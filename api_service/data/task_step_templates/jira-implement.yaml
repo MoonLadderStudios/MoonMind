@@ -1,6 +1,6 @@
 slug: jira-implement
 title: Jira Implement
-description: Move a Jira issue through implementation by using its preset brief as the implementation input, creating a PR, and advancing the issue to Code Review. When PR merge automation is enabled the issue advances to Done automatically after merge.
+description: Move a Jira issue through implementation by first assessing the current state of the branch against the issue. If the issue is already fully implemented, advance it directly to Done. Otherwise, finish any partial work, create a PR, and advance the issue to Code Review. When PR merge automation is enabled the issue advances to Done automatically after merge.
 scope: global
 version: 1.0.0
 tags:
@@ -63,14 +63,6 @@ inputs:
     required: false
     default: ""
 steps:
-  - title: Move Jira issue to In Progress
-    instructions: |-
-      Change Jira issue {{ inputs.jira_issue_key }} to status In Progress before implementation starts.
-
-      Use the trusted Jira issue updater workflow and Jira transition tools. Match In Progress against the issue's available transitions or target statuses; do not guess transition IDs. Re-fetch the issue when possible and report the confirmed status.
-    skill:
-      id: jira-issue-updater
-      args: {}
   - title: Check Jira blockers before implementation
     type: tool
     instructions: |-
@@ -109,9 +101,54 @@ steps:
       args: {}
       inputs:
         issueKey: "{{ inputs.jira_issue_key }}"
+  - title: Assess existing implementation state
+    annotations:
+      jiraImplementRole: initial-assessment
+    instructions: |-
+      Before changing Jira or writing any code, assess whether Jira issue {{ inputs.jira_issue_key }} is already implemented against the current state of the repository checkout.
+
+      Use the jira-verify approach as the model: pick branch mode when a feature branch is checked out with commits ahead of its base ref, otherwise use main/trunk mode. Compare the loaded Jira preset brief and acceptance criteria against the actual repository contents (and, in branch mode, against the diff between the current branch and its base ref). In main/trunk mode also search recent merge history for the issue key.
+
+      Do not edit any code, do not run long verification suites, and do not mutate Jira during this step. Read-only inspection only.
+
+      Classify the result into exactly one verdict:
+
+      - FULLY_IMPLEMENTED: every in-scope requirement in the Jira preset brief is already satisfied by the current repository state (or by an identified merged change on the default branch). No new code work is needed.
+      - PARTIALLY_IMPLEMENTED: some in-scope requirements are met but at least one is missing or only partially satisfied. New code work is required to complete the issue.
+      - NOT_IMPLEMENTED: none of the in-scope requirements are reflected in the current repository state. A full implementation pass is required.
+      - BLOCKED: the requirements are too ambiguous to assess, or required Jira/repo evidence is unavailable. Do not guess; report BLOCKED with the exact missing evidence and stop the preset.
+
+      Record the verdict and a concise list of met/partially-met/unmet requirements in the step result AND in a local handoff artifact at artifacts/jira-implement-assessment.json with keys jira_issue_key, verdict, branch, base_ref, mode, summary, and requirements (list of objects with description and status of met, partially_met, not_met, or unverifiable).
+
+      The verdict written here is the controlling input for every later step in this preset: the In Progress transition, the implementation step, the verification step, the pull request step, and the final Jira transition all gate on this verdict. Be conservative — only choose FULLY_IMPLEMENTED when the evidence clearly supports it.
+    skill:
+      id: auto
+      args: {}
+      requiredCapabilities:
+        - git
+  - title: Move Jira issue to In Progress
+    instructions: |-
+      Read artifacts/jira-implement-assessment.json (or the previous step's recorded verdict) before doing anything.
+
+      If the recorded verdict is FULLY_IMPLEMENTED, skip the In Progress transition entirely and report it as skipped because the issue is already implemented; do not move a likely-Done issue back into In Progress. The final step in this preset will move {{ inputs.jira_issue_key }} directly to Done.
+
+      If the recorded verdict is BLOCKED, stop without changing Jira and report that the preset is blocked by the initial assessment.
+
+      Otherwise (PARTIALLY_IMPLEMENTED or NOT_IMPLEMENTED), change Jira issue {{ inputs.jira_issue_key }} to status In Progress before implementation starts. Use the trusted Jira issue updater workflow and Jira transition tools. Match In Progress against the issue's available transitions or target statuses; do not guess transition IDs. Re-fetch the issue when possible and report the confirmed status.
+    skill:
+      id: jira-issue-updater
+      args: {}
   - title: Implement the Jira issue
     instructions: |-
-      Implement the work described by Jira issue {{ inputs.jira_issue_key }} using the loaded Jira preset brief as the authoritative implementation input.
+      Read artifacts/jira-implement-assessment.json (or the recorded verdict from the assess step) before doing anything.
+
+      If the recorded verdict is FULLY_IMPLEMENTED, make no code changes and report that implementation is skipped because the issue is already implemented in the current repository state.
+
+      If the recorded verdict is BLOCKED, stop without changing code and report the blocking evidence from the assessment.
+
+      If the recorded verdict is PARTIALLY_IMPLEMENTED, treat the assessment's unmet and partially-met requirements as the authoritative bounded backlog. Finish only the remaining gaps. Do not redo work that is already satisfied and do not broaden scope.
+
+      If the recorded verdict is NOT_IMPLEMENTED, implement the work described by Jira issue {{ inputs.jira_issue_key }} using the loaded Jira preset brief as the authoritative implementation input.
 
       Additional constraints:
       {{ inputs.constraints }}
@@ -128,7 +165,11 @@ steps:
         - git
   - title: Verify implementation
     instructions: |-
-      Verify that the implementation for Jira issue {{ inputs.jira_issue_key }} satisfies the loaded preset brief and acceptance criteria.
+      Read artifacts/jira-implement-assessment.json (or the recorded verdict from the assess step) before doing anything.
+
+      If the recorded verdict is FULLY_IMPLEMENTED and the implementation step did no code changes, report verification as already satisfied by the initial assessment and skip rerunning verification.
+
+      Otherwise verify that the implementation for Jira issue {{ inputs.jira_issue_key }} satisfies the loaded preset brief and acceptance criteria.
 
       Re-read the Jira preset brief and confirm every required behavior change is implemented and covered by tests. Run the focused unit and integration checks named by the brief or implied by the changed code paths.
 
@@ -142,7 +183,11 @@ steps:
     annotations:
       jiraImplementRole: pull-request-handoff
     instructions: |-
-      Create a pull request for the completed work for Jira issue {{ inputs.jira_issue_key }}.
+      Read artifacts/jira-implement-assessment.json (or the recorded verdict from the assess step) before doing anything.
+
+      If the recorded verdict is FULLY_IMPLEMENTED and the implementation step did no code changes, skip pull request creation entirely and report it as skipped because there is nothing new to publish. Do not write artifacts/jira-implement-pr.json in this case. The final step will move {{ inputs.jira_issue_key }} directly to Done.
+
+      Otherwise create a pull request for the completed work for Jira issue {{ inputs.jira_issue_key }}.
 
       This Jira Implement handoff step is the explicit PR-publication step for this preset. It intentionally owns pull request creation before the Jira Code Review transition so the confirmed pull request URL is available to both Jira and MoonMind publish handling. If generic managed-runtime guidance says not to push or create a pull request, treat this step-specific handoff instruction as the controlling instruction for this step only. If the task is submitted with PR merge automation enabled, the parent workflow must use the pull request URL produced by this step as the published PR and then run merge automation against that PR; on a successful merge the parent workflow will transition Jira issue {{ inputs.jira_issue_key }} to Done automatically. If the runtime instructions, task parameters, authentication, remote configuration, branch protection, or repository permissions prevent committing, pushing, or creating the pull request in this step, stop before changing Jira to Code Review and report the exact blocker.
 
@@ -162,15 +207,21 @@ steps:
       args: {}
       requiredCapabilities:
         - git
-  - title: Move Jira issue to Code Review
+  - title: Finalize Jira status
+    annotations:
+      jiraImplementRole: final-transition
     instructions: |-
-      Change Jira issue {{ inputs.jira_issue_key }} to status Code Review only after the pull request exists.
+      Read artifacts/jira-implement-assessment.json (or the recorded verdict from the assess step) before changing Jira.
 
-      Before using any Jira transition tool, read the previous pull request creation result or artifacts/jira-implement-pr.json and verify it contains a non-empty pull_request_url for {{ inputs.jira_issue_key }}. If no confirmed pull request URL is available, stop without changing Jira and report that Code Review is blocked until PR creation succeeds.
+      Decide the target Jira status based on the recorded initial-assessment verdict:
 
-      Use the trusted Jira issue updater workflow and Jira transition tools. Match Code Review against the issue's available transitions or target statuses; do not guess transition IDs. Add or preserve a Jira-visible reference to the pull request when supported by the trusted tools. Re-fetch the issue when possible and report the confirmed status.
+      - If the recorded verdict is FULLY_IMPLEMENTED, transition Jira issue {{ inputs.jira_issue_key }} to status Done. The issue was already implemented at the start of this preset, so no pull request is required. If the issue is already in a Done-category status, treat the transition as already satisfied and report it as such. Do not require artifacts/jira-implement-pr.json in this branch.
 
-      Note: when this task was submitted with PR merge automation enabled, the parent workflow will transition Jira issue {{ inputs.jira_issue_key }} to Done automatically after the pull request merges. This in-task step only owns the Code Review transition.
+      - Otherwise (the initial verdict was PARTIALLY_IMPLEMENTED or NOT_IMPLEMENTED), transition Jira issue {{ inputs.jira_issue_key }} to status Code Review only after the pull request exists. Read the previous pull request creation result or artifacts/jira-implement-pr.json and verify it contains a non-empty pull_request_url for {{ inputs.jira_issue_key }}. If no confirmed pull request URL is available, stop without changing Jira and report that Code Review is blocked until PR creation succeeds. Add or preserve a Jira-visible reference to the pull request when supported by the trusted tools.
+
+      In both cases, use the trusted Jira issue updater workflow and Jira transition tools. Match the target status against the issue's available transitions or target statuses; do not guess transition IDs. Re-fetch the issue when possible and report the confirmed status.
+
+      Note: when this task was submitted with PR merge automation enabled and the work followed the Code Review path, the parent workflow will transition Jira issue {{ inputs.jira_issue_key }} to Done automatically after the pull request merges. This in-task step only owns the explicit Done transition for the already-implemented case and the Code Review transition for the freshly-implemented case.
     skill:
       id: jira-issue-updater
       args: {}

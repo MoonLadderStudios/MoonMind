@@ -212,28 +212,68 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             (step.get("skill") or step.get("tool"))["id"]
             for step in jira_implement_template.latest_version.steps
         ]
-        assert jira_implement_steps[0] == "jira-issue-updater"
-        assert jira_implement_steps[1] == "jira.check_blockers"
-        assert jira_implement_steps[2] == "jira.load_preset_brief"
+        assert jira_implement_steps[0] == "jira.check_blockers"
+        assert jira_implement_steps[1] == "jira.load_preset_brief"
         assert jira_implement_steps[-1] == "jira-issue-updater"
-        assert len(jira_implement_steps) == 7
+        assert len(jira_implement_steps) == 8
         implement_step_titles = [
             step["title"] for step in jira_implement_template.latest_version.steps
         ]
-        assert implement_step_titles[0] == "Move Jira issue to In Progress"
+        assert implement_step_titles[0] == "Check Jira blockers before implementation"
+        assert implement_step_titles[1] == "Load Jira preset brief"
+        assert implement_step_titles[2] == "Assess existing implementation state"
+        assert implement_step_titles[3] == "Move Jira issue to In Progress"
         assert "Implement the Jira issue" in implement_step_titles
+        assert "Verify implementation" in implement_step_titles
         assert "Create pull request" in implement_step_titles
-        assert implement_step_titles[-1] == "Move Jira issue to Code Review"
-        implement_blocker_step = jira_implement_template.latest_version.steps[1]
+        assert implement_step_titles[-1] == "Finalize Jira status"
+        implement_blocker_step = jira_implement_template.latest_version.steps[0]
         assert implement_blocker_step["type"] == "tool"
         assert implement_blocker_step["tool"]["id"] == "jira.check_blockers"
         assert (
             "deterministic trusted Jira blocker preflight"
             in implement_blocker_step["instructions"]
         )
-        implement_brief_step = jira_implement_template.latest_version.steps[2]
+        implement_brief_step = jira_implement_template.latest_version.steps[1]
         assert implement_brief_step["type"] == "tool"
         assert implement_brief_step["tool"]["id"] == "jira.load_preset_brief"
+        implement_assessment_step = jira_implement_template.latest_version.steps[2]
+        assert implement_assessment_step["title"] == "Assess existing implementation state"
+        assert implement_assessment_step["skill"]["id"] == "auto"
+        assert (
+            "FULLY_IMPLEMENTED" in implement_assessment_step["instructions"]
+        )
+        assert (
+            "PARTIALLY_IMPLEMENTED" in implement_assessment_step["instructions"]
+        )
+        assert (
+            "NOT_IMPLEMENTED" in implement_assessment_step["instructions"]
+        )
+        assert (
+            "artifacts/jira-implement-assessment.json"
+            in implement_assessment_step["instructions"]
+        )
+        implement_in_progress_step = jira_implement_template.latest_version.steps[3]
+        assert implement_in_progress_step["title"] == "Move Jira issue to In Progress"
+        assert implement_in_progress_step["skill"]["id"] == "jira-issue-updater"
+        assert (
+            "FULLY_IMPLEMENTED" in implement_in_progress_step["instructions"]
+        )
+        assert (
+            "skip the In Progress transition"
+            in implement_in_progress_step["instructions"]
+        )
+        implement_step = next(
+            step
+            for step in jira_implement_template.latest_version.steps
+            if step["title"] == "Implement the Jira issue"
+        )
+        assert "FULLY_IMPLEMENTED" in implement_step["instructions"]
+        assert "PARTIALLY_IMPLEMENTED" in implement_step["instructions"]
+        assert (
+            "artifacts/jira-implement-assessment.json"
+            in implement_step["instructions"]
+        )
         implement_pr_step = next(
             step
             for step in jira_implement_template.latest_version.steps
@@ -242,10 +282,16 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "merge automation" in implement_pr_step["instructions"]
         assert "Done automatically" in implement_pr_step["instructions"]
         assert "artifacts/jira-implement-pr.json" in implement_pr_step["instructions"]
-        implement_code_review_step = jira_implement_template.latest_version.steps[-1]
-        assert implement_code_review_step["title"] == "Move Jira issue to Code Review"
-        assert "Code Review" in implement_code_review_step["instructions"]
-        assert "pull_request_url" in implement_code_review_step["instructions"]
+        assert "FULLY_IMPLEMENTED" in implement_pr_step["instructions"]
+        implement_finalize_step = jira_implement_template.latest_version.steps[-1]
+        assert implement_finalize_step["title"] == "Finalize Jira status"
+        assert implement_finalize_step["skill"]["id"] == "jira-issue-updater"
+        assert "Done" in implement_finalize_step["instructions"]
+        assert "Code Review" in implement_finalize_step["instructions"]
+        assert "pull_request_url" in implement_finalize_step["instructions"]
+        assert (
+            "FULLY_IMPLEMENTED" in implement_finalize_step["instructions"]
+        )
 
         result = await session.execute(
             select(TaskStepTemplate)
