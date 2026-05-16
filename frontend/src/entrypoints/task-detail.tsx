@@ -96,6 +96,16 @@ function detailObjectValue(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function firstDetailObjectValue(...values: unknown[]): Record<string, unknown> {
+  for (const value of values) {
+    const normalized = detailObjectValue(value);
+    if (Object.keys(normalized).length > 0) {
+      return normalized;
+    }
+  }
+  return {};
+}
+
 function detailStringValue(...values: unknown[]): string {
   for (const value of values) {
     const normalized = String(value ?? '').trim();
@@ -108,18 +118,24 @@ function detailStringValue(...values: unknown[]): string {
 
 function runtimeCommandFromExecution(execution: unknown): Record<string, unknown> {
   const detail = detailObjectValue(execution);
-  const direct = detailObjectValue(detail.runtimeCommand);
+  const direct = firstDetailObjectValue(detail.runtimeCommand, detail.runtime_command);
   if (Object.keys(direct).length > 0) {
     return direct;
   }
-  const inputParameters = detailObjectValue(detail.inputParameters);
+  const inputParameters = firstDetailObjectValue(
+    detail.inputParameters,
+    detail.input_parameters,
+  );
   const task = detailObjectValue(inputParameters.task);
-  const taskCommand = detailObjectValue(task.runtimeCommand);
+  const taskCommand = firstDetailObjectValue(task.runtimeCommand, task.runtime_command);
   if (Object.keys(taskCommand).length > 0) {
     return taskCommand;
   }
   const objective = detailObjectValue(inputParameters.objective);
-  const objectiveCommand = detailObjectValue(objective.runtimeCommand);
+  const objectiveCommand = firstDetailObjectValue(
+    objective.runtimeCommand,
+    objective.runtime_command,
+  );
   if (Object.keys(objectiveCommand).length > 0) {
     return objectiveCommand;
   }

@@ -94,3 +94,41 @@ def test_runtime_command_audit_events_redact_secret_like_values() -> None:
     assert "password=super-secret" not in serialized
     assert "BEGIN PRIVATE KEY" not in serialized
     assert events[0]["command"] == "review"
+
+
+def test_runtime_command_audit_events_ignore_empty_and_failed_rendering() -> None:
+    assert (
+        build_runtime_command_audit_events(
+            runtime_id="codex_cli",
+            runtime_command={
+                "rawCommand": "/",
+                "sourcePath": "objective.instructions",
+                "hintStatus": "hinted",
+            },
+        )
+        == []
+    )
+
+    events = build_runtime_command_audit_events(
+        runtime_id="codex_cli",
+        runtime_command={
+            "command": "review",
+            "rawCommand": "/review",
+            "sourcePath": "objective.instructions",
+            "hintStatus": "hinted",
+        },
+        render_result={
+            "status": "unsupported",
+            "renderMode": "unsupported",
+        },
+    )
+
+    assert events == [
+        {
+            "event": "runtime_command.detected",
+            "runtimeId": "codex_cli",
+            "command": "review",
+            "sourcePath": "objective.instructions",
+            "hintStatus": "hinted",
+        }
+    ]

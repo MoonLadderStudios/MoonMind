@@ -513,6 +513,58 @@ describe('Task Detail Entrypoint', () => {
     expect(screen.getAllByText('2026-05-13').length).toBeGreaterThanOrEqual(2);
   });
 
+  it('displays legacy snake_case slash command metadata from historical execution snapshots', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Legacy slash task',
+      summary: 'Execution summary',
+      taskInstructions: '/review\nCheck the branch.',
+      status: 'completed',
+      state: 'completed',
+      rawState: 'completed',
+      temporalStatus: 'completed',
+      targetRuntime: 'codex_cli',
+      input_parameters: {
+        task: {
+          runtime_command: {
+            command: 'review',
+            rawCommand: '/review',
+            targetRuntime: 'codex_cli',
+            render_mode: 'prompt_prefix',
+            status: 'rendered',
+          },
+        },
+      },
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({ ok: true, json: async () => latestStepsSnapshot } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={stepsPayload} />);
+
+    expect(await screen.findByText('Runtime Command')).toBeTruthy();
+    expect(screen.getByText('/review')).toBeTruthy();
+    expect(screen.getByText('prompt prefix')).toBeTruthy();
+    expect(screen.queryByText('Historical runtime command metadata is not available.')).toBeNull();
+  });
+
 
   it('renders planning detail pills with the shared shimmer selector contract and keeps dependency pills inactive when appropriate', async () => {
     const mockExecution = {

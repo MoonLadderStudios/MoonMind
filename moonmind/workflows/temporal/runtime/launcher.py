@@ -83,7 +83,8 @@ def build_runtime_command_audit_events(
     command = _compact_string(command_metadata.get("command"))
     raw_command = _compact_string(command_metadata.get("rawCommand"))
     if not command and raw_command.startswith("/"):
-        command = raw_command[1:].split(maxsplit=1)[0]
+        parts = raw_command[1:].split(maxsplit=1)
+        command = parts[0] if parts else ""
     if not command:
         return []
 
@@ -125,7 +126,7 @@ def build_runtime_command_audit_events(
                 "hintStatus": _compact_string(command_metadata.get("hintStatus")),
                 "renderMode": render_mode,
             }
-        elif status in {"ok", "rendered", "fallback"} or render_mode:
+        elif status in {"ok", "rendered", "fallback"}:
             event = {
                 "event": "runtime_command.rendered",
                 "runtimeId": runtime,

@@ -114,7 +114,9 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
       },
     );
 
-    expect(draft.taskInstructions).toBe("/review\nCheck the branch.");
+    expect(draft.taskInstructions).toBe(
+      "/review\nCheck the branch.\n\n/simplify\nKeep the patch small.",
+    );
     expect(draft.runtimeCommand).toMatchObject({
       command: "review",
       sourcePath: "objective.instructions",
@@ -154,5 +156,28 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
       "/future-command\nUse provider behavior.",
     );
     expect(draft.runtimeCommand).toBeUndefined();
+  });
+
+  it("combines task and step instructions when both are present", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:combined-instructions",
+      workflowType: "MoonMind.Run",
+      targetRuntime: "codex_cli",
+      inputParameters: {
+        task: {
+          instructions: "Review the overall branch.",
+          steps: [
+            {
+              id: "step-1",
+              instructions: "Check the runtime command audit trail.",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(draft.taskInstructions).toBe(
+      "Review the overall branch.\n\nCheck the runtime command audit trail.",
+    );
   });
 });

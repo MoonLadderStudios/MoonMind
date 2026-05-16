@@ -401,11 +401,10 @@ function firstObjectValue(...values: unknown[]): Record<string, unknown> {
 
 function taskInstructionsFrom(...tasks: Record<string, unknown>[]): string {
   for (const task of tasks) {
-    const objectiveInstructions = stringValue(task.instructions);
-    if (objectiveInstructions) {
-      return objectiveInstructions;
-    }
-    const instructions = stepInstructions(task.steps);
+    const instructions = [
+      stringValue(task.instructions),
+      ...stepInstructions(task.steps),
+    ].filter(Boolean);
     if (instructions.length > 0) {
       return instructions.join('\n\n');
     }
