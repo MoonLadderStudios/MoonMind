@@ -1,0 +1,902 @@
+{
+  "source": {
+    "title": "Managed Agent Docker Sidecar Runtime",
+    "path": "docs/ManagedAgents/DockerSidecarRuntime.md",
+    "referencePath": "docs/ManagedAgents/DockerSidecarRuntime.md",
+    "originalDesignText": "# Managed Agent Docker Sidecar Runtime\n\n- **Status:** Desired state\n- **Owners:** MoonMind Platform\n- **Last updated:** 2026-05-16\n\n**Related:**\n\n- [`docs/ManagedAgents/ManagedAgentArchitecture.md`](./ManagedAgentArchitecture.md)\n- [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)\n- [`docs/ManagedAgents/CodexManagedSessionPlane.md`](./CodexManagedSessionPlane.md)\n- [`docs/ManagedAgents/DockerOutOfDocker.md`](./DockerOutOfDocker.md)\n- [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)\n- [`docs/Tasks/SkillAndPlanContracts.md`](../Tasks/SkillAndPlanContracts.md)\n\n---\n\n## 1. Purpose\n\nThis document defines how MoonMind gives **managed agent sessions** the ability to run ordinary container workloads \u2014 `docker run`, `docker build`, `docker compose run` \u2014 for tests, build toolchains, and short-lived application containers, **without** mounting the host Docker socket and **without** embedding a Docker daemon in the managed agent image.\n\nThe model is a **per-session Docker sidecar**: the managed session container holds a Docker CLI only, and a sibling container holds a private Docker daemon scoped to that session.\n\nThis is the **default execution path** for containerized work that originates from a managed agent session. The Temporal-launched Docker-out-of-Docker (DooD) workload plane defined in [`DockerOutOfDocker.md`](./DockerOutOfDocker.md) remains, but is now reserved for the narrow set of operations that must run from the control plane itself, such as MoonMind admin and update flows.\n\n### 1.1 Relationship to existing architecture\n\nThis document supersedes two specific clauses in the prior architecture for the case of normal task workloads originating from a managed agent session:\n\n- `ManagedAgentArchitecture.md \u00a75.5` (\"No direct Docker control from the managed session by default\") \u2014 replaced for the sidecar deployment shape. A managed session with the sidecar runtime enabled has a private `DOCKER_HOST` pointing at its own daemon. It never gets the host socket and never sees other sessions' containers.\n- `DockerOutOfDocker.md \u00a717.3` (\"Important boundary\") \u2014 replaced for ordinary repository test workloads. Control-plane-launched Docker workloads remain the model for admin and update flows; they are no longer the default model for repo tests.\n\nAll other invariants from those documents still apply: artifacts and bounded metadata remain authoritative, session identity and workload identity remain separable, deployment credentials never reach the session, and the host Docker socket is never exposed to a managed session.\n\nFollow-up edits to the superseded sections of those documents are tracked in \u00a728.\n\n---\n\n## 2. Core decisions\n\n1. **Managed agents run normal Docker commands.** No MoonMind-specific workload syntax is required for ordinary tests and builds.\n2. **A private Docker daemon lives in a sibling sidecar container, not in the agent container.** No `dockerd`, `containerd`, or `runc` is installed in the managed agent image.\n3. **The host Docker socket is never exposed to a managed agent or its sidecar.**\n4. **The Docker sidecar image is prebuilt and generic.** It does not need the MoonMind codebase, MoonMind deployment credentials, or registry secrets.\n5. **The workspace is mounted at the same absolute path in both containers.** Bind mounts of the form `-v \"$PWD\":/workspace` resolve identically on the agent CLI and the sidecar daemon.\n6. **The Docker daemon scope is per session.** Containers, images, and graph storage do not bleed across sessions or across users.\n7. **The control-plane DooD path is preserved for MoonMind admin/update operations only**, not for ordinary task workloads.\n8. **The design has a clean Kubernetes mapping** as a future-state target (sidecar container in the same Pod, shared volumes for workspace and socket).\n\n---\n\n## 3. Scope and non-goals\n\n### 3.1 In scope\n\n- The container topology that lets a managed agent run ordinary Docker commands safely.\n- The agent-image and sidecar-image contracts.\n- The workspace, socket, and graph volume contracts.\n- The runtime mode set (`docker-sidecar`, `docker-sidecar-rootless`, `no-docker`, future `kubernetes-job`).\n- Per-session lifecycle, cleanup, readiness, and audit metadata.\n- The boundary between managed-agent Docker use and MoonMind ops/admin Docker use.\n\n### 3.2 Out of scope\n\n- Kubernetes orchestration of MoonMind itself.\n- A general arbitrary-shell execution surface from the control plane.\n- A generic container marketplace or cross-session container reuse.\n- The detailed Codex / Claude / Gemini managed session protocols (owned by the runtime-specific docs).\n- The provider-profile, secrets, and OAuth subsystems.\n\n---\n\n## 4. Terminology\n\n- **Managed agent session container** (or \"agent container\"): the task-scoped runtime container that holds the agent runtime \u2014 Codex CLI, Claude Code, Gemini CLI, or equivalent \u2014 and the workspace bind. In this document this is the container that runs `docker version`, `docker run`, and so on.\n- **Docker sidecar container**: a sibling container in the same managed session that runs `dockerd` (classic or rootless) and exposes the daemon socket on a shared volume.\n- **Workspace volume**: the shared volume mounted at the same path into both containers so that `-v \"$PWD\":/workspace` bind mounts work transparently.\n- **Docker socket volume**: the shared volume that carries the Unix socket exposed by `dockerd` and consumed by the Docker CLI in the agent container.\n- **Docker graph volume**: the volume that backs `/var/lib/docker` (or the rootless equivalent) for the per-session daemon.\n- **Session runtime profile**: the declarative description of agent container + sidecar shape applied at session launch.\n- **MoonMind ops runtime**: the separate, narrowly-scoped Docker access path used by MoonMind itself for deploy/restart/rollback. Defined in \u00a721 and elaborated in [`DockerOutOfDocker.md`](./DockerOutOfDocker.md).\n\n---\n\n## 5. Runtime model\n\nA managed session with Docker capability is two containers and a small set of shared volumes.\n\n```\nManaged session\n\u251c\u2500\u2500 agent container\n\u2502   \u251c\u2500\u2500 agent runtime (Codex / Claude / Gemini / shell)\n\u2502   \u251c\u2500\u2500 git, repo tools\n\u2502   \u251c\u2500\u2500 Docker CLI (+ Compose plugin, optional)\n\u2502   \u251c\u2500\u2500 DOCKER_HOST=unix:///var/run/moonmind-docker/docker.sock\n\u2502   \u2514\u2500\u2500 workspace mounted at /workspace\n\u2502\n\u251c\u2500\u2500 docker sidecar container\n\u2502   \u251c\u2500\u2500 dockerd (classic or rootless)\n\u2502   \u251c\u2500\u2500 no MoonMind codebase\n\u2502   \u251c\u2500\u2500 no MoonMind deployment credentials\n\u2502   \u251c\u2500\u2500 workspace mounted at the same /workspace\n\u2502   \u251c\u2500\u2500 /var/run/moonmind-docker (socket volume)\n\u2502   \u2514\u2500\u2500 /var/lib/docker (graph volume, session-scoped)\n\u2502\n\u2514\u2500\u2500 shared volumes\n    \u251c\u2500\u2500 workspace        (RW, both containers, same mount path)\n    \u251c\u2500\u2500 docker-socket    (RW, both containers)\n    \u251c\u2500\u2500 docker-graph     (RW, sidecar only)\n    \u2514\u2500\u2500 optional caches  (RW, both containers, deployment-approved)\n```\n\n### 5.1 Workspace path invariant\n\nThe single most important property of the topology:\n\n> The workspace volume must be mounted at the **same absolute path** in the agent container and in the Docker sidecar.\n\nDocker daemon bind mounts are resolved by the daemon, not by the CLI. When the agent runs:\n\n```bash\ndocker run --rm -v \"$PWD\":/workspace -w /workspace alpine ls\n```\n\nthe daemon receives `$PWD` as a literal host path and resolves it on its own filesystem. Unless the sidecar sees the same path that the agent sees, the bind mount silently points at the wrong directory or fails.\n\nIf the agent uses `/workspace` and the sidecar uses `/mnt/workspace`, normal Docker testing is broken. Session launch must reject this configuration (see \u00a723).\n\n### 5.2 MoonMind workspace convention\n\nMoonMind workspaces follow the canonical layout from `DockerOutOfDocker.md \u00a710`:\n\n- `agent_workspaces` is the named volume.\n- `/work/agent_jobs/<task_run_id>` is the run root.\n- `/work/agent_jobs/<task_run_id>/repo` is the checked-out repository.\n- `/work/agent_jobs/<task_run_id>/artifacts/<step_id>` is the durable artifact area.\n\nThe sidecar runtime keeps this convention. The \"workspace\" mount in this document is `agent_workspaces` mounted at `/work/agent_jobs` in both containers; `/workspace` is shown in examples as a synonym for the per-run repo path made visible to the agent via `MOONMIND_REPO_DIR`. Deployments may choose to expose either the run root or the repo path as the agent's working directory; the invariant in \u00a75.1 applies to whatever path is actually shared.\n\n---\n\n## 6. Session runtime profile\n\nA session runtime profile describes the agent + sidecar shape declaratively. The session launcher materializes this profile differently for Docker deployments today and Kubernetes deployments later.\n\nThe YAML below is **illustrative**: the canonical configuration surface is the existing MoonMind launcher inputs and provider/runtime profile records. It is shown here to make the contract concrete.\n\n```yaml\nkind: ManagedAgentRuntimeProfile\nname: default-docker-sidecar\nspec:\n  workloadMode: docker-sidecar\n\n  workspace:\n    volume: agent_workspaces\n    mountPath: /work/agent_jobs\n    repoEnv: MOONMIND_REPO_DIR\n    lifecycle: session\n\n  agent:\n    image: moonmind/managed-agent:<pinned>\n    dockerClient:\n      enabled: true\n      composePlugin: true\n      daemonInAgent: false\n    env:\n      DOCKER_HOST: unix:///var/run/moonmind-docker/docker.sock\n    mounts:\n      - { name: workspace,     mountPath: /work/agent_jobs }\n      - { name: docker-socket, mountPath: /var/run/moonmind-docker }\n\n  dockerSidecar:\n    enabled: true\n    mode: dind                      # or dind-rootless\n    image: docker:27-dind            # pinned, not :latest\n    socket:\n      path: /var/run/moonmind-docker/docker.sock\n      volumeName: docker-socket\n    storage:\n      volumeName: docker-graph\n      mountPath: /var/lib/docker\n      lifecycle: session\n    security:\n      privileged: true              # required for classic dind\n      hostDockerSocket: forbidden\n      moonmindDeploymentSecrets: forbidden\n    mounts:\n      - { name: workspace,     mountPath: /work/agent_jobs }\n      - { name: docker-socket, mountPath: /var/run/moonmind-docker }\n      - { name: docker-graph,  mountPath: /var/lib/docker }\n\n  resources:\n    agent:         { cpu: \"2\", memory: 4Gi }\n    dockerSidecar: { cpu: \"4\", memory: 8Gi, ephemeralStorage: 40Gi }\n\n  readiness:\n    docker:\n      required: true\n      timeoutSeconds: 60\n      intervalSeconds: 2\n      probes: [ \"docker version\", \"docker info\" ]\n\n  policy:\n    hostDockerAccess: forbidden\n    appContainerControlFromSession: forbidden\n    deploymentSecretsInSession: forbidden\n```\n\n---\n\n## 7. Runtime modes\n\nA session profile declares one of the following modes:\n\n| Mode | Meaning | When to use |\n|---|---|---|\n| `docker-sidecar` | Classic DinD sidecar, privileged. | Default for trusted Docker deployments. |\n| `docker-sidecar-rootless` | Rootless dockerd sidecar, no `--privileged`. | Hardened deployments where the rootless feature set is sufficient. |\n| `no-docker` | No Docker capability in the session. | Lightweight sessions that never need containers. |\n| `kubernetes-job` (future) | Per-workload Kubernetes Job instead of nested Docker. | Clusters that disallow DinD; future portability path. |\n\nRecommended defaults:\n\n- Current Docker deployments: `docker-sidecar`.\n- Future hardened Docker deployments: `docker-sidecar-rootless`.\n- Locked-down Kubernetes clusters: `kubernetes-job` (see \u00a713).\n\nThe mode is a deployment / profile decision. Task instructions cannot raise it.\n\n---\n\n## 8. Agent image contract\n\nThe managed agent image stays lightweight.\n\n**Must include:**\n\n- shell (bash), git, curl/wget, ca-certificates\n- Docker CLI\n- Docker Compose plugin (when sessions are expected to use `docker compose`)\n- the agent runtime tooling (Codex CLI, Claude Code, Gemini CLI, or equivalent)\n\n**Must not include:**\n\n- `dockerd`, `containerd`, `runc`\n- Docker graph storage\n- a mounted host Docker socket\n- MoonMind deployment credentials\n- registry push credentials beyond what an individual task is authorized to use\n\nSmoke test inside an agent container with sidecar enabled:\n\n```bash\ndocker version\ndocker run --rm alpine echo hello\ndocker build -t local-test-image .\ndocker compose run --rm test\n```\n\nAll of these should work without privilege escalation in the agent container itself.\n\n---\n\n## 9. Docker sidecar contract\n\nThe Docker sidecar is a prebuilt image with the Docker daemon, its runtime dependencies, and nothing MoonMind-specific.\n\nIt needs only:\n\n- a Docker daemon\n- the shared socket volume\n- the shared workspace volume\n- session-scoped graph storage\n\nIt must not receive:\n\n- the host Docker socket\n- MoonMind deployment credentials\n- MoonMind session tokens\n- the MoonMind codebase\n\nRecommended sidecar images:\n\n| Variant | Image | Privileged | Notes |\n|---|---|---|---|\n| Classic | `docker:27-dind` | Yes | Broadest workload compatibility. Pin the tag. |\n| Rootless | `docker:27-dind-rootless` | No | Preferred where the workload set is compatible. Some features (e.g. cgroup v1, certain storage drivers) are restricted. |\n\nStart with classic DinD on trusted deployments. Roll rootless out as a hardening track per deployment as workload compatibility is confirmed.\n\n---\n\n## 10. Volume contract\n\n| Volume | Lifecycle | Mount path | Shared with | Purpose |\n|---|---|---|---|---|\n| `workspace` | session | same path in both (e.g. `/work/agent_jobs`) | agent + sidecar | the agent's repo and run artifacts |\n| `docker-socket` | session | `/var/run/moonmind-docker` | agent + sidecar | Unix socket exposed by `dockerd` |\n| `docker-graph` | session | `/var/lib/docker` (or rootless equivalent) | sidecar only | nested image/container storage |\n| optional caches | session or user | deployment-defined | agent + sidecar (as declared) | package manager / build caches |\n\nInvariants:\n\n- `agent.workspace.mountPath == dockerSidecar.workspace.mountPath` (the \u00a75.1 rule).\n- The socket volume is exclusive to this session.\n- The graph volume is exclusive to this session and removed at session end by default.\n- Optional caches must be deployment-approved named volumes; arbitrary host-path mounts are not part of this contract.\n\n---\n\n## 11. Materialized Docker shape\n\nFor current Docker deployments the profile materializes as two containers and three volumes per session.\n\nIllustrative Compose-style output (real launcher names are generated per-session):\n\n```yaml\nservices:\n  session-agent:\n    image: moonmind/managed-agent:<pinned>\n    environment:\n      MOONMIND_REPO_DIR: /work/agent_jobs/<task_run_id>/repo\n      DOCKER_HOST: unix:///var/run/moonmind-docker/docker.sock\n    volumes:\n      - session-workspace:/work/agent_jobs\n      - session-docker-socket:/var/run/moonmind-docker\n    depends_on:\n      - session-docker\n\n  session-docker:\n    image: docker:27-dind\n    privileged: true\n    command:\n      - dockerd\n      - --host=unix:///var/run/moonmind-docker/docker.sock\n    volumes:\n      - session-workspace:/work/agent_jobs\n      - session-docker-socket:/var/run/moonmind-docker\n      - session-docker-graph:/var/lib/docker\n\nvolumes:\n  session-workspace:\n  session-docker-socket:\n  session-docker-graph:\n```\n\nPer-session names follow the existing MoonMind labeling convention:\n\n- `moonmind-session-<session_id>-agent`\n- `moonmind-session-<session_id>-docker`\n- `moonmind-session-<session_id>-workspace`\n- `moonmind-session-<session_id>-docker-socket`\n- `moonmind-session-<session_id>-docker-graph`\n\nContainers must carry MoonMind ownership labels (see \u00a722).\n\n---\n\n## 12. Materialized Kubernetes shape (future)\n\nThe same profile maps to a single Pod with two containers and shared volumes.\n\n```yaml\napiVersion: v1\nkind: Pod\nmetadata:\n  name: moonmind-session-<session_id>\n  labels:\n    app: moonmind\n    moonmind.kind: managed-session\n    moonmind.session_id: <session_id>\nspec:\n  containers:\n    - name: agent\n      image: moonmind/managed-agent:<pinned>\n      env:\n        - { name: MOONMIND_REPO_DIR, value: /work/agent_jobs/<task_run_id>/repo }\n        - { name: DOCKER_HOST,       value: unix:///var/run/moonmind-docker/docker.sock }\n      volumeMounts:\n        - { name: workspace,     mountPath: /work/agent_jobs }\n        - { name: docker-socket, mountPath: /var/run/moonmind-docker }\n    - name: docker-sidecar\n      image: docker:27-dind\n      securityContext:\n        privileged: true\n      command: [ \"dockerd\" ]\n      args:    [ \"--host=unix:///var/run/moonmind-docker/docker.sock\" ]\n      volumeMounts:\n        - { name: workspace,     mountPath: /work/agent_jobs }\n        - { name: docker-socket, mountPath: /var/run/moonmind-docker }\n        - { name: docker-graph,  mountPath: /var/lib/docker }\n  volumes:\n    - { name: workspace,     persistentVolumeClaim: { claimName: moonmind-session-<session_id>-workspace } }\n    - { name: docker-socket, emptyDir: {} }\n    - { name: docker-graph,  emptyDir: {} }\n```\n\nFor clusters that disallow DinD, the `kubernetes-job` mode replaces nested Docker with per-workload Jobs; the agent then requests workloads through a MoonMind capability rather than `docker run`. That mode is a future option, not the default.\n\n---\n\n## 13. Session request and status\n\nThe Temporal `MoonMind.AgentSession` workflow requests a session and reads its status. The Docker-related portions of the request and the status surface are:\n\nSession request (excerpt):\n\n```yaml\nruntimeProfileRef: default-docker-sidecar\n\nrepo:\n  mountPath: /work/agent_jobs/<task_run_id>/repo\n  checkout: { provider: github, repository: owner/repo, ref: main }\n\ncapabilities:\n  docker:\n    required: true\n    mode: sidecar\n    compose: optional\n\nlifecycle:\n  destroySidecarOnSessionEnd: true\n  destroyDockerGraphOnSessionEnd: true\n  preserveWorkspaceOnSessionEnd: configurable\n```\n\nSession status (excerpt):\n\n```yaml\nphase: running\nworkspace: { mountPath: /work/agent_jobs, ready: true }\ncapabilities:\n  docker:\n    available: true\n    mode: sidecar-dind\n    dockerHost: unix:///var/run/moonmind-docker/docker.sock\n    composeAvailable: true\n    daemon: { ready: true, version: \"27.x\" }\n    checks:  { dockerVersion: passed, dockerInfo: passed }\ncontainers:\n  agent:         { phase: running }\n  dockerSidecar: { phase: running, ready: true }\n```\n\nIf the sidecar fails to come up:\n\n```yaml\ncapabilities:\n  docker:\n    available: false\n    mode: sidecar-dind\n    reason: sidecar_not_ready\n    message: \"Docker daemon did not become ready within 60s.\"\n```\n\nSkill and plan logic can then branch cleanly:\n\n- `docker.available == true` \u2192 run normal containerized tests.\n- `docker.available == false` \u2192 report the environment limitation or use a non-Docker fallback.\n\n---\n\n## 14. What the session sees\n\nInside the agent container, with sidecar mode enabled:\n\n```bash\n$ echo \"$MOONMIND_REPO_DIR\"\n/work/agent_jobs/<task_run_id>/repo\n\n$ echo \"$DOCKER_HOST\"\nunix:///var/run/moonmind-docker/docker.sock\n\n$ docker version\n$ docker run --rm alpine echo hello\n$ docker ps                 # only this session's containers\n```\n\nThe session does **not** see:\n\n- `/var/run/docker.sock` from the host\n- containers from other sessions\n- containers from the MoonMind application itself (api, worker, temporal, etc.)\n\nThe dedicated socket path `/var/run/moonmind-docker/docker.sock` is the convention; deployments must not silently substitute `/var/run/docker.sock` for the host socket.\n\n---\n\n## 15. Repository workload examples\n\n### 15.1 Smoke test\n\n```bash\ndocker run --rm alpine sh -lc 'echo hello from docker'\n```\n\n### 15.2 Workspace visibility\n\n```bash\necho \"agent wrote this\" > \"$MOONMIND_REPO_DIR/sidecar-check.txt\"\n\ndocker run --rm \\\n  -v \"$MOONMIND_REPO_DIR\":/workspace -w /workspace \\\n  alpine cat sidecar-check.txt\n# agent wrote this\n```\n\n### 15.3 .NET test workload\n\n```bash\ndocker run --rm \\\n  --user \"$(id -u):$(id -g)\" \\\n  -v \"$PWD\":/workspace -w /workspace \\\n  -e HOME=/workspace/.moonmind/home \\\n  -e DOTNET_CLI_HOME=/workspace/.moonmind/dotnet-home \\\n  -e NUGET_PACKAGES=/workspace/.moonmind/nuget/packages \\\n  -e DOTNET_CLI_TELEMETRY_OPTOUT=1 -e DOTNET_NOLOGO=1 \\\n  mcr.microsoft.com/dotnet/sdk:8.0 \\\n  bash ./scripts/ci-unit-tests.sh\n```\n\nThis is the workflow MoonMind recommends for ordinary containerized testing.\n\n---\n\n## 16. Repository script convention\n\nRepos should expose ordinary test entrypoints:\n\n```\nscripts/\n  test-container.sh     # outer: docker run \u2026 bash ./scripts/ci-unit-tests.sh\n  ci-unit-tests.sh      # inner: actual build/test commands\n```\n\nThis keeps the contract uniform across runtimes: the agent invokes a repo-provided script, the sidecar daemon runs the requested image, and the session reads results from the workspace.\n\n---\n\n## 17. Policy model\n\nThe strongest security boundary in this design comes from the topology itself:\n\n- a private per-session Docker daemon,\n- no host Docker socket,\n- no MoonMind deployment credentials in the agent or sidecar,\n- no visibility into MoonMind application containers,\n- explicit per-session cleanup,\n- resource limits applied outside the nested daemon.\n\nBeyond topology, policy is declared so that hardening can tighten over time. A Docker API proxy is **not** required for MVP, but the policy below is the target enforcement surface for a future proxy:\n\n```yaml\npolicy:\n  daemonScope: session\n\n  forbidden:\n    hostDockerSocket: true\n    sharedDaemonAcrossUsers: true\n    moonmindDeploymentSecretsInSession: true\n    appContainerControlFromSession: true\n\n  dockerOperations:\n    run:                  allowed\n    build:                allowed\n    pull:                 allowed\n    compose:              allowed\n    inspectOwnContainers: allowed\n    logsOwnContainers:    allowed\n    systemPrune:          denied\n    pluginInstall:        denied\n    swarm:                denied\n\n  dangerousRunOptions:\n    privileged:        warn-or-deny\n    hostNetwork:       deny\n    hostPid:           deny\n    hostIpc:           deny\n    devices:           deny\n    dockerSocketMount: deny\n    hostRootMount:     deny\n```\n\nMVP enforces the topology rules at launch time. Per-operation enforcement (e.g. blocking `docker swarm init` inside the session) is a follow-up that can be added with an API proxy once the broader policy surface is needed.\n\n---\n\n## 18. Resource model\n\nResource limits live **outside** the nested daemon so the daemon cannot grant itself more than the session sidecar received.\n\n```yaml\nresources:\n  session:        { maxRuntimeSeconds: 14400 }\n  agent:          { cpu: \"2\", memory: 4Gi }\n  dockerSidecar:  { cpu: \"4\", memory: 8Gi, ephemeralStorage: 40Gi }\n  nestedContainers:\n    defaultCpu:    \"2\"\n    defaultMemory: 4Gi\n    maxContainers: 16\n```\n\nThe sidecar can run multiple nested containers concurrently (build + test + compose stack). Size the outer sidecar limits for the realistic concurrent workload, not for a single shell.\n\n---\n\n## 19. Readiness behavior\n\nThe agent waits briefly for the sidecar's daemon to come up before reporting the session ready.\n\n```yaml\nreadiness:\n  docker:\n    required: true\n    timeoutSeconds: 60\n    intervalSeconds: 2\n    probes: [ \"docker version\", \"docker info\" ]\n```\n\nBehavior:\n\n- If `required: true` and the daemon does not become ready within `timeoutSeconds`, session startup fails (or is marked degraded per profile) and the status surface in \u00a713 records the reason.\n- If `required: false` and the daemon is not ready, the session still starts and the status reports `docker.available=false`. Skill/plan logic must check that field before attempting Docker work.\n\nRecommended defaults:\n\n- Normal managed-agent sessions: `required: true`.\n- Lightweight non-Docker sessions: `required: false` (or `workloadMode: no-docker`).\n\n---\n\n## 20. Cleanup model\n\nCleanup is declared explicitly so failures don't leave dangling state.\n\n```yaml\ncleanup:\n  onSessionEnd:\n    stopNestedContainers: true\n    removeDockerGraph:    true\n    removeDockerSocket:   true\n    preserveWorkspace:    configurable     # follows session-policy default\n\n  onSidecarFailure:\n    markDockerCapabilityUnavailable: true\n    preserveAgentSession:            true\n\n  onAgentFailure:\n    stopSidecar:        true\n    preserveWorkspace:  configurable\n```\n\nDefault posture: destroy the sidecar and its graph storage at session end; preserve the workspace only according to the existing managed-session retention policy.\n\n---\n\n## 21. Separation from the MoonMind admin/update path\n\nThe session sidecar is the **agent workload** path. It is not the path MoonMind uses to manage itself.\n\nOrdinary managed sessions must not:\n\n- restart MoonMind application containers,\n- deploy or roll back MoonMind services,\n- interact with the host Docker socket directly,\n- inspect or kill containers owned by other sessions or the MoonMind app.\n\nMoonMind admin/update operations (`deploy`, `restart`, `rollback`, image refresh) live in a dedicated **MoonMind ops runtime**:\n\n```yaml\nkind: MoonMindOpsRuntime\nname: docker-admin-runtime\nspec:\n  purpose: moonmind-application-operations\n  backend: docker\n  exposedToManagedAgents: false\n  allowedOperations: [ status, deploy, restart, rollback, logs ]\n  dockerBackend:\n    hostDockerAccess: true\n    component: moonmind-ops-runner\n    allowedServices: [ api, worker, session-manager, ops-runner ]\n  futureBackends: [ kubernetes ]\n```\n\nThis is the residual scope of the older Docker-out-of-Docker plane described in [`DockerOutOfDocker.md`](./DockerOutOfDocker.md). For ordinary repo tests, builds, and compose-driven workloads, use the sidecar runtime defined in this document, not `container.run_workload` / `container.run_container` / `container.run_docker`.\n\nIf the MoonMind API container ever needs Docker access for admin reasons, that access lives in a dedicated `moonmind-ops-runner`, not in the API container itself.\n\n---\n\n## 22. Audit and observability\n\nEvery per-session sidecar deployment must be discoverable and traceable. The two containers and their volumes carry MoonMind ownership labels consistent with `DockerOutOfDocker.md \u00a713.6`:\n\n- `moonmind.kind=managed-session` (agent) / `moonmind.kind=session-docker-sidecar` (sidecar)\n- `moonmind.session_id=<session_id>`\n- `moonmind.session_epoch=<session_epoch>`\n- `moonmind.task_run_id=<task_run_id>` (when bound)\n- `moonmind.workload_mode=docker-sidecar | docker-sidecar-rootless`\n\nThe session-status surface (\u00a713) reports daemon readiness, version, and probe results. Durable evidence for agent work continues to flow through the existing artifact pipeline; the sidecar itself is not the system of record. Per-container stdout/stderr capture for the daemon belongs in worker logs, not in the task artifact area, unless explicitly attached for debugging.\n\n---\n\n## 23. Validation rules\n\nThe session launcher must validate at least the following before starting a session, and fail closed on any violation:\n\n1. If `dockerSidecar.enabled=true`, then `agent.dockerClient.enabled=true`.\n2. `agent.dockerClient.daemonInAgent` must be `false`.\n3. `agent.env.DOCKER_HOST` must point at the declared sidecar socket path.\n4. `agent.workspace.mountPath == dockerSidecar.workspace.mountPath` (\u00a75.1).\n5. The sidecar mount set must not include the host Docker socket.\n6. Neither container may receive MoonMind deployment credentials, registry push secrets, or session-bridge tokens for unrelated sessions.\n7. The MoonMind API container must not mount the host Docker socket as part of normal workload support.\n8. Admin/ops Docker access must be isolated to the MoonMind ops runtime (\u00a721).\n9. The sidecar image tag must be pinned (`docker:27-dind`, not `docker:latest`).\n10. The Docker daemon scope must be per session \u2014 no shared daemon across sessions or users.\n\nExample failure message:\n\n```\nInvalid ManagedAgentRuntimeProfile:\n  agent workspace mountPath /workspace does not match\n  dockerSidecar workspaceMountPath /mnt/workspace.\n\n  Normal `docker run -v \"$PWD\":/workspace` will not work because\n  bind mount sources are resolved by the Docker daemon, which sees\n  a different filesystem path than the agent.\n```\n\n---\n\n## 24. Skill and plan guidance\n\nSkills and plans that drive containerized work in managed sessions should:\n\n- Prefer repo-provided scripts (`./scripts/test-container.sh`, `make test-container`, `docker compose run --rm test`).\n- Use a `docker version` probe to confirm capability before assuming Docker is available, and consult `capabilities.docker.available` in the session status when planning across steps.\n- Use ordinary Docker commands, not MoonMind workload-bridge tools, for repo tests and short-lived build/test containers.\n- Reserve MoonMind admin tools (deploy / restart / rollback) for MoonMind-managing flows, not for repo work.\n\nA skill should not assume that `container.run_workload` is the route to a `dotnet test` or `npm test`. The route is `docker run \u2026` or a repo-provided script that calls it.\n\n---\n\n## 25. Backend portability\n\n### 25.1 Docker today\n\nA session is two containers and three volumes (\u00a711). The session launcher creates them; the agent uses Docker normally; cleanup removes the sidecar and graph at session end.\n\n### 25.2 Kubernetes later\n\nThe same profile maps to a single Pod with two containers (\u00a712). Volumes become a PVC for the workspace and `emptyDir` volumes for the socket and graph.\n\n### 25.3 Kubernetes-native fallback\n\nFor clusters that disallow DinD, `workloadMode: kubernetes-job` lets the same logical workload become a Kubernetes Job:\n\n```yaml\nimage:     mcr.microsoft.com/dotnet/sdk:8.0\ncommand:   [ \"bash\", \"./scripts/ci-unit-tests.sh\" ]\nworkspace: current-session\n```\n\nThat mode preserves the principle (no host Docker, no shared daemon) but trades the \"agents see normal Docker\" property for native cluster scheduling. It is a future option, not the default execution path today.\n\n---\n\n## 26. Stable design rules\n\nThe rules below remain stable as implementation details evolve.\n\n1. Managed agent sessions run ordinary Docker commands; the daemon is a sibling container, not embedded in the agent image.\n2. The host Docker socket is never exposed to a managed session or its sidecar.\n3. The workspace volume is mounted at the same absolute path in the agent and the sidecar.\n4. The Docker daemon scope is per session; no daemon is shared across sessions or users.\n5. The Docker sidecar image is prebuilt and generic; it does not need the MoonMind codebase or deployment credentials.\n6. The session container is the actor for ordinary containerized work; control-plane-launched Docker workloads (DooD) are reserved for MoonMind admin/update flows.\n7. Artifacts and bounded session metadata remain authoritative; nested container state is not durable truth.\n8. The design has a clean Kubernetes mapping (sidecar in Pod, shared volumes) and a fallback to Kubernetes Jobs where DinD is disallowed.\n9. Resource limits live outside the nested daemon.\n10. The MoonMind API container stays lightweight and never carries the host Docker socket for normal workload support.\n\n---\n\n## 27. Final declarative contract\n\n```yaml\nmanagedAgentDockerContract:\n  normalWorkloads:\n    executionModel:       docker-sidecar\n    agentHas:             docker-cli-only\n    sidecarHas:           private-docker-daemon\n    hostDockerSocket:     forbidden\n    workspaceSharing:     same-path-shared-volume\n    repoTestingInterface: ordinary-docker-commands\n\n  agentContainer:\n    lightweight:                true\n    runsDockerd:                false\n    hasDockerCli:               true\n    hasComposePlugin:           optional\n    receivesDeploymentSecrets:  false\n\n  sidecarContainer:\n    prebuilt:                  true\n    needsMoonMindCodebase:     false\n    daemonScope:               per-session\n    receivesDeploymentSecrets: false\n    seesWorkspaceAt:           same-as-agent\n\n  adminUpdates:\n    executionModel:         separate-ops-runtime\n    dockerOutsideAllowed:   only-for-admin-backend\n    exposedToNormalAgents:  false\n    futureBackend:          kubernetes\n```\n\nMental model:\n\n- Agents run Docker like normal developers.\n- The Docker daemon is private to the session.\n- The workspace is shared with the sidecar at the same path.\n- MoonMind admin/update is a separate, narrow Docker path.\n- The MoonMind API container stays lightweight.\n- The sidecar is prebuilt and carries no MoonMind code or credentials.\n\n---\n\n## 28. Follow-up alignment work\n\nThis document supersedes specific clauses in two related architecture documents. Those docs need follow-up edits so that the canonical narrative stays coherent:\n\n- `docs/ManagedAgents/ManagedAgentArchitecture.md \u00a75.5` \u2014 rewrite to describe the sidecar topology as the default Docker capability path for managed sessions, and to keep the security boundary (no host socket, no app-container control) intact.\n- `docs/ManagedAgents/DockerOutOfDocker.md` \u2014 narrow the scope to MoonMind admin/update operations (and any deliberately exceptional control-plane workloads), and update \u00a717.3 so it no longer asserts that session containers must request all Docker work through the control plane.\n- `docs/ManagedAgents/ManagedAgentArchitecture.md`'s \"Related\" list and any architecture-overview diagrams that imply DooD is the canonical workload path.\n\nTrack those edits as part of adopting the sidecar runtime; do not leave them implicit.\n"
+  },
+  "extractedAt": "2026-05-16T08:58:18Z",
+  "mode": "jira",
+  "designSummary": "The design defines a desired-state managed-agent Docker sidecar runtime where normal repository tests and builds run through ordinary Docker commands from the agent container while a private per-session sibling sidecar owns the Docker daemon. It preserves host-socket isolation, same-path workspace mounts, per-session daemon state, explicit runtime modes, readiness and cleanup behavior, audit metadata, and a strict separation between ordinary agent workloads and MoonMind admin/update Docker access. It also documents future portability to Kubernetes sidecar Pods and Kubernetes Jobs while keeping artifacts and bounded session metadata as the source of truth rather than nested container state.",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Managed sessions run ordinary Docker commands through a sidecar runtime",
+      "type": "requirement",
+      "source_section": "1. Purpose; 2. Core decisions",
+      "explanation": "Normal repo tests, builds, docker run, docker build, and docker compose run originate from the managed agent session without MoonMind-specific workload syntax."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "Docker daemon is a sibling sidecar, not embedded in the agent image",
+      "type": "constraint",
+      "source_section": "1. Purpose; 2. Core decisions; 8. Agent image contract",
+      "explanation": "The agent image carries only client tooling; dockerd, containerd, runc, and graph storage remain outside the agent container."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Host Docker socket is forbidden for managed sessions and sidecars",
+      "type": "security",
+      "source_section": "1. Purpose; 2. Core decisions; 9. Docker sidecar contract; 14. What the session sees",
+      "explanation": "Neither the agent nor sidecar may mount or substitute the host /var/run/docker.sock."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Workspace path must match exactly in agent and sidecar",
+      "type": "constraint",
+      "source_section": "5.1 Workspace path invariant; 10. Volume contract; 23. Validation rules",
+      "explanation": "Bind mount sources are resolved by the daemon, so launch must reject mismatched absolute workspace paths."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "MoonMind workspace layout remains canonical",
+      "type": "state-model",
+      "source_section": "5.2 MoonMind workspace convention",
+      "explanation": "The sidecar runtime keeps agent_workspaces mounted at /work/agent_jobs with repo and artifacts under the established per-run layout."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Runtime profile declaratively describes agent, sidecar, volumes, resources, readiness, and policy",
+      "type": "artifact",
+      "source_section": "6. Session runtime profile",
+      "explanation": "Launch behavior is materialized from existing launcher inputs and provider/runtime profile records, not ad hoc imperative setup."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Runtime modes are explicit and cannot be raised by task instructions",
+      "type": "requirement",
+      "source_section": "7. Runtime modes",
+      "explanation": "Profiles choose docker-sidecar, docker-sidecar-rootless, no-docker, or future kubernetes-job; tasks cannot grant themselves more Docker capability."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "Agent image contract stays lightweight and CLI-only for Docker",
+      "type": "constraint",
+      "source_section": "8. Agent image contract",
+      "explanation": "The agent image must include shell, git, network basics, Docker CLI and optional Compose plugin, but no daemon or deployment credentials."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Sidecar image is generic, prebuilt, pinned, and credential-free",
+      "type": "security",
+      "source_section": "9. Docker sidecar contract; 23. Validation rules",
+      "explanation": "The sidecar needs only a daemon and session volumes; it must not receive MoonMind code, tokens, deployment credentials, or unpinned image tags."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Volumes have per-session lifecycle and sharing rules",
+      "type": "state-model",
+      "source_section": "10. Volume contract; 20. Cleanup model",
+      "explanation": "Workspace, docker-socket, docker-graph, and optional caches have declared mount paths, ownership, lifecycle, and cleanup semantics."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Docker deployment materializes as two containers and three per-session volumes with ownership names and labels",
+      "type": "integration",
+      "source_section": "11. Materialized Docker shape; 22. Audit and observability",
+      "explanation": "Current Docker deployments create session agent and sidecar containers plus workspace, socket, and graph volumes following MoonMind naming and labeling conventions."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Kubernetes portability maps the same profile to a future two-container Pod",
+      "type": "integration",
+      "source_section": "12. Materialized Kubernetes shape (future); 25. Backend portability",
+      "explanation": "The same logical contract should map to an agent plus sidecar Pod with shared PVC/emptyDir volumes."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "Kubernetes Job mode is a future fallback for clusters that disallow DinD",
+      "type": "integration",
+      "source_section": "7. Runtime modes; 12. Materialized Kubernetes shape (future); 25.3 Kubernetes-native fallback",
+      "explanation": "The design keeps a future native workload mode that preserves isolation but gives up ordinary in-session Docker commands."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "Session request and status expose Docker capability, readiness, mode, checks, and degraded reasons",
+      "type": "public-contract",
+      "source_section": "13. Session request and status; 19. Readiness behavior",
+      "explanation": "Temporal session workflows request runtime profiles and surface whether Docker is available, ready, and usable by skills/plans."
+    },
+    {
+      "id": "DESIGN-REQ-015",
+      "title": "Session-visible Docker scope is private to the current session",
+      "type": "security",
+      "source_section": "14. What the session sees; 17. Policy model",
+      "explanation": "The agent sees its DOCKER_HOST and only its session containers, not host/app/other-session containers."
+    },
+    {
+      "id": "DESIGN-REQ-016",
+      "title": "Repository workloads use normal scripts and Docker commands",
+      "type": "requirement",
+      "source_section": "15. Repository workload examples; 16. Repository script convention; 24. Skill and plan guidance",
+      "explanation": "Repo tests should run through scripts like test-container.sh or direct docker/compose commands rather than MoonMind workload bridge tools."
+    },
+    {
+      "id": "DESIGN-REQ-017",
+      "title": "Policy model enforces topology at MVP and leaves per-operation proxy enforcement for future hardening",
+      "type": "security",
+      "source_section": "17. Policy model",
+      "explanation": "MVP must enforce private daemon/no host socket/no app control/no deployment credentials; blocking specific Docker API operations can come later via proxy."
+    },
+    {
+      "id": "DESIGN-REQ-018",
+      "title": "Resource limits are applied outside the nested daemon",
+      "type": "requirement",
+      "source_section": "18. Resource model",
+      "explanation": "The sidecar and session receive outer CPU, memory, runtime, ephemeral storage, and nested-container limits that the daemon cannot exceed."
+    },
+    {
+      "id": "DESIGN-REQ-019",
+      "title": "Readiness behavior controls session startup and degraded reporting",
+      "type": "requirement",
+      "source_section": "19. Readiness behavior",
+      "explanation": "Docker version/info probes run with required/optional behavior and explicit timeout-driven failure or degraded status."
+    },
+    {
+      "id": "DESIGN-REQ-020",
+      "title": "Cleanup stops nested containers and removes sidecar state according to retention policy",
+      "type": "requirement",
+      "source_section": "20. Cleanup model",
+      "explanation": "Session end, sidecar failure, and agent failure have declared cleanup and preservation behavior."
+    },
+    {
+      "id": "DESIGN-REQ-021",
+      "title": "MoonMind admin/update Docker access remains isolated in a separate ops runtime",
+      "type": "integration",
+      "source_section": "21. Separation from the MoonMind admin/update path; 26. Stable design rules; 27. Final declarative contract",
+      "explanation": "Ordinary managed sessions must not deploy, restart, roll back, inspect, or kill MoonMind app containers; admin Docker access is a separate runtime."
+    },
+    {
+      "id": "DESIGN-REQ-022",
+      "title": "Audit and observability label every sidecar deployment and keep artifacts authoritative",
+      "type": "observability",
+      "source_section": "22. Audit and observability; 26. Stable design rules",
+      "explanation": "Session containers and volumes carry ownership labels; daemon readiness and versions are reported; durable work evidence remains in the artifact pipeline."
+    },
+    {
+      "id": "DESIGN-REQ-023",
+      "title": "Launcher validation fails closed for unsafe or inconsistent profiles",
+      "type": "requirement",
+      "source_section": "23. Validation rules",
+      "explanation": "Before launch, the system rejects missing client support, daemon-in-agent, wrong DOCKER_HOST, mismatched mounts, host socket, credentials, API socket mounts, unpinned sidecars, and shared daemons."
+    },
+    {
+      "id": "DESIGN-REQ-024",
+      "title": "Canonical docs require follow-up alignment after adopting sidecar runtime",
+      "type": "migration",
+      "source_section": "1.1 Relationship to existing architecture; 28. Follow-up alignment work",
+      "explanation": "Related architecture docs must be updated so DooD is no longer presented as the default repo workload path for managed sessions."
+    },
+    {
+      "id": "DESIGN-REQ-025",
+      "title": "Explicit out-of-scope boundaries constrain the sidecar runtime effort",
+      "type": "non-goal",
+      "source_section": "3. Scope and non-goals",
+      "explanation": "The design excludes MoonMind Kubernetes orchestration, arbitrary control-plane shells, container marketplaces, runtime-specific session protocols, and provider-profile/secrets/OAuth subsystem changes."
+    }
+  ],
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Add declarative Docker sidecar runtime profile validation",
+      "shortName": "sidecar-profile-validation",
+      "description": "As a MoonMind operator, I need managed-session Docker capability to be declared and validated before launch so unsafe or inconsistent runtime profiles fail closed instead of starting a broken or over-privileged session.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/DockerSidecarRuntime.md",
+        "title": "Managed Agent Docker Sidecar Runtime",
+        "sections": [
+          "6. Session runtime profile",
+          "7. Runtime modes",
+          "10. Volume contract",
+          "23. Validation rules",
+          "3. Scope and non-goals"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-023",
+          "DESIGN-REQ-025"
+        ]
+      },
+      "scope": [
+        "Define or extend the managed-session runtime profile contract for Docker sidecar fields.",
+        "Validate mode, Docker client, DOCKER_HOST, same-path workspace mounts, sidecar socket, per-session daemon scope, pinned sidecar image, and forbidden host socket/credential inputs.",
+        "Return actionable fail-closed errors for invalid profile shapes."
+      ],
+      "outOfScope": [
+        "Implementing Kubernetes orchestration, arbitrary control-plane shell execution, provider OAuth/secrets subsystems, or runtime-specific Codex/Claude/Gemini protocols."
+      ],
+      "independentTest": "Unit and launcher-boundary tests submit valid and invalid runtime profiles and verify accepted profile metadata or deterministic validation errors without starting real Docker workloads.",
+      "acceptanceCriteria": [
+        "A valid docker-sidecar profile with matching workspace paths, pinned sidecar image, Docker CLI enabled, and sidecar socket DOCKER_HOST passes validation.",
+        "Profiles fail validation when daemonInAgent is true, DOCKER_HOST points outside the declared socket path, workspace mount paths differ, host Docker socket is mounted, credentials or unrelated session tokens are injected, the API container is configured for normal workload Docker socket access, the sidecar image is unpinned, or daemon scope is shared.",
+        "Runtime mode is read from deployment/profile configuration and task instructions cannot raise Docker capability.",
+        "Validation errors explain the broken invariant and operational consequence."
+      ],
+      "requirements": [
+        "Expose a typed profile model for workloadMode, workspace, agent Docker client settings, dockerSidecar settings, resources, readiness, and policy.",
+        "Validate all minimum rules listed in the source document before session launch.",
+        "Keep explicit non-goals outside the contract surface."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-004",
+          "title": "Workspace path must match exactly in agent and sidecar",
+          "ownership": "This story explicitly owns enforcement or delivery of: Workspace path must match exactly in agent and sidecar"
+        },
+        {
+          "id": "DESIGN-REQ-006",
+          "title": "Runtime profile declaratively describes agent, sidecar, volumes, resources, readiness, and policy",
+          "ownership": "This story explicitly owns enforcement or delivery of: Runtime profile declaratively describes agent, sidecar, volumes, resources, readiness, and policy"
+        },
+        {
+          "id": "DESIGN-REQ-007",
+          "title": "Runtime modes are explicit and cannot be raised by task instructions",
+          "ownership": "This story explicitly owns enforcement or delivery of: Runtime modes are explicit and cannot be raised by task instructions"
+        },
+        {
+          "id": "DESIGN-REQ-010",
+          "title": "Volumes have per-session lifecycle and sharing rules",
+          "ownership": "This story explicitly owns enforcement or delivery of: Volumes have per-session lifecycle and sharing rules"
+        },
+        {
+          "id": "DESIGN-REQ-023",
+          "title": "Launcher validation fails closed for unsafe or inconsistent profiles",
+          "ownership": "This story explicitly owns enforcement or delivery of: Launcher validation fails closed for unsafe or inconsistent profiles"
+        },
+        {
+          "id": "DESIGN-REQ-025",
+          "title": "Explicit out-of-scope boundaries constrain the sidecar runtime effort",
+          "ownership": "This story explicitly owns enforcement or delivery of: Explicit out-of-scope boundaries constrain the sidecar runtime effort"
+        }
+      ],
+      "dependencies": [],
+      "assumptions": [
+        "Existing launcher inputs and provider/runtime profile records can carry the new profile fields without a new persistent table."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Launch managed sessions with a private Docker sidecar",
+      "shortName": "private-sidecar-launch",
+      "description": "As a managed agent user, I need a launched session to contain an agent container with Docker CLI and a sibling private Docker daemon sidecar so ordinary containerized test and build commands work without host socket access.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/DockerSidecarRuntime.md",
+        "title": "Managed Agent Docker Sidecar Runtime",
+        "sections": [
+          "1. Purpose",
+          "2. Core decisions",
+          "5. Runtime model",
+          "5.2 MoonMind workspace convention",
+          "8. Agent image contract",
+          "9. Docker sidecar contract",
+          "10. Volume contract",
+          "11. Materialized Docker shape"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-011"
+        ]
+      },
+      "scope": [
+        "Materialize Docker deployments as an agent container plus per-session sidecar container.",
+        "Mount workspace and socket volumes into both containers at declared paths and graph storage only into the sidecar.",
+        "Set DOCKER_HOST to the shared sidecar socket and preserve the /work/agent_jobs layout.",
+        "Apply MoonMind naming conventions for session containers and volumes."
+      ],
+      "outOfScope": [
+        "Running MoonMind admin/update flows through this sidecar.",
+        "Adding a Docker API proxy for per-operation command filtering."
+      ],
+      "independentTest": "Launcher integration or adapter-boundary tests create a session launch plan and assert generated containers, volumes, environment, image contracts, mount paths, and forbidden mounts.",
+      "acceptanceCriteria": [
+        "The agent container includes Docker CLI/optional Compose support but not dockerd, containerd, runc, Docker graph storage, host socket, or deployment credentials.",
+        "The sidecar uses a pinned generic Docker daemon image and receives no MoonMind codebase, deployment credentials, session tokens, or host Docker socket.",
+        "The workspace is mounted at the same absolute path in both containers and follows the existing /work/agent_jobs layout.",
+        "Session-scoped container and volume names follow the documented moonmind-session pattern."
+      ],
+      "requirements": [
+        "Create one private daemon sidecar per Docker-enabled session.",
+        "Share socket and workspace volumes between the agent and sidecar only as declared.",
+        "Keep graph storage session-scoped and sidecar-only."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "title": "Managed sessions run ordinary Docker commands through a sidecar runtime",
+          "ownership": "This story explicitly owns enforcement or delivery of: Managed sessions run ordinary Docker commands through a sidecar runtime"
+        },
+        {
+          "id": "DESIGN-REQ-002",
+          "title": "Docker daemon is a sibling sidecar, not embedded in the agent image",
+          "ownership": "This story explicitly owns enforcement or delivery of: Docker daemon is a sibling sidecar, not embedded in the agent image"
+        },
+        {
+          "id": "DESIGN-REQ-003",
+          "title": "Host Docker socket is forbidden for managed sessions and sidecars",
+          "ownership": "This story explicitly owns enforcement or delivery of: Host Docker socket is forbidden for managed sessions and sidecars"
+        },
+        {
+          "id": "DESIGN-REQ-005",
+          "title": "MoonMind workspace layout remains canonical",
+          "ownership": "This story explicitly owns enforcement or delivery of: MoonMind workspace layout remains canonical"
+        },
+        {
+          "id": "DESIGN-REQ-008",
+          "title": "Agent image contract stays lightweight and CLI-only for Docker",
+          "ownership": "This story explicitly owns enforcement or delivery of: Agent image contract stays lightweight and CLI-only for Docker"
+        },
+        {
+          "id": "DESIGN-REQ-009",
+          "title": "Sidecar image is generic, prebuilt, pinned, and credential-free",
+          "ownership": "This story explicitly owns enforcement or delivery of: Sidecar image is generic, prebuilt, pinned, and credential-free"
+        },
+        {
+          "id": "DESIGN-REQ-010",
+          "title": "Volumes have per-session lifecycle and sharing rules",
+          "ownership": "This story explicitly owns enforcement or delivery of: Volumes have per-session lifecycle and sharing rules"
+        },
+        {
+          "id": "DESIGN-REQ-011",
+          "title": "Docker deployment materializes as two containers and three per-session volumes with ownership names and labels",
+          "ownership": "This story explicitly owns enforcement or delivery of: Docker deployment materializes as two containers and three per-session volumes with ownership names and labels"
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Expose Docker capability readiness in session request and status",
+      "shortName": "docker-capability-status",
+      "description": "As a workflow or skill author, I need session status to report whether Docker sidecar capability is ready, degraded, or unavailable so plans can choose ordinary Docker commands only when the environment supports them.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/DockerSidecarRuntime.md",
+        "title": "Managed Agent Docker Sidecar Runtime",
+        "sections": [
+          "13. Session request and status",
+          "19. Readiness behavior",
+          "24. Skill and plan guidance"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-019",
+          "DESIGN-REQ-016"
+        ]
+      },
+      "scope": [
+        "Carry Docker capability requirements in the session request.",
+        "Probe docker version and docker info with configured timeout/interval behavior.",
+        "Expose available, mode, dockerHost, compose availability, daemon readiness/version, checks, reason, and message in session status."
+      ],
+      "outOfScope": [
+        "Executing repository tests as part of readiness.",
+        "Publishing provider-specific runtime protocol changes."
+      ],
+      "independentTest": "Workflow/activity boundary tests simulate ready, timeout, and optional-degraded sidecar probe results and assert serialized session status.",
+      "acceptanceCriteria": [
+        "When Docker is required and probes pass, status reports docker.available=true with sidecar mode, socket DOCKER_HOST, daemon ready/version, and passed checks.",
+        "When Docker is required and readiness times out, startup fails or is marked degraded per profile with reason sidecar_not_ready.",
+        "When Docker is optional and readiness fails, the session starts with docker.available=false.",
+        "Skill/plan guidance can consult capabilities.docker.available and use docker version as a probe."
+      ],
+      "requirements": [
+        "Represent Docker capability request fields for required mode and compose support.",
+        "Record readiness probe results in compact status metadata.",
+        "Preserve deterministic status values for unavailable Docker capability."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-014",
+          "title": "Session request and status expose Docker capability, readiness, mode, checks, and degraded reasons",
+          "ownership": "This story explicitly owns enforcement or delivery of: Session request and status expose Docker capability, readiness, mode, checks, and degraded reasons"
+        },
+        {
+          "id": "DESIGN-REQ-019",
+          "title": "Readiness behavior controls session startup and degraded reporting",
+          "ownership": "This story explicitly owns enforcement or delivery of: Readiness behavior controls session startup and degraded reporting"
+        },
+        {
+          "id": "DESIGN-REQ-016",
+          "title": "Repository workloads use normal scripts and Docker commands",
+          "ownership": "This story explicitly owns enforcement or delivery of: Repository workloads use normal scripts and Docker commands"
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Enforce private session Docker isolation and policy guardrails",
+      "shortName": "session-docker-isolation",
+      "description": "As a MoonMind operator, I need Docker-enabled managed sessions to be isolated from the host daemon, MoonMind application containers, deployment credentials, and other sessions so normal repo workloads cannot affect platform operations or other users.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/DockerSidecarRuntime.md",
+        "title": "Managed Agent Docker Sidecar Runtime",
+        "sections": [
+          "14. What the session sees",
+          "17. Policy model",
+          "21. Separation from the MoonMind admin/update path",
+          "26. Stable design rules",
+          "27. Final declarative contract"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-021"
+        ]
+      },
+      "scope": [
+        "Enforce MVP topology policy at launch time: private daemon, no host socket, no app-container control, no deployment credentials, no shared daemon.",
+        "Ensure the agent sees only the dedicated sidecar socket path and its own session containers.",
+        "Keep MoonMind admin/update Docker operations on a separate ops runtime."
+      ],
+      "outOfScope": [
+        "Implementing a full Docker API proxy for blocking every dangerous Docker operation."
+      ],
+      "independentTest": "Security-oriented launcher tests and runtime contract tests inspect generated specs and environment for forbidden sockets, credentials, app-control mounts, and shared daemons.",
+      "acceptanceCriteria": [
+        "Managed sessions never receive /var/run/docker.sock or a silent substitution to the host socket path.",
+        "docker ps from a session is scoped to the private sidecar daemon.",
+        "Admin operations such as deploy, restart, rollback, image refresh, and app logs are available only through the dedicated ops runtime.",
+        "MVP documents and enforces topology guardrails while future Docker API proxy enforcement remains separate."
+      ],
+      "requirements": [
+        "Forbid hostDockerSocket, sharedDaemonAcrossUsers, moonmindDeploymentSecretsInSession, and appContainerControlFromSession in runtime policy.",
+        "Reserve control-plane Docker access for a MoonMindOpsRuntime-style backend with exposedToManagedAgents=false."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-003",
+          "title": "Host Docker socket is forbidden for managed sessions and sidecars",
+          "ownership": "This story explicitly owns enforcement or delivery of: Host Docker socket is forbidden for managed sessions and sidecars"
+        },
+        {
+          "id": "DESIGN-REQ-015",
+          "title": "Session-visible Docker scope is private to the current session",
+          "ownership": "This story explicitly owns enforcement or delivery of: Session-visible Docker scope is private to the current session"
+        },
+        {
+          "id": "DESIGN-REQ-017",
+          "title": "Policy model enforces topology at MVP and leaves per-operation proxy enforcement for future hardening",
+          "ownership": "This story explicitly owns enforcement or delivery of: Policy model enforces topology at MVP and leaves per-operation proxy enforcement for future hardening"
+        },
+        {
+          "id": "DESIGN-REQ-021",
+          "title": "MoonMind admin/update Docker access remains isolated in a separate ops runtime",
+          "ownership": "This story explicitly owns enforcement or delivery of: MoonMind admin/update Docker access remains isolated in a separate ops runtime"
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Apply sidecar resource limits, cleanup, and retention behavior",
+      "shortName": "sidecar-lifecycle-cleanup",
+      "description": "As a MoonMind operator, I need Docker sidecar resources and cleanup behavior to be explicit so nested containers cannot exceed allocated capacity and failed or completed sessions do not leave dangling Docker state.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/DockerSidecarRuntime.md",
+        "title": "Managed Agent Docker Sidecar Runtime",
+        "sections": [
+          "18. Resource model",
+          "20. Cleanup model",
+          "10. Volume contract"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-018",
+          "DESIGN-REQ-020"
+        ]
+      },
+      "scope": [
+        "Apply outer resource limits to the session, agent, sidecar, and nested-container defaults/caps.",
+        "Stop nested containers and remove socket/graph state at session end.",
+        "Handle sidecar and agent failure according to declared cleanup and workspace retention policy."
+      ],
+      "outOfScope": [
+        "Long-term cross-session Docker image caching or container marketplace behavior."
+      ],
+      "independentTest": "Lifecycle tests simulate session end, sidecar failure, and agent failure and assert cleanup calls, retention/removal decisions, and status changes.",
+      "acceptanceCriteria": [
+        "Sidecar CPU, memory, ephemeral storage, max runtime, default nested container resources, and max container counts are applied outside the nested daemon.",
+        "On session end, nested containers stop and Docker graph/socket state is removed by default while workspace preservation follows retention policy.",
+        "On sidecar failure, Docker capability becomes unavailable but the agent session can be preserved when policy says so.",
+        "On agent failure, sidecar cleanup runs and workspace retention remains configurable."
+      ],
+      "requirements": [
+        "Represent resource limits in the runtime profile and launch plan.",
+        "Run idempotent cleanup for sidecar, graph, socket, and nested containers.",
+        "Keep optional caches deployment-approved and avoid arbitrary host path mounts."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-010",
+          "title": "Volumes have per-session lifecycle and sharing rules",
+          "ownership": "This story explicitly owns enforcement or delivery of: Volumes have per-session lifecycle and sharing rules"
+        },
+        {
+          "id": "DESIGN-REQ-018",
+          "title": "Resource limits are applied outside the nested daemon",
+          "ownership": "This story explicitly owns enforcement or delivery of: Resource limits are applied outside the nested daemon"
+        },
+        {
+          "id": "DESIGN-REQ-020",
+          "title": "Cleanup stops nested containers and removes sidecar state according to retention policy",
+          "ownership": "This story explicitly owns enforcement or delivery of: Cleanup stops nested containers and removes sidecar state according to retention policy"
+        }
+      ],
+      "dependencies": [
+        "STORY-002",
+        "STORY-003"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-006",
+      "summary": "Publish sidecar audit labels and runtime observability",
+      "shortName": "sidecar-audit-observability",
+      "description": "As a MoonMind operator, I need sidecar containers and volumes to be discoverable and session status to expose Docker runtime facts so I can trace ownership, diagnose readiness failures, and rely on artifacts as the durable evidence of work.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/DockerSidecarRuntime.md",
+        "title": "Managed Agent Docker Sidecar Runtime",
+        "sections": [
+          "22. Audit and observability",
+          "13. Session request and status",
+          "26. Stable design rules"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-022"
+        ]
+      },
+      "scope": [
+        "Apply MoonMind ownership labels to agent containers, sidecar containers, and volumes.",
+        "Report daemon readiness, version, mode, and probe results in session status.",
+        "Route sidecar daemon stdout/stderr to worker logs by default and keep task evidence in existing artifacts."
+      ],
+      "outOfScope": [
+        "Making sidecar daemon logs a mandatory task artifact for every run."
+      ],
+      "independentTest": "Adapter-boundary tests inspect generated labels and status payloads; log routing tests verify daemon logs are not incorrectly treated as task artifacts.",
+      "acceptanceCriteria": [
+        "Agent and sidecar resources carry moonmind.kind, moonmind.session_id, moonmind.session_epoch, moonmind.task_run_id when bound, and moonmind.workload_mode labels.",
+        "Session status exposes readiness, daemon version, mode, and probe results in a compact surface.",
+        "Durable evidence for agent work continues through the artifact pipeline and nested container state is not the system of record.",
+        "Sidecar daemon stdout/stderr is available through worker logs unless debug explicitly attaches it as an artifact."
+      ],
+      "requirements": [
+        "Label all launched sidecar runtime resources consistently with ownership conventions.",
+        "Keep artifacts and bounded metadata authoritative for task outcomes."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-011",
+          "title": "Docker deployment materializes as two containers and three per-session volumes with ownership names and labels",
+          "ownership": "This story explicitly owns enforcement or delivery of: Docker deployment materializes as two containers and three per-session volumes with ownership names and labels"
+        },
+        {
+          "id": "DESIGN-REQ-014",
+          "title": "Session request and status expose Docker capability, readiness, mode, checks, and degraded reasons",
+          "ownership": "This story explicitly owns enforcement or delivery of: Session request and status expose Docker capability, readiness, mode, checks, and degraded reasons"
+        },
+        {
+          "id": "DESIGN-REQ-022",
+          "title": "Audit and observability label every sidecar deployment and keep artifacts authoritative",
+          "ownership": "This story explicitly owns enforcement or delivery of: Audit and observability label every sidecar deployment and keep artifacts authoritative"
+        }
+      ],
+      "dependencies": [
+        "STORY-002",
+        "STORY-003"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-007",
+      "summary": "Guide repository workloads to ordinary Docker entrypoints",
+      "shortName": "ordinary-docker-entrypoints",
+      "description": "As an agent or skill author, I need managed-session containerized work to use ordinary repo-provided Docker scripts and commands so tests and builds run the way developers expect while MoonMind-specific workload bridge tools stay reserved for control-plane operations.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/DockerSidecarRuntime.md",
+        "title": "Managed Agent Docker Sidecar Runtime",
+        "sections": [
+          "15. Repository workload examples",
+          "16. Repository script convention",
+          "24. Skill and plan guidance",
+          "21. Separation from the MoonMind admin/update path"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-021"
+        ]
+      },
+      "scope": [
+        "Document and test expected use of docker run, docker build, docker compose run, and repo scripts such as scripts/test-container.sh.",
+        "Ensure skills/plans prefer ordinary Docker commands for repo tests and short-lived build/test containers.",
+        "Reserve MoonMind workload bridge and admin tools for non-repo or MoonMind-managing flows."
+      ],
+      "outOfScope": [
+        "Rewriting every repository to add test-container.sh scripts.",
+        "Changing provider-specific managed session protocols."
+      ],
+      "independentTest": "Skill guidance and contract tests verify representative repo workload commands run through DOCKER_HOST and planning does not route ordinary tests through admin workload tools.",
+      "acceptanceCriteria": [
+        "A Docker-capable session can run the documented smoke, workspace visibility, docker build, and docker compose examples through the sidecar daemon.",
+        "Skills and plans check Docker capability before attempting Docker work.",
+        "MoonMind admin tools are not recommended or invoked for ordinary repo test/build workloads."
+      ],
+      "requirements": [
+        "Surface clear repository script conventions for outer Docker invocation and inner build/test commands.",
+        "Keep the developer mental model as normal Docker use from the session."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "title": "Managed sessions run ordinary Docker commands through a sidecar runtime",
+          "ownership": "This story explicitly owns enforcement or delivery of: Managed sessions run ordinary Docker commands through a sidecar runtime"
+        },
+        {
+          "id": "DESIGN-REQ-016",
+          "title": "Repository workloads use normal scripts and Docker commands",
+          "ownership": "This story explicitly owns enforcement or delivery of: Repository workloads use normal scripts and Docker commands"
+        },
+        {
+          "id": "DESIGN-REQ-021",
+          "title": "MoonMind admin/update Docker access remains isolated in a separate ops runtime",
+          "ownership": "This story explicitly owns enforcement or delivery of: MoonMind admin/update Docker access remains isolated in a separate ops runtime"
+        }
+      ],
+      "dependencies": [
+        "STORY-002",
+        "STORY-003",
+        "STORY-004"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-008",
+      "summary": "Preserve backend portability for Kubernetes sidecar and Job modes",
+      "shortName": "backend-portability-targets",
+      "description": "As a platform maintainer, I need the sidecar runtime profile to retain a clean future mapping to Kubernetes Pods and Kubernetes Jobs so Docker deployments today do not block hardened or cluster-native deployments later.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/DockerSidecarRuntime.md",
+        "title": "Managed Agent Docker Sidecar Runtime",
+        "sections": [
+          "12. Materialized Kubernetes shape (future)",
+          "25. Backend portability",
+          "7. Runtime modes",
+          "26. Stable design rules"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-007"
+        ]
+      },
+      "scope": [
+        "Keep runtime profile fields backend-neutral enough to map to Docker containers today and Kubernetes Pods later.",
+        "Represent kubernetes-job as a future runtime mode without making it the default execution path.",
+        "Document the tradeoff that Kubernetes Job mode preserves isolation but does not let agents run ordinary docker run commands."
+      ],
+      "outOfScope": [
+        "Implementing Kubernetes orchestration in this story.",
+        "Making kubernetes-job the current default for Docker deployments."
+      ],
+      "independentTest": "Contract tests serialize a profile and verify required fields can be projected into both current Docker launch specs and documented Kubernetes Pod/Job shapes.",
+      "acceptanceCriteria": [
+        "The profile model keeps workspace, socket, graph, resources, labels, and capability semantics separable from Docker-specific rendering.",
+        "docker-sidecar remains the default for trusted Docker deployments, rootless remains a hardening target, and kubernetes-job remains future.",
+        "Kubernetes Job mode cannot be selected unless deployment explicitly supports it."
+      ],
+      "requirements": [
+        "Do not encode Docker Compose-only assumptions into the durable runtime profile contract.",
+        "Keep backend portability visible in docs and tests."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-012",
+          "title": "Kubernetes portability maps the same profile to a future two-container Pod",
+          "ownership": "This story explicitly owns enforcement or delivery of: Kubernetes portability maps the same profile to a future two-container Pod"
+        },
+        {
+          "id": "DESIGN-REQ-013",
+          "title": "Kubernetes Job mode is a future fallback for clusters that disallow DinD",
+          "ownership": "This story explicitly owns enforcement or delivery of: Kubernetes Job mode is a future fallback for clusters that disallow DinD"
+        },
+        {
+          "id": "DESIGN-REQ-007",
+          "title": "Runtime modes are explicit and cannot be raised by task instructions",
+          "ownership": "This story explicitly owns enforcement or delivery of: Runtime modes are explicit and cannot be raised by task instructions"
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "No Kubernetes implementation is required for the initial Docker-sidecar adoption story set."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-009",
+      "summary": "Align canonical managed-agent Docker documentation",
+      "shortName": "canonical-doc-alignment",
+      "description": "As a MoonMind maintainer, I need the related managed-agent architecture documents to reflect that Docker sidecar is the default ordinary repo workload path and DooD is reserved for MoonMind admin/update operations so canonical docs do not contradict the desired runtime model.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/DockerSidecarRuntime.md",
+        "title": "Managed Agent Docker Sidecar Runtime",
+        "sections": [
+          "1.1 Relationship to existing architecture",
+          "21. Separation from the MoonMind admin/update path",
+          "28. Follow-up alignment work"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-021",
+          "DESIGN-REQ-024"
+        ]
+      },
+      "scope": [
+        "Update ManagedAgentArchitecture.md section 5.5 to describe sidecar topology as the default Docker capability path.",
+        "Update DockerOutOfDocker.md to narrow DooD scope to admin/update and deliberately exceptional control-plane workloads.",
+        "Update related lists and overview diagrams that imply DooD is the canonical managed-session workload path."
+      ],
+      "outOfScope": [
+        "Creating migration checklists in canonical docs or implementing runtime code changes."
+      ],
+      "independentTest": "Documentation review and grep checks verify canonical docs no longer state ordinary repo Docker work must route through the control plane and preserve no-host-socket/no-app-control invariants.",
+      "acceptanceCriteria": [
+        "ManagedAgentArchitecture.md points to sidecar runtime as the default Docker capability path while preserving security boundaries.",
+        "DockerOutOfDocker.md is narrowed to MoonMind admin/update and exceptional control-plane workloads.",
+        "Architecture overview references and diagrams no longer contradict the sidecar default.",
+        "Migration or rollout details stay in MoonSpec artifacts or local handoffs."
+      ],
+      "requirements": [
+        "Keep canonical docs focused on desired state per Constitution principle XII.",
+        "Preserve the source document as the reference for sidecar runtime semantics."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-021",
+          "title": "MoonMind admin/update Docker access remains isolated in a separate ops runtime",
+          "ownership": "This story explicitly owns enforcement or delivery of: MoonMind admin/update Docker access remains isolated in a separate ops runtime"
+        },
+        {
+          "id": "DESIGN-REQ-024",
+          "title": "Canonical docs require follow-up alignment after adopting sidecar runtime",
+          "ownership": "This story explicitly owns enforcement or delivery of: Canonical docs require follow-up alignment after adopting sidecar runtime"
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-004"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-002",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-002",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-001",
+      "STORY-008"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-001",
+      "STORY-002",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-002",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-008"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-008"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-003",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-003",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-017": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-018": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-019": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-020": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-021": [
+      "STORY-004",
+      "STORY-007",
+      "STORY-009"
+    ],
+    "DESIGN-REQ-022": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-023": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-024": [
+      "STORY-009"
+    ],
+    "DESIGN-REQ-025": [
+      "STORY-001"
+    ]
+  }
+}
