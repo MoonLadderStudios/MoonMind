@@ -2279,13 +2279,108 @@ async def test_audit_entries_expose_apply_mode_and_affected_systems(
             permissions={"settings.audit.read"},
         )
 
-    assert entries[0].event_type == "settings.override.updated"
+    assert entries[0].event_type == "setting_changed"
     assert entries[0].key == "workflow.default_publish_mode"
     assert entries[0].scope == "workspace"
+    assert entries[0].source == "workspace_override"
     assert entries[0].apply_mode == "next_task"
     assert entries[0].affected_systems == ["task_creation", "publishing"]
     assert entries[0].validation_outcome == "accepted"
     assert entries[0].created_at is not None
+
+
+@pytest.mark.asyncio
+async def test_apply_overrides_returns_setting_changed_event_with_refresh_targets(
+    settings_session_maker,
+):
+    async with settings_session_maker() as settings_session:
+        entry_type = SettingsCatalogService(env={})._registry[0].__class__
+        service = SettingsCatalogService(
+            env={},
+            session=settings_session,
+            user_id=uuid4(),
+            registry=(
+                entry_type(
+                    key="test.provider_profile",
+                    title="Provider Profile",
+                    category="Test",
+                    section="user-workspace",
+                    value_type="string",
+                    ui="provider_profile_picker",
+                    scopes=("workspace",),
+                    default_value="profile-default",
+                    order=1,
+                    apply_mode="next_launch",
+                    applies_to=(
+                        "task_creation",
+                        "workflow_runtime",
+                        "provider_profiles",
+                    ),
+                ),
+            ),
+        )
+
+        response = await service.apply_overrides(
+            scope="workspace",
+            changes={"test.provider_profile": "profile-main"},
+            expected_versions={"test.provider_profile": 1},
+        )
+
+    event = response.change_events[0]
+    assert event.event_type == "setting_changed"
+    assert event.key == "test.provider_profile"
+    assert event.scope == "workspace"
+    assert event.source == "workspace_override"
+    assert event.apply_mode == "next_launch"
+    assert event.actor_user_id is not None
+    assert event.changed_at is not None
+    assert event.affected_systems == [
+        "task_creation",
+        "workflow_runtime",
+        "provider_profiles",
+    ]
+    assert event.refresh_targets == [
+        "provider_profile_manager",
+        "settings_catalog",
+        "task_creation_defaults",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_catalog_keeps_reload_setting_pending_until_reload(
+    settings_session_maker,
+):
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(env={}, session=settings_session)
+        await service.apply_overrides(
+            scope="workspace",
+            changes={"skills.policy_mode": "allowlist"},
+            expected_versions={"skills.policy_mode": 1},
+        )
+
+        catalog = await service.catalog_async(
+            section="user-workspace",
+            scope="workspace",
+        )
+        effective = await service.effective_value_async(
+            "skills.policy_mode",
+            scope="workspace",
+        )
+
+    skill_policy = next(
+        item
+        for item in catalog.categories["Skills"]
+        if item.key == "skills.policy_mode"
+    )
+    assert skill_policy.apply_mode == "worker_reload"
+    assert skill_policy.activation_state == "pending_reload"
+    assert skill_policy.active is False
+    assert skill_policy.pending_value == "allowlist"
+    assert skill_policy.affected_process_or_worker == "workflow_runtime, skills"
+    assert skill_policy.completion_guidance == "Reload affected workers to activate this value."
+    assert effective.activation_state == "pending_reload"
+    assert effective.active is False
+    assert effective.pending_value == "allowlist"
 
 
 @pytest.mark.asyncio
