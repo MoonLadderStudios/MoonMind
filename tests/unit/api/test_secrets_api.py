@@ -167,3 +167,59 @@ def test_validate_secret_response_is_redacted(mock_secrets_service):
     assert resp.json()["diagnostics"][0]["message"] == (
         "Managed secret is missing; token=[REDACTED]"
     )
+
+
+def test_secret_usage_endpoint_returns_references_and_object_names_only(
+    mock_secrets_service,
+):
+    raw_secret = "ghp_usage_plaintext"
+    mock_secrets_service.list_secret_usage.return_value = {
+        "secretRef": "db://github-pat-main",
+        "usages": [
+            {
+                "consumerType": "setting_override",
+                "objectName": "Workspace setting integrations.github.token_ref",
+                "reference": "db://github-pat-main",
+                "scope": "workspace",
+                "settingKey": "integrations.github.token_ref",
+            }
+        ],
+        "diagnostics": [],
+    }
+
+    resp = client.get("/api/v1/secrets/github-pat-main/usage")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["secretRef"] == "db://github-pat-main"
+    assert body["usages"][0]["objectName"] == (
+        "Workspace setting integrations.github.token_ref"
+    )
+    assert body["usages"][0]["reference"] == "db://github-pat-main"
+    assert "ciphertext" not in resp.text
+    assert raw_secret not in resp.text
+
+
+def test_secret_usage_endpoint_redacts_missing_secret_diagnostics(
+    mock_secrets_service,
+):
+    raw_secret = "sk-missing-secret"
+    mock_secrets_service.list_secret_usage.return_value = {
+        "secretRef": "db://missing-secret",
+        "usages": [],
+        "diagnostics": [
+            {
+                "code": "secret_ref_unresolved",
+                "message": f"Managed secret is missing; token={raw_secret}",
+                "severity": "error",
+            }
+        ],
+    }
+
+    resp = client.get("/api/v1/secrets/missing-secret/usage")
+
+    assert resp.status_code == 200
+    assert raw_secret not in resp.text
+    assert resp.json()["diagnostics"][0]["message"] == (
+        "Managed secret is missing; token=[REDACTED]"
+    )

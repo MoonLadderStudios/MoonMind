@@ -1,13 +1,16 @@
 import structlog
 from typing import Any, Sequence
 from datetime import datetime, timezone
+from uuid import UUID
 
-from sqlalchemy import select, Row
+from sqlalchemy import and_, or_, select, Row
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.db.models import ManagedSecret, SecretStatus
+from api_service.db.models import ManagedSecret, SecretStatus, SettingsOverride
 
 logger = structlog.get_logger(__name__)
+
+_DEFAULT_SETTINGS_SUBJECT_ID = UUID("00000000-0000-0000-0000-000000000000")
 
 class SecretsService:
     """Service layer for managing securely encrypted secrets."""
@@ -130,6 +133,89 @@ class SecretsService:
             )
         )
         return result.all()
+
+    @classmethod
+    async def list_secret_usage(
+        cls,
+        db: AsyncSession,
+        slug: str,
+        *,
+        workspace_id: UUID | None = None,
+        user_id: UUID | None = None,
+    ) -> dict[str, Any]:
+        """List metadata-only consumers for a managed secret reference."""
+        secret_ref = f"db://{slug}"
+        resolved_workspace_id = workspace_id or _DEFAULT_SETTINGS_SUBJECT_ID
+        resolved_user_id = user_id or _DEFAULT_SETTINGS_SUBJECT_ID
+        status_result = await db.execute(
+            select(ManagedSecret.status).where(ManagedSecret.slug == slug)
+        )
+        status = status_result.scalar_one_or_none()
+        if status is None:
+            return {
+                "secretRef": secret_ref,
+                "usages": [],
+                "diagnostics": [
+                    {
+                        "code": "secret_ref_unresolved",
+                        "message": "Managed secret is missing.",
+                        "severity": "error",
+                    }
+                ],
+            }
+
+        usage_result = await db.execute(
+            select(
+                SettingsOverride.key,
+                SettingsOverride.scope,
+                SettingsOverride.value_json,
+            ).where(
+                SettingsOverride.workspace_id == resolved_workspace_id,
+                or_(
+                    and_(
+                        SettingsOverride.scope == "user",
+                        SettingsOverride.user_id == resolved_user_id,
+                    ),
+                    and_(
+                        SettingsOverride.scope != "user",
+                        SettingsOverride.user_id == _DEFAULT_SETTINGS_SUBJECT_ID,
+                    ),
+                ),
+            )
+        )
+        usages = []
+        for key, scope, value_json in usage_result:
+            if not cls._value_references_secret(value_json, secret_ref):
+                continue
+            scope = str(scope)
+            scope_label = "Workspace" if scope == "workspace" else "User"
+            usages.append(
+                {
+                    "consumerType": "setting_override",
+                    "objectName": f"{scope_label} setting {key}",
+                    "reference": secret_ref,
+                    "scope": scope,
+                    "settingKey": key,
+                }
+            )
+
+        return {"secretRef": secret_ref, "usages": usages, "diagnostics": []}
+
+    @staticmethod
+    def _value_references_secret(value: Any, secret_ref: str) -> bool:
+        if value == secret_ref:
+            return True
+        if isinstance(value, dict):
+            return any(
+                SecretsService._value_references_secret(item, secret_ref)
+                for item in value.values()
+            )
+        if isinstance(value, list):
+            return any(
+                SecretsService._value_references_secret(item, secret_ref)
+                for item in value
+            )
+        return False
 
     @classmethod
     async def get_secret(cls, db: AsyncSession, slug: str) -> str | None:

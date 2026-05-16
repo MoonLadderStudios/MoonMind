@@ -122,6 +122,24 @@ def test_secret_redactor_scrub_sequence():
     result = redactor.scrub_sequence(["This is my_secret", "No secrets"])
     assert result == ["This is ***", "No secrets"]
 
+def test_redact_sensitive_text_redacts_auth_paths_without_regex_backtracking():
+    repeated_path = "/home/app/.codex-auth/" + ("auth-volume/" * 200)
+
+    result = redact_sensitive_payload(f"token=sk-test in {repeated_path}")
+
+    assert result == "token=[REDACTED] in [REDACTED_AUTH_PATH]"
+
+def test_redact_sensitive_text_redacts_private_keys_without_regex_backtracking():
+    private_key = (
+        "prefix -----BEGIN PRIVATE KEY-----"
+        + ("-----BEGIN PRIVATE KEY-----" * 200)
+        + "-----END PRIVATE KEY----- suffix"
+    )
+
+    result = redact_sensitive_payload(private_key)
+
+    assert result == "prefix [REDACTED_PRIVATE_KEY] suffix"
+
 def test_redact_profile_file_templates_redacts_nested_content_fields():
     raw_secret = "sk-template-raw-secret"
 
