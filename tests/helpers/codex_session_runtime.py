@@ -19,6 +19,7 @@ def write_fake_app_server(
     start_thread_id: str = "vendor-thread-1",
     start_thread_path: str | None = "/tmp/vendor-thread-1.jsonl",
     rollout_entries_on_read: list[dict] | None = None,
+    items_list_assistant_text: str | None = None,
     skill_outcome_path: Path | str | None = None,
     skill_outcome_payload: dict | str | None = None,
     steer_record_path: Path | None = None,
@@ -58,6 +59,7 @@ ASSISTANT_TEXT = __ASSISTANT_TEXT__
 THREAD_STATUS_TYPE = __THREAD_STATUS_TYPE__
 THREAD_STATUS_REASON = __THREAD_STATUS_REASON__
 ROLLOUT_ENTRIES_ON_READ = __ROLLOUT_ENTRIES_ON_READ__
+ITEMS_LIST_ASSISTANT_TEXT = __ITEMS_LIST_ASSISTANT_TEXT__
 SKILL_OUTCOME_PATH = __SKILL_OUTCOME_PATH__
 SKILL_OUTCOME_PAYLOAD = __SKILL_OUTCOME_PAYLOAD__
 SKILL_OUTCOME_PAYLOAD_IS_RAW = __SKILL_OUTCOME_PAYLOAD_IS_RAW__
@@ -212,6 +214,27 @@ __COMPLETION_BLOCK__
             "result": {"status": "running"},
         }) + "\\n")
         sys.stdout.flush()
+    elif method == "thread/turns/items/list":
+        turn_items = []
+        if turn_completed and ITEMS_LIST_ASSISTANT_TEXT is not None:
+            turn_items = [
+                {
+                    "type": "agentMessage",
+                    "id": "msg-list-1",
+                    "text": ITEMS_LIST_ASSISTANT_TEXT,
+                    "phase": "final_answer",
+                    "memoryCitation": None,
+                }
+            ]
+        sys.stdout.write(json.dumps({
+            "id": msg_id,
+            "result": {
+                "data": turn_items,
+                "nextCursor": None,
+                "backwardsCursor": None,
+            },
+        }) + "\\n")
+        sys.stdout.flush()
     elif method == "thread/read":
         thread_id = message["params"]["threadId"]
         if START_THREAD_PATH and ROLLOUT_ENTRIES_ON_READ:
@@ -316,6 +339,7 @@ __COMPLETION_BLOCK__
         .replace("__THREAD_STATUS_TYPE__", repr(thread_status_type))
         .replace("__THREAD_STATUS_REASON__", repr(thread_status_reason))
         .replace("__ROLLOUT_ENTRIES_ON_READ__", repr(rollout_entries_on_read or []))
+        .replace("__ITEMS_LIST_ASSISTANT_TEXT__", repr(items_list_assistant_text))
         .replace(
             "__SKILL_OUTCOME_PATH__",
             repr(str(skill_outcome_path) if skill_outcome_path is not None else ""),

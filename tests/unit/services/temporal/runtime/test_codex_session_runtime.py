@@ -479,6 +479,56 @@ def test_runtime_session_status_fails_when_completed_turn_has_no_assistant_outpu
     assert stderr_path.exists()
     assert "turn failed:" in stderr_path.read_text(encoding="utf-8")
 
+
+def test_runtime_send_turn_reads_completed_assistant_items_from_item_list(
+    tmp_path: Path,
+) -> None:
+    script = write_fake_app_server(
+        tmp_path,
+        assistant_text="",
+        items_list_assistant_text="OK",
+    )
+    request = launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "completed"
+    assert response.turn_id == "vendor-turn-1"
+    assert response.metadata["assistantText"] == "OK"
+    assert "turnFailureEvidence" not in response.metadata
+
+    handle = runtime.session_status(
+        CodexManagedSessionLocator(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+        )
+    )
+    assert handle.status == "ready"
+    assert handle.metadata["lastAssistantText"] == "OK"
+    assert handle.metadata["lastTurnStatus"] == "completed"
+
+
 def test_runtime_send_turn_accepts_item_completed_notification_contract(
     tmp_path: Path,
 ) -> None:
@@ -3061,3 +3111,79 @@ def test_run_ready_requires_runtime_environment(monkeypatch: pytest.MonkeyPatch,
 
     with pytest.raises(RuntimeError, match="MOONMIND_SESSION_IMAGE_REF is required"):
         _run_ready()
+
+
+def _make_runtime_for_turn_items_test(tmp_path: Path) -> CodexManagedSessionRuntime:
+    request = launch_request(tmp_path)
+    return CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+    )
+
+
+class _StubTurnItemsClient:
+    def __init__(self, responses: list[object]) -> None:
+        self._responses = list(responses)
+        self.calls: list[dict[str, object]] = []
+
+    def request(self, method: str, params: dict[str, object]) -> dict[str, object]:
+        assert method == "thread/turns/items/list"
+        self.calls.append(dict(params))
+        if not self._responses:
+            raise AssertionError("no remaining stubbed responses")
+        next_value = self._responses.pop(0)
+        if isinstance(next_value, Exception):
+            raise next_value
+        return next_value  # type: ignore[return-value]
+
+
+def test_assistant_text_from_turn_items_list_preserves_partial_pages_on_runtime_error(
+    tmp_path: Path,
+) -> None:
+    runtime = _make_runtime_for_turn_items_test(tmp_path)
+    client = _StubTurnItemsClient(
+        responses=[
+            {
+                "data": [
+                    {
+                        "type": "agentMessage",
+                        "id": "msg-1",
+                        "text": "partial assistant text",
+                        "phase": "final_answer",
+                    }
+                ],
+                "nextCursor": "cursor-2",
+            },
+            RuntimeError("transport closed"),
+        ]
+    )
+
+    result = runtime._assistant_text_from_turn_items_list(
+        client=client,  # type: ignore[arg-type]
+        vendor_thread_id="thread-1",
+        vendor_turn_id="turn-1",
+    )
+
+    assert result == "partial assistant text"
+    assert len(client.calls) == 2
+
+
+def test_assistant_text_from_turn_items_list_returns_empty_when_first_page_fails(
+    tmp_path: Path,
+) -> None:
+    runtime = _make_runtime_for_turn_items_test(tmp_path)
+    client = _StubTurnItemsClient(responses=[RuntimeError("transport closed")])
+
+    result = runtime._assistant_text_from_turn_items_list(
+        client=client,  # type: ignore[arg-type]
+        vendor_thread_id="thread-1",
+        vendor_turn_id="turn-1",
+    )
+
+    assert result == ""
+    assert len(client.calls) == 1
