@@ -11,7 +11,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api_service.auth_providers import get_current_user
 from api_service.db import base as db_base
-from api_service.db.models import Base, SettingsAuditEvent, SettingsOverride
+from api_service.db.models import (
+    Base,
+    ManagedAgentProviderProfile,
+    ProviderCredentialSource,
+    SettingsAuditEvent,
+    SettingsOverride,
+)
 from api_service.main import app
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
@@ -288,3 +294,108 @@ async def test_mm657_validate_preview_structured_errors_and_redaction(
     assert unsupported_system_scope.json()["scope"] == "system"
     assert requires_confirmation.status_code == 428
     assert requires_confirmation.json()["error"] == "requires_confirmation"
+
+
+async def test_mm664_restored_reference_diagnostics_surface_broken_resources(
+    settings_http_api_db,
+):
+    workspace_id = uuid4()
+    restored_user = SimpleNamespace(
+        id=uuid4(),
+        email="restored-settings-http-api@example.com",
+        is_superuser=True,
+        settings_permissions={
+            "settings.effective.read",
+            "settings.workspace.write",
+            "settings.audit.read",
+        },
+        workspace_id=workspace_id,
+    )
+    app.dependency_overrides[SETTINGS_USER_DEP] = lambda: restored_user
+
+    async with settings_http_api_db() as session:
+        session.add_all(
+            [
+                SettingsOverride(
+                    scope="workspace",
+                    workspace_id=workspace_id,
+                    key="integrations.github.token_ref",
+                    value_json="db://restored-missing-secret",
+                    value_version=7,
+                ),
+                SettingsOverride(
+                    scope="workspace",
+                    workspace_id=workspace_id,
+                    key="workflow.default_provider_profile_ref",
+                    value_json="restored-missing-profile",
+                    value_version=3,
+                ),
+            ]
+        )
+        await session.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        missing_refs = await client.get(
+            "/api/v1/settings/diagnostics",
+            params={"scope": "workspace"},
+        )
+
+    assert missing_refs.status_code == 200
+    missing_values = missing_refs.json()["values"]
+    github_diagnostics = missing_values["integrations.github.token_ref"][
+        "diagnostics"
+    ]
+    profile_diagnostics = missing_values["workflow.default_provider_profile_ref"][
+        "diagnostics"
+    ]
+    assert github_diagnostics[0]["code"] == "unresolved_secret_ref"
+    assert github_diagnostics[0]["details"]["status"] == "missing"
+    assert profile_diagnostics[0]["code"] == "provider_profile_not_found"
+    assert "restored-secret-plaintext" not in missing_refs.text
+
+    async with settings_http_api_db() as session:
+        override = (
+            await session.execute(
+                select(SettingsOverride).where(
+                    SettingsOverride.workspace_id == workspace_id,
+                    SettingsOverride.key == "workflow.default_provider_profile_ref",
+                )
+            )
+        ).scalar_one()
+        override.value_json = "restored-oauth-profile"
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id="restored-oauth-profile",
+                runtime_id="codex",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                enabled=True,
+                volume_ref=None,
+            )
+        )
+        await session.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        oauth_gap = await client.get(
+            "/api/v1/settings/diagnostics",
+            params={
+                "scope": "workspace",
+                "key": "workflow.default_provider_profile_ref",
+            },
+        )
+
+    assert oauth_gap.status_code == 200
+    oauth_profile = oauth_gap.json()["values"]["workflow.default_provider_profile_ref"]
+    assert oauth_profile["diagnostics"][0]["code"] == (
+        "provider_profile_oauth_volume_missing"
+    )
+    assert oauth_profile["diagnostics"][0]["details"] == {
+        "profile_id": "restored-oauth-profile",
+        "credential_source": "oauth_volume",
+        "launch_blocker": True,
+        "blocks": ["launch", "readiness"],
+    }
