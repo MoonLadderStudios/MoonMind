@@ -52,13 +52,13 @@ Never print raw environment variables. Use targeted checks such as `test -n "$MO
    - Record `git branch --show-current`, `git rev-parse HEAD`, and `git status --short`.
    - Determine the candidate base ref from user input, upstream tracking branch, `origin/main`, `origin/master`, `main`, or `master`. Fetch the base ref only when needed and safe.
    - Decide the mode:
-     - **Branch mode** when the current checkout is NOT the default branch AND `git rev-list --left-right --count <base>...HEAD` shows commits ahead of base.
+     - **Branch mode** when the current checkout is NOT the default branch AND `git rev-list --count <base>..HEAD` is greater than 0.
      - **Main/trunk mode** when the current checkout IS the default branch, when HEAD already equals the base ref, when `git rev-list --count <base>..HEAD` is `0`, or when the user explicitly requested `main` mode.
      - If a user-supplied mode hint is provided, honor it unless it is impossible (e.g. branch mode requested but no distinct branch exists — then block with a clear reason).
    - For branch mode: use `git merge-base <base> HEAD`, then inspect `git diff --stat <merge-base>..HEAD`, `git diff --name-status <merge-base>..HEAD`, and relevant hunks as the primary evidence set.
    - For main/trunk mode: do NOT block on the empty diff. The repository state at HEAD is itself the evidence. Additionally locate the merge(s) that implemented the issue:
-     - `git log --grep '<ISSUE-KEY>' --oneline -n 200` to find commits that reference the key in the message.
-     - `git log --all --oneline -n 200 -- <likely paths>` for paths matched by issue keywords when no key reference is found.
+     - `git log -i --grep '<ISSUE-KEY>' --oneline -n 200` to find commits that reference the key in the message.
+     - `git log --oneline -n 200 -- <likely paths>` for paths matched by issue keywords when no key reference is found.
      - `gh pr list --search '<ISSUE-KEY>' --state merged --limit 20` when `gh` is authenticated, to locate the merged PR(s) for the issue.
      - For each candidate merge commit, inspect `git show --stat <sha>` and `git diff <sha>^..<sha>` to extract the implementation diff, and treat that as the diff under verification.
      - If multiple merges plausibly implement parts of the issue, aggregate them and note each in the evidence ledger.
@@ -67,7 +67,7 @@ Never print raw environment variables. Use targeted checks such as `test -n "$MO
 3. Inspect implementation evidence.
    - In branch mode: read changed source, tests, docs, workflow/config, migrations, and generated artifacts within `<merge-base>..HEAD`.
    - In main/trunk mode: read the current state of files relevant to the Jira ledger AND, when available, the implementing merge commit(s) diffs identified above. The "current state on main" is acceptable evidence on its own when it clearly satisfies a requirement; the historical diff is supplementary.
-   - In both modes: search the repository with `rg` for Jira terms, feature names, acceptance criteria keywords, old behavior, and new behavior. In main/trunk mode, also `rg` the issue key itself (`MM-555`, etc.) across source, tests, specs, docs, changelog, and `specs/<feature>/` folders.
+   - In both modes: search the repository with `rg -i` for Jira terms, feature names, acceptance criteria keywords, old behavior, and new behavior. In main/trunk mode, also `rg -i -w` the issue key itself (`MM-555`, etc.) across source, tests, specs, docs, changelog, and `specs/<feature>/` folders.
    - Identify deleted or superseded paths so the verdict accounts for removals as well as additions.
    - Run local tests when required by repo instructions, user request, or when the verdict depends on unproven behavior. If tests cannot run, record exactly why.
    - In main/trunk mode, if no implementing commits, no issue-key references, and no code matching the requirements can be found, then — and only then — record the verdict as `FAIL` (not implemented on main) or `BLOCKED` (requirements too ambiguous to tell), with a clear distinction between the two.
