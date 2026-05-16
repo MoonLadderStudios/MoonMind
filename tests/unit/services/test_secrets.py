@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import ManagedSecret, SecretStatus
+from api_service.db.models import SettingsOverride
 from api_service.services.secrets import SecretsService
 
 @pytest.fixture
@@ -148,6 +149,91 @@ async def test_validate_secret_ref_reports_missing_without_plaintext(mock_db_ses
         "message": "Managed secret is missing.",
         "severity": "error",
     }
+
+
+@pytest.mark.asyncio
+async def test_list_secret_usage_reports_settings_consumers_without_plaintext(
+    mock_db_session,
+):
+    raw_secret = "ghp_usage_plaintext"
+    secret_status_result = MagicMock()
+    secret_status_result.scalar_one_or_none.return_value = SecretStatus.ACTIVE
+    usage_result = MagicMock()
+    usage_result.scalars.return_value.all.return_value = [
+        SettingsOverride(
+            scope="workspace",
+            key="integrations.github.token_ref",
+            value_json="db://github-pat-main",
+        )
+    ]
+
+    async def mock_execute(*args, **kwargs):
+        return secret_status_result if mock_db_session.execute.call_count == 1 else usage_result
+
+    mock_db_session.execute.side_effect = mock_execute
+
+    result = await SecretsService.list_secret_usage(
+        mock_db_session,
+        "github-pat-main",
+    )
+
+    assert result["secretRef"] == "db://github-pat-main"
+    assert result["usages"] == [
+        {
+            "consumerType": "setting_override",
+            "objectName": "Workspace setting integrations.github.token_ref",
+            "reference": "db://github-pat-main",
+            "scope": "workspace",
+            "settingKey": "integrations.github.token_ref",
+        }
+    ]
+    assert raw_secret not in repr(result)
+
+
+@pytest.mark.asyncio
+async def test_list_secret_usage_reports_empty_and_missing_without_plaintext(
+    mock_db_session,
+):
+    active_result = MagicMock()
+    active_result.scalar_one_or_none.return_value = SecretStatus.ACTIVE
+    empty_usage_result = MagicMock()
+    empty_usage_result.scalars.return_value.all.return_value = []
+    missing_result = MagicMock()
+    missing_result.scalar_one_or_none.return_value = None
+
+    async def active_execute(*args, **kwargs):
+        return active_result if mock_db_session.execute.call_count == 1 else empty_usage_result
+
+    mock_db_session.execute.side_effect = active_execute
+
+    empty = await SecretsService.list_secret_usage(mock_db_session, "unused-secret")
+
+    assert empty == {
+        "secretRef": "db://unused-secret",
+        "usages": [],
+        "diagnostics": [],
+    }
+
+    mock_db_session.execute.reset_mock()
+    mock_db_session.execute.side_effect = None
+
+    async def missing_execute(*args, **kwargs):
+        return missing_result
+
+    mock_db_session.execute.side_effect = missing_execute
+
+    missing = await SecretsService.list_secret_usage(mock_db_session, "missing-secret")
+
+    assert missing["secretRef"] == "db://missing-secret"
+    assert missing["usages"] == []
+    assert missing["diagnostics"] == [
+        {
+            "code": "secret_ref_unresolved",
+            "message": "Managed secret is missing.",
+            "severity": "error",
+        }
+    ]
+    assert "plaintext" not in repr(missing)
 
 @pytest.mark.asyncio
 async def test_import_from_env(mock_db_session):

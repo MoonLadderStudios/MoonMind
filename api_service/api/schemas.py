@@ -598,6 +598,35 @@ class SecretListResponse(BaseModel):
 
     items: list[SecretMetadataResponse] = Field(default_factory=list)
 
+class SecretUsageItemResponse(BaseModel):
+    """Metadata-only reference from a consumer to a managed secret."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    consumer_type: str = Field(..., alias="consumerType")
+    object_name: str = Field(..., alias="objectName")
+    reference: str
+    scope: Optional[str] = None
+    setting_key: Optional[str] = Field(None, alias="settingKey")
+
+class SecretUsageDiagnosticResponse(BaseModel):
+    """Redacted diagnostic surfaced by a secret usage lookup."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    code: str
+    message: str
+    severity: str
+
+class SecretUsageResponse(BaseModel):
+    """Envelope for managed secret usage views."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    secret_ref: str = Field(..., alias="secretRef")
+    usages: list[SecretUsageItemResponse] = Field(default_factory=list)
+    diagnostics: list[SecretUsageDiagnosticResponse] = Field(default_factory=list)
+
 class AgentSkillSummaryResponse(BaseModel):
     """List item representing an agent skill definition."""
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
@@ -685,6 +714,9 @@ __all__ = [
     "SecretStatusUpdateRequest",
     "SecretMetadataResponse",
     "SecretListResponse",
+    "SecretUsageItemResponse",
+    "SecretUsageDiagnosticResponse",
+    "SecretUsageResponse",
     "AgentSkillSummaryResponse",
     "AgentSkillVersionResponse",
     "AgentSkillCreateRequest",

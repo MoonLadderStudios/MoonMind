@@ -57,4 +57,48 @@ describe('SecretManager', () => {
       text: 'SecretRef copied.',
     });
   });
+
+  it('shows usage references and consumer names without exposing plaintext', () => {
+    render(
+      <QueryClientProvider
+        client={
+          new QueryClient({
+            defaultOptions: { queries: { retry: false } },
+          })
+        }
+      >
+        <SecretManager
+          secrets={[
+            {
+              slug: 'github-pat-main',
+              secretRef: 'db://github-pat-main',
+              status: 'active',
+              details: {},
+              createdAt: '2026-04-28T00:00:00Z',
+              updatedAt: '2026-04-28T00:00:00Z',
+              usages: [
+                {
+                  consumerType: 'setting_override',
+                  objectName: 'Workspace setting integrations.github.token_ref',
+                  reference: 'db://github-pat-main',
+                  scope: 'workspace',
+                  settingKey: 'integrations.github.token_ref',
+                },
+              ],
+            },
+          ]}
+          onNotice={vi.fn()}
+          queryClient={
+            new QueryClient({
+              defaultOptions: { queries: { retry: false } },
+            })
+          }
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByText('Workspace setting integrations.github.token_ref')).toBeTruthy();
+    expect(screen.getAllByText('db://github-pat-main').length).toBeGreaterThan(0);
+    expect(screen.queryByText('ghp_usage_plaintext')).toBeNull();
+  });
 });

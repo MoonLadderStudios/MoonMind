@@ -10,6 +10,15 @@ interface SecretMetadata {
   details: Record<string, unknown>;
   createdAt: string;
   updatedAt?: string;
+  usages?: SecretUsage[];
+}
+
+interface SecretUsage {
+  consumerType: string;
+  objectName: string;
+  reference: string;
+  scope?: string;
+  settingKey?: string;
 }
 
 interface SecretManagerProps {
@@ -172,6 +181,28 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
     }
   };
 
+  const renderUsages = (secret: SecretMetadata) => {
+    const usages = secret.usages ?? [];
+    if (usages.length === 0) {
+      return <span className="text-xs text-slate-500 dark:text-slate-400">No consumers</span>;
+    }
+
+    return (
+      <ul className="space-y-2">
+        {usages.map((usage) => (
+          <li key={`${usage.consumerType}:${usage.objectName}:${usage.reference}`}>
+            <div className="text-xs font-medium text-slate-700 dark:text-slate-200">
+              {usage.objectName}
+            </div>
+            <code className="mt-1 inline-block rounded bg-slate-100 px-2 py-1 text-xs text-slate-800 dark:bg-slate-900 dark:text-slate-100">
+              {usage.reference}
+            </code>
+          </li>
+        ))}
+      </ul>
+    );
+  };
+
   return (
     <div className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
       <div className="border-b border-slate-200 dark:border-slate-800 pb-4">
@@ -194,6 +225,7 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
                   <th className="px-2 py-3 font-medium text-slate-600 dark:text-slate-400">Secret slug</th>
                   <th className="px-2 py-3 font-medium text-slate-600 dark:text-slate-400">SecretRef</th>
                   <th className="px-2 py-3 font-medium text-slate-600 dark:text-slate-400">Status</th>
+                  <th className="px-2 py-3 font-medium text-slate-600 dark:text-slate-400">Usage</th>
                   <th className="px-2 py-3 font-medium text-slate-600 dark:text-slate-400">Updated</th>
                   <th className="px-2 py-3 font-medium text-slate-600 dark:text-slate-400">Actions</th>
                 </tr>
@@ -201,7 +233,7 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                 {secrets.length === 0 ? (
                   <tr>
-                    <td className="px-2 py-6 text-slate-500 dark:text-slate-400 italic" colSpan={5}>
+                    <td className="px-2 py-6 text-slate-500 dark:text-slate-400 italic" colSpan={6}>
                       No secrets currently stored.
                     </td>
                   </tr>
@@ -217,6 +249,7 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
                         </code>
                       </td>
                       <td className="px-2 py-4">{renderStatus(secret.status)}</td>
+                      <td className="px-2 py-4">{renderUsages(secret)}</td>
                       <td className="px-2 py-4 text-xs text-slate-500 dark:text-slate-400">
                         {secret.updatedAt
                           ? new Date(secret.updatedAt).toLocaleString()

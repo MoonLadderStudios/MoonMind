@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select, Row
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.db.models import ManagedSecret, SecretStatus
+from api_service.db.models import ManagedSecret, SecretStatus, SettingsOverride
 
 logger = structlog.get_logger(__name__)
 
@@ -130,6 +130,62 @@ class SecretsService:
             )
         )
         return result.all()
+
+    @classmethod
+    async def list_secret_usage(cls, db: AsyncSession, slug: str) -> dict[str, Any]:
+        """List metadata-only consumers for a managed secret reference."""
+        secret_ref = f"db://{slug}"
+        status_result = await db.execute(
+            select(ManagedSecret.status).where(ManagedSecret.slug == slug)
+        )
+        status = status_result.scalar_one_or_none()
+        if status is None:
+            return {
+                "secretRef": secret_ref,
+                "usages": [],
+                "diagnostics": [
+                    {
+                        "code": "secret_ref_unresolved",
+                        "message": "Managed secret is missing.",
+                        "severity": "error",
+                    }
+                ],
+            }
+
+        usage_result = await db.execute(select(SettingsOverride))
+        usages = []
+        for override in usage_result.scalars().all():
+            if not cls._value_references_secret(override.value_json, secret_ref):
+                continue
+            scope = str(override.scope)
+            scope_label = "Workspace" if scope == "workspace" else "User"
+            usages.append(
+                {
+                    "consumerType": "setting_override",
+                    "objectName": f"{scope_label} setting {override.key}",
+                    "reference": secret_ref,
+                    "scope": scope,
+                    "settingKey": override.key,
+                }
+            )
+
+        return {"secretRef": secret_ref, "usages": usages, "diagnostics": []}
+
+    @staticmethod
+    def _value_references_secret(value: Any, secret_ref: str) -> bool:
+        if value == secret_ref:
+            return True
+        if isinstance(value, dict):
+            return any(
+                SecretsService._value_references_secret(item, secret_ref)
+                for item in value.values()
+            )
+        if isinstance(value, list):
+            return any(
+                SecretsService._value_references_secret(item, secret_ref)
+                for item in value
+            )
+        return False
 
     @classmethod
     async def get_secret(cls, db: AsyncSession, slug: str) -> str | None:
