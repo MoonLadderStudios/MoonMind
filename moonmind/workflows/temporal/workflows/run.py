@@ -3732,7 +3732,12 @@ class MoonMindRunWorkflow:
             outputs.get("error"),
             self._get_from_result(result, "summary"),
         )
-        profile_id = _first_text(outputs.get("profileId"), outputs.get("profile_id"))
+        profile_id = _first_text(
+            outputs.get("profileId"),
+            outputs.get("profile_id"),
+            provider_failure.get("profileId"),
+            provider_failure.get("profile_id"),
+        )
 
         normalized_code = (provider_error_code or "").strip().lower()
         normalized_retry = (retry_recommendation or "").strip().lower()
@@ -4005,6 +4010,11 @@ class MoonMindRunWorkflow:
                 break
 
         self._clear_jira_blocker_wait()
+        if skipped:
+            self._set_state(
+                STATE_EXECUTING,
+                summary="Jira blocker wait skipped by operator.",
+            )
         self._update_search_attributes()
         self._update_memo()
         return current_result, skipped
@@ -6220,7 +6230,7 @@ class MoonMindRunWorkflow:
             "error": failure or "",
         }
         if diagnostics_ref:
-            outputs["diagnostics_ref"] = diagnostics_ref
+            outputs["diagnosticsRef"] = diagnostics_ref
         if provider_error_code:
             outputs["providerErrorCode"] = provider_error_code
         if retry_recommendation:
@@ -7439,8 +7449,6 @@ class MoonMindRunWorkflow:
         if self._state != STATE_WAITING_ON_DEPENDENCIES:
             raise ValueError("Workflow is not waiting on dependencies.")
         if self._jira_blocker_wait_active:
-            if not self._jira_blocker_wait_issue_keys:
-                raise ValueError("Workflow has no unresolved Jira blockers.")
             return
         if self._dependency_failure is not None:
             raise ValueError("Cannot skip dependency wait after dependency failure.")

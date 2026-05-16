@@ -1882,6 +1882,91 @@ def test_activity_result_provider_failure_summary_includes_auth_action() -> None
         "http 401 (retryRecommendation: reauthenticate)"
     )
 
+def test_activity_result_provider_failure_summary_reads_profile_from_failure() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    message = workflow._activity_result_provider_failure_summary(
+        {
+            "status": "FAILED",
+            "outputs": {
+                "error": "user_error",
+                "providerFailure": {
+                    "providerErrorCode": "401",
+                    "profileId": "codex_default",
+                    "reason": "http 401",
+                    "retryRecommendation": "reauthenticate",
+                },
+            },
+        }
+    )
+
+    assert (
+        message
+        == "Provider authentication failed with HTTP 401 for profile codex_default: "
+        "http 401 (retryRecommendation: reauthenticate)"
+    )
+
+@pytest.mark.asyncio
+async def test_skipped_jira_blocker_wait_restores_executing_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+
+    async def fake_wait_condition(
+        predicate: Callable[[], bool],
+        **_kwargs: Any,
+    ) -> None:
+        assert predicate() is False
+        workflow._jira_blocker_wait_skipped = True
+        assert predicate() is True
+
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        fake_wait_condition,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+
+    current_result, skipped = await workflow._wait_for_jira_blocker_resolution(
+        execution_result={
+            "status": "COMPLETED",
+            "outputs": {
+                "decision": "blocked",
+                "summary": "Blocked by upstream Jira work.",
+            },
+        },
+        route=type("Route", (), {"activity_type": "mm.skill.execute"})(),
+        execute_payload={},
+        node_id="check-blockers",
+        tool_name=run_workflow_module.JIRA_CHECK_BLOCKERS_TOOL_NAME,
+        tool_type="skill",
+    )
+
+    assert skipped is True
+    assert current_result["outputs"]["decision"] == "blocked"
+    assert workflow._state == run_workflow_module.STATE_EXECUTING
+    assert workflow._jira_blocker_wait_active is False
+    assert workflow._waiting_reason is None
+
+def test_skip_dependency_wait_allows_active_jira_wait_without_issue_keys() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._state = run_workflow_module.STATE_WAITING_ON_DEPENDENCIES
+    workflow._jira_blocker_wait_active = True
+    workflow._jira_blocker_wait_issue_keys = []
+
+    workflow.validate_skip_dependency_wait()
+
 @pytest.mark.asyncio
 async def test_run_execution_stage_fail_fast_raises_provider_failure_summary(
     monkeypatch: pytest.MonkeyPatch,

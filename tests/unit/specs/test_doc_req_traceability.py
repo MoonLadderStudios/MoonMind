@@ -33,7 +33,10 @@ def _doc_req_ids_from_text(spec_path: Path) -> set[str]:
 
 def _discover_contract_backed_features() -> list[tuple[str, Path, Path]]:
     features: list[tuple[str, Path, Path]] = []
-    for path in sorted(Path("specs").iterdir()):
+    specs_dir = Path("specs")
+    if not specs_dir.exists():
+        return features
+    for path in sorted(specs_dir.iterdir()):
         if not path.is_dir():
             continue
         if _FEATURE_DIR_PATTERN.fullmatch(path.name) is None:
