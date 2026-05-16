@@ -34,6 +34,8 @@ const SELF_MANAGED_PUBLISH_SKILLS = new Set([
   ...PR_RESOLVER_SKILLS,
   JIRA_BREAKDOWN_PRESET_SLUG,
   JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG,
+  "jira-verify",
+  "jira-pr-verify",
 ]);
 const MOONSPEC_ORCHESTRATE_PRESET_SLUG = "moonspec-orchestrate";
 const HIDDEN_PRESET_INPUT_KEYS: Record<string, Set<string>> = {

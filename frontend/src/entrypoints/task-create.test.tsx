@@ -6159,6 +6159,73 @@ describe.skip("Task Create Entrypoint", () => {
     });
   });
 
+  it("defaults publish mode to none when selecting jira-verify or jira-pr-verify skills", async () => {
+    type MockInitialData = {
+      dashboardConfig: {
+        system: {
+          defaultPublishMode: string;
+        };
+      };
+    };
+
+    const payload: BootPayload = {
+      ...mockPayload,
+      initialData: {
+        ...(mockPayload.initialData as MockInitialData),
+        dashboardConfig: {
+          ...(mockPayload.initialData as MockInitialData).dashboardConfig,
+          system: {
+            ...(mockPayload.initialData as MockInitialData).dashboardConfig
+              .system,
+            defaultPublishMode: "pr",
+          },
+        },
+      },
+    };
+
+    renderWithClient(<TaskCreatePage payload={payload} />);
+
+    const primaryStep = (await screen.findByText("Step 1")).closest(
+      "section",
+    );
+    expect(primaryStep).not.toBeNull();
+
+    const publishSelect = screen.getByLabelText(
+      "Publish Mode",
+    ) as HTMLSelectElement;
+    expect(publishSelect.value).toBe(
+      (payload.initialData as MockInitialData).dashboardConfig.system
+        .defaultPublishMode,
+    );
+
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      {
+        target: { value: "jira-verify" },
+      },
+    );
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
+      ).toBe("none");
+    });
+
+    fireEvent.change(publishSelect, { target: { value: "pr" } });
+    expect(publishSelect.value).toBe("pr");
+
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      {
+        target: { value: "jira-pr-verify" },
+      },
+    );
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
+      ).toBe("none");
+    });
+  });
+
   it("defaults publish mode to none when selecting the Jira Breakdown preset", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
