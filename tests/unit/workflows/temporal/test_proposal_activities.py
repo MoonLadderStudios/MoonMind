@@ -331,6 +331,43 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["submitted_count"], 2)
         self.assertEqual(result["errors"], [])
 
+    async def test_origin_requires_workflow_id_without_service(self) -> None:
+        activities = TemporalProposalActivities()
+
+        result = await activities.proposal_submit(
+            {
+                "candidates": [
+                    {
+                        "title": "Fix bug",
+                        "summary": "There is a bug in module X",
+                        "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                    }
+                ],
+                "policy": {},
+                "origin": {"temporal_run_id": "run-1"},
+            }
+        )
+
+        self.assertEqual(result["generated_count"], 1)
+        self.assertEqual(result["submitted_count"], 0)
+        self.assertEqual(result["deliveredCount"], 0)
+        self.assertEqual(
+            result["errors"],
+            ["origin.workflow_id is required for workflow proposal submission"],
+        )
+        self.assertEqual(
+            result["validationErrors"],
+            [
+                {
+                    "code": "proposal_validation_error",
+                    "message": (
+                        "origin.workflow_id is required for workflow proposal "
+                        "submission"
+                    ),
+                }
+            ],
+        )
+
     async def test_valid_skill_tool_candidate_counted_after_contract_validation(self) -> None:
         activities = TemporalProposalActivities()
         candidates = [

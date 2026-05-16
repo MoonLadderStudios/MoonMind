@@ -2828,6 +2828,18 @@ class TemporalProposalActivities:
             payload_node["task"] = {"runtime": {"mode": default_runtime}}
         return stamped_request
 
+    @staticmethod
+    def _task_runtime_mode_from_payload(payload_node: Any) -> str:
+        if not isinstance(payload_node, Mapping):
+            return ""
+        task_node = payload_node.get("task") or {}
+        if not isinstance(task_node, Mapping):
+            return ""
+        runtime_node = task_node.get("runtime") or {}
+        if isinstance(runtime_node, Mapping):
+            runtime_node = runtime_node.get("mode")
+        return str(runtime_node or "").strip()
+
     @classmethod
     def _validate_candidate_task_create_request(
         cls, request: Mapping[str, Any], *, default_runtime: str | None
@@ -3128,7 +3140,7 @@ class TemporalProposalActivities:
             ctx = _wrap()
 
         async with ctx as service:
-            if service is not None and origin and not workflow_id:
+            if origin and not workflow_id:
                 error = "origin.workflow_id is required for workflow proposal submission"
                 return {
                     "generated_count": generated_count,
@@ -3178,26 +3190,12 @@ class TemporalProposalActivities:
                 if isinstance(payload_node, Mapping):
                     target_repo = str(payload_node.get("repository") or "").strip()
 
-                original_runtime_mode = ""
-                if isinstance(task_create_request, Mapping):
-                    original_payload = task_create_request.get("payload")
-                    if isinstance(original_payload, Mapping):
-                        original_task = original_payload.get("task")
-                        if isinstance(original_task, Mapping):
-                            original_runtime = original_task.get("runtime")
-                            if isinstance(original_runtime, Mapping):
-                                original_runtime_mode = str(
-                                    original_runtime.get("mode") or ""
-                                ).strip()
-                stamped_runtime_mode = ""
-                if isinstance(payload_node, Mapping):
-                    stamped_task = payload_node.get("task")
-                    if isinstance(stamped_task, Mapping):
-                        stamped_runtime = stamped_task.get("runtime")
-                        if isinstance(stamped_runtime, Mapping):
-                            stamped_runtime_mode = str(
-                                stamped_runtime.get("mode") or ""
-                            ).strip()
+                original_runtime_mode = self._task_runtime_mode_from_payload(
+                    task_create_request.get("payload")
+                )
+                stamped_runtime_mode = self._task_runtime_mode_from_payload(
+                    payload_node
+                )
                 default_runtime_value = (
                     default_runtime if isinstance(default_runtime, str) else None
                 )
