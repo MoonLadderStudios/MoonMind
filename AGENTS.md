@@ -279,6 +279,8 @@ Key diagnostics:
 - Existing Temporal execution records, existing task proposal records, existing artifact-backed original task input snapshots; no new persistent tables. (357-normalize-proposal-submissions)
 - Python 3.12 + Pydantic v2, Temporal Python SDK, existing Temporal artifact activities, pytest (001-step-attempt-manifest)
 - Existing Temporal artifact store through `artifact.create` and `artifact.write_complete`; no new persistent tables (001-step-attempt-manifest)
+- Python 3.12 + Pydantic v2, Temporal Python SDK, existing MoonMind Temporal artifact activities/helpers, pytest (001-step-attempt-manifest)
+- Existing Temporal artifact store for JSON manifests; existing workflow state/step ledger compact refs only; no new persistent database tables (001-step-attempt-manifest)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
