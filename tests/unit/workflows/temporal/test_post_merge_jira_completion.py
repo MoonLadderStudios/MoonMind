@@ -76,16 +76,28 @@ async def test_resolve_issue_key_deduplicates_and_detects_ambiguity() -> None:
     ]
     assert calls == ["MM-403"]
 
-    ambiguous = await resolve_issue_key(
+    lower_priority_metadata = await resolve_issue_key(
         [
             JiraIssueCandidate(issue_key="MM-403", source="merge_automation"),
             JiraIssueCandidate(issue_key="MM-404", source="pr_metadata"),
         ],
         get_issue=get_issue,
     )
+    assert lower_priority_metadata["status"] == "resolved"
+    assert lower_priority_metadata["issueKey"] == "MM-403"
+    assert lower_priority_metadata["source"] == "merge_automation"
+    assert calls == ["MM-403", "MM-403"]
+
+    ambiguous = await resolve_issue_key(
+        [
+            JiraIssueCandidate(issue_key="MM-403", source="merge_automation"),
+            JiraIssueCandidate(issue_key="MM-404", source="task_metadata"),
+        ],
+        get_issue=get_issue,
+    )
     assert ambiguous["status"] == "ambiguous"
     assert ambiguous["issueKey"] is None
-    assert calls == ["MM-403", "MM-403", "MM-404"]
+    assert calls == ["MM-403", "MM-403", "MM-403", "MM-404"]
 
 def test_select_done_transition_requires_exactly_one_safe_done_transition() -> None:
     config = PostMergeJiraCompletionConfig()
@@ -183,6 +195,157 @@ async def test_complete_post_merge_jira_transitions_one_valid_issue() -> None:
     assert decision.status == "succeeded"
     assert decision.transitioned is True
     assert calls[-1] == ("transition_issue", ("MM-403", "41", {}))
+
+@pytest.mark.asyncio
+async def test_complete_post_merge_jira_uses_canonical_key_before_pr_metadata() -> None:
+    calls: list[tuple[str, object]] = []
+
+    async def get_issue(issue_key: str) -> dict[str, object]:
+        calls.append(("get_issue", issue_key))
+        return _issue(issue_key)
+
+    async def get_transitions(issue_key: str) -> list[dict[str, object]]:
+        calls.append(("get_transitions", issue_key))
+        return [_transition("41", "Done")]
+
+    async def transition_issue(
+        issue_key: str,
+        transition_id: str,
+        fields: dict[str, object],
+    ) -> dict[str, object]:
+        calls.append(("transition_issue", (issue_key, transition_id, fields)))
+        return {"transitioned": True}
+
+    decision = await complete_post_merge_jira(
+        {
+            "jiraIssueKey": "MM-403",
+            "postMergeJira": {"enabled": True, "required": True},
+            "candidateContext": {"prMetadataKeys": ["MM-404"]},
+            "pullRequest": {
+                "title": "MM-405 unrelated metadata",
+                "body": "Reviewed alongside MM-406",
+            },
+        },
+        get_issue=get_issue,
+        get_transitions=get_transitions,
+        transition_issue=transition_issue,
+    )
+
+    assert decision.status == "succeeded"
+    assert decision.issueResolution["issueKey"] == "MM-403"
+    assert decision.issueResolution["source"] == "merge_automation"
+    assert calls == [
+        ("get_issue", "MM-403"),
+        ("get_issue", "MM-403"),
+        ("get_transitions", "MM-403"),
+        ("transition_issue", ("MM-403", "41", {})),
+    ]
+
+@pytest.mark.asyncio
+async def test_complete_post_merge_jira_allows_single_pr_metadata_fallback() -> None:
+    calls: list[tuple[str, object]] = []
+
+    async def get_issue(issue_key: str) -> dict[str, object]:
+        calls.append(("get_issue", issue_key))
+        return _issue(issue_key)
+
+    async def get_transitions(issue_key: str) -> list[dict[str, object]]:
+        calls.append(("get_transitions", issue_key))
+        return [_transition("41", "Done")]
+
+    async def transition_issue(
+        issue_key: str,
+        transition_id: str,
+        fields: dict[str, object],
+    ) -> dict[str, object]:
+        calls.append(("transition_issue", (issue_key, transition_id, fields)))
+        return {"transitioned": True}
+
+    decision = await complete_post_merge_jira(
+        {
+            "postMergeJira": {"enabled": True, "required": True},
+            "pullRequest": {
+                "title": "MM-404 completed work",
+                "body": "Same issue repeated for traceability: MM-404",
+            },
+        },
+        get_issue=get_issue,
+        get_transitions=get_transitions,
+        transition_issue=transition_issue,
+    )
+
+    assert decision.status == "succeeded"
+    assert decision.issueResolution["issueKey"] == "MM-404"
+    assert decision.issueResolution["source"] == "pr_metadata"
+    assert calls[-1] == ("transition_issue", ("MM-404", "41", {}))
+    assert [call for call in calls if call[0] == "transition_issue"] == [
+        ("transition_issue", ("MM-404", "41", {}))
+    ]
+
+@pytest.mark.asyncio
+async def test_complete_post_merge_jira_blocks_multiple_pr_metadata_fallback_keys() -> None:
+    calls: list[tuple[str, object]] = []
+
+    async def get_issue(issue_key: str) -> dict[str, object]:
+        calls.append(("get_issue", issue_key))
+        return _issue(issue_key)
+
+    async def get_transitions(issue_key: str) -> list[dict[str, object]]:
+        calls.append(("get_transitions", issue_key))
+        return [_transition("41", "Done")]
+
+    async def transition_issue(
+        issue_key: str,
+        transition_id: str,
+        fields: dict[str, object],
+    ) -> dict[str, object]:
+        calls.append(("transition_issue", (issue_key, transition_id, fields)))
+        return {"transitioned": True}
+
+    decision = await complete_post_merge_jira(
+        {
+            "postMergeJira": {"enabled": True, "required": True},
+            "candidateContext": {"prMetadataKeys": ["MM-404", "MM-405"]},
+        },
+        get_issue=get_issue,
+        get_transitions=get_transitions,
+        transition_issue=transition_issue,
+    )
+
+    assert decision.status == "blocked"
+    assert decision.issueResolution["status"] == "ambiguous"
+    assert [call for call in calls if call[0] == "transition_issue"] == []
+
+@pytest.mark.asyncio
+async def test_complete_post_merge_jira_blocks_missing_key_without_transition() -> None:
+    calls: list[tuple[str, object]] = []
+
+    async def get_issue(issue_key: str) -> dict[str, object]:
+        calls.append(("get_issue", issue_key))
+        return _issue(issue_key)
+
+    async def get_transitions(issue_key: str) -> list[dict[str, object]]:
+        calls.append(("get_transitions", issue_key))
+        return [_transition("41", "Done")]
+
+    async def transition_issue(
+        issue_key: str,
+        transition_id: str,
+        fields: dict[str, object],
+    ) -> dict[str, object]:
+        calls.append(("transition_issue", (issue_key, transition_id, fields)))
+        return {"transitioned": True}
+
+    decision = await complete_post_merge_jira(
+        {"postMergeJira": {"enabled": True, "required": True}},
+        get_issue=get_issue,
+        get_transitions=get_transitions,
+        transition_issue=transition_issue,
+    )
+
+    assert decision.status == "blocked"
+    assert decision.issueResolution["status"] == "missing"
+    assert calls == []
 
 @pytest.mark.asyncio
 async def test_complete_post_merge_jira_returns_failed_decision_for_read_failures() -> None:
