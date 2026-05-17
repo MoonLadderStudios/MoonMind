@@ -105,15 +105,6 @@ async def test_local_first_walkthrough_runs_end_to_end(local_first_db):
         )
         assert catalog.status_code == 200
         catalog_body = catalog.json()
-        token_descriptor = next(
-            (
-                descriptor
-                for descriptors in catalog_body["categories"].values()
-                for descriptor in descriptors
-                if descriptor["key"] == TOKEN_KEY
-            ),
-            None,
-        )
         # On a clean install, the SecretRef descriptor lives in Providers
         # & Secrets; the user-workspace catalog need not expose it. Confirm
         # that *no* descriptor leaks plaintext-shaped keys regardless.
@@ -214,8 +205,8 @@ async def test_local_first_walkthrough_runs_end_to_end(local_first_db):
             # reference value for usage-trace reasons, but never plaintext.
             assert row.redacted is True
             for payload in (row.old_value_json, row.new_value_json):
-                if isinstance(payload, str):
-                    assert PLACEHOLDER_PLAINTEXT not in payload
+                if payload is not None:
+                    assert PLACEHOLDER_PLAINTEXT not in str(payload)
 
         secret_rows = (
             await session.execute(

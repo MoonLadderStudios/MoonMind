@@ -19,29 +19,20 @@ from __future__ import annotations
 
 import inspect
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Iterable
-from uuid import UUID, uuid4
 
 import pytest
+import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from api_service.db.models import (
-    Base,
-    ManagedSecret,
-    SecretStatus,
-    SettingsAuditEvent,
-)
+from api_service.db.models import Base
 from api_service.services.settings_catalog import (
     SETTINGS_PERMISSION_NAMES,
     EffectiveSettingValue,
     SettingDescriptor,
-    SettingMigrationRule,
     SettingRegistryEntry,
-    SettingsAuditRead,
     SettingsCatalogService,
     SettingsRegistry,
-    SettingsValidationError,
     _MAX_OVERRIDE_VALUE_BYTES,
     _PERSISTED_SCOPES,
     _REGISTRY,
@@ -81,21 +72,18 @@ def _operator_locked_registry() -> tuple[SettingRegistryEntry, ...]:
     )
 
 
-@pytest.fixture
-def settings_async_session(tmp_path):
+@pytest_asyncio.fixture
+async def settings_async_session(tmp_path):
     engine = create_async_engine(
         f"sqlite+aiosqlite:///{tmp_path}/settings-guardrail.db"
     )
 
-    async def _setup():
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
-    asyncio_run = __import__("asyncio").run
-    asyncio_run(_setup())
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
     yield session_maker
-    asyncio_run(engine.dispose())
+    await engine.dispose()
 
 
 # ===========================================================================
