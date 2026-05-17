@@ -35,9 +35,32 @@ interface SecretManagerProps {
   secrets: SecretMetadata[];
   onNotice: (notice: { level: 'ok' | 'error'; text: string } | null) => void;
   queryClient: QueryClient;
+  permissions?: ReadonlySet<string>;
 }
 
-export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerProps) {
+const _RE_ENABLE_PERMISSIONS = ['secrets.disable', 'secrets.rotate'];
+const _BROKEN_REFERENCE_STATUSES = new Set([
+  'disabled',
+  'rotated',
+  'deleted',
+  'invalid',
+  'missing',
+]);
+
+function isBrokenReferenceStatus(status: string | undefined): boolean {
+  return Boolean(status) && _BROKEN_REFERENCE_STATUSES.has(String(status));
+}
+
+export function SecretManager({
+  secrets,
+  onNotice,
+  queryClient,
+  permissions,
+}: SecretManagerProps) {
+  const grantedPermissions = permissions ?? new Set<string>();
+  const canChangeStatus = _RE_ENABLE_PERMISSIONS.some((permission) =>
+    grantedPermissions.has(permission),
+  );
   const [slug, setSlug] = useState('');
   const [plaintext, setPlaintext] = useState('');
   const [isEditing, setIsEditing] = useState(false);
@@ -150,6 +173,33 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
     onError: (error: Error) => onNotice({ level: 'error', text: error.message }),
   });
 
+  const setStatusOp = useMutation({
+    mutationFn: async ({
+      slug: nextSlug,
+      status,
+    }: {
+      slug: string;
+      status: 'active' | 'disabled';
+    }) => {
+      const response = await fetch(`/api/v1/secrets/${nextSlug}/status`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      });
+      if (!response.ok) {
+        const errorPayload = await response.json().catch(() => ({}));
+        throw new Error(errorPayload.detail || 'Failed to change secret status');
+      }
+      return response.json();
+    },
+    onSuccess: (_data, variables) => {
+      const verb = variables.status === 'active' ? 're-enabled' : 'disabled';
+      onNotice({ level: 'ok', text: `Secret ${verb}.` });
+      queryClient.invalidateQueries({ queryKey: ['secrets'] });
+    },
+    onError: (error: Error) => onNotice({ level: 'error', text: error.message }),
+  });
+
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!slug) {
@@ -173,16 +223,31 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
   };
 
   const renderStatus = (status: string) => {
-    if (status === 'active') {
-      return <span className="badge badge-success">Active</span>;
-    }
-    if (status === 'disabled') {
-      return <span className="badge badge-warning">Disabled</span>;
-    }
-    if (status === 'rotated') {
-      return <span className="badge badge-neutral">Rotated</span>;
-    }
-    return <span className="badge badge-error">{formatStatusLabel(status)}</span>;
+    const isBroken = isBrokenReferenceStatus(status);
+    const primaryBadge =
+      status === 'active' ? (
+        <span className="badge badge-success">Active</span>
+      ) : status === 'disabled' ? (
+        <span className="badge badge-warning">Disabled</span>
+      ) : status === 'rotated' ? (
+        <span className="badge badge-neutral">Rotated</span>
+      ) : (
+        <span className="badge badge-error">{formatStatusLabel(status)}</span>
+      );
+    return (
+      <div className="flex flex-wrap items-center gap-1">
+        {primaryBadge}
+        {isBroken ? (
+          <span
+            className="badge badge-error"
+            aria-label={`Broken reference: ${status}`}
+            title="Dependent settings and profiles will fail launches until this secret is active again."
+          >
+            Broken reference
+          </span>
+        ) : null}
+      </div>
+    );
   };
 
   const copySecretRef = async (secretRef: string) => {
@@ -223,6 +288,7 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
     const usages = loadedUsage?.usages ?? secret.usages ?? [];
     const usageError = usageErrorBySlug[secret.slug];
     const usageLoaded = Boolean(loadedUsage || secret.usages);
+    const isBroken = isBrokenReferenceStatus(secret.status);
 
     if (usageError) {
       return <span className="text-xs text-red-600 dark:text-red-400">{usageError}</span>;
@@ -249,8 +315,19 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
       <ul className="space-y-2">
         {usages.map((usage) => (
           <li key={`${usage.consumerType}:${usage.objectName}:${usage.reference}`}>
-            <div className="text-xs font-medium text-slate-700 dark:text-slate-200">
-              {usage.objectName}
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="text-xs font-medium text-slate-700 dark:text-slate-200">
+                {usage.objectName}
+              </div>
+              {isBroken ? (
+                <span
+                  className="badge badge-error"
+                  aria-label={`Broken reference for ${usage.objectName}`}
+                  title="Launches that bind this secret are blocked until it is active."
+                >
+                  Broken reference
+                </span>
+              ) : null}
             </div>
             <code className="mt-1 inline-block rounded bg-slate-100 px-2 py-1 text-xs text-slate-800 dark:bg-slate-900 dark:text-slate-100">
               {usage.reference}
@@ -345,6 +422,22 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
                           >
                             Rotate
                           </button>
+                          {secret.status === 'disabled' && canChangeStatus ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setStatusOp.mutate({
+                                  slug: secret.slug,
+                                  status: 'active',
+                                })
+                              }
+                              disabled={setStatusOp.isPending}
+                              className="btn btn-sm btn-outline"
+                              aria-label={`Re-enable ${secret.slug}`}
+                            >
+                              Re-enable
+                            </button>
+                          ) : null}
                           <button
                             type="button"
                             onClick={() => {

@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
 from sqlalchemy import select
 
@@ -327,8 +328,142 @@ async def resolve_managed_api_key_reference(
         if vault_resolver_instance is not None:
             await vault_resolver_instance.aclose()
 
+@dataclass(frozen=True)
+class BrokenSecretRef:
+    """Describes a managed SecretRef that cannot be used for launch.
+
+    The diagnostic is intentionally metadata-only; no plaintext, ciphertext, or
+    decryption error detail is surfaced. ``status`` is the managed secret
+    lifecycle state ("missing", "disabled", "rotated", "deleted", "invalid").
+    """
+
+    secret_ref: str
+    slug: str
+    status: str
+    diagnostic_code: str
+    message: str
+
+
+class SecretRefLaunchBlockedError(ValueError):
+    """Raised when one or more managed SecretRefs are not active for launch."""
+
+    def __init__(self, broken: list[BrokenSecretRef]) -> None:
+        self.broken = list(broken)
+        descriptions = "; ".join(
+            f"{item.secret_ref}={item.status}" for item in self.broken
+        )
+        super().__init__(
+            "Refusing to launch: managed SecretRefs are not active: "
+            f"{descriptions}"
+        )
+
+
+async def inspect_managed_secret_refs_for_launch(
+    refs: Iterable[str],
+) -> list[BrokenSecretRef]:
+    """Inspect managed (``db://``) SecretRefs and return any broken references.
+
+    Only ``db://`` refs are inspected here; ``env://``, ``exec://``, and
+    ``vault://`` validation is left to the regular resolver. Plaintext is never
+    read or returned.
+    """
+
+    candidates: list[tuple[str, str]] = []
+    seen_slugs: set[str] = set()
+    for ref in refs:
+        if not isinstance(ref, str):
+            continue
+        stripped = ref.strip()
+        if not stripped or not stripped.startswith("db://"):
+            continue
+        slug = stripped.removeprefix("db://").strip()
+        if not slug or slug in seen_slugs:
+            continue
+        seen_slugs.add(slug)
+        candidates.append((stripped, slug))
+
+    if not candidates:
+        return []
+
+    from api_service.db.base import async_session_maker
+    from api_service.db.models import ManagedSecret, SecretStatus
+
+    try:
+        async with async_session_maker() as session:
+            result = await session.execute(
+                select(ManagedSecret.slug, ManagedSecret.status).where(
+                    ManagedSecret.slug.in_([slug for _, slug in candidates])
+                )
+            )
+            statuses_by_slug: dict[str, str] = {}
+            for slug, status in result.all():
+                statuses_by_slug[slug] = (
+                    status.value if isinstance(status, SecretStatus) else str(status)
+                )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # Cannot reach the managed-secret store (e.g. unit tests without a DB
+        # fixture, transient connection issue). Skip the pre-flight check;
+        # the resolver itself will still surface a typed failure when it
+        # attempts to read the secret.
+        logger.warning(
+            "Skipping managed SecretRef readiness check; managed secret store "
+            "unreachable.",
+            exc_info=True,
+        )
+        return []
+
+    active_value = SecretStatus.ACTIVE.value
+    issues: list[BrokenSecretRef] = []
+    for secret_ref, slug in candidates:
+        status = statuses_by_slug.get(slug)
+        if status is None:
+            issues.append(
+                BrokenSecretRef(
+                    secret_ref=secret_ref,
+                    slug=slug,
+                    status="missing",
+                    diagnostic_code="broken_reference_missing",
+                    message=(
+                        f"Managed secret '{slug}' is missing; restore it or "
+                        "update the reference."
+                    ),
+                )
+            )
+            continue
+        if status != active_value:
+            issues.append(
+                BrokenSecretRef(
+                    secret_ref=secret_ref,
+                    slug=slug,
+                    status=status,
+                    diagnostic_code=f"broken_reference_{status}",
+                    message=(
+                        f"Managed secret '{slug}' is {status}; re-enable it "
+                        "before launching."
+                    ),
+                )
+            )
+    return issues
+
+
+async def assert_managed_secret_refs_active_for_launch(
+    refs: Iterable[str],
+) -> None:
+    """Raise SecretRefLaunchBlockedError if any managed SecretRef is not active."""
+
+    issues = await inspect_managed_secret_refs_for_launch(refs)
+    if issues:
+        raise SecretRefLaunchBlockedError(issues)
+
+
 __all__ = [
+    "BrokenSecretRef",
+    "SecretRefLaunchBlockedError",
+    "assert_managed_secret_refs_active_for_launch",
     "build_github_credential_descriptor_for_launch",
+    "inspect_managed_secret_refs_for_launch",
     "resolve_github_token_for_launch",
     "resolve_managed_api_key_reference",
     "resolve_managed_github_token_from_store",

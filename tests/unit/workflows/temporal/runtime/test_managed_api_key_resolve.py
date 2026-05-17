@@ -8,6 +8,10 @@ from types import SimpleNamespace
 import pytest
 
 from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
+    BrokenSecretRef,
+    SecretRefLaunchBlockedError,
+    assert_managed_secret_refs_active_for_launch,
+    inspect_managed_secret_refs_for_launch,
     resolve_github_token_for_launch,
     resolve_managed_api_key_reference,
     resolve_managed_github_token_from_store,
@@ -210,3 +214,153 @@ async def test_resolve_github_token_for_launch_propagates_cancellation_from_stor
 
     with pytest.raises(asyncio.CancelledError):
         await resolve_github_token_for_launch({})
+
+
+class _FakeStatusResult:
+    def __init__(self, rows: list[tuple[str, str]]) -> None:
+        self._rows = list(rows)
+
+    def all(self) -> list[tuple[str, str]]:
+        return list(self._rows)
+
+
+class _FakeStatusSession:
+    def __init__(self, statuses_by_slug: dict[str, str | None]) -> None:
+        self._statuses = dict(statuses_by_slug)
+        self.queried_slugs: list[tuple[str, ...]] = []
+
+    async def execute(self, query) -> _FakeStatusResult:
+        compiled = query.compile()
+        params = compiled.params
+        slugs_collected: list[str] = []
+        for key, value in params.items():
+            if not key.startswith("slug_"):
+                continue
+            if isinstance(value, str):
+                slugs_collected.append(value)
+            elif isinstance(value, (list, tuple, set)):
+                slugs_collected.extend(
+                    item for item in value if isinstance(item, str)
+                )
+        slugs = tuple(sorted(slugs_collected))
+        self.queried_slugs.append(slugs)
+        rows = [
+            (slug, status)
+            for slug, status in self._statuses.items()
+            if slug in slugs and status is not None
+        ]
+        return _FakeStatusResult(rows)
+
+
+class _FakeStatusSessionMaker:
+    def __init__(self, session: _FakeStatusSession) -> None:
+        self._session = session
+        self.calls = 0
+
+    def __call__(self) -> _FakeAsyncSessionCtx:
+        self.calls += 1
+        return _FakeAsyncSessionCtx(self._session)
+
+
+async def test_inspect_managed_secret_refs_returns_empty_for_only_env_refs() -> None:
+    issues = await inspect_managed_secret_refs_for_launch(
+        ["env://OPENAI_API_KEY", "vault://kv/data/foo#bar"]
+    )
+    assert issues == []
+
+
+async def test_inspect_managed_secret_refs_flags_missing_slug(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeStatusSession(statuses_by_slug={})
+    monkeypatch.setattr(
+        "api_service.db.base.async_session_maker",
+        _FakeStatusSessionMaker(session),
+    )
+
+    issues = await inspect_managed_secret_refs_for_launch(
+        ["db://missing-slug"]
+    )
+
+    assert len(issues) == 1
+    issue = issues[0]
+    assert isinstance(issue, BrokenSecretRef)
+    assert issue.secret_ref == "db://missing-slug"
+    assert issue.slug == "missing-slug"
+    assert issue.status == "missing"
+    assert issue.diagnostic_code == "broken_reference_missing"
+
+
+async def test_inspect_managed_secret_refs_flags_disabled_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeStatusSession(statuses_by_slug={"github-pat-main": "disabled"})
+    monkeypatch.setattr(
+        "api_service.db.base.async_session_maker",
+        _FakeStatusSessionMaker(session),
+    )
+
+    issues = await inspect_managed_secret_refs_for_launch(
+        ["db://github-pat-main"]
+    )
+
+    assert len(issues) == 1
+    assert issues[0].status == "disabled"
+    assert issues[0].diagnostic_code == "broken_reference_disabled"
+
+
+async def test_inspect_managed_secret_refs_ignores_active_refs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeStatusSession(statuses_by_slug={"ok-secret": "active"})
+    monkeypatch.setattr(
+        "api_service.db.base.async_session_maker",
+        _FakeStatusSessionMaker(session),
+    )
+
+    issues = await inspect_managed_secret_refs_for_launch(
+        ["db://ok-secret", "env://OPENAI_API_KEY"]
+    )
+
+    assert issues == []
+
+
+async def test_assert_managed_secret_refs_raises_launch_blocked_for_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeStatusSession(
+        statuses_by_slug={
+            "claude-key": "disabled",
+            "openai-key": "active",
+        }
+    )
+    monkeypatch.setattr(
+        "api_service.db.base.async_session_maker",
+        _FakeStatusSessionMaker(session),
+    )
+
+    with pytest.raises(SecretRefLaunchBlockedError) as exc_info:
+        await assert_managed_secret_refs_active_for_launch(
+            ["db://claude-key", "db://openai-key"]
+        )
+
+    error = exc_info.value
+    assert len(error.broken) == 1
+    assert error.broken[0].secret_ref == "db://claude-key"
+    assert error.broken[0].status == "disabled"
+    assert "claude-key" in str(error)
+    assert "disabled" in str(error)
+
+
+async def test_assert_managed_secret_refs_noop_for_all_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeStatusSession(statuses_by_slug={"ok-key": "active"})
+    monkeypatch.setattr(
+        "api_service.db.base.async_session_maker",
+        _FakeStatusSessionMaker(session),
+    )
+
+    await assert_managed_secret_refs_active_for_launch(
+        ["db://ok-key", "env://ALSO_OK"]
+    )

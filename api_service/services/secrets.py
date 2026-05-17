@@ -6,7 +6,12 @@ from uuid import UUID
 from sqlalchemy import and_, or_, select, Row
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.db.models import ManagedSecret, SecretStatus, SettingsOverride
+from api_service.db.models import (
+    ManagedSecret,
+    SecretStatus,
+    SettingsAuditEvent,
+    SettingsOverride,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -81,9 +86,22 @@ class SecretsService:
 
     @classmethod
     async def set_status(
-        cls, db: AsyncSession, slug: str, status: SecretStatus
+        cls,
+        db: AsyncSession,
+        slug: str,
+        status: SecretStatus,
+        *,
+        actor_user_id: UUID | None = None,
+        workspace_id: UUID | None = None,
+        reason: str | None = None,
+        request_id: str | None = None,
     ) -> ManagedSecret | None:
-        """Change the status of an existing secret."""
+        """Change the status of an existing secret and record an audit event.
+
+        The audit event captures the lifecycle transition without exposing
+        plaintext or ciphertext; ``redacted=True`` enforces that contract at
+        the storage layer.
+        """
         result = await db.execute(select(ManagedSecret).where(ManagedSecret.slug == slug))
         secret = result.scalar_one_or_none()
 
@@ -91,11 +109,33 @@ class SecretsService:
             logger.warning("secret_not_found_for_status_change", slug=slug)
             return None
 
+        previous_status = (
+            secret.status.value
+            if isinstance(secret.status, SecretStatus)
+            else str(secret.status)
+        )
+        new_status = status.value if isinstance(status, SecretStatus) else str(status)
+
         secret.status = status
         secret.updated_at = datetime.now(timezone.utc)
+        db.add(
+            SettingsAuditEvent(
+                event_type="secrets.status.changed",
+                key=f"secrets.{slug}",
+                scope="system",
+                workspace_id=workspace_id or _DEFAULT_SETTINGS_SUBJECT_ID,
+                user_id=_DEFAULT_SETTINGS_SUBJECT_ID,
+                actor_user_id=actor_user_id,
+                old_value_json={"status": previous_status},
+                new_value_json={"status": new_status},
+                redacted=True,
+                reason=reason,
+                request_id=request_id,
+            )
+        )
         await db.commit()
         await db.refresh(secret)
-        logger.info("secret_status_changed", slug=slug, new_status=status.value)
+        logger.info("secret_status_changed", slug=slug, new_status=new_status)
         return secret
 
     @classmethod

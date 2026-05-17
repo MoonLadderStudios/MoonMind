@@ -295,6 +295,16 @@ function reloadBadges(descriptor: SettingDescriptor): string[] {
   return badges;
 }
 
+function hasBrokenSecretRef(descriptor: SettingDescriptor): boolean {
+  return descriptor.diagnostics.some(
+    (diagnostic) =>
+      diagnostic.code === 'unresolved_secret_ref' ||
+      diagnostic.code === 'secret_ref_unresolved' ||
+      diagnostic.code === 'invalid_secret_ref' ||
+      diagnostic.code.startsWith('broken_reference_'),
+  );
+}
+
 function canReset(descriptor: SettingDescriptor, scope: SettingScope): boolean {
   return (
     (scope === 'workspace' && descriptor.source === 'workspace_override') ||
@@ -633,6 +643,15 @@ export function GeneratedSettingsSection() {
                           {badge}
                         </span>
                       ))}
+                      {hasBrokenSecretRef(descriptor) ? (
+                        <span
+                          className="rounded-full bg-rose-100 px-2 py-1 text-xs font-medium text-rose-800 dark:bg-rose-900/40 dark:text-rose-200"
+                          aria-label={`Broken reference for ${descriptor.title}`}
+                          title="Launches will be blocked until the referenced secret is active."
+                        >
+                          Broken reference
+                        </span>
+                      ) : null}
                     </div>
                     {descriptor.description ? (
                       <p className="text-sm text-slate-600 dark:text-slate-400">{descriptor.description}</p>
