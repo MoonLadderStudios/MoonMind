@@ -2,14 +2,24 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 TargetKind = Literal["objective", "step"]
+MemoryProposalState = Literal[
+    "proposed",
+    "accepted_for_run_context",
+    "applied_to_repo",
+    "rejected",
+    "superseded",
+]
+ATTEMPT_CONTEXT_BUILDER_VERSION = "attempt-context-builder-v1"
 
 _INLINE_ATTACHMENT_KEYS = {
     "base64",
@@ -22,7 +32,7 @@ _INLINE_ATTACHMENT_KEYS = {
 }
 _DATA_URL_RE = re.compile(r"data:[^\s'\")]+", re.IGNORECASE)
 _SECRETISH_RE = re.compile(
-    r"(ghp_|github_pat_|AIza|ATATT|AKIA|token=|password=|"
+    r"(ghp_|github_pat_|AIza|ATATT|AKIA|"
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----)",
     re.IGNORECASE,
 )
@@ -104,6 +114,132 @@ class StepPreparedContext(BaseModel):
                 "objective": len(self.objective_context_refs),
                 "step": len(self.step_context_refs),
             },
+        }
+
+
+class RetrievalManifest(BaseModel):
+    """Compact retrieval input manifest recorded for one attempt."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    query: str | None = None
+    selector: dict[str, Any] | None = None
+    index_version: str | None = Field(default=None, alias="indexVersion")
+    returned_refs: list[str] = Field(default_factory=list, alias="returnedRefs")
+    filters: dict[str, Any] = Field(default_factory=dict)
+    compact_summaries: list[str] = Field(
+        default_factory=list,
+        alias="compactSummaries",
+    )
+    retrieval_manifest_ref: str = Field(alias="retrievalManifestRef")
+
+    @model_validator(mode="after")
+    def _validate_manifest(self) -> "RetrievalManifest":
+        if not self.query and not self.selector and not self.returned_refs:
+            raise ValueError(
+                "retrieval manifest requires query, selector, or returnedRefs"
+            )
+        _reject_secretish_values(self.model_dump(by_alias=True), path="retrieval")
+        return self
+
+
+class MemoryProposal(BaseModel):
+    """Compact memory proposal with explicit promotion state."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    proposal_ref: str = Field(alias="proposalRef")
+    state: MemoryProposalState
+    summary: str | None = None
+    policy_ref: str | None = Field(default=None, alias="policyRef")
+
+    @field_validator("proposal_ref")
+    @classmethod
+    def _proposal_ref_required(cls, value: str) -> str:
+        candidate = str(value or "").strip()
+        if not candidate:
+            raise ValueError("proposalRef is required")
+        return candidate
+
+    @model_validator(mode="after")
+    def _validate_policy_state(self) -> "MemoryProposal":
+        if (
+            self.state == "applied_to_repo"
+            and not str(self.policy_ref or "").strip()
+        ):
+            raise ValueError(
+                "applied_to_repo memory proposals require an explicit policyRef"
+            )
+        _reject_secretish_values(self.model_dump(by_alias=True), path="memory")
+        return self
+
+
+class MemoryManifest(BaseModel):
+    """Compact memory manifest recorded for one attempt."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    proposals: list[MemoryProposal] = Field(default_factory=list)
+    memory_manifest_ref: str = Field(alias="memoryManifestRef")
+
+
+class AttemptContextBundle(BaseModel):
+    """Digest-addressed context envelope for one runtime attempt."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    schema_version: Literal["v1"] = Field("v1", alias="schemaVersion")
+    workflow_id: str = Field(alias="workflowId")
+    run_id: str = Field(alias="runId")
+    logical_step_id: str = Field(alias="logicalStepId")
+    attempt: int
+    reason: str = "initial_execution"
+    prepared_input_refs: list[str] = Field(
+        default_factory=list,
+        alias="preparedInputRefs",
+    )
+    retrieval_manifest_ref: str | None = Field(
+        default=None,
+        alias="retrievalManifestRef",
+    )
+    memory_manifest_ref: str | None = Field(default=None, alias="memoryManifestRef")
+    runtime_selection: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="runtimeSelection",
+    )
+    context_bundle_ref: str = Field(alias="contextBundleRef")
+    context_bundle_digest: str = Field(alias="contextBundleDigest")
+    builder_version: str = Field(alias="builderVersion")
+
+    @field_validator("workflow_id", "run_id", "logical_step_id", "reason")
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        candidate = str(value or "").strip()
+        if not candidate:
+            raise ValueError("field must be a non-empty string")
+        return candidate
+
+    @field_validator("attempt")
+    @classmethod
+    def _positive_attempt(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("attempt must be positive")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_safe_content(self) -> "AttemptContextBundle":
+        _reject_secretish_values(self.model_dump(by_alias=True), path="attemptContext")
+        return self
+
+    def to_manifest_projection(self) -> dict[str, Any]:
+        return {
+            "context": {
+                "contextBundleRef": self.context_bundle_ref,
+                "contextBundleDigest": self.context_bundle_digest,
+                "builderVersion": self.builder_version,
+                "retrievalManifestRef": self.retrieval_manifest_ref,
+                "memoryManifestRef": self.memory_manifest_ref,
+            }
         }
 
 
@@ -197,6 +333,99 @@ def select_step_prepared_context(
     )
 
 
+def build_attempt_context_bundle(
+    *,
+    workflow_id: str,
+    run_id: str,
+    logical_step_id: str,
+    attempt: int | None = None,
+    reason: str = "initial_execution",
+    prepared_context: StepPreparedContext | None = None,
+    runtime_selection: Mapping[str, Any] | None = None,
+    retrieval: Mapping[str, Any] | None = None,
+    memory_proposals: Sequence[Mapping[str, Any]] | None = None,
+    builder_version: str = ATTEMPT_CONTEXT_BUILDER_VERSION,
+) -> AttemptContextBundle:
+    """Build a compact, digest-addressed attempt context bundle."""
+
+    prepared_input_refs = (
+        prepared_context.input_refs if prepared_context is not None else []
+    )
+    retrieval_manifest_ref = None
+    if isinstance(retrieval, Mapping) and retrieval:
+        retrieval_manifest_ref = (
+            build_retrieval_manifest(retrieval).retrieval_manifest_ref
+        )
+    memory_manifest_ref = None
+    if memory_proposals:
+        memory_manifest_ref = (
+            build_memory_manifest(memory_proposals).memory_manifest_ref
+        )
+
+    base_payload = {
+        "schemaVersion": "v1",
+        "workflowId": workflow_id,
+        "runId": run_id,
+        "logicalStepId": logical_step_id,
+        "attempt": attempt or 1,
+        "reason": reason,
+        "preparedInputRefs": list(prepared_input_refs),
+        "retrievalManifestRef": retrieval_manifest_ref,
+        "memoryManifestRef": memory_manifest_ref,
+        "runtimeSelection": dict(runtime_selection or {}),
+        "builderVersion": builder_version,
+    }
+    digest = _digest_payload(base_payload)
+    payload = {
+        **base_payload,
+        "contextBundleRef": f"attempt-context-bundle://{digest}",
+        "contextBundleDigest": digest,
+    }
+    return AttemptContextBundle.model_validate(payload)
+
+
+def build_retrieval_manifest(retrieval: Mapping[str, Any]) -> RetrievalManifest:
+    payload = {
+        "query": _optional_text(retrieval.get("query")),
+        "selector": _optional_mapping(retrieval.get("selector")),
+        "indexVersion": _optional_text(
+            retrieval.get("indexVersion") or retrieval.get("index_version")
+        ),
+        "returnedRefs": _clean_existing_refs(
+            retrieval.get("returnedRefs")
+            or retrieval.get("returned_refs")
+            or retrieval.get("retrievedRefs")
+            or retrieval.get("retrieved_refs")
+        ),
+        "filters": _optional_mapping(retrieval.get("filters")) or {},
+        "compactSummaries": _bounded_summaries(
+            retrieval.get("compactSummaries") or retrieval.get("compact_summaries")
+        ),
+    }
+    digest = _digest_payload(payload)
+    payload["retrievalManifestRef"] = f"attempt-retrieval-manifest://{digest}"
+    return RetrievalManifest.model_validate(payload)
+
+
+def build_memory_manifest(
+    proposals: Sequence[Mapping[str, Any]],
+) -> MemoryManifest:
+    proposal_models = [
+        MemoryProposal.model_validate(proposal)
+        for proposal in proposals
+        if isinstance(proposal, Mapping)
+    ]
+    payload = {
+        "proposals": [
+            proposal.model_dump(by_alias=True, exclude_none=True)
+            for proposal in proposal_models
+        ]
+    }
+    digest = _digest_payload(payload)
+    payload["memoryManifestRef"] = f"attempt-memory-manifest://{digest}"
+    return MemoryManifest.model_validate(payload)
+
+
 def merge_prepared_input_refs(
     existing_refs: Sequence[Any] | None,
     prepared_context: StepPreparedContext,
@@ -271,6 +500,10 @@ def _entry_from_attachment(
 ) -> PreparedInputEntry:
     try:
         _reject_inline_attachment_content(attachment)
+        _reject_secretish_values(
+            attachment,
+            path=_attachment_target_label(target_kind, step_ref),
+        )
         artifact_id = _artifact_id(attachment)
     except ValueError as exc:
         raise ValueError(
@@ -395,6 +628,50 @@ def _reject_inline_attachment_content(attachment: Mapping[str, Any]) -> None:
             raise ValueError(
                 "inline attachment content is not allowed in prepared inputs"
             )
+
+
+def _reject_secretish_values(value: Any, *, path: str) -> None:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            _reject_secretish_values(item, path=f"{path}.{key}")
+        return
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for index, item in enumerate(value):
+            _reject_secretish_values(item, path=f"{path}[{index}]")
+        return
+    if isinstance(value, str) and _SECRETISH_RE.search(value):
+        raise ValueError(f"{path} contains raw secret material")
+
+
+def _digest_payload(payload: Mapping[str, Any]) -> str:
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def _optional_mapping(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    return dict(value)
+
+
+def _bounded_summaries(value: Any) -> list[str]:
+    if isinstance(value, str):
+        values: Sequence[Any] = [value]
+    elif isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        values = value
+    else:
+        values = []
+    summaries: list[str] = []
+    for item in values:
+        candidate = _optional_text(item)
+        if candidate:
+            summaries.append(candidate[:500])
+    return summaries
 
 
 def _optional_text(value: Any) -> str | None:
