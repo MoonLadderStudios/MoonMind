@@ -286,9 +286,7 @@ def mark_step_attempt_manifest_evidence(
         artifacts = default_step_artifacts()
         current_artifacts = row.get("artifacts")
         if isinstance(current_artifacts, Mapping):
-            for key, value in current_artifacts.items():
-                if key in artifacts:
-                    artifacts[key] = value
+            artifacts.update(current_artifacts)
         history = artifacts.get("attemptManifestRefs")
         if not isinstance(history, list):
             history = []

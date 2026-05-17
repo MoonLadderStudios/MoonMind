@@ -229,6 +229,7 @@ RUN_TERMINAL_STATE_ACTIVITY_PATCH = "run-terminal-state-activity-v1"
 RUN_PAUSE_SAFE_BOUNDARIES_PATCH = "run-pause-safe-boundaries-v1"
 # Replay-stable patch id for stamping mm_started_at when real work begins.
 RUN_REAL_STARTED_AT_PATCH = "run-real-started-at-v1"
+RUN_STEP_ATTEMPT_MANIFEST_PATCH = "run-step-attempt-manifest-v1"
 MM_STARTED_AT_SEARCH_ATTRIBUTE = "mm_started_at"
 _PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code", "gemini_cli")
 _MANAGED_AGENT_IDS = frozenset(
@@ -3034,9 +3035,13 @@ class MoonMindRunWorkflow:
                     "quality_gate_failed"
                     if previous_review_feedback
                     else (
-                        "initial_execution"
-                        if current_step_attempt == 1
-                        else "runtime_recovered"
+                        "resume_from_failed_step"
+                        if node_id == self._resume_failed_step_id
+                        else (
+                            "initial_execution"
+                            if current_step_attempt == 1
+                            else "runtime_recovered"
+                        )
                     )
                 )
 
@@ -3045,6 +3050,30 @@ class MoonMindRunWorkflow:
                     await self._wait_if_paused_at_safe_boundary()
                     if self._cancel_requested:
                         return
+
+                    if workflow.patched(RUN_STEP_ATTEMPT_MANIFEST_PATCH):
+                        await self._record_step_attempt_manifest_started(
+                            node_id,
+                            updated_at=workflow.now(),
+                            summary=self._summary,
+                            reason=attempt_reason,
+                            input_refs=(
+                                node_inputs.get("inputRefs")
+                                if isinstance(node_inputs.get("inputRefs"), list)
+                                else []
+                            ),
+                            execution={
+                                "kind": tool_type,
+                                "toolName": tool_name,
+                                "idempotencyKey": step_attempt_operation_idempotency_key(
+                                    workflow_id=workflow.info().workflow_id,
+                                    run_id=workflow.info().run_id,
+                                    logical_step_id=node_id,
+                                    attempt=current_step_attempt,
+                                    operation="execute",
+                                ),
+                            },
+                        )
 
                     if tool_type == "agent_runtime":
                         # --- Agent dispatch: child workflow ---
@@ -3070,6 +3099,7 @@ class MoonMindRunWorkflow:
                                 tool_name=tool_name,
                                 resolved_skillset_ref=resolved_skillset_ref,
                                 workflow_parameters=parameters,
+                                step_attempt=current_step_attempt,
                             )
                             if workflow.patched(RUN_SLOT_CONTINUITY_PATCH):
                                 self._mark_slot_continuity_for_next_step(
@@ -3092,6 +3122,13 @@ class MoonMindRunWorkflow:
                             child_workflow_id = (
                                 f"{workflow.info().workflow_id}:agent:{node_id}"
                             )
+                            if (
+                                current_step_attempt > 1
+                                and workflow.patched(RUN_STEP_ATTEMPT_MANIFEST_PATCH)
+                            ):
+                                child_workflow_id = (
+                                    f"{child_workflow_id}:attempt{current_step_attempt}"
+                                )
                             if system_retries > 0:
                                 child_workflow_id = (
                                     f"{child_workflow_id}:retry{system_retries}"
@@ -3223,28 +3260,6 @@ class MoonMindRunWorkflow:
                         )
 
                     result_status = self._activity_result_status(execution_result)
-                    await self._record_step_attempt_manifest_started(
-                        node_id,
-                        updated_at=workflow.now(),
-                        summary=self._summary,
-                        reason=attempt_reason,
-                        input_refs=(
-                            node_inputs.get("inputRefs")
-                            if isinstance(node_inputs.get("inputRefs"), list)
-                            else []
-                        ),
-                        execution={
-                            "kind": tool_type,
-                            "toolName": tool_name,
-                            "idempotencyKey": step_attempt_operation_idempotency_key(
-                                workflow_id=workflow.info().workflow_id,
-                                run_id=workflow.info().run_id,
-                                logical_step_id=node_id,
-                                attempt=current_step_attempt,
-                                operation="execute",
-                            ),
-                        },
-                    )
                     if result_status is None:
                         if failure_mode == "FAIL_FAST":
                             raise ValueError(
@@ -5926,6 +5941,7 @@ class MoonMindRunWorkflow:
         tool_name: str,
         resolved_skillset_ref: str | None = None,
         workflow_parameters: Mapping[str, Any] | None = None,
+        step_attempt: int | None = None,
     ) -> "AgentExecutionRequest":
         """Build an ``AgentExecutionRequest`` from plan-node inputs and workflow context."""
         node_inputs = self._append_trusted_previous_outputs_to_agent_inputs(node_inputs)
@@ -5971,7 +5987,20 @@ class MoonMindRunWorkflow:
             )
         wf_info = workflow.info()
         correlation_id = wf_info.workflow_id
-        idempotency_key = f"{wf_info.workflow_id}:{node_id}:{wf_info.run_id}"
+        if (
+            step_attempt is not None
+            and step_attempt > 0
+            and workflow.patched(RUN_STEP_ATTEMPT_MANIFEST_PATCH)
+        ):
+            idempotency_key = step_attempt_operation_idempotency_key(
+                workflow_id=wf_info.workflow_id,
+                run_id=wf_info.run_id,
+                logical_step_id=node_id,
+                attempt=step_attempt,
+                operation="agent_execute",
+            )
+        else:
+            idempotency_key = f"{wf_info.workflow_id}:{node_id}:{wf_info.run_id}"
 
         workspace_spec: dict[str, Any] = {}
         for ws_key in (
