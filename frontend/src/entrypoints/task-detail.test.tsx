@@ -409,6 +409,112 @@ describe('Task Detail Entrypoint', () => {
     });
   });
 
+  it('renders compact proposal delivery diagnostics from execution detail outcomes', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Proposal detail task',
+      summary: 'Execution summary',
+      status: 'running',
+      state: 'proposals',
+      rawState: 'proposals',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+      proposalSummary: {
+        requested: true,
+        generatedCount: 3,
+        submittedCount: 3,
+        deliveredCount: 1,
+        externalLinks: [],
+        dedupUpdates: [
+          {
+            provider: 'github',
+            externalKey: '42',
+            created: false,
+            duplicateSource: 'existing-open-issue',
+          },
+        ],
+        validationErrors: [
+          { code: 'proposal_validation_error', message: 'proposal skipped: [REDACTED]' },
+        ],
+        deliveryFailures: [
+          { provider: 'jira', code: 'delivery_failed', message: 'delivery failed: [REDACTED]' },
+        ],
+      },
+      proposalOutcomes: [
+        {
+          provider: 'jira',
+          externalKey: 'MM-901',
+          externalUrl: 'https://jira.example/browse/MM-901',
+          deliveryStatus: 'delivered',
+          deliveredAt: '2026-04-09T00:01:00Z',
+          lastSyncedAt: '2026-04-09T00:02:00Z',
+          taskPreview: {
+            repository: 'MoonLadderStudios/MoonMind',
+            runtimeMode: 'codex_cli',
+            publishMode: 'pr',
+            priority: 4,
+            maxAttempts: 2,
+            taskSkills: ['fix-ci'],
+            presetProvenance: 'jira-preset',
+          },
+          promotionResult: {
+            promotedExecutionId: 'mm-promoted-1',
+            promotedExecutionUrl: '/tasks/temporal/mm-promoted-1',
+          },
+        },
+        {
+          provider: 'github',
+          externalKey: '42',
+          deliveryStatus: 'updated',
+          created: false,
+          duplicateSource: 'existing-open-issue',
+        },
+        {
+          provider: 'jira',
+          externalKey: 'MM-902',
+          deliveryStatus: 'failed',
+          message: 'delivery failed: [REDACTED]',
+        },
+      ],
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={stepsPayload} />);
+
+    await waitFor(() => {
+      const summaryCard = (label: string) => screen.getByText((_, element) => element?.textContent === `${label}:`).closest('.card');
+      expect(screen.getByRole('heading', { name: 'Proposal Outcomes' })).toBeTruthy();
+      expect(summaryCard('Delivered')?.textContent).toContain('1');
+      expect(summaryCard('Updated')?.textContent).toContain('1');
+      expect(summaryCard('Failed')?.textContent).toContain('2');
+      expect(screen.getByText('jira: MM-901')).toBeTruthy();
+      expect(screen.getAllByText('Delivery Status').length).toBeGreaterThan(0);
+      expect(screen.getByText('delivered')).toBeTruthy();
+      expect(screen.getByText('MoonLadderStudios/MoonMind')).toBeTruthy();
+      expect(screen.getByText('Codex CLI')).toBeTruthy();
+      expect(screen.getByText('fix-ci')).toBeTruthy();
+      expect(screen.getByText('jira-preset')).toBeTruthy();
+      expect(screen.getByText('existing-open-issue')).toBeTruthy();
+      expect(screen.getByText('mm-promoted-1')).toBeTruthy();
+      expect(screen.getAllByText('delivery failed: [REDACTED]').length).toBeGreaterThan(0);
+      expect(screen.queryByText(/ghp_secret/i)).toBeNull();
+    });
+  });
+
   it('does not poll terminal task detail surfaces after the initial load', async () => {
     const terminalExecution = {
       taskId: 'test-123',
