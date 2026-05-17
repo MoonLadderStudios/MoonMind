@@ -2426,89 +2426,152 @@ def test_runtime_planner_publish_pr_treats_authored_branch_as_base():
     assert node_inputs["targetBranch"].startswith("fix-create-branch-publish-")
     assert re.fullmatch(r"[a-z0-9-]+-[0-9a-f]{8}", node_inputs["targetBranch"])
 
-def test_runtime_planner_authored_branch_fallback_order():
+@pytest.mark.parametrize(
+    ("inputs", "parameters", "expected_branch"),
+    [
+        (
+            {"task": {"git": {"branch": "from-git"}}},
+            {"branch": "from-params"},
+            "from-git",
+        ),
+        (
+            {"task": {"branch": "from-task", "inputs": {"branch": "from-skill"}}},
+            {"branch": "from-params"},
+            "from-task",
+        ),
+        (
+            {"task": {"inputs": {"branch": "from-skill"}}},
+            {"branch": "from-params"},
+            "from-skill",
+        ),
+        ({}, {"branch": "from-params"}, "from-params"),
+        ({"branch": "from-input"}, {}, "from-input"),
+        (
+            {"task": {"git": {"defaultBranch": "from-default"}}},
+            {},
+            "from-default",
+        ),
+    ],
+)
+def test_runtime_planner_mm669_authored_branch_uses_documented_fallback_chain(
+    inputs,
+    parameters,
+    expected_branch,
+):
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+    task_overrides = dict(inputs.get("task", {}))
+    top_level_inputs = {key: value for key, value in inputs.items() if key != "task"}
+
+    task = {
+        "instructions": "Do work",
+        "title": "MM-669 branch resolution",
+        "runtime": {"mode": "codex_cli"},
+        "publish": {"mode": "pr"},
+        **task_overrides,
+    }
+    plan = planner(
+        inputs={**top_level_inputs, "task": task},
+        parameters={"publishMode": "pr", **parameters},
+        snapshot=snapshot,
+    )
+
+    node_inputs = plan["nodes"][-1]["inputs"]
+    assert node_inputs["branch"] == expected_branch
+    assert node_inputs["startingBranch"] == expected_branch
+
+def test_runtime_planner_mm669_pr_head_uses_workspace_metadata_before_generated_branch():
     planner = _build_runtime_planner()
     snapshot = _make_snapshot()
 
-    cases = [
-        ({"task": {"git": {"branch": "feature/git"}}}, "feature/git"),
-        ({"task": {"branch": "feature/task"}}, "feature/task"),
-        (
-            {
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Do work",
+                "title": "MM-669 work branch",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+            }
+        },
+        parameters={
+            "publishMode": "pr",
+            "targetBranch": "legacy-top-level-head",
+            "workspaceSpec": {"targetBranch": "workspace-head"},
+        },
+        snapshot=snapshot,
+    )
+
+    assert plan["nodes"][-1]["inputs"]["targetBranch"] == "workspace-head"
+
+def test_runtime_planner_mm669_pr_head_ignores_legacy_top_level_target_branch():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Do work",
+                "title": "MM-669 generated head",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+            }
+        },
+        parameters={"publishMode": "pr", "targetBranch": "legacy-top-level-head"},
+        snapshot=snapshot,
+    )
+
+    target_branch = plan["nodes"][-1]["inputs"]["targetBranch"]
+    assert target_branch != "legacy-top-level-head"
+    assert target_branch.startswith("mm-669-generated-head-")
+
+def test_runtime_planner_mm669_pr_head_ignores_legacy_git_target_branch():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Do work",
+                "title": "MM-669 generated head from git legacy",
+                "git": {"targetBranch": "legacy-git-head"},
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+            }
+        },
+        parameters={"publishMode": "pr"},
+        snapshot=snapshot,
+    )
+
+    target_branch = plan["nodes"][-1]["inputs"]["targetBranch"]
+    assert target_branch != "legacy-git-head"
+    assert target_branch.startswith("mm-669-generated-head-from-git-legacy-")
+
+def test_runtime_planner_mm669_pr_mode_errors_when_head_branch_unresolved(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.worker_runtime._generate_runtime_pr_branch",
+        lambda _prefix: "",
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="publishMode 'pr' requested but no PR head branch could be resolved",
+    ):
+        planner(
+            inputs={
                 "task": {
-                    "tool": {
-                        "name": "auto",
-                        "inputs": {"branch": "feature/skill"},
-                    }
+                    "instructions": "Do work",
+                    "title": "MM-669 unresolved head",
+                    "runtime": {"mode": "codex_cli"},
+                    "publish": {"mode": "pr"},
                 }
             },
-            "feature/skill",
-        ),
-        ({}, "feature/parameter"),
-        ({"branch": "feature/input"}, "feature/input"),
-        ({"defaultBranch": "trunk"}, "trunk"),
-    ]
-
-    for input_overrides, expected_branch in cases:
-        task = {
-            "instructions": "Do work",
-            "runtime": {"mode": "codex_cli"},
-            "publish": {"mode": "branch"},
-        }
-        task.update(input_overrides.get("task", {}))
-        inputs = {"task": task}
-        for key, value in input_overrides.items():
-            if key != "task":
-                inputs[key] = value
-        parameters = {
-            "branch": "feature/parameter",
-            "defaultBranch": "main",
-        }
-        if expected_branch in {"feature/input", "trunk"}:
-            parameters.pop("branch")
-        if expected_branch == "trunk":
-            parameters.pop("defaultBranch")
-
-        plan = planner(inputs=inputs, parameters=parameters, snapshot=snapshot)
-
-        assert plan["nodes"][-1]["inputs"]["branch"] == expected_branch
-
-def test_runtime_planner_leaves_branch_unset_without_authored_branch():
-    planner = _build_runtime_planner()
-    snapshot = _make_snapshot()
-
-    plan = planner(
-        inputs={
-            "task": {
-                "instructions": "Do work",
-                "runtime": {"mode": "codex_cli"},
-                "publish": {"mode": "branch"},
-            }
-        },
-        parameters={},
-        snapshot=snapshot,
-    )
-
-    assert "branch" not in plan["nodes"][-1]["inputs"]
-
-def test_runtime_planner_ignores_non_string_branch_values():
-    planner = _build_runtime_planner()
-    snapshot = _make_snapshot()
-
-    plan = planner(
-        inputs={
-            "task": {
-                "instructions": "Do work",
-                "runtime": {"mode": "codex_cli"},
-                "publish": {"mode": "branch"},
-                "git": {"defaultBranch": {"name": "main"}},
-            }
-        },
-        parameters={"defaultBranch": {"name": "trunk"}},
-        snapshot=snapshot,
-    )
-
-    assert "branch" not in plan["nodes"][-1]["inputs"]
+            parameters={"publishMode": "pr"},
+            snapshot=snapshot,
+        )
 
 def test_runtime_planner_publish_pr_uses_step_title_for_target_branch_prefix():
     planner = _build_runtime_planner()
