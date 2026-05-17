@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { BootPayload } from '../boot/parseBootPayload';
 import { SecretManager } from '../components/secrets/SecretManager';
 import { GeneratedSettingsSection } from '../components/settings/GeneratedSettingsSection';
+import { GithubTokenProbePanel } from '../components/settings/GithubTokenProbePanel';
 import {
   OperationsSettingsSection,
   type WorkerPauseConfig,
@@ -153,6 +154,7 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
       ?.settingsPermissions ?? []),
   );
   const canWriteProviderProfiles = settingsPermissions.has('provider_profiles.write');
+  const canRunGithubTokenProbe = settingsPermissions.has('settings.effective.read');
 
   useEffect(() => {
     const handlePopState = () => {
@@ -343,6 +345,11 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
               permissions={settingsPermissions}
             />
           )}
+
+          <GithubTokenProbePanel
+            canRunProbe={canRunGithubTokenProbe}
+            onNotice={setNotice}
+          />
         </div>
       ) : null}
 
