@@ -1016,6 +1016,22 @@ async def ensure_provider_profile_managers_started():
     except Exception as e:
         logger.error(f"Error ensuring ProviderProfileManager workflows: {e}", exc_info=True)
 
+def _register_settings_change_subscribers() -> None:
+    """Wire the default SettingsChangePublisher subscribers once per process."""
+
+    try:
+        from api_service.services.settings_change_subscribers import (
+            register_default_subscribers,
+        )
+
+        register_default_subscribers()
+    except Exception as exc:  # noqa: BLE001 — defensive at startup
+        logger.warning(
+            "Failed to register default settings change subscribers: %s",
+            exc,
+        )
+
+
 async def startup_event():
     """Defines the application's startup events."""
     logger.info("Executing application startup events...")
@@ -1031,6 +1047,7 @@ async def startup_event():
     _initialize_contexts(app.state, settings)
     _load_or_create_vector_index(app.state)
     await _initialize_oidc_provider(app)  # OIDC provider init like Keycloak discovery
+    _register_settings_change_subscribers()
     try:
         app.state.retrieval_service = ContextRetrievalService(
             settings=RagRuntimeSettings.from_env()
