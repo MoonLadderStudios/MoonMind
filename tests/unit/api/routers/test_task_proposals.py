@@ -687,3 +687,51 @@ def test_provider_decision_recovery_inspects_delivery_history(
     assert payload["providerMetadata"]["providerDecisions"][0]["promotedExecutionId"] == (
         "wf-abc-123"
     )
+
+
+def test_redeliver_proposal_endpoint_returns_recovery_record(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
+    test_client, service, _execution_service = client
+    proposal = _build_proposal()
+    proposal.provider = "github"
+    proposal.external_key = "42"
+    proposal.external_url = "https://github.example/Moon/Repo/issues/42"
+    proposal.provider_metadata = {
+        "delivery": {
+            "status": "delivered",
+            "storedSnapshotNotice": True,
+            "created": False,
+        }
+    }
+    service.redeliver_proposal.return_value = proposal
+
+    response = test_client.post(f"/api/proposals/{proposal.id}/redeliver")
+
+    assert response.status_code == 200
+    service.redeliver_proposal.assert_awaited_once_with(proposal_id=proposal.id)
+    assert response.json()["reviewDelivery"]["status"] == "delivered"
+
+
+def test_sync_proposal_delivery_endpoint_returns_recovery_record(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
+    test_client, service, _execution_service = client
+    proposal = _build_proposal()
+    proposal.provider = "jira"
+    proposal.external_key = "MM-901"
+    proposal.external_url = "https://jira.example/browse/MM-901"
+    proposal.last_synced_at = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
+    proposal.provider_metadata = {
+        "delivery": {"status": "delivered", "storedSnapshotNotice": True},
+        "sync": {"status": "inspected"},
+    }
+    service.sync_proposal_delivery.return_value = proposal
+
+    response = test_client.post(f"/api/proposals/{proposal.id}/sync")
+
+    assert response.status_code == 200
+    service.sync_proposal_delivery.assert_awaited_once_with(proposal_id=proposal.id)
+    payload = response.json()
+    assert payload["reviewDelivery"]["lastSyncedAt"] == "2026-05-17T12:00:00Z"
+    assert payload["providerMetadata"]["sync"]["status"] == "inspected"

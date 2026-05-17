@@ -668,6 +668,45 @@ async def inspect_proposal_delivery(
         ) from exc
     return _serialize_proposal(proposal)
 
+
+@router.post("/{proposal_id}/redeliver", response_model=TaskProposalModel)
+async def redeliver_proposal(
+    *,
+    proposal_id: UUID,
+    service: TaskProposalService = Depends(_get_service),
+    _user: User = Depends(get_current_user()),
+) -> TaskProposalModel:
+    try:
+        proposal = await service.redeliver_proposal(proposal_id=proposal_id)
+    except TaskProposalValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "invalid_request", "message": str(exc)},
+        ) from exc
+    except TaskProposalError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "proposal_not_found", "message": str(exc)},
+        ) from exc
+    return _serialize_proposal(proposal)
+
+
+@router.post("/{proposal_id}/sync", response_model=TaskProposalModel)
+async def sync_proposal_delivery(
+    *,
+    proposal_id: UUID,
+    service: TaskProposalService = Depends(_get_service),
+    _user: User = Depends(get_current_user()),
+) -> TaskProposalModel:
+    try:
+        proposal = await service.sync_proposal_delivery(proposal_id=proposal_id)
+    except TaskProposalError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "proposal_not_found", "message": str(exc)},
+        ) from exc
+    return _serialize_proposal(proposal)
+
 @router.post("/{proposal_id}/dismiss", response_model=TaskProposalModel)
 async def dismiss_proposal(
     *,
