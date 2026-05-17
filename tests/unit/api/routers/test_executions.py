@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import time
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Iterator
@@ -209,13 +210,17 @@ class _QueryHandle:
         ledger=None,
         summary=None,
         error: Exception | None = None,
+        delay_seconds: float = 0,
     ) -> None:
         self._progress = progress
         self._ledger = ledger
         self._summary = summary
         self._error = error
+        self._delay_seconds = delay_seconds
 
     async def query(self, name: str):
+        if self._delay_seconds > 0:
+            await asyncio.sleep(self._delay_seconds)
         if self._error is not None:
             raise self._error
         if name == "get_progress":
@@ -233,6 +238,7 @@ def _override_query_client(
     ledger=None,
     summary=None,
     error: Exception | None = None,
+    delay_seconds: float = 0,
 ) -> SimpleNamespace:
     handles: dict[str, _QueryHandle] = {}
 
@@ -243,6 +249,7 @@ def _override_query_client(
                 ledger=ledger,
                 summary=summary,
                 error=error,
+                delay_seconds=delay_seconds,
             )
         return handles[workflow_id]
 
@@ -5911,6 +5918,51 @@ def test_describe_execution_leaves_progress_null_when_query_fails() -> None:
     assert payload["stepsHref"] == "/api/executions/mm:wf-1/steps"
     assert payload["progress"] is None
 
+def test_describe_execution_bounds_slow_live_progress_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(
+        app,
+        progress={"total": 99},
+        delay_seconds=0.2,
+    )
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(
+        settings.temporal_dashboard,
+        "live_query_timeout_seconds",
+        0.01,
+    )
+    monkeypatch.setattr(
+        settings.temporal,
+        "temporal_authoritative_read_enabled",
+        False,
+    )
+
+    with (
+        patch(
+            "api_service.api.routers.executions._hydrate_execution_report_projection",
+            new_callable=AsyncMock,
+            side_effect=lambda execution, **_kwargs: execution,
+        ),
+        patch(
+            "api_service.api.routers.executions._resolve_task_run_ids_from_managed_store",
+            return_value={},
+        ),
+        TestClient(app) as test_client,
+    ):
+        started = time.perf_counter()
+        response = test_client.get("/api/executions/mm:wf-1")
+        elapsed = time.perf_counter() - started
+
+    assert response.status_code == 200
+    assert elapsed < 0.15
+    assert response.json()["progress"] is None
+
 def test_describe_execution_skips_live_progress_query_for_terminal_runs() -> None:
     from api_service.db.models import TemporalExecutionCloseStatus
 
@@ -6198,6 +6250,100 @@ def test_get_execution_steps_returns_503_for_temporal_rpc_errors() -> None:
 
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "temporal_unavailable"
+
+def test_get_execution_steps_returns_503_for_slow_temporal_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(
+        app,
+        ledger={"workflowId": "mm:wf-1", "runId": "run-99", "steps": []},
+        delay_seconds=0.2,
+    )
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(
+        settings.temporal_dashboard,
+        "live_query_timeout_seconds",
+        0.01,
+    )
+
+    with TestClient(app) as test_client:
+        started = time.perf_counter()
+        response = test_client.get("/api/executions/mm:wf-1/steps")
+        elapsed = time.perf_counter() - started
+
+    assert response.status_code == 503
+    assert elapsed < 0.15
+    assert response.json()["detail"]["code"] == "temporal_unavailable"
+
+def test_get_execution_steps_falls_back_to_stored_task_steps_when_temporal_query_times_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    record = _build_execution_record()
+    record.memo = {
+        **record.memo,
+        "summary": "Executing plan step 2/2: moonspec-implement",
+    }
+    record.parameters = {
+        "task": {
+            "steps": [
+                {
+                    "id": "fetch-issue",
+                    "title": "Fetch issue",
+                    "type": "tool",
+                    "tool": {"id": "jira.get_issue", "version": "1.0.0"},
+                },
+                {
+                    "id": "implement",
+                    "title": "Implement issue",
+                    "type": "skill",
+                    "skill": {"id": "moonspec-implement"},
+                    "dependsOn": ["fetch-issue"],
+                },
+            ],
+        },
+    }
+    mock_service.describe_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(
+        app,
+        ledger={"workflowId": "mm:wf-1", "runId": "run-99", "steps": []},
+        delay_seconds=0.2,
+    )
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(
+        settings.temporal_dashboard,
+        "live_query_timeout_seconds",
+        0.01,
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1/steps")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["workflowId"] == "mm:wf-1"
+    assert payload["runId"] == "run-2"
+    assert [step["logicalStepId"] for step in payload["steps"]] == [
+        "fetch-issue",
+        "implement",
+    ]
+    assert payload["steps"][0]["tool"] == {
+        "type": "tool",
+        "name": "jira.get_issue",
+        "version": "1.0.0",
+    }
+    assert payload["steps"][1]["tool"]["name"] == "moonspec-implement"
+    assert payload["steps"][1]["dependsOn"] == ["fetch-issue"]
+    assert payload["steps"][1]["status"] == "running"
+    assert payload["steps"][1]["attempt"] == 1
 
 def test_get_execution_steps_returns_500_for_invalid_ledger_payload() -> None:
     app = FastAPI()
