@@ -279,6 +279,8 @@ Key diagnostics:
 - Existing `settings_overrides`, managed secret/provider-profile rows, and artifact/runtime metadata only; no new persistent storage planned (001-secretref-settings-integration)
 - Python 3.12; TypeScript/React for Mission Control state surfaces. + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, pytest, existing task proposal service, existing execution router, existing Mission Control view model helpers. (357-normalize-proposal-submissions)
 - Existing Temporal execution records, existing task proposal records, existing artifact-backed original task input snapshots; no new persistent tables. (357-normalize-proposal-submissions)
+- Python 3.12 + Pydantic v2, Temporal Python SDK, existing Temporal artifact activities, pytest (001-step-attempt-manifest)
+- Existing Temporal artifact store through `artifact.create` and `artifact.write_complete`; no new persistent tables (001-step-attempt-manifest)
 - Python 3.12 + Pydantic v2, SQLAlchemy 2.x async ORM, FastAPI (consumer of the settings catalog), pytest with `pytest-asyncio` (358-settings-migration-and-backup-docs)
 - Existing `settings_overrides` and `settings_audit_events` SQLAlchemy/Alembic tables (`api_service/db/models.py`). No new persistent storage. (358-settings-migration-and-backup-docs)
 

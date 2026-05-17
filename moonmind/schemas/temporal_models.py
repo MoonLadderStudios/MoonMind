@@ -1112,6 +1112,11 @@ class StepLedgerArtifactsModel(BaseModel):
     runtime_merged_logs: str | None = Field(None, alias="runtimeMergedLogs")
     runtime_diagnostics: str | None = Field(None, alias="runtimeDiagnostics")
     provider_snapshot: str | None = Field(None, alias="providerSnapshot")
+    attempt_manifest_ref: str | None = Field(None, alias="attemptManifestRef")
+    attempt_manifest_refs: list[str] = Field(
+        default_factory=list,
+        alias="attemptManifestRefs",
+    )
 
 class StepLedgerResumePreservationModel(BaseModel):
     """Bounded failed-step Resume preservation eligibility for one source step."""
