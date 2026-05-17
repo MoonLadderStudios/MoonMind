@@ -970,15 +970,19 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         )
         await self._attach_runtime_handles(
             {
+                "sessionEpoch": handle.session_state.session_epoch,
                 "containerId": handle.session_state.container_id,
                 "threadId": handle.session_state.thread_id,
+                "activeTurnId": handle.session_state.active_turn_id,
             }
         )
         await self._signal_control_action(
             action="clear_session",
             reason=reason,
+            session_epoch=handle.session_state.session_epoch,
             container_id=handle.session_state.container_id,
             thread_id=handle.session_state.thread_id,
+            active_turn_id=handle.session_state.active_turn_id,
         )
         return handle
 
@@ -1335,6 +1339,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         *,
         action: str,
         reason: str | None,
+        session_epoch: int | None = None,
         container_id: str | None,
         thread_id: str | None,
         active_turn_id: str | None = None,
@@ -1342,6 +1347,8 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         payload: dict[str, Any] = {"action": action}
         if reason is not None:
             payload["reason"] = reason
+        if session_epoch is not None:
+            payload["sessionEpoch"] = session_epoch
         if container_id is not None:
             payload["containerId"] = container_id
         if thread_id is not None:

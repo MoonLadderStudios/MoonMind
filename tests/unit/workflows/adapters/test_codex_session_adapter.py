@@ -1445,6 +1445,7 @@ async def test_start_resets_session_once_after_empty_assistant_activity_failure(
     workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
     send_turn_calls: list[Any] = []
     clear_calls: list[Any] = []
+    attach_calls: list[dict[str, Any]] = []
     control_calls: list[dict[str, Any]] = []
     run_store = ManagedRunStore(tmp_path / "managed_runs")
     reset_thread_id = "thread-1:empty-output-reset"
@@ -1523,6 +1524,9 @@ async def test_start_resets_session_once_after_empty_assistant_activity_failure(
     async def _apply_control_action(payload: dict[str, Any]) -> None:
         control_calls.append(payload)
 
+    async def _attach_runtime_handles(payload: dict[str, Any]) -> None:
+        attach_calls.append(payload)
+
     adapter = CodexSessionAdapter(
         profile_fetcher=_fake_profiles(
             [{"profile_id": "codex-default", "credential_source": "oauth_volume"}]
@@ -1543,7 +1547,7 @@ async def test_start_resets_session_once_after_empty_assistant_activity_failure(
         terminate_remote_session=_async_noop,
         fetch_remote_summary=_fetch_summary,
         publish_remote_artifacts=_publish_artifacts,
-        attach_runtime_handles=_async_noop,
+        attach_runtime_handles=_attach_runtime_handles,
         apply_session_control_action=_apply_control_action,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
@@ -1555,7 +1559,19 @@ async def test_start_resets_session_once_after_empty_assistant_activity_failure(
     assert len(send_turn_calls) == 2
     assert len(clear_calls) == 1
     assert send_turn_calls[1].thread_id == reset_thread_id
-    assert any(call["action"] == "clear_session" for call in control_calls)
+    assert {
+        "sessionEpoch": 2,
+        "containerId": "container-1",
+        "threadId": reset_thread_id,
+        "activeTurnId": None,
+    } in attach_calls
+    assert {
+        "action": "clear_session",
+        "reason": "retry_after_empty_assistant_output",
+        "sessionEpoch": 2,
+        "containerId": "container-1",
+        "threadId": reset_thread_id,
+    } in control_calls
     persisted_record = run_store.load(binding.task_run_id)
     result = await adapter.fetch_result(handle.run_id)
     assert persisted_record is not None
@@ -2893,15 +2909,27 @@ async def test_clear_session_rotates_epoch_and_signals_session_workflow(
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
 
-    handle = await adapter.clear_session(binding=binding, new_thread_id="thread-2", reason="reset")
+    handle = await adapter.clear_session(
+        binding=binding,
+        new_thread_id="thread-2",
+        reason="reset",
+    )
 
     assert handle.session_state.session_epoch == 2
     assert handle.session_state.thread_id == "thread-2"
-    assert attach_calls == [{"containerId": "container-1", "threadId": "thread-2"}]
+    assert attach_calls == [
+        {
+            "sessionEpoch": 2,
+            "containerId": "container-1",
+            "threadId": "thread-2",
+            "activeTurnId": None,
+        }
+    ]
     assert control_calls == [
         {
             "action": "clear_session",
             "reason": "reset",
+            "sessionEpoch": 2,
             "containerId": "container-1",
             "threadId": "thread-2",
         }

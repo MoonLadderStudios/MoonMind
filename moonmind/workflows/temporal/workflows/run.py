@@ -279,6 +279,36 @@ class MoonMindRunWorkflow:
             )
             return logging.LoggerAdapter(logging.getLogger(__name__), extra=extra)
 
+    @staticmethod
+    def _operator_failure_summary(exc: BaseException) -> str:
+        """Return the most actionable bounded message from a nested failure chain."""
+
+        generic_messages = {
+            "Activity task failed",
+            "Child Workflow execution failed",
+            "Workflow execution failed",
+            "activity failed",
+        }
+        messages: list[str] = []
+        seen: set[int] = set()
+        current: BaseException | None = exc
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            message = str(current).strip()
+            if message:
+                messages.append(message)
+            next_exc = getattr(current, "cause", None)
+            if not isinstance(next_exc, BaseException):
+                next_exc = current.__cause__
+            current = next_exc
+
+        for message in reversed(messages):
+            if message and message not in generic_messages:
+                return message[:1000]
+        if messages:
+            return messages[-1][:1000]
+        return exc.__class__.__name__
+
     def __init__(self) -> None:
         self._state = STATE_INITIALIZING
         self._owner_type: Optional[str] = None
@@ -2428,15 +2458,16 @@ class MoonMindRunWorkflow:
                 non_retryable=True,
             ) from exc
         except Exception as exc:
+            failure_summary = self._operator_failure_summary(exc)
             await self._run_finalizing_stage(
-                parameters=parameters, status="failed", error=str(exc)
+                parameters=parameters, status="failed", error=failure_summary
             )
             self._close_status = CLOSE_STATUS_FAILED
-            self._set_state(STATE_FAILED, summary=str(exc))
+            self._set_state(STATE_FAILED, summary=failure_summary)
             await self._record_terminal_state(
                 state=STATE_FAILED,
                 close_status=CLOSE_STATUS_FAILED,
-                summary=str(exc),
+                summary=failure_summary,
                 error_category="execution_error",
             )
             raise

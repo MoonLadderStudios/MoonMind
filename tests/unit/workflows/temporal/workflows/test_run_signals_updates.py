@@ -19,6 +19,12 @@ from moonmind.workflows.temporal.workflows.run import (
     MoonMindRunWorkflow,
 )
 
+class _NestedFailure(Exception):
+    def __init__(self, message: str, cause: BaseException | None = None) -> None:
+        super().__init__(message)
+        self.cause = cause
+
+
 async def fake_execute_activity(activity_name, *args, **kwargs):
     if activity_name == "artifact.read":
         import json
@@ -65,6 +71,22 @@ async def fake_execute_activity(activity_name, *args, **kwargs):
     elif activity_name == "artifact.create":
         return {"artifact_id": "art-123"}, {"url": "test"}
     return {}
+
+
+def test_operator_failure_summary_uses_deep_actionable_cause() -> None:
+    failure = _NestedFailure(
+        "Child Workflow execution failed",
+        _NestedFailure(
+            "Activity task failed",
+            RuntimeError("sessionEpoch does not match the active managed session"),
+        ),
+    )
+
+    assert (
+        MoonMindRunWorkflow._operator_failure_summary(failure)
+        == "sessionEpoch does not match the active managed session"
+    )
+
 
 @pytest.fixture
 def mock_run_environment(monkeypatch):
