@@ -1002,7 +1002,7 @@ def _downstream_task_payload(
     source_issue_key: str,
     target_preset: str = _DOWNSTREAM_PRESET_ORCHESTRATE,
 ) -> tuple[str, dict[str, Any]]:
-    preset = _DOWNSTREAM_PRESETS.get(target_preset, _DOWNSTREAM_PRESETS[_DOWNSTREAM_PRESET_ORCHESTRATE])
+    preset = _DOWNSTREAM_PRESETS[target_preset]
     preset_label = preset["label"]
     preset_slug = preset["slug"]
     issue_key = _string(mapping.get("issueKey") or mapping.get("issue_key"))
@@ -1067,16 +1067,16 @@ def _downstream_task_payload(
         task["dependsOn"] = list(depends_on)
     return task["title"], task
 
-async def create_jira_orchestrate_tasks_from_issue_mappings(
+async def _create_jira_downstream_tasks_from_issue_mappings(
     inputs: Mapping[str, Any],
     _context: Mapping[str, Any] | None = None,
     *,
     execution_creator: ExecutionCreator | None = None,
-    target_preset: str = _DOWNSTREAM_PRESET_ORCHESTRATE,
+    target_preset: str,
 ) -> ToolResult:
-    """Create dependent Jira Orchestrate or Jira Implement tasks from ordered Jira issue mappings."""
+    """Create dependent downstream Jira tasks (Orchestrate or Implement) from ordered issue mappings."""
 
-    preset = _DOWNSTREAM_PRESETS.get(target_preset, _DOWNSTREAM_PRESETS[_DOWNSTREAM_PRESET_ORCHESTRATE])
+    preset = _DOWNSTREAM_PRESETS[target_preset]
     preset_label = preset["label"]
     preset_idempotency_prefix = preset["idempotencyPrefix"]
 
@@ -1137,7 +1137,7 @@ async def create_jira_orchestrate_tasks_from_issue_mappings(
                 {
                     **base_result,
                     "errorCode": "missing_issue_key",
-                    "message": "Jira Orchestrate task creation requires issueKey.",
+                    "message": f"{preset_label} task creation requires issueKey.",
                 }
             )
             skipped_stories.append({**base_result, "summary": summary})
@@ -1267,6 +1267,22 @@ async def create_jira_orchestrate_tasks_from_issue_mappings(
         },
     )
 
+async def create_jira_orchestrate_tasks_from_issue_mappings(
+    inputs: Mapping[str, Any],
+    _context: Mapping[str, Any] | None = None,
+    *,
+    execution_creator: ExecutionCreator | None = None,
+) -> ToolResult:
+    """Create dependent Jira Orchestrate tasks from ordered Jira issue mappings."""
+
+    return await _create_jira_downstream_tasks_from_issue_mappings(
+        inputs,
+        _context,
+        execution_creator=execution_creator,
+        target_preset=_DOWNSTREAM_PRESET_ORCHESTRATE,
+    )
+
+
 async def create_jira_implement_tasks_from_issue_mappings(
     inputs: Mapping[str, Any],
     _context: Mapping[str, Any] | None = None,
@@ -1275,7 +1291,7 @@ async def create_jira_implement_tasks_from_issue_mappings(
 ) -> ToolResult:
     """Create dependent Jira Implement tasks from ordered Jira issue mappings."""
 
-    return await create_jira_orchestrate_tasks_from_issue_mappings(
+    return await _create_jira_downstream_tasks_from_issue_mappings(
         inputs,
         _context,
         execution_creator=execution_creator,
