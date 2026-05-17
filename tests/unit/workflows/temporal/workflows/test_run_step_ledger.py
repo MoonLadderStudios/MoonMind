@@ -518,6 +518,8 @@ def test_run_groups_child_lineage_and_evidence_into_step_row(
         "runtimeMergedLogs": "art_merged_1",
         "runtimeDiagnostics": "art_diag_1",
         "providerSnapshot": "art_provider_1",
+        "attemptManifestRef": None,
+        "attemptManifestRefs": [],
     }
 
 def test_run_waiting_state_captures_child_workflow_lineage(
@@ -934,7 +936,7 @@ async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check
     workflow._owner_id = "owner-1"
     review_snapshots: list[dict[str, Any]] = []
     written_review_payloads: list[dict[str, Any]] = []
-    review_artifact_ids = iter(("art_review_1",))
+    review_artifact_ids = iter(("art_attempt_1", "art_review_1"))
 
     async def fake_execute_activity(
         activity_type: str,
@@ -1031,7 +1033,17 @@ async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check
             "artifactRef": "art_review_1",
         }
     ]
-    assert written_review_payloads[0]["verdict"]["verdict"] == "PASS"
+    review_payloads = [
+        payload for payload in written_review_payloads if "verdict" in payload
+    ]
+    assert review_payloads[0]["verdict"]["verdict"] == "PASS"
+    attempt_payloads = [
+        payload for payload in written_review_payloads if payload.get("contentType")
+    ]
+    assert attempt_payloads[0]["stepAttemptId"] == (
+        "wf-run-review-1:run-review-1:apply-patch:attempt:1"
+    )
+    assert step["artifacts"]["attemptManifestRef"] == "art_attempt_1"
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retry_count(
@@ -1042,7 +1054,9 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
     workflow._owner_id = "owner-1"
     written_review_payloads: list[dict[str, Any]] = []
     skill_inputs: list[dict[str, Any]] = []
-    review_artifact_ids = iter(("art_review_1", "art_review_2"))
+    review_artifact_ids = iter(
+        ("art_attempt_1", "art_review_1", "art_attempt_2", "art_review_2")
+    )
     review_verdicts = iter(
         (
             {
@@ -1159,8 +1173,16 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
             "artifactRef": "art_review_2",
         }
     ]
-    assert written_review_payloads[0]["verdict"]["verdict"] == "FAIL"
-    assert written_review_payloads[1]["verdict"]["verdict"] == "PASS"
+    review_payloads = [
+        payload for payload in written_review_payloads if "verdict" in payload
+    ]
+    assert review_payloads[0]["verdict"]["verdict"] == "FAIL"
+    assert review_payloads[1]["verdict"]["verdict"] == "PASS"
+    assert step["artifacts"]["attemptManifestRef"] == "art_attempt_2"
+    assert step["artifacts"]["attemptManifestRefs"] == [
+        "art_attempt_1",
+        "art_attempt_2",
+    ]
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_in_instruction_ref(
@@ -1171,7 +1193,9 @@ async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_i
     workflow._owner_id = "owner-1"
     written_review_payloads: list[dict[str, Any]] = []
     child_requests: list[Any] = []
-    review_artifact_ids = iter(("art_review_1", "art_review_2"))
+    review_artifact_ids = iter(
+        ("art_attempt_1", "art_review_1", "art_attempt_2", "art_review_2")
+    )
     review_verdicts = iter(
         (
             {
@@ -1297,5 +1321,9 @@ async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_i
             "artifactRef": "art_review_2",
         }
     ]
-    assert written_review_payloads[0]["attempt"] == 1
-    assert written_review_payloads[1]["attempt"] == 2
+    review_payloads = [
+        payload for payload in written_review_payloads if "verdict" in payload
+    ]
+    assert review_payloads[0]["attempt"] == 1
+    assert review_payloads[1]["attempt"] == 2
+    assert step["artifacts"]["attemptManifestRef"] == "art_attempt_2"

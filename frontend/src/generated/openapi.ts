@@ -6568,6 +6568,10 @@ export interface components {
             runtimeDiagnostics?: string | null;
             /** Providersnapshot */
             providerSnapshot?: string | null;
+            /** Attemptmanifestref */
+            attemptManifestRef?: string | null;
+            /** Attemptmanifestrefs */
+            attemptManifestRefs?: string[];
         };
         /**
          * StepLedgerCheckModel

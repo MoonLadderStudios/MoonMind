@@ -28,6 +28,8 @@ def default_step_artifacts() -> dict[str, Any]:
         "runtimeMergedLogs": None,
         "runtimeDiagnostics": None,
         "providerSnapshot": None,
+        "attemptManifestRef": None,
+        "attemptManifestRefs": [],
     }
 
 def default_step_workload() -> dict[str, Any] | None:
@@ -266,6 +268,43 @@ def mark_step_checkpoint_evidence(
     raise KeyError(f"Unknown logical step id: {logical_step_id}")
 
 
+def mark_step_attempt_manifest_evidence(
+    rows: list[dict[str, Any]],
+    logical_step_id: str,
+    *,
+    updated_at: datetime,
+    attempt_manifest_ref: str,
+) -> dict[str, Any]:
+    """Attach compact Step Attempt manifest refs to a step row."""
+
+    manifest_ref = str(attempt_manifest_ref or "").strip()
+    if not manifest_ref:
+        raise ValueError("attempt_manifest_ref must be a non-empty string")
+    for row in rows:
+        if row.get("logicalStepId") != logical_step_id:
+            continue
+        artifacts = default_step_artifacts()
+        current_artifacts = row.get("artifacts")
+        if isinstance(current_artifacts, Mapping):
+            artifacts.update(current_artifacts)
+        history = artifacts.get("attemptManifestRefs")
+        if not isinstance(history, list):
+            history = []
+        normalized_history = [
+            item.strip()
+            for item in history
+            if isinstance(item, str) and item.strip()
+        ]
+        if manifest_ref not in normalized_history:
+            normalized_history.append(manifest_ref)
+        artifacts["attemptManifestRef"] = manifest_ref
+        artifacts["attemptManifestRefs"] = normalized_history
+        row["artifacts"] = artifacts
+        row["updatedAt"] = updated_at.isoformat()
+        return row
+    raise KeyError(f"Unknown logical step id: {logical_step_id}")
+
+
 def clear_step_checkpoint_evidence(
     rows: list[dict[str, Any]],
     logical_step_id: str,
@@ -371,6 +410,9 @@ def update_step_row(
                 for key, value in artifacts.items():
                     if key in merged_artifacts:
                         merged_artifacts[key] = value
+            history = merged_artifacts.get("attemptManifestRefs")
+            if not isinstance(history, list):
+                merged_artifacts["attemptManifestRefs"] = []
             row["artifacts"] = merged_artifacts
         if workload is not _UNSET:
             row["workload"] = dict(workload) if isinstance(workload, Mapping) else None
