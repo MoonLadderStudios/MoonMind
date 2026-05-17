@@ -3218,6 +3218,23 @@ def _fallback_current_step_order(record: Any) -> int | None:
     memo = getattr(record, "memo", None)
     if not isinstance(memo, Mapping):
         return None
+    structured = memo.get("mm_current_step_order")
+    if isinstance(structured, bool):
+        structured = None
+    if isinstance(structured, int):
+        return structured if structured > 0 else None
+    if isinstance(structured, str):
+        candidate = structured.strip()
+        if candidate:
+            try:
+                order = int(candidate)
+            except ValueError:
+                order = None
+            if order is not None:
+                return order if order > 0 else None
+    # Compatibility fallback for in-flight workflows that predate
+    # ``mm_current_step_order``; the human-readable ``summary`` carries the
+    # current step as ``step <n>/<total>``.
     summary = str(memo.get("summary") or "").strip()
     match = re.search(r"\bstep\s+(\d+)\s*/\s*\d+\b", summary, re.IGNORECASE)
     if match is None:
@@ -3246,7 +3263,6 @@ def _fallback_step_ledger_from_record(record: Any) -> StepLedgerSnapshotModel | 
 
     ordered_nodes: list[dict[str, Any]] = []
     dependency_map: dict[str, list[str]] = {}
-    explicit_dependencies = False
 
     for index, step in enumerate(normalized_steps, start=1):
         step_id = str(
@@ -3271,24 +3287,14 @@ def _fallback_step_ledger_from_record(record: Any) -> StepLedgerSnapshotModel | 
                 "inputs": {"title": title},
             }
         )
-        dependencies = normalize_dependency_ids(
+        dependency_map[step_id] = normalize_dependency_ids(
             step.get("dependsOn")
             or step.get("depends_on")
             or step.get("dependencies")
         )
-        if dependencies:
-            explicit_dependencies = True
-        dependency_map[step_id] = dependencies
 
     if not ordered_nodes:
         return None
-
-    if not explicit_dependencies and len(ordered_nodes) > 1:
-        previous_step_id = None
-        for node in ordered_nodes:
-            step_id = str(node.get("id") or "").strip()
-            dependency_map[step_id] = [previous_step_id] if previous_step_id else []
-            previous_step_id = step_id
 
     updated_at = _compatibility_refreshed_at(record)
     rows = build_initial_step_rows(
@@ -3358,6 +3364,7 @@ async def _load_execution_progress(
             "Failed to query execution progress for %s: %s",
             workflow_id,
             exc,
+            exc_info=True,
         )
         return None, None
 

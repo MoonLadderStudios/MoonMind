@@ -6345,6 +6345,123 @@ def test_get_execution_steps_falls_back_to_stored_task_steps_when_temporal_query
     assert payload["steps"][1]["status"] == "running"
     assert payload["steps"][1]["attempt"] == 1
 
+def test_get_execution_steps_fallback_prefers_structured_step_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    record = _build_execution_record()
+    record.memo = {
+        **record.memo,
+        "summary": "Executing plan step 1/2: fetch-issue",
+        "mm_current_step_order": 2,
+    }
+    record.parameters = {
+        "task": {
+            "steps": [
+                {
+                    "id": "fetch-issue",
+                    "title": "Fetch issue",
+                    "type": "tool",
+                    "tool": {"id": "jira.get_issue", "version": "1.0.0"},
+                },
+                {
+                    "id": "implement",
+                    "title": "Implement issue",
+                    "type": "skill",
+                    "skill": {"id": "moonspec-implement"},
+                    "dependsOn": ["fetch-issue"],
+                },
+            ],
+        },
+    }
+    mock_service.describe_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(
+        app,
+        ledger={"workflowId": "mm:wf-1", "runId": "run-99", "steps": []},
+        delay_seconds=0.2,
+    )
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(
+        settings.temporal_dashboard,
+        "live_query_timeout_seconds",
+        0.01,
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1/steps")
+
+    assert response.status_code == 200
+    payload = response.json()
+    # The structured memo field wins over the stale summary string.
+    assert payload["steps"][1]["status"] == "running"
+    assert payload["steps"][0]["status"] == "ready"
+
+def test_get_execution_steps_fallback_preserves_independent_steps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    record = _build_execution_record()
+    record.memo = {
+        **record.memo,
+        "summary": "Executing plan step 1/3: alpha",
+    }
+    record.parameters = {
+        "task": {
+            "steps": [
+                {
+                    "id": "alpha",
+                    "title": "Alpha",
+                    "type": "tool",
+                    "tool": {"id": "tool.alpha"},
+                },
+                {
+                    "id": "beta",
+                    "title": "Beta",
+                    "type": "tool",
+                    "tool": {"id": "tool.beta"},
+                },
+                {
+                    "id": "gamma",
+                    "title": "Gamma",
+                    "type": "tool",
+                    "tool": {"id": "tool.gamma"},
+                },
+            ],
+        },
+    }
+    mock_service.describe_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(
+        app,
+        ledger={"workflowId": "mm:wf-1", "runId": "run-99", "steps": []},
+        delay_seconds=0.2,
+    )
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(
+        settings.temporal_dashboard,
+        "live_query_timeout_seconds",
+        0.01,
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1/steps")
+
+    assert response.status_code == 200
+    payload = response.json()
+    # No step declared ``dependsOn`` so the fallback must not fabricate a chain
+    # — independent steps should remain runnable in parallel.
+    assert payload["steps"][0]["dependsOn"] == []
+    assert payload["steps"][1]["dependsOn"] == []
+    assert payload["steps"][2]["dependsOn"] == []
+    assert payload["steps"][0]["status"] == "running"
+    assert payload["steps"][1]["status"] == "ready"
+    assert payload["steps"][2]["status"] == "ready"
+
 def test_get_execution_steps_returns_500_for_invalid_ledger_payload() -> None:
     app = FastAPI()
     app.include_router(router)

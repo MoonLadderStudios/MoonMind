@@ -438,6 +438,22 @@ def test_run_memo_updates_remain_compact(monkeypatch: pytest.MonkeyPatch) -> Non
     assert "progress" not in latest_memo
     assert "checks" not in latest_memo
 
+def test_run_memo_includes_current_step_order_when_step_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memo_updates = _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+    workflow = MoonMindRunWorkflow()
+
+    workflow._title = "Ledger run"
+    workflow._summary = "Executing plan step 2/3"
+    workflow._update_memo()
+    assert "mm_current_step_order" not in memo_updates[-1]
+
+    workflow._step_count = 2
+    workflow._update_memo()
+    assert memo_updates[-1]["mm_current_step_order"] == 2
+
 def test_run_memo_surfaces_runtime_and_skill_visibility(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
