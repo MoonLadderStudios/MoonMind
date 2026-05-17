@@ -152,12 +152,37 @@ def _append_candidate(
     if issue_key:
         candidates.append(JiraIssueCandidate(issue_key=issue_key, source=source))
 
+_CANDIDATE_SOURCE_PRIORITIES = {
+    "explicit_post_merge": 0,
+    "merge_automation": 1,
+    "task_origin": 1,
+    "task_metadata": 1,
+    "publish_context": 1,
+    "pr_metadata": 2,
+}
+
+def _candidate_priority(candidate: JiraIssueCandidate) -> int:
+    return _CANDIDATE_SOURCE_PRIORITIES.get(candidate.source, 2)
+
+def _highest_priority_candidates(
+    candidates: list[JiraIssueCandidate],
+) -> list[JiraIssueCandidate]:
+    if not candidates:
+        return []
+    selected_priority = min(_candidate_priority(candidate) for candidate in candidates)
+    return [
+        candidate
+        for candidate in candidates
+        if _candidate_priority(candidate) == selected_priority
+    ]
+
 async def resolve_issue_key(
     candidates: list[JiraIssueCandidate],
     *,
     get_issue: Callable[[str], Awaitable[dict[str, Any]]],
 ) -> dict[str, Any]:
-    if not candidates:
+    selected_candidates = _highest_priority_candidates(candidates)
+    if not selected_candidates:
         return {
             "status": "missing",
             "issueKey": None,
@@ -169,7 +194,7 @@ async def resolve_issue_key(
     evidence: list[dict[str, Any]] = []
     candidates_by_key: dict[str, list[JiraIssueCandidate]] = {}
     ordered_keys: list[str] = []
-    for candidate in candidates:
+    for candidate in selected_candidates:
         issue_key = _normalize_issue_key(candidate.issue_key)
         if not issue_key:
             evidence.append(
