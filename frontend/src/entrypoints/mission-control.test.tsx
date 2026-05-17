@@ -756,7 +756,7 @@ describe('Mission Control shared entry', () => {
 
   it('lets masthead content and chrome span the page while panels stay constrained', async () => {
     const dashboardRootBlock = cssRuleBlock(missionControlCss, '.dashboard-root');
-    expect(dashboardRootBlock).toContain('--dashboard-pt: 0rem;');
+    expect(dashboardRootBlock).toContain('--dashboard-pt: 0;');
     expect(missionControlCss).toMatch(
       /\.dashboard-shell-full\s*\{[^}]*width:\s*100%/s,
     );

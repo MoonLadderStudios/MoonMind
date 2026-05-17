@@ -165,7 +165,7 @@ samp {
 }
 
 .dashboard-root {
-  --dashboard-pt: 0rem;
+  --dashboard-pt: 0;
 
   margin: 0 auto;
   max-width: none;
@@ -208,7 +208,7 @@ samp {
   content: "";
   position: absolute;
   z-index: -1;
-  top: calc(-1 * var(--dashboard-pt, 0.9rem));
+  top: calc(-1 * var(--dashboard-pt, 0));
   left: calc(50% - 50cqw - 1rem);
   right: calc(50% - 50cqw - 1rem);
   bottom: 0;
