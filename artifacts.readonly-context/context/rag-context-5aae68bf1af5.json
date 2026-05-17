@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. moonmind/models_cache.py (score: 1.000, trust: canonical)\n    line 4: from threading import Lock, Thread\n2. frontend/vite.config.ts (score: 1.000, trust: canonical)\n    line 1: import { defineConfig } from 'vite';\n3. api_service/docker/README.md (score: 1.000, trust: canonical)\n    line 21: The final runtime image copies the produced launchers, the Node runtime, supporting `node_modules`, and license files from the builder. It intentionally relies on the platform-specific optional dependency already installed under `@openai/codex` rather than copying an extra Codex vendor tree into the image.\n4. moonmind/rag/guardrails.py (score: 1.000, trust: canonical)\n    line 3: from __future__ import annotations\n5. moonmind/rag/retriever.py (score: 1.000, trust: canonical)\n    line 2: from typing import List\n6. tests/e2e/test_confluence_e2e.py (score: 1.000, trust: canonical)\n    line 4: from dotenv import load_dotenv\n7. moonmind/rag/context_injection.py (score: 1.000, trust: canonical)\n    line 3: from __future__ import annotations\n8. moonmind/rag/service.py (score: 1.000, trust: canonical)\n    line 3: from __future__ import annotations",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "moonmind/models_cache.py",
+      "text": "line 4: from threading import Lock, Thread",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 4,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "frontend/vite.config.ts",
+      "text": "line 1: import { defineConfig } from 'vite';",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/docker/README.md",
+      "text": "line 21: The final runtime image copies the produced launchers, the Node runtime, supporting `node_modules`, and license files from the builder. It intentionally relies on the platform-specific optional dependency already installed under `@openai/codex` rather than copying an extra Codex vendor tree into the image.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 21,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/rag/guardrails.py",
+      "text": "line 3: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/rag/retriever.py",
+      "text": "line 2: from typing import List",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 2,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "tests/e2e/test_confluence_e2e.py",
+      "text": "line 4: from dotenv import load_dotenv",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 4,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/rag/context_injection.py",
+      "text": "line 3: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/rag/service.py",
+      "text": "line 3: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-05-17T07:23:13Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}

@@ -3615,9 +3615,13 @@ class MoonMindRunWorkflow:
                         "failed with status '%s'.",
                         push_status,
                     )
-                elif not self._repo or not head_branch:
+                elif not head_branch:
                     raise ValueError(
-                        "publishMode 'pr' requested but no PR URL was returned, and missing repo/branch to create it natively"
+                        "publishMode 'pr' requested but no PR head branch could be resolved from provider outputs, workspace metadata, or runtime planner generation"
+                    )
+                elif not self._repo:
+                    raise ValueError(
+                        "publishMode 'pr' requested but no repository was available to create the pull request natively"
                     )
                 else:
                     self._get_logger().info(

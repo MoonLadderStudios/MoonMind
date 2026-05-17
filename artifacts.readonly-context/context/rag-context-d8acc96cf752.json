@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. api_service/main.py (score: 1.000, trust: canonical)\n    line 21: from fastapi.responses import JSONResponse, RedirectResponse\n2. moonmind/models_cache.py (score: 1.000, trust: canonical)\n    line 4: from threading import Lock, Thread\n3. frontend/src/components/skills/SkillProvenanceBadge.tsx (score: 1.000, trust: canonical)\n    line 20: readOnly?: boolean | null | undefined;\n4. docs/Artifacts/ReportArtifacts.md (score: 1.000, trust: canonical)\n    line 7: The core contract in this document — `report.*` link types, the compact `report_bundle_v = 1` workflow result, the `reportProjection` execution-detail summary, retention defaults, the Mission Control report-first surface, and the report/observability separation — is implemented across the specs called out in section 22. Sections that are still future work (a dedicated `/report` endpoint, stronger evidence grouping semantics, multi-step task-level projections) are marked **Deferred** inline.\n5. frontend/src/components/settings/GeneratedSettingsSection.tsx (score: 1.000, trust: canonical)\n    line 49: read_only: boolean;\n6. frontend/src/components/settings/GeneratedSettingsSection.test.tsx (score: 1.000, trust: canonical)\n    line 39: read_only: false,\n7. docs/Artifacts/ArtifactPresentationContract.md (score: 1.000, trust: canonical)\n    line 15: - stable conventions for `link_type`, default reads, downloads, previews, and rendering hints\n8. frontend/src/components/settings/ProviderProfilesManager.tsx (score: 1.000, trust: canonical)\n    line 28: readiness?: ProviderProfileReadiness | null;",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "api_service/main.py",
+      "text": "line 21: from fastapi.responses import JSONResponse, RedirectResponse",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 21,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/models_cache.py",
+      "text": "line 4: from threading import Lock, Thread",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 4,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "frontend/src/components/skills/SkillProvenanceBadge.tsx",
+      "text": "line 20: readOnly?: boolean | null | undefined;",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 20,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Artifacts/ReportArtifacts.md",
+      "text": "line 7: The core contract in this document — `report.*` link types, the compact `report_bundle_v = 1` workflow result, the `reportProjection` execution-detail summary, retention defaults, the Mission Control report-first surface, and the report/observability separation — is implemented across the specs called out in section 22. Sections that are still future work (a dedicated `/report` endpoint, stronger evidence grouping semantics, multi-step task-level projections) are marked **Deferred** inline.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 7,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "frontend/src/components/settings/GeneratedSettingsSection.tsx",
+      "text": "line 49: read_only: boolean;",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 49,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "frontend/src/components/settings/GeneratedSettingsSection.test.tsx",
+      "text": "line 39: read_only: false,",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 39,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Artifacts/ArtifactPresentationContract.md",
+      "text": "line 15: - stable conventions for `link_type`, default reads, downloads, previews, and rendering hints",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 15,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "frontend/src/components/settings/ProviderProfilesManager.tsx",
+      "text": "line 28: readiness?: ProviderProfileReadiness | null;",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 28,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-05-17T07:22:08Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
