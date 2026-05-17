@@ -82,19 +82,6 @@ def test_checkpoint_payload_uses_deterministic_boundary_identity() -> None:
 
 def test_checkpoint_model_rejects_inline_large_or_raw_content() -> None:
     identity = _identity()
-    payload = build_step_checkpoint_payload(
-        identity=identity,
-        boundary="after_attempt",
-        task_input_snapshot_ref="artifact-input",
-        plan_ref="artifact-plan",
-        workspace=_workspace_patch(),
-        created_at=datetime(2026, 5, 17, 12, 0, tzinfo=UTC),
-    )
-    payload["workspace"]["inlineCheckpointPayload"] = {"raw": "x" * 20}
-
-    with pytest.raises(ValidationError, match="compact refs"):
-        StepAttemptCheckpointModel.model_validate(payload)
-
     payload = {
         **build_step_checkpoint_payload(
             identity=identity,
@@ -108,6 +95,16 @@ def test_checkpoint_model_rejects_inline_large_or_raw_content() -> None:
     }
     with pytest.raises(ValidationError, match="compact refs"):
         StepAttemptCheckpointModel.model_validate(payload)
+
+
+def test_workspace_checkpoint_model_rejects_unexpected_fields() -> None:
+    workspace = {
+        **_workspace_patch(),
+        "inlineCheckpointPayload": {"raw": "x" * 20},
+    }
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        WorkspaceCheckpointEvidenceModel.model_validate(workspace)
 
 
 @pytest.mark.parametrize(
@@ -164,6 +161,19 @@ def test_workspace_policy_matrix_and_validation_failure_codes() -> None:
     assert result.valid is False
     assert result.failure_code == "policy_incompatible"
     assert "apply_previous_diff_to_clean_baseline" in result.message
+
+    fresh_branch_mismatch = validate_step_checkpoint(
+        StepCheckpointValidationRequestModel(
+            checkpoint=checkpoint,
+            expectedSource=_identity(),
+            expectedTaskInputSnapshotRef="artifact-input",
+            expectedPlanDigest="sha256:plan",
+            workspacePolicy="fresh_branch_from_source",
+        )
+    )
+
+    assert fresh_branch_mismatch.valid is False
+    assert fresh_branch_mismatch.failure_code == "policy_incompatible"
 
 
 def test_validation_reports_source_plan_and_artifact_failures() -> None:
@@ -241,3 +251,29 @@ def test_validation_reports_source_plan_and_artifact_failures() -> None:
         )
     )
     assert workspace_mismatch.failure_code == "workspace_mismatch"
+
+
+def test_validation_collects_artifact_refs_from_space_separated_keys() -> None:
+    checkpoint = StepAttemptCheckpointModel.model_validate(
+        build_step_checkpoint_payload(
+            identity=_identity(),
+            boundary="before_resume_restoration",
+            task_input_snapshot_ref="artifact-input",
+            plan_digest="sha256:plan",
+            workspace=_workspace_patch(),
+            step_outputs={"patch Ref": "artifact-space-ref"},
+            created_at=datetime(2026, 5, 17, 12, 0, tzinfo=UTC),
+        )
+    )
+
+    result = validate_step_checkpoint(
+        StepCheckpointValidationRequestModel(
+            checkpoint=checkpoint,
+            expectedSource=_identity(),
+            expectedTaskInputSnapshotRef="artifact-input",
+            expectedPlanDigest="sha256:plan",
+            requiredArtifactRefs=["artifact-space-ref"],
+        )
+    )
+
+    assert result.valid is True

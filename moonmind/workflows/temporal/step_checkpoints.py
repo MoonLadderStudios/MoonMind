@@ -132,7 +132,7 @@ def validate_step_checkpoint(
         return _invalid(request, "plan_mismatch", "checkpoint plan digest mismatch")
     if request.workspace_policy is not None:
         accepted_kinds = checkpoint_kinds_for_workspace_policy(request.workspace_policy)
-        if accepted_kinds and checkpoint.workspace.kind not in accepted_kinds:
+        if checkpoint.workspace.kind not in accepted_kinds:
             return _invalid(
                 request,
                 "policy_incompatible",
@@ -214,7 +214,9 @@ def _checkpoint_artifact_refs(
 def _collect_ref_values(value: Any, refs: set[str]) -> None:
     if isinstance(value, dict):
         for key, nested in value.items():
-            normalized = str(key).replace("_", "").replace("-", "").lower()
+            normalized = (
+                str(key).replace("_", "").replace("-", "").replace(" ", "").lower()
+            )
             if normalized.endswith("ref") and isinstance(nested, str) and nested.strip():
                 refs.add(nested.strip())
             elif normalized.endswith("refs") and isinstance(nested, list):

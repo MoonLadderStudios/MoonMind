@@ -335,7 +335,7 @@ class StepAttemptBoundaryResultModel(BaseModel):
 class WorkspaceCheckpointEvidenceModel(BaseModel):
     """Compact workspace evidence for restoring or validating a checkpoint."""
 
-    model_config = ConfigDict(populate_by_name=True, extra="allow")
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     kind: WorkspaceCheckpointKind = Field(..., alias="kind")
     base_commit: str | None = Field(None, alias="baseCommit")
