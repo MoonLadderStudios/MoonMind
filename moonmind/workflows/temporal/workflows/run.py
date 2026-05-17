@@ -8150,6 +8150,8 @@ class MoonMindRunWorkflow:
             "title": self._title or "Run",
             "summary": self._summary,
         }
+        if isinstance(self._step_count, int) and self._step_count > 0:
+            memo_dict["mm_current_step_order"] = self._step_count
         if workflow.patched("run-memo-runtime-skill-visibility"):
             if self._target_runtime:
                 memo_dict["targetRuntime"] = self._target_runtime
