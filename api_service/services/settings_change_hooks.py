@@ -23,6 +23,7 @@ already provides.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -113,7 +114,7 @@ def make_provider_profile_refresh_hook(
             )
             return
 
-        for runtime_id in runtime_ids:
+        async def _signal_one(runtime_id: str) -> None:
             workflow_id = f"{_PROVIDER_PROFILE_WORKFLOW_ID_PREFIX}:{runtime_id}"
             try:
                 handle = client.get_workflow_handle(workflow_id)
@@ -133,6 +134,8 @@ def make_provider_profile_refresh_hook(
                     intent.key,
                     exc,
                 )
+
+        await asyncio.gather(*(_signal_one(rid) for rid in runtime_ids))
 
     return _hook
 

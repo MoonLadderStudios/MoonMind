@@ -22,7 +22,6 @@ from api_service.db import base as db_base
 from api_service.db.models import Base
 from api_service.main import app
 from api_service.services.settings_change_publisher import (
-    SettingsChangePublisher,
     get_settings_change_publisher,
     reset_default_settings_change_publisher,
 )

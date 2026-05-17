@@ -24,6 +24,7 @@ from api_service.services.settings_change_hooks import (
 )
 from api_service.services.settings_change_publisher import SettingsChangePublisher
 from api_service.services.settings_change_subscribers import (
+    OperationalControlsSubscriber,
     OperationalRefreshIntent,
     ProviderProfileManagerSubscriber,
     ProviderProfileRefreshIntent,
@@ -313,6 +314,26 @@ async def test_register_default_subscribers_wires_worker_reload_hook():
     worker_sub = worker_subs[0]
     assert isinstance(worker_sub, WorkerReloadSubscriber)
     assert worker_sub.on_reload is captured_hook
+
+
+@pytest.mark.asyncio
+async def test_register_default_subscribers_wires_operational_hook():
+    received: list[OperationalRefreshIntent] = []
+
+    async def captured_hook(intent: OperationalRefreshIntent) -> None:
+        received.append(intent)
+
+    publisher = SettingsChangePublisher()
+    register_default_subscribers(
+        publisher,
+        operational_on_refresh=captured_hook,
+    )
+
+    operational_subs = publisher.subscribers_for("operational_controls")
+    assert operational_subs, "expected operational_controls subscriber registered"
+    operational_sub = operational_subs[0]
+    assert isinstance(operational_sub, OperationalControlsSubscriber)
+    assert operational_sub.on_refresh is captured_hook
 
 
 @pytest.mark.asyncio

@@ -1026,6 +1026,7 @@ def _register_settings_change_subscribers() -> None:
 
     try:
         from api_service.services.settings_change_hooks import (
+            make_operational_mode_hook,
             make_provider_profile_refresh_hook,
             make_worker_reload_broadcast_hook,
         )
@@ -1035,6 +1036,9 @@ def _register_settings_change_subscribers() -> None:
 
         worker_reload_logger = logging.getLogger(
             "api_service.settings_change.worker_reload_broadcast"
+        )
+        operational_logger = logging.getLogger(
+            "api_service.settings_change.operational_mode"
         )
 
         async def _structured_worker_reload_broadcaster(payload: dict) -> None:
@@ -1047,11 +1051,20 @@ def _register_settings_change_subscribers() -> None:
                 extra={"settings_worker_reload_broadcast": payload},
             )
 
+        async def _structured_operational_mode_handler(payload: dict) -> None:
+            operational_logger.info(
+                "settings.operational_mode_change",
+                extra={"settings_operational_mode_change": payload},
+            )
+
         register_default_subscribers(
             worker_on_reload=make_worker_reload_broadcast_hook(
                 broadcaster=_structured_worker_reload_broadcaster,
             ),
             provider_profile_on_refresh=make_provider_profile_refresh_hook(),
+            operational_on_refresh=make_operational_mode_hook(
+                handler=_structured_operational_mode_handler,
+            ),
         )
     except Exception as exc:  # noqa: BLE001 — defensive at startup
         logger.warning(

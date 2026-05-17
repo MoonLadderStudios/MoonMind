@@ -147,11 +147,16 @@ class OperationalControlsSubscriber:
     name = "operational_controls"
     refresh_targets = frozenset({"operational_controls"})
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        on_refresh: Callable[[OperationalRefreshIntent], Awaitable[None]] | None = None,
+    ) -> None:
         self.version: int = 0
         self.pending_intents: deque[OperationalRefreshIntent] = deque(
             maxlen=_LEDGER_MAXLEN
         )
+        self.on_refresh = on_refresh
 
     async def __call__(self, event: SettingsChangeEvent) -> None:
         intent = OperationalRefreshIntent(
@@ -163,6 +168,8 @@ class OperationalControlsSubscriber:
         )
         self.pending_intents.append(intent)
         self.version += 1
+        if self.on_refresh is not None:
+            await self.on_refresh(intent)
 
 
 def register_default_subscribers(
@@ -173,14 +180,18 @@ def register_default_subscribers(
         [ProviderProfileRefreshIntent], Awaitable[None]
     ]
     | None = None,
+    operational_on_refresh: Callable[
+        [OperationalRefreshIntent], Awaitable[None]
+    ]
+    | None = None,
 ) -> None:
     """Register the four default subscribers against *publisher* once.
 
     Optional hooks let production wiring drive observable cross-process side
-    effects (e.g. Temporal signals, worker drain broadcasts) when
-    ``worker_reload`` / ``process_restart`` / ``next_launch`` apply modes are
-    triggered. The hooks default to ``None`` so tests can run with the bare
-    intent-ledger contract.
+    effects (e.g. Temporal signals, worker drain broadcasts, operational
+    alerting) when ``worker_reload`` / ``process_restart`` / ``next_launch`` /
+    ``manual_operation`` apply modes are triggered. The hooks default to
+    ``None`` so tests can run with the bare intent-ledger contract.
     """
 
     target_publisher = publisher or get_settings_change_publisher()
@@ -190,7 +201,7 @@ def register_default_subscribers(
         lambda: ProviderProfileManagerSubscriber(
             on_refresh=provider_profile_on_refresh
         ),
-        OperationalControlsSubscriber,
+        lambda: OperationalControlsSubscriber(on_refresh=operational_on_refresh),
     )
     for factory in factories:
         instance = factory()

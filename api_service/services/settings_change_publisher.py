@@ -32,8 +32,10 @@ class SettingsChangeSubscriber(Protocol):
     name: str
     refresh_targets: frozenset[str]
 
-    async def __call__(self, event: SettingsChangeEvent) -> Awaitable[None] | None:
-        ...  # pragma: no cover - protocol stub
+    async def __call__(  # pragma: no cover - protocol stub
+        self, event: SettingsChangeEvent
+    ) -> Awaitable[None] | None:
+        """Protocol stub; implementations consume the event."""
 
 
 class SettingsChangePublisher:
