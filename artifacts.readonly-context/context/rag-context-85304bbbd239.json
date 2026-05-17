@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. api_service/auth.py (score: 1.000, trust: canonical)\n    line 87: # Hardcoded default user details for disabled auth mode\n2. moonmind/cli.py (score: 1.000, trust: canonical)\n    line 16: rag_app = typer.Typer(help=\"Retrieval helpers for Codex workers.\")\n3. moonmind/indexers/jira_indexer.py (score: 1.000, trust: canonical)\n    line 8: # LlamaIndex Jira reader (ensure this import path is correct if it's part of an integration package)\n4. docs/MoonMindRoadmap.md (score: 1.000, trust: canonical)\n    line 28: **README claim:** *\"MoonMind can run Claude Code, Gemini CLI, and Codex CLI as managed workers on your own infrastructure.\"*\n5. docs/ExternalAgents/OpenClawAgentAdapter.md (score: 1.000, trust: canonical)\n    line 22: > OpenClaw is a **streaming-gateway** provider, not a poll-by-external-id provider like Jules or Codex Cloud.\n6. docs/ManagedAgents/ManagedAgentsAuthentication.md (score: 1.000, trust: canonical)\n    line 25: | OAuth volume provisioning scripts | `tools/auth-gemini-volume.sh`, `tools/auth-codex-volume.sh`, `tools/auth-claude-volume.sh` |\n7. docs/ManagedAgents/AgentSessionDeploymentSafetyCutover.md (score: 1.000, trust: canonical)\n    line 7: - **replay-safe rollout** gates are in place before production promotion.\n8. docs/ManagedAgents/ClaudeAnthropicOAuth.md (score: 1.000, trust: canonical)\n    line 7: This document defines the OAuth-backed Claude Code authentication path for",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "api_service/auth.py",
+      "text": "line 87: # Hardcoded default user details for disabled auth mode",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 87,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/cli.py",
+      "text": "line 16: rag_app = typer.Typer(help=\"Retrieval helpers for Codex workers.\")",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 16,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/jira_indexer.py",
+      "text": "line 8: # LlamaIndex Jira reader (ensure this import path is correct if it's part of an integration package)",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 8,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/MoonMindRoadmap.md",
+      "text": "line 28: **README claim:** *\"MoonMind can run Claude Code, Gemini CLI, and Codex CLI as managed workers on your own infrastructure.\"*",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 28,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ExternalAgents/OpenClawAgentAdapter.md",
+      "text": "line 22: > OpenClaw is a **streaming-gateway** provider, not a poll-by-external-id provider like Jules or Codex Cloud.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 22,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ManagedAgents/ManagedAgentsAuthentication.md",
+      "text": "line 25: | OAuth volume provisioning scripts | `tools/auth-gemini-volume.sh`, `tools/auth-codex-volume.sh`, `tools/auth-claude-volume.sh` |",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 25,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ManagedAgents/AgentSessionDeploymentSafetyCutover.md",
+      "text": "line 7: - **replay-safe rollout** gates are in place before production promotion.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 7,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ManagedAgents/ClaudeAnthropicOAuth.md",
+      "text": "line 7: This document defines the OAuth-backed Claude Code authentication path for",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 7,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-05-17T07:11:29Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
