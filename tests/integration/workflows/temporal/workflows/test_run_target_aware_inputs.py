@@ -58,6 +58,23 @@ def test_run_boundary_prepares_objective_and_current_step_context_only() -> None
     assert dumped["parameters"]["metadata"]["moonmind"]["preparedContext"][
         "targetCounts"
     ] == {"objective": 1, "step": 1}
+    attempt_context = dumped["parameters"]["metadata"]["moonmind"]["attemptContext"]
+    projection = dumped["parameters"]["metadata"]["moonmind"][
+        "attemptManifestProjection"
+    ]
+    assert attempt_context["workflowId"] == "run-target-aware-integration"
+    assert attempt_context["logicalStepId"] == "first-step"
+    assert attempt_context["preparedInputRefs"] == [
+        "prepared-context://objective/objective-artifact",
+        "prepared-context://steps/first-step/first-step-artifact",
+        "artifact://objective-artifact",
+        "artifact://first-step-artifact",
+    ]
+    assert attempt_context["contextBundleDigest"].startswith("sha256:")
+    assert projection["context"]["contextBundleRef"] == (
+        attempt_context["contextBundleRef"]
+    )
+    assert "preparedInputRefs" not in projection["context"]
 
 
 def test_agent_run_child_input_scope_is_parent_selected() -> None:

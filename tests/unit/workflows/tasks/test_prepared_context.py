@@ -7,8 +7,11 @@ from moonmind.workflows.tasks.prepared_context import (
     PreparedContextFailure,
     PreparedInputEntry,
     PreparedInputManifest,
+    build_attempt_context_bundle,
+    build_memory_manifest,
     build_resume_prepared_artifact_refs,
     build_prepared_input_manifest,
+    build_retrieval_manifest,
     select_step_prepared_context,
 )
 
@@ -323,6 +326,178 @@ def test_step_context_metadata_is_bounded_and_target_aware() -> None:
         "artifact://artifact-step-1",
     ]
     assert "data:image" not in str(metadata)
+
+
+def test_attempt_context_bundle_digest_is_stable_and_attempt_scoped() -> None:
+    manifest = build_prepared_input_manifest(_task_payload())
+    context = select_step_prepared_context(manifest, logical_step_id="collect-evidence")
+
+    first = build_attempt_context_bundle(
+        workflow_id="workflow-1",
+        run_id="run-1",
+        logical_step_id="collect-evidence",
+        attempt=1,
+        prepared_context=context,
+        runtime_selection={"runtimeId": "codex_cli"},
+    )
+    duplicate = build_attempt_context_bundle(
+        workflow_id="workflow-1",
+        run_id="run-1",
+        logical_step_id="collect-evidence",
+        attempt=1,
+        prepared_context=context,
+        runtime_selection={"runtimeId": "codex_cli"},
+    )
+    changed_attempt = build_attempt_context_bundle(
+        workflow_id="workflow-1",
+        run_id="run-1",
+        logical_step_id="collect-evidence",
+        attempt=2,
+        prepared_context=context,
+        runtime_selection={"runtimeId": "codex_cli"},
+    )
+
+    assert first.context_bundle_digest == duplicate.context_bundle_digest
+    assert first.context_bundle_ref == (
+        f"attempt-context-bundle://{first.context_bundle_digest}"
+    )
+    assert first.context_bundle_digest != changed_attempt.context_bundle_digest
+    assert first.builder_version == "attempt-context-builder-v1"
+    projection = first.to_manifest_projection()
+    assert projection["context"]["contextBundleDigest"] == first.context_bundle_digest
+    assert "preparedInputRefs" not in projection["context"]
+
+
+def test_attempt_context_records_retrieval_and_memory_manifest_refs() -> None:
+    retrieval = build_retrieval_manifest(
+        {
+            "query": "attempt context bundle",
+            "indexVersion": "rag-index-1",
+            "returnedRefs": ["artifact://doc-1"],
+            "filters": {"source": "docs"},
+            "compactSummaries": ["Relevant source design section."],
+        }
+    )
+    memory = build_memory_manifest(
+        [
+            {
+                "proposalRef": "memory://proposal-1",
+                "state": "proposed",
+                "summary": "Remember failed attempt evidence.",
+            },
+            {
+                "proposalRef": "memory://proposal-2",
+                "state": "rejected",
+                "summary": "Rejected noisy suggestion.",
+            },
+        ]
+    )
+    bundle = build_attempt_context_bundle(
+        workflow_id="workflow-1",
+        run_id="run-1",
+        logical_step_id="collect-evidence",
+        attempt=1,
+        retrieval={
+            "query": "attempt context bundle",
+            "indexVersion": "rag-index-1",
+            "returnedRefs": ["artifact://doc-1"],
+            "filters": {"source": "docs"},
+            "compactSummaries": ["Relevant source design section."],
+        },
+        memory_proposals=[
+            {
+                "proposalRef": "memory://proposal-1",
+                "state": "proposed",
+                "summary": "Remember failed attempt evidence.",
+            },
+            {
+                "proposalRef": "memory://proposal-2",
+                "state": "rejected",
+                "summary": "Rejected noisy suggestion.",
+            },
+        ],
+    )
+
+    assert retrieval.query == "attempt context bundle"
+    assert retrieval.index_version == "rag-index-1"
+    assert retrieval.returned_refs == ["artifact://doc-1"]
+    assert retrieval.compact_summaries == ["Relevant source design section."]
+    assert retrieval.retrieval_manifest_ref.startswith(
+        "attempt-retrieval-manifest://sha256:"
+    )
+    assert memory.proposals[0].state == "proposed"
+    assert memory.proposals[1].state == "rejected"
+    assert memory.memory_manifest_ref.startswith("attempt-memory-manifest://sha256:")
+    assert bundle.retrieval_manifest_ref == retrieval.retrieval_manifest_ref
+    assert bundle.memory_manifest_ref == memory.memory_manifest_ref
+
+
+def test_retrieval_manifest_accepts_documented_retrieved_refs_key() -> None:
+    retrieval = build_retrieval_manifest(
+        {
+            "retrievedRefs": ["artifact://doc-1", "artifact://doc-2"],
+        }
+    )
+
+    assert retrieval.returned_refs == ["artifact://doc-1", "artifact://doc-2"]
+    assert retrieval.retrieval_manifest_ref.startswith(
+        "attempt-retrieval-manifest://sha256:"
+    )
+
+
+def test_retrieval_manifest_allows_literal_assignment_search_terms() -> None:
+    retrieval = build_retrieval_manifest(
+        {
+            "query": "find `password=` assignments and token= examples",
+            "indexVersion": "rag-index-1",
+        }
+    )
+
+    assert retrieval.query == "find `password=` assignments and token= examples"
+
+
+def test_attempt_context_rejects_secretish_values_and_unknown_memory_states() -> None:
+    with pytest.raises(ValueError, match="raw secret material"):
+        build_prepared_input_manifest(
+            {
+                "inputAttachments": [
+                    {
+                        "artifactId": "ghp_unsafe",
+                    }
+                ]
+            }
+        )
+
+    with pytest.raises(ValueError, match="raw secret material"):
+        build_attempt_context_bundle(
+            workflow_id="workflow-1",
+            run_id="run-1",
+            logical_step_id="collect-evidence",
+            retrieval={
+                "query": "ghp_unsafe",
+                "indexVersion": "rag-index-1",
+            },
+        )
+
+    with pytest.raises(ValidationError, match="Input should be"):
+        build_memory_manifest(
+            [
+                {
+                    "proposalRef": "memory://proposal-1",
+                    "state": "auto_promoted",
+                }
+            ]
+        )
+
+    with pytest.raises(ValueError, match="policyRef"):
+        build_memory_manifest(
+            [
+                {
+                    "proposalRef": "memory://proposal-1",
+                    "state": "applied_to_repo",
+                }
+            ]
+        )
 
 
 def test_resume_prepared_artifact_refs_are_compact_and_deduped() -> None:

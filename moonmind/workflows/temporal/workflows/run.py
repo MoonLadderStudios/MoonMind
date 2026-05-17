@@ -39,6 +39,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.workflows.tasks.routing import _coerce_bool
     from moonmind.workflows.tasks.prepared_context import (
+        build_attempt_context_bundle,
         build_prepared_input_manifest,
         build_resume_prepared_artifact_refs,
         merge_prepared_input_refs,
@@ -6758,9 +6759,12 @@ class MoonMindRunWorkflow:
             parameters["metadata"] = metadata_payload
 
         input_refs = node_inputs.get("inputRefs") or []
+        task_payload_for_context: Mapping[str, Any] | None = None
+        prepared_context = None
         if isinstance(workflow_parameters, Mapping):
             task_payload = workflow_parameters.get("task")
             if isinstance(task_payload, Mapping):
+                task_payload_for_context = task_payload
                 prepared_manifest = build_prepared_input_manifest(task_payload)
                 if prepared_manifest.has_entries:
                     prepared_context = select_step_prepared_context(
@@ -6788,6 +6792,66 @@ class MoonMindRunWorkflow:
                         )
                         metadata_payload["moonmind"] = moonmind_payload
                         parameters["metadata"] = metadata_payload
+
+        runtime_selection = {
+            "runtimeId": agent_id,
+            "agentKind": agent_kind,
+        }
+        if selected_skill:
+            runtime_selection["skillId"] = selected_skill
+        retrieval_context = None
+        memory_proposals = None
+        if isinstance(task_payload_for_context, Mapping):
+            raw_retrieval_context = (
+                task_payload_for_context.get("attemptRetrieval")
+                or task_payload_for_context.get("retrievalManifest")
+                or task_payload_for_context.get("retrieval")
+            )
+            if isinstance(raw_retrieval_context, Mapping):
+                retrieval_context = raw_retrieval_context
+            raw_memory_proposals = (
+                task_payload_for_context.get("memoryProposals")
+                or task_payload_for_context.get("memoryEffects")
+                or task_payload_for_context.get("memory")
+            )
+            if isinstance(raw_memory_proposals, Sequence) and not isinstance(
+                raw_memory_proposals,
+                (str, bytes, bytearray),
+            ):
+                memory_proposals = [
+                    proposal
+                    for proposal in raw_memory_proposals
+                    if isinstance(proposal, Mapping)
+                ]
+        attempt_context = build_attempt_context_bundle(
+            workflow_id=wf_info.workflow_id,
+            run_id=wf_info.run_id,
+            logical_step_id=node_id,
+            attempt=step_attempt or 1,
+            prepared_context=prepared_context,
+            runtime_selection=runtime_selection,
+            retrieval=retrieval_context,
+            memory_proposals=memory_proposals,
+        )
+        metadata_payload = (
+            parameters.get("metadata")
+            if isinstance(parameters.get("metadata"), dict)
+            else {}
+        )
+        moonmind_payload = (
+            metadata_payload.get("moonmind")
+            if isinstance(metadata_payload.get("moonmind"), dict)
+            else {}
+        )
+        moonmind_payload["attemptContext"] = attempt_context.model_dump(
+            by_alias=True,
+            exclude_none=True,
+        )
+        moonmind_payload["attemptManifestProjection"] = (
+            attempt_context.to_manifest_projection()
+        )
+        metadata_payload["moonmind"] = moonmind_payload
+        parameters["metadata"] = metadata_payload
 
         return AgentExecutionRequest(
             agent_kind=agent_kind,
