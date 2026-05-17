@@ -95,6 +95,7 @@ from moonmind.workflows.temporal import (
     TemporalExecutionValidationError,
     build_manifest_status_snapshot,
 )
+from moonmind.workflows.temporal.step_ledger import build_initial_step_rows
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
     build_artifact_ref,
@@ -2802,7 +2803,7 @@ async def _resolver_child_observability(
     task_run_id: str | None = None
     child_status: str | None = None
     try:
-        payload = await query_workflow(
+        payload = await _query_workflow_for_detail(
             temporal_client,
             workflow_id,
             "get_step_ledger",
@@ -2839,6 +2840,21 @@ async def _resolver_child_observability(
         detailHref=f"/tasks/{quote(workflow_id, safe='')}?source=temporal",
     )
 
+
+async def _query_workflow_for_detail(
+    temporal_client: Client,
+    workflow_id: str,
+    query_name: str,
+) -> Any:
+    timeout_seconds = float(
+        settings.temporal_dashboard.live_query_timeout_seconds
+    )
+    return await asyncio.wait_for(
+        query_workflow(temporal_client, workflow_id, query_name),
+        timeout=timeout_seconds,
+    )
+
+
 async def _enrich_execution_merge_automation(
     execution: ExecutionModel,
     *,
@@ -2851,7 +2867,7 @@ async def _enrich_execution_merge_automation(
     payload = merge_automation.model_dump(by_alias=True, exclude_none=True)
     if workflow_id:
         try:
-            live_payload = await query_workflow(
+            live_payload = await _query_workflow_for_detail(
                 temporal_client,
                 workflow_id,
                 "summary",
@@ -3153,13 +3169,196 @@ async def _enrich_step_ledger_task_run_refs(payload: Any) -> Any:
     enriched_payload["steps"] = enriched_steps
     return enriched_payload
 
+
+def _fallback_step_tool_payload(step: Mapping[str, Any]) -> dict[str, str]:
+    step_type = str(step.get("type") or "").strip()
+    tool = step.get("tool") if isinstance(step.get("tool"), Mapping) else None
+    skill = step.get("skill") if isinstance(step.get("skill"), Mapping) else None
+    source = tool or skill or {}
+    source_type = str(
+        source.get("type")
+        or source.get("kind")
+        or ("tool" if tool is not None else "skill")
+    ).strip()
+    if step_type in {"tool", "skill", "agent_runtime"}:
+        source_type = step_type
+    name = str(
+        source.get("name")
+        or source.get("id")
+        or step.get("targetRuntime")
+        or step.get("runtime")
+        or ""
+    ).strip()
+    version = str(source.get("version") or "").strip()
+    return {
+        "type": source_type or "skill",
+        "name": name,
+        "version": version,
+    }
+
+
+def _fallback_step_title(
+    step: Mapping[str, Any],
+    *,
+    step_id: str,
+    tool_payload: Mapping[str, str],
+) -> str:
+    return (
+        str(
+            step.get("title")
+            or step.get("name")
+            or tool_payload.get("name")
+            or step_id
+        ).strip()
+        or step_id
+    )
+
+
+def _fallback_current_step_order(record: Any) -> int | None:
+    memo = getattr(record, "memo", None)
+    if not isinstance(memo, Mapping):
+        return None
+    structured = memo.get("mm_current_step_order")
+    if isinstance(structured, bool):
+        structured = None
+    if isinstance(structured, int):
+        return structured if structured > 0 else None
+    if isinstance(structured, str):
+        candidate = structured.strip()
+        if candidate:
+            try:
+                order = int(candidate)
+            except ValueError:
+                order = None
+            if order is not None:
+                return order if order > 0 else None
+    # Compatibility fallback for in-flight workflows that predate
+    # ``mm_current_step_order``; the human-readable ``summary`` carries the
+    # current step as ``step <n>/<total>``.
+    summary = str(memo.get("summary") or "").strip()
+    match = re.search(r"\bstep\s+(\d+)\s*/\s*\d+\b", summary, re.IGNORECASE)
+    if match is None:
+        return None
+    try:
+        order = int(match.group(1))
+    except ValueError:
+        return None
+    return order if order > 0 else None
+
+
+def _fallback_step_ledger_from_record(record: Any) -> StepLedgerSnapshotModel | None:
+    parameters = getattr(record, "parameters", None)
+    if not isinstance(parameters, Mapping):
+        return None
+    task = parameters.get("task")
+    if not isinstance(task, Mapping):
+        return None
+    raw_steps = task.get("steps")
+    if not isinstance(raw_steps, list):
+        return None
+
+    normalized_steps = [step for step in raw_steps if isinstance(step, Mapping)]
+    if not normalized_steps:
+        return None
+
+    ordered_nodes: list[dict[str, Any]] = []
+    dependency_map: dict[str, list[str]] = {}
+
+    for index, step in enumerate(normalized_steps, start=1):
+        step_id = str(
+            step.get("id")
+            or step.get("logicalStepId")
+            or step.get("logical_step_id")
+            or f"step-{index:04d}"
+        ).strip()
+        if not step_id:
+            continue
+        tool_payload = _fallback_step_tool_payload(step)
+        title = _fallback_step_title(
+            step,
+            step_id=step_id,
+            tool_payload=tool_payload,
+        )
+        ordered_nodes.append(
+            {
+                "id": step_id,
+                "title": title,
+                "tool": tool_payload,
+                "inputs": {"title": title},
+            }
+        )
+        dependency_map[step_id] = normalize_dependency_ids(
+            step.get("dependsOn")
+            or step.get("depends_on")
+            or step.get("dependencies")
+        )
+
+    if not ordered_nodes:
+        return None
+
+    updated_at = _compatibility_refreshed_at(record)
+    rows = build_initial_step_rows(
+        ordered_nodes=ordered_nodes,
+        dependency_map=dependency_map,
+        updated_at=updated_at,
+    )
+
+    current_order = _fallback_current_step_order(record)
+    if current_order is not None:
+        waiting_reason = str(
+            getattr(record, "waiting_reason", None)
+            or (getattr(record, "memo", {}) or {}).get("waiting_reason")
+            or ""
+        ).strip()
+        summary = str((getattr(record, "memo", {}) or {}).get("summary") or "").strip()
+        for row in rows:
+            if row.get("order") != current_order:
+                continue
+            row["status"] = "awaiting_external" if waiting_reason else "running"
+            row["attempt"] = max(int(row.get("attempt") or 0), 1)
+            row["startedAt"] = row.get("startedAt") or updated_at.isoformat()
+            row["updatedAt"] = updated_at.isoformat()
+            row["waitingReason"] = waiting_reason or None
+            row["attentionRequired"] = bool(
+                waiting_reason or getattr(record, "attention_required", False)
+            )
+            row["summary"] = summary or row.get("summary")
+            break
+
+    snapshot = {
+        "workflowId": str(getattr(record, "workflow_id", "") or "").strip(),
+        "runId": str(getattr(record, "run_id", "") or "").strip(),
+        "runScope": "latest",
+        "steps": rows,
+    }
+    try:
+        return StepLedgerSnapshotModel.model_validate(snapshot)
+    except ValidationError:
+        logger.warning(
+            "Failed to build fallback step ledger for %s",
+            getattr(record, "workflow_id", "<unknown>"),
+            exc_info=True,
+        )
+        return None
+
 async def _load_execution_progress(
     *,
     temporal_client: Client,
     workflow_id: str,
 ) -> tuple[ExecutionProgressModel | None, str | None]:
     try:
-        payload = await query_workflow(temporal_client, workflow_id, "get_progress")
+        payload = await _query_workflow_for_detail(
+            temporal_client,
+            workflow_id,
+            "get_progress",
+        )
+    except TimeoutError:
+        logger.warning(
+            "Timed out querying execution progress for %s after %.3fs",
+            workflow_id,
+            settings.temporal_dashboard.live_query_timeout_seconds,
+        )
+        return None, None
     except Exception as exc:
         logger.warning(
             "Failed to query execution progress for %s: %s",
@@ -3203,20 +3402,32 @@ async def _load_execution_step_ledger(
     *,
     temporal_client: Client,
     workflow_id: str,
+    fallback_record: Any | None = None,
 ) -> StepLedgerSnapshotModel:
     try:
-        payload = await query_workflow(
+        payload = await _query_workflow_for_detail(
             temporal_client,
             workflow_id,
             "get_step_ledger",
         )
-    except RPCError as exc:
+    except (RPCError, TimeoutError) as exc:
         logger.warning(
             "Failed to query execution step ledger for %s: %s",
             workflow_id,
             exc,
-            exc_info=True,
+            exc_info=not isinstance(exc, TimeoutError),
         )
+        fallback = (
+            _fallback_step_ledger_from_record(fallback_record)
+            if fallback_record is not None
+            else None
+        )
+        if fallback is not None:
+            logger.info(
+                "Serving fallback step ledger for %s from stored task parameters",
+                workflow_id,
+            )
+            return fallback
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
@@ -6533,6 +6744,7 @@ async def describe_execution_steps(
     return await _load_execution_step_ledger(
         temporal_client=temporal_client,
         workflow_id=canonical_workflow_id,
+        fallback_record=record,
     )
 
 @router.get("/{workflow_id}", response_model=ExecutionModel)
