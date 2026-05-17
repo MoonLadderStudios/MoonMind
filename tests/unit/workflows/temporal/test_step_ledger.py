@@ -13,6 +13,7 @@ from moonmind.schemas.temporal_models import (
 from moonmind.workflows.temporal.step_ledger import (
     build_initial_step_rows,
     build_progress_summary,
+    mark_step_attempt_manifest_evidence,
     mark_step_checkpoint_evidence,
     upsert_step_check,
     update_step_row,
@@ -122,6 +123,8 @@ def test_build_initial_step_rows_skips_blank_node_ids() -> None:
                 "runtimeMergedLogs": None,
                 "runtimeDiagnostics": None,
                 "providerSnapshot": None,
+                "attemptManifestRef": None,
+                "attemptManifestRefs": [],
             },
             "workload": None,
             "lastError": None,
@@ -354,6 +357,8 @@ def test_row_defaults_remain_bounded_and_structured() -> None:
         "runtimeMergedLogs": None,
         "runtimeDiagnostics": None,
         "providerSnapshot": None,
+        "attemptManifestRef": None,
+        "attemptManifestRefs": [],
     }
 
 
@@ -533,4 +538,56 @@ def test_update_step_row_merges_structured_refs_and_artifacts() -> None:
         "runtimeMergedLogs": None,
         "runtimeDiagnostics": "art_diag_1",
         "providerSnapshot": None,
+        "attemptManifestRef": None,
+        "attemptManifestRefs": [],
     }
+
+
+def test_mark_step_attempt_manifest_evidence_tracks_latest_and_history() -> None:
+    updated_at = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
+    rows = build_initial_step_rows(
+        ordered_nodes=[
+            {
+                "id": "implement",
+                "tool": {"type": "skill", "name": "codex", "version": "1"},
+                "inputs": {"title": "Implement"},
+            }
+        ],
+        dependency_map={"implement": []},
+        updated_at=updated_at,
+    )
+
+    update_step_row(
+        rows,
+        "implement",
+        updated_at=updated_at,
+        increment_attempt=True,
+        status="running",
+    )
+    mark_step_attempt_manifest_evidence(
+        rows,
+        "implement",
+        updated_at=updated_at,
+        attempt_manifest_ref="artifact://attempt-1",
+    )
+    assert rows[0]["artifacts"]["attemptManifestRef"] == "artifact://attempt-1"
+    update_step_row(
+        rows,
+        "implement",
+        updated_at=updated_at,
+        increment_attempt=True,
+        status="running",
+    )
+    second = mark_step_attempt_manifest_evidence(
+        rows,
+        "implement",
+        updated_at=updated_at,
+        attempt_manifest_ref="artifact://attempt-2",
+    )
+
+    assert second["artifacts"]["attemptManifestRef"] == "artifact://attempt-2"
+    assert second["artifacts"]["attemptManifestRefs"] == [
+        "artifact://attempt-1",
+        "artifact://attempt-2",
+    ]
+    assert "schemaVersion" not in second["artifacts"]
