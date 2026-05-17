@@ -1020,6 +1020,38 @@ def test_effective_task_step_skills_apply_exclusions_without_mutating_task() -> 
 def test_effective_task_step_skills_returns_none_for_empty_intent() -> None:
     assert build_effective_task_skill_selectors(None, None) is None
 
+def test_effective_task_step_skills_ignores_auto_sentinel_include() -> None:
+    task_skills = TaskExecutionSpec.model_validate(
+        {
+            "repository": "test/repo",
+            "instructions": "execute",
+            "skills": {"include": [{"name": "auto"}]},
+        }
+    ).skills
+
+    assert build_effective_task_skill_selectors(task_skills, None) is None
+
+def test_effective_task_step_skills_drops_auto_without_losing_real_includes() -> None:
+    task_skills = TaskExecutionSpec.model_validate(
+        {
+            "repository": "test/repo",
+            "instructions": "execute",
+            "skills": {
+                "include": [
+                    {"name": "auto"},
+                    {"name": "jira-issue-updater"},
+                ],
+            },
+        }
+    ).skills
+
+    effective = build_effective_task_skill_selectors(task_skills, None)
+
+    assert effective is not None
+    assert [(item.name, item.version) for item in effective.include or []] == [
+        ("jira-issue-updater", None)
+    ]
+
 def test_task_input_attachments_preserve_objective_and_step_targets() -> None:
     """MM-367: objective and step refs remain distinct canonical fields."""
 

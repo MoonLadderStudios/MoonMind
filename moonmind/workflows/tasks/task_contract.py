@@ -792,6 +792,8 @@ def build_effective_task_skill_selectors(
     include_by_name: dict[str, TaskSkillSelectorExact] = {}
     for source in (task, step):
         for item in (source.include if source is not None else None) or []:
+            if _normalize_skill_id(item.name) == "auto":
+                continue
             include_by_name[item.name] = TaskSkillSelectorExact(
                 name=item.name,
                 version=item.version,
