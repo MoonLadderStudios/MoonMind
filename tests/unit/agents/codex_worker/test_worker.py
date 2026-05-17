@@ -8057,6 +8057,20 @@ async def test_validate_pr_metadata_accepts_jira_backed_review_metadata() -> Non
     assert metadata.jira_issue_key == "MM-707"
     assert metadata.moon_spec_path == "specs/707-pr-metadata-validation"
 
+async def test_validate_pr_metadata_requires_jira_body_labels() -> None:
+    """Required Jira metadata fields should not pass through incidental words."""
+
+    with pytest.raises(ValueError, match="Jira"):
+        CodexWorker._validate_pull_request_metadata(
+            title="MM-707 Validate semantic pull request metadata",
+            body=(
+                "This summary mentions jira and moonspec naturally.\n"
+                "The verdict is that tests passed and the risk is low.\n"
+                "MM-707 is implemented."
+            ),
+            canonical_payload={"task": {"jiraIssueKey": "MM-707"}},
+        )
+
 
 @pytest.mark.parametrize(
     ("title", "body", "match"),
@@ -8103,6 +8117,49 @@ async def test_validate_pr_metadata_rejects_invalid_jira_metadata(
             body=body,
             canonical_payload={"task": {"jiraIssueKey": "MM-707"}},
         )
+
+async def test_derive_default_jira_pr_metadata_contains_required_review_fields() -> None:
+    """Default Jira-backed PR metadata should satisfy semantic publication rules."""
+
+    job_id = uuid4()
+    canonical_payload = {
+        "task": {
+            "jiraIssueKey": "MM-707",
+            "moonSpecPath": "specs/707-pr-metadata-validation",
+        }
+    }
+    title = CodexWorker._derive_default_jira_pr_title(
+        job_id=job_id,
+        canonical_payload=canonical_payload,
+        resolved_steps=[
+            ResolvedTaskStep(
+                step_index=1,
+                step_id="step-1",
+                title="Validate semantic pull request metadata",
+                instructions="unused",
+                effective_skill_id="auto",
+                effective_skill_args={},
+                has_step_instructions=True,
+            )
+        ],
+    )
+    body = CodexWorker._derive_default_jira_pr_body(
+        job_id=job_id,
+        canonical_payload=canonical_payload,
+        runtime_mode="codex",
+        base_branch="main",
+        head_branch="feature/branch",
+    )
+
+    metadata = CodexWorker._validate_pull_request_metadata(
+        title=title,
+        body=body,
+        canonical_payload=canonical_payload,
+    )
+
+    assert title.startswith("MM-707 ")
+    assert metadata.jira_issue_key == "MM-707"
+    assert "MoonSpec: specs/707-pr-metadata-validation" in body
 
 async def test_parse_git_status_paths_collects_renamed_source_paths() -> None:
     """Git status parser should include both sides of a rename or copy for safety."""
@@ -8540,6 +8597,8 @@ async def test_run_publish_stage_rejects_invalid_pr_metadata_before_pr_creation(
         )
 
     assert not any(call[:3] == ("gh", "pr", "create") for call in run_calls)
+    assert not any(call[:3] == ("git", "commit", "-m") for call in run_calls)
+    assert not any(call[:2] == ("git", "push") for call in run_calls)
 
 
 async def test_run_publish_stage_records_validated_pr_metadata(
@@ -8655,6 +8714,114 @@ async def test_run_publish_stage_records_validated_pr_metadata(
         "jiraIssueKey": "MM-707",
         "moonSpecPath": "specs/707-pr-metadata-validation",
     }
+
+async def test_run_publish_stage_defaults_jira_pr_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Jira-backed PR publish defaults should pass semantic validation."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:8000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    run_calls: list[tuple[str, ...]] = []
+
+    async def _capture_stage_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+    ):
+        _ = (cwd, log_path, check, env, redaction_values, cancel_event)
+        normalized = tuple(str(part) for part in command)
+        run_calls.append(normalized)
+        if normalized[:2] == ("git", "status"):
+            return CommandResult(normalized, 0, " M worker.py\n", "")
+        if normalized[:3] == ("gh", "pr", "create"):
+            return CommandResult(
+                normalized,
+                0,
+                "https://github.com/MoonLadderStudios/MoonMind/pull/707\n",
+                "",
+            )
+        return CommandResult(normalized, 0, "", "")
+
+    monkeypatch.setattr(worker, "_run_stage_command", _capture_stage_command)
+
+    job_id = uuid4()
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path / str(job_id),
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=tmp_path / "context",
+        publish_result_path=tmp_path / "publish-result.json",
+        default_branch="main",
+        starting_branch="main",
+        new_branch="feature/branch",
+        working_branch="feature/branch",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+    prepared.repo_dir.mkdir(parents=True, exist_ok=True)
+    prepared.task_context_path.mkdir(parents=True, exist_ok=True)
+    prepared.execute_log_path.write_text(
+        "[command] $ ./tools/test_unit.sh "
+        "tests/unit/agents/codex_worker/test_worker.py\nok\n",
+        encoding="utf-8",
+    )
+
+    await worker._run_publish_stage(
+        job_id=job_id,
+        canonical_payload={
+            "task": {
+                "jiraIssueKey": "MM-707",
+                "moonSpecPath": "specs/707-pr-metadata-validation",
+                "steps": [
+                    {
+                        "id": "implementation",
+                        "title": "Validate semantic pull request metadata",
+                        "instructions": "Implement validation.",
+                    }
+                ],
+                "publish": {"mode": "pr"},
+            }
+        },
+        prepared=prepared,
+        skill_meta={},
+        job_type="task",
+        staged_artifacts=[],
+    )
+
+    pr_call = next(
+        call for call in run_calls if call[:3] == ("gh", "pr", "create")
+    )
+    pr_title = pr_call[pr_call.index("--title") + 1]
+    pr_body = pr_call[pr_call.index("--body") + 1]
+    assert pr_title == "MM-707 Validate semantic pull request metadata"
+    assert "Jira: MM-707" in pr_body
+    assert "Remaining risks:" in pr_body
 
 async def test_run_publish_stage_fails_without_verification_evidence_for_source_changes(
     tmp_path: Path,
