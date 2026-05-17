@@ -83,9 +83,7 @@ function StatusBadge({ status }: { status: string }) {
     (verifiedRead
       ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-300'
       : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-300');
-  const label = verifiedRead
-    ? status.replace(/_/g, ' ')
-    : status.replace(/_/g, ' ');
+  const label = status.replace(/_/g, ' ');
   return (
     <span
       className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${className}`}
@@ -165,8 +163,7 @@ export function GithubTokenProbePanel({
         | { detail?: string };
       if (!response.ok) {
         const detail =
-          (typeof (body as { detail?: unknown }).detail === 'string' &&
-            ((body as { detail?: string }).detail as string)) ||
+          (typeof body.detail === 'string' && body.detail) ||
           `Probe failed with HTTP ${response.status}`;
         setErrorMessage(detail);
         onNotice?.({ level: 'error', text: detail });
