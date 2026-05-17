@@ -285,28 +285,34 @@ class MoonMindRunWorkflow:
 
         generic_messages = {
             "Activity task failed",
+            "Activity error",
             "Child Workflow execution failed",
+            "Child workflow execution failed",
             "Workflow execution failed",
             "activity failed",
         }
-        messages: list[str] = []
-        seen: set[int] = set()
+        generic_types = (
+            exceptions.ActivityError,
+            exceptions.ChildWorkflowError,
+        )
+        chain: list[tuple[BaseException, str]] = []
         current: BaseException | None = exc
-        while current is not None and id(current) not in seen:
-            seen.add(id(current))
+        for _ in range(20):
+            if current is None:
+                break
             message = str(current).strip()
             if message:
-                messages.append(message)
+                chain.append((current, message))
             next_exc = getattr(current, "cause", None)
             if not isinstance(next_exc, BaseException):
                 next_exc = current.__cause__
             current = next_exc
 
-        for message in reversed(messages):
-            if message and message not in generic_messages:
+        for exc_obj, message in reversed(chain):
+            if message not in generic_messages and not isinstance(exc_obj, generic_types):
                 return message[:1000]
-        if messages:
-            return messages[-1][:1000]
+        if chain:
+            return chain[-1][1][:1000]
         return exc.__class__.__name__
 
     def __init__(self) -> None:
