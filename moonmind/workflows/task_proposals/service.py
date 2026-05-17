@@ -37,6 +37,7 @@ from moonmind.workflows.task_proposals.repositories import (
 )
 from moonmind.workflows.tasks.task_contract import (
     CanonicalTaskPayload,
+    SUPPORTED_EXECUTION_RUNTIMES,
     TaskContractError,
 )
 
@@ -691,6 +692,71 @@ class TaskProposalService:
         proposal.provider_metadata = existing_metadata
         await self._repository.commit()
 
+    async def redeliver_proposal(self, *, proposal_id: UUID) -> TaskProposal:
+        """Retry provider delivery through the trusted delivery adapter."""
+
+        if self._delivery_service is None:
+            raise TaskProposalValidationError(
+                "proposal delivery provider is not configured"
+            )
+        proposal = await self._repository.get_proposal(proposal_id)
+        if proposal is None:
+            raise TaskProposalNotFoundError(str(proposal_id))
+        await self._deliver_proposal_if_configured(proposal)
+        await self._repository.refresh(proposal)
+        return proposal
+
+    async def sync_proposal_delivery(self, *, proposal_id: UUID) -> TaskProposal:
+        """Refresh delivery audit metadata without changing the executable payload."""
+
+        if self._delivery_service is None:
+            raise TaskProposalValidationError(
+                "proposal delivery provider is not configured"
+            )
+        proposal = await self._repository.get_proposal(proposal_id)
+        if proposal is None:
+            raise TaskProposalNotFoundError(str(proposal_id))
+        provider_metadata = dict(proposal.provider_metadata)
+        syncer = getattr(self._delivery_service, "sync", None)
+        now = datetime.now(UTC)
+        if callable(syncer):
+            try:
+                result = await syncer(request_from_proposal(proposal))
+            except Exception as exc:  # pragma: no cover - adapter-specific
+                provider_metadata["sync"] = self._scrub_json(
+                    {
+                        "status": "failed",
+                        "errorType": type(exc).__name__,
+                        "sanitizedReason": str(exc),
+                        "syncedAt": now.isoformat(),
+                    }
+                )
+            else:
+                metadata = result if isinstance(result, Mapping) else {}
+                provider_metadata["sync"] = self._scrub_json(
+                    {
+                        "status": "synced",
+                        "syncedAt": now.isoformat(),
+                        **dict(metadata),
+                    }
+                )
+        else:
+            provider_metadata["sync"] = self._scrub_json(
+                {
+                    "status": "inspected",
+                    "syncedAt": now.isoformat(),
+                    "note": (
+                        "trusted provider adapter does not expose a dedicated sync "
+                        "operation"
+                    ),
+                }
+            )
+        proposal.last_synced_at = now
+        proposal.provider_metadata = provider_metadata
+        await self._repository.commit()
+        await self._repository.refresh(proposal)
+        return proposal
+
     async def create_proposal(
         self,
         *,
@@ -1269,6 +1335,14 @@ class TaskProposalService:
             normalized_runtime_mode = self._normalize_proposal_runtime_mode(
                 runtime_mode_override
             )
+            if (
+                not isinstance(normalized_runtime_mode, str)
+                or normalized_runtime_mode not in SUPPORTED_EXECUTION_RUNTIMES
+            ):
+                supported = ", ".join(sorted(SUPPORTED_EXECUTION_RUNTIMES))
+                raise TaskProposalValidationError(
+                    f"runtimeMode must be one of: {supported}"
+                )
             task_node = payload.get("task")
             task = dict(task_node) if isinstance(task_node, Mapping) else {}
             runtime_node = task.get("runtime")
