@@ -965,9 +965,18 @@ class ManagedRuntimeLauncher:
         from moonmind.workflows.adapters.secret_boundary import SecretResolverBoundary
         
         # Resolve secrets async up-front so the async materializer can access them.
-        from moonmind.workflows.temporal.runtime.managed_api_key_resolve import resolve_managed_api_key_reference
+        from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
+            assert_managed_secret_refs_active_for_launch,
+            resolve_managed_api_key_reference,
+        )
+        profile_secret_refs = getattr(profile, "secret_refs", None) or {}
+        # Refuse to materialize the runtime when any managed SecretRef is
+        # disabled, revoked, or missing. Plaintext is never read or surfaced.
+        await assert_managed_secret_refs_active_for_launch(
+            profile_secret_refs.values()
+        )
         resolved_secrets = {}
-        for ref_key, secret_name in (getattr(profile, "secret_refs", None) or {}).items():
+        for ref_key, secret_name in profile_secret_refs.items():
             resolved_secrets[ref_key] = await resolve_managed_api_key_reference(secret_name)
 
         class AsyncDictSecretResolver(SecretResolverBoundary):
