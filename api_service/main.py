@@ -1017,14 +1017,42 @@ async def ensure_provider_profile_managers_started():
         logger.error(f"Error ensuring ProviderProfileManager workflows: {e}", exc_info=True)
 
 def _register_settings_change_subscribers() -> None:
-    """Wire the default SettingsChangePublisher subscribers once per process."""
+    """Wire the default SettingsChangePublisher subscribers once per process.
+
+    Production wiring attaches concrete hooks so worker_reload / next_launch
+    apply modes drive observable cross-process side effects (Temporal signals,
+    structured broadcast log) beyond the in-process intent ledgers.
+    """
 
     try:
+        from api_service.services.settings_change_hooks import (
+            make_provider_profile_refresh_hook,
+            make_worker_reload_broadcast_hook,
+        )
         from api_service.services.settings_change_subscribers import (
             register_default_subscribers,
         )
 
-        register_default_subscribers()
+        worker_reload_logger = logging.getLogger(
+            "api_service.settings_change.worker_reload_broadcast"
+        )
+
+        async def _structured_worker_reload_broadcaster(payload: dict) -> None:
+            # Records a structured INFO event that ops dashboards and worker
+            # health scrapers can observe out-of-process. Real cross-host
+            # broadcast (Redis, Temporal control workflow, etc.) can be plugged
+            # in by replacing this callable.
+            worker_reload_logger.info(
+                "settings.worker_reload_broadcast",
+                extra={"settings_worker_reload_broadcast": payload},
+            )
+
+        register_default_subscribers(
+            worker_on_reload=make_worker_reload_broadcast_hook(
+                broadcaster=_structured_worker_reload_broadcaster,
+            ),
+            provider_profile_on_refresh=make_provider_profile_refresh_hook(),
+        )
     except Exception as exc:  # noqa: BLE001 — defensive at startup
         logger.warning(
             "Failed to register default settings change subscribers: %s",

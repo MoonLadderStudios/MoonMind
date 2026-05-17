@@ -334,3 +334,159 @@ async def test_secret_ref_setting_change_does_not_publish_secret_payload(
     # The event payload must not include the value being set.
     assert env_alias not in repr(payload.get("source"))
     assert env_alias not in repr(payload.get("key"))
+
+
+@pytest_asyncio.fixture
+async def settings_subscriber_env_with_hooks(tmp_path):
+    """Same hermetic env as ``settings_subscriber_env`` but with the production
+    hook factories wired in. The Temporal client provider is mocked so we can
+    assert observable signaling without touching a live Temporal server.
+    """
+
+    from unittest.mock import AsyncMock, MagicMock
+
+    from api_service.services.settings_change_hooks import (
+        make_provider_profile_refresh_hook,
+        make_worker_reload_broadcast_hook,
+    )
+
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path}/settings-subscribers-hooks.db"
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    original_session_maker = db_base.async_session_maker
+    db_base.async_session_maker = session_maker
+
+    user = SimpleNamespace(
+        id=uuid4(),
+        email="settings-subscribers-hooks@example.com",
+        is_superuser=True,
+        settings_permissions={
+            "settings.catalog.read",
+            "settings.effective.read",
+            "settings.user.write",
+            "settings.workspace.write",
+        },
+        workspace_id=uuid4(),
+    )
+    app.dependency_overrides[SETTINGS_USER_DEP] = lambda: user
+
+    reset_default_settings_change_publisher()
+    publisher = get_settings_change_publisher()
+
+    signaled_workflows: list[str] = []
+    signaled_calls: list[tuple[str, dict]] = []
+    fake_client = MagicMock()
+
+    def _handle_for(workflow_id: str):
+        signaled_workflows.append(workflow_id)
+        handle = AsyncMock()
+
+        async def _signal(name: str, payload: dict) -> None:
+            signaled_calls.append((name, payload))
+
+        handle.signal.side_effect = _signal
+        return handle
+
+    fake_client.get_workflow_handle = MagicMock(side_effect=_handle_for)
+
+    runtime_ids = ["claude_code", "codex_cli"]
+
+    provider_hook = make_provider_profile_refresh_hook(
+        temporal_client_provider=AsyncMock(return_value=fake_client),
+        runtime_ids_provider=AsyncMock(return_value=runtime_ids),
+    )
+
+    worker_broadcasts: list[dict] = []
+
+    async def _record_broadcast(payload: dict) -> None:
+        worker_broadcasts.append(payload)
+
+    worker_hook = make_worker_reload_broadcast_hook(
+        broadcaster=_record_broadcast,
+    )
+
+    register_default_subscribers(
+        publisher,
+        worker_on_reload=worker_hook,
+        provider_profile_on_refresh=provider_hook,
+    )
+
+    handle = SimpleNamespace(
+        publisher=publisher,
+        signaled_workflows=signaled_workflows,
+        signaled_calls=signaled_calls,
+        worker_broadcasts=worker_broadcasts,
+        runtime_ids=runtime_ids,
+    )
+    try:
+        yield handle
+    finally:
+        app.dependency_overrides.pop(SETTINGS_USER_DEP, None)
+        db_base.async_session_maker = original_session_maker
+        reset_default_settings_change_publisher()
+        await engine.dispose()
+
+
+async def test_provider_profile_refresh_hook_signals_each_known_runtime_on_patch(
+    settings_subscriber_env_with_hooks,
+):
+    """End-to-end: patching ``workflow.default_provider_profile_ref`` must reach
+    every registered ProviderProfileManager workflow via ``sync_profiles``."""
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.patch(
+            "/api/v1/settings/workspace",
+            json={
+                "changes": {"workflow.default_provider_profile_ref": None},
+                "expected_versions": {"workflow.default_provider_profile_ref": 1},
+            },
+        )
+
+    assert response.status_code == 200
+    assert sorted(settings_subscriber_env_with_hooks.signaled_workflows) == sorted(
+        f"provider-profile-manager:{rid}"
+        for rid in settings_subscriber_env_with_hooks.runtime_ids
+    )
+    assert all(
+        name == "sync_profiles"
+        for name, _ in settings_subscriber_env_with_hooks.signaled_calls
+    )
+    assert len(settings_subscriber_env_with_hooks.signaled_calls) == len(
+        settings_subscriber_env_with_hooks.runtime_ids
+    )
+
+
+async def test_worker_reload_hook_broadcasts_intent_on_patch(
+    settings_subscriber_env_with_hooks,
+):
+    """End-to-end: patching a worker_reload-mode setting must reach the
+    configured broadcaster with the normalized intent payload."""
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.patch(
+            "/api/v1/settings/workspace",
+            json={
+                "changes": {"skills.policy_mode": "allowlist"},
+                "expected_versions": {"skills.policy_mode": 1},
+            },
+        )
+
+    assert response.status_code == 200
+    broadcasts = settings_subscriber_env_with_hooks.worker_broadcasts
+    assert len(broadcasts) == 1
+    payload = broadcasts[0]
+    assert payload["intent"] == "soft_reload"
+    assert payload["apply_mode"] == "worker_reload"
+    assert payload["key"] == "skills.policy_mode"
+    assert "workflow_runtime" in payload["affected_systems"]
+    # The Temporal client provider must not be exercised for worker_reload-only
+    # settings: refresh hook is keyed off the provider_profile_manager refresh
+    # target which only fires when applies_to includes provider_profiles.
+    assert settings_subscriber_env_with_hooks.signaled_workflows == []

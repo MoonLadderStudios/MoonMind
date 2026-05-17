@@ -165,21 +165,34 @@ class OperationalControlsSubscriber:
         self.version += 1
 
 
-_DEFAULT_SUBSCRIBER_FACTORIES: tuple[Callable[[], object], ...] = (
-    TaskCreationDefaultsSubscriber,
-    WorkerReloadSubscriber,
-    ProviderProfileManagerSubscriber,
-    OperationalControlsSubscriber,
-)
-
-
 def register_default_subscribers(
     publisher: SettingsChangePublisher | None = None,
+    *,
+    worker_on_reload: Callable[[WorkerReloadIntent], Awaitable[None]] | None = None,
+    provider_profile_on_refresh: Callable[
+        [ProviderProfileRefreshIntent], Awaitable[None]
+    ]
+    | None = None,
 ) -> None:
-    """Register the four default subscribers against *publisher* once."""
+    """Register the four default subscribers against *publisher* once.
+
+    Optional hooks let production wiring drive observable cross-process side
+    effects (e.g. Temporal signals, worker drain broadcasts) when
+    ``worker_reload`` / ``process_restart`` / ``next_launch`` apply modes are
+    triggered. The hooks default to ``None`` so tests can run with the bare
+    intent-ledger contract.
+    """
 
     target_publisher = publisher or get_settings_change_publisher()
-    for factory in _DEFAULT_SUBSCRIBER_FACTORIES:
+    factories: tuple[Callable[[], object], ...] = (
+        TaskCreationDefaultsSubscriber,
+        lambda: WorkerReloadSubscriber(on_reload=worker_on_reload),
+        lambda: ProviderProfileManagerSubscriber(
+            on_refresh=provider_profile_on_refresh
+        ),
+        OperationalControlsSubscriber,
+    )
+    for factory in factories:
         instance = factory()
         name = getattr(instance, "name", None)
         refresh_targets = getattr(instance, "refresh_targets", frozenset())
