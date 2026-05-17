@@ -1016,6 +1016,63 @@ async def ensure_provider_profile_managers_started():
     except Exception as e:
         logger.error(f"Error ensuring ProviderProfileManager workflows: {e}", exc_info=True)
 
+def _register_settings_change_subscribers() -> None:
+    """Wire the default SettingsChangePublisher subscribers once per process.
+
+    Production wiring attaches concrete hooks so worker_reload / next_launch
+    apply modes drive observable cross-process side effects (Temporal signals,
+    structured broadcast log) beyond the in-process intent ledgers.
+    """
+
+    try:
+        from api_service.services.settings_change_hooks import (
+            make_operational_mode_hook,
+            make_provider_profile_refresh_hook,
+            make_worker_reload_broadcast_hook,
+        )
+        from api_service.services.settings_change_subscribers import (
+            register_default_subscribers,
+        )
+
+        worker_reload_logger = logging.getLogger(
+            "api_service.settings_change.worker_reload_broadcast"
+        )
+        operational_logger = logging.getLogger(
+            "api_service.settings_change.operational_mode"
+        )
+
+        async def _structured_worker_reload_broadcaster(payload: dict) -> None:
+            # Records a structured INFO event that ops dashboards and worker
+            # health scrapers can observe out-of-process. Real cross-host
+            # broadcast (Redis, Temporal control workflow, etc.) can be plugged
+            # in by replacing this callable.
+            worker_reload_logger.info(
+                "settings.worker_reload_broadcast",
+                extra={"settings_worker_reload_broadcast": payload},
+            )
+
+        async def _structured_operational_mode_handler(payload: dict) -> None:
+            operational_logger.info(
+                "settings.operational_mode_change",
+                extra={"settings_operational_mode_change": payload},
+            )
+
+        register_default_subscribers(
+            worker_on_reload=make_worker_reload_broadcast_hook(
+                broadcaster=_structured_worker_reload_broadcaster,
+            ),
+            provider_profile_on_refresh=make_provider_profile_refresh_hook(),
+            operational_on_refresh=make_operational_mode_hook(
+                handler=_structured_operational_mode_handler,
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 — defensive at startup
+        logger.warning(
+            "Failed to register default settings change subscribers: %s",
+            exc,
+        )
+
+
 async def startup_event():
     """Defines the application's startup events."""
     logger.info("Executing application startup events...")
@@ -1031,6 +1088,7 @@ async def startup_event():
     _initialize_contexts(app.state, settings)
     _load_or_create_vector_index(app.state)
     await _initialize_oidc_provider(app)  # OIDC provider init like Keycloak discovery
+    _register_settings_change_subscribers()
     try:
         app.state.retrieval_service = ContextRetrievalService(
             settings=RagRuntimeSettings.from_env()
