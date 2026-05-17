@@ -57,11 +57,78 @@ def _build_request_for_step(step_id: str, *, runtime_mode: str = "jules"):
 def test_run_request_records_prepared_manifest_before_step_dispatch() -> None:
     request = _build_request_for_step("collect-evidence")
 
-    prepared_context = request.parameters["metadata"]["moonmind"]["preparedContext"]
+    moonmind_metadata = request.parameters["metadata"]["moonmind"]
+    prepared_context = moonmind_metadata["preparedContext"]
+    attempt_context = moonmind_metadata["attemptContext"]
+    projection = moonmind_metadata["attemptManifestProjection"]
 
     assert prepared_context["manifestRef"].startswith("prepared-context-manifest://")
     assert prepared_context["logicalStepId"] == "collect-evidence"
     assert prepared_context["targetCounts"] == {"objective": 1, "step": 1}
+    assert attempt_context["workflowId"] == "run-target-aware"
+    assert attempt_context["runId"] == "run-id-1"
+    assert attempt_context["logicalStepId"] == "collect-evidence"
+    assert attempt_context["attempt"] == 1
+    assert attempt_context["preparedInputRefs"] == prepared_context["inputRefs"]
+    assert attempt_context["contextBundleDigest"].startswith("sha256:")
+    assert attempt_context["contextBundleRef"] == (
+        f"attempt-context-bundle://{attempt_context['contextBundleDigest']}"
+    )
+    assert attempt_context["builderVersion"] == "attempt-context-builder-v1"
+    assert projection["context"]["contextBundleDigest"] == (
+        attempt_context["contextBundleDigest"]
+    )
+    assert "preparedInputRefs" not in projection["context"]
+
+
+def test_run_request_records_retrieval_and_memory_refs_in_attempt_projection() -> None:
+    wf = MoonMindRunWorkflow()
+    task_payload = {
+        **_task_payload(),
+        "retrieval": {
+            "query": "attempt context",
+            "indexVersion": "rag-index-1",
+            "returnedRefs": ["artifact://retrieved-doc"],
+            "filters": {"kind": "docs"},
+            "compactSummaries": ["Relevant design summary."],
+        },
+        "memoryProposals": [
+            {
+                "proposalRef": "memory://proposal-1",
+                "state": "proposed",
+                "summary": "Candidate memory.",
+            }
+        ],
+    }
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        return_value=_workflow_info(),
+    ):
+        request = wf._build_agent_execution_request(
+            node_inputs={"runtime": {"mode": "codex_cli"}},
+            node_id="collect-evidence",
+            tool_name="codex_cli",
+            workflow_parameters={"task": task_payload},
+        )
+
+    attempt_context = request.parameters["metadata"]["moonmind"]["attemptContext"]
+    projection = request.parameters["metadata"]["moonmind"][
+        "attemptManifestProjection"
+    ]
+
+    assert attempt_context["retrievalManifestRef"].startswith(
+        "attempt-retrieval-manifest://sha256:"
+    )
+    assert attempt_context["memoryManifestRef"].startswith(
+        "attempt-memory-manifest://sha256:"
+    )
+    assert projection["context"]["retrievalManifestRef"] == (
+        attempt_context["retrievalManifestRef"]
+    )
+    assert projection["context"]["memoryManifestRef"] == (
+        attempt_context["memoryManifestRef"]
+    )
+    assert "Relevant design summary." not in str(projection)
 
 
 def test_run_request_filters_prepared_context_to_current_step() -> None:
