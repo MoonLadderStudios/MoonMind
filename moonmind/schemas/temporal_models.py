@@ -54,6 +54,43 @@ TASK_RUN_ID_MEMO_KEYS = ("taskRunId", "task_run_id")
 TASK_RUN_ID_SEARCH_ATTR_KEYS = ("mm_task_run_id",)
 TASK_RUN_ID_PARAM_KEYS = ("taskRunId", "task_run_id")
 
+STEP_ATTEMPT_MANIFEST_CONTENT_TYPE = (
+    "application/vnd.moonmind.step-attempt+json;version=1"
+)
+
+StepAttemptReason = Literal[
+    "initial_execution",
+    "quality_gate_failed",
+    "tests_failed",
+    "runtime_recovered",
+    "resume_from_failed_step",
+    "remediation_context",
+    "operator_requested",
+    "dependency_invalidated",
+    "policy_revalidation",
+]
+StepAttemptStatus = Literal[
+    "pending",
+    "preparing",
+    "running",
+    "checking",
+    "succeeded",
+    "failed",
+    "blocked",
+    "canceled",
+    "superseded",
+]
+StepAttemptTerminalDisposition = Literal[
+    "accepted",
+    "retryable",
+    "blocked",
+    "needs_human",
+    "discarded",
+    "superseded",
+    "failed_unrecoverable",
+]
+StepAttemptSemanticOperation = Literal["retry", "reattempt", "resume"]
+
 def normalize_dependency_ids(raw_value: Any) -> list[str]:
     """Normalize a list of dependency IDs, stripping whitespace and removing duplicates/non-strings."""
     if not isinstance(raw_value, list):
@@ -69,6 +106,127 @@ def normalize_dependency_ids(raw_value: Any) -> list[str]:
         seen.add(candidate)
         normalized.append(candidate)
     return normalized
+
+
+class StepAttemptIdentityModel(BaseModel):
+    """Run-scoped identity for one semantic execution of a logical step."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    workflow_id: str = Field(..., alias="workflowId", min_length=1)
+    run_id: str = Field(..., alias="runId", min_length=1)
+    logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
+    attempt: int = Field(..., alias="attempt", ge=1)
+
+
+class StepAttemptLineageModel(BaseModel):
+    """Optional cross-run provenance for resumed or related attempts."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    source_workflow_id: str = Field(..., alias="sourceWorkflowId", min_length=1)
+    source_run_id: str = Field(..., alias="sourceRunId", min_length=1)
+    source_logical_step_id: str = Field(
+        ..., alias="sourceLogicalStepId", min_length=1
+    )
+    source_attempt: int = Field(..., alias="sourceAttempt", ge=1)
+    relationship: str | None = Field(None, alias="relationship")
+    lineage_attempt_ordinal: int | None = Field(
+        None, alias="lineageAttemptOrdinal", ge=1
+    )
+
+
+class StepAttemptSummaryRefModel(BaseModel):
+    """Compact workflow-visible reference to artifact-backed attempt evidence."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    manifest_artifact_ref: str = Field(..., alias="manifestArtifactRef", min_length=1)
+    step_attempt_id: str = Field(..., alias="stepAttemptId", min_length=1)
+    logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
+    attempt: int = Field(..., alias="attempt", ge=1)
+    reason: StepAttemptReason = Field(..., alias="reason")
+    status: StepAttemptStatus = Field(..., alias="status")
+    terminal_disposition: StepAttemptTerminalDisposition | None = Field(
+        None, alias="terminalDisposition"
+    )
+    summary: str | None = Field(None, alias="summary", max_length=1000)
+
+
+class StepAttemptManifestModel(BaseModel):
+    """Artifact-backed Step Attempt manifest payload."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    schema_version: Literal["v1"] = Field("v1", alias="schemaVersion")
+    step_attempt_id: str = Field(..., alias="stepAttemptId", min_length=1)
+    workflow_id: str = Field(..., alias="workflowId", min_length=1)
+    run_id: str = Field(..., alias="runId", min_length=1)
+    logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
+    attempt: int = Field(..., alias="attempt", ge=1)
+    attempt_scope: Literal["run"] = Field("run", alias="attemptScope")
+    lineage: StepAttemptLineageModel | None = Field(None, alias="lineage")
+    reason: StepAttemptReason = Field(..., alias="reason")
+    status: StepAttemptStatus = Field(..., alias="status")
+    terminal_disposition: StepAttemptTerminalDisposition | None = Field(
+        None, alias="terminalDisposition"
+    )
+    started_at: datetime | None = Field(None, alias="startedAt")
+    updated_at: datetime | None = Field(None, alias="updatedAt")
+    input: dict[str, Any] = Field(default_factory=dict, alias="input")
+    context: dict[str, Any] = Field(default_factory=dict, alias="context")
+    workspace: dict[str, Any] = Field(default_factory=dict, alias="workspace")
+    execution: dict[str, Any] = Field(default_factory=dict, alias="execution")
+    outputs: dict[str, Any] = Field(default_factory=dict, alias="outputs")
+    checks: list[dict[str, Any]] = Field(default_factory=list, alias="checks")
+    side_effects: dict[str, Any] = Field(default_factory=dict, alias="sideEffects")
+    dependency_effects: dict[str, Any] = Field(
+        default_factory=dict, alias="dependencyEffects"
+    )
+    budget: dict[str, Any] = Field(default_factory=dict, alias="budget")
+
+
+class StepAttemptBoundaryResultModel(BaseModel):
+    """Compact activity/workflow boundary result for attempt manifest operations."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    identity: StepAttemptIdentityModel = Field(..., alias="identity")
+    manifest_artifact_ref: str = Field(..., alias="manifestArtifactRef", min_length=1)
+    idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
+    summary: str | None = Field(None, alias="summary", max_length=1000)
+
+
+class StepAttemptSemanticOperationModel(BaseModel):
+    """Explicit semantic operation label that keeps retry, reattempt, and resume distinct."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    kind: StepAttemptSemanticOperation = Field(..., alias="kind")
+
+
+def build_step_attempt_id(identity: StepAttemptIdentityModel) -> str:
+    """Build the deterministic identifier for a Step Attempt."""
+
+    return (
+        f"{identity.workflow_id}:{identity.run_id}:"
+        f"{identity.logical_step_id}:attempt:{identity.attempt}"
+    )
+
+
+def build_step_attempt_idempotency_key(
+    identity: StepAttemptIdentityModel,
+    operation: str,
+) -> str:
+    """Build a deterministic idempotency key for an attempt-scoped side effect."""
+
+    normalized_operation = str(operation or "").strip()
+    if not normalized_operation:
+        raise ValueError("operation must be a non-empty string")
+    return (
+        f"{identity.workflow_id}:{identity.run_id}:"
+        f"{identity.logical_step_id}:{identity.attempt}:{normalized_operation}"
+    )
 
 class PullRequestRefModel(BaseModel):
     """Compact pull request identity carried through merge automation history."""
@@ -1099,6 +1257,12 @@ class StepLedgerRefsModel(BaseModel):
     child_workflow_id: str | None = Field(None, alias="childWorkflowId")
     child_run_id: str | None = Field(None, alias="childRunId")
     task_run_id: str | None = Field(None, alias="taskRunId")
+    latest_attempt_manifest_ref: str | None = Field(
+        None, alias="latestAttemptManifestRef"
+    )
+    attempt_manifest_refs: list[str] = Field(
+        default_factory=list, alias="attemptManifestRefs"
+    )
 
 class StepLedgerArtifactsModel(BaseModel):
     """Stable semantic artifact slots for step evidence."""

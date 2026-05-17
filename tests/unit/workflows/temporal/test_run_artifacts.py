@@ -243,8 +243,8 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
     assert captured[3][1]["artifact_ref"] == "art_plan_1"
     assert captured[4][0] == "artifact.read"
     assert captured[4][1]["artifact_ref"] == "artifact://registry/1"
-    assert captured[5][0] == "mm.skill.execute"
-    assert captured[5][1]["registry_snapshot_ref"] == "artifact://registry/1"
+    skill_call = next(item for item in captured if item[0] == "mm.skill.execute")
+    assert skill_call[1]["registry_snapshot_ref"] == "artifact://registry/1"
 
 @pytest.mark.asyncio
 async def test_run_finalizing_stage_writes_dependency_summary_metadata(
@@ -430,8 +430,8 @@ async def test_run_execution_stage_routes_mm_tool_execute_from_registry(
 
     # provider_profile.list calls (3) happen first, then artifact.read for plan,
     # artifact.read for registry, then mm.tool.execute
-    assert captured[5][0] == "mm.tool.execute"
-    assert captured[5][1]["registry_snapshot_ref"] == "artifact://registry/1"
+    tool_call = next(item for item in captured if item[0] == "mm.tool.execute")
+    assert tool_call[1]["registry_snapshot_ref"] == "artifact://registry/1"
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_skips_empty_registry_for_agent_runtime_only_plan(

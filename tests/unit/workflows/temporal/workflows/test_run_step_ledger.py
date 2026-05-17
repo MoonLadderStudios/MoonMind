@@ -509,6 +509,8 @@ def test_run_groups_child_lineage_and_evidence_into_step_row(
         "childWorkflowId": "wf-child-1",
         "childRunId": "run-child-1",
         "taskRunId": "550e8400-e29b-41d4-a716-446655440000",
+        "latestAttemptManifestRef": None,
+        "attemptManifestRefs": [],
     }
     assert step["artifacts"] == {
         "outputSummary": "art_summary_1",
@@ -559,7 +561,95 @@ def test_run_waiting_state_captures_child_workflow_lineage(
         "childWorkflowId": "wf-child-1",
         "childRunId": None,
         "taskRunId": None,
+        "latestAttemptManifestRef": None,
+        "attemptManifestRefs": [],
     }
+
+
+@pytest.mark.asyncio
+async def test_run_records_step_attempt_manifest_ref_when_work_begins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+    writes: list[dict[str, Any]] = []
+
+    async def fake_write_json_artifact(
+        *,
+        name: str,
+        payload: dict[str, Any],
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
+    ) -> str:
+        writes.append(
+            {
+                "name": name,
+                "payload": payload,
+                "content_type": content_type,
+                "metadata_json": metadata_json,
+            }
+        )
+        return f"artifact-attempt-{len(writes)}"
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[
+            {
+                "id": "delegate-agent",
+                "tool": {"type": "agent_runtime", "name": "codex", "version": ""},
+                "inputs": {"title": "Delegate agent"},
+            }
+        ],
+        dependency_map={"delegate-agent": []},
+        updated_at=now,
+    )
+
+    workflow._mark_step_running(
+        "delegate-agent",
+        updated_at=now,
+        summary="Launching child runtime",
+    )
+    await workflow._record_step_attempt_manifest_start(
+        "delegate-agent",
+        updated_at=now,
+        reason="initial_execution",
+    )
+    workflow._mark_step_terminal(
+        "delegate-agent",
+        status="failed",
+        updated_at=now,
+        summary="Runtime failed",
+    )
+    workflow._mark_step_running(
+        "delegate-agent",
+        updated_at=now,
+        summary="Retrying child runtime",
+    )
+    await workflow._record_step_attempt_manifest_start(
+        "delegate-agent",
+        updated_at=now,
+        reason="runtime_recovered",
+    )
+
+    step = workflow.get_step_ledger()["steps"][0]
+    assert step["attempt"] == 2
+    assert step["refs"]["latestAttemptManifestRef"] == "artifact-attempt-2"
+    assert step["refs"]["attemptManifestRefs"] == [
+        "artifact-attempt-1",
+        "artifact-attempt-2",
+    ]
+    assert writes[0]["content_type"] == (
+        "application/vnd.moonmind.step-attempt+json;version=1"
+    )
+    assert writes[0]["payload"]["stepAttemptId"] == (
+        "wf-run-1:run-1:delegate-agent:attempt:1"
+    )
+    assert writes[0]["metadata_json"]["idempotencyKey"] == (
+        "wf-run-1:run-1:delegate-agent:1:manifest"
+    )
+    assert writes[0]["payload"]["reason"] == "initial_execution"
+    assert writes[1]["payload"]["reason"] == "runtime_recovered"
 
 def test_run_uses_deterministic_output_primary_fallback_for_generic_results(
     monkeypatch: pytest.MonkeyPatch,
@@ -935,6 +1025,7 @@ async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check
     review_snapshots: list[dict[str, Any]] = []
     written_review_payloads: list[dict[str, Any]] = []
     review_artifact_ids = iter(("art_review_1",))
+    step_attempt_artifact_ids = iter(("art_step_attempt_1",))
 
     async def fake_execute_activity(
         activity_type: str,
@@ -944,6 +1035,11 @@ async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check
         if activity_type == "provider_profile.list":
             return {"profiles": []}
         if activity_type == "artifact.create":
+            if str(payload.get("name") or "").startswith("reports/step_attempts/"):
+                return (
+                    {"artifact_id": next(step_attempt_artifact_ids)},
+                    {"upload_url": "unused"},
+                )
             return ({"artifact_id": next(review_artifact_ids)}, {"upload_url": "unused"})
         if activity_type == "mm.skill.execute":
             return {
@@ -974,6 +1070,10 @@ async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check
             if artifact_ref == "artifact://registry/1":
                 return json.dumps(_registry_payload()).encode("utf-8")
         if activity_type == "artifact.write_complete":
+            if getattr(payload, "content_type", "") == (
+                "application/vnd.moonmind.step-attempt+json;version=1"
+            ):
+                return {"ok": True}
             written_review_payloads.append(json.loads(payload.payload.decode("utf-8")))
             return {"ok": True}
         raise AssertionError(f"unexpected typed activity: {activity_type}")
@@ -1043,6 +1143,7 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
     written_review_payloads: list[dict[str, Any]] = []
     skill_inputs: list[dict[str, Any]] = []
     review_artifact_ids = iter(("art_review_1", "art_review_2"))
+    step_attempt_artifact_ids = iter(("art_step_attempt_1", "art_step_attempt_2"))
     review_verdicts = iter(
         (
             {
@@ -1074,6 +1175,11 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
         if activity_type == "provider_profile.list":
             return {"profiles": []}
         if activity_type == "artifact.create":
+            if str(payload.get("name") or "").startswith("reports/step_attempts/"):
+                return (
+                    {"artifact_id": next(step_attempt_artifact_ids)},
+                    {"upload_url": "unused"},
+                )
             return ({"artifact_id": next(review_artifact_ids)}, {"upload_url": "unused"})
         if activity_type == "mm.skill.execute":
             invocation_payload = payload["invocation_payload"]
@@ -1099,6 +1205,10 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
             if artifact_ref == "artifact://registry/1":
                 return json.dumps(_registry_payload()).encode("utf-8")
         if activity_type == "artifact.write_complete":
+            if getattr(payload, "content_type", "") == (
+                "application/vnd.moonmind.step-attempt+json;version=1"
+            ):
+                return {"ok": True}
             written_review_payloads.append(json.loads(payload.payload.decode("utf-8")))
             return {"ok": True}
         raise AssertionError(f"unexpected typed activity: {activity_type}")
@@ -1172,6 +1282,7 @@ async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_i
     written_review_payloads: list[dict[str, Any]] = []
     child_requests: list[Any] = []
     review_artifact_ids = iter(("art_review_1", "art_review_2"))
+    step_attempt_artifact_ids = iter(("art_step_attempt_1", "art_step_attempt_2"))
     review_verdicts = iter(
         (
             {
@@ -1210,6 +1321,11 @@ async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_i
         if activity_type == "provider_profile.list":
             return {"profiles": []}
         if activity_type == "artifact.create":
+            if str(payload.get("name") or "").startswith("reports/step_attempts/"):
+                return (
+                    {"artifact_id": next(step_attempt_artifact_ids)},
+                    {"upload_url": "unused"},
+                )
             return ({"artifact_id": next(review_artifact_ids)}, {"upload_url": "unused"})
         if activity_type == "step.review":
             return next(review_verdicts)
@@ -1225,6 +1341,10 @@ async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_i
             if artifact_ref == "art_plan_1":
                 return json.dumps(plan_payload).encode("utf-8")
         if activity_type == "artifact.write_complete":
+            if getattr(payload, "content_type", "") == (
+                "application/vnd.moonmind.step-attempt+json;version=1"
+            ):
+                return {"ok": True}
             written_review_payloads.append(json.loads(payload.payload.decode("utf-8")))
             return {"ok": True}
         raise AssertionError(f"unexpected typed activity: {activity_type}")

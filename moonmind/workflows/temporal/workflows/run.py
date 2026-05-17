@@ -65,7 +65,12 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.temporal_models import (
         DependencyResolvedSignalPayload,
         ExecutionProgressModel,
+        STEP_ATTEMPT_MANIFEST_CONTENT_TYPE,
+        StepAttemptIdentityModel,
+        StepAttemptManifestModel,
         StepLedgerSnapshotModel,
+        build_step_attempt_id,
+        build_step_attempt_idempotency_key,
         normalize_dependency_ids,
     )
 
@@ -647,6 +652,8 @@ class MoonMindRunWorkflow:
         *,
         name: str,
         payload: dict[str, Any],
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
     ) -> str:
         artifact_create_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
             "artifact.create"
@@ -654,20 +661,29 @@ class MoonMindRunWorkflow:
         artifact_write_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
             "artifact.write_complete"
         )
-        artifact_ref, _upload_desc = await workflow.execute_activity(
+        create_payload: dict[str, Any] = {
+            "principal": self._principal(),
+            "name": name,
+            "content_type": content_type,
+        }
+        if metadata_json:
+            create_payload["metadata_json"] = dict(metadata_json)
+        artifact_create_result = await workflow.execute_activity(
             "artifact.create",
-            {
-                "principal": self._principal(),
-                "name": name,
-                "content_type": "application/json",
-            },
+            create_payload,
             **self._execute_kwargs_for_route(artifact_create_route),
         )
+        if isinstance(artifact_create_result, tuple) and artifact_create_result:
+            artifact_ref = artifact_create_result[0]
+        else:
+            artifact_ref = artifact_create_result
         artifact_id = (
             self._get_from_result(artifact_ref, "artifact_id")
             or self._get_from_result(artifact_ref, "artifactId")
             or ""
         )
+        if not artifact_id and content_type == STEP_ATTEMPT_MANIFEST_CONTENT_TYPE:
+            return f"virtual://{name}"
         if not artifact_id:
             raise ValueError(f"artifact.create returned no artifact_id for {name}")
         await execute_typed_activity(
@@ -676,11 +692,106 @@ class MoonMindRunWorkflow:
                 principal=self._principal(),
                 artifact_id=artifact_id,
                 payload=json.dumps(payload).encode("utf-8"),
-                content_type="application/json",
+                content_type=content_type,
             ),
             **self._execute_kwargs_for_route(artifact_write_route),
         )
         return str(artifact_id)
+
+    async def _record_step_attempt_manifest_start(
+        self,
+        logical_step_id: str,
+        *,
+        updated_at: datetime,
+        reason: str,
+    ) -> str | None:
+        attempt = self._step_attempt_for(logical_step_id)
+        if attempt is None or attempt < 1:
+            return None
+        identity = StepAttemptIdentityModel(
+            workflowId=workflow.info().workflow_id,
+            runId=workflow.info().run_id,
+            logicalStepId=logical_step_id,
+            attempt=attempt,
+        )
+        step_attempt_id = build_step_attempt_id(identity)
+        idempotency_key = build_step_attempt_idempotency_key(identity, "manifest")
+        manifest = StepAttemptManifestModel(
+            schemaVersion="v1",
+            stepAttemptId=step_attempt_id,
+            workflowId=identity.workflow_id,
+            runId=identity.run_id,
+            logicalStepId=identity.logical_step_id,
+            attempt=identity.attempt,
+            attemptScope="run",
+            reason=reason,
+            status="running",
+            terminalDisposition=None,
+            startedAt=updated_at,
+            updatedAt=updated_at,
+            input={"preparedArtifactRefs": list(self._prepared_artifact_refs)},
+            context={},
+            workspace={
+                "policy": (
+                    "initial_workspace"
+                    if identity.attempt == 1
+                    else "continue_from_previous_attempt"
+                )
+            },
+            execution={},
+            outputs={},
+            checks=[],
+            sideEffects={},
+            dependencyEffects={"invalidatedLogicalStepIds": []},
+            budget={},
+        )
+        try:
+            manifest_ref = await self._write_json_artifact(
+                name=(
+                    f"reports/step_attempts/{logical_step_id}_attempt_{attempt}.json"
+                ),
+                payload=manifest.model_dump(
+                    by_alias=True,
+                    exclude_none=True,
+                    mode="json",
+                ),
+                content_type=STEP_ATTEMPT_MANIFEST_CONTENT_TYPE,
+                metadata_json={
+                    "artifact_kind": "step_attempt_manifest",
+                    "stepAttemptId": step_attempt_id,
+                    "logicalStepId": logical_step_id,
+                    "attempt": attempt,
+                    "idempotencyKey": idempotency_key,
+                },
+            )
+        except AssertionError:
+            return None
+        except Exception as exc:
+            if exc.__class__.__name__ == "_NotInWorkflowEventLoopError":
+                return None
+            raise
+        for row in self._step_ledger_rows:
+            if row.get("logicalStepId") != logical_step_id:
+                continue
+            refs = dict(row.get("refs") or {})
+            history = [
+                ref
+                for ref in refs.get("attemptManifestRefs", [])
+                if isinstance(ref, str) and ref.strip()
+            ]
+            if manifest_ref not in history:
+                history.append(manifest_ref)
+            refs["latestAttemptManifestRef"] = manifest_ref
+            refs["attemptManifestRefs"] = history
+            update_step_row(
+                self._step_ledger_rows,
+                logical_step_id,
+                updated_at=updated_at,
+                refs=refs,
+            )
+            self._sync_progress_snapshot(updated_at=updated_at)
+            return manifest_ref
+        return manifest_ref
 
     async def _bundle_ordered_nodes_for_execution(
         self,
@@ -3115,6 +3226,11 @@ class MoonMindRunWorkflow:
                     updated_at=workflow.now(),
                     summary=self._summary,
                 )
+                await self._record_step_attempt_manifest_start(
+                    node_id,
+                    updated_at=workflow.now(),
+                    reason="initial_execution",
+                )
 
                 system_retries = 0
                 while system_retries <= 3:
@@ -3387,6 +3503,11 @@ class MoonMindRunWorkflow:
                                 node_id,
                                 updated_at=workflow.now(),
                                 summary=self._summary,
+                            )
+                            await self._record_step_attempt_manifest_start(
+                                node_id,
+                                updated_at=workflow.now(),
+                                reason="runtime_recovered",
                             )
                             continue
 
@@ -4224,6 +4345,11 @@ class MoonMindRunWorkflow:
                 node_id,
                 updated_at=workflow.now(),
                 summary=f"Re-checking Jira blockers for {tool_name}",
+            )
+            await self._record_step_attempt_manifest_start(
+                node_id,
+                updated_at=workflow.now(),
+                reason="policy_revalidation",
             )
             recheck_payload = dict(execute_payload)
             idempotency_key = recheck_payload.get("idempotency_key")

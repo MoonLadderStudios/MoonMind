@@ -49,6 +49,29 @@ def test_build_initial_step_rows_uses_plan_metadata_and_dependencies() -> None:
     assert rows[1]["status"] == "pending"
     assert rows[1]["dependsOn"] == ["step-1"]
     assert rows[1]["tool"] == {"type": "skill", "name": "repo.test", "version": "1"}
+    assert rows[0]["refs"]["latestAttemptManifestRef"] is None
+    assert rows[0]["refs"]["attemptManifestRefs"] == []
+
+
+def test_step_ledger_refs_track_latest_and_historical_attempt_manifests() -> None:
+    refs = StepLedgerRefsModel.model_validate(
+        {
+            "childWorkflowId": "child-1",
+            "childRunId": "run-child",
+            "taskRunId": "task-run",
+            "latestAttemptManifestRef": "artifact-attempt-2",
+            "attemptManifestRefs": ["artifact-attempt-1", "artifact-attempt-2"],
+        }
+    )
+
+    assert refs.latest_attempt_manifest_ref == "artifact-attempt-2"
+    assert refs.attempt_manifest_refs == [
+        "artifact-attempt-1",
+        "artifact-attempt-2",
+    ]
+    assert refs.model_dump(by_alias=True)["latestAttemptManifestRef"] == (
+        "artifact-attempt-2"
+    )
 
 def test_build_initial_step_rows_skips_blank_node_ids() -> None:
     updated_at = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
@@ -88,6 +111,8 @@ def test_build_initial_step_rows_skips_blank_node_ids() -> None:
                 "childWorkflowId": None,
                 "childRunId": None,
                 "taskRunId": None,
+                "latestAttemptManifestRef": None,
+                "attemptManifestRefs": [],
             },
             "artifacts": {
                 "outputSummary": None,
@@ -318,6 +343,8 @@ def test_row_defaults_remain_bounded_and_structured() -> None:
         "childWorkflowId": None,
         "childRunId": None,
         "taskRunId": None,
+        "latestAttemptManifestRef": None,
+        "attemptManifestRefs": [],
     }
     assert artifacts.model_dump(by_alias=True) == {
         "outputSummary": None,
@@ -495,6 +522,8 @@ def test_update_step_row_merges_structured_refs_and_artifacts() -> None:
         "childWorkflowId": "wf-child-1",
         "childRunId": "run-child-1",
         "taskRunId": "550e8400-e29b-41d4-a716-446655440000",
+        "latestAttemptManifestRef": None,
+        "attemptManifestRefs": [],
     }
     assert row["artifacts"] == {
         "outputSummary": "art_summary_1",

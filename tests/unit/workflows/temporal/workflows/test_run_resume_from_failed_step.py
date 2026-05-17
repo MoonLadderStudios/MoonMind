@@ -182,6 +182,8 @@ def test_parent_owned_checkpoint_evidence_survives_child_runtime_projection() ->
         "childWorkflowId": "wf-child",
         "childRunId": "run-child",
         "taskRunId": None,
+        "latestAttemptManifestRef": None,
+        "attemptManifestRefs": [],
     }
     assert rows[0]["stateCheckpointRef"] == "artifact://child-checkpoint"
     assert rows[0]["resumePreservation"] == {
