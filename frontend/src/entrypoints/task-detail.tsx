@@ -1130,11 +1130,11 @@ function ProposalDeliveryCard({ outcome, index }: { outcome: Record<string, unkn
   const deliveredAt = proposalFieldText(outcome, 'deliveredAt', 'delivered_at');
   const lastSyncedAt = proposalFieldText(outcome, 'lastSyncedAt', 'last_synced_at');
   const duplicateSource = proposalFieldText(outcome, 'duplicateSource', 'duplicate_source');
-  const created = outcome.created;
+  const created = outcome['created'];
   const errorText = proposalErrorText(outcome);
   const taskPreview = proposalNestedRecord(outcome, 'taskPreview', 'task_preview');
   const promotionResult = proposalNestedRecord(outcome, 'promotionResult', 'promotion_result');
-  const taskSkills = proposalStringList(taskPreview.taskSkills ?? taskPreview.task_skills);
+  const taskSkills = proposalStringList(taskPreview['taskSkills'] ?? taskPreview['task_skills']);
   const promotedExecutionId = proposalFieldText(promotionResult, 'promotedExecutionId', 'promoted_execution_id');
   const promotedExecutionUrl = proposalFieldText(promotionResult, 'promotedExecutionUrl', 'promoted_execution_url');
 
@@ -4789,8 +4789,10 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                 <Card label="Generated">{String(proposalSummary.generatedCount ?? 0)}</Card>
                 <Card label="Submitted">{String(proposalSummary.submittedCount ?? 0)}</Card>
                 <Card label="Delivered">{String(proposalSummary.deliveredCount ?? 0)}</Card>
-                <Card label="Updated">{String(proposalSummary.dedupUpdates.length)}</Card>
-                <Card label="Failed">{String(proposalSummary.validationErrors.length + proposalSummary.deliveryFailures.length)}</Card>
+                <Card label="Updated">{String(proposalSummary.dedupUpdates?.length ?? 0)}</Card>
+                <Card label="Failed">
+                  {String((proposalSummary.validationErrors?.length ?? 0) + (proposalSummary.deliveryFailures?.length ?? 0))}
+                </Card>
               </div>
               {proposalSummary.externalLinks.length > 0 ? (
                 <div className="stack">
@@ -4811,38 +4813,38 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                   })}
                 </div>
               ) : null}
-              {proposalOutcomes.length > 0 ? (
+              {(proposalOutcomes?.length ?? 0) > 0 ? (
                 <div className="stack">
                   <strong>Delivery Status</strong>
-                  {proposalOutcomes.map((item, index) => (
+                  {proposalOutcomes?.map((item, index) => (
                     <ProposalDeliveryCard
-                      key={`${String(item.provider || 'tracker')}-${String(item.externalKey || item.externalUrl || index)}`}
+                      key={`${String(item['provider'] || 'tracker')}-${String(item['externalKey'] || item['externalUrl'] || index)}`}
                       outcome={item}
                       index={index}
                     />
                   ))}
                 </div>
               ) : null}
-              {proposalSummary.dedupUpdates.length > 0 ? (
-                <p className="small">{proposalSummary.dedupUpdates.length} dedup update(s)</p>
+              {(proposalSummary.dedupUpdates?.length ?? 0) > 0 ? (
+                <p className="small">{proposalSummary.dedupUpdates?.length ?? 0} dedup update(s)</p>
               ) : null}
-              {proposalSummary.validationErrors.length > 0 ? (
+              {(proposalSummary.validationErrors?.length ?? 0) > 0 ? (
                 <div className="stack">
                   <strong>Validation Errors</strong>
-                  {proposalSummary.validationErrors.map((item, index) => {
+                  {proposalSummary.validationErrors?.map((item, index) => {
                     const message = proposalErrorText(item);
                     return (
                       <p key={`validation-error-${index}`} className="small whitespace-pre-wrap">
-                        {message || `${proposalSummary.validationErrors.length} validation error(s)`}
+                        {message || `${proposalSummary.validationErrors?.length ?? 0} validation error(s)`}
                       </p>
                     );
                   })}
                 </div>
               ) : null}
-              {proposalSummary.deliveryFailures.length > 0 ? (
+              {(proposalSummary.deliveryFailures?.length ?? 0) > 0 ? (
                 <div className="stack">
                   <strong>Delivery Failures</strong>
-                  {proposalSummary.deliveryFailures.map((item, index) => {
+                  {proposalSummary.deliveryFailures?.map((item, index) => {
                     const provider = proposalFieldText(item, 'provider') || 'tracker';
                     const message = proposalErrorText(item);
                     return (
@@ -4853,8 +4855,8 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                   })}
                 </div>
               ) : null}
-              {proposalOutcomes.length > 0 && !runSummary?.proposals ? (
-                <p className="small">{proposalOutcomes.length} proposal outcome(s) available from execution detail.</p>
+              {(proposalOutcomes?.length ?? 0) > 0 && !runSummary?.proposals ? (
+                <p className="small">{proposalOutcomes?.length ?? 0} proposal outcome(s) available from execution detail.</p>
               ) : null}
             </section>
           ) : null}
