@@ -1090,6 +1090,66 @@ def test_native_pr_branch_resolution_uses_patched_publish_defaults(
     assert head_branch == ""
     assert base_branch == "release"
 
+def test_native_pr_branch_resolution_prefers_runtime_owned_head_sources(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_patched(patch_id: str) -> bool:
+        return patch_id == NATIVE_PR_BRANCH_DEFAULTS_PATCH
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", fake_patched)
+
+    head_branch, base_branch = mock_run_workflow._resolve_native_pr_branches(
+        parameters={"targetBranch": "legacy/parameter-target"},
+        agent_outputs={},
+        workspace_spec={"targetBranch": "runtime/generated-head"},
+        last_node_inputs={"targetBranch": "plan/generated-head"},
+        publish_payload={"prBaseBranch": "develop"},
+    )
+
+    assert head_branch == "runtime/generated-head"
+    assert base_branch == "develop"
+
+def test_native_pr_branch_resolution_prefers_provider_output_over_workspace_head(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_patched(patch_id: str) -> bool:
+        return patch_id == NATIVE_PR_BRANCH_DEFAULTS_PATCH
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", fake_patched)
+
+    head_branch, base_branch = mock_run_workflow._resolve_native_pr_branches(
+        parameters={},
+        agent_outputs={"push_branch": "provider/head"},
+        workspace_spec={"targetBranch": "workspace/head"},
+        last_node_inputs={"targetBranch": "generated/head"},
+        publish_payload={"prBaseBranch": "main"},
+    )
+
+    assert head_branch == "provider/head"
+    assert base_branch == "main"
+
+def test_native_pr_branch_resolution_ignores_legacy_parameter_target_branch(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_patched(patch_id: str) -> bool:
+        return patch_id == NATIVE_PR_BRANCH_DEFAULTS_PATCH
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", fake_patched)
+
+    head_branch, base_branch = mock_run_workflow._resolve_native_pr_branches(
+        parameters={"targetBranch": "legacy/parameter-target"},
+        agent_outputs={},
+        workspace_spec={},
+        last_node_inputs={},
+        publish_payload={"prBaseBranch": "develop"},
+    )
+
+    assert head_branch == ""
+    assert base_branch == "develop"
+
 def test_native_pr_push_status_gate_preserves_legacy_protected_branch_fallback(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,

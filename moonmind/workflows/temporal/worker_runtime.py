@@ -762,6 +762,40 @@ def _derive_pr_resolver_title(
         or ""
     ).strip()
 
+def _first_non_empty_text(*values: Any) -> str:
+    for value in values:
+        if isinstance(value, str):
+            text = value.strip()
+            if text:
+                return text
+    return ""
+
+def _resolve_authored_branch(
+    *,
+    task_payload: Mapping[str, Any],
+    git_payload: Mapping[str, Any],
+    selected_skill_inputs: Mapping[str, Any],
+    parameter_payload: Mapping[str, Any],
+    input_payload: Mapping[str, Any],
+) -> str:
+    return _first_non_empty_text(
+        git_payload.get("branch"),
+        task_payload.get("branch"),
+        selected_skill_inputs.get("branch"),
+        parameter_payload.get("branch"),
+        input_payload.get("branch"),
+        git_payload.get("defaultBranch"),
+        git_payload.get("default_branch"),
+        task_payload.get("defaultBranch"),
+        task_payload.get("default_branch"),
+        selected_skill_inputs.get("defaultBranch"),
+        selected_skill_inputs.get("default_branch"),
+        parameter_payload.get("defaultBranch"),
+        parameter_payload.get("default_branch"),
+        input_payload.get("defaultBranch"),
+        input_payload.get("default_branch"),
+    )
+
 def _normalize_runtime_mode(raw_mode: Any) -> str:
     normalized = str(raw_mode or "").strip().lower()
     if not normalized:
@@ -1174,7 +1208,7 @@ def _build_runtime_planner():
         node_publish_mode = str(node_inputs.get("publishMode") or "").lower()
         if not publish_uses_git and node_publish_mode in {"pr", "branch"}:
             node_inputs["publishMode"] = "none"
-        for git_key in ("startingBranch", "targetBranch", "branch"):
+        for git_key in ("startingBranch", "targetBranch"):
             git_val = (
                 git_payload.get(git_key)
                 or task_payload.get(git_key)
@@ -1184,6 +1218,15 @@ def _build_runtime_planner():
             )
             if isinstance(git_val, str) and git_val.strip():
                 node_inputs[git_key] = git_val.strip()
+        authored_branch = _resolve_authored_branch(
+            task_payload=task_payload,
+            git_payload=git_payload,
+            selected_skill_inputs=selected_skill_inputs,
+            parameter_payload=parameter_payload,
+            input_payload=input_payload,
+        )
+        if authored_branch:
+            node_inputs["branch"] = authored_branch
 
         if (
             publish_uses_git
