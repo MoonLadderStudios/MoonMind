@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. api_service/auth.py (score: 1.000, trust: canonical)\n    line 3: from typing import AsyncGenerator, Optional\n2. tests/helpers/step_type_payloads.py (score: 1.000, trust: canonical)\n    line 3: from __future__ import annotations\n3. docs/MoonMindArchitecture.md (score: 1.000, trust: canonical)\n    line 19: This document describes the current architecture and target direction. It intentionally separates **managed runtime runs** from **managed sessions** so the project can accurately describe the current Claude Code path without overstating Claude session parity.\n4. moonmind/planning/__init__.py (score: 1.000, trust: canonical)\n    line 3: from .jira_story_planner import JiraStoryPlanner, JiraStoryPlannerError, StoryDraft\n5. moonmind/jules/__init__.py (score: 1.000, trust: canonical)\n    line 3: from .runtime import (\n6. moonmind/planning/jira_story_planner.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Skeleton for planning Jira stories from high level text.\"\"\"\n7. moonmind/claude/runtime.py (score: 1.000, trust: canonical)\n    line 3: from __future__ import annotations\n8. moonmind/config/jules_settings.py (score: 1.000, trust: canonical)\n    line 3: from __future__ import annotations",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "api_service/auth.py",
+      "text": "line 3: from typing import AsyncGenerator, Optional",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "tests/helpers/step_type_payloads.py",
+      "text": "line 3: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/MoonMindArchitecture.md",
+      "text": "line 19: This document describes the current architecture and target direction. It intentionally separates **managed runtime runs** from **managed sessions** so the project can accurately describe the current Claude Code path without overstating Claude session parity.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 19,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/planning/__init__.py",
+      "text": "line 3: from .jira_story_planner import JiraStoryPlanner, JiraStoryPlannerError, StoryDraft",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/jules/__init__.py",
+      "text": "line 3: from .runtime import (",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/planning/jira_story_planner.py",
+      "text": "line 1: \"\"\"Skeleton for planning Jira stories from high level text.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/claude/runtime.py",
+      "text": "line 3: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/config/jules_settings.py",
+      "text": "line 3: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-05-17T07:45:43Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
