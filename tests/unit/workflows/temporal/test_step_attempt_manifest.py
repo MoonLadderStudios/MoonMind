@@ -184,6 +184,29 @@ def test_step_attempt_manifest_rejects_large_inline_evidence() -> None:
         StepAttemptManifestModel.model_validate(payload)
 
 
+def test_step_attempt_manifest_rejects_large_inline_check_evidence() -> None:
+    payload = {
+        **_identity(),
+        "schemaVersion": "v1",
+        "stepAttemptId": "workflow-1:run-1:implement-story:attempt:2",
+        "attemptScope": "run",
+        "reason": "runtime_recovered",
+        "status": "running",
+        "input": {"taskInputSnapshotRef": "artifact-input"},
+        "context": {"contextBundleRef": "artifact-context"},
+        "workspace": {"policy": "continue_from_previous_attempt"},
+        "execution": {"kind": "agent_run"},
+        "outputs": {"summaryRef": "artifact-summary"},
+        "checks": [{"kind": "unit", "logText": "x" * 2000}],
+        "sideEffects": {},
+        "dependencyEffects": {"invalidatedLogicalStepIds": []},
+        "budget": {"attemptLimit": 3},
+    }
+
+    with pytest.raises(ValidationError, match="compact refs"):
+        StepAttemptManifestModel.model_validate(payload)
+
+
 def test_step_attempt_idempotency_key_uses_attempt_identity_and_operation() -> None:
     identity = StepAttemptIdentityModel.model_validate(_identity())
 

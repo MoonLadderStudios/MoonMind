@@ -206,6 +206,7 @@ class StepAttemptManifestModel(BaseModel):
             "workspace": self.workspace,
             "execution": self.execution,
             "outputs": self.outputs,
+            "checks": self.checks,
             "sideEffects": self.side_effects,
             "dependencyEffects": self.dependency_effects,
             "budget": self.budget,

@@ -159,6 +159,7 @@ async def test_resume_attempt_manifest_carries_lineage_without_large_payloads(
     assert manifest["lineage"]["sourceWorkflowId"] == "wf-source"
     assert manifest["lineage"]["sourceRunId"] == "run-source"
     assert manifest["lineage"]["sourceAttempt"] == 2
+    assert manifest["lineage"]["lineageAttemptOrdinal"] == 3
     assert manifest["workspace"]["restoredCheckpointRef"] == (
         "artifact://workspace/before-implement"
     )

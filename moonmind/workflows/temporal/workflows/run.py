@@ -746,6 +746,72 @@ class MoonMindRunWorkflow:
                 attempt=identity.attempt,
                 source_attempt=source_attempt,
             ),
+            execution={},
+            outputs={},
+            checks=[],
+            sideEffects={},
+            dependencyEffects={"invalidatedLogicalStepIds": []},
+            budget={},
+        )
+        return await self._write_step_attempt_manifest(
+            logical_step_id,
+            attempt=attempt,
+            manifest=manifest,
+            step_attempt_id=step_attempt_id,
+            idempotency_key=idempotency_key,
+            updated_at=updated_at,
+        )
+
+    async def _record_step_attempt_manifest_terminal(
+        self,
+        logical_step_id: str,
+        *,
+        updated_at: datetime,
+        reason: str,
+        status: str,
+        terminal_disposition: str,
+    ) -> str | None:
+        attempt = self._step_attempt_for(logical_step_id)
+        if attempt is None or attempt < 1:
+            return None
+        identity = StepAttemptIdentityModel(
+            workflowId=workflow.info().workflow_id,
+            runId=workflow.info().run_id,
+            logicalStepId=logical_step_id,
+            attempt=attempt,
+        )
+        step_attempt_id = build_step_attempt_id(identity)
+        idempotency_key = build_step_attempt_idempotency_key(identity, "manifest")
+        source_attempt = self._step_attempt_source_identity(
+            logical_step_id,
+            attempt=attempt,
+        )
+        lineage = self._step_attempt_lineage(
+            logical_step_id,
+            reason=reason,
+            source_attempt=source_attempt,
+        )
+        manifest = StepAttemptManifestModel(
+            schemaVersion="v1",
+            stepAttemptId=step_attempt_id,
+            workflowId=identity.workflow_id,
+            runId=identity.run_id,
+            logicalStepId=identity.logical_step_id,
+            attempt=identity.attempt,
+            attemptScope="run",
+            lineage=lineage,
+            reason=reason,
+            status=status,
+            terminalDisposition=terminal_disposition,
+            startedAt=self._step_attempt_started_at(logical_step_id),
+            updatedAt=updated_at,
+            input={"preparedArtifactRefs": list(self._prepared_artifact_refs)},
+            context={},
+            workspace=self._step_attempt_workspace(
+                logical_step_id,
+                attempt=identity.attempt,
+                source_attempt=source_attempt,
+            ),
             execution=self._step_attempt_compact_execution_refs(logical_step_id),
             outputs=self._step_attempt_compact_output_refs(logical_step_id),
             checks=list(
@@ -756,6 +822,25 @@ class MoonMindRunWorkflow:
             dependencyEffects={"invalidatedLogicalStepIds": []},
             budget={},
         )
+        return await self._write_step_attempt_manifest(
+            logical_step_id,
+            attempt=attempt,
+            manifest=manifest,
+            step_attempt_id=step_attempt_id,
+            idempotency_key=idempotency_key,
+            updated_at=updated_at,
+        )
+
+    async def _write_step_attempt_manifest(
+        self,
+        logical_step_id: str,
+        *,
+        attempt: int,
+        manifest: StepAttemptManifestModel,
+        step_attempt_id: str,
+        idempotency_key: str,
+        updated_at: datetime,
+    ) -> str | None:
         try:
             manifest_ref = await self._write_json_artifact(
                 name=(
@@ -775,8 +860,6 @@ class MoonMindRunWorkflow:
                     "idempotencyKey": idempotency_key,
                 },
             )
-        except AssertionError:
-            return None
         except Exception as exc:
             if exc.__class__.__name__ == "_NotInWorkflowEventLoopError":
                 return None
@@ -1080,8 +1163,16 @@ class MoonMindRunWorkflow:
             "sourceLogicalStepId": source_attempt["logicalStepId"],
             "sourceAttempt": source_attempt["attempt"],
             "relationship": reason,
-            "lineageAttemptOrdinal": 1,
+            "lineageAttemptOrdinal": int(source_attempt["attempt"])
+            + (self._step_attempt_for(logical_step_id) or 0),
         }
+
+    def _step_attempt_started_at(self, logical_step_id: str) -> datetime | None:
+        row = self._step_ledger_row_for(logical_step_id)
+        if not isinstance(row, Mapping):
+            return None
+        value = row.get("startedAt") or row.get("started_at")
+        return value if isinstance(value, datetime) else None
 
     def _step_attempt_workspace(
         self,
@@ -3399,10 +3490,15 @@ class MoonMindRunWorkflow:
                     updated_at=workflow.now(),
                     summary=self._summary,
                 )
+                attempt_reason = (
+                    "resume_from_failed_step"
+                    if node_id == self._resume_failed_step_id
+                    else "initial_execution"
+                )
                 await self._record_step_attempt_manifest_start(
                     node_id,
                     updated_at=workflow.now(),
-                    reason="initial_execution",
+                    reason=attempt_reason,
                 )
 
                 system_retries = 0
@@ -3664,6 +3760,13 @@ class MoonMindRunWorkflow:
                                 summary=f"{tool_name} failed",
                                 last_error=failure_message,
                             )
+                            await self._record_step_attempt_manifest_terminal(
+                                node_id,
+                                updated_at=workflow.now(),
+                                reason=attempt_reason,
+                                status="failed",
+                                terminal_disposition="retryable",
+                            )
                             system_retries += 1
                             self._get_logger().info(
                                 f"Retrying plan node {node_id} after {failure_message} "
@@ -3682,6 +3785,7 @@ class MoonMindRunWorkflow:
                                 updated_at=workflow.now(),
                                 reason="runtime_recovered",
                             )
+                            attempt_reason = "runtime_recovered"
                             continue
 
                         self._mark_step_terminal(
@@ -3691,6 +3795,13 @@ class MoonMindRunWorkflow:
                             summary=operator_failure_summary
                             or f"{tool_name} failed",
                             last_error=failure_message,
+                        )
+                        await self._record_step_attempt_manifest_terminal(
+                            node_id,
+                            updated_at=workflow.now(),
+                            reason=attempt_reason,
+                            status="failed",
+                            terminal_disposition="failed_unrecoverable",
                         )
                         if failure_mode == "FAIL_FAST":
                             if provider_failure_summary:
@@ -3847,6 +3958,13 @@ class MoonMindRunWorkflow:
                 summary=self._get_from_result(execution_result, "summary")
                 or self._summary,
                 last_error=None,
+            )
+            await self._record_step_attempt_manifest_terminal(
+                node_id,
+                updated_at=workflow.now(),
+                reason=attempt_reason,
+                status="succeeded",
+                terminal_disposition="accepted",
             )
             self._record_step_checkpoint_evidence(
                 node_id,

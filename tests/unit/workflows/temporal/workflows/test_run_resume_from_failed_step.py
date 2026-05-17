@@ -368,7 +368,7 @@ async def test_resume_attempt_manifest_preserves_source_lineage(
         "sourceLogicalStepId": "implement",
         "sourceAttempt": 1,
         "relationship": "resume_from_failed_step",
-        "lineageAttemptOrdinal": 1,
+        "lineageAttemptOrdinal": 2,
     }
     assert manifest["workspace"]["policy"] == "resume_from_source_attempt"
     assert manifest["workspace"]["sourceAttempt"] == {

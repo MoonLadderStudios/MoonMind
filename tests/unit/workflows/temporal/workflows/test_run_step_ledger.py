@@ -615,6 +615,18 @@ async def test_run_records_step_attempt_manifest_ref_when_work_begins(
         updated_at=now,
         reason="initial_execution",
     )
+    workflow._record_step_result_evidence(
+        "delegate-agent",
+        execution_result={
+            "status": "FAILED",
+            "outputs": {
+                "childWorkflowId": "wf-child-1",
+                "childRunId": "run-child-1",
+                "outputSummaryRef": "artifact://summary/attempt-1",
+            },
+        },
+        updated_at=now,
+    )
     workflow._mark_step_terminal(
         "delegate-agent",
         status="failed",
@@ -649,7 +661,11 @@ async def test_run_records_step_attempt_manifest_ref_when_work_begins(
         "wf-run-1:run-1:delegate-agent:1:manifest"
     )
     assert writes[0]["payload"]["reason"] == "initial_execution"
+    assert writes[0]["payload"]["execution"] == {}
+    assert writes[0]["payload"]["outputs"] == {}
     assert writes[1]["payload"]["reason"] == "runtime_recovered"
+    assert writes[1]["payload"]["execution"] == {}
+    assert writes[1]["payload"]["outputs"] == {}
     assert writes[1]["payload"]["workspace"]["policy"] == (
         "continue_from_previous_attempt"
     )
@@ -660,6 +676,94 @@ async def test_run_records_step_attempt_manifest_ref_when_work_begins(
         "attempt": 1,
     }
     assert "lineage" not in writes[1]["payload"]
+
+
+@pytest.mark.asyncio
+async def test_run_records_terminal_step_attempt_manifest_with_result_refs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+    writes: list[dict[str, Any]] = []
+
+    async def fake_write_json_artifact(
+        *,
+        name: str,
+        payload: dict[str, Any],
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
+    ) -> str:
+        writes.append(
+            {
+                "name": name,
+                "payload": payload,
+                "content_type": content_type,
+                "metadata_json": metadata_json,
+            }
+        )
+        return f"artifact-attempt-{len(writes)}"
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[
+            {
+                "id": "run-tests",
+                "tool": {"type": "skill", "name": "repo.run_tests", "version": "1"},
+                "inputs": {"title": "Run tests"},
+            }
+        ],
+        dependency_map={"run-tests": []},
+        updated_at=now,
+    )
+
+    workflow._mark_step_running("run-tests", updated_at=now, summary="Run tests")
+    await workflow._record_step_attempt_manifest_start(
+        "run-tests",
+        updated_at=now,
+        reason="initial_execution",
+    )
+    workflow._record_step_result_evidence(
+        "run-tests",
+        execution_result={
+            "status": "COMPLETED",
+            "outputs": {
+                "taskRunId": "task-run-1",
+                "outputSummaryRef": "artifact://summary/attempt-1",
+                "stdoutArtifactRef": "artifact://stdout/attempt-1",
+                "diagnosticsRef": "artifact://diagnostics/attempt-1",
+            },
+        },
+        updated_at=now,
+    )
+    workflow._mark_step_terminal(
+        "run-tests",
+        status="succeeded",
+        updated_at=now,
+        summary="Done",
+    )
+    await workflow._record_step_attempt_manifest_terminal(
+        "run-tests",
+        updated_at=now,
+        reason="initial_execution",
+        status="succeeded",
+        terminal_disposition="accepted",
+    )
+
+    assert writes[0]["payload"]["status"] == "running"
+    assert writes[0]["payload"]["execution"] == {}
+    assert writes[0]["payload"]["outputs"] == {}
+    assert writes[1]["payload"]["status"] == "succeeded"
+    assert writes[1]["payload"]["terminalDisposition"] == "accepted"
+    assert writes[1]["payload"]["execution"] == {
+        "taskRunId": "task-run-1",
+        "diagnosticsRef": "artifact://diagnostics/attempt-1",
+    }
+    assert writes[1]["payload"]["outputs"] == {
+        "summaryRef": "artifact://summary/attempt-1",
+        "stdoutRef": "artifact://stdout/attempt-1",
+    }
+
 
 def test_run_uses_deterministic_output_primary_fallback_for_generic_results(
     monkeypatch: pytest.MonkeyPatch,
@@ -1035,7 +1139,9 @@ async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check
     review_snapshots: list[dict[str, Any]] = []
     written_review_payloads: list[dict[str, Any]] = []
     review_artifact_ids = iter(("art_review_1",))
-    step_attempt_artifact_ids = iter(("art_step_attempt_1",))
+    step_attempt_artifact_ids = iter(
+        ("art_step_attempt_1", "art_step_attempt_1_terminal")
+    )
 
     async def fake_execute_activity(
         activity_type: str,
@@ -1153,7 +1259,13 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
     written_review_payloads: list[dict[str, Any]] = []
     skill_inputs: list[dict[str, Any]] = []
     review_artifact_ids = iter(("art_review_1", "art_review_2"))
-    step_attempt_artifact_ids = iter(("art_step_attempt_1", "art_step_attempt_2"))
+    step_attempt_artifact_ids = iter(
+        (
+            "art_step_attempt_1",
+            "art_step_attempt_2",
+            "art_step_attempt_2_terminal",
+        )
+    )
     review_verdicts = iter(
         (
             {
@@ -1292,7 +1404,13 @@ async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_i
     written_review_payloads: list[dict[str, Any]] = []
     child_requests: list[Any] = []
     review_artifact_ids = iter(("art_review_1", "art_review_2"))
-    step_attempt_artifact_ids = iter(("art_step_attempt_1", "art_step_attempt_2"))
+    step_attempt_artifact_ids = iter(
+        (
+            "art_step_attempt_1",
+            "art_step_attempt_2",
+            "art_step_attempt_2_terminal",
+        )
+    )
     review_verdicts = iter(
         (
             {

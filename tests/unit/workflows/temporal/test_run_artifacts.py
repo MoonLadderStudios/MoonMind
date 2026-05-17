@@ -1,6 +1,7 @@
 import asyncio
 import json
 from datetime import datetime, timezone
+from itertools import count
 from typing import Any, Callable
 
 import pytest
@@ -13,6 +14,18 @@ def _normalize_payload(payload: Any) -> dict[str, Any]:
         return payload
     dump_method = getattr(payload, 'model_dump', getattr(payload, 'dict', None))
     return dump_method() if dump_method else payload
+
+def _step_attempt_artifact_create_result(
+    payload: Any,
+    artifact_ids: count,
+) -> tuple[dict[str, str], dict[str, str]] | None:
+    normalized = _normalize_payload(payload)
+    if not str(normalized.get("name") or "").startswith("reports/step_attempts/"):
+        return None
+    return (
+        {"artifact_id": f"art_step_attempt_{next(artifact_ids)}"},
+        {"upload_url": "unused"},
+    )
 
 async def _immediate_wait_condition(
     predicate: Callable[[], bool],
@@ -551,6 +564,7 @@ async def test_run_execution_stage_stops_plan_after_structured_blocked_outcome(
     workflow._repo = "MoonLadderStudios/MoonMind"
     workflow._integration = None
     child_calls: list[str] = []
+    step_attempt_artifact_ids = count(1)
 
     async def fake_execute_activity(
         activity_type: str,
@@ -558,6 +572,13 @@ async def test_run_execution_stage_stops_plan_after_structured_blocked_outcome(
         **_kwargs: Any,
     ) -> Any:
         normalized = _normalize_payload(payload)
+        if activity_type == "artifact.create":
+            artifact_create_result = _step_attempt_artifact_create_result(
+                payload,
+                step_attempt_artifact_ids,
+            )
+            if artifact_create_result is not None:
+                return artifact_create_result
         if activity_type == "artifact.read":
             assert normalized["artifact_ref"] == "art_plan_1"
             return json.dumps(
@@ -624,6 +645,15 @@ async def test_run_execution_stage_stops_plan_after_structured_blocked_outcome(
     ) -> object:
         return request
 
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **kwargs: Any,
+    ) -> object:
+        if activity_type == "artifact.write_complete":
+            return {"ok": True}
+        return await fake_execute_activity(activity_type, payload, **kwargs)
+
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "execute_activity",
@@ -633,6 +663,11 @@ async def test_run_execution_stage_stops_plan_after_structured_blocked_outcome(
         run_workflow_module.workflow,
         "execute_child_workflow",
         fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_workflow_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
     )
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
     monkeypatch.setattr(
@@ -694,6 +729,7 @@ async def test_run_execution_stage_rechecks_jira_blockers_in_dependency_wait(
     workflow._owner_id = "owner-1"
     workflow._repo = "MoonLadderStudios/MoonMind"
     skill_calls: list[tuple[str, str | None]] = []
+    step_attempt_artifact_ids = count(1)
 
     registry_payload = {
         "skills": [
@@ -744,6 +780,13 @@ async def test_run_execution_stage_rechecks_jira_blockers_in_dependency_wait(
         **_kwargs: Any,
     ) -> Any:
         normalized = _normalize_payload(payload)
+        if activity_type == "artifact.create":
+            artifact_create_result = _step_attempt_artifact_create_result(
+                payload,
+                step_attempt_artifact_ids,
+            )
+            if artifact_create_result is not None:
+                return artifact_create_result
         if activity_type == "artifact.read":
             artifact_ref = normalized.get("artifact_ref")
             if artifact_ref == "artifact://registry/jira":
@@ -820,10 +863,24 @@ async def test_run_execution_stage_rechecks_jira_blockers_in_dependency_wait(
             return {"status": "COMPLETED", "outputs": {"summary": "Implemented."}}
         raise AssertionError(f"unexpected activity {activity_type}")
 
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **kwargs: Any,
+    ) -> object:
+        if activity_type == "artifact.write_complete":
+            return {"ok": True}
+        return await fake_execute_activity(activity_type, payload, **kwargs)
+
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "execute_activity",
         fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_workflow_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
     )
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
     monkeypatch.setattr(
@@ -2181,12 +2238,20 @@ async def test_run_execution_stage_fail_fast_raises_provider_failure_summary(
 
     workflow = MoonMindRunWorkflow()
     workflow._owner_id = "owner-1"
+    step_attempt_artifact_ids = count(1)
 
     async def fake_execute_activity(
         activity_type: str,
         payload: dict[str, object],
         **_kwargs: object,
     ) -> object:
+        if activity_type == "artifact.create":
+            artifact_create_result = _step_attempt_artifact_create_result(
+                payload,
+                step_attempt_artifact_ids,
+            )
+            if artifact_create_result is not None:
+                return artifact_create_result
         assert activity_type == "artifact.read"
         return json.dumps(
             {
@@ -2223,6 +2288,15 @@ async def test_run_execution_stage_fail_fast_raises_provider_failure_summary(
             }
         ).encode("utf-8")
 
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **kwargs: Any,
+    ) -> object:
+        if activity_type == "artifact.write_complete":
+            return {"ok": True}
+        return await fake_execute_activity(activity_type, payload, **kwargs)
+
     async def fake_execute_child_workflow(*_args: object, **_kwargs: object) -> AgentRunResult:
         return AgentRunResult(
             summary="http 401",
@@ -2249,6 +2323,11 @@ async def test_run_execution_stage_fail_fast_raises_provider_failure_summary(
         return None
 
     monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(
+        run_workflow_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "execute_child_workflow",
