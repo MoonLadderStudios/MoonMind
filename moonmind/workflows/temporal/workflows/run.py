@@ -537,6 +537,8 @@ class MoonMindRunWorkflow:
         self._resume_workspace_restored_ref: str | None = None
         self._prepared_artifact_refs: list[str] = []
         self._step_checkpoint_refs: dict[str, str] = {}
+        self._previous_step_checkpoint_refs: dict[str, str] = {}
+        self._step_attempt_launch_blocks: set[str] = set()
 
         # State tracking
         self._paused: bool = False
@@ -732,6 +734,12 @@ class MoonMindRunWorkflow:
             reason=reason,
             source_attempt=source_attempt,
         )
+        workspace = self._step_attempt_workspace(
+            logical_step_id,
+            attempt=identity.attempt,
+            source_attempt=source_attempt,
+        )
+        launch_blocked = self._workspace_policy_launch_blocked(workspace)
         manifest = StepAttemptManifestModel(
             schemaVersion="v1",
             stepAttemptId=step_attempt_id,
@@ -742,25 +750,25 @@ class MoonMindRunWorkflow:
             attemptScope="run",
             lineage=lineage,
             reason=reason,
-            status="running",
-            terminalDisposition=None,
+            status="blocked" if launch_blocked else "running",
+            terminalDisposition="blocked" if launch_blocked else None,
             startedAt=updated_at,
             updatedAt=updated_at,
             input={"preparedArtifactRefs": list(self._prepared_artifact_refs)},
             context={},
-            workspace=self._step_attempt_workspace(
-                logical_step_id,
-                attempt=identity.attempt,
-                source_attempt=source_attempt,
-            ),
+            workspace=workspace,
             execution={},
-            outputs={},
+            outputs={
+                "summary": "Workspace policy rejected before launch."
+            }
+            if launch_blocked
+            else {},
             checks=[],
             sideEffects={},
             dependencyEffects={"invalidatedLogicalStepIds": []},
             budget={},
         )
-        return await self._write_step_attempt_manifest(
+        manifest_ref = await self._write_step_attempt_manifest(
             logical_step_id,
             attempt=attempt,
             manifest=manifest,
@@ -768,6 +776,17 @@ class MoonMindRunWorkflow:
             idempotency_key=idempotency_key,
             updated_at=updated_at,
         )
+        if launch_blocked:
+            self._record_workspace_policy_launch_block(
+                logical_step_id,
+                attempt=attempt,
+                updated_at=updated_at,
+                reason=str(
+                    workspace.get("rejectionReason")
+                    or "missing_required_checkpoint_evidence"
+                ),
+            )
+        return manifest_ref
 
     async def _record_step_attempt_manifest_terminal(
         self,
@@ -1200,6 +1219,44 @@ class MoonMindRunWorkflow:
         value = row.get("startedAt") or row.get("started_at")
         return value if isinstance(value, datetime) else None
 
+    @staticmethod
+    def _workspace_policy_launch_blocked(workspace: Mapping[str, Any]) -> bool:
+        return workspace.get("evidenceAccepted") is False
+
+    @staticmethod
+    def _step_attempt_launch_block_key(logical_step_id: str, attempt: int) -> str:
+        return f"{logical_step_id}:{attempt}"
+
+    def _record_workspace_policy_launch_block(
+        self,
+        logical_step_id: str,
+        *,
+        attempt: int,
+        updated_at: datetime,
+        reason: str,
+    ) -> None:
+        self._step_attempt_launch_blocks.add(
+            self._step_attempt_launch_block_key(logical_step_id, attempt)
+        )
+        self._mark_step_terminal(
+            logical_step_id,
+            status="failed",
+            updated_at=updated_at,
+            summary="Workspace policy rejected before launch.",
+            last_error=reason,
+        )
+
+    def _is_step_attempt_launch_blocked(
+        self,
+        logical_step_id: str,
+        *,
+        attempt: int,
+    ) -> bool:
+        return (
+            self._step_attempt_launch_block_key(logical_step_id, attempt)
+            in self._step_attempt_launch_blocks
+        )
+
     def _step_attempt_workspace(
         self,
         logical_step_id: str,
@@ -1219,7 +1276,9 @@ class MoonMindRunWorkflow:
                 }
             )
             return workspace
-        checkpoint_ref = self._step_checkpoint_refs.get(logical_step_id)
+        checkpoint_ref = self._step_checkpoint_refs.get(
+            logical_step_id
+        ) or self._previous_step_checkpoint_refs.get(logical_step_id)
         if attempt > 1:
             workspace = workspace_policy_metadata(
                 policy="continue_from_previous_attempt",
@@ -1619,6 +1678,17 @@ class MoonMindRunWorkflow:
             set_started_at=True,
         ):
             return
+        previous_checkpoint_ref = self._step_checkpoint_refs.get(logical_step_id)
+        if not previous_checkpoint_ref:
+            row = self._step_ledger_row_for(logical_step_id)
+            if isinstance(row, Mapping):
+                raw_ref = row.get("stateCheckpointRef")
+                if isinstance(raw_ref, str) and raw_ref.strip():
+                    previous_checkpoint_ref = raw_ref.strip()
+        if previous_checkpoint_ref:
+            self._previous_step_checkpoint_refs[logical_step_id] = (
+                previous_checkpoint_ref
+            )
         self._step_checkpoint_refs.pop(logical_step_id, None)
         try:
             clear_step_checkpoint_evidence(
@@ -1648,18 +1718,35 @@ class MoonMindRunWorkflow:
         attempt = self._step_attempt_for(logical_step_id)
         if attempt is None or attempt <= 0:
             return None
+        source_attempt = self._step_attempt_source_identity(
+            logical_step_id,
+            attempt=attempt,
+        )
+        workspace = self._step_attempt_workspace(
+            logical_step_id,
+            attempt=attempt,
+            source_attempt=source_attempt,
+        )
+        launch_blocked = self._workspace_policy_launch_blocked(workspace)
         manifest_payload = build_step_attempt_manifest_payload(
             workflow_id=workflow.info().workflow_id,
             run_id=workflow.info().run_id,
             logical_step_id=logical_step_id,
             attempt=attempt,
             reason=reason,  # type: ignore[arg-type]
-            status="running",
+            status="blocked" if launch_blocked else "running",
             updated_at=updated_at,
-            summary=summary,
+            summary=(
+                "Workspace policy rejected before launch."
+                if launch_blocked
+                else summary
+            ),
             input_refs=input_refs,
+            workspace=workspace,
             execution=execution,
         )
+        if launch_blocked:
+            manifest_payload["terminalDisposition"] = "blocked"
         try:
             manifest_ref = await self._write_json_artifact(
                 name=f"reports/step_attempt_{logical_step_id}_attempt_{attempt}.json",
@@ -1707,6 +1794,16 @@ class MoonMindRunWorkflow:
             )
         except KeyError:
             return manifest_ref
+        if launch_blocked:
+            self._record_workspace_policy_launch_block(
+                logical_step_id,
+                attempt=attempt,
+                updated_at=updated_at,
+                reason=str(
+                    workspace.get("rejectionReason")
+                    or "missing_required_checkpoint_evidence"
+                ),
+            )
         self._sync_progress_snapshot(updated_at=updated_at)
         return manifest_ref
 
@@ -3696,6 +3793,20 @@ class MoonMindRunWorkflow:
                                 ),
                             },
                         )
+                        if self._is_step_attempt_launch_blocked(
+                            node_id,
+                            attempt=current_step_attempt,
+                        ):
+                            execution_result = {
+                                "status": "FAILED",
+                                "outputs": {
+                                    "failureMessage": (
+                                        "missing_required_checkpoint_evidence"
+                                    ),
+                                },
+                            }
+                            result_status = "FAILED"
+                            break
 
                     if tool_type == "agent_runtime":
                         # --- Agent dispatch: child workflow ---

@@ -102,12 +102,19 @@ async def test_step_attempt_manifest_refs_are_append_only_for_reexecution(
     assert writes[1]["payload"]["workspace"]["rejectionReason"] == (
         "missing_required_checkpoint_evidence"
     )
+    assert writes[1]["payload"]["status"] == "blocked"
+    assert writes[1]["payload"]["terminalDisposition"] == "blocked"
+    assert writes[1]["payload"]["outputs"]["summary"] == (
+        "Workspace policy rejected before launch."
+    )
     assert writes[1]["payload"]["workspace"]["sourceAttempt"] == {
         "workflowId": "wf-boundary",
         "runId": "run-boundary",
         "logicalStepId": "implement",
         "attempt": 1,
     }
+    assert step["status"] == "failed"
+    assert step["lastError"] == "missing_required_checkpoint_evidence"
 
 
 async def test_resume_attempt_manifest_carries_lineage_without_large_payloads(

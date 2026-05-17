@@ -174,6 +174,33 @@ def test_side_effect_records_gate_external_effects() -> None:
     assert cleanup["disposition"] == "accepted"
 
 
+def test_side_effect_records_sanitize_diagnostics_and_gate_workspace_writes() -> None:
+    outside_workspace = side_effect_record(
+        effect_class="workspace_mutation",
+        operation="workspace.write",
+        target="/tmp/outside-workspace/token=ghp_leakedsecret",
+        approved_workspace_roots=["/work/agent_jobs/run/repo"],
+        reason="password=hunter2",
+    )
+
+    assert outside_workspace["disposition"] == "blocked"
+    assert outside_workspace["reason"] == "workspace_target_outside_approved_roots"
+    assert "ghp_leakedsecret" not in str(outside_workspace)
+    assert "hunter2" not in str(outside_workspace)
+
+    approved_workspace = side_effect_record(
+        effect_class="workspace_mutation",
+        operation="workspace.write",
+        target="/work/agent_jobs/run/repo/moonmind/workflows/temporal/run.py",
+        approved_workspace_roots=["/work/agent_jobs/run/repo"],
+    )
+
+    assert approved_workspace["disposition"] == "accepted"
+    assert approved_workspace["target"].endswith(
+        "/moonmind/workflows/temporal/run.py"
+    )
+
+
 def test_manifest_payload_embeds_policy_git_effect_and_side_effect_records() -> None:
     now = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
     payload = build_step_attempt_manifest_payload(

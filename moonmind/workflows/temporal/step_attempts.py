@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+import posixpath
+import re
 from typing import Any, Literal
 
 from moonmind.schemas.step_attempt_models import (
@@ -48,6 +50,47 @@ _GATED_OPERATION_PREFIXES = (
     "deployment.",
     "provider_account.",
 )
+_SECRET_LIKE_PATTERNS = (
+    re.compile(r"ghp_[A-Za-z0-9_]+"),
+    re.compile(r"github_pat_[A-Za-z0-9_]+"),
+    re.compile(r"AIza[A-Za-z0-9_-]+"),
+    re.compile(r"AKIA[A-Z0-9]{16}"),
+    re.compile(r"(?i)token\s*=\s*[^/\s&]+"),
+    re.compile(r"(?i)password\s*=\s*[^/\s&]+"),
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+)
+
+
+def _sanitize_diagnostic_text(value: str | None) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    for pattern in _SECRET_LIKE_PATTERNS:
+        text = pattern.sub("[REDACTED]", text)
+    return text
+
+
+def _normalized_absolute_workspace_path(value: str | None) -> str | None:
+    path = str(value or "").strip().replace("\\", "/")
+    if not path.startswith("/"):
+        return None
+    return posixpath.normpath(path)
+
+
+def _target_within_approved_workspace_roots(
+    target: str | None,
+    approved_workspace_roots: Sequence[str],
+) -> bool:
+    target_path = _normalized_absolute_workspace_path(target)
+    if target_path is None:
+        return False
+    for root in approved_workspace_roots:
+        root_path = _normalized_absolute_workspace_path(root)
+        if root_path is None:
+            continue
+        if target_path == root_path or target_path.startswith(f"{root_path}/"):
+            return True
+    return False
 
 
 def step_attempt_id(
@@ -218,6 +261,7 @@ def side_effect_record(
     disposition: SideEffectDisposition | None = None,
     effect_kind: Literal["normal", "cleanup", "compensation"] = "normal",
     reason: str | None = None,
+    approved_workspace_roots: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Build a compact side-effect decision and gate unsafe effect classes."""
 
@@ -233,23 +277,36 @@ def side_effect_record(
     gated_operation = any(
         operation_lower.startswith(prefix) for prefix in _GATED_OPERATION_PREFIXES
     )
-    blocked = (
+    workspace_boundary_blocked = (
+        effect_class == "workspace_mutation"
+        and bool(approved_workspace_roots)
+        and not _target_within_approved_workspace_roots(
+            target,
+            approved_workspace_roots,
+        )
+    )
+    workflow_gate_blocked = (
         effect_class in _GATED_SIDE_EFFECT_CLASSES or gated_operation
     ) and not workflow_state_accepted
+    blocked = workspace_boundary_blocked or workflow_gate_blocked
     final_disposition = disposition or ("blocked" if blocked else "accepted")
     record: dict[str, Any] = {
         "class": effect_class,
         "kind": effect_kind,
         "operation": operation_text,
-        "target": str(target or "").strip() or None,
-        "idempotencyKey": key_text,
+        "target": _sanitize_diagnostic_text(target),
+        "idempotencyKey": _sanitize_diagnostic_text(key_text),
         "workflowStateAccepted": workflow_state_accepted,
         "disposition": final_disposition,
     }
-    if blocked:
-        record["reason"] = reason or "workflow_state_not_gate_approved"
+    if workspace_boundary_blocked:
+        record["reason"] = "workspace_target_outside_approved_roots"
+    elif workflow_gate_blocked:
+        record["reason"] = (
+            _sanitize_diagnostic_text(reason) or "workflow_state_not_gate_approved"
+        )
     elif reason:
-        record["reason"] = reason
+        record["reason"] = _sanitize_diagnostic_text(reason)
     return record
 
 
