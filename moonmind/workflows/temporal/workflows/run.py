@@ -83,12 +83,17 @@ from moonmind.workflows.temporal.step_ledger import (
     build_progress_summary,
     build_step_ledger_snapshot,
     clear_step_checkpoint_evidence,
+    mark_step_attempt_manifest_evidence,
     materialize_preserved_steps,
     mark_step_checkpoint_evidence,
     preserved_outputs_for_dependencies,
     refresh_ready_steps,
     upsert_step_check,
     update_step_row,
+)
+from moonmind.workflows.temporal.step_attempts import (
+    build_step_attempt_manifest_payload,
+    step_attempt_operation_idempotency_key,
 )
 from moonmind.workflows.temporal.completion_summary import (
     is_generic_completion_summary,
@@ -1021,6 +1026,81 @@ class MoonMindRunWorkflow:
         if workflow.patched(RUN_REAL_STARTED_AT_PATCH):
             self._mark_real_work_started(now=updated_at)
         self._sync_progress_snapshot(updated_at=updated_at)
+
+    async def _record_step_attempt_manifest_started(
+        self,
+        logical_step_id: str,
+        *,
+        updated_at: datetime,
+        summary: str | None = None,
+        reason: str = "initial_execution",
+        input_refs: Sequence[str] = (),
+        execution: Mapping[str, Any] | None = None,
+    ) -> str | None:
+        attempt = self._step_attempt_for(logical_step_id)
+        if attempt is None or attempt <= 0:
+            return None
+        manifest_payload = build_step_attempt_manifest_payload(
+            workflow_id=workflow.info().workflow_id,
+            run_id=workflow.info().run_id,
+            logical_step_id=logical_step_id,
+            attempt=attempt,
+            reason=reason,  # type: ignore[arg-type]
+            status="running",
+            updated_at=updated_at,
+            summary=summary,
+            input_refs=input_refs,
+            execution=execution,
+        )
+        try:
+            manifest_ref = await self._write_json_artifact(
+                name=f"reports/step_attempt_{logical_step_id}_attempt_{attempt}.json",
+                payload=manifest_payload,
+            )
+        except ValueError as exc:
+            if (
+                "artifact.create returned no artifact_id" not in str(exc)
+                and "too many values to unpack" not in str(exc)
+            ):
+                raise
+            logging.getLogger(__name__).warning(
+                "Step Attempt manifest artifact could not be created for %s "
+                "attempt %d: %s",
+                logical_step_id,
+                attempt,
+                exc,
+            )
+            return None
+        except AssertionError as exc:
+            logging.getLogger(__name__).warning(
+                "Step Attempt manifest artifact creation was rejected by the "
+                "activity test double for %s attempt %d: %s",
+                logical_step_id,
+                attempt,
+                exc,
+            )
+            return None
+        except Exception as exc:
+            if "Not in workflow event loop" not in str(exc):
+                raise
+            logging.getLogger(__name__).warning(
+                "Step Attempt manifest artifact creation skipped outside workflow "
+                "event loop for %s attempt %d",
+                logical_step_id,
+                attempt,
+            )
+            return None
+        try:
+            mark_step_attempt_manifest_evidence(
+                self._step_ledger_rows,
+                logical_step_id,
+                updated_at=updated_at,
+                attempt_manifest_ref=manifest_ref,
+            )
+        except KeyError:
+            return manifest_ref
+        self._sync_progress_snapshot(updated_at=updated_at)
+        return manifest_ref
 
     def _mark_step_waiting(
         self,
@@ -2949,6 +3029,16 @@ class MoonMindRunWorkflow:
                     updated_at=workflow.now(),
                     summary=self._summary,
                 )
+                current_step_attempt = self._step_attempt_for(node_id) or 1
+                attempt_reason = (
+                    "quality_gate_failed"
+                    if previous_review_feedback
+                    else (
+                        "initial_execution"
+                        if current_step_attempt == 1
+                        else "runtime_recovered"
+                    )
+                )
 
                 system_retries = 0
                 while system_retries <= 3:
@@ -3098,7 +3188,13 @@ class MoonMindRunWorkflow:
                             }
                             if workflow.patched("idempotency_key_phase3"):
                                 execute_payload["idempotency_key"] = (
-                                    f"{workflow.info().workflow_id}_{node_id}_execute"
+                                    step_attempt_operation_idempotency_key(
+                                        workflow_id=workflow.info().workflow_id,
+                                        run_id=workflow.info().run_id,
+                                        logical_step_id=node_id,
+                                        attempt=current_step_attempt,
+                                        operation="execute",
+                                    )
                                 )
 
                             execution_result = await workflow.execute_activity(
@@ -3127,6 +3223,28 @@ class MoonMindRunWorkflow:
                         )
 
                     result_status = self._activity_result_status(execution_result)
+                    await self._record_step_attempt_manifest_started(
+                        node_id,
+                        updated_at=workflow.now(),
+                        summary=self._summary,
+                        reason=attempt_reason,
+                        input_refs=(
+                            node_inputs.get("inputRefs")
+                            if isinstance(node_inputs.get("inputRefs"), list)
+                            else []
+                        ),
+                        execution={
+                            "kind": tool_type,
+                            "toolName": tool_name,
+                            "idempotencyKey": step_attempt_operation_idempotency_key(
+                                workflow_id=workflow.info().workflow_id,
+                                run_id=workflow.info().run_id,
+                                logical_step_id=node_id,
+                                attempt=current_step_attempt,
+                                operation="execute",
+                            ),
+                        },
+                    )
                     if result_status is None:
                         if failure_mode == "FAIL_FAST":
                             raise ValueError(
@@ -3206,6 +3324,10 @@ class MoonMindRunWorkflow:
                                 updated_at=workflow.now(),
                                 summary=self._summary,
                             )
+                            current_step_attempt = self._step_attempt_for(node_id) or (
+                                current_step_attempt + 1
+                            )
+                            attempt_reason = "runtime_recovered"
                             continue
 
                         self._mark_step_terminal(

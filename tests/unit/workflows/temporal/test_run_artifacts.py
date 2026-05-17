@@ -870,7 +870,9 @@ async def test_run_execution_stage_rechecks_jira_blockers_in_dependency_wait(
         "jira.check_blockers",
         "repo.run_tests",
     ]
-    assert skill_calls[1][1] == "wf-1_check-blockers_execute_jira_blocker_recheck_1"
+    assert skill_calls[1][1] == (
+        "wf-1:run-1:check-blockers:attempt:1:execute_jira_blocker_recheck_1"
+    )
     assert workflow._plan_blocked_message is None
     assert workflow._jira_blocker_wait_active is False
     assert workflow._waiting_reason is None
