@@ -57,6 +57,9 @@ TASK_RUN_ID_PARAM_KEYS = ("taskRunId", "task_run_id")
 STEP_ATTEMPT_MANIFEST_CONTENT_TYPE = (
     "application/vnd.moonmind.step-attempt+json;version=1"
 )
+STEP_ATTEMPT_CHECKPOINT_CONTENT_TYPE = (
+    "application/vnd.moonmind.step-attempt-checkpoint+json;version=1"
+)
 
 StepAttemptReason = Literal[
     "initial_execution",
@@ -90,6 +93,42 @@ StepAttemptTerminalDisposition = Literal[
     "failed_unrecoverable",
 ]
 StepAttemptSemanticOperation = Literal["retry", "reattempt", "resume"]
+StepAttemptCheckpointBoundary = Literal[
+    "after_prepare",
+    "before_attempt",
+    "after_attempt",
+    "after_gate",
+    "before_publication",
+    "before_resume_restoration",
+]
+WorkspaceCheckpointKind = Literal[
+    "git_commit",
+    "git_patch",
+    "worktree_archive",
+    "ephemeral_workspace_ref",
+    "external_state_ref",
+]
+WorkspacePolicy = Literal[
+    "restore_pre_attempt",
+    "continue_from_previous_attempt",
+    "apply_previous_diff_to_clean_baseline",
+    "start_from_last_passed_commit",
+    "fresh_branch_from_source",
+]
+StepCheckpointValidationFailureCode = Literal[
+    "source_mismatch",
+    "task_input_mismatch",
+    "plan_mismatch",
+    "step_mismatch",
+    "attempt_mismatch",
+    "artifact_missing",
+    "artifact_unauthorized",
+    "artifact_corrupted",
+    "workspace_mismatch",
+    "checkpoint_kind_incompatible",
+    "policy_incompatible",
+    "invalid_checkpoint",
+]
 _STEP_ATTEMPT_INLINE_EVIDENCE_KEYS = {
     "content",
     "diff",
@@ -103,6 +142,39 @@ _STEP_ATTEMPT_INLINE_EVIDENCE_KEYS = {
     "stderr",
     "stdout",
 }
+
+
+def _reject_inline_checkpoint_evidence(value: Any, path: str) -> None:
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            key_text = str(key)
+            normalized = (
+                key_text.replace("_", "").replace("-", "").replace(" ", "").lower()
+            )
+            is_ref_key = normalized.endswith("ref") or normalized.endswith("refs")
+            is_summary_key = "summary" in normalized or "message" in normalized
+            if (
+                (
+                    normalized in _STEP_ATTEMPT_INLINE_EVIDENCE_KEYS
+                    or normalized == "inlinecheckpointpayload"
+                )
+                and not is_ref_key
+                and not is_summary_key
+            ):
+                raise ValueError(
+                    "Step Attempt checkpoints must store large evidence as "
+                    f"compact refs, not inline values at {path}.{key_text}."
+                )
+            if isinstance(nested, str) and len(nested) > 1000:
+                if not is_ref_key and not is_summary_key:
+                    raise ValueError(
+                        "Step Attempt checkpoints must store large evidence as "
+                        f"compact refs, not inline values at {path}.{key_text}."
+                    )
+            _reject_inline_checkpoint_evidence(nested, f"{path}.{key_text}")
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            _reject_inline_checkpoint_evidence(nested, f"{path}[{index}]")
 
 def normalize_dependency_ids(raw_value: Any) -> list[str]:
     """Normalize a list of dependency IDs, stripping whitespace and removing duplicates/non-strings."""
@@ -258,6 +330,228 @@ class StepAttemptBoundaryResultModel(BaseModel):
     manifest_artifact_ref: str = Field(..., alias="manifestArtifactRef", min_length=1)
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
     summary: str | None = Field(None, alias="summary", max_length=1000)
+
+
+class WorkspaceCheckpointEvidenceModel(BaseModel):
+    """Compact workspace evidence for restoring or validating a checkpoint."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    kind: WorkspaceCheckpointKind = Field(..., alias="kind")
+    base_commit: str | None = Field(None, alias="baseCommit")
+    head_commit: str | None = Field(None, alias="headCommit")
+    patch_ref: str | None = Field(None, alias="patchRef")
+    archive_ref: str | None = Field(None, alias="archiveRef")
+    workspace_ref: str | None = Field(None, alias="workspaceRef")
+    external_state_ref: str | None = Field(None, alias="externalStateRef")
+    manifest_ref: str | None = Field(None, alias="manifestRef")
+    branch: str | None = Field(None, alias="branch")
+    includes_untracked: bool = Field(False, alias="includesUntracked")
+    includes_ignored_files: bool = Field(False, alias="includesIgnoredFiles")
+    created_at: datetime | None = Field(None, alias="createdAt")
+    expires_at: datetime | None = Field(None, alias="expiresAt")
+
+    @field_validator(
+        "base_commit",
+        "head_commit",
+        "patch_ref",
+        "archive_ref",
+        "workspace_ref",
+        "external_state_ref",
+        "manifest_ref",
+        "branch",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_optional_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        return candidate or None
+
+    @model_validator(mode="after")
+    def _validate_kind_evidence(self) -> "WorkspaceCheckpointEvidenceModel":
+        if self.kind == "git_commit" and not (
+            self.base_commit or self.head_commit
+        ):
+            raise ValueError(
+                "git_commit checkpoint requires baseCommit or headCommit"
+            )
+        if self.kind == "git_patch" and not (
+            self.base_commit and self.patch_ref
+        ):
+            raise ValueError("git_patch checkpoint requires baseCommit and patchRef")
+        if self.kind == "worktree_archive" and not (
+            self.archive_ref and self.manifest_ref
+        ):
+            raise ValueError(
+                "worktree_archive checkpoint requires archiveRef and manifestRef"
+            )
+        if self.kind == "ephemeral_workspace_ref" and not self.workspace_ref:
+            raise ValueError(
+                "ephemeral_workspace_ref checkpoint requires workspaceRef"
+            )
+        if self.kind == "external_state_ref" and not self.external_state_ref:
+            raise ValueError("external_state_ref checkpoint requires externalStateRef")
+        _reject_inline_checkpoint_evidence(
+            self.model_dump(by_alias=True, mode="json"),
+            "workspace",
+        )
+        return self
+
+
+class StepCheckpointValidationResultModel(BaseModel):
+    """Compact workflow-visible checkpoint validation decision."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    valid: bool = Field(..., alias="valid")
+    failure_code: StepCheckpointValidationFailureCode | None = Field(
+        None, alias="failureCode"
+    )
+    message: str = Field(..., alias="message", min_length=1, max_length=1000)
+    checkpoint_id: str = Field(..., alias="checkpointId", min_length=1)
+    checkpoint_ref: str | None = Field(None, alias="checkpointRef")
+
+    @model_validator(mode="after")
+    def _validate_result_shape(self) -> "StepCheckpointValidationResultModel":
+        if self.valid and self.failure_code is not None:
+            raise ValueError("valid checkpoint result cannot include failureCode")
+        if not self.valid and self.failure_code is None:
+            raise ValueError("invalid checkpoint result requires failureCode")
+        return self
+
+
+class StepAttemptCheckpointModel(BaseModel):
+    """Artifact-backed Step Attempt checkpoint payload."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    schema_version: Literal["v1"] = Field("v1", alias="schemaVersion")
+    content_type: Literal[STEP_ATTEMPT_CHECKPOINT_CONTENT_TYPE] = Field(
+        STEP_ATTEMPT_CHECKPOINT_CONTENT_TYPE,
+        alias="contentType",
+    )
+    checkpoint_id: str = Field(..., alias="checkpointId", min_length=1)
+    checkpoint_kind: Literal["step_boundary"] = Field(
+        "step_boundary", alias="checkpointKind"
+    )
+    boundary: StepAttemptCheckpointBoundary = Field(..., alias="boundary")
+    source: StepAttemptIdentityModel = Field(..., alias="source")
+    task_input_snapshot_ref: str = Field(
+        ..., alias="taskInputSnapshotRef", min_length=1
+    )
+    plan_ref: str | None = Field(None, alias="planRef")
+    plan_digest: str | None = Field(None, alias="planDigest")
+    prepared_input_refs: list[str] = Field(
+        default_factory=list, alias="preparedInputRefs"
+    )
+    workspace: WorkspaceCheckpointEvidenceModel = Field(..., alias="workspace")
+    step_outputs: dict[str, Any] = Field(default_factory=dict, alias="stepOutputs")
+    validation: StepCheckpointValidationResultModel | None = Field(
+        None, alias="validation"
+    )
+    created_at: datetime = Field(..., alias="createdAt")
+
+    @field_validator("plan_ref", "plan_digest", mode="before")
+    @classmethod
+    def _normalize_optional_ref(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        return candidate or None
+
+    @field_validator("prepared_input_refs")
+    @classmethod
+    def _normalize_prepared_input_refs(cls, value: list[str]) -> list[str]:
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    @field_validator("step_outputs", mode="before")
+    @classmethod
+    def _validate_compact_step_outputs(cls, value: Any) -> dict[str, Any]:
+        output = validate_compact_temporal_mapping(
+            value, field_name="stepOutputs"
+        )
+        _reject_inline_checkpoint_evidence(output, "stepOutputs")
+        return output
+
+    @model_validator(mode="after")
+    def _validate_checkpoint_identity(self) -> "StepAttemptCheckpointModel":
+        expected = (
+            f"{self.source.workflow_id}:{self.source.run_id}:"
+            f"{self.source.logical_step_id}:attempt:{self.source.attempt}:"
+            f"checkpoint:{self.boundary}"
+        )
+        if self.checkpoint_id != expected:
+            raise ValueError("checkpointId must match Step Attempt boundary identity")
+        if self.plan_ref is None and self.plan_digest is None:
+            raise ValueError("checkpoint requires planRef or planDigest")
+        return self
+
+
+class StepCheckpointValidationRequestModel(BaseModel):
+    """Input for validating checkpoint evidence before attempt or Resume execution."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    checkpoint: StepAttemptCheckpointModel = Field(..., alias="checkpoint")
+    expected_source: StepAttemptIdentityModel = Field(..., alias="expectedSource")
+    expected_task_input_snapshot_ref: str = Field(
+        ..., alias="expectedTaskInputSnapshotRef", min_length=1
+    )
+    expected_plan_ref: str | None = Field(None, alias="expectedPlanRef")
+    expected_plan_digest: str | None = Field(None, alias="expectedPlanDigest")
+    workspace_policy: WorkspacePolicy | None = Field(None, alias="workspacePolicy")
+    required_artifact_refs: list[str] = Field(
+        default_factory=list, alias="requiredArtifactRefs"
+    )
+    unauthorized_artifact_refs: list[str] = Field(
+        default_factory=list, alias="unauthorizedArtifactRefs"
+    )
+    corrupted_artifact_refs: list[str] = Field(
+        default_factory=list, alias="corruptedArtifactRefs"
+    )
+    expected_workspace: dict[str, Any] = Field(
+        default_factory=dict, alias="expectedWorkspace"
+    )
+    checkpoint_ref: str | None = Field(None, alias="checkpointRef")
+
+    @field_validator(
+        "expected_plan_ref",
+        "expected_plan_digest",
+        "checkpoint_ref",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_optional_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        return candidate or None
+
+    @field_validator(
+        "required_artifact_refs",
+        "unauthorized_artifact_refs",
+        "corrupted_artifact_refs",
+    )
+    @classmethod
+    def _normalize_artifact_refs(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            candidate = str(item).strip()
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            normalized.append(candidate)
+        return normalized
+
+    @field_validator("expected_workspace", mode="before")
+    @classmethod
+    def _validate_expected_workspace(cls, value: Any) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(
+            value, field_name="expectedWorkspace"
+        )
 
 
 class StepAttemptSemanticOperationModel(BaseModel):
