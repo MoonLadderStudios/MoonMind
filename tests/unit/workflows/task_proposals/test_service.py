@@ -526,6 +526,40 @@ async def test_promote_proposal_applies_runtime_override() -> None:
 
 
 @pytest.mark.asyncio
+async def test_promote_proposal_rejects_unsupported_runtime_before_commit() -> None:
+    repo = AsyncMock()
+    proposal = SimpleNamespace(
+        id=uuid4(),
+        status=TaskProposalStatus.OPEN,
+        repository="Moon/Repo",
+        promoted_at=None,
+        promoted_by_user_id=None,
+        decided_by_user_id=None,
+        decision_note=None,
+        task_create_request={
+            "payload": {
+                "repository": "Moon/Repo",
+                "task": {
+                    "instructions": "Refactor logic",
+                    "runtime": {"mode": "gemini_cli"},
+                },
+            }
+        },
+    )
+    repo.get_proposal_for_update.return_value = proposal
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
+
+    with pytest.raises(TaskProposalValidationError, match="runtimeMode must be one of"):
+        await service.promote_proposal(
+            proposal_id=proposal.id,
+            promoted_by_user_id=uuid4(),
+            runtime_mode_override="codex_cloud",
+        )
+
+    repo.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_promote_proposal_preserves_preset_provenance() -> None:
     repo = AsyncMock()
     proposal = SimpleNamespace(
@@ -1118,6 +1152,109 @@ async def test_create_proposal_invokes_delivery_and_persists_external_issue() ->
     assert proposal.provider_metadata["delivery"]["marker"] == "moonmind-proposal"
     assert delivery.requests[0].task_snapshot_ref == "artifact://snapshot"
     assert repo.commit.await_count >= 2
+
+
+@pytest.mark.asyncio
+async def test_redeliver_proposal_reuses_trusted_delivery_adapter() -> None:
+    repo = AsyncMock()
+    record = SimpleNamespace(
+        id=uuid4(),
+        provider="github",
+        external_key="42",
+        external_url="https://github.example/Moon/Repo/issues/42",
+        repository="Moon/Repo",
+        title="Add tests",
+        summary="Add follow-up",
+        category="tests",
+        tags=["tests"],
+        dedup_key="moon/repo:add-tests",
+        dedup_hash="hash",
+        review_priority=TaskProposalReviewPriority.NORMAL,
+        origin_metadata={},
+        provider_metadata={"delivery": {"status": "failed"}},
+        resolved_policy={},
+        task_snapshot_ref="artifact://snapshot",
+        task_create_request={"payload": {"repository": "Moon/Repo"}},
+        delivered_at=None,
+        last_synced_at=None,
+    )
+    repo.get_proposal.return_value = record
+    delivery = _FakeDeliveryService()
+    service = TaskProposalService(
+        repo,
+        redactor=SecretRedactor([], "***"),
+        delivery_service=delivery,
+    )
+
+    updated = await service.redeliver_proposal(proposal_id=record.id)
+
+    assert updated is record
+    assert delivery.requests[0].record_id == str(record.id)
+    assert record.provider_metadata["delivery"]["status"] == "delivered"
+    repo.get_proposal_for_update.assert_not_called()
+    repo.refresh.assert_awaited_with(record)
+
+
+@pytest.mark.asyncio
+async def test_sync_proposal_delivery_records_recovery_audit_without_adapter_sync() -> None:
+    repo = AsyncMock()
+    record = SimpleNamespace(
+        id=uuid4(),
+        provider="jira",
+        external_key="MM-42",
+        external_url="https://jira.example/browse/MM-42",
+        repository="MM",
+        title="Add tests",
+        summary="Add follow-up",
+        category="tests",
+        tags=["tests"],
+        dedup_key="mm:add-tests",
+        dedup_hash="hash",
+        review_priority=TaskProposalReviewPriority.NORMAL,
+        origin_metadata={},
+        provider_metadata={"delivery": {"status": "delivered"}},
+        resolved_policy={},
+        task_snapshot_ref="artifact://snapshot",
+        task_create_request={"payload": {"repository": "Moon/Repo"}},
+        delivered_at=None,
+        last_synced_at=None,
+    )
+    repo.get_proposal.return_value = record
+    service = TaskProposalService(
+        repo,
+        redactor=SecretRedactor([], "***"),
+        delivery_service=object(),
+    )
+
+    updated = await service.sync_proposal_delivery(proposal_id=record.id)
+
+    assert updated is record
+    assert record.provider_metadata["sync"]["status"] == "inspected"
+    assert record.last_synced_at is not None
+    repo.get_proposal_for_update.assert_not_called()
+    repo.commit.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_redeliver_proposal_requires_configured_delivery_service() -> None:
+    repo = AsyncMock()
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
+
+    with pytest.raises(TaskProposalValidationError):
+        await service.redeliver_proposal(proposal_id=uuid4())
+
+    repo.get_proposal.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_sync_proposal_delivery_requires_configured_delivery_service() -> None:
+    repo = AsyncMock()
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
+
+    with pytest.raises(TaskProposalValidationError):
+        await service.sync_proposal_delivery(proposal_id=uuid4())
+
+    repo.get_proposal.assert_not_called()
 
 
 @pytest.mark.asyncio
