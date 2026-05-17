@@ -682,8 +682,6 @@ class MoonMindRunWorkflow:
             or self._get_from_result(artifact_ref, "artifactId")
             or ""
         )
-        if not artifact_id and content_type == STEP_ATTEMPT_MANIFEST_CONTENT_TYPE:
-            return f"virtual://{name}"
         if not artifact_id:
             raise ValueError(f"artifact.create returned no artifact_id for {name}")
         await execute_typed_activity(
@@ -862,6 +860,19 @@ class MoonMindRunWorkflow:
             )
         except Exception as exc:
             if exc.__class__.__name__ == "_NotInWorkflowEventLoopError":
+                return None
+            if (
+                isinstance(exc, ValueError)
+                and str(exc).startswith("artifact.create returned no artifact_id")
+            ):
+                self._get_logger().warning(
+                    "Skipping step-attempt manifest without artifact id.",
+                    extra={
+                        "event": "step_attempt_manifest_missing_artifact_id",
+                        "logical_step_id": logical_step_id,
+                        "attempt": attempt,
+                    },
+                )
                 return None
             raise
         for row in self._step_ledger_rows:

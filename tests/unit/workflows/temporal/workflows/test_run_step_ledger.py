@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from moonmind.schemas.temporal_models import STEP_ATTEMPT_MANIFEST_CONTENT_TYPE
 from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
@@ -125,6 +126,7 @@ def _registry_payload() -> dict[str, Any]:
 def test_run_initializes_latest_run_step_ledger(monkeypatch: pytest.MonkeyPatch) -> None:
     _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
     now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
 
     workflow._initialize_step_ledger(
@@ -763,6 +765,43 @@ async def test_run_records_terminal_step_attempt_manifest_with_result_refs(
         "summaryRef": "artifact://summary/attempt-1",
         "stdoutRef": "artifact://stdout/attempt-1",
     }
+
+
+@pytest.mark.asyncio
+async def test_write_step_attempt_manifest_requires_real_artifact_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+
+    async def fake_execute_activity(
+        activity_type: str,
+        _payload: Any,
+        **_kwargs: Any,
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        assert activity_type == "artifact.create"
+        return ({}, {"upload_url": "unused"})
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        _payload: Any,
+        **_kwargs: Any,
+    ) -> dict[str, bool]:
+        raise AssertionError(f"unexpected typed activity: {activity_type}")
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(run_module, "execute_typed_activity", fake_execute_typed_activity)
+
+    with pytest.raises(
+        ValueError,
+        match="artifact.create returned no artifact_id",
+    ):
+        await workflow._write_json_artifact(
+            name="reports/step_attempts/run-tests_attempt_1.json",
+            payload={"schemaVersion": "v1"},
+            content_type=STEP_ATTEMPT_MANIFEST_CONTENT_TYPE,
+        )
 
 
 def test_run_uses_deterministic_output_primary_fallback_for_generic_results(
