@@ -696,6 +696,86 @@ def _coerce_mapping(value: Any) -> dict[str, Any]:
 def _coerce_non_empty_text(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
 
+
+def _first_non_empty_text(*values: Any) -> str:
+    for value in values:
+        text = _coerce_non_empty_text(value)
+        if text:
+            return text
+    return ""
+
+
+def _repository_default_branch_candidate(*payloads: Mapping[str, Any]) -> str:
+    for payload in payloads:
+        value = _first_non_empty_text(
+            payload.get("defaultBranch"),
+            payload.get("default_branch"),
+            payload.get("repositoryDefaultBranch"),
+            payload.get("repository_default_branch"),
+        )
+        if value:
+            return value
+    return ""
+
+
+def _resolve_authored_branch(
+    *,
+    git_payload: Mapping[str, Any],
+    task_payload: Mapping[str, Any],
+    selected_skill_inputs: Mapping[str, Any],
+    parameter_payload: Mapping[str, Any],
+    input_payload: Mapping[str, Any],
+) -> str:
+    repository_default_branch = _repository_default_branch_candidate(
+        git_payload,
+        task_payload,
+        selected_skill_inputs,
+        parameter_payload,
+        input_payload,
+    )
+    return _first_non_empty_text(
+        git_payload.get("branch"),
+        task_payload.get("branch"),
+        selected_skill_inputs.get("branch"),
+        parameter_payload.get("branch"),
+        input_payload.get("branch"),
+        repository_default_branch,
+    )
+
+
+def _resolve_workspace_work_branch(
+    *,
+    task_payload: Mapping[str, Any],
+    parameter_payload: Mapping[str, Any],
+    input_payload: Mapping[str, Any],
+) -> str:
+    task_workspace_spec = _coerce_mapping(
+        task_payload.get("workspaceSpec") or task_payload.get("workspace_spec")
+    )
+    parameter_workspace_spec = _coerce_mapping(
+        parameter_payload.get("workspaceSpec") or parameter_payload.get("workspace_spec")
+    )
+    input_workspace_spec = _coerce_mapping(
+        input_payload.get("workspaceSpec") or input_payload.get("workspace_spec")
+    )
+    workspace_payload = _coerce_mapping(
+        task_payload.get("workspace")
+        or parameter_payload.get("workspace")
+        or input_payload.get("workspace")
+    )
+    return _first_non_empty_text(
+        task_workspace_spec.get("targetBranch"),
+        parameter_workspace_spec.get("targetBranch"),
+        input_workspace_spec.get("targetBranch"),
+        workspace_payload.get("targetBranch"),
+    )
+
+
+def _generate_runtime_pr_branch(prefix: str) -> str:
+    branch_prefix = f"{prefix}-" if prefix else ""
+    return f"{branch_prefix}{str(uuid.uuid4())[:8]}"
+
+
 def _slugify_branch_prefix(value: Any, *, max_length: int = 40) -> str:
     candidate = _coerce_non_empty_text(value)
     if not candidate:
@@ -770,11 +850,7 @@ def _normalize_runtime_mode(raw_mode: Any) -> str:
 
 _JIRA_AGENT_SKILLS = JIRA_AGENT_SKILLS
 _JIRA_STORY_OUTPUT_TOOLS = frozenset(
-    {
-        "story.create_jira_issues",
-        "story.create_jira_orchestrate_tasks",
-        "story.create_jira_implement_tasks",
-    }
+    {"story.create_jira_issues", "story.create_jira_orchestrate_tasks"}
 )
 _MOONSPEC_BREAKDOWN_TOOLS = frozenset({"moonspec-breakdown"})
 
@@ -1174,7 +1250,28 @@ def _build_runtime_planner():
         node_publish_mode = str(node_inputs.get("publishMode") or "").lower()
         if not publish_uses_git and node_publish_mode in {"pr", "branch"}:
             node_inputs["publishMode"] = "none"
-        for git_key in ("startingBranch", "targetBranch", "branch"):
+        publish_mode_is_pr = (
+            publish_uses_git
+            and isinstance(publish_mode, str)
+            and publish_mode.strip().lower() == "pr"
+        )
+        authored_branch = _resolve_authored_branch(
+            git_payload=git_payload,
+            task_payload=task_payload,
+            selected_skill_inputs=selected_skill_inputs,
+            parameter_payload=parameter_payload,
+            input_payload=input_payload,
+        )
+        for git_key in ("startingBranch", "targetBranch"):
+            if publish_mode_is_pr and git_key == "targetBranch":
+                git_val = _resolve_workspace_work_branch(
+                    task_payload=task_payload,
+                    parameter_payload=parameter_payload,
+                    input_payload=input_payload,
+                )
+                if git_val:
+                    node_inputs[git_key] = git_val
+                continue
             git_val = (
                 git_payload.get(git_key)
                 or task_payload.get(git_key)
@@ -1184,12 +1281,10 @@ def _build_runtime_planner():
             )
             if isinstance(git_val, str) and git_val.strip():
                 node_inputs[git_key] = git_val.strip()
+        if authored_branch:
+            node_inputs["branch"] = authored_branch
 
-        if (
-            publish_uses_git
-            and isinstance(publish_mode, str)
-            and publish_mode.strip().lower() == "pr"
-        ):
+        if publish_mode_is_pr:
             # In the single authored branch model, ``branch`` is the PR base,
             # not the work/head branch. Always resolve a distinct head branch
             # for PR publishing when one was not explicitly provided.
@@ -1208,9 +1303,11 @@ def _build_runtime_planner():
                         selected_skill_name=selected_skill_name,
                     )
 
-                branch_prefix = f"{prefix}-" if prefix else ""
-                node_inputs["targetBranch"] = (
-                    f"{branch_prefix}{str(uuid.uuid4())[:8]}"
+                node_inputs["targetBranch"] = _generate_runtime_pr_branch(prefix)
+            if not _coerce_non_empty_text(node_inputs.get("targetBranch")):
+                raise RuntimeError(
+                    "publishMode 'pr' requested but no PR head branch could be "
+                    "resolved from workspace metadata or runtime planner generation"
                 )
 
         # --- Assemble plan ---
@@ -1390,7 +1487,7 @@ def _build_runtime_planner():
                     publish_payload=publish_payload,
                     selected_skill_name=selected_skill_name,
                 ) or "story-breakdown"
-                node_inputs["targetBranch"] = f"{prefix}-{str(uuid.uuid4())[:8]}"
+                node_inputs["targetBranch"] = _generate_runtime_pr_branch(prefix)
             story_output_payload = dict(story_output_payload)
             story_output_payload.setdefault("mode", story_output_mode or "docs_tmp")
             if story_output_mode == "jira" and creates_story_breakdown_artifact:

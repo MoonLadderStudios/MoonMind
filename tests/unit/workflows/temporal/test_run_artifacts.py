@@ -1558,7 +1558,7 @@ async def test_run_execution_stage_publish_mode_pr_requires_pull_request_url(
 
     with pytest.raises(
         ValueError,
-        match="publishMode 'pr' requested but no PR URL was returned, and missing repo/branch to create it natively",
+        match="publishMode 'pr' requested but no PR head branch could be resolved",
     ):
         await workflow._run_execution_stage(
             parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},

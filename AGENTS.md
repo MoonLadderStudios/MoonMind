@@ -93,6 +93,8 @@ Note: Jules **unit** tests (`tests/unit/jules/`, `tests/unit/workflows/temporal/
 
 When asked to check on a workflow, follow this procedure in order:
 
+If the root cause and fix are not clear immediately from the parent workflow description, expect to continue into child workflow history and agent runtime diagnostics. Most unclear workflow incidents require checking the deepest active child workflow plus the managed agent process, workspace, artifacts, and logs before deciding whether the issue is Temporal scheduling, worker health, provider/runtime behavior, or task implementation.
+
 1. **Describe the parent workflow** (always use `--namespace default`):
    ```
    docker exec moonmind-temporal-1 temporal workflow describe \
@@ -279,6 +281,8 @@ Key diagnostics:
 - Existing Temporal execution records, existing task proposal records, existing artifact-backed original task input snapshots; no new persistent tables. (357-normalize-proposal-submissions)
 - Python 3.12 + Pydantic v2, Temporal Python SDK, existing Temporal artifact activities, pytest (001-step-attempt-manifest)
 - Existing Temporal artifact store through `artifact.create` and `artifact.write_complete`; no new persistent tables (001-step-attempt-manifest)
+- Python 3.12 + Pydantic v2, SQLAlchemy 2.x async ORM, FastAPI (consumer of the settings catalog), pytest with `pytest-asyncio` (358-settings-migration-and-backup-docs)
+- Existing `settings_overrides` and `settings_audit_events` SQLAlchemy/Alembic tables (`api_service/db/models.py`). No new persistent storage. (358-settings-migration-and-backup-docs)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers

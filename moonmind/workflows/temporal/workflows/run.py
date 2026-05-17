@@ -321,6 +321,152 @@ class MoonMindRunWorkflow:
             return chain[-1][1][:1000]
         return exc.__class__.__name__
 
+    @staticmethod
+    def _failure_root_cause(exc: BaseException) -> BaseException:
+        """Walk the exception chain to the deepest non-generic cause."""
+
+        generic_types = (
+            exceptions.ActivityError,
+            exceptions.ChildWorkflowError,
+        )
+        chain: list[BaseException] = []
+        current: BaseException | None = exc
+        for _ in range(20):
+            if current is None:
+                break
+            chain.append(current)
+            next_exc = getattr(current, "cause", None)
+            if not isinstance(next_exc, BaseException):
+                next_exc = current.__cause__
+            current = next_exc
+        for candidate in reversed(chain):
+            if not isinstance(candidate, generic_types):
+                return candidate
+        return chain[-1] if chain else exc
+
+    @classmethod
+    def _classify_failure_category(cls, exc: BaseException) -> str:
+        """Map an exception chain to one of the canonical errorCategory values.
+
+        Categories align with `ExecutionTerminalStateInput.error_category`:
+        ``user_error`` | ``integration_error`` | ``execution_error`` | ``system_error``.
+        """
+
+        # CancelledError is not a normal failure; callers must handle it before
+        # invoking this helper, but classify defensively.
+        if isinstance(exc, (CancelledError, asyncio.CancelledError)):
+            return "execution_error"
+
+        root = cls._failure_root_cause(exc)
+
+        # Inspect ApplicationError.type when present (set by activities raising
+        # typed errors per docs/Temporal/ErrorTaxonomy.md).
+        application_types: list[str] = []
+        current: BaseException | None = exc
+        for _ in range(20):
+            if current is None:
+                break
+            if isinstance(current, exceptions.ApplicationError):
+                raw_type = getattr(current, "type", None)
+                if isinstance(raw_type, str) and raw_type.strip():
+                    application_types.append(raw_type.strip())
+            next_exc = getattr(current, "cause", None)
+            if not isinstance(next_exc, BaseException):
+                next_exc = current.__cause__
+            current = next_exc
+
+        user_error_types = {"INVALID_INPUT"}
+        integration_error_types = {
+            "UnsupportedStatus",
+            "ProfileResolutionError",
+            "SlotAcquisitionTimeout",
+            "RATE_LIMITED",
+        }
+        for app_type in reversed(application_types):
+            if app_type in user_error_types:
+                return "user_error"
+            if app_type in integration_error_types:
+                return "integration_error"
+
+        # Heuristic fallback based on the deepest root-cause type.
+        root_type_name = root.__class__.__name__
+        if root_type_name in {"ValueError", "TypeError", "KeyError"}:
+            # These typically indicate malformed/invalid input.
+            return "user_error"
+        if "Timeout" in root_type_name or "Connection" in root_type_name:
+            return "integration_error"
+        return "execution_error"
+
+    def _failure_diagnostic_from_exception(
+        self,
+        exc: BaseException,
+        *,
+        stage: str | None = None,
+        step_id: str | None = None,
+        step_title: str | None = None,
+        source: str | None = None,
+        child_workflow_id: str | None = None,
+        diagnostics_ref: str | None = None,
+    ) -> dict[str, Any]:
+        """Build a bounded, redacted failure diagnostic from a failure chain.
+
+        The returned dict is intentionally small and free of secrets so it
+        can flow through the workflow's finish-summary contract and the
+        terminal-state activity without leaking credential-bearing payloads.
+        """
+
+        raw_message = self._operator_failure_summary(exc)
+        sanitized = self._sanitize_operator_summary(raw_message) or raw_message
+        bounded_message = self._coerce_text(sanitized, max_chars=1000) or (
+            exc.__class__.__name__
+        )
+        category = self._classify_failure_category(exc)
+        root = self._failure_root_cause(exc)
+
+        diagnostic: dict[str, Any] = {
+            "stage": self._coerce_text(stage or self._state, max_chars=80),
+            "category": category,
+            "source": self._coerce_text(source, max_chars=40) or "workflow",
+            "stepId": self._coerce_text(step_id, max_chars=120),
+            "stepTitle": self._coerce_text(step_title, max_chars=200),
+            "childWorkflowId": self._coerce_text(child_workflow_id, max_chars=400),
+            "message": bounded_message,
+            "rootCauseType": self._coerce_text(
+                root.__class__.__name__, max_chars=80
+            ),
+            "diagnosticsRef": self._coerce_text(diagnostics_ref, max_chars=400),
+        }
+        # Drop empty optional keys to keep the structure compact.
+        return {key: value for key, value in diagnostic.items() if value is not None}
+
+    def _record_failure_diagnostic(
+        self,
+        exc: BaseException,
+        *,
+        stage: str | None = None,
+        step_id: str | None = None,
+        step_title: str | None = None,
+        source: str | None = None,
+        child_workflow_id: str | None = None,
+        diagnostics_ref: str | None = None,
+    ) -> dict[str, Any]:
+        """Capture a failure diagnostic on the workflow if none is set yet."""
+
+        diagnostic = self._failure_diagnostic_from_exception(
+            exc,
+            stage=stage,
+            step_id=step_id,
+            step_title=step_title,
+            source=source,
+            child_workflow_id=child_workflow_id,
+            diagnostics_ref=diagnostics_ref,
+        )
+        # First failure wins: keep the deepest available root cause and avoid
+        # later generic wrapping handlers from overwriting it.
+        if self._failure_diagnostic is None:
+            self._failure_diagnostic = diagnostic
+        return diagnostic
+
     def __init__(self) -> None:
         self._state = STATE_INITIALIZING
         self._owner_type: Optional[str] = None
@@ -345,6 +491,11 @@ class MoonMindRunWorkflow:
         self._last_step_summary: Optional[str] = None
         self._plan_blocked_message: Optional[str] = None
         self._last_diagnostics_ref: Optional[str] = None
+        # Bounded, redacted structured failure diagnostic captured at the
+        # failure boundary. Surfaced in reports/run_summary.json and reused by
+        # terminal-state recording so operators see the deepest root cause
+        # instead of generic Temporal wrappers.
+        self._failure_diagnostic: Optional[dict[str, Any]] = None
         self._merge_automation_disposition: Optional[str] = None
         self._merge_automation_head_sha: Optional[str] = None
         self._report_created: bool = False
@@ -2487,19 +2638,24 @@ class MoonMindRunWorkflow:
                     )
                     return {"status": "canceled"}
         except ValueError as exc:
+            diagnostic = self._record_failure_diagnostic(
+                exc,
+                stage=self._state,
+                source="workflow",
+            )
             await self._run_finalizing_stage(
-                parameters=parameters, status="failed", error=str(exc)
+                parameters=parameters, status="failed", error=diagnostic["message"]
             )
             self._close_status = CLOSE_STATUS_FAILED
-            self._set_state(STATE_FAILED, summary=str(exc))
+            self._set_state(STATE_FAILED, summary=diagnostic["message"])
             await self._record_terminal_state(
                 state=STATE_FAILED,
                 close_status=CLOSE_STATUS_FAILED,
-                summary=str(exc),
-                error_category="execution_error",
+                summary=diagnostic["message"],
+                error_category=diagnostic["category"],
             )
             raise exceptions.ApplicationError(
-                str(exc),
+                diagnostic["message"],
                 non_retryable=True,
             ) from exc
         self._set_state(STATE_PLANNING, summary="Planning execution strategy.")
@@ -2529,23 +2685,33 @@ class MoonMindRunWorkflow:
                 plan_ref=resolved_plan_ref,
             )
         except ValueError as exc:
+            diagnostic = self._record_failure_diagnostic(
+                exc,
+                stage=self._state,
+                source="workflow",
+            )
             await self._run_finalizing_stage(
-                parameters=parameters, status="failed", error=str(exc)
+                parameters=parameters, status="failed", error=diagnostic["message"]
             )
             self._close_status = CLOSE_STATUS_FAILED
-            self._set_state(STATE_FAILED, summary=str(exc))
+            self._set_state(STATE_FAILED, summary=diagnostic["message"])
             await self._record_terminal_state(
                 state=STATE_FAILED,
                 close_status=CLOSE_STATUS_FAILED,
-                summary=str(exc),
-                error_category="execution_error",
+                summary=diagnostic["message"],
+                error_category=diagnostic["category"],
             )
             raise exceptions.ApplicationError(
-                str(exc),
+                diagnostic["message"],
                 non_retryable=True,
             ) from exc
         except Exception as exc:
-            failure_summary = self._operator_failure_summary(exc)
+            diagnostic = self._record_failure_diagnostic(
+                exc,
+                stage=self._state,
+                source="workflow",
+            )
+            failure_summary = diagnostic["message"]
             await self._run_finalizing_stage(
                 parameters=parameters, status="failed", error=failure_summary
             )
@@ -2555,7 +2721,7 @@ class MoonMindRunWorkflow:
                 state=STATE_FAILED,
                 close_status=CLOSE_STATUS_FAILED,
                 summary=failure_summary,
-                error_category="execution_error",
+                error_category=diagnostic["category"],
             )
             raise
 
@@ -3077,6 +3243,7 @@ class MoonMindRunWorkflow:
 
                     if tool_type == "agent_runtime":
                         # --- Agent dispatch: child workflow ---
+                        child_workflow_id: str | None = None
                         try:
                             resolved_skillset_ref = (
                                 await self._resolve_agent_node_skillset_ref(
@@ -3157,13 +3324,21 @@ class MoonMindRunWorkflow:
                                 self._active_agent_child_workflow_id = None
                                 self._active_agent_id = None
                             execution_result = self._map_agent_run_result(child_result)
-                        except Exception:
+                        except Exception as exc:
+                            diagnostic = self._record_failure_diagnostic(
+                                exc,
+                                stage=self._state,
+                                step_id=node_id,
+                                step_title=tool_name,
+                                source="child_workflow",
+                                child_workflow_id=child_workflow_id,
+                            )
                             self._mark_step_terminal(
                                 node_id,
                                 status="failed",
                                 updated_at=workflow.now(),
-                                summary=f"{tool_name} failed",
-                                last_error="execution_error",
+                                summary=diagnostic["message"],
+                                last_error=diagnostic["category"],
                             )
                             if failure_mode == "FAIL_FAST":
                                 raise
@@ -3240,13 +3415,20 @@ class MoonMindRunWorkflow:
                                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
                                 **self._execute_kwargs_for_route(route),
                             )
-                        except Exception:
+                        except Exception as exc:
+                            diagnostic = self._record_failure_diagnostic(
+                                exc,
+                                stage=self._state,
+                                step_id=node_id,
+                                step_title=tool_name,
+                                source="activity",
+                            )
                             self._mark_step_terminal(
                                 node_id,
                                 status="failed",
                                 updated_at=workflow.now(),
-                                summary=f"{tool_name} failed",
-                                last_error="execution_error",
+                                summary=diagnostic["message"],
+                                last_error=diagnostic["category"],
                             )
                             if failure_mode == "FAIL_FAST":
                                 raise
@@ -3752,9 +3934,13 @@ class MoonMindRunWorkflow:
                         "failed with status '%s'.",
                         push_status,
                     )
-                elif not self._repo or not head_branch:
+                elif not head_branch:
                     raise ValueError(
-                        "publishMode 'pr' requested but no PR URL was returned, and missing repo/branch to create it natively"
+                        "publishMode 'pr' requested but no PR head branch could be resolved from provider outputs, workspace metadata, or runtime planner generation"
+                    )
+                elif not self._repo:
+                    raise ValueError(
+                        "publishMode 'pr' requested but no repository was available to create the pull request natively"
                     )
                 else:
                     self._get_logger().info(
@@ -4189,13 +4375,20 @@ class MoonMindRunWorkflow:
                     cancellation_type=ActivityCancellationType.TRY_CANCEL,
                     **self._execute_kwargs_for_route(route),
                 )
-            except Exception:
+            except Exception as exc:
+                diagnostic = self._record_failure_diagnostic(
+                    exc,
+                    stage=self._state,
+                    step_id=node_id,
+                    step_title=f"Re-check of Jira blockers for {tool_name}",
+                    source="activity",
+                )
                 self._mark_step_terminal(
                     node_id,
                     status="failed",
                     updated_at=workflow.now(),
-                    summary=f"Re-check of Jira blockers for {tool_name} failed",
-                    last_error="execution_error",
+                    summary=diagnostic["message"],
+                    last_error=diagnostic["category"],
                 )
                 if failure_mode == "FAIL_FAST":
                     raise
@@ -4614,7 +4807,6 @@ class MoonMindRunWorkflow:
                 agent_outputs.get("branch"),
                 agent_outputs.get("targetBranch"),
                 workspace_spec.get("targetBranch"),
-                parameters.get("targetBranch"),
                 last_node_inputs.get("targetBranch"),
             )
             base_candidates = (
@@ -5746,10 +5938,17 @@ class MoonMindRunWorkflow:
             self._update_memo()
             self._update_search_attributes()
             raise
-        except Exception:
+        except Exception as exc:
             self._awaiting_external = False
             self._waiting_reason = None
             self._publish_context["mergeAutomationStatus"] = "failed"
+            self._record_failure_diagnostic(
+                exc,
+                stage=self._state,
+                source="child_workflow",
+                child_workflow_id=workflow_id,
+                step_title="merge automation",
+            )
             self._update_memo()
             self._update_search_attributes()
             raise
@@ -7035,6 +7234,12 @@ class MoonMindRunWorkflow:
                     elif publish_mode == "none":
                         code = "PUBLISH_DISABLED"
 
+            diagnostic_reason: str | None = None
+            if status == "failed" and isinstance(self._failure_diagnostic, dict):
+                diagnostic_reason = self._failure_diagnostic.get("message") or None
+
+            finish_outcome_reason = diagnostic_reason or error or "completed"
+
             finish_summary = {
                 "schemaVersion": "v1",
                 "jobId": workflow.info().workflow_id,
@@ -7050,7 +7255,7 @@ class MoonMindRunWorkflow:
                 "finishOutcome": {
                     "code": code,
                     "stage": self._state,
-                    "reason": error or "completed",
+                    "reason": finish_outcome_reason,
                 },
                 "publish": {
                     "mode": publish_mode,
@@ -7085,12 +7290,42 @@ class MoonMindRunWorkflow:
                 merge_automation_summary = self._merge_automation_summary_from_context()
                 if merge_automation_summary:
                     finish_summary["mergeAutomation"] = merge_automation_summary
-            if self._last_step_id or self._last_step_summary or self._last_diagnostics_ref:
-                finish_summary["lastStep"] = {
-                    "id": self._last_step_id,
-                    "summary": self._last_step_summary,
-                    "diagnosticsRef": self._last_diagnostics_ref,
+            last_step_summary = self._last_step_summary
+            last_step_id = self._last_step_id
+            last_diagnostics_ref = self._last_diagnostics_ref
+            last_step_error: str | None = None
+            if status == "failed" and isinstance(self._failure_diagnostic, dict):
+                diag = self._failure_diagnostic
+                # Prefer the diagnostic when it covers a specific failed step so
+                # the operator sees the failing tool, not the last successful
+                # step recorded earlier in the run.
+                diag_step_id = diag.get("stepId")
+                if diag_step_id:
+                    last_step_id = diag_step_id
+                    last_step_summary = diag.get("message") or last_step_summary
+                    if diag.get("diagnosticsRef"):
+                        last_diagnostics_ref = diag.get("diagnosticsRef")
+                elif diag.get("message"):
+                    last_step_summary = last_step_summary or diag.get("message")
+                last_step_error = diag.get("category")
+
+            if (
+                last_step_id
+                or last_step_summary
+                or last_diagnostics_ref
+                or last_step_error
+            ):
+                last_step_block: dict[str, Any] = {
+                    "id": last_step_id,
+                    "summary": last_step_summary,
+                    "diagnosticsRef": last_diagnostics_ref,
                 }
+                if last_step_error:
+                    last_step_block["lastError"] = last_step_error
+                finish_summary["lastStep"] = last_step_block
+
+            if status == "failed" and isinstance(self._failure_diagnostic, dict):
+                finish_summary["failure"] = dict(self._failure_diagnostic)
 
             artifact_create_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
                 "artifact.create"

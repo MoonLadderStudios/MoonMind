@@ -1,10 +1,12 @@
 # Temporal Error Taxonomy
 
 Status: **Core policy document** (partially enforced in current activity definitions; broader adoption ongoing)
-Last updated: 2026-03-30
+Last updated: 2026-05-17
 Related:
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](./ManagedAndExternalAgentExecutionModel.md)
 - [`docs/Temporal/ActivityCatalogAndWorkerTopology.md`](./ActivityCatalogAndWorkerTopology.md)
+- [`docs/Temporal/StepLedgerAndProgressModel.md`](./StepLedgerAndProgressModel.md)
+- [`docs/Tasks/TaskFinishSummarySystem.md`](../Tasks/TaskFinishSummarySystem.md)
 - [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)
 
 ---
@@ -467,6 +469,32 @@ Workflows decide what to do with activity failures:
 ## 10.3 Workflows should not repair malformed contracts
 
 Workflow code should not become a compatibility layer for malformed provider/runtime payloads. That logic belongs in adapters and activities.
+
+## 10.4 Workflows own the operator-facing failure diagnostic
+
+Even though activities own failure translation, workflows are responsible for
+turning the resulting exception chain into the bounded, redacted failure
+reason that operators see in `reports/run_summary.json` and in the terminal
+execution state.
+
+`MoonMind.Run` captures a structured **failure diagnostic** at the first
+failure boundary that surfaces a non-generic root cause — typically the
+`except Exception` blocks around a `MoonMind.AgentRun` child workflow
+execution, a plan-step activity execution, the merge-automation child
+workflow, and the top-level planning/execution exception handlers. That
+diagnostic carries the deepest root-cause message, a `category` that maps onto
+this taxonomy, the failing `stepId`/`childWorkflowId`, and an optional
+`diagnosticsRef` artifact pointer for larger detail.
+
+The canonical contract for the diagnostic — including its JSON shape, the
+secret-handling rules, and how it feeds `finishOutcome.reason`, `lastStep`,
+and the terminal-state `errorCategory` — lives in
+[`docs/Tasks/TaskFinishSummarySystem.md`](../Tasks/TaskFinishSummarySystem.md).
+The `category` values used there (`user_error`, `integration_error`,
+`execution_error`, `system_error`) are how this taxonomy's
+`ApplicationError.type` values such as `INVALID_INPUT`, `UnsupportedStatus`,
+`ProfileResolutionError`, `SlotAcquisitionTimeout`, and `RATE_LIMITED` are
+projected onto the four operator-visible categories.
 
 ---
 

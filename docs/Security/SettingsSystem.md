@@ -1480,24 +1480,68 @@ The desired-state Settings System must satisfy all of the following:
 
 ## 23. Backup and Recovery
 
-Settings overrides are ordinary application configuration data and should be included in database backups.
+Settings overrides are ordinary application configuration data and should be included in database backups. The contract here is intentionally aligned with the Secrets System backup contract in `docs/Security/SecretsSystem.md` §14: settings tables carry references and metadata, never raw managed-secret plaintext.
 
-Backups may contain:
+### 23.1 Backup contents
 
-- setting keys,
-- non-sensitive values,
-- SecretRef values,
-- resource references,
-- audit records, and
-- metadata.
+A standard database backup that covers the Settings System tables (`settings_overrides`, `settings_audit_events`) may contain:
 
-Backups must not contain raw managed secret plaintext.
+- setting keys (for example `workflow.default_task_runtime`),
+- non-sensitive override values (booleans, enums, lists, strings, integers, structured non-secret JSON),
+- SecretRef values (for example `db://my-token`, `env:MOONMIND_GH_TOKEN`) — these are references, not plaintext,
+- resource references (for example provider-profile IDs in `workflow.default_provider_profile_ref`),
+- audit records describing past changes (including migration events such as `settings.migration.renamed`, `settings.migration.type_changed`, and `settings.migration.removed`), and
+- bookkeeping metadata (`schema_version`, `value_version`, `created_at`, `updated_at`, actor IDs).
 
-Restoring settings without restoring the corresponding secrets, OAuth volumes, or provider profiles may produce broken references. The UI must surface those broken references clearly.
+### 23.2 Backup exclusions
+
+Backups MUST NOT contain raw managed-secret plaintext. The Settings System upholds this in three layers:
+
+- It only ever stores SecretRef strings for secret-typed descriptors, never plaintext values. The catalog rejects writes to secret-typed keys that look like raw credentials.
+- Audit events for descriptors whose `audit.redact = true` (or whose `value_type` is sensitive but not `secret_ref`) MUST store `null` for `old_value_json` / `new_value_json` and set the `redacted` flag to `true`. Migration events produced by the settings migration orchestrator MUST follow the same redaction policy when the descriptor is sensitive — callers wire this through the orchestrator's `redact_keys` parameter.
+- `api_service/services/settings_backup.py::export_settings_backup` enforces the policy at backup time:
+  - Overrides whose descriptor declares `audit.redact = True` AND whose `value_type` is not `secret_ref` are dropped from the bundle and listed in `excluded_keys` so operators know the row was intentionally redacted.
+  - SecretRef-typed overrides remain in the bundle as references; if such an override carries a value that is not a SecretRef the helper raises `SettingsBackupViolation` rather than emitting plaintext.
+  - Audit rows flagged `redacted=True` MUST carry no payload; a corrupted row also raises `SettingsBackupViolation` instead of being included in the bundle.
+
+Operators who run their own backup tooling against the database SHOULD treat the Settings tables as restorable application data, not as a secret-bearing surface. Restoring them requires no key material on its own; restoring the encrypted managed-secrets table requires the external root key source described in the Secrets System backup contract.
+
+### 23.3 Partial restore and broken references
+
+Settings often point at adjacent resources (managed secrets, OAuth volumes, provider profiles). A partial restore — settings restored without their dependencies, or vice versa — MUST NOT silently degrade. The system surfaces these conditions explicitly:
+
+- SecretRef overrides pointing at missing managed secrets resolve to the catalog default and emit a `secret_ref_unresolved` (or `unresolved_secret_ref`) diagnostic on the affected setting; Mission Control renders the diagnostic next to the descriptor and on the SecretRef picker.
+- `workflow.default_provider_profile_ref` overrides pointing at missing provider profiles emit a `provider_profile_not_found` diagnostic and the resolver falls back to inheritance instead of accepting the broken value.
+- Migration audit events restored alongside their override rows let operators correlate any post-restore diagnostic with the migration that produced the current key set.
+- `api_service/services/settings_backup.py::scan_broken_references` returns a `SettingsBrokenReference` for every persisted override whose SecretRef target is missing/disabled/invalid, or whose provider-profile target is missing/disabled. Operator dashboards and post-restore checklists SHOULD run this scan so dependent settings and profiles are detectable without waiting for a runtime launch to fail.
+
+The UI MUST surface these diagnostics clearly so operators can decide whether to re-create the missing dependency, point the override at a different reference, or reset the override.
+
+### 23.4 Recovery rehearsal
+
+Operators are expected to rehearse the following recovery paths against a non-production environment:
+
+- restoring `settings_overrides` and `settings_audit_events` alongside the managed-secret tables and provider-profile tables — the desired no-diagnostic outcome,
+- restoring `settings_overrides` and `settings_audit_events` without the managed-secret tables — diagnostics MUST surface broken SecretRefs without crashing the catalog or hiding the affected settings, and `scan_broken_references` MUST list every affected override,
+- restoring only the managed-secret tables — settings then resolve from defaults and environment, and the audit table records no spurious change events.
+
+### 23.5 Operator runbook (pre-release)
+
+A minimal operator-facing procedure for the pre-release release line:
+
+1. Take a normal database backup (typically a `pg_dump` or equivalent) and verify it includes `settings_overrides`, `settings_audit_events`, `managed_secrets`, and `managed_agent_provider_profiles`.
+2. To produce a portable Settings-only snapshot for offsite or rehearsal use, call `export_settings_backup` against a read-only session and persist the resulting `SettingsBackupBundle` (JSON-serializable). The helper refuses to emit a bundle that contains plaintext credentials or unredacted sensitive audit payloads.
+3. Restore in dependency order: managed secrets first, then provider profiles, then settings tables. After a partial or staged restore, run `scan_broken_references` and resolve every `SettingsBrokenReference` (re-create the missing dependency, point the override at a different reference, or reset the override) before resuming launches.
+4. Keep the migration audit events (`settings.migration.renamed`, `settings.migration.type_changed`, `settings.migration.removed`) restored alongside the override rows so post-restore diagnostics can be correlated with the migration that produced the current key set.
 
 ---
 
 ## 24. Migration and Deprecation
+
+The desired-state Settings System distinguishes **registry-level migration metadata** from **override-level migration execution**:
+
+- The registry carries a `SettingMigrationRule` for every renamed, deprecated, removed, or type-changed key. Rules drive deprecation diagnostics, registry-level write rejection (`setting_not_exposed`), and rename-aware effective-value resolution.
+- The override-level migration orchestrator (`api_service/services/settings_migrations.py`) executes the row-level changes against `settings_overrides` and records explicit migration events in `settings_audit_events`.
 
 ### 24.1 Renaming Settings
 
@@ -1509,6 +1553,8 @@ Renaming a setting requires:
 - audit visibility, and
 - tests proving effective values are preserved.
 
+The migration orchestrator's `apply_rename` helper copies every `settings_overrides` row from `old_key` to `new_key` while preserving `scope`, `workspace_id`, `user_id`, `value_json`, `schema_version`, and `value_version`, and records one `settings.migration.renamed` audit event per row. Effective values are preserved across the cutover because the target row inherits the source row's value and version state. Collisions with a pre-existing override on the target key raise `SettingsMigrationCollisionError` unless the caller explicitly opts to skip them.
+
 ### 24.2 Removing Settings
 
 Removing a setting requires:
@@ -1518,11 +1564,28 @@ Removing a setting requires:
 - explaining deprecated values in diagnostics, and
 - avoiding silent loss of operator intent.
 
+Writes to removed or deprecated keys remain rejected at the request layer via the `setting_not_exposed` error path. The migration orchestrator's `apply_removal` helper preserves existing rows for diagnostic continuity (so the catalog's deprecated-override diagnostics keep surfacing them) and stamps a `settings.migration.removed` audit event for forensic visibility. Operators who want to retire stored rows can do so explicitly via `reset_override` once they have confirmed the values are no longer needed.
+
 ### 24.3 Changing Types
 
-Changing a setting type requires an explicit migration.
+Changing a setting type requires an explicit migration. The resolver must not reinterpret existing JSON values ambiguously.
 
-The resolver must not reinterpret existing JSON values ambiguously.
+The migration orchestrator's `apply_type_change` helper enforces that an explicit `TypeChangeCoercion` is supplied. The coercion provides:
+
+- a `coerce` callable that maps the old `value_json` to the new representation, and
+- a `target_schema_version` that MUST equal the rule's `expected_schema_version`.
+
+The orchestrator never parses or reinterprets the old value on its own. Type-changed rules without a coercion are surfaced in the `run_all` report as `skipped_rules` so the deployment can fail fast rather than fall back to ambiguous resolution. Diagnostics continue to flag rows at the old `schema_version` as `post_migration_invalid` until the coercion has run.
+
+### 24.4 Audit and Backup Visibility
+
+Migration events produced by the orchestrator are written to `settings_audit_events` with one of the following `event_type` values:
+
+- `settings.migration.renamed`
+- `settings.migration.type_changed`
+- `settings.migration.removed`
+
+These events are ordinary backup data (per §23) and let operators correlate any post-restore diagnostic with the migration that produced the current key set. Callers SHOULD pass the orchestrator a `redact_keys` set covering descriptors whose `audit.redact` policy requires it, so sensitive values never reach the audit table even during migrations.
 
 ---
 
@@ -1550,6 +1613,9 @@ The desired-state Settings System should include tests for:
 18. UI displays source badges and reset actions correctly.
 19. Operations controls require proper authorization.
 20. Snapshot tests detect accidental catalog drift.
+21. Rename, type-change, and removal migrations preserve effective values, emit migration audit events, and never reinterpret JSON values ambiguously (covered by `tests/unit/services/test_settings_migrations.py`).
+22. Backup snapshots exclude managed-secret plaintext, preserve SecretRef references and migration audit events, and refuse to serialize redaction-flagged rows that still carry payloads (covered by `tests/unit/services/test_settings_backup.py` and `tests/integration/api/test_settings_backup_recovery_contract.py`).
+23. Partial-restore broken-reference scans surface every persisted override whose SecretRef or provider-profile target is missing or disabled (covered by the same test files).
 
 ---
 
@@ -1575,6 +1641,22 @@ SettingsValidator
 
 SettingsAuditWriter
   Writes redacted audit events.
+
+SettingsMigrationOrchestrator
+  Applies rename / type-change / removal rules to persisted overrides and
+  records migration audit events (see §24).
+
+SettingsBackupExporter
+  Produces a SettingsBackupBundle from settings_overrides and
+  settings_audit_events while enforcing the backup-exclusion policy
+  (see §23.2). Implemented as
+  api_service.services.settings_backup.export_settings_backup.
+
+SettingsBrokenReferenceScanner
+  Walks every persisted override and returns SettingsBrokenReference
+  records for missing/disabled SecretRef and provider-profile targets so
+  partial restores surface explicit, actionable diagnostics (see §23.3).
+  Implemented as api_service.services.settings_backup.scan_broken_references.
 
 SettingsChangePublisher
   Emits change notifications to interested subsystems.
