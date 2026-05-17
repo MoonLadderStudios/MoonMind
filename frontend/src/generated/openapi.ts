@@ -6603,6 +6603,10 @@ export interface components {
             childRunId?: string | null;
             /** Taskrunid */
             taskRunId?: string | null;
+            /** Latestattemptmanifestref */
+            latestAttemptManifestRef?: string | null;
+            /** Attemptmanifestrefs */
+            attemptManifestRefs?: string[];
         };
         /**
          * StepLedgerResumePreservationModel

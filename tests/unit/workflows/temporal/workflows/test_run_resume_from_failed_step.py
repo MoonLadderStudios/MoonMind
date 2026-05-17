@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -11,7 +13,28 @@ from moonmind.workflows.temporal.step_ledger import (
     refresh_ready_steps,
     update_step_row,
 )
+from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+
+
+def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    workflow_info = SimpleNamespace(
+        namespace="default",
+        workflow_id="wf-resume",
+        run_id="run-resume",
+        task_queue="mm.workflow",
+        search_attributes={"mm_owner_type": ["user"], "mm_owner_id": ["user-1"]},
+    )
+    logger = SimpleNamespace(
+        info=lambda *a, **k: None,
+        warning=lambda *a, **k: None,
+        error=lambda *a, **k: None,
+        debug=lambda *a, **k: None,
+        isEnabledFor=lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(run_module.workflow, "info", lambda: workflow_info)
+    monkeypatch.setattr(run_module.workflow, "logger", logger)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: False)
 
 
 def _resume_source(**overrides: object) -> dict[str, object]:
@@ -182,6 +205,8 @@ def test_parent_owned_checkpoint_evidence_survives_child_runtime_projection() ->
         "childWorkflowId": "wf-child",
         "childRunId": "run-child",
         "taskRunId": None,
+        "latestAttemptManifestRef": None,
+        "attemptManifestRefs": [],
     }
     assert rows[0]["stateCheckpointRef"] == "artifact://child-checkpoint"
     assert rows[0]["resumePreservation"] == {
@@ -291,6 +316,71 @@ def test_resume_source_restores_workspace_before_failed_step_execution() -> None
     assert restored_ref == "artifact://workspace/before-implement"
     assert workflow._resume_workspace_restored_ref == restored_ref
     assert workflow._restore_resume_workspace_for_failed_step("verify") is None
+
+
+@pytest.mark.asyncio
+async def test_resume_attempt_manifest_preserves_source_lineage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    now = datetime.now(UTC)
+    workflow = _workflow_with_resume()
+    writes: list[dict[str, Any]] = []
+
+    async def fake_write_json_artifact(
+        *,
+        name: str,
+        payload: dict[str, Any],
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
+    ) -> str:
+        writes.append(
+            {
+                "name": name,
+                "payload": payload,
+                "content_type": content_type,
+                "metadata_json": metadata_json,
+            }
+        )
+        return f"artifact-attempt-{len(writes)}"
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+    workflow._initialize_step_ledger(
+        ordered_nodes=_ordered_nodes(),
+        dependency_map=_dependency_map(),
+        updated_at=now,
+    )
+
+    workflow._mark_step_running("implement", updated_at=now, summary="Resuming")
+    await workflow._record_step_attempt_manifest_start(
+        "implement",
+        updated_at=now,
+        reason="resume_from_failed_step",
+    )
+
+    manifest = writes[0]["payload"]
+    assert manifest["workflowId"] == "wf-resume"
+    assert manifest["runId"] == "run-resume"
+    assert manifest["attempt"] == 1
+    assert manifest["lineage"] == {
+        "sourceWorkflowId": "mm:source",
+        "sourceRunId": "run-source",
+        "sourceLogicalStepId": "implement",
+        "sourceAttempt": 1,
+        "relationship": "resume_from_failed_step",
+        "lineageAttemptOrdinal": 2,
+    }
+    assert manifest["workspace"]["policy"] == "resume_from_source_attempt"
+    assert manifest["workspace"]["sourceAttempt"] == {
+        "workflowId": "mm:source",
+        "runId": "run-source",
+        "logicalStepId": "implement",
+        "attempt": 1,
+    }
+    assert (
+        manifest["workspace"]["restoredCheckpointRef"]
+        == "artifact://workspace/before-implement"
+    )
 
 
 def test_resume_source_rejects_missing_workspace_evidence() -> None:

@@ -65,7 +65,12 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.temporal_models import (
         DependencyResolvedSignalPayload,
         ExecutionProgressModel,
+        STEP_ATTEMPT_MANIFEST_CONTENT_TYPE,
+        StepAttemptIdentityModel,
+        StepAttemptManifestModel,
         StepLedgerSnapshotModel,
+        build_step_attempt_id,
+        build_step_attempt_idempotency_key,
         normalize_dependency_ids,
     )
 
@@ -653,6 +658,8 @@ class MoonMindRunWorkflow:
         *,
         name: str,
         payload: dict[str, Any],
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
     ) -> str:
         artifact_create_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
             "artifact.create"
@@ -660,15 +667,22 @@ class MoonMindRunWorkflow:
         artifact_write_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
             "artifact.write_complete"
         )
-        artifact_ref, _upload_desc = await workflow.execute_activity(
+        create_payload: dict[str, Any] = {
+            "principal": self._principal(),
+            "name": name,
+            "content_type": content_type,
+        }
+        if metadata_json:
+            create_payload["metadata_json"] = dict(metadata_json)
+        artifact_create_result = await workflow.execute_activity(
             "artifact.create",
-            {
-                "principal": self._principal(),
-                "name": name,
-                "content_type": "application/json",
-            },
+            create_payload,
             **self._execute_kwargs_for_route(artifact_create_route),
         )
+        if isinstance(artifact_create_result, tuple) and artifact_create_result:
+            artifact_ref = artifact_create_result[0]
+        else:
+            artifact_ref = artifact_create_result
         artifact_id = (
             self._get_from_result(artifact_ref, "artifact_id")
             or self._get_from_result(artifact_ref, "artifactId")
@@ -682,11 +696,213 @@ class MoonMindRunWorkflow:
                 principal=self._principal(),
                 artifact_id=artifact_id,
                 payload=json.dumps(payload).encode("utf-8"),
-                content_type="application/json",
+                content_type=content_type,
             ),
             **self._execute_kwargs_for_route(artifact_write_route),
         )
         return str(artifact_id)
+
+    async def _record_step_attempt_manifest_start(
+        self,
+        logical_step_id: str,
+        *,
+        updated_at: datetime,
+        reason: str,
+    ) -> str | None:
+        attempt = self._step_attempt_for(logical_step_id)
+        if attempt is None or attempt < 1:
+            return None
+        identity = StepAttemptIdentityModel(
+            workflowId=workflow.info().workflow_id,
+            runId=workflow.info().run_id,
+            logicalStepId=logical_step_id,
+            attempt=attempt,
+        )
+        step_attempt_id = build_step_attempt_id(identity)
+        idempotency_key = build_step_attempt_idempotency_key(identity, "manifest")
+        source_attempt = self._step_attempt_source_identity(
+            logical_step_id,
+            attempt=attempt,
+        )
+        lineage = self._step_attempt_lineage(
+            logical_step_id,
+            reason=reason,
+            source_attempt=source_attempt,
+        )
+        manifest = StepAttemptManifestModel(
+            schemaVersion="v1",
+            stepAttemptId=step_attempt_id,
+            workflowId=identity.workflow_id,
+            runId=identity.run_id,
+            logicalStepId=identity.logical_step_id,
+            attempt=identity.attempt,
+            attemptScope="run",
+            lineage=lineage,
+            reason=reason,
+            status="running",
+            terminalDisposition=None,
+            startedAt=updated_at,
+            updatedAt=updated_at,
+            input={"preparedArtifactRefs": list(self._prepared_artifact_refs)},
+            context={},
+            workspace=self._step_attempt_workspace(
+                logical_step_id,
+                attempt=identity.attempt,
+                source_attempt=source_attempt,
+            ),
+            execution={},
+            outputs={},
+            checks=[],
+            sideEffects={},
+            dependencyEffects={"invalidatedLogicalStepIds": []},
+            budget={},
+        )
+        return await self._write_step_attempt_manifest(
+            logical_step_id,
+            attempt=attempt,
+            manifest=manifest,
+            step_attempt_id=step_attempt_id,
+            idempotency_key=idempotency_key,
+            updated_at=updated_at,
+        )
+
+    async def _record_step_attempt_manifest_terminal(
+        self,
+        logical_step_id: str,
+        *,
+        updated_at: datetime,
+        reason: str,
+        status: str,
+        terminal_disposition: str,
+    ) -> str | None:
+        attempt = self._step_attempt_for(logical_step_id)
+        if attempt is None or attempt < 1:
+            return None
+        identity = StepAttemptIdentityModel(
+            workflowId=workflow.info().workflow_id,
+            runId=workflow.info().run_id,
+            logicalStepId=logical_step_id,
+            attempt=attempt,
+        )
+        step_attempt_id = build_step_attempt_id(identity)
+        idempotency_key = build_step_attempt_idempotency_key(identity, "manifest")
+        source_attempt = self._step_attempt_source_identity(
+            logical_step_id,
+            attempt=attempt,
+        )
+        lineage = self._step_attempt_lineage(
+            logical_step_id,
+            reason=reason,
+            source_attempt=source_attempt,
+        )
+        manifest = StepAttemptManifestModel(
+            schemaVersion="v1",
+            stepAttemptId=step_attempt_id,
+            workflowId=identity.workflow_id,
+            runId=identity.run_id,
+            logicalStepId=identity.logical_step_id,
+            attempt=identity.attempt,
+            attemptScope="run",
+            lineage=lineage,
+            reason=reason,
+            status=status,
+            terminalDisposition=terminal_disposition,
+            startedAt=self._step_attempt_started_at(logical_step_id),
+            updatedAt=updated_at,
+            input={"preparedArtifactRefs": list(self._prepared_artifact_refs)},
+            context={},
+            workspace=self._step_attempt_workspace(
+                logical_step_id,
+                attempt=identity.attempt,
+                source_attempt=source_attempt,
+            ),
+            execution=self._step_attempt_compact_execution_refs(logical_step_id),
+            outputs=self._step_attempt_compact_output_refs(logical_step_id),
+            checks=list(
+                (self._step_ledger_row_for(logical_step_id) or {}).get("checks")
+                or []
+            ),
+            sideEffects={},
+            dependencyEffects={"invalidatedLogicalStepIds": []},
+            budget={},
+        )
+        return await self._write_step_attempt_manifest(
+            logical_step_id,
+            attempt=attempt,
+            manifest=manifest,
+            step_attempt_id=step_attempt_id,
+            idempotency_key=idempotency_key,
+            updated_at=updated_at,
+        )
+
+    async def _write_step_attempt_manifest(
+        self,
+        logical_step_id: str,
+        *,
+        attempt: int,
+        manifest: StepAttemptManifestModel,
+        step_attempt_id: str,
+        idempotency_key: str,
+        updated_at: datetime,
+    ) -> str | None:
+        try:
+            manifest_ref = await self._write_json_artifact(
+                name=(
+                    f"reports/step_attempts/{logical_step_id}_attempt_{attempt}.json"
+                ),
+                payload=manifest.model_dump(
+                    by_alias=True,
+                    exclude_none=True,
+                    mode="json",
+                ),
+                content_type=STEP_ATTEMPT_MANIFEST_CONTENT_TYPE,
+                metadata_json={
+                    "artifact_kind": "step_attempt_manifest",
+                    "stepAttemptId": step_attempt_id,
+                    "logicalStepId": logical_step_id,
+                    "attempt": attempt,
+                    "idempotencyKey": idempotency_key,
+                },
+            )
+        except Exception as exc:
+            if exc.__class__.__name__ == "_NotInWorkflowEventLoopError":
+                return None
+            if (
+                isinstance(exc, ValueError)
+                and str(exc).startswith("artifact.create returned no artifact_id")
+            ):
+                self._get_logger().warning(
+                    "Skipping step-attempt manifest without artifact id.",
+                    extra={
+                        "event": "step_attempt_manifest_missing_artifact_id",
+                        "logical_step_id": logical_step_id,
+                        "attempt": attempt,
+                    },
+                )
+                return None
+            raise
+        for row in self._step_ledger_rows:
+            if row.get("logicalStepId") != logical_step_id:
+                continue
+            refs = dict(row.get("refs") or {})
+            history = [
+                ref
+                for ref in refs.get("attemptManifestRefs", [])
+                if isinstance(ref, str) and ref.strip()
+            ]
+            if manifest_ref not in history:
+                history.append(manifest_ref)
+            refs["latestAttemptManifestRef"] = manifest_ref
+            refs["attemptManifestRefs"] = history
+            update_step_row(
+                self._step_ledger_rows,
+                logical_step_id,
+                updated_at=updated_at,
+                refs=refs,
+            )
+            self._sync_progress_snapshot(updated_at=updated_at)
+            return manifest_ref
+        return manifest_ref
 
     async def _bundle_ordered_nodes_for_execution(
         self,
@@ -874,6 +1090,176 @@ class MoonMindRunWorkflow:
             if isinstance(value, str) and value.strip():
                 return value.strip()
         return ""
+
+    def _resume_source_int(
+        self,
+        source: Mapping[str, Any],
+        *keys: str,
+    ) -> int | None:
+        for key in keys:
+            value = source.get(key)
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, int) and value >= 1:
+                return value
+            if isinstance(value, str) and value.strip():
+                try:
+                    parsed = int(value.strip())
+                except ValueError:
+                    continue
+                if parsed >= 1:
+                    return parsed
+        return None
+
+    def _step_attempt_source_identity(
+        self,
+        logical_step_id: str,
+        *,
+        attempt: int,
+    ) -> dict[str, Any] | None:
+        if attempt > 1:
+            info = workflow.info()
+            return {
+                "workflowId": info.workflow_id,
+                "runId": info.run_id,
+                "logicalStepId": logical_step_id,
+                "attempt": attempt - 1,
+            }
+        resume_source = self._resume_source
+        if (
+            not isinstance(resume_source, Mapping)
+            or logical_step_id != self._resume_failed_step_id
+        ):
+            return None
+        source_workflow_id = self._resume_source_text(
+            resume_source,
+            "sourceWorkflowId",
+            "source_workflow_id",
+        )
+        source_run_id = self._resume_source_text(
+            resume_source,
+            "sourceRunId",
+            "source_run_id",
+        )
+        source_logical_step_id = self._resume_source_text(
+            resume_source,
+            "failedStepId",
+            "failed_step_id",
+        )
+        source_attempt = self._resume_source_int(
+            resume_source,
+            "failedStepAttempt",
+            "failed_step_attempt",
+        )
+        if (
+            not source_workflow_id
+            or not source_run_id
+            or not source_logical_step_id
+            or not source_attempt
+        ):
+            return None
+        return {
+            "workflowId": source_workflow_id,
+            "runId": source_run_id,
+            "logicalStepId": source_logical_step_id,
+            "attempt": source_attempt,
+        }
+
+    def _step_attempt_lineage(
+        self,
+        logical_step_id: str,
+        *,
+        reason: str,
+        source_attempt: Mapping[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if not source_attempt or logical_step_id != self._resume_failed_step_id:
+            return None
+        return {
+            "sourceWorkflowId": source_attempt["workflowId"],
+            "sourceRunId": source_attempt["runId"],
+            "sourceLogicalStepId": source_attempt["logicalStepId"],
+            "sourceAttempt": source_attempt["attempt"],
+            "relationship": reason,
+            "lineageAttemptOrdinal": int(source_attempt["attempt"])
+            + (self._step_attempt_for(logical_step_id) or 0),
+        }
+
+    def _step_attempt_started_at(self, logical_step_id: str) -> datetime | None:
+        row = self._step_ledger_row_for(logical_step_id)
+        if not isinstance(row, Mapping):
+            return None
+        value = row.get("startedAt") or row.get("started_at")
+        return value if isinstance(value, datetime) else None
+
+    def _step_attempt_workspace(
+        self,
+        logical_step_id: str,
+        *,
+        attempt: int,
+        source_attempt: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        if source_attempt and logical_step_id == self._resume_failed_step_id:
+            workspace = {
+                "policy": "resume_from_source_attempt",
+                "sourceAttempt": dict(source_attempt),
+            }
+            if self._resume_workspace_restored_ref:
+                workspace["restoredCheckpointRef"] = self._resume_workspace_restored_ref
+            return workspace
+        if attempt > 1:
+            return {
+                "policy": "continue_from_previous_attempt",
+                "sourceAttempt": dict(source_attempt) if source_attempt else None,
+            }
+        return {"policy": "initial_workspace"}
+
+    def _step_attempt_compact_execution_refs(
+        self,
+        logical_step_id: str,
+    ) -> dict[str, Any]:
+        row = self._step_ledger_row_for(logical_step_id)
+        if not isinstance(row, Mapping):
+            return {}
+        refs = row.get("refs")
+        artifacts = row.get("artifacts")
+        execution: dict[str, Any] = {}
+        if isinstance(refs, Mapping):
+            for source_key, target_key in (
+                ("childWorkflowId", "childWorkflowId"),
+                ("childRunId", "childRunId"),
+                ("taskRunId", "taskRunId"),
+            ):
+                value = refs.get(source_key)
+                if isinstance(value, str) and value.strip():
+                    execution[target_key] = value.strip()
+        if isinstance(artifacts, Mapping):
+            diagnostics_ref = artifacts.get("runtimeDiagnostics")
+            if isinstance(diagnostics_ref, str) and diagnostics_ref.strip():
+                execution["diagnosticsRef"] = diagnostics_ref.strip()
+        return execution
+
+    def _step_attempt_compact_output_refs(
+        self,
+        logical_step_id: str,
+    ) -> dict[str, Any]:
+        row = self._step_ledger_row_for(logical_step_id)
+        if not isinstance(row, Mapping):
+            return {}
+        artifacts = row.get("artifacts")
+        if not isinstance(artifacts, Mapping):
+            return {}
+        outputs: dict[str, Any] = {}
+        for source_key, target_key in (
+            ("outputSummary", "summaryRef"),
+            ("outputPrimary", "primaryRef"),
+            ("runtimeStdout", "stdoutRef"),
+            ("runtimeStderr", "stderrRef"),
+            ("runtimeMergedLogs", "logsRef"),
+        ):
+            value = artifacts.get(source_key)
+            if isinstance(value, str) and value.strip():
+                outputs[target_key] = value.strip()
+        return outputs
 
     def _resume_workspace_checkpoint_ref(
         self,
@@ -3508,6 +3894,13 @@ class MoonMindRunWorkflow:
                                 summary=f"{tool_name} failed",
                                 last_error=failure_message,
                             )
+                            await self._record_step_attempt_manifest_terminal(
+                                node_id,
+                                updated_at=workflow.now(),
+                                reason=attempt_reason,
+                                status="failed",
+                                terminal_disposition="retryable",
+                            )
                             system_retries += 1
                             self._get_logger().info(
                                 f"Retrying plan node {node_id} after {failure_message} "
@@ -3534,6 +3927,13 @@ class MoonMindRunWorkflow:
                             summary=operator_failure_summary
                             or f"{tool_name} failed",
                             last_error=failure_message,
+                        )
+                        await self._record_step_attempt_manifest_terminal(
+                            node_id,
+                            updated_at=workflow.now(),
+                            reason=attempt_reason,
+                            status="failed",
+                            terminal_disposition="failed_unrecoverable",
                         )
                         if failure_mode == "FAIL_FAST":
                             if provider_failure_summary:
@@ -3690,6 +4090,13 @@ class MoonMindRunWorkflow:
                 summary=self._get_from_result(execution_result, "summary")
                 or self._summary,
                 last_error=None,
+            )
+            await self._record_step_attempt_manifest_terminal(
+                node_id,
+                updated_at=workflow.now(),
+                reason=attempt_reason,
+                status="succeeded",
+                terminal_disposition="accepted",
             )
             self._record_step_checkpoint_evidence(
                 node_id,
@@ -4361,6 +4768,11 @@ class MoonMindRunWorkflow:
                 node_id,
                 updated_at=workflow.now(),
                 summary=f"Re-checking Jira blockers for {tool_name}",
+            )
+            await self._record_step_attempt_manifest_start(
+                node_id,
+                updated_at=workflow.now(),
+                reason="policy_revalidation",
             )
             recheck_payload = dict(execute_payload)
             idempotency_key = recheck_payload.get("idempotency_key")

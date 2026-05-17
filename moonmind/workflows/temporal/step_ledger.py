@@ -17,6 +17,8 @@ def default_step_refs() -> dict[str, Any]:
         "childWorkflowId": None,
         "childRunId": None,
         "taskRunId": None,
+        "latestAttemptManifestRef": None,
+        "attemptManifestRefs": [],
     }
 
 def default_step_artifacts() -> dict[str, Any]:
