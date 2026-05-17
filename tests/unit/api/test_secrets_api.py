@@ -1,6 +1,7 @@
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from api_service.api.routers.secrets import router
@@ -11,8 +12,36 @@ app = FastAPI()
 app.include_router(router, prefix="/api/v1/secrets")
 
 mock_db_session = AsyncMock()
+
+# Resolve the cached current-user dependency once so overrides target the same
+# callable that FastAPI sees when the router was imported with
+# Depends(get_current_user()).
+_CURRENT_USER_DEP = get_current_user()
+
+
+def _superuser():
+    return SimpleNamespace(
+        id=None, workspace_id=None, is_superuser=True, settings_permissions=set()
+    )
+
+
+def _user_without_permissions():
+    return SimpleNamespace(
+        id=None, workspace_id=None, is_superuser=False, settings_permissions=set()
+    )
+
+
+def _user_with_disable_only():
+    return SimpleNamespace(
+        id=None,
+        workspace_id=None,
+        is_superuser=False,
+        settings_permissions={"secrets.disable"},
+    )
+
+
 app.dependency_overrides[get_async_session] = lambda: mock_db_session
-app.dependency_overrides[get_current_user] = lambda: lambda: None
+app.dependency_overrides[_CURRENT_USER_DEP] = _superuser
 
 client = TestClient(app)
 
@@ -223,3 +252,53 @@ def test_secret_usage_endpoint_redacts_missing_secret_diagnostics(
     assert resp.json()["diagnostics"][0]["message"] == (
         "Managed secret is missing; token=[REDACTED]"
     )
+
+
+def _restore_superuser_dep():
+    app.dependency_overrides[_CURRENT_USER_DEP] = _superuser
+
+
+def test_update_secret_status_denied_without_disable_or_rotate_permissions(
+    mock_secrets_service,
+):
+    app.dependency_overrides[_CURRENT_USER_DEP] = _user_without_permissions
+    try:
+        resp = client.put(
+            "/api/v1/secrets/TEST_API_KEY/status",
+            json={"status": "active"},
+        )
+    finally:
+        _restore_superuser_dep()
+
+    assert resp.status_code == 403
+    body = resp.json()
+    assert "secrets.disable" in body["detail"] or "secrets.rotate" in body["detail"]
+    mock_secrets_service.set_status.assert_not_called()
+
+
+def test_update_secret_status_allows_re_enable_with_disable_permission(
+    mock_secrets_service,
+):
+    from api_service.db.models import ManagedSecret
+    from datetime import datetime
+
+    mock_secret = ManagedSecret(
+        slug="TEST_API_KEY",
+        status="active",
+        details={},
+        created_at=datetime.utcnow(),
+    )
+    mock_secrets_service.set_status.return_value = mock_secret
+
+    app.dependency_overrides[_CURRENT_USER_DEP] = _user_with_disable_only
+    try:
+        resp = client.put(
+            "/api/v1/secrets/TEST_API_KEY/status",
+            json={"status": "active"},
+        )
+    finally:
+        _restore_superuser_dep()
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "active"
+    mock_secrets_service.set_status.assert_awaited()

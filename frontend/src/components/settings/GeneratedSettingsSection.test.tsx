@@ -517,6 +517,16 @@ describe('GeneratedSettingsSection', () => {
     expect(screen.queryByText('Default Publish Mode')).toBeNull();
   });
 
+  it('renders a Broken reference indicator on rows whose secret_ref is unresolved', async () => {
+    renderWithClient(<GeneratedSettingsSection />);
+
+    expect(await screen.findByText('Default Publish Mode')).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Search settings'), { target: { value: 'github' } });
+    expect(screen.getByText('GitHub Token Reference')).toBeTruthy();
+    expect(screen.getAllByText(/broken reference/i).length).toBeGreaterThan(0);
+  });
+
   it('resets overrides through the reset route and supports discard', async () => {
     renderWithClient(<GeneratedSettingsSection />);
 

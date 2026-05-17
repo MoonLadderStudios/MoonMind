@@ -16,7 +16,10 @@ from api_service.api.schemas import (
 )
 from api_service.db.models import SecretStatus
 from api_service.services.secrets import SecretsService
+from api_service.services.settings_catalog import settings_permissions_for_user
 from moonmind.utils.logging import redact_sensitive_payload
+
+_STATUS_CHANGE_PERMISSIONS = frozenset({"secrets.disable", "secrets.rotate"})
 
 logger = structlog.get_logger(__name__)
 
@@ -126,8 +129,23 @@ async def update_secret_status(
     db: AsyncSession = Depends(get_async_session),
     user: Any = Depends(get_current_user()),
 ) -> SecretMetadataResponse:
+    permissions = settings_permissions_for_user(user)
+    if not permissions & _STATUS_CHANGE_PERMISSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Missing required secrets.disable or secrets.rotate permission "
+                "to change managed secret status."
+            ),
+        )
     new_status = SecretStatus(request.status)
-    secret = await SecretsService.set_status(db, slug, new_status)
+    secret = await SecretsService.set_status(
+        db,
+        slug,
+        new_status,
+        actor_user_id=_uuid_attr(getattr(user, "id", None)),
+        workspace_id=_uuid_attr(getattr(user, "workspace_id", None)),
+    )
     if not secret:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Secret not found"

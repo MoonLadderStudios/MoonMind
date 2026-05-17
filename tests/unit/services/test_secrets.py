@@ -80,17 +80,61 @@ async def test_rotate_secret(mock_db_session):
 async def test_set_status_secret(mock_db_session):
     slug = "test-secret"
     existing_secret = ManagedSecret(slug=slug, ciphertext="old", status=SecretStatus.ACTIVE)
-    
+
     mock_result = MagicMock()
     mock_result.scalar_one_or_none.return_value = existing_secret
-    
+
     async def mock_execute(*args, **kwargs):
         return mock_result
-        
+
     mock_db_session.execute.side_effect = mock_execute
-    
+
     disabled = await SecretsService.set_status(mock_db_session, slug, SecretStatus.DISABLED)
     assert disabled.status == SecretStatus.DISABLED
+
+
+@pytest.mark.asyncio
+async def test_set_status_records_audit_event(mock_db_session):
+    from api_service.db.models import SettingsAuditEvent
+
+    slug = "test-secret"
+    existing_secret = ManagedSecret(slug=slug, ciphertext="old", status=SecretStatus.ACTIVE)
+
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = existing_secret
+
+    async def mock_execute(*args, **kwargs):
+        return mock_result
+
+    mock_db_session.execute.side_effect = mock_execute
+
+    actor_id = uuid4()
+    workspace_id = uuid4()
+
+    await SecretsService.set_status(
+        mock_db_session,
+        slug,
+        SecretStatus.DISABLED,
+        actor_user_id=actor_id,
+        workspace_id=workspace_id,
+        reason="rotation cadence",
+    )
+
+    audit_calls = [
+        call.args[0]
+        for call in mock_db_session.add.call_args_list
+        if call.args and isinstance(call.args[0], SettingsAuditEvent)
+    ]
+    assert audit_calls, "Expected SettingsAuditEvent to be persisted for status change"
+    event = audit_calls[0]
+    assert event.event_type == "secrets.status.changed"
+    assert event.actor_user_id == actor_id
+    assert event.workspace_id == workspace_id
+    assert event.redacted is True
+    assert event.old_value_json == {"status": "active"}
+    assert event.new_value_json == {"status": "disabled"}
+    assert event.reason == "rotation cadence"
+    assert event.key == f"secrets.{slug}"
 
 @pytest.mark.asyncio
 async def test_get_secret(mock_db_session):

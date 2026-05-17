@@ -340,6 +340,7 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
               secrets={secretsData?.items ?? []}
               onNotice={setNotice}
               queryClient={queryClient}
+              permissions={settingsPermissions}
             />
           )}
         </div>
