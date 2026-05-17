@@ -376,7 +376,7 @@ class MoonMindRunWorkflow:
             "SlotAcquisitionTimeout",
             "RATE_LIMITED",
         }
-        for app_type in application_types:
+        for app_type in reversed(application_types):
             if app_type in user_error_types:
                 return "user_error"
             if app_type in integration_error_types:
@@ -3124,6 +3124,7 @@ class MoonMindRunWorkflow:
 
                     if tool_type == "agent_runtime":
                         # --- Agent dispatch: child workflow ---
+                        child_workflow_id: str | None = None
                         try:
                             resolved_skillset_ref = (
                                 await self._resolve_agent_node_skillset_ref(
