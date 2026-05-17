@@ -165,7 +165,7 @@ samp {
 }
 
 .dashboard-root {
-  --dashboard-pt: 0.9rem;
+  --dashboard-pt: 0rem;
 
   margin: 0 auto;
   max-width: none;
