@@ -285,6 +285,8 @@ Key diagnostics:
 - Existing `settings_overrides` and `settings_audit_events` SQLAlchemy/Alembic tables (`api_service/db/models.py`). No new persistent storage. (358-settings-migration-and-backup-docs)
 - Python 3.12 (backend, tests); TypeScript/React for the §26 component-split reference test (Vitest). + pytest, pytest-asyncio, `SettingsCatalogService`/`SettingsRegistry`/`SettingsCatalogBuilder`/`SettingsMigrationOrchestrator`/`SettingsChangePublisher`/`settings_backup`/`settings_migrations`, FastAPI ASGI test client, SQLAlchemy async fixtures, Docker Compose (`docker-compose.test.yaml`), Vitest, Testing Library. (359-mm713-settings-guardrail-suite)
 - Existing `settings_overrides`, `settings_audit_events`, `managed_secrets`, `managed_agent_provider_profiles` schemas. No new persistent storage. (359-mm713-settings-guardrail-suite)
+- Python 3.12 + Pydantic v2, Temporal Python SDK models/helpers, existing artifact-ref conventions (716-generalize-checkpoint-contracts)
+- Existing artifact refs only; no new persistent storage (716-generalize-checkpoint-contracts)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
