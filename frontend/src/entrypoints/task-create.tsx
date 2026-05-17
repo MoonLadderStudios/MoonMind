@@ -5472,8 +5472,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const branchControlDisabled =
     !selectedRepositoryForBranchLookup.trim() ||
     !branchLookupEndpoint ||
-    !branchLookupRepository ||
-    branchOptionsQuery.isLoading;
+    !branchLookupRepository;
   const branchStatusMessage = (() => {
     if (!selectedRepositoryForBranchLookup.trim()) {
       return "Select a repository to load branches.";

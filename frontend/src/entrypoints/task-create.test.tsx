@@ -13190,6 +13190,49 @@ describe("Task Create MM-641 authoring validation", () => {
     expect(JSON.stringify(task)).not.toContain("targetBranch");
     expect(JSON.stringify(task)).not.toContain("startingBranch");
   });
+
+  it("lets users paste a branch while branch options are still loading", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/github/branches")) {
+        return new Promise<Response>(() => {});
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
+    });
+
+    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+
+    const branchInput = (await screen.findByLabelText(
+      "Branch",
+    )) as HTMLInputElement;
+
+    await waitFor(() => {
+      expect(branchInput.getAttribute("placeholder")).toBe("Loading branches...");
+      expect(branchInput.disabled).toBe(false);
+    });
+
+    fireEvent.change(branchInput, {
+      target: { value: "feature/pasted-while-loading" },
+    });
+    expect(branchInput.value).toBe("feature/pasted-while-loading");
+
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Use a branch pasted while options are loading." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const request = latestCreateRequest();
+    const task = (request.payload as { task: Record<string, unknown> }).task;
+    expect(task.git).toEqual({ branch: "feature/pasted-while-loading" });
+  });
 });
 
 describe("Task Create submit arrow animation", () => {
