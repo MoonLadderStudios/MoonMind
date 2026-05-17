@@ -2473,6 +2473,43 @@ def test_runtime_planner_authored_branch_fallback_order():
 
         assert plan["nodes"][-1]["inputs"]["branch"] == expected_branch
 
+def test_runtime_planner_leaves_branch_unset_without_authored_branch():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Do work",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "branch"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    assert "branch" not in plan["nodes"][-1]["inputs"]
+
+def test_runtime_planner_ignores_non_string_branch_values():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Do work",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "branch"},
+                "git": {"defaultBranch": {"name": "main"}},
+            }
+        },
+        parameters={"defaultBranch": {"name": "trunk"}},
+        snapshot=snapshot,
+    )
+
+    assert "branch" not in plan["nodes"][-1]["inputs"]
+
 def test_runtime_planner_publish_pr_uses_step_title_for_target_branch_prefix():
     planner = _build_runtime_planner()
     snapshot = _make_snapshot()

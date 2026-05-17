@@ -764,9 +764,10 @@ def _derive_pr_resolver_title(
 
 def _first_non_empty_text(*values: Any) -> str:
     for value in values:
-        text = str(value or "").strip()
-        if text:
-            return text
+        if isinstance(value, str):
+            text = value.strip()
+            if text:
+                return text
     return ""
 
 def _resolve_authored_branch(
@@ -793,7 +794,6 @@ def _resolve_authored_branch(
         parameter_payload.get("default_branch"),
         input_payload.get("defaultBranch"),
         input_payload.get("default_branch"),
-        "main",
     )
 
 def _normalize_runtime_mode(raw_mode: Any) -> str:
