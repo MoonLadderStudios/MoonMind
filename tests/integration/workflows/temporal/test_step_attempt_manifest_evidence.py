@@ -95,6 +95,13 @@ async def test_step_attempt_manifest_refs_are_append_only_for_reexecution(
         "artifact-attempt-1",
         "artifact-attempt-2",
     ]
+    assert writes[0]["payload"]["workspace"]["policy"] == "fresh_branch_from_source"
+    assert writes[0]["payload"]["workspace"]["evidenceAccepted"] is True
+    assert writes[1]["payload"]["workspace"]["policy"] == "continue_from_previous_attempt"
+    assert writes[1]["payload"]["workspace"]["evidenceAccepted"] is False
+    assert writes[1]["payload"]["workspace"]["rejectionReason"] == (
+        "missing_required_checkpoint_evidence"
+    )
     assert writes[1]["payload"]["workspace"]["sourceAttempt"] == {
         "workflowId": "wf-boundary",
         "runId": "run-boundary",
@@ -160,7 +167,9 @@ async def test_resume_attempt_manifest_carries_lineage_without_large_payloads(
     assert manifest["lineage"]["sourceRunId"] == "run-source"
     assert manifest["lineage"]["sourceAttempt"] == 2
     assert manifest["lineage"]["lineageAttemptOrdinal"] == 3
-    assert manifest["workspace"]["restoredCheckpointRef"] == (
+    assert manifest["workspace"]["policy"] == "start_from_last_passed_commit"
+    assert manifest["workspace"]["checkpointRef"] == (
         "artifact://workspace/before-implement"
     )
+    assert manifest["workspace"]["evidenceAccepted"] is True
     assert "payload" not in manifest

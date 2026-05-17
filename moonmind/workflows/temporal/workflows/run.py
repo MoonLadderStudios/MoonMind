@@ -99,7 +99,9 @@ from moonmind.workflows.temporal.step_ledger import (
 )
 from moonmind.workflows.temporal.step_attempts import (
     build_step_attempt_manifest_payload,
+    git_effect_metadata,
     step_attempt_operation_idempotency_key,
+    workspace_policy_metadata,
 )
 from moonmind.workflows.temporal.completion_summary import (
     is_generic_completion_summary,
@@ -812,11 +814,17 @@ class MoonMindRunWorkflow:
             updatedAt=updated_at,
             input={"preparedArtifactRefs": list(self._prepared_artifact_refs)},
             context={},
-            workspace=self._step_attempt_workspace(
-                logical_step_id,
-                attempt=identity.attempt,
-                source_attempt=source_attempt,
-            ),
+            workspace={
+                **self._step_attempt_workspace(
+                    logical_step_id,
+                    attempt=identity.attempt,
+                    source_attempt=source_attempt,
+                ),
+                "gitEffect": self._step_attempt_git_effect(
+                    logical_step_id,
+                    terminal_disposition=terminal_disposition,
+                ),
+            },
             execution=self._step_attempt_compact_execution_refs(logical_step_id),
             outputs=self._step_attempt_compact_output_refs(logical_step_id),
             checks=list(
@@ -1200,19 +1208,80 @@ class MoonMindRunWorkflow:
         source_attempt: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
         if source_attempt and logical_step_id == self._resume_failed_step_id:
-            workspace = {
-                "policy": "resume_from_source_attempt",
-                "sourceAttempt": dict(source_attempt),
-            }
-            if self._resume_workspace_restored_ref:
-                workspace["restoredCheckpointRef"] = self._resume_workspace_restored_ref
+            workspace = workspace_policy_metadata(
+                policy="start_from_last_passed_commit",
+                checkpoint_ref=self._resume_workspace_restored_ref,
+                checkpoint_valid=bool(self._resume_workspace_restored_ref),
+            )
+            workspace.update(
+                {
+                    "sourceAttempt": dict(source_attempt),
+                }
+            )
             return workspace
+        checkpoint_ref = self._step_checkpoint_refs.get(logical_step_id)
         if attempt > 1:
+            workspace = workspace_policy_metadata(
+                policy="continue_from_previous_attempt",
+                checkpoint_ref=checkpoint_ref,
+                checkpoint_valid=bool(checkpoint_ref) if checkpoint_ref else None,
+            )
+            workspace["sourceAttempt"] = dict(source_attempt) if source_attempt else None
+            return workspace
+        return workspace_policy_metadata(
+            policy="fresh_branch_from_source",
+            checkpoint_ref=checkpoint_ref,
+            checkpoint_valid=None,
+        )
+
+    def _step_attempt_git_effect(
+        self,
+        logical_step_id: str,
+        *,
+        terminal_disposition: str,
+    ) -> dict[str, Any]:
+        outputs = self._step_attempt_compact_output_refs(logical_step_id)
+        row = self._step_ledger_row_for(logical_step_id)
+        checkpoint_ref = None
+        if isinstance(row, Mapping):
+            raw_checkpoint = row.get("stateCheckpointRef")
+            if isinstance(raw_checkpoint, str) and raw_checkpoint.strip():
+                checkpoint_ref = raw_checkpoint.strip()
+        disposition = (
+            "accepted"
+            if terminal_disposition == "accepted"
+            else (
+                "candidate"
+                if terminal_disposition in {"retryable", "needs_human"}
+                else (
+                    "discarded"
+                    if terminal_disposition in {"discarded", "failed_unrecoverable"}
+                    else str(terminal_disposition or "none")
+                )
+            )
+        )
+        typed_artifact_ref = (
+            outputs.get("primaryRef")
+            or outputs.get("summaryRef")
+            or outputs.get("logsRef")
+            or outputs.get("stdoutRef")
+        )
+        try:
+            return git_effect_metadata(
+                disposition=disposition,  # type: ignore[arg-type]
+                workspace_checkpoint_ref=checkpoint_ref,
+                typed_artifact_ref=typed_artifact_ref,
+                no_change_accepted=(
+                    terminal_disposition == "accepted" and not typed_artifact_ref
+                ),
+            )
+        except ValueError:
             return {
-                "policy": "continue_from_previous_attempt",
-                "sourceAttempt": dict(source_attempt) if source_attempt else None,
+                "disposition": "candidate",
+                "workspaceCheckpointRef": checkpoint_ref,
+                "acceptedOutputPresent": False,
+                "rejectionReason": "missing_accepted_output",
             }
-        return {"policy": "initial_workspace"}
 
     def _step_attempt_compact_execution_refs(
         self,
