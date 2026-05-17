@@ -7651,12 +7651,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         : cleaned;
     })();
 
-    // Only include task-level agent skill selectors when we have an explicit skill or a template slug.
-    const taskSkillSelectors =
-      hasExplicitSkillSelection(primarySkillId) ||
-      submissionAppliedTemplates.length > 0
-        ? { include: [{ name: effectiveSubmissionSkillId }] }
-        : undefined;
+    // Only include task-level agent skill selectors for real instruction bundles.
+    const taskSkillSelectors = hasExplicitSkillSelection(
+      effectiveSubmissionSkillId,
+    )
+      ? { include: [{ name: effectiveSubmissionSkillId }] }
+      : undefined;
     const submissionAuthoredPresets =
       authoredPresetsFromAppliedTemplates(submissionAppliedTemplates);
 

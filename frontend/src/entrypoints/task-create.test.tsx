@@ -14380,7 +14380,12 @@ describe("Task Create MM-578 Preset expansion", () => {
     expect(
       (
         latestCreateRequest() as {
-          payload?: { task?: { authoredPresets?: Array<Record<string, unknown>> } };
+          payload?: {
+            task?: {
+              authoredPresets?: Array<Record<string, unknown>>;
+              skills?: Record<string, unknown>;
+            };
+          };
         }
       ).payload?.task?.authoredPresets,
     ).toEqual([
@@ -14390,6 +14395,13 @@ describe("Task Create MM-578 Preset expansion", () => {
         includePath: ["mm-578-preset@1.0.0"],
       },
     ]);
+    expect(
+      (
+        latestCreateRequest() as {
+          payload?: { task?: { skills?: Record<string, unknown> } };
+        }
+      ).payload?.task?.skills,
+    ).toBeUndefined();
     expect(
       screen.getByDisplayValue("Keep unresolved MM-578 preset placeholder."),
     ).toBeTruthy();
