@@ -99,6 +99,27 @@ async def test_resolve_issue_key_deduplicates_and_detects_ambiguity() -> None:
     assert ambiguous["issueKey"] is None
     assert calls == ["MM-403", "MM-403", "MM-403", "MM-404"]
 
+@pytest.mark.asyncio
+async def test_resolve_issue_key_treats_unknown_sources_as_fallback() -> None:
+    calls: list[str] = []
+
+    async def get_issue(issue_key: str) -> dict[str, object]:
+        calls.append(issue_key)
+        return _issue(issue_key)
+
+    resolved = await resolve_issue_key(
+        [
+            JiraIssueCandidate(issue_key="MM-403", source="merge_automation"),
+            JiraIssueCandidate(issue_key="MM-404", source="future_source"),
+        ],
+        get_issue=get_issue,
+    )
+
+    assert resolved["status"] == "resolved"
+    assert resolved["issueKey"] == "MM-403"
+    assert resolved["source"] == "merge_automation"
+    assert calls == ["MM-403"]
+
 def test_select_done_transition_requires_exactly_one_safe_done_transition() -> None:
     config = PostMergeJiraCompletionConfig()
 

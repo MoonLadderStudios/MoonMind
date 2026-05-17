@@ -162,7 +162,7 @@ _CANDIDATE_SOURCE_PRIORITIES = {
 }
 
 def _candidate_priority(candidate: JiraIssueCandidate) -> int:
-    return _CANDIDATE_SOURCE_PRIORITIES.get(candidate.source, 1)
+    return _CANDIDATE_SOURCE_PRIORITIES.get(candidate.source, 2)
 
 def _highest_priority_candidates(
     candidates: list[JiraIssueCandidate],
