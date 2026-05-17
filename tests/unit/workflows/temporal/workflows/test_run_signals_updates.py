@@ -8,6 +8,7 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 
 from temporalio import workflow
+from temporalio.exceptions import ActivityError
 from temporalio.workflow import ActivityCancellationType
 from moonmind.workflows.temporal.activity_catalog import ARTIFACTS_TASK_QUEUE
 from moonmind.workflows.temporal.workflows import run as run_workflow_module
@@ -18,6 +19,12 @@ from moonmind.workflows.temporal.workflows.run import (
     STATE_WAITING_ON_DEPENDENCIES,
     MoonMindRunWorkflow,
 )
+
+class _NestedFailure(Exception):
+    def __init__(self, message: str, cause: BaseException | None = None) -> None:
+        super().__init__(message)
+        self.cause = cause
+
 
 async def fake_execute_activity(activity_name, *args, **kwargs):
     if activity_name == "artifact.read":
@@ -65,6 +72,44 @@ async def fake_execute_activity(activity_name, *args, **kwargs):
     elif activity_name == "artifact.create":
         return {"artifact_id": "art-123"}, {"url": "test"}
     return {}
+
+
+def test_operator_failure_summary_uses_deep_actionable_cause() -> None:
+    failure = _NestedFailure(
+        "Child Workflow execution failed",
+        _NestedFailure(
+            "Activity task failed",
+            RuntimeError("sessionEpoch does not match the active managed session"),
+        ),
+    )
+
+    assert (
+        MoonMindRunWorkflow._operator_failure_summary(failure)
+        == "sessionEpoch does not match the active managed session"
+    )
+
+
+def test_operator_failure_summary_skips_temporal_activity_wrapper() -> None:
+    cause = RuntimeError("sessionEpoch does not match the active managed session")
+    try:
+        raise cause
+    except RuntimeError as exc:
+        failure = ActivityError(
+            "Activity error",
+            scheduled_event_id=1,
+            started_event_id=2,
+            identity="test-worker",
+            activity_type="agent_runtime.session_status",
+            activity_id="activity-1",
+            retry_state=None,
+        )
+        failure.__cause__ = exc
+
+    assert (
+        MoonMindRunWorkflow._operator_failure_summary(failure)
+        == "sessionEpoch does not match the active managed session"
+    )
+
 
 @pytest.fixture
 def mock_run_environment(monkeypatch):
