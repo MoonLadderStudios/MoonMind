@@ -650,6 +650,16 @@ async def test_run_records_step_attempt_manifest_ref_when_work_begins(
     )
     assert writes[0]["payload"]["reason"] == "initial_execution"
     assert writes[1]["payload"]["reason"] == "runtime_recovered"
+    assert writes[1]["payload"]["workspace"]["policy"] == (
+        "continue_from_previous_attempt"
+    )
+    assert writes[1]["payload"]["workspace"]["sourceAttempt"] == {
+        "workflowId": "wf-run-1",
+        "runId": "run-1",
+        "logicalStepId": "delegate-agent",
+        "attempt": 1,
+    }
+    assert "lineage" not in writes[1]["payload"]
 
 def test_run_uses_deterministic_output_primary_fallback_for_generic_results(
     monkeypatch: pytest.MonkeyPatch,

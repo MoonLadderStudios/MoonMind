@@ -90,6 +90,19 @@ StepAttemptTerminalDisposition = Literal[
     "failed_unrecoverable",
 ]
 StepAttemptSemanticOperation = Literal["retry", "reattempt", "resume"]
+_STEP_ATTEMPT_INLINE_EVIDENCE_KEYS = {
+    "content",
+    "diff",
+    "diagnostics",
+    "log",
+    "logs",
+    "logtext",
+    "payload",
+    "provideroutput",
+    "raw",
+    "stderr",
+    "stdout",
+}
 
 def normalize_dependency_ids(raw_value: Any) -> list[str]:
     """Normalize a list of dependency IDs, stripping whitespace and removing duplicates/non-strings."""
@@ -184,6 +197,55 @@ class StepAttemptManifestModel(BaseModel):
         default_factory=dict, alias="dependencyEffects"
     )
     budget: dict[str, Any] = Field(default_factory=dict, alias="budget")
+
+    @model_validator(mode="after")
+    def _validate_compact_evidence(self) -> "StepAttemptManifestModel":
+        sections = {
+            "input": self.input,
+            "context": self.context,
+            "workspace": self.workspace,
+            "execution": self.execution,
+            "outputs": self.outputs,
+            "sideEffects": self.side_effects,
+            "dependencyEffects": self.dependency_effects,
+            "budget": self.budget,
+        }
+        for section_name, section_value in sections.items():
+            self._reject_inline_evidence(section_value, section_name)
+        return self
+
+    @classmethod
+    def _reject_inline_evidence(cls, value: Any, path: str) -> None:
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                key_text = str(key)
+                normalized = (
+                    key_text.replace("_", "")
+                    .replace("-", "")
+                    .replace(" ", "")
+                    .lower()
+                )
+                is_ref_key = normalized.endswith("ref") or normalized.endswith("refs")
+                is_summary_key = "summary" in normalized or "message" in normalized
+                if (
+                    normalized in _STEP_ATTEMPT_INLINE_EVIDENCE_KEYS
+                    and not is_ref_key
+                    and not is_summary_key
+                ):
+                    raise ValueError(
+                        "Step Attempt manifests must store large evidence as "
+                        f"compact refs, not inline values at {path}.{key_text}."
+                    )
+                if isinstance(nested, str) and len(nested) > 1000:
+                    if not is_ref_key and not is_summary_key:
+                        raise ValueError(
+                            "Step Attempt manifests must store large evidence as "
+                            f"compact refs, not inline values at {path}.{key_text}."
+                        )
+                cls._reject_inline_evidence(nested, f"{path}.{key_text}")
+        elif isinstance(value, list):
+            for index, nested in enumerate(value):
+                cls._reject_inline_evidence(nested, f"{path}[{index}]")
 
 
 class StepAttemptBoundaryResultModel(BaseModel):
