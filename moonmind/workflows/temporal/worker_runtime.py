@@ -770,7 +770,11 @@ def _normalize_runtime_mode(raw_mode: Any) -> str:
 
 _JIRA_AGENT_SKILLS = JIRA_AGENT_SKILLS
 _JIRA_STORY_OUTPUT_TOOLS = frozenset(
-    {"story.create_jira_issues", "story.create_jira_orchestrate_tasks"}
+    {
+        "story.create_jira_issues",
+        "story.create_jira_orchestrate_tasks",
+        "story.create_jira_implement_tasks",
+    }
 )
 _MOONSPEC_BREAKDOWN_TOOLS = frozenset({"moonspec-breakdown"})
 

@@ -29,12 +29,14 @@ const OWNER_REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const PR_RESOLVER_SKILLS = new Set(["pr-resolver", "batch-pr-resolver"]);
 const JIRA_BREAKDOWN_PRESET_SLUG = "jira-breakdown";
 const JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG = "jira-breakdown-orchestrate";
+const JIRA_BREAKDOWN_IMPLEMENT_PRESET_SLUG = "jira-breakdown-implement";
 const JIRA_ORCHESTRATE_PRESET_SLUG = "jira-orchestrate";
 const JIRA_IMPLEMENT_PRESET_SLUG = "jira-implement";
 const SELF_MANAGED_PUBLISH_SKILLS = new Set([
   ...PR_RESOLVER_SKILLS,
   JIRA_BREAKDOWN_PRESET_SLUG,
   JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG,
+  JIRA_BREAKDOWN_IMPLEMENT_PRESET_SLUG,
   "jira-verify",
   "jira-pr-verify",
 ]);

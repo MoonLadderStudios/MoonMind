@@ -28,11 +28,30 @@ from moonmind.workflows.skills.tool_plan_contracts import ToolResult
 
 JIRA_CREATE_ISSUES_TOOL_NAME = "story.create_jira_issues"
 JIRA_ORCHESTRATE_TASKS_TOOL_NAME = "story.create_jira_orchestrate_tasks"
+JIRA_IMPLEMENT_TASKS_TOOL_NAME = "story.create_jira_implement_tasks"
 JIRA_CHECK_BLOCKERS_TOOL_NAME = "jira.check_blockers"
 JIRA_LOAD_PRESET_BRIEF_TOOL_NAME = "jira.load_preset_brief"
 JIRA_STORY_TOOL_NAMES = frozenset(
-    {JIRA_CREATE_ISSUES_TOOL_NAME, JIRA_ORCHESTRATE_TASKS_TOOL_NAME}
+    {
+        JIRA_CREATE_ISSUES_TOOL_NAME,
+        JIRA_ORCHESTRATE_TASKS_TOOL_NAME,
+        JIRA_IMPLEMENT_TASKS_TOOL_NAME,
+    }
 )
+_DOWNSTREAM_PRESET_ORCHESTRATE = "orchestrate"
+_DOWNSTREAM_PRESET_IMPLEMENT = "implement"
+_DOWNSTREAM_PRESETS: dict[str, dict[str, str]] = {
+    _DOWNSTREAM_PRESET_ORCHESTRATE: {
+        "slug": "jira-orchestrate",
+        "label": "Jira Orchestrate",
+        "idempotencyPrefix": "jira-orchestrate",
+    },
+    _DOWNSTREAM_PRESET_IMPLEMENT: {
+        "slug": "jira-implement",
+        "label": "Jira Implement",
+        "idempotencyPrefix": "jira-implement",
+    },
+}
 JIRA_DESCRIPTION_MAX_CHARS = 32767
 JIRA_DESCRIPTION_TRUNCATION_SUFFIX = "\n\n[Truncated by MoonMind before Jira export]"
 JIRA_DEPENDENCY_MODE_NONE = "none"
@@ -955,12 +974,13 @@ def _stable_idempotency_key(
     source_issue_key: str,
     story_id: str,
     issue_key: str,
+    prefix: str = "jira-orchestrate",
 ) -> str:
-    raw = f"jira-orchestrate:{source_issue_key}:{story_id}:{issue_key}"
+    raw = f"{prefix}:{source_issue_key}:{story_id}:{issue_key}"
     if len(raw) <= 128:
         return raw
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
-    return f"jira-orchestrate:{source_issue_key}:{digest}"[:128]
+    return f"{prefix}:{source_issue_key}:{digest}"[:128]
 
 
 def _truthy(value: Any) -> bool:
@@ -980,7 +1000,11 @@ def _downstream_task_payload(
     traceability: Mapping[str, Any],
     depends_on: list[str],
     source_issue_key: str,
+    target_preset: str = _DOWNSTREAM_PRESET_ORCHESTRATE,
 ) -> tuple[str, dict[str, Any]]:
+    preset = _DOWNSTREAM_PRESETS[target_preset]
+    preset_label = preset["label"]
+    preset_slug = preset["slug"]
     issue_key = _string(mapping.get("issueKey") or mapping.get("issue_key"))
     story_id = _string(mapping.get("storyId") or mapping.get("story_id"))
     summary = _string(mapping.get("summary")) or issue_key
@@ -988,12 +1012,12 @@ def _downstream_task_payload(
         traceability.get("sourceBriefRef") or traceability.get("source_brief_ref")
     )
     instructions = (
-        f"Run Jira Orchestrate for {issue_key}.\n\n"
+        f"Run {preset_label} for {issue_key}.\n\n"
         f"Source story: {story_id or summary}.\n"
         f"Source summary: {summary}.\n"
         f"Source Jira issue: {source_issue_key or 'unknown'}.\n"
         f"Original brief reference: {source_brief_ref or 'not provided'}.\n\n"
-        "Use the existing Jira Orchestrate workflow for this Jira issue. "
+        f"Use the existing {preset_label} workflow for this Jira issue. "
         "Do not run implementation inline inside the breakdown task."
     )
     runtime = _mapping(task_payload.get("runtime"))
@@ -1017,7 +1041,7 @@ def _downstream_task_payload(
         publish.pop("merge_automation", None)
     repository = _string(task_payload.get("repository") or task_payload.get("repo"))
     task: dict[str, Any] = {
-        "title": f"Run Jira Orchestrate for {issue_key}: {summary}",
+        "title": f"Run {preset_label} for {issue_key}: {summary}",
         "instructions": instructions,
         "inputs": {
             "jira_issue_key": issue_key,
@@ -1029,7 +1053,7 @@ def _downstream_task_payload(
             ),
         },
         "taskTemplate": {
-            "slug": "jira-orchestrate",
+            "slug": preset_slug,
             "version": "1.0.0",
         },
     }
@@ -1043,16 +1067,23 @@ def _downstream_task_payload(
         task["dependsOn"] = list(depends_on)
     return task["title"], task
 
-async def create_jira_orchestrate_tasks_from_issue_mappings(
+async def _create_jira_downstream_tasks_from_issue_mappings(
     inputs: Mapping[str, Any],
     _context: Mapping[str, Any] | None = None,
     *,
     execution_creator: ExecutionCreator | None = None,
+    target_preset: str,
 ) -> ToolResult:
-    """Create dependent Jira Orchestrate tasks from ordered Jira issue mappings."""
+    """Create dependent downstream Jira tasks (Orchestrate or Implement) from ordered issue mappings."""
+
+    preset = _DOWNSTREAM_PRESETS[target_preset]
+    preset_label = preset["label"]
+    preset_idempotency_prefix = preset["idempotencyPrefix"]
 
     if execution_creator is None:
-        raise ValueError("execution_creator is required for Jira Orchestrate task creation.")
+        raise ValueError(
+            f"execution_creator is required for {preset_label} task creation."
+        )
 
     context = _context or {}
     issue_mappings = _issue_mappings_from_inputs(inputs, context=context)
@@ -1106,7 +1137,7 @@ async def create_jira_orchestrate_tasks_from_issue_mappings(
                 {
                     **base_result,
                     "errorCode": "missing_issue_key",
-                    "message": "Jira Orchestrate task creation requires issueKey.",
+                    "message": f"{preset_label} task creation requires issueKey.",
                 }
             )
             skipped_stories.append({**base_result, "summary": summary})
@@ -1119,11 +1150,13 @@ async def create_jira_orchestrate_tasks_from_issue_mappings(
             traceability=traceability,
             depends_on=depends_on,
             source_issue_key=source_issue_key,
+            target_preset=target_preset,
         )
         idempotency_key = _stable_idempotency_key(
             source_issue_key=source_issue_key,
             story_id=story_id,
             issue_key=issue_key,
+            prefix=preset_idempotency_prefix,
         )
         try:
             created = execution_creator(
@@ -1149,7 +1182,7 @@ async def create_jira_orchestrate_tasks_from_issue_mappings(
                 idempotency_key=idempotency_key,
                 repository=repository or None,
                 integration="jira",
-                summary=f"Jira Orchestrate task for {issue_key}.",
+                summary=f"{preset_label} task for {issue_key}.",
             )
             if inspect.isawaitable(created):
                 created = await created  # type: ignore[assignment]
@@ -1233,6 +1266,38 @@ async def create_jira_orchestrate_tasks_from_issue_mappings(
             }
         },
     )
+
+async def create_jira_orchestrate_tasks_from_issue_mappings(
+    inputs: Mapping[str, Any],
+    _context: Mapping[str, Any] | None = None,
+    *,
+    execution_creator: ExecutionCreator | None = None,
+) -> ToolResult:
+    """Create dependent Jira Orchestrate tasks from ordered Jira issue mappings."""
+
+    return await _create_jira_downstream_tasks_from_issue_mappings(
+        inputs,
+        _context,
+        execution_creator=execution_creator,
+        target_preset=_DOWNSTREAM_PRESET_ORCHESTRATE,
+    )
+
+
+async def create_jira_implement_tasks_from_issue_mappings(
+    inputs: Mapping[str, Any],
+    _context: Mapping[str, Any] | None = None,
+    *,
+    execution_creator: ExecutionCreator | None = None,
+) -> ToolResult:
+    """Create dependent Jira Implement tasks from ordered Jira issue mappings."""
+
+    return await _create_jira_downstream_tasks_from_issue_mappings(
+        inputs,
+        _context,
+        execution_creator=execution_creator,
+        target_preset=_DOWNSTREAM_PRESET_IMPLEMENT,
+    )
+
 
 def _dependency_mode(
     *,
@@ -2688,6 +2753,22 @@ def register_story_output_tool_handlers(
         handler=_create_jira_orchestrate_tasks,
     )
 
+    async def _create_jira_implement_tasks(
+        inputs: Mapping[str, Any],
+        context: Mapping[str, Any] | None = None,
+    ) -> ToolResult:
+        return await create_jira_implement_tasks_from_issue_mappings(
+            inputs,
+            context,
+            execution_creator=execution_creator,
+        )
+
+    dispatcher.register_skill(
+        skill_name=JIRA_IMPLEMENT_TASKS_TOOL_NAME,
+        version="1.0",
+        handler=_create_jira_implement_tasks,
+    )
+
     async def _check_jira_blockers(
         inputs: Mapping[str, Any],
         context: Mapping[str, Any] | None = None,
@@ -2742,11 +2823,15 @@ def register_story_output_tool_handlers(
 
 __all__ = [
     "JIRA_CHECK_BLOCKERS_TOOL_NAME",
+    "JIRA_CREATE_ISSUES_TOOL_NAME",
+    "JIRA_IMPLEMENT_TASKS_TOOL_NAME",
     "JIRA_LOAD_PRESET_BRIEF_TOOL_NAME",
+    "JIRA_ORCHESTRATE_TASKS_TOOL_NAME",
     "JIRA_STORY_TOOL_NAMES",
     "check_jira_blockers",
     "create_jira_issues_from_stories",
     "create_jira_orchestrate_tasks_from_issue_mappings",
+    "create_jira_implement_tasks_from_issue_mappings",
     "discover_documents",
     "create_document_update_tasks_from_paths",
     "load_jira_preset_brief",

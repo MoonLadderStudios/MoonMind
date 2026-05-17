@@ -67,8 +67,16 @@ _SUPPORTED_INPUT_TYPES = frozenset(
 )
 _JIRA_BREAKDOWN_SLUG = "jira-breakdown"
 _JIRA_BREAKDOWN_ORCHESTRATE_SLUG = "jira-breakdown-orchestrate"
+_JIRA_BREAKDOWN_IMPLEMENT_SLUG = "jira-breakdown-implement"
+_JIRA_BREAKDOWN_COMPOSITE_SLUGS = frozenset(
+    {_JIRA_BREAKDOWN_ORCHESTRATE_SLUG, _JIRA_BREAKDOWN_IMPLEMENT_SLUG}
+)
 _JIRA_BREAKDOWN_PROJECT_DEFAULT_SLUGS = frozenset(
-    {_JIRA_BREAKDOWN_SLUG, _JIRA_BREAKDOWN_ORCHESTRATE_SLUG}
+    {
+        _JIRA_BREAKDOWN_SLUG,
+        _JIRA_BREAKDOWN_ORCHESTRATE_SLUG,
+        _JIRA_BREAKDOWN_IMPLEMENT_SLUG,
+    }
 )
 _JIRA_BREAKDOWN_PROJECT_INPUT = "jira_project_key"
 _JIRA_BREAKDOWN_REPLACEABLE_PROJECT_DEFAULTS = frozenset({"TOOL", "MM"})
@@ -642,7 +650,9 @@ def _effective_inputs_schema(
 
     repository = _repository_from_context(context)
     project_key = _jira_project_default_for_context(repository)
-    repository_default = repository if slug == _JIRA_BREAKDOWN_ORCHESTRATE_SLUG else None
+    repository_default = (
+        repository if slug in _JIRA_BREAKDOWN_COMPOSITE_SLUGS else None
+    )
     effective_schema = [dict(definition) for definition in inputs_schema]
     default_configured_repository = str(
         settings.workflow.github_repository or ""
@@ -656,7 +666,7 @@ def _effective_inputs_schema(
                 definition["default"] = None
         elif name == "repository" and repository_default:
             definition["default"] = repository_default
-        elif name == "repository" and slug == _JIRA_BREAKDOWN_ORCHESTRATE_SLUG:
+        elif name == "repository" and slug in _JIRA_BREAKDOWN_COMPOSITE_SLUGS:
             default_repository = str(definition.get("default") or "").strip()
             if default_repository and default_repository == default_configured_repository:
                 definition["default"] = None
@@ -752,7 +762,7 @@ def _apply_contextual_input_overrides(
         return submitted
 
     schema_defaults = _input_schema_defaults_by_name(inputs_schema)
-    if slug == _JIRA_BREAKDOWN_ORCHESTRATE_SLUG:
+    if slug in _JIRA_BREAKDOWN_COMPOSITE_SLUGS:
         submitted_repository = str(adjusted.get("repository") or "").strip()
         schema_repository = schema_defaults.get("repository", "")
         if (
