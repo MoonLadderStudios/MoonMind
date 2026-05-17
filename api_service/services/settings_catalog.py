@@ -838,10 +838,12 @@ class SettingsCatalogService:
         workspace_id: UUID | None = None,
         user_id: UUID | None = None,
         workspace_policy: SettingsWorkspacePolicy | dict[str, Any] | None = None,
+        change_publisher: "SettingsChangePublisher | None" = None,
     ) -> None:
         self._settings = settings or app_settings
         self._env = env if env is not None else os.environ
         self._migration_rules = migration_rules
+        self._change_publisher = change_publisher
         ledger = _CATALOG_KEY_LEDGER if registry is _REGISTRY else None
         self._settings_registry = SettingsRegistry(
             registry,
@@ -1700,6 +1702,7 @@ class SettingsCatalogService:
         except IntegrityError as exc:
             await self._session.rollback()
             raise ValueError("version_conflict") from exc
+        await self._dispatch_change_events(change_events)
         changed_overrides = {
             (row_scope, changed_key): row
             for (row_scope, changed_key), row in current_rows.items()
@@ -2121,6 +2124,21 @@ class SettingsCatalogService:
             "requires_process_restart": entry.requires_process_restart,
             "applies_to": list(entry.applies_to),
         }
+
+    async def _dispatch_change_events(
+        self, events: list["SettingsChangeEvent"]
+    ) -> None:
+        if not events:
+            return
+        publisher = self._change_publisher
+        if publisher is None:
+            from api_service.services.settings_change_publisher import (
+                get_settings_change_publisher,
+            )
+
+            publisher = get_settings_change_publisher()
+            self._change_publisher = publisher
+        await publisher.publish(events)
 
     def _refresh_targets_for_entry(self, entry: SettingRegistryEntry) -> list[str]:
         targets = {"settings_catalog"}

@@ -3293,3 +3293,127 @@ def test_workflow_settings_has_moonmind_expose_metadata():
     assert "skills.policy_mode" in exposed_keys
     assert "skills.canary_percent" in exposed_keys
     assert "live_sessions.default_enabled" in exposed_keys
+
+
+# ---------------------------------------------------------------------------
+# MM-710: SettingsCatalogService.apply_overrides publishes through the
+# SettingsChangePublisher after the database transaction commits.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_apply_overrides_dispatches_change_events_through_injected_publisher(
+    settings_session_maker,
+):
+    from api_service.services.settings_change_publisher import SettingsChangePublisher
+    from api_service.services.settings_catalog import SettingsChangeEvent
+
+    published: list[list[SettingsChangeEvent]] = []
+
+    class _CapturingPublisher(SettingsChangePublisher):
+        async def publish(self, events):  # type: ignore[override]
+            batch = list(events)
+            published.append(batch)
+            await super().publish(batch)
+
+    publisher = _CapturingPublisher()
+
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(
+            env={},
+            session=settings_session,
+            user_id=uuid4(),
+            change_publisher=publisher,
+        )
+        response = await service.apply_overrides(
+            scope="workspace",
+            changes={"workflow.default_task_runtime": "claude_code"},
+            expected_versions={"workflow.default_task_runtime": 1},
+        )
+
+    assert len(published) == 1
+    assert len(published[0]) == 1
+    dispatched = published[0][0]
+    assert dispatched.key == "workflow.default_task_runtime"
+    assert dispatched.scope == "workspace"
+    assert dispatched.source == "workspace_override"
+    assert "task_creation_defaults" in dispatched.refresh_targets
+
+    response_event = response.change_events[0]
+    assert response_event.key == dispatched.key
+    assert response_event.refresh_targets == dispatched.refresh_targets
+
+
+@pytest.mark.asyncio
+async def test_apply_overrides_does_not_dispatch_when_validation_fails(
+    settings_session_maker,
+):
+    from api_service.services.settings_change_publisher import SettingsChangePublisher
+    from api_service.services.settings_catalog import SettingsChangeEvent
+
+    published: list[SettingsChangeEvent] = []
+
+    class _CapturingPublisher(SettingsChangePublisher):
+        async def publish(self, events):  # type: ignore[override]
+            published.extend(events)
+            await super().publish(events)
+
+    publisher = _CapturingPublisher()
+
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(
+            env={},
+            session=settings_session,
+            user_id=uuid4(),
+            change_publisher=publisher,
+        )
+        with pytest.raises(SettingsValidationError):
+            await service.apply_overrides(
+                scope="workspace",
+                changes={"skills.canary_percent": 999},
+                expected_versions={"skills.canary_percent": 1},
+            )
+
+    assert published == []
+
+
+@pytest.mark.asyncio
+async def test_apply_overrides_fans_out_one_event_per_committed_key(
+    settings_session_maker,
+):
+    """SC-002: a single PATCH committing N settings produces N publish payload entries."""
+
+    from api_service.services.settings_change_publisher import SettingsChangePublisher
+    from api_service.services.settings_catalog import SettingsChangeEvent
+
+    published: list[SettingsChangeEvent] = []
+
+    class _CapturingPublisher(SettingsChangePublisher):
+        async def publish(self, events):  # type: ignore[override]
+            published.extend(events)
+            await super().publish(events)
+
+    publisher = _CapturingPublisher()
+
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(
+            env={},
+            session=settings_session,
+            user_id=uuid4(),
+            change_publisher=publisher,
+        )
+        await service.apply_overrides(
+            scope="workspace",
+            changes={
+                "workflow.default_task_runtime": "claude_code",
+                "workflow.default_publish_mode": "branch",
+            },
+            expected_versions={
+                "workflow.default_task_runtime": 1,
+                "workflow.default_publish_mode": 1,
+            },
+        )
+
+    assert len(published) == 2
+    keys = {event.key for event in published}
+    assert keys == {"workflow.default_task_runtime", "workflow.default_publish_mode"}
