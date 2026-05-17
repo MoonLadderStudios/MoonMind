@@ -147,35 +147,39 @@ class SettingsMigrationOrchestrator:
 
         outcomes: list[SettingsMigrationOutcome] = []
         old_rows = await self._fetch_overrides(rule.old_key)
-        for row in old_rows:
-            target = await self._fetch_override(
-                scope=row.scope,
-                user_id=row.user_id,
-                key=rule.new_key,
-            )
-            if target is not None:
-                if on_collision == "skip":
-                    outcomes.append(
-                        SettingsMigrationOutcome(
-                            rule_old_key=rule.old_key,
-                            rule_new_key=rule.new_key,
-                            state=rule.state,
-                            event_type="settings.migration.renamed",
-                            scope=row.scope,
-                            workspace_id=row.workspace_id,
-                            user_id=row.user_id,
-                            old_schema_version=row.schema_version,
-                            new_schema_version=target.schema_version,
-                            old_value=row.value_json,
-                            new_value=target.value_json,
-                            applied=False,
-                        )
+        target_rows = await self._fetch_overrides(rule.new_key)
+        targets_by_subject: dict[
+            tuple[str, UUID], SettingsOverride
+        ] = {(target.scope, target.user_id): target for target in target_rows}
+
+        if on_collision == "raise":
+            for row in old_rows:
+                if (row.scope, row.user_id) in targets_by_subject:
+                    raise SettingsMigrationCollisionError(
+                        f"rename target {rule.new_key!r} already has an override "
+                        f"in scope {row.scope!r}"
                     )
-                    continue
-                raise SettingsMigrationCollisionError(
-                    f"rename target {rule.new_key!r} already has an override "
-                    f"in scope {row.scope!r}"
+
+        for row in old_rows:
+            target = targets_by_subject.get((row.scope, row.user_id))
+            if target is not None:
+                outcomes.append(
+                    SettingsMigrationOutcome(
+                        rule_old_key=rule.old_key,
+                        rule_new_key=rule.new_key,
+                        state=rule.state,
+                        event_type="settings.migration.renamed",
+                        scope=row.scope,
+                        workspace_id=row.workspace_id,
+                        user_id=row.user_id,
+                        old_schema_version=row.schema_version,
+                        new_schema_version=target.schema_version,
+                        old_value=row.value_json,
+                        new_value=target.value_json,
+                        applied=False,
+                    )
                 )
+                continue
 
             old_value = row.value_json
             schema_version = row.schema_version
@@ -249,6 +253,8 @@ class SettingsMigrationOrchestrator:
 
         outcomes: list[SettingsMigrationOutcome] = []
         for row in await self._fetch_overrides(rule.old_key):
+            if row.schema_version == coercion.target_schema_version:
+                continue
             old_value = row.value_json
             old_schema_version = row.schema_version
             new_value = coercion.coerce(old_value)
@@ -372,23 +378,6 @@ class SettingsMigrationOrchestrator:
             )
         )
         return list(result.scalars().all())
-
-    async def _fetch_override(
-        self,
-        *,
-        scope: str,
-        user_id: UUID,
-        key: str,
-    ) -> SettingsOverride | None:
-        result = await self.session.execute(
-            select(SettingsOverride).where(
-                SettingsOverride.scope == scope,
-                SettingsOverride.workspace_id == self.workspace_id,
-                SettingsOverride.user_id == user_id,
-                SettingsOverride.key == key,
-            )
-        )
-        return result.scalars().first()
 
     def _record_audit_event(
         self,

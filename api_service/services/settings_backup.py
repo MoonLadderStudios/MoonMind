@@ -166,8 +166,10 @@ async def export_settings_backup(
         if sensitive_inline:
             excluded_keys.add(row.key)
             continue
-        if is_secret_ref and isinstance(row.value_json, str):
-            if not _looks_like_secret_ref(row.value_json):
+        if is_secret_ref and row.value_json is not None:
+            if not isinstance(row.value_json, str) or not _looks_like_secret_ref(
+                row.value_json
+            ):
                 raise SettingsBackupViolation(
                     f"settings_overrides row for {row.key!r} carries a value that "
                     "does not look like a SecretRef; refusing to back up to avoid "
@@ -396,7 +398,7 @@ def _secret_ref_broken_reference(
                 },
             )
         return None
-    if "://" not in value:
+    if not _looks_like_secret_ref(value):
         return SettingsBrokenReference(
             key=row.key,
             scope=row.scope,
