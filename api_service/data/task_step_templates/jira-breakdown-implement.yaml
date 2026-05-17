@@ -1,0 +1,137 @@
+slug: jira-breakdown-implement
+title: Jira Breakdown and Implement
+description: Break a broad Jira or design input into stories, create Jira issues, then create dependent Jira Implement tasks for each generated issue.
+scope: global
+version: 1.0.0
+tags:
+  - jira
+  - moonspec
+  - breakdown
+  - implement
+requiredCapabilities:
+  - git
+annotations:
+  sourceSkill: jira-breakdown
+  jiraWorkflow: breakdown-to-dependent-implement
+  output: dependent-jira-implement-tasks
+inputs:
+  - name: feature_request
+    label: Declarative Design Path or Text
+    type: markdown
+    required: true
+  - name: jira_project_key
+    label: Jira Project Key
+    type: text
+    required: true
+    default: MM
+  - name: jira_issue_type
+    label: Jira Issue Type
+    type: text
+    required: true
+    default: Story
+  - name: jira_board_id
+    label: Jira Board
+    type: jira_board
+    required: false
+    default: ""
+  - name: jira_dependency_mode
+    label: Jira Dependency Mode
+    type: enum
+    required: true
+    default: linear_blocker_chain
+    options:
+      - linear_blocker_chain
+      - none
+  - name: publish_mode
+    label: Publish Mode
+    type: enum
+    required: true
+    default: pr_with_merge_automation
+    options:
+      - pr
+      - pr_with_merge_automation
+  - name: source_issue_key
+    label: Source Jira Issue Key
+    type: text
+    required: false
+    default: ""
+steps:
+  - title: Break down declarative design
+    instructions: |-
+      Run moonspec-breakdown for this declarative design:
+
+      {{ inputs.feature_request }}
+
+      If the input is a readable repo path, use that file as the original declarative document and preserve its path in every story's sourceReference.
+      Write the coverage-checked story breakdown to the runtime-provided story breakdown paths.
+    skill:
+      id: moonspec-breakdown
+      args: {}
+      requiredCapabilities:
+        - git
+  - title: Reconcile stories with current implementation
+    instructions: |-
+      Use story-reconcile-implementation to compare the generated MoonSpec story breakdown against the current repository implementation before any Jira issue creation occurs.
+
+      Read the runtime-provided story breakdown JSON path and rewrite that same JSON handoff with implementationStatus and jiraCreation fields for every story.
+      Mark fully implemented stories with jiraCreation.action = "skip" so no Jira issue or downstream Jira Implement task is created for completed work.
+      For partially implemented stories, preserve the original story scope and add remainingWork so Jira tracks only the unmet requirements.
+      Mark unverifiable stories with jiraCreation.action = "manual_review" so deterministic Jira creation will not create implementation work automatically.
+      Write the reconciliation report to the runtime-provided markdown breakdown path when available.
+      Do not create Jira issues, do not create implementation tasks, and do not implement code in this reconciliation step.
+    skill:
+      id: story-reconcile-implementation
+      args: {}
+      requiredCapabilities:
+        - git
+  - title: Create Jira issues
+    instructions: |-
+      Create one Jira {{ inputs.jira_issue_type }} issue in project {{ inputs.jira_project_key }} for each eligible story from the reconciled MoonSpec breakdown.
+
+      Use the runtime-provided story breakdown JSON path.
+      Every Jira issue must include the Source Document path from the story breakdown.
+      Do not create Jira issues for stories where jiraCreation.action is skip or manual_review.
+      For stories where jiraCreation.action is create_remaining_work_issue, create the Jira issue from the story's remainingWork while preserving the original story traceability.
+      {% if inputs.source_issue_key %}Source Jira issue key: {{ inputs.source_issue_key }}.{% endif %}
+      {% if inputs.source_issue_key and inputs.jira_issue_type | lower in ["sub-task", "subtask", "sub task"] %}Create each generated Jira issue as a sub-task of {{ inputs.source_issue_key }}.{% endif %}
+      {% if inputs.jira_board_id %}Selected Jira board ID: {{ inputs.jira_board_id }}.{% endif %}
+      Dependency mode: {{ inputs.jira_dependency_mode }}.
+      If dependency mode is linear_blocker_chain, create an ordered blocker chain so each later story is blocked by the immediately preceding story.
+      If dependency mode is none, create the Jira issues without dependency links.
+      Return the created Jira issue keys, URLs, dependency mode, and created/reused/failed link results.
+    storyOutput:
+      mode: jira
+      fallback: fail
+      jira:
+        projectKey: "{{ inputs.jira_project_key }}"
+        issueTypeName: "{{ inputs.jira_issue_type }}"
+        boardId: "{{ inputs.jira_board_id }}"
+        sourceIssueKey: "{{ inputs.source_issue_key }}"
+        dependencyMode: "{{ inputs.jira_dependency_mode }}"
+    skill:
+      id: story.create_jira_issues
+      args: {}
+  - title: Create dependent Jira Implement tasks
+    instructions: |-
+      Create one Jira Implement task for each Jira issue created from the trusted Jira story output.
+
+      Use the ordered issue mappings returned by story.create_jira_issues. Preserve the generated story order when creating downstream tasks.
+      Do not create downstream tasks for skipped fully implemented stories or manual-review stories that did not produce Jira issue mappings.
+      Each downstream task must run Jira Implement on its corresponding Jira story issue and must not run implementation inline inside this breakdown run.
+      Create task dependencies with dependsOn so each later generated task waits for the immediately earlier generated task workflow ID.
+      Preserve source Jira issue {{ inputs.source_issue_key }} and the original source brief in downstream task instructions and result traceability.
+      Report created tasks, skipped stories, dependency edges, partial failures, and no-downstream-task outcomes honestly.
+    jiraOrchestration:
+      task:
+        repository: "{{ context.repository }}"
+        runtime:
+          mode: "{{ context.targetRuntime }}"
+        publish:
+          mode: "pr"
+          mergeAutomation:
+            enabled: "{{ inputs.publish_mode == 'pr_with_merge_automation' }}"
+      traceability:
+        sourceIssueKey: "{{ inputs.source_issue_key }}"
+    skill:
+      id: story.create_jira_implement_tasks
+      args: {}

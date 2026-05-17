@@ -9,6 +9,7 @@ from moonmind.workflows.temporal import story_output_tools as story_tools
 from moonmind.workflows.temporal.story_output_tools import (
     check_jira_blockers,
     create_document_update_tasks_from_paths,
+    create_jira_implement_tasks_from_issue_mappings,
     create_jira_issues_from_stories,
     create_jira_orchestrate_tasks_from_issue_mappings,
     discover_documents,
@@ -1679,6 +1680,78 @@ async def test_create_jira_orchestrate_tasks_reports_missing_issue_key_and_parti
     assert orchestration["dependencyCount"] == 0
     assert orchestration["failures"][0]["storyId"] == "STORY-002"
     assert orchestration["failures"][0]["errorCode"] == "task_creation_failed"
+
+
+@pytest.mark.asyncio
+async def test_create_jira_implement_tasks_targets_jira_implement_preset():
+    creator = _FakeExecutionCreator()
+
+    result = await create_jira_implement_tasks_from_issue_mappings(
+        {
+            "jira": {
+                "issueMappings": [
+                    {
+                        "storyId": "STORY-001",
+                        "storyIndex": 1,
+                        "summary": "First",
+                        "issueKey": "MM-501",
+                    },
+                    {
+                        "storyId": "STORY-002",
+                        "storyIndex": 2,
+                        "summary": "Second",
+                        "issueKey": "MM-502",
+                    },
+                ]
+            },
+            "task": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {
+                    "mode": "pr",
+                    "mergeAutomation": {"enabled": True},
+                },
+            },
+            "traceability": {
+                "sourceIssueKey": "MM-404",
+                "sourceBriefRef": "spec.md (Input)",
+            },
+        },
+        execution_creator=creator,
+    )
+
+    assert result.status == "COMPLETED"
+    orchestration = result.outputs["jiraOrchestration"]
+    assert orchestration["status"] == "completed"
+    assert orchestration["createdTaskCount"] == 2
+    assert orchestration["dependencyCount"] == 1
+    assert orchestration["tasks"][0]["dependsOn"] == []
+    assert orchestration["tasks"][1]["dependsOn"] == ["mm:story-1"]
+
+    first_request = creator.requests[0]
+    assert first_request["idempotency_key"] == (
+        "jira-implement:MM-404:STORY-001:MM-501"
+    )
+    assert "Jira Implement task for MM-501" in first_request["summary"]
+    first_task = first_request["initial_parameters"]["task"]
+    assert first_task["taskTemplate"] == {
+        "slug": "jira-implement",
+        "version": "1.0.0",
+    }
+    assert first_task["title"].startswith("Run Jira Implement for MM-501")
+    assert "Run Jira Implement for MM-501" in first_task["instructions"]
+    assert (
+        "Use the existing Jira Implement workflow"
+        in first_task["instructions"]
+    )
+    assert first_task["inputs"]["jira_issue_key"] == "MM-501"
+    assert first_task["inputs"]["constraints"] == (
+        "Preserve source issue MM-404 traceability."
+    )
+    assert first_task["publish"] == {
+        "mode": "pr",
+        "mergeAutomation": {"enabled": True},
+    }
 
 
 @pytest.mark.asyncio

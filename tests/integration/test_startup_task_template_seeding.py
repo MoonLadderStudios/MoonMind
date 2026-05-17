@@ -334,6 +334,42 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         result = await session.execute(
             select(TaskStepTemplate)
             .where(
+                TaskStepTemplate.slug == "jira-breakdown-implement",
+                TaskStepTemplate.scope_type == TaskTemplateScopeType.GLOBAL,
+                TaskStepTemplate.scope_ref.is_(None),
+            )
+            .options(selectinload(TaskStepTemplate.latest_version))
+        )
+        implement_composite_template = result.scalar_one_or_none()
+        assert implement_composite_template is not None
+        assert implement_composite_template.latest_version is not None
+        assert [
+            step["skill"]["id"]
+            for step in implement_composite_template.latest_version.steps
+        ] == [
+            "moonspec-breakdown",
+            "story-reconcile-implementation",
+            "story.create_jira_issues",
+            "story.create_jira_implement_tasks",
+        ]
+        implement_downstream_step = (
+            implement_composite_template.latest_version.steps[3]
+        )
+        assert (
+            "Create one Jira Implement task"
+            in implement_downstream_step["instructions"]
+        )
+        assert "dependsOn" in implement_downstream_step["instructions"]
+        assert implement_downstream_step["jiraOrchestration"]["task"]["publish"] == {
+            "mode": "pr",
+            "mergeAutomation": {
+                "enabled": "{{ inputs.publish_mode == 'pr_with_merge_automation' }}"
+            },
+        }
+
+        result = await session.execute(
+            select(TaskStepTemplate)
+            .where(
                 TaskStepTemplate.slug == "document-update-orchestrate",
                 TaskStepTemplate.scope_type == TaskTemplateScopeType.GLOBAL,
                 TaskStepTemplate.scope_ref.is_(None),
