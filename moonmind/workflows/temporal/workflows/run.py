@@ -4477,7 +4477,6 @@ class MoonMindRunWorkflow:
                 agent_outputs.get("branch"),
                 agent_outputs.get("targetBranch"),
                 workspace_spec.get("targetBranch"),
-                parameters.get("targetBranch"),
                 last_node_inputs.get("targetBranch"),
             )
             base_candidates = (

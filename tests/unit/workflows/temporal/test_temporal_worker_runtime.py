@@ -2426,6 +2426,90 @@ def test_runtime_planner_publish_pr_treats_authored_branch_as_base():
     assert node_inputs["targetBranch"].startswith("fix-create-branch-publish-")
     assert re.fullmatch(r"[a-z0-9-]+-[0-9a-f]{8}", node_inputs["targetBranch"])
 
+def test_runtime_planner_authored_branch_fallback_order():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    cases = [
+        ({"task": {"git": {"branch": "feature/git"}}}, "feature/git"),
+        ({"task": {"branch": "feature/task"}}, "feature/task"),
+        (
+            {
+                "task": {
+                    "tool": {
+                        "name": "auto",
+                        "inputs": {"branch": "feature/skill"},
+                    }
+                }
+            },
+            "feature/skill",
+        ),
+        ({}, "feature/parameter"),
+        ({"branch": "feature/input"}, "feature/input"),
+        ({"defaultBranch": "trunk"}, "trunk"),
+    ]
+
+    for input_overrides, expected_branch in cases:
+        task = {
+            "instructions": "Do work",
+            "runtime": {"mode": "codex_cli"},
+            "publish": {"mode": "branch"},
+        }
+        task.update(input_overrides.get("task", {}))
+        inputs = {"task": task}
+        for key, value in input_overrides.items():
+            if key != "task":
+                inputs[key] = value
+        parameters = {
+            "branch": "feature/parameter",
+            "defaultBranch": "main",
+        }
+        if expected_branch in {"feature/input", "trunk"}:
+            parameters.pop("branch")
+        if expected_branch == "trunk":
+            parameters.pop("defaultBranch")
+
+        plan = planner(inputs=inputs, parameters=parameters, snapshot=snapshot)
+
+        assert plan["nodes"][-1]["inputs"]["branch"] == expected_branch
+
+def test_runtime_planner_leaves_branch_unset_without_authored_branch():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Do work",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "branch"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    assert "branch" not in plan["nodes"][-1]["inputs"]
+
+def test_runtime_planner_ignores_non_string_branch_values():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Do work",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "branch"},
+                "git": {"defaultBranch": {"name": "main"}},
+            }
+        },
+        parameters={"defaultBranch": {"name": "trunk"}},
+        snapshot=snapshot,
+    )
+
+    assert "branch" not in plan["nodes"][-1]["inputs"]
+
 def test_runtime_planner_publish_pr_uses_step_title_for_target_branch_prefix():
     planner = _build_runtime_planner()
     snapshot = _make_snapshot()

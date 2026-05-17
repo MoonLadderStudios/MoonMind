@@ -7039,50 +7039,6 @@ class TemporalAgentRuntimeActivities:
             protected = {"main", "master", "HEAD"}
             if target_branch_name and not target_branch_push_allowed:
                 protected.add(target_branch_name)
-            if (
-                current_branch == "HEAD"
-                and head_branch_name
-                and head_branch_name not in protected
-            ):
-                repair_proc = await asyncio.create_subprocess_exec(
-                    *self._workspace_git_command(
-                        workspace, "checkout", "-B", head_branch_name,
-                    ),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    env=command_env,
-                )
-                try:
-                    repair_stdout, repair_stderr = await asyncio.wait_for(
-                        repair_proc.communicate(), timeout=30,
-                    )
-                except asyncio.TimeoutError:
-                    repair_proc.kill()
-                    await repair_proc.wait()
-                    return {
-                        "push_status": "failed",
-                        "push_error": "detached HEAD recovery timed out after 30s",
-                        "push_branch": "HEAD",
-                    }
-                if repair_proc.returncode != 0:
-                    repair_detail = (
-                        repair_stderr.decode("utf-8", errors="replace").strip()
-                        or repair_stdout.decode("utf-8", errors="replace").strip()
-                    )
-                    return {
-                        "push_status": "failed",
-                        "push_error": (
-                            "could not recover detached HEAD onto "
-                            f"'{head_branch_name}': {repair_detail}"
-                        ),
-                        "push_branch": "HEAD",
-                    }
-                logger.info(
-                    "Recovered detached HEAD for run %s onto branch '%s' before push",
-                    run_id,
-                    head_branch_name,
-                )
-                current_branch = head_branch_name
             if not current_branch or current_branch in protected:
                 logger.warning(
                     "Post-agent git push skipped for run %s: "

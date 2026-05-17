@@ -425,84 +425,26 @@ class TestPushWorkspaceBranch:
         assert result["push_status"] == "protected_branch"
 
     @pytest.mark.asyncio
-    async def test_push_recovers_detached_head_to_explicit_head_branch(self):
+    async def test_push_refuses_detached_head_even_with_explicit_head_branch(self):
         store = _make_mock_store()
         activities = TemporalAgentRuntimeActivities(run_store=store)
-        call_count = 0
-        captured_checkout_args = None
 
         async def _mock_exec(*args, **kwargs):
-            nonlocal call_count, captured_checkout_args
-            call_count += 1
             proc = AsyncMock()
-            if call_count == 1:  # rev-parse
-                proc.communicate = AsyncMock(return_value=(b"HEAD\n", b""))
-                proc.returncode = 0
-            elif call_count == 2:  # checkout -B feature branch
-                captured_checkout_args = args
-                proc.communicate = AsyncMock(return_value=(b"", b""))
-                proc.returncode = 0
-            elif call_count == 3:  # status --porcelain
-                proc.communicate = AsyncMock(return_value=(b"", b""))
-                proc.returncode = 0
-            elif call_count == 4:  # push
-                proc.communicate = AsyncMock(return_value=(b"", b""))
-                proc.returncode = 0
-            else:  # rev-list --count
-                proc.communicate = AsyncMock(return_value=(b"1\n", b""))
-                proc.returncode = 0
+            proc.communicate = AsyncMock(return_value=(b"HEAD\n", b""))
+            proc.returncode = 0
             return proc
 
-        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec) as mock_exec:
             result = await activities._push_workspace_branch(
                 "run-1",
                 target_branch="main",
                 head_branch="feature/recover-detached-head",
             )
 
-        assert result["push_status"] == "pushed"
-        assert result["push_branch"] == "feature/recover-detached-head"
-        assert captured_checkout_args is not None
-        assert captured_checkout_args[-3:] == (
-            "checkout",
-            "-B",
-            "feature/recover-detached-head",
-        )
-
-    @pytest.mark.asyncio
-    async def test_push_detached_head_recovery_timeout_kills_checkout(self):
-        store = _make_mock_store()
-        activities = TemporalAgentRuntimeActivities(run_store=store)
-        call_count = 0
-        repair_proc = MagicMock()
-        repair_proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError())
-        repair_proc.wait = AsyncMock(return_value=0)
-        repair_proc.kill = MagicMock()
-
-        async def _mock_exec(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:  # rev-parse
-                proc = MagicMock()
-                proc.communicate = AsyncMock(return_value=(b"HEAD\n", b""))
-                proc.returncode = 0
-                return proc
-            if call_count == 2:  # checkout -B feature branch
-                return repair_proc
-            raise AssertionError(f"Unexpected subprocess call #{call_count}: {args!r}")
-
-        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
-            result = await activities._push_workspace_branch(
-                "run-1",
-                target_branch="main",
-                head_branch="feature/recover-detached-head",
-            )
-
-        assert result["push_status"] == "failed"
+        assert result["push_status"] == "protected_branch"
         assert result["push_branch"] == "HEAD"
-        assert result["push_error"] == "detached HEAD recovery timed out after 30s"
-        repair_proc.kill.assert_called_once_with()
-        repair_proc.wait.assert_awaited_once()
+        assert mock_exec.call_count == 1
 
     @pytest.mark.asyncio
     async def test_push_protected_target_branch(self):
