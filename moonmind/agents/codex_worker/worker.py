@@ -108,6 +108,28 @@ _SECRET_LIKE_METADATA_PATTERN = re.compile(
     """
 )
 _SENSITIVE_COMMAND_FLAGS = frozenset({"--title", "--body", "--message", "-m"})
+_JIRA_ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
+_CONTROL_PLANE_PR_METADATA_PATTERNS = (
+    re.compile(
+        r"\b(?:change|move|transition)\s+jira\s+issue\s+"
+        r"[A-Z][A-Z0-9]+-\d+\s+to\s+"
+        r"(?:status\s+)?"
+        r"(?:in\s+progress|code\s+review|done|backlog|selected\s+for\s+development)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\btrusted\s+jira\s+issue\s+updater\s+workflow\b", re.IGNORECASE),
+    re.compile(r"\bjira\s+transition\s+tools?\b", re.IGNORECASE),
+    re.compile(r"\bbefore\s+implementation\s+starts?\b", re.IGNORECASE),
+    re.compile(r"\bdo\s+not\s+guess\s+transition\s+ids?\b", re.IGNORECASE),
+)
+_JIRA_PR_BODY_REQUIRED_FIELDS = (
+    ("Jira", ("jira",)),
+    ("MoonSpec", ("moonspec", "moon spec")),
+    ("Summary", ("summary",)),
+    ("Verification verdict", ("verification verdict", "verdict")),
+    ("Tests", ("tests", "test evidence")),
+    ("Remaining risks", ("remaining risks", "risks", "risk")),
+)
 _MOONMIND_SIGNAL_TAGS = frozenset(
     {
         "retry",
@@ -122,6 +144,24 @@ _MOONMIND_SIGNAL_TAGS = frozenset(
 _FIX_PROPOSAL_SKILL_ID = "fix-proposal"
 _CONTINUATION_PROPOSAL_SKILL_ID = "continuation-proposal"
 _PR_RESOLVER_SKILL_ID = "pr-resolver"
+
+
+@dataclass(frozen=True)
+class ValidatedPullRequestMetadata:
+    """Semantic PR metadata accepted for managed publication."""
+
+    title: str
+    body: str
+    jira_issue_key: str | None = None
+    moon_spec_path: str | None = None
+
+    def to_payload(self) -> dict[str, str]:
+        payload = {"title": self.title, "body": self.body}
+        if self.jira_issue_key:
+            payload["jiraIssueKey"] = self.jira_issue_key
+        if self.moon_spec_path:
+            payload["moonSpecPath"] = self.moon_spec_path
+        return payload
 
 # Worker runtime modes accepted by MOONMIND_WORKER_RUNTIME. Intentionally a subset
 # of SUPPORTED_RUNTIME_MODES: `codex_cloud` is excluded because it is not a local
@@ -5013,6 +5053,125 @@ class CodexWorker:
         return candidate
 
     @staticmethod
+    def _resolve_canonical_jira_issue_key(
+        canonical_payload: Mapping[str, Any],
+    ) -> str | None:
+        """Return the canonical Jira issue key attached to a task-shaped payload."""
+
+        task_node = canonical_payload.get("task")
+        task = task_node if isinstance(task_node, Mapping) else {}
+        candidates = (
+            task.get("jiraIssueKey"),
+            task.get("jira_issue_key"),
+            canonical_payload.get("jiraIssueKey"),
+            canonical_payload.get("jira_issue_key"),
+        )
+        for candidate in candidates:
+            value = str(candidate or "").strip().upper()
+            if value and _JIRA_ISSUE_KEY_PATTERN.fullmatch(value):
+                return value
+        jira_node = task.get("jira")
+        jira = jira_node if isinstance(jira_node, Mapping) else {}
+        for key in ("issueKey", "issue_key", "key"):
+            value = str(jira.get(key) or "").strip().upper()
+            if value and _JIRA_ISSUE_KEY_PATTERN.fullmatch(value):
+                return value
+        return None
+
+    @staticmethod
+    def _resolve_canonical_moonspec_path(
+        canonical_payload: Mapping[str, Any],
+    ) -> str | None:
+        """Return the active MoonSpec path when task payload metadata provides it."""
+
+        task_node = canonical_payload.get("task")
+        task = task_node if isinstance(task_node, Mapping) else {}
+        for candidate in (
+            task.get("moonSpecPath"),
+            task.get("moonspecPath"),
+            task.get("moon_spec_path"),
+            canonical_payload.get("moonSpecPath"),
+            canonical_payload.get("moonspecPath"),
+            canonical_payload.get("moon_spec_path"),
+        ):
+            value = str(candidate or "").strip()
+            if value:
+                return value
+        return None
+
+    @staticmethod
+    def _contains_control_plane_pr_metadata(value: str) -> bool:
+        """Detect known workflow-control text that is invalid as PR review metadata."""
+
+        return any(
+            pattern.search(value) for pattern in _CONTROL_PLANE_PR_METADATA_PATTERNS
+        )
+
+    @classmethod
+    def _validate_pull_request_metadata(
+        cls,
+        *,
+        title: str,
+        body: str,
+        canonical_payload: Mapping[str, Any],
+    ) -> ValidatedPullRequestMetadata:
+        """Validate semantic PR metadata before creating or updating a PR."""
+
+        title_text = str(title or "")
+        body_text = str(body or "")
+        if not title_text.strip():
+            raise ValueError("task.publish.prTitle must be non-empty for PR publication")
+        if not body_text.strip():
+            raise ValueError("task.publish.prBody must be non-empty for PR publication")
+
+        combined = f"{title_text}\n{body_text}"
+        if cls._contains_control_plane_pr_metadata(combined):
+            raise ValueError(
+                "task.publish PR metadata appears to contain control-plane instructions; "
+                "provide reviewer-facing implementation metadata instead"
+            )
+
+        jira_issue_key = cls._resolve_canonical_jira_issue_key(canonical_payload)
+        moon_spec_path = cls._resolve_canonical_moonspec_path(canonical_payload)
+        if jira_issue_key:
+            issue_pattern = re.compile(
+                rf"\b{re.escape(jira_issue_key)}\b",
+                re.IGNORECASE,
+            )
+            if issue_pattern.search(title_text) is None:
+                raise ValueError(
+                    "task.publish.prTitle for Jira-backed PRs must include the "
+                    f"canonical Jira issue key {jira_issue_key}"
+                )
+            capability = issue_pattern.sub("", title_text)
+            capability = re.sub(r"[\s:;\-_\[\]()#]+", " ", capability).strip()
+            if not capability:
+                raise ValueError(
+                    "task.publish.prTitle for Jira-backed PRs must include an "
+                    "implemented capability"
+                )
+            if issue_pattern.search(body_text) is None:
+                raise ValueError(
+                    "task.publish.prBody for Jira-backed PRs must include the "
+                    f"canonical Jira issue key {jira_issue_key}"
+                )
+
+            normalized_body = " ".join(body_text.casefold().split())
+            for label, markers in _JIRA_PR_BODY_REQUIRED_FIELDS:
+                if not any(marker in normalized_body for marker in markers):
+                    raise ValueError(
+                        "task.publish.prBody for Jira-backed PRs must include "
+                        f"{label}"
+                    )
+
+        return ValidatedPullRequestMetadata(
+            title=title_text,
+            body=body_text,
+            jira_issue_key=jira_issue_key,
+            moon_spec_path=moon_spec_path,
+        )
+
+    @staticmethod
     def _sanitize_metadata_footer_value(
         value: str | None, *, fallback: str = "unknown"
     ) -> str:
@@ -5889,6 +6048,7 @@ class CodexWorker:
             publish_base_branch = prepared.starting_branch
             publish_note = f"published branch {prepared.working_branch}"
             pr_base: str | None = None
+            validated_pr_metadata: ValidatedPullRequestMetadata | None = None
 
             if publish_mode == "pr":
                 try:
@@ -5982,6 +6142,11 @@ class CodexWorker:
                         pr_body=pr_body,
                         skip_reason=preflight_result.verification_skip_reason,
                     )
+                validated_pr_metadata = self._validate_pull_request_metadata(
+                    title=pr_title,
+                    body=pr_body,
+                    canonical_payload=canonical_payload,
+                )
                 publish_env = prepared.publish_command_env or {}
                 github_token = str(publish_env.get("GITHUB_TOKEN") or "").strip()
                 repository = str(canonical_payload.get("repository") or "").strip()
@@ -6042,6 +6207,10 @@ class CodexWorker:
                 "skipped": False,
                 "verification": verification_payload,
             }
+            if publish_mode == "pr":
+                result_payload["readinessState"] = "pending"
+                if validated_pr_metadata is not None:
+                    result_payload["prMetadata"] = validated_pr_metadata.to_payload()
             prepared.publish_result_path.write_text(
                 json.dumps(result_payload, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
