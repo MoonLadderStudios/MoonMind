@@ -51,6 +51,18 @@ async def _get_service(
     return get_task_proposal_service(session)
 
 
+def _require_proposal_recovery_admin(user: User) -> None:
+    if bool(getattr(user, "is_superuser", False)):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "code": "proposal_recovery_forbidden",
+            "message": "Only administrators can run proposal recovery actions.",
+        },
+    )
+
+
 def _build_task_preview(
     task_request: dict[str, object],
 ) -> TaskProposalTaskPreview | None:
@@ -674,8 +686,9 @@ async def redeliver_proposal(
     *,
     proposal_id: UUID,
     service: TaskProposalService = Depends(_get_service),
-    _user: User = Depends(get_current_user()),
+    user: User = Depends(get_current_user()),
 ) -> TaskProposalModel:
+    _require_proposal_recovery_admin(user)
     try:
         proposal = await service.redeliver_proposal(proposal_id=proposal_id)
     except TaskProposalValidationError as exc:
@@ -696,10 +709,16 @@ async def sync_proposal_delivery(
     *,
     proposal_id: UUID,
     service: TaskProposalService = Depends(_get_service),
-    _user: User = Depends(get_current_user()),
+    user: User = Depends(get_current_user()),
 ) -> TaskProposalModel:
+    _require_proposal_recovery_admin(user)
     try:
         proposal = await service.sync_proposal_delivery(proposal_id=proposal_id)
+    except TaskProposalValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "invalid_request", "message": str(exc)},
+        ) from exc
     except TaskProposalError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

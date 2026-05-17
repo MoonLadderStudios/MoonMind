@@ -695,11 +695,13 @@ class TaskProposalService:
     async def redeliver_proposal(self, *, proposal_id: UUID) -> TaskProposal:
         """Retry provider delivery through the trusted delivery adapter."""
 
-        proposal = await self._repository.get_proposal_for_update(proposal_id)
         if self._delivery_service is None:
             raise TaskProposalValidationError(
                 "proposal delivery provider is not configured"
             )
+        proposal = await self._repository.get_proposal(proposal_id)
+        if proposal is None:
+            raise TaskProposalNotFoundError(str(proposal_id))
         await self._deliver_proposal_if_configured(proposal)
         await self._repository.refresh(proposal)
         return proposal
@@ -707,12 +709,14 @@ class TaskProposalService:
     async def sync_proposal_delivery(self, *, proposal_id: UUID) -> TaskProposal:
         """Refresh delivery audit metadata without changing the executable payload."""
 
-        proposal = await self._repository.get_proposal_for_update(proposal_id)
-        provider_metadata = (
-            dict(getattr(proposal, "provider_metadata", {}))
-            if isinstance(getattr(proposal, "provider_metadata", {}), Mapping)
-            else {}
-        )
+        if self._delivery_service is None:
+            raise TaskProposalValidationError(
+                "proposal delivery provider is not configured"
+            )
+        proposal = await self._repository.get_proposal(proposal_id)
+        if proposal is None:
+            raise TaskProposalNotFoundError(str(proposal_id))
+        provider_metadata = dict(proposal.provider_metadata)
         syncer = getattr(self._delivery_service, "sync", None)
         now = datetime.now(UTC)
         if callable(syncer):

@@ -18,7 +18,10 @@ from moonmind.workflows.task_proposals.models import (
     TaskProposalReviewPriority,
     TaskProposalStatus,
 )
-from moonmind.workflows.task_proposals.service import TaskProposalStatusError
+from moonmind.workflows.task_proposals.service import (
+    TaskProposalStatusError,
+    TaskProposalValidationError,
+)
 
 @pytest.fixture
 def client() -> tuple[TestClient, AsyncMock, AsyncMock]:
@@ -37,7 +40,12 @@ def client() -> tuple[TestClient, AsyncMock, AsyncMock]:
     app.dependency_overrides[_get_service] = _service_override
     app.dependency_overrides[_get_temporal_execution_service] = _execution_service_override
 
-    mock_user = SimpleNamespace(id=uuid4(), email="user@example.com", is_active=True)
+    mock_user = SimpleNamespace(
+        id=uuid4(),
+        email="user@example.com",
+        is_active=True,
+        is_superuser=True,
+    )
 
     async def _user_override():
         return mock_user
@@ -713,6 +721,28 @@ def test_redeliver_proposal_endpoint_returns_recovery_record(
     assert response.json()["reviewDelivery"]["status"] == "delivered"
 
 
+def test_redeliver_proposal_endpoint_requires_admin(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
+    test_client, service, _execution_service = client
+    proposal = _build_proposal()
+
+    async def _user_override():
+        return SimpleNamespace(
+            id=uuid4(),
+            email="user@example.com",
+            is_active=True,
+            is_superuser=False,
+        )
+
+    test_client.app.dependency_overrides[get_current_user()] = _user_override
+
+    response = test_client.post(f"/api/proposals/{proposal.id}/redeliver")
+
+    assert response.status_code == 403
+    service.redeliver_proposal.assert_not_awaited()
+
+
 def test_sync_proposal_delivery_endpoint_returns_recovery_record(
     client: tuple[TestClient, AsyncMock, AsyncMock],
 ) -> None:
@@ -735,3 +765,40 @@ def test_sync_proposal_delivery_endpoint_returns_recovery_record(
     payload = response.json()
     assert payload["reviewDelivery"]["lastSyncedAt"] == "2026-05-17T12:00:00Z"
     assert payload["providerMetadata"]["sync"]["status"] == "inspected"
+
+
+def test_sync_proposal_delivery_endpoint_requires_admin(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
+    test_client, service, _execution_service = client
+    proposal = _build_proposal()
+
+    async def _user_override():
+        return SimpleNamespace(
+            id=uuid4(),
+            email="user@example.com",
+            is_active=True,
+            is_superuser=False,
+        )
+
+    test_client.app.dependency_overrides[get_current_user()] = _user_override
+
+    response = test_client.post(f"/api/proposals/{proposal.id}/sync")
+
+    assert response.status_code == 403
+    service.sync_proposal_delivery.assert_not_awaited()
+
+
+def test_sync_proposal_delivery_endpoint_returns_validation_errors(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
+    test_client, service, _execution_service = client
+    proposal = _build_proposal()
+    service.sync_proposal_delivery.side_effect = TaskProposalValidationError(
+        "proposal delivery provider is not configured"
+    )
+
+    response = test_client.post(f"/api/proposals/{proposal.id}/sync")
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "invalid_request"

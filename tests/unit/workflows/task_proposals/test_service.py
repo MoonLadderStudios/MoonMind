@@ -1178,7 +1178,7 @@ async def test_redeliver_proposal_reuses_trusted_delivery_adapter() -> None:
         delivered_at=None,
         last_synced_at=None,
     )
-    repo.get_proposal_for_update.return_value = record
+    repo.get_proposal.return_value = record
     delivery = _FakeDeliveryService()
     service = TaskProposalService(
         repo,
@@ -1191,6 +1191,7 @@ async def test_redeliver_proposal_reuses_trusted_delivery_adapter() -> None:
     assert updated is record
     assert delivery.requests[0].record_id == str(record.id)
     assert record.provider_metadata["delivery"]["status"] == "delivered"
+    repo.get_proposal_for_update.assert_not_called()
     repo.refresh.assert_awaited_with(record)
 
 
@@ -1218,7 +1219,7 @@ async def test_sync_proposal_delivery_records_recovery_audit_without_adapter_syn
         delivered_at=None,
         last_synced_at=None,
     )
-    repo.get_proposal_for_update.return_value = record
+    repo.get_proposal.return_value = record
     service = TaskProposalService(
         repo,
         redactor=SecretRedactor([], "***"),
@@ -1230,7 +1231,30 @@ async def test_sync_proposal_delivery_records_recovery_audit_without_adapter_syn
     assert updated is record
     assert record.provider_metadata["sync"]["status"] == "inspected"
     assert record.last_synced_at is not None
+    repo.get_proposal_for_update.assert_not_called()
     repo.commit.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_redeliver_proposal_requires_configured_delivery_service() -> None:
+    repo = AsyncMock()
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
+
+    with pytest.raises(TaskProposalValidationError):
+        await service.redeliver_proposal(proposal_id=uuid4())
+
+    repo.get_proposal.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_sync_proposal_delivery_requires_configured_delivery_service() -> None:
+    repo = AsyncMock()
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
+
+    with pytest.raises(TaskProposalValidationError):
+        await service.sync_proposal_delivery(proposal_id=uuid4())
+
+    repo.get_proposal.assert_not_called()
 
 
 @pytest.mark.asyncio
