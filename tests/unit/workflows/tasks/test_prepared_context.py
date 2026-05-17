@@ -432,13 +432,37 @@ def test_attempt_context_records_retrieval_and_memory_manifest_refs() -> None:
     assert bundle.memory_manifest_ref == memory.memory_manifest_ref
 
 
+def test_retrieval_manifest_accepts_documented_retrieved_refs_key() -> None:
+    retrieval = build_retrieval_manifest(
+        {
+            "retrievedRefs": ["artifact://doc-1", "artifact://doc-2"],
+        }
+    )
+
+    assert retrieval.returned_refs == ["artifact://doc-1", "artifact://doc-2"]
+    assert retrieval.retrieval_manifest_ref.startswith(
+        "attempt-retrieval-manifest://sha256:"
+    )
+
+
+def test_retrieval_manifest_allows_literal_assignment_search_terms() -> None:
+    retrieval = build_retrieval_manifest(
+        {
+            "query": "find `password=` assignments and token= examples",
+            "indexVersion": "rag-index-1",
+        }
+    )
+
+    assert retrieval.query == "find `password=` assignments and token= examples"
+
+
 def test_attempt_context_rejects_secretish_values_and_unknown_memory_states() -> None:
     with pytest.raises(ValueError, match="raw secret material"):
         build_prepared_input_manifest(
             {
                 "inputAttachments": [
                     {
-                        "artifactId": "token=password=unsafe",
+                        "artifactId": "ghp_unsafe",
                     }
                 ]
             }
@@ -450,7 +474,7 @@ def test_attempt_context_rejects_secretish_values_and_unknown_memory_states() ->
             run_id="run-1",
             logical_step_id="collect-evidence",
             retrieval={
-                "query": "token=unsafe",
+                "query": "ghp_unsafe",
                 "indexVersion": "rag-index-1",
             },
         )

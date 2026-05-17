@@ -32,7 +32,7 @@ _INLINE_ATTACHMENT_KEYS = {
 }
 _DATA_URL_RE = re.compile(r"data:[^\s'\")]+", re.IGNORECASE)
 _SECRETISH_RE = re.compile(
-    r"(ghp_|github_pat_|AIza|ATATT|AKIA|token=|password=|"
+    r"(ghp_|github_pat_|AIza|ATATT|AKIA|"
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----)",
     re.IGNORECASE,
 )
@@ -392,7 +392,10 @@ def build_retrieval_manifest(retrieval: Mapping[str, Any]) -> RetrievalManifest:
             retrieval.get("indexVersion") or retrieval.get("index_version")
         ),
         "returnedRefs": _clean_existing_refs(
-            retrieval.get("returnedRefs") or retrieval.get("returned_refs")
+            retrieval.get("returnedRefs")
+            or retrieval.get("returned_refs")
+            or retrieval.get("retrievedRefs")
+            or retrieval.get("retrieved_refs")
         ),
         "filters": _optional_mapping(retrieval.get("filters")) or {},
         "compactSummaries": _bounded_summaries(
