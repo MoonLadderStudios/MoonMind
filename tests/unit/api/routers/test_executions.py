@@ -3011,6 +3011,31 @@ def test_serialize_execution_deduplicates_proposal_outcomes_by_external_key() ->
         }
     ]
 
+def test_serialize_execution_includes_failed_proposal_outcomes() -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.COMPLETED)
+    record.memo["proposals"] = {
+        "deliveryFailures": [
+            {
+                "provider": "jira",
+                "externalKey": "MM-902",
+                "code": "delivery_failed",
+                "message": "delivery failed: [REDACTED]",
+            }
+        ],
+    }
+
+    payload = _serialize_execution(record).model_dump(by_alias=True)
+
+    assert payload["proposalOutcomes"] == [
+        {
+            "provider": "jira",
+            "externalKey": "MM-902",
+            "code": "delivery_failed",
+            "message": "delivery failed: [REDACTED]",
+            "deliveryStatus": "failed",
+        }
+    ]
+
 
 def test_serialize_execution_exposes_snake_case_publish_merge_automation() -> None:
     record = _build_execution_record()

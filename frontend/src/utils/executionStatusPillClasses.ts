@@ -2,7 +2,7 @@ import { formatStatusLabel } from './formatters';
 
 export const EXECUTING_STATUS_PILL_TRACEABILITY = Object.freeze({
   jiraIssue: 'MM-488',
-  relatedJiraIssues: ['MM-489', 'MM-490', 'MM-491'],
+  relatedJiraIssues: ['MM-489', 'MM-490', 'MM-491', 'MM-704'],
   designRequirements: [
     'DESIGN-REQ-001',
     'DESIGN-REQ-002',
@@ -39,6 +39,7 @@ function executionStatusBaseClasses(key: string): string {
   if (
     key === 'running' ||
     key === 'executing' ||
+    key === 'proposals' ||
     key === 'planning' ||
     key === 'initializing' ||
     key === 'finalizing'

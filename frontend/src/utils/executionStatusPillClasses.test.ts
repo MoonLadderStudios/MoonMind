@@ -51,6 +51,7 @@ describe('executionStatusPillProps', () => {
     expect(executionStatusPillProps('failed')).toEqual({ className: 'status status-failed' });
     expect(executionStatusPillProps('executing').className).toBe('status status-running is-executing');
     expect(executionStatusPillProps('planning').className).toBe('status status-running is-planning');
+    expect(executionStatusPillProps('proposals')).toEqual({ className: 'status status-running' });
 
     expect(executionStatusPillProps('waiting_on_dependencies')).toEqual({
       className: 'status status-waiting',
@@ -79,5 +80,6 @@ describe('executionStatusPillProps', () => {
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-489');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-490');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-491');
+    expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-704');
   });
 });

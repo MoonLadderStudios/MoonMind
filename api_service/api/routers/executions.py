@@ -2081,6 +2081,10 @@ def _proposal_outcomes_from_summary(
         if not isinstance(item, Mapping):
             continue
         merge_outcome(item, default_status="updated")
+    for item in proposal_summary.get("deliveryFailures") or []:
+        if not isinstance(item, Mapping):
+            continue
+        merge_outcome(item, default_status="failed")
     return outcomes
 
 
