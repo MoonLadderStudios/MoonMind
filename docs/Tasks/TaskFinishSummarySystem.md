@@ -2,8 +2,9 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-03-27  
-Related: `docs/Tasks/TaskArchitecture.md`, `docs/Tasks/TaskProposalQueue.md`
+Last Updated: 2026-05-17  
+Related: `docs/Tasks/TaskArchitecture.md`, `docs/Tasks/TaskProposalQueue.md`,
+`docs/Temporal/ErrorTaxonomy.md`, `docs/Temporal/StepLedgerAndProgressModel.md`
 
 ---
 
@@ -72,11 +73,96 @@ The finish summary data is small and stored as JSON. A `reports/run_summary.json
 }
 ```
 
-### 2.3 Secret Handling
+### 2.3 Failure Diagnostics Contract
+
+Failed and canceled runs MUST include a bounded, redacted, operator-meaningful
+failure reason. Generic Temporal wrappers (for example `Activity task failed`,
+`Child Workflow execution failed`) are not acceptable as the operator-visible
+reason — the workflow MUST walk the exception chain and surface the deepest
+non-generic root cause.
+
+`finishOutcome.reason` is the canonical operator-facing failure string. When a
+run fails, it MUST be sourced from a structured failure diagnostic captured at
+the failure boundary, not reconstructed from the terminal `summary` field
+alone.
+
+Failed runs SHOULD additionally include a structured `failure` object alongside
+`finishOutcome`. The object is small, free of secrets, and shaped as:
+
+```json
+{
+  "failure": {
+    "stage": "executing",
+    "category": "integration_error",
+    "source": "child_workflow",
+    "stepId": "apply-patch",
+    "stepTitle": "Apply patch",
+    "childWorkflowId": "task-123:agent:apply-patch",
+    "message": "Provider authentication failed with HTTP 401 for profile codex-prod.",
+    "rootCauseType": "ApplicationError",
+    "diagnosticsRef": "artifact://..."
+  }
+}
+```
+
+Field semantics:
+
+* `stage`: the workflow stage that was active when the failure was captured
+  (`prepare`, `planning`, `executing`, `publish`, `proposals`, `finalizing`).
+* `category`: aligns with `ExecutionTerminalStateInput.error_category` and the
+  policy categories in `docs/Temporal/ErrorTaxonomy.md`. Permitted values are
+  `user_error`, `integration_error`, `execution_error`, and `system_error`.
+  `ApplicationError.type` values such as `INVALID_INPUT`,
+  `UnsupportedStatus`, `ProfileResolutionError`, `SlotAcquisitionTimeout`, and
+  `RATE_LIMITED` are mapped onto these four categories.
+* `source`: where the failure originated — `child_workflow`, `activity`, or
+  `workflow`.
+* `stepId` / `stepTitle`: the failing plan node when applicable.
+* `childWorkflowId`: the child workflow id when the failure originated from a
+  child workflow.
+* `message`: the redacted, bounded operator-facing root cause. Truncated to
+  ~1000 characters.
+* `rootCauseType`: the deepest non-generic exception class name observed in
+  the failure chain.
+* `diagnosticsRef`: an optional artifact ref pointing at larger structured
+  diagnostics. Large diagnostic payloads MUST NOT be embedded inline — they
+  belong in artifacts. See `docs/Temporal/StepLedgerAndProgressModel.md` for
+  the same rule applied to per-step `lastError`.
+
+When a structured `failure` is present, the `lastStep` block SHOULD reflect
+the failure so operators see the failing tool, not a stale prior step:
+
+* `lastStep.id` is set to the failing step's `stepId`.
+* `lastStep.summary` matches the diagnostic `message`.
+* `lastStep.lastError` carries the diagnostic `category` (mirroring the
+  step-ledger `lastError` semantics defined in
+  `docs/Temporal/StepLedgerAndProgressModel.md`).
+* `lastStep.diagnosticsRef` is set when the diagnostic carries one.
+
+The terminal-state activity (`execution.record_terminal_state`) uses the same
+diagnostic when recording the `summary` and `errorCategory` so the visibility
+projection and the finish-summary artifact never disagree about why a run
+failed.
+
+#### First-failure-wins capture
+
+Failure diagnostics are captured at the first failure boundary that surfaces a
+non-generic root cause (for example the `except Exception` block around a
+`MoonMind.AgentRun` child workflow execution or a plan-step activity). Later
+generic re-raises in higher-level handlers MUST NOT overwrite an earlier,
+deeper diagnostic.
+
+### 2.5 Secret Handling
 
 Finish summaries MUST NOT contain tokens, API keys, credential strings, or full command lines with secret arguments. All strings are passed through redaction mechanisms before sync.
 
-### 2.4 Preset Summary Ownership
+This rule applies to the structured `failure` diagnostic defined in §2.3 as
+well. The diagnostic `message` is passed through the same redaction policy
+used for `operatorSummary` and step summaries (for example
+`scrub_github_tokens`) before being written to `reports/run_summary.json` or
+sent to the terminal-state activity.
+
+### 2.6 Preset Summary Ownership
 
 Task presets do not own generic end-of-run narration. Presets may emit structured
 facts that are useful after execution, such as a Jira issue key, pull request

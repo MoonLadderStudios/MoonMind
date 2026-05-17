@@ -111,6 +111,116 @@ def test_operator_failure_summary_skips_temporal_activity_wrapper() -> None:
     )
 
 
+def _make_workflow_for_diagnostic() -> MoonMindRunWorkflow:
+    wf = MoonMindRunWorkflow()
+    wf._state = "executing"
+    return wf
+
+
+def test_failure_diagnostic_from_exception_captures_deep_root_cause() -> None:
+    wf = _make_workflow_for_diagnostic()
+    failure = _NestedFailure(
+        "Child Workflow execution failed",
+        _NestedFailure(
+            "Activity task failed",
+            RuntimeError(
+                "Provider authentication failed with HTTP 401 for profile codex-prod."
+            ),
+        ),
+    )
+
+    diag = wf._failure_diagnostic_from_exception(
+        failure,
+        stage="executing",
+        step_id="apply-patch",
+        step_title="Apply patch",
+        source="child_workflow",
+        child_workflow_id="task-123:agent:apply-patch",
+    )
+
+    assert diag["stage"] == "executing"
+    assert diag["stepId"] == "apply-patch"
+    assert diag["stepTitle"] == "Apply patch"
+    assert diag["source"] == "child_workflow"
+    assert diag["childWorkflowId"] == "task-123:agent:apply-patch"
+    assert (
+        diag["message"]
+        == "Provider authentication failed with HTTP 401 for profile codex-prod."
+    )
+    assert diag["rootCauseType"] == "RuntimeError"
+    assert diag["category"] == "execution_error"
+
+
+def test_failure_diagnostic_redacts_github_tokens() -> None:
+    wf = _make_workflow_for_diagnostic()
+    secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+    failure = RuntimeError(
+        f"Push failed because token {secret} was rejected by the server"
+    )
+
+    diag = wf._failure_diagnostic_from_exception(failure, stage="executing")
+
+    assert secret not in diag["message"]
+    # Sanity check: redacted message still mentions the failure context.
+    assert "Push failed" in diag["message"]
+
+
+def test_failure_diagnostic_classifies_invalid_input_as_user_error() -> None:
+    from temporalio.exceptions import ApplicationError
+
+    wf = _make_workflow_for_diagnostic()
+    failure = ApplicationError(
+        "Plan tool 'apply-patch' was not found in registry snapshot",
+        type="INVALID_INPUT",
+        non_retryable=True,
+    )
+
+    diag = wf._failure_diagnostic_from_exception(failure, stage="planning")
+
+    assert diag["category"] == "user_error"
+    assert "Plan tool" in diag["message"]
+
+
+def test_failure_diagnostic_classifies_profile_resolution_as_integration() -> None:
+    from temporalio.exceptions import ApplicationError
+
+    wf = _make_workflow_for_diagnostic()
+    failure = ApplicationError(
+        "No enabled provider profiles for runtime codex_cli",
+        type="ProfileResolutionError",
+        non_retryable=True,
+    )
+
+    diag = wf._failure_diagnostic_from_exception(failure, stage="executing")
+
+    assert diag["category"] == "integration_error"
+
+
+def test_record_failure_diagnostic_keeps_first_root_cause() -> None:
+    wf = _make_workflow_for_diagnostic()
+    first = RuntimeError(
+        "Provider authentication failed with HTTP 401 for profile codex-prod."
+    )
+    wf._record_failure_diagnostic(
+        first,
+        stage="executing",
+        step_id="apply-patch",
+        step_title="Apply patch",
+        source="child_workflow",
+        child_workflow_id="wf:1",
+    )
+
+    second = RuntimeError("generic wrapper from higher-level handler")
+    wf._record_failure_diagnostic(second, stage="finalizing", source="workflow")
+
+    assert wf._failure_diagnostic is not None
+    assert wf._failure_diagnostic["stepId"] == "apply-patch"
+    assert (
+        wf._failure_diagnostic["message"]
+        == "Provider authentication failed with HTTP 401 for profile codex-prod."
+    )
+
+
 @pytest.fixture
 def mock_run_environment(monkeypatch):
     monkeypatch.setattr(
