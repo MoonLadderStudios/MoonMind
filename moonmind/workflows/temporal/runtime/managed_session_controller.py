@@ -2003,6 +2003,7 @@ class DockerCodexManagedSessionController:
             self._docker_binary,
             "run",
             "-d",
+            "--init",
             "--name",
             container_name,
             "--user",

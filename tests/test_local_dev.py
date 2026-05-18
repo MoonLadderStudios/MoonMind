@@ -53,6 +53,11 @@ def test_docker_compose_has_temporal_worker_auto_start_configured():
             "profiles" not in service_config
         ), f"Worker fleet '{fleet}' should not have profiles so it starts by default"
 
+        assert service_config.get("init") is True, (
+            f"Worker fleet '{fleet}' must run with an init process so child "
+            "agent/tool processes are reaped and shutdown signals are forwarded"
+        )
+
         # Verify the command is polling, not sleep
         env_vars = service_config.get("environment", [])
         command_var = next(
@@ -61,6 +66,25 @@ def test_docker_compose_has_temporal_worker_auto_start_configured():
         assert (
             "sleep" not in command_var
         ), f"Worker '{fleet}' must not be configured to sleep. Found: {command_var}"
+
+
+def test_api_service_runs_with_container_init():
+    """API service supervises subprocess-capable routes and should reap children."""
+    compose_path = Path("docker-compose.yaml")
+    assert (
+        compose_path.exists()
+    ), "docker-compose.yaml must exist at the repository root"
+
+    compose_data = yaml.safe_load(compose_path.read_text())
+    services = compose_data.get("services", {})
+    api_service = services.get("api")
+    assert isinstance(
+        api_service, dict
+    ), "api service is missing from docker-compose.yaml"
+    assert api_service.get("init") is True, (
+        "api service must run with an init process so child subprocesses "
+        "are reaped and shutdown signals are forwarded"
+    )
 
 
 def test_api_service_mounts_agent_runtime_workspace_volume():

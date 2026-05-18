@@ -171,6 +171,7 @@ async def test_controller_launches_container_and_returns_typed_handle(
     run_command = next(
         command for command in commands if command[:2] == ("docker", "run")
     )
+    assert "--init" in run_command
     assert "--name" in run_command
     assert "--user" in run_command
     assert "1000:1000" in run_command
