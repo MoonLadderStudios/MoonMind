@@ -165,7 +165,10 @@ async def test_controller_launches_container_and_returns_typed_handle(
     assert handle.session_state.container_id == "ctr-1"
     assert handle.metadata["vendorThreadId"] == "vendor-thread-1"
     assert commands[0] == ("docker", "rm", "-f", "mm-codex-session-sess-1")
-    run_command = commands[1]
+    assert commands[1] == ("docker", "rm", "-f", "moonmind-session-sess-1-agent")
+    run_command = next(
+        command for command in commands if command[:2] == ("docker", "run")
+    )
     assert "--name" in run_command
     assert "--user" in run_command
     assert "1000:1000" in run_command
@@ -287,6 +290,11 @@ async def test_controller_launches_private_docker_sidecar_for_docker_enabled_ses
     assert "--privileged" in sidecar_run
     assert "docker:27-dind" in sidecar_run
     assert "/var/run/docker.sock" not in " ".join(sidecar_run)
+    assert "moonmind.session_id=sess-1" in sidecar_run
+    assert "moonmind.session_epoch=1" in sidecar_run
+    assert "moonmind.task_run_id=task-1" in sidecar_run
+    assert "moonmind.workload_mode=docker-sidecar" in sidecar_run
+    assert "--group=1000" in sidecar_run
     assert (
         "type=volume,src=agent_workspaces,"
         f"dst={workspace_root}" in sidecar_run
@@ -304,6 +312,10 @@ async def test_controller_launches_private_docker_sidecar_for_docker_enabled_ses
         "dst=/var/lib/docker" in sidecar_run
     )
     assert "--privileged" not in agent_run
+    assert "moonmind.session_id=sess-1" in agent_run
+    assert "moonmind.session_epoch=1" in agent_run
+    assert "moonmind.task_run_id=task-1" in agent_run
+    assert "moonmind.workload_mode=docker-sidecar" in agent_run
     assert (
         "DOCKER_HOST=unix:///var/run/moonmind-docker/docker.sock" in agent_run
     )
@@ -338,6 +350,37 @@ async def test_controller_rejects_unmaterialized_rootless_sidecar_mode(
     )
 
     with pytest.raises(RuntimeError, match="docker-sidecar-rootless"):
+        await controller.launch_session(request)
+    runner.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_controller_rejects_unknown_managed_session_docker_mode(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "agent_jobs"
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_root / "task-1" / "repo"),
+        sessionWorkspacePath=str(workspace_root / "task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        environment={"MOONMIND_MANAGED_SESSION_DOCKER_MODE": "docker-sidecarr"},
+    )
+    runner = AsyncMock()
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        command_runner=runner,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Unsupported MOONMIND_MANAGED_SESSION_DOCKER_MODE",
+    ):
         await controller.launch_session(request)
     runner.assert_not_awaited()
 
@@ -476,7 +519,9 @@ async def test_controller_uses_request_moonmind_url_for_docker_network(
 
     await controller.launch_session(request)
 
-    run_command = commands[1]
+    run_command = next(
+        command for command in commands if command[:2] == ("docker", "run")
+    )
     assert "--network" in run_command
     assert "local-network" in run_command
 
@@ -547,17 +592,19 @@ async def test_controller_launch_unrestricted_session_exposes_docker_proxy(
 
     await controller.launch_session(request)
 
-    run_command = commands[1]
+    run_command = next(
+        command for command in commands if command[:2] == ("docker", "run")
+    )
     assert "DOCKER_HOST=tcp://docker-proxy:2375" in run_command
     assert "SYSTEM_DOCKER_HOST=tcp://docker-proxy:2375" in run_command
     assert "MOONMIND_WORKFLOW_DOCKER_MODE=unrestricted" in run_command
-    assert commands[2] == (
+    assert (
         "docker",
         "network",
         "connect",
         "docker-proxy-test",
         "ctr-1",
-    )
+    ) in commands
 
 @pytest.mark.asyncio
 async def test_controller_launch_removes_container_when_proxy_network_attach_fails(
@@ -671,7 +718,9 @@ async def test_controller_replaces_blank_request_moonmind_url(
 
     await controller.launch_session(request)
 
-    run_command = commands[1]
+    run_command = next(
+        command for command in commands if command[:2] == ("docker", "run")
+    )
     assert "MOONMIND_URL=http://api:8000" in run_command
 
 @pytest.mark.asyncio
@@ -757,8 +806,11 @@ async def test_controller_launch_normalizes_created_paths_for_container_user(
         Path(request.artifact_spool_path),
     } <= chowned_paths
     assert all(uid == 1000 and gid == 1000 for _path, uid, gid, _follow in chown_calls)
-    assert all(follow_symlinks is False for _path, _uid, _gid, follow_symlinks in chown_calls)
-    assert commands[1][:2] == ("docker", "run")
+    assert all(
+        follow_symlinks is False
+        for _path, _uid, _gid, follow_symlinks in chown_calls
+    )
+    assert any(command[:2] == ("docker", "run") for command in commands)
 
 @pytest.mark.asyncio
 async def test_controller_launch_clones_workspace_before_starting_container(
@@ -4209,7 +4261,9 @@ async def test_controller_launch_uses_mount_syntax_for_colon_scoped_paths(
 
     await controller.launch_session(request)
 
-    run_command = commands[1]
+    run_command = next(
+        command for command in commands if command[:2] == ("docker", "run")
+    )
     assert "-v" not in run_command
     assert "--user" in run_command
     assert "1000:1000" in run_command
@@ -4272,7 +4326,9 @@ async def test_controller_launch_mounts_auth_volume_at_separate_managed_auth_pat
 
     await controller.launch_session(request)
 
-    run_command = commands[1]
+    run_command = next(
+        command for command in commands if command[:2] == ("docker", "run")
+    )
     assert (
         "type=volume,src=codex_auth_volume,dst=/home/app/.codex-auth" in run_command
     )

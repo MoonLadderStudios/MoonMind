@@ -69,6 +69,8 @@ _SESSION_DOCKER_SOCKET_DIR = "/var/run/moonmind-docker"
 _SESSION_DOCKER_SOCKET_PATH = f"{_SESSION_DOCKER_SOCKET_DIR}/docker.sock"
 _SESSION_DOCKER_GRAPH_PATH = "/var/lib/docker"
 _DEFAULT_SESSION_DOCKER_SIDECAR_IMAGE = "docker:27-dind"
+_SESSION_DOCKER_MODE_ENABLED_VALUES = {"docker-sidecar"}
+_SESSION_DOCKER_MODE_DISABLED_VALUES = {"no-docker", "disabled", "none", "off"}
 logger = logging.getLogger(__name__)
 
 def _last_assistant_text_metadata(value: str) -> dict[str, Any]:
@@ -301,15 +303,25 @@ class DockerCodexManagedSessionController:
             or os.environ.get("MOONMIND_MANAGED_SESSION_DOCKER_MODE")
             or ""
         ).strip().lower()
-        if raw_mode in {"no-docker", "disabled", "none", "off"}:
+        if raw_mode in _SESSION_DOCKER_MODE_DISABLED_VALUES:
             return False
         if raw_mode == "docker-sidecar-rootless":
             raise RuntimeError(
                 "MOONMIND_MANAGED_SESSION_DOCKER_MODE=docker-sidecar-rootless "
                 "is not materialized by the Docker session launcher yet"
             )
-        if raw_mode == "docker-sidecar":
+        if raw_mode in _SESSION_DOCKER_MODE_ENABLED_VALUES:
             return True
+        if raw_mode:
+            allowed = sorted(
+                _SESSION_DOCKER_MODE_ENABLED_VALUES
+                | _SESSION_DOCKER_MODE_DISABLED_VALUES
+                | {"docker-sidecar-rootless"}
+            )
+            raise RuntimeError(
+                "Unsupported MOONMIND_MANAGED_SESSION_DOCKER_MODE "
+                f"{raw_mode!r}; expected one of {', '.join(allowed)}"
+            )
         workflow_source = session_environment.get("MOONMIND_WORKFLOW_DOCKER_MODE")
         if workflow_source is None:
             return False
@@ -393,6 +405,10 @@ class DockerCodexManagedSessionController:
             "--label",
             f"moonmind.session_id={request.session_id}",
             "--label",
+            f"moonmind.session_epoch={request.session_epoch}",
+            "--label",
+            f"moonmind.task_run_id={request.task_run_id}",
+            "--label",
             "moonmind.workload_mode=docker-sidecar",
             "-e",
             "DOCKER_TLS_CERTDIR=",
@@ -410,6 +426,7 @@ class DockerCodexManagedSessionController:
                 image,
                 "dockerd",
                 f"--host=unix://{_SESSION_DOCKER_SOCKET_PATH}",
+                f"--group={_MANAGED_SESSION_CONTAINER_GID}",
             ]
         )
         stdout, _stderr = await self._run(command)
@@ -1822,7 +1839,14 @@ class DockerCodexManagedSessionController:
             if docker_sidecar_enabled
             else self._container_name(request.session_id)
         )
-        await self._remove_container(container_name, ignore_failure=True)
+        await self._remove_container(
+            self._container_name(request.session_id),
+            ignore_failure=True,
+        )
+        await self._remove_container(
+            self._sidecar_agent_container_name(request.session_id),
+            ignore_failure=True,
+        )
         if docker_sidecar_enabled:
             await self._cleanup_docker_sidecar_resources(
                 request.session_id,
@@ -1840,6 +1864,13 @@ class DockerCodexManagedSessionController:
             "moonmind.kind=managed-session",
             "--label",
             f"moonmind.session_id={request.session_id}",
+            "--label",
+            f"moonmind.session_epoch={request.session_epoch}",
+            "--label",
+            f"moonmind.task_run_id={request.task_run_id}",
+            "--label",
+            "moonmind.workload_mode="
+            f"{'docker-sidecar' if docker_sidecar_enabled else 'no-docker'}",
             "--mount",
             self._volume_mount(self._workspace_volume_name, self._workspace_root),
         ]
