@@ -591,10 +591,16 @@ class DockerCodexManagedSessionController:
         capability_metadata: Mapping[str, Any],
     ) -> dict[str, Any]:
         merged = dict(metadata)
-        capabilities = dict(merged.get("capabilities") or {})
-        capabilities.update(dict(capability_metadata.get("capabilities") or {}))
-        if capabilities:
+        merged.update(dict(capability_metadata))
+        existing_capabilities = metadata.get("capabilities")
+        next_capabilities = capability_metadata.get("capabilities")
+        if isinstance(existing_capabilities, Mapping):
+            capabilities = dict(existing_capabilities)
+            if isinstance(next_capabilities, Mapping):
+                capabilities.update(dict(next_capabilities))
             merged["capabilities"] = capabilities
+        elif isinstance(next_capabilities, Mapping):
+            merged["capabilities"] = dict(next_capabilities)
         return merged
 
     async def _run_docker_capability_probe(
@@ -602,16 +608,17 @@ class DockerCodexManagedSessionController:
         *,
         container_id: str,
         args: tuple[str, ...],
+        docker_host: str | None = None,
     ) -> tuple[bool, str]:
-        command = (
+        command: list[str] = [
             self._docker_binary,
             "exec",
-            container_id,
-            "docker",
-            *args,
-        )
+        ]
+        if docker_host:
+            command.extend(("-e", f"DOCKER_HOST={docker_host}"))
+        command.extend((container_id, "docker", *args))
         returncode, stdout, stderr = await self._command_runner(
-            command,
+            tuple(command),
             env=self._docker_env(),
         )
         detail = (stdout.strip() or stderr.strip())[:500]
@@ -633,11 +640,13 @@ class DockerCodexManagedSessionController:
         version_ok, version_text = await self._run_docker_capability_probe(
             container_id=container_id,
             args=("version", "--format", "{{.Server.Version}}"),
+            docker_host=docker_host,
         )
         checks["dockerVersion"] = "passed" if version_ok else "failed"
         info_ok, _info_text = await self._run_docker_capability_probe(
             container_id=container_id,
             args=("info",),
+            docker_host=docker_host,
         )
         checks["dockerInfo"] = "passed" if info_ok else "failed"
         compose_available = False
@@ -645,6 +654,7 @@ class DockerCodexManagedSessionController:
             compose_ok, _compose_text = await self._run_docker_capability_probe(
                 container_id=container_id,
                 args=("compose", "version"),
+                docker_host=docker_host,
             )
             checks["dockerCompose"] = "passed" if compose_ok else "failed"
             compose_available = compose_ok
@@ -702,6 +712,8 @@ class DockerCodexManagedSessionController:
                 break
             if capability.interval_seconds > 0:
                 await asyncio.sleep(capability.interval_seconds)
+            else:
+                await asyncio.sleep(0)
 
         if capability.required:
             raise RuntimeError("sidecar_not_ready: Docker capability is required")

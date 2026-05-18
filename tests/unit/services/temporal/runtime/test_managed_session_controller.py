@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+import moonmind.workflows.temporal.runtime.managed_session_controller as managed_session_controller
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionClearRequest,
     CodexManagedSessionLocator,
@@ -229,11 +230,35 @@ async def test_mm693_launch_reports_required_docker_capability_ready(
             return 0, "ctr-1\n", ""
         if "ready" in command:
             return 0, '{"ready": true}\n', ""
-        if command[:5] == ("docker", "exec", "ctr-1", "docker", "version"):
+        if command[:7] == (
+            "docker",
+            "exec",
+            "-e",
+            "DOCKER_HOST=unix:///var/run/moonmind-docker/docker.sock",
+            "ctr-1",
+            "docker",
+            "version",
+        ):
             return 0, "27.3.1\n", ""
-        if command[:5] == ("docker", "exec", "ctr-1", "docker", "info"):
+        if command[:7] == (
+            "docker",
+            "exec",
+            "-e",
+            "DOCKER_HOST=unix:///var/run/moonmind-docker/docker.sock",
+            "ctr-1",
+            "docker",
+            "info",
+        ):
             return 0, "ok\n", ""
-        if command[:5] == ("docker", "exec", "ctr-1", "docker", "compose"):
+        if command[:7] == (
+            "docker",
+            "exec",
+            "-e",
+            "DOCKER_HOST=unix:///var/run/moonmind-docker/docker.sock",
+            "ctr-1",
+            "docker",
+            "compose",
+        ):
             return 0, "Docker Compose version v2.29.0\n", ""
         if "launch_session" in command:
             launch_payloads.append(json.loads(input_text or "{}"))
@@ -408,6 +433,103 @@ async def test_mm693_required_docker_capability_failure_blocks_launch(
         await controller.launch_session(request)
 
     assert ("docker", "rm", "-f", "ctr-1") in commands
+
+
+def test_mm693_capability_metadata_ignores_non_mapping_existing_value() -> None:
+    merged = DockerCodexManagedSessionController._merge_capability_metadata(
+        {"capabilities": "v1", "other": "kept"},
+        {"capabilities": {"docker": {"available": True}}},
+    )
+
+    assert merged == {
+        "capabilities": {"docker": {"available": True}},
+        "other": "kept",
+    }
+
+    unchanged = DockerCodexManagedSessionController._merge_capability_metadata(
+        {"capabilities": "v1"},
+        {},
+    )
+    assert unchanged == {"capabilities": "v1"}
+
+    with_metadata = DockerCodexManagedSessionController._merge_capability_metadata(
+        {"capabilities": {"docker": {"available": False}}, "original": "kept"},
+        {
+            "capabilities": {"docker": {"available": True}},
+            "vendorThreadId": "thread-2",
+        },
+    )
+    assert with_metadata == {
+        "capabilities": {"docker": {"available": True}},
+        "original": "kept",
+        "vendorThreadId": "thread-2",
+    }
+
+
+@pytest.mark.asyncio
+async def test_mm693_zero_interval_docker_capability_probe_yields(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(tmp_path / "repo"),
+        sessionWorkspacePath=str(tmp_path / "session"),
+        artifactSpoolPath=str(tmp_path / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        dockerCapability={
+            "required": False,
+            "mode": "sidecar-dind",
+            "composeSupport": False,
+            "timeoutSeconds": 0.1,
+            "intervalSeconds": 0,
+        },
+    )
+    monotonic_values = [0.0, 0.0, 1.0]
+    monotonic_index = 0
+    sleeps: list[float] = []
+    original_sleep = managed_session_controller.asyncio.sleep
+
+    def _monotonic() -> float:
+        nonlocal monotonic_index
+        value = monotonic_values[min(monotonic_index, len(monotonic_values) - 1)]
+        monotonic_index += 1
+        return value
+
+    async def _sleep(delay: float) -> None:
+        sleeps.append(delay)
+        await original_sleep(0)
+
+    monkeypatch.setattr(managed_session_controller.time, "monotonic", _monotonic)
+    monkeypatch.setattr(managed_session_controller.asyncio, "sleep", _sleep)
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        if command[:4] == ("docker", "exec", "ctr-1", "docker"):
+            return 1, "", "docker daemon unavailable"
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(tmp_path),
+        command_runner=_fake_runner,
+    )
+
+    status = await controller._evaluate_docker_capability(
+        container_id="ctr-1",
+        request=request,
+    )
+
+    assert sleeps == [0]
+    assert status["capabilities"]["docker"]["available"] is False
 
 @pytest.mark.asyncio
 async def test_controller_record_keeps_auth_and_runtime_homes_out_of_artifact_refs(
