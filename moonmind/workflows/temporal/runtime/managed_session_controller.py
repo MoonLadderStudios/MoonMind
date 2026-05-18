@@ -363,11 +363,14 @@ class DockerCodexManagedSessionController:
         session_id: str,
         *,
         ignore_failure: bool,
+        remove_volumes_if_container_missing: bool = True,
     ) -> None:
-        await self._remove_container(
+        removed_container = await self._remove_container(
             self._sidecar_container_name(session_id),
             ignore_failure=ignore_failure,
         )
+        if not removed_container and not remove_volumes_if_container_missing:
+            return
         await self._remove_volume(
             self._sidecar_graph_volume_name(session_id),
             ignore_failure=ignore_failure,
@@ -427,6 +430,7 @@ class DockerCodexManagedSessionController:
                 image,
                 "dockerd",
                 f"--host=unix://{_SESSION_DOCKER_SOCKET_PATH}",
+                f"--data-root={_SESSION_DOCKER_GRAPH_PATH}",
                 f"--group={_MANAGED_SESSION_CONTAINER_GID}",
             ]
         )
@@ -1064,12 +1068,14 @@ class DockerCodexManagedSessionController:
         container_identifier: str,
         *,
         ignore_failure: bool,
-    ) -> None:
+    ) -> bool:
         try:
             await self._run((self._docker_binary, "rm", "-f", container_identifier))
+            return True
         except RuntimeError:
             if not ignore_failure:
                 raise
+            return False
 
     async def _connect_container_network(
         self,
@@ -2105,8 +2111,10 @@ class DockerCodexManagedSessionController:
                     network_name=unrestricted_proxy_network,
                 )
         except Exception:
-            if container_id:
-                await self._remove_container(container_id, ignore_failure=True)
+            await self._remove_container(
+                container_id or container_name,
+                ignore_failure=True,
+            )
             if docker_sidecar_enabled:
                 await self._cleanup_docker_sidecar_resources(
                     request.session_id,
@@ -2457,6 +2465,12 @@ class DockerCodexManagedSessionController:
             await self._cleanup_docker_sidecar_resources(
                 request.session_id,
                 ignore_failure=True,
+            )
+        elif record is None:
+            await self._cleanup_docker_sidecar_resources(
+                request.session_id,
+                ignore_failure=True,
+                remove_volumes_if_container_missing=False,
             )
         await self._github_auth_brokers.stop(request.session_id)
         handle = CodexManagedSessionHandle(
