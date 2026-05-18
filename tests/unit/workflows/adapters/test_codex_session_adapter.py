@@ -620,6 +620,7 @@ async def test_start_passes_managed_session_dood_context(
         slot_releaser=_async_noop,
         cooldown_reporter=_async_noop,
         workflow_id="wf-agent-run-1",
+        task_workflow_id="wf-parent-task-1",
         runtime_id="codex_cli",
         run_store=ManagedRunStore(tmp_path / "managed_runs"),
         load_session_snapshot=_load_snapshot,
@@ -643,11 +644,95 @@ async def test_start_passes_managed_session_dood_context(
     launch_environment = launch_calls[0]["request"]["environment"]
     assert launch_environment["MOONMIND_WORKDIR"] == str(workspace_root)
     assert launch_environment["MOONMIND_JOB_ID"] == binding.task_run_id
+    assert launch_environment["MOONMIND_TASK_WORKFLOW_ID"] == "wf-parent-task-1"
+    assert launch_environment["MOONMIND_TASK_RUN_ID"] == binding.task_run_id
     assert (
         launch_environment["MOONMIND_CONTAINER_WORKSPACE_VOLUME"]
         == "agent_workspaces_test"
     )
     assert launch_environment["MOONMIND_WORKFLOW_DOCKER_MODE"] == "unrestricted"
+
+
+def _make_adapter_for_environment_test(
+    *,
+    tmp_path: Path,
+    task_workflow_id: str | None,
+) -> CodexSessionAdapter:
+    return CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "codex-default", "credential_source": "oauth_volume"}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        task_workflow_id=task_workflow_id,
+        runtime_id="codex_cli",
+        run_store=ManagedRunStore(tmp_path / "managed_runs"),
+        load_session_snapshot=_async_noop,
+        launch_session=_async_noop,
+        session_status=_async_noop,
+        prepare_turn_instructions=_prepare_turn_instructions,
+        send_turn=_async_noop,
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=_async_noop,
+        publish_remote_artifacts=_async_noop,
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+
+
+async def test_managed_session_launch_environment_overrides_incoming_task_identity(
+    tmp_path: Path,
+) -> None:
+    binding = _binding()
+    adapter = _make_adapter_for_environment_test(
+        tmp_path=tmp_path,
+        task_workflow_id="wf-parent-task-trusted",
+    )
+
+    spoofed_environment = {
+        "MOONMIND_TASK_WORKFLOW_ID": "wf-attacker-task",
+        "MOONMIND_TASK_RUN_ID": "wf-attacker-run",
+        "OTHER_VAR": "preserved",
+    }
+
+    launch_environment = adapter._managed_session_launch_environment(
+        binding=binding,
+        environment=spoofed_environment,
+    )
+
+    assert launch_environment["MOONMIND_TASK_WORKFLOW_ID"] == "wf-parent-task-trusted"
+    assert launch_environment["MOONMIND_TASK_RUN_ID"] == binding.task_run_id
+    assert launch_environment["OTHER_VAR"] == "preserved"
+
+
+async def test_managed_session_launch_environment_drops_task_workflow_when_unset(
+    tmp_path: Path,
+) -> None:
+    binding = _binding()
+    adapter = _make_adapter_for_environment_test(
+        tmp_path=tmp_path,
+        task_workflow_id=None,
+    )
+
+    spoofed_environment = {
+        "MOONMIND_TASK_WORKFLOW_ID": "wf-attacker-task",
+        "MOONMIND_TASK_RUN_ID": "wf-attacker-run",
+    }
+
+    launch_environment = adapter._managed_session_launch_environment(
+        binding=binding,
+        environment=spoofed_environment,
+    )
+
+    assert "MOONMIND_TASK_WORKFLOW_ID" not in launch_environment
+    assert launch_environment["MOONMIND_TASK_RUN_ID"] == binding.task_run_id
+
 
 async def test_start_omits_large_inline_instruction_from_result_metadata(
     tmp_path: Path,

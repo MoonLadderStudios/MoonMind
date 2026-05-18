@@ -1969,6 +1969,12 @@ class DockerCodexManagedSessionController:
         await self._ensure_workspace_paths(request)
         session_environment = dict(request.environment)
         session_environment.pop("GITHUB_TOKEN", None)
+        if request.workflow_id:
+            session_environment.setdefault(
+                "MOONMIND_TASK_WORKFLOW_ID",
+                request.workflow_id,
+            )
+        session_environment.setdefault("MOONMIND_TASK_RUN_ID", request.task_run_id)
         if self._moonmind_url:
             existing_moonmind_url = session_environment.get("MOONMIND_URL")
             if existing_moonmind_url is None or not str(existing_moonmind_url).strip():

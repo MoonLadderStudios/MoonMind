@@ -305,6 +305,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         apply_session_control_action: SessionControlSignaler,
         workspace_root: str,
         session_image_ref: str,
+        task_workflow_id: str | None = None,
         defer_turn_instructions_until_session_launch: bool = True,
         **kwargs: Any,
     ) -> None:
@@ -323,6 +324,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         self._apply_session_control_action = apply_session_control_action
         self._workspace_root = Path(workspace_root).resolve()
         self._session_image_ref = str(session_image_ref).strip()
+        self._task_workflow_id = str(task_workflow_id or "").strip() or None
         self._defer_turn_instructions_until_session_launch = bool(
             defer_turn_instructions_until_session_launch
         )
@@ -1249,6 +1251,14 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         }
         session_environment.setdefault("MOONMIND_WORKDIR", str(self._workspace_root))
         session_environment.setdefault("MOONMIND_JOB_ID", binding.task_run_id)
+        # Task identity is authorization-critical: caller-inheritance checks rely on these
+        # values matching the active workflow/binding. Overwrite any incoming overrides so
+        # a managed profile cannot spoof or stale-pin the identity of the current run.
+        if self._task_workflow_id:
+            session_environment["MOONMIND_TASK_WORKFLOW_ID"] = self._task_workflow_id
+        else:
+            session_environment.pop("MOONMIND_TASK_WORKFLOW_ID", None)
+        session_environment["MOONMIND_TASK_RUN_ID"] = binding.task_run_id
         session_environment.setdefault(
             "MOONMIND_CONTAINER_WORKSPACE_VOLUME",
             os.environ.get("MOONMIND_AGENT_WORKSPACES_VOLUME_NAME", "agent_workspaces"),

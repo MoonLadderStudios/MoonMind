@@ -111,6 +111,7 @@ async def test_controller_launches_container_and_returns_typed_handle(
     session_supervisor.emit_session_event = Mock()
     request = LaunchCodexManagedSessionRequest(
         taskRunId="task-1",
+        workflowId="wf-task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath=str(workspace_root / "task-1" / "repo"),
@@ -183,6 +184,8 @@ async def test_controller_launches_container_and_returns_typed_handle(
     assert (
         "MOONMIND_SESSION_TURN_COMPLETION_TIMEOUT_SECONDS=1800" in run_command
     )
+    assert "MOONMIND_TASK_WORKFLOW_ID=wf-task-1" in run_command
+    assert "MOONMIND_TASK_RUN_ID=task-1" in run_command
     assert "python3" in run_command
     assert "moonmind.workflows.temporal.runtime.codex_session_runtime" in run_command
     stored = session_store.load("sess-1")
