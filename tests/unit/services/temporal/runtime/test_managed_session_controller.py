@@ -292,6 +292,10 @@ async def test_controller_launches_private_docker_sidecar_for_docker_enabled_ses
         f"dst={workspace_root}" in sidecar_run
     )
     assert (
+        "type=volume,src=agent_workspaces,"
+        f"dst={workspace_root}" in agent_run
+    )
+    assert (
         "type=volume,src=moonmind-session-sess-1-docker-socket,"
         "dst=/var/run/moonmind-docker" in sidecar_run
     )
