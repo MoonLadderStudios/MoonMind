@@ -131,8 +131,22 @@ _TERMINAL_LAST_ERROR_UNSET = object()
 
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 _PR_OPTIONAL_AGENT_SKILLS = JIRA_AGENT_SKILLS
+_PR_OPTIONAL_TASK_SKILLS = frozenset(
+    {"jira-implement", *_PR_OPTIONAL_AGENT_SKILLS}
+)
+_PUBLISH_NOT_REQUIRED_STATUSES = frozenset(
+    {
+        "not_required",
+        "not-required",
+        "notrequired",
+        "not_applicable",
+        "not-applicable",
+    }
+)
 _JIRA_ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
-_JIRA_BACKED_AGENT_SKILLS = JIRA_BACKED_AGENT_SKILLS
+_JIRA_BACKED_AGENT_SKILLS = frozenset(
+    {"jira-implement", *JIRA_BACKED_AGENT_SKILLS}
+)
 
 class RunWorkflowInput(TypedDict, total=False):
     """Input payload for the MoonMind.Run workflow."""
@@ -3621,7 +3635,9 @@ class MoonMindRunWorkflow:
         )
         failure_mode = plan_definition.policy.failure_mode
         publish_mode = self._publish_mode(parameters)
-        pr_publish_optional = self._pr_publish_optional_for_plan(ordered_nodes)
+        pr_publish_optional = self._pr_publish_optional_for_plan(
+            ordered_nodes
+        ) or self._pr_publish_optional_for_task(parameters)
         require_pull_request_url = (
             publish_mode == "pr"
             and self._integration is None
@@ -4319,6 +4335,9 @@ class MoonMindRunWorkflow:
                 parameters=parameters,
                 execution_result=execution_result,
             )
+            if self._publish_status == "not_required":
+                require_pull_request_url = False
+                pull_request_url = None
             if (
                 self._publish_status == "failed"
                 and publish_status_before != "failed"
@@ -4512,7 +4531,11 @@ class MoonMindRunWorkflow:
                     )
 
                 push_status = agent_outputs.get("push_status", "")
-                if push_status == "no_commits":
+                if self._publish_status == "not_required":
+                    self._get_logger().info(
+                        "Skipping native PR creation: publish output not required."
+                    )
+                elif push_status == "no_commits":
                     self._get_logger().info(
                         "Skipping native PR creation: agent made no commits "
                         "on branch '%s'.",
@@ -4592,6 +4615,8 @@ class MoonMindRunWorkflow:
             self._publish_reason = (
                 "Jira issue agent completed; no PR output required"
             )
+            if self._merge_automation_requested(parameters):
+                self._publish_context["mergeAutomationStatus"] = "not_applicable"
         # Persist the PR URL so the workflow output can determine if a PR was created.
         self._pull_request_url = pull_request_url
         publish_mode = self._publish_mode(parameters)
@@ -5528,6 +5553,14 @@ class MoonMindRunWorkflow:
         if not isinstance(outputs, Mapping):
             return
 
+        not_required_reason = self._publish_not_required_reason(outputs)
+        if not_required_reason is not None:
+            self._publish_status = "not_required"
+            self._publish_reason = not_required_reason
+            if self._merge_automation_requested(parameters):
+                self._publish_context["mergeAutomationStatus"] = "not_applicable"
+            return
+
         push_status = self._coerce_text(outputs.get("push_status"))
         if push_status is None:
             return
@@ -5589,6 +5622,51 @@ class MoonMindRunWorkflow:
         if push_status == "pushed" and publish_mode == "branch":
             self._publish_status = "published"
             self._publish_reason = "published branch"
+
+    def _publish_not_required_reason(self, outputs: Mapping[str, Any]) -> str | None:
+        for source in self._publish_outcome_sources(outputs):
+            status = self._coerce_text(
+                source.get("publishStatus")
+                or source.get("publish_status")
+                or source.get("publishOutcome")
+                or source.get("publish_outcome")
+                or source.get("status")
+                or source.get("outcome"),
+                max_chars=80,
+            )
+            pr_required = source.get("prRequired")
+            if pr_required is None:
+                pr_required = source.get("pr_required")
+            required = source.get("required")
+
+            status_not_required = bool(
+                status and status.lower() in _PUBLISH_NOT_REQUIRED_STATUSES
+            )
+            pr_explicitly_not_required = pr_required is False or required is False
+            if not status_not_required and not pr_explicitly_not_required:
+                continue
+
+            reason = self._coerce_text(
+                source.get("publishReason")
+                or source.get("publish_reason")
+                or source.get("reason")
+                or source.get("summary")
+                or source.get("message")
+                or outputs.get("operator_summary")
+                or outputs.get("operatorSummary"),
+                max_chars=700,
+            )
+            return reason or "publish output not required"
+        return None
+
+    def _publish_outcome_sources(
+        self, outputs: Mapping[str, Any]
+    ) -> Iterable[Mapping[str, Any]]:
+        for key in ("publishOutcome", "publish_outcome", "publish"):
+            candidate = outputs.get(key)
+            if isinstance(candidate, Mapping):
+                yield candidate
+        yield outputs
 
     @staticmethod
     def _is_successful_jira_story_output(*, mode: str, status: str) -> bool:
@@ -5763,6 +5841,45 @@ class MoonMindRunWorkflow:
                 return False
         return True
 
+    def _pr_publish_optional_for_task(self, parameters: Mapping[str, Any]) -> bool:
+        task_payload = self._mapping_value(parameters, "task")
+        skill_names = self._task_skill_names(parameters, task_payload)
+        if not skill_names:
+            return False
+        return skill_names.issubset(_PR_OPTIONAL_TASK_SKILLS)
+
+    def _task_skill_names(
+        self,
+        parameters: Mapping[str, Any],
+        task_payload: Mapping[str, Any],
+    ) -> set[str]:
+        skill_names: set[str] = set()
+        for payload in (parameters, task_payload):
+            for key in ("tool", "skill"):
+                nested = payload.get(key)
+                if isinstance(nested, Mapping):
+                    name = self._coerce_text(
+                        nested.get("name") or nested.get("id"),
+                        max_chars=120,
+                    )
+                    if name:
+                        skill_names.add(name.lower())
+        skills_payload = task_payload.get("skills")
+        if isinstance(skills_payload, Mapping):
+            include = skills_payload.get("include")
+            if isinstance(include, Sequence) and not isinstance(include, (str, bytes)):
+                for item in include:
+                    if isinstance(item, Mapping):
+                        name = self._coerce_text(
+                            item.get("name") or item.get("id"),
+                            max_chars=120,
+                        )
+                    else:
+                        name = self._coerce_text(item, max_chars=120)
+                    if name:
+                        skill_names.add(name.lower())
+        return skill_names
+
     def _execution_result_has_publishable_changes(self, execution_result: Any) -> bool:
         if self._extract_pull_request_url(execution_result):
             return True
@@ -5901,6 +6018,22 @@ class MoonMindRunWorkflow:
                 True,
             )
 
+        if self._publish_status == "not_required":
+            if self._report_requested(parameters) and not self._report_created:
+                return (
+                    "failed",
+                    "reportOutput requested but no final report was created",
+                    True,
+                )
+            return (
+                "success",
+                self._compose_success_completion_message(
+                    publish_detail=self._publish_reason,
+                    publish_mode=publish_mode,
+                ),
+                False,
+            )
+
         missing_outcome = self._missing_required_outcome_reason(
             parameters=parameters,
             publish_mode=publish_mode,
@@ -5914,16 +6047,6 @@ class MoonMindRunWorkflow:
             return (
                 "success",
                 self._compose_success_completion_message(publish_mode=publish_mode),
-                False,
-            )
-
-        if self._publish_status == "not_required":
-            return (
-                "success",
-                self._compose_success_completion_message(
-                    publish_detail=self._publish_reason,
-                    publish_mode=publish_mode,
-                ),
                 False,
             )
 
@@ -5978,6 +6101,8 @@ class MoonMindRunWorkflow:
         parameters: Mapping[str, Any],
         publish_mode: str,
     ) -> str | None:
+        if self._publish_status == "not_required":
+            return None
         if publish_mode == "pr" and not self._pull_request_created():
             return "publishMode 'pr' requested but no PR was created"
         if publish_mode == "branch" and self._publish_status is None:
@@ -6188,33 +6313,7 @@ class MoonMindRunWorkflow:
         parameters: Mapping[str, Any],
         task_payload: Mapping[str, Any],
     ) -> bool:
-        skill_names: set[str] = set()
-        for payload in (parameters, task_payload):
-            for key in ("tool", "skill"):
-                nested = payload.get(key)
-                if isinstance(nested, Mapping):
-                    name = self._coerce_text(
-                        nested.get("name") or nested.get("id"),
-                        max_chars=120,
-                    )
-                    if name:
-                        skill_names.add(name.lower())
-        skills_payload = task_payload.get("skills")
-        if isinstance(skills_payload, Mapping):
-            include = skills_payload.get("include")
-            if isinstance(include, Sequence) and not isinstance(include, (str, bytes)):
-                for item in include:
-                    if isinstance(item, Mapping):
-                        name = self._coerce_text(
-                            item.get("name") or item.get("id"),
-                            max_chars=120,
-                        )
-                        if name:
-                            skill_names.add(name.lower())
-                    else:
-                        name = self._coerce_text(item, max_chars=120)
-                        if name:
-                            skill_names.add(name.lower())
+        skill_names = self._task_skill_names(parameters, task_payload)
         return bool(skill_names & _JIRA_BACKED_AGENT_SKILLS)
 
     def _jira_issue_key_text_sources(

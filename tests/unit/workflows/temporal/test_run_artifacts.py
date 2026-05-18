@@ -2621,6 +2621,191 @@ def test_jira_story_output_status_satisfies_pr_publish(story_status: str) -> Non
         status=story_status,
     )
 
+
+def test_pr_publish_optional_for_task_requires_all_skills_pr_optional() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    pure_task = {
+        "task": {"skills": {"include": [{"name": "jira-implement"}]}}
+    }
+    mixed_task = {
+        "task": {
+            "skills": {
+                "include": [
+                    {"name": "jira-implement"},
+                    {"name": "general-coder"},
+                ]
+            }
+        }
+    }
+    empty_task = {"task": {"skills": {"include": []}}}
+
+    assert workflow._pr_publish_optional_for_task(pure_task) is True
+    assert workflow._pr_publish_optional_for_task(mixed_task) is False
+    assert workflow._pr_publish_optional_for_task(empty_task) is False
+
+
+def test_publish_not_required_reason_reads_flattened_outputs() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    reason = workflow._publish_not_required_reason(
+        {
+            "publish_status": "not_required",
+            "publish_reason": "Jira issue agent completed; no PR output required",
+        }
+    )
+
+    assert reason == "Jira issue agent completed; no PR output required"
+
+
+def test_publish_not_required_reason_reads_required_false_in_outputs() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    reason = workflow._publish_not_required_reason(
+        {
+            "required": False,
+            "summary": "Plan blocked upstream; nothing to publish.",
+        }
+    )
+
+    assert reason == "Plan blocked upstream; nothing to publish."
+
+
+def test_publish_not_required_reason_ignores_unrelated_status_in_outputs() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    reason = workflow._publish_not_required_reason(
+        {"status": "COMPLETED", "summary": "Agent finished."}
+    )
+
+    assert reason is None
+
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_jira_implement_not_required_skips_native_pr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "MoonLadderStudios/MoonMind"
+    create_pr_called = False
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, object] | None = None,
+        **_kwargs: object,
+    ) -> object:
+        nonlocal create_pr_called
+        if activity_type == "repo.create_pr":
+            create_pr_called = True
+            return {"url": "https://github.com/MoonLadderStudios/MoonMind/pull/999"}
+        if activity_type == "agent_skill.resolve":
+            return {"manifestRef": "art_skill_snapshot_1"}
+
+        if activity_type == "artifact.read":
+            return json.dumps(
+                {
+                    "plan_version": "1.0",
+                    "metadata": {
+                        "title": "Jira Implement",
+                        "created_at": "2026-03-12T00:00:00Z",
+                        "registry_snapshot": {
+                            "digest": "reg:sha256:" + ("a" * 64),
+                            "artifact_ref": "artifact://registry/1",
+                        },
+                    },
+                    "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+                    "nodes": [
+                        {
+                            "id": "tpl:jira-implement:1.0.0:08:abc12345",
+                            "tool": {
+                                "type": "agent_runtime",
+                                "name": "claude",
+                                "version": "1.0",
+                            },
+                            "inputs": {
+                                "runtime": {"mode": "claude"},
+                                "selectedSkill": "auto",
+                                "annotations": {
+                                    "jiraImplementRole": "final-transition",
+                                },
+                                "instructions": "Finalize Jira status.",
+                            },
+                            "options": {},
+                        }
+                    ],
+                    "edges": [],
+                }
+            ).encode("utf-8")
+        return {"status": "COMPLETED", "outputs": {}}
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _args: object,
+        **_kwargs: object,
+    ) -> object:
+        return {
+            "summary": "Completed with status completed",
+            "metadata": {
+                "operator_summary": "MM-697 was transitioned to Done.",
+            },
+            "output_refs": [],
+        }
+
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        _immediate_wait_condition,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            run_workflow_module.RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+            run_workflow_module.NATIVE_PR_BRANCH_DEFAULTS_PATCH,
+        },
+    )
+
+    await workflow._run_execution_stage(
+        parameters={
+            "repo": "MoonLadderStudios/MoonMind",
+            "publishMode": "pr",
+            "mergeAutomation": {"enabled": True, "jiraIssueKey": "MM-697"},
+            "task": {
+                "skills": {
+                    "include": [
+                        {"name": "jira-implement"},
+                    ],
+                },
+            },
+        },
+        plan_ref="art_plan_1",
+    )
+
+    assert not create_pr_called
+    assert workflow._publish_status == "not_required"
+    assert workflow._publish_context["mergeAutomationStatus"] == "not_applicable"
+
 @pytest.mark.asyncio
 async def test_run_execution_stage_publish_mode_pr_jules_skips_native_pr(
     monkeypatch: pytest.MonkeyPatch,
