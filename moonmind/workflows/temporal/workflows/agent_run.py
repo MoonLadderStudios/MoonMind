@@ -2016,6 +2016,7 @@ class MoonMindAgentRun:
                             apply_session_control_action=_apply_session_control_action,
                             workspace_root=_MANAGED_RUNTIME_STORE_ROOT,
                             session_image_ref=_DEFAULT_SESSION_IMAGE_REF,
+                            task_workflow_id=task_workflow_id,
                             launch_context_builder=_launch_context_builder,
                             defer_turn_instructions_until_session_launch=(
                                 defer_turn_instructions_until_session_launch
