@@ -63,6 +63,17 @@ def _valid_docker_sidecar_profile() -> dict:
                 {"name": "docker-graph", "mountPath": "/var/lib/docker"},
             ],
         },
+        "labels": {
+            "moonmind.kind": "managed-session",
+            "moonmind.workload_mode": "docker-sidecar",
+        },
+        "capabilities": {
+            "docker": {
+                "available": True,
+                "executionModel": "docker-sidecar",
+                "composePlugin": True,
+            },
+        },
         "policy": {
             "hostDockerAccess": "forbidden",
             "appContainerControlFromSession": "forbidden",
@@ -77,6 +88,53 @@ def test_launch_context_validates_runtime_profile_before_managed_session_launch(
     runtime_profile["dockerSidecar"]["image"] = "docker:latest"
 
     with pytest.raises(ValueError, match="sidecar image must be pinned"):
+        build_managed_profile_launch_context(
+            profile={
+                "profile_id": "codex_default",
+                "credential_source": "oauth_volume",
+                "runtime_profile": runtime_profile,
+            },
+            runtime_for_profile="codex_cli",
+            workflow_id="wf-agent-run-1",
+            default_credential_source="oauth_volume",
+        )
+
+
+def test_launch_context_rejects_ungated_kubernetes_job_runtime_profile() -> None:
+    runtime_profile = {
+        "workloadMode": "kubernetes-job",
+        "workspace": {
+            "volume": "agent_workspaces",
+            "mountPath": "/work/agent_jobs",
+            "lifecycle": "session",
+        },
+        "agent": {
+            "workspace": {"mountPath": "/work/agent_jobs"},
+            "dockerClient": {"enabled": False, "daemonInAgent": False},
+            "env": {},
+            "mounts": [{"name": "workspace", "mountPath": "/work/agent_jobs"}],
+        },
+        "labels": {
+            "moonmind.kind": "managed-session",
+            "moonmind.workload_mode": "kubernetes-job",
+        },
+        "capabilities": {
+            "docker": {
+                "available": True,
+                "executionModel": "kubernetes-job",
+                "composePlugin": False,
+            },
+        },
+        "deploymentSupportsKubernetesJob": False,
+        "policy": {
+            "hostDockerAccess": "forbidden",
+            "appContainerControlFromSession": "forbidden",
+            "deploymentSecretsInSession": "forbidden",
+            "apiContainerWorkloadDockerSocketAccess": False,
+        },
+    }
+
+    with pytest.raises(ValueError, match="deploymentSupportsKubernetesJob=true"):
         build_managed_profile_launch_context(
             profile={
                 "profile_id": "codex_default",

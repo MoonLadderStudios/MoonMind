@@ -579,6 +579,7 @@ ManagedRuntimeWorkloadMode = Literal[
     "docker-sidecar",
     "docker-sidecar-rootless",
     "no-docker",
+    "kubernetes-job",
 ]
 
 
@@ -681,6 +682,36 @@ class RuntimeProfileDockerSidecar(BaseModel):
     mounts: list[RuntimeProfileMount] = Field(default_factory=list)
 
 
+RuntimeProfileCapabilityExecutionModel = Literal[
+    "none",
+    "docker-sidecar",
+    "docker-sidecar-rootless",
+    "kubernetes-job",
+]
+
+
+class RuntimeProfileDockerCapability(BaseModel):
+    """Backend-neutral declaration of Docker-like workload capability."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    available: bool = False
+    execution_model: RuntimeProfileCapabilityExecutionModel = Field(
+        "none", alias="executionModel"
+    )
+    compose_plugin: bool = Field(False, alias="composePlugin")
+
+
+class RuntimeProfileCapabilities(BaseModel):
+    """Capability semantics kept separate from backend rendering details."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    docker: RuntimeProfileDockerCapability = Field(
+        default_factory=RuntimeProfileDockerCapability
+    )
+
+
 class RuntimeProfilePolicy(BaseModel):
     """Policy declaration for managed agent runtime profile validation."""
 
@@ -734,18 +765,27 @@ def _mounts_host_docker_socket(mounts: list[RuntimeProfileMount]) -> bool:
 
 
 class ManagedAgentRuntimeProfile(BaseModel):
-    """Validated managed-session runtime profile for Docker sidecar capability."""
+    """Validated managed-session runtime profile for portable workload capability."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    workload_mode: ManagedRuntimeWorkloadMode = Field(..., alias="workloadMode")
+    workload_mode: ManagedRuntimeWorkloadMode = Field(
+        "docker-sidecar", alias="workloadMode"
+    )
     workspace: RuntimeProfileWorkspace
     agent: RuntimeProfileAgent
     docker_sidecar: RuntimeProfileDockerSidecar | None = Field(
         None, alias="dockerSidecar"
     )
     resources: dict[str, Any] = Field(default_factory=dict)
+    labels: dict[str, str] = Field(default_factory=dict)
+    capabilities: RuntimeProfileCapabilities = Field(
+        default_factory=RuntimeProfileCapabilities
+    )
     readiness: dict[str, Any] = Field(default_factory=dict)
+    deployment_supports_kubernetes_job: bool = Field(
+        False, alias="deploymentSupportsKubernetesJob"
+    )
     policy: RuntimeProfilePolicy = Field(default_factory=RuntimeProfilePolicy)
 
     @model_validator(mode="after")
@@ -776,6 +816,8 @@ class ManagedAgentRuntimeProfile(BaseModel):
                 "workload Docker control belongs to the isolated session sidecar"
             )
 
+        self._validate_capability_declaration()
+
         if self.workload_mode == "no-docker":
             if self.agent.docker_client.enabled:
                 raise ValueError(
@@ -794,10 +836,50 @@ class ManagedAgentRuntimeProfile(BaseModel):
                 )
             return self
 
+        if self.workload_mode == "kubernetes-job":
+            if not self.deployment_supports_kubernetes_job:
+                raise ValueError(
+                    "kubernetes-job workloadMode requires "
+                    "deploymentSupportsKubernetesJob=true; Kubernetes Job mode "
+                    "must not be selectable unless the deployment explicitly "
+                    "supports it"
+                )
+            if self.agent.docker_client.enabled:
+                raise ValueError(
+                    "agent.dockerClient.enabled must be false for kubernetes-job "
+                    "profiles; workloads run through deployment-supported "
+                    "Kubernetes Jobs rather than an agent Docker daemon"
+                )
+            if sidecar is not None and sidecar.enabled:
+                raise ValueError(
+                    "dockerSidecar.enabled must be false for kubernetes-job "
+                    "profiles; Kubernetes Job mode must not materialize a Docker "
+                    "sidecar"
+                )
+            if "DOCKER_HOST" in self.agent.env:
+                raise ValueError(
+                    "agent.env.DOCKER_HOST must not be set for kubernetes-job "
+                    "profiles; Kubernetes Job mode does not expose a Docker socket"
+                )
+            return self
+
         if sidecar is None or not sidecar.enabled:
             raise ValueError(
                 "dockerSidecar.enabled must be true for Docker-capable profiles; "
                 "otherwise agent Docker commands would have no per-session daemon"
+            )
+        if self.workload_mode == "docker-sidecar" and sidecar.mode != "dind":
+            raise ValueError(
+                "dockerSidecar.mode must be dind for docker-sidecar profiles; "
+                "rootless hardening must use docker-sidecar-rootless"
+            )
+        if (
+            self.workload_mode == "docker-sidecar-rootless"
+            and sidecar.mode != "dind-rootless"
+        ):
+            raise ValueError(
+                "dockerSidecar.mode must be dind-rootless for "
+                "docker-sidecar-rootless profiles"
             )
         if not self.agent.docker_client.enabled:
             raise ValueError(
@@ -846,6 +928,25 @@ class ManagedAgentRuntimeProfile(BaseModel):
                 "containers, images, and credentials across sessions or users"
             )
         return self
+
+    def _validate_capability_declaration(self) -> None:
+        docker_capability = self.capabilities.docker
+        if docker_capability.execution_model != "none":
+            if docker_capability.execution_model != self.workload_mode:
+                raise ValueError(
+                    "capabilities.docker.executionModel must match workloadMode; "
+                    "capability semantics must remain separate from backend "
+                    "rendering"
+                )
+            if not docker_capability.available:
+                raise ValueError(
+                    "capabilities.docker.available must be true when "
+                    "capabilities.docker.executionModel declares a workload mode"
+                )
+        if self.workload_mode == "no-docker" and docker_capability.available:
+            raise ValueError(
+                "capabilities.docker.available must be false for no-docker profiles"
+            )
 
 
 def resolve_managed_runtime_workload_mode(

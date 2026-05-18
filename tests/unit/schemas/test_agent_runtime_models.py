@@ -640,6 +640,17 @@ def _valid_docker_sidecar_profile() -> dict:
             "agent": {"cpu": "2", "memory": "4Gi"},
             "dockerSidecar": {"cpu": "4", "memory": "8Gi"},
         },
+        "labels": {
+            "moonmind.kind": "managed-session",
+            "moonmind.workload_mode": "docker-sidecar",
+        },
+        "capabilities": {
+            "docker": {
+                "available": True,
+                "executionModel": "docker-sidecar",
+                "composePlugin": True,
+            },
+        },
         "readiness": {
             "docker": {
                 "required": True,
@@ -667,6 +678,9 @@ def test_managed_agent_runtime_profile_accepts_valid_docker_sidecar_contract() -
     )
     assert profile.docker_sidecar is not None
     assert profile.docker_sidecar.image == "docker:27-dind"
+    assert profile.labels["moonmind.workload_mode"] == "docker-sidecar"
+    assert profile.capabilities.docker.available is True
+    assert profile.capabilities.docker.execution_model == "docker-sidecar"
 
 
 @pytest.mark.parametrize(
@@ -718,6 +732,16 @@ def test_managed_agent_runtime_profile_accepts_valid_docker_sidecar_contract() -
             ),
             "Docker daemon scope must be per session",
         ),
+        (
+            lambda p: p["capabilities"]["docker"].update(
+                {"executionModel": "kubernetes-job"}
+            ),
+            "capabilities.docker.executionModel must match workloadMode",
+        ),
+        (
+            lambda p: p["capabilities"]["docker"].update({"available": False}),
+            "capabilities.docker.available must be true",
+        ),
     ],
 )
 def test_managed_agent_runtime_profile_rejects_unsafe_sidecar_invariants(
@@ -728,6 +752,129 @@ def test_managed_agent_runtime_profile_rejects_unsafe_sidecar_invariants(
 
     with pytest.raises(ValidationError, match=message):
         ManagedAgentRuntimeProfile.model_validate(payload)
+
+
+def test_managed_agent_runtime_profile_defaults_to_docker_sidecar_mode() -> None:
+    payload = _valid_docker_sidecar_profile()
+    payload.pop("workloadMode")
+
+    profile = ManagedAgentRuntimeProfile.model_validate(payload)
+
+    assert profile.workload_mode == "docker-sidecar"
+
+
+def test_managed_agent_runtime_profile_accepts_rootless_sidecar_hardening_track() -> None:
+    payload = _valid_docker_sidecar_profile()
+    payload["workloadMode"] = "docker-sidecar-rootless"
+    payload["labels"]["moonmind.workload_mode"] = "docker-sidecar-rootless"
+    payload["capabilities"]["docker"]["executionModel"] = "docker-sidecar-rootless"
+    payload["dockerSidecar"]["mode"] = "dind-rootless"
+    payload["dockerSidecar"]["image"] = "docker:27-dind-rootless"
+    payload["dockerSidecar"]["security"]["privileged"] = False
+
+    profile = ManagedAgentRuntimeProfile.model_validate(payload)
+
+    assert profile.workload_mode == "docker-sidecar-rootless"
+    assert profile.docker_sidecar is not None
+    assert profile.docker_sidecar.mode == "dind-rootless"
+    assert profile.docker_sidecar.security.privileged is False
+
+
+def test_rootless_workload_mode_requires_rootless_sidecar_rendering() -> None:
+    payload = _valid_docker_sidecar_profile()
+    payload["workloadMode"] = "docker-sidecar-rootless"
+    payload["capabilities"]["docker"]["executionModel"] = "docker-sidecar-rootless"
+
+    with pytest.raises(ValidationError, match="must be dind-rootless"):
+        ManagedAgentRuntimeProfile.model_validate(payload)
+
+
+def test_kubernetes_job_profile_requires_explicit_deployment_support() -> None:
+    payload = {
+        "workloadMode": "kubernetes-job",
+        "workspace": {
+            "volume": "agent_workspaces",
+            "mountPath": "/work/agent_jobs",
+            "lifecycle": "session",
+        },
+        "agent": {
+            "workspace": {"mountPath": "/work/agent_jobs"},
+            "dockerClient": {"enabled": False, "daemonInAgent": False},
+            "env": {},
+            "mounts": [{"name": "workspace", "mountPath": "/work/agent_jobs"}],
+        },
+        "labels": {
+            "moonmind.kind": "managed-session",
+            "moonmind.workload_mode": "kubernetes-job",
+        },
+        "capabilities": {
+            "docker": {
+                "available": True,
+                "executionModel": "kubernetes-job",
+                "composePlugin": False,
+            },
+        },
+        "deploymentSupportsKubernetesJob": False,
+        "policy": {
+            "hostDockerAccess": "forbidden",
+            "appContainerControlFromSession": "forbidden",
+            "deploymentSecretsInSession": "forbidden",
+        },
+    }
+
+    with pytest.raises(
+        ValidationError,
+        match="deploymentSupportsKubernetesJob=true",
+    ):
+        ManagedAgentRuntimeProfile.model_validate(payload)
+
+
+def test_kubernetes_job_profile_keeps_future_backend_separate() -> None:
+    payload = {
+        "workloadMode": "kubernetes-job",
+        "workspace": {
+            "volume": "agent_workspaces",
+            "mountPath": "/work/agent_jobs",
+            "lifecycle": "session",
+        },
+        "agent": {
+            "workspace": {"mountPath": "/work/agent_jobs"},
+            "dockerClient": {"enabled": False, "daemonInAgent": False},
+            "env": {},
+            "mounts": [{"name": "workspace", "mountPath": "/work/agent_jobs"}],
+        },
+        "dockerSidecar": {"enabled": False},
+        "resources": {
+            "agent": {"cpu": "2", "memory": "4Gi"},
+            "kubernetesJob": {"cpu": "4", "memory": "8Gi"},
+        },
+        "labels": {
+            "moonmind.kind": "managed-session",
+            "moonmind.workload_mode": "kubernetes-job",
+        },
+        "capabilities": {
+            "docker": {
+                "available": True,
+                "executionModel": "kubernetes-job",
+                "composePlugin": False,
+            },
+        },
+        "deploymentSupportsKubernetesJob": True,
+        "policy": {
+            "hostDockerAccess": "forbidden",
+            "appContainerControlFromSession": "forbidden",
+            "deploymentSecretsInSession": "forbidden",
+        },
+    }
+
+    profile = ManagedAgentRuntimeProfile.model_validate(payload)
+
+    assert profile.workload_mode == "kubernetes-job"
+    assert profile.deployment_supports_kubernetes_job is True
+    assert profile.docker_sidecar is not None
+    assert profile.docker_sidecar.enabled is False
+    assert profile.capabilities.docker.execution_model == "kubernetes-job"
+    assert profile.resources["kubernetesJob"]["memory"] == "8Gi"
 
 
 def _valid_no_docker_profile() -> dict:

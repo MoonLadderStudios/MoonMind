@@ -193,6 +193,16 @@ spec:
     agent:         { cpu: "2", memory: 4Gi }
     dockerSidecar: { cpu: "4", memory: 8Gi, ephemeralStorage: 40Gi }
 
+  labels:
+    moonmind.kind: managed-session
+    moonmind.workload_mode: docker-sidecar
+
+  capabilities:
+    docker:
+      available: true
+      executionModel: docker-sidecar
+      composePlugin: true
+
   readiness:
     docker:
       required: true
@@ -204,6 +214,8 @@ spec:
     hostDockerAccess: forbidden
     appContainerControlFromSession: forbidden
     deploymentSecretsInSession: forbidden
+
+  deploymentSupportsKubernetesJob: false
 ```
 
 ---
@@ -226,6 +238,11 @@ Recommended defaults:
 - Locked-down Kubernetes clusters: `kubernetes-job` (see §13).
 
 The mode is a deployment / profile decision. Task instructions cannot raise it.
+
+`kubernetes-job` is present in the durable profile contract only as a gated future
+backend. A profile using it must set `deploymentSupportsKubernetesJob: true`;
+otherwise session launch validation fails closed. Current Docker deployments
+should leave that flag unset or `false`.
 
 ---
 
@@ -700,6 +717,14 @@ Every per-session sidecar deployment must be discoverable and traceable. The two
 
 The session-status surface (§13) reports daemon readiness, version, and probe results. Durable evidence for agent work continues to flow through the existing artifact pipeline; the sidecar itself is not the system of record. Per-container stdout/stderr capture for the daemon belongs in worker logs, not in the task artifact area, unless explicitly attached for debugging.
 
+The runtime profile stores labels and capability semantics separately from the
+backend-specific `dockerSidecar` rendering. `labels` are the durable ownership
+and observability metadata. `capabilities.docker` states whether Docker-like
+workload capability is available and which execution model provides it
+(`docker-sidecar`, `docker-sidecar-rootless`, or future `kubernetes-job`).
+Docker socket, graph storage, and sidecar image details remain rendering inputs
+for the Docker backend only.
+
 ---
 
 ## 23. Validation rules
@@ -716,6 +741,10 @@ The session launcher must validate at least the following before starting a sess
 8. Admin/ops Docker access must be isolated to the MoonMind ops runtime (§21).
 9. The sidecar image tag must be pinned (`docker:27-dind`, not `docker:latest`).
 10. The Docker daemon scope must be per session — no shared daemon across sessions or users.
+11. `capabilities.docker.executionModel`, when set, must match `workloadMode`.
+12. `workloadMode: kubernetes-job` requires
+    `deploymentSupportsKubernetesJob: true` and must not enable a Docker sidecar
+    or agent `DOCKER_HOST`.
 
 Example failure message:
 
