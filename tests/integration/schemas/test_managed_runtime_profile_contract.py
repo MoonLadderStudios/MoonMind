@@ -104,9 +104,10 @@ def _valid_docker_sidecar_profile() -> dict:
             },
         },
         "policy": {
-            "hostDockerAccess": "forbidden",
+            "hostDockerSocket": "forbidden",
+            "sharedDaemonAcrossUsers": "forbidden",
+            "moonmindDeploymentSecretsInSession": "forbidden",
             "appContainerControlFromSession": "forbidden",
-            "deploymentSecretsInSession": "forbidden",
             "apiContainerWorkloadDockerSocketAccess": False,
         },
     }

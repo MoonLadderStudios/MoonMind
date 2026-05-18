@@ -201,9 +201,11 @@ spec:
       probes: [ "docker version", "docker info" ]
 
   policy:
-    hostDockerAccess: forbidden
+    hostDockerSocket: forbidden
+    sharedDaemonAcrossUsers: forbidden
+    moonmindDeploymentSecretsInSession: forbidden
     appContainerControlFromSession: forbidden
-    deploymentSecretsInSession: forbidden
+    apiContainerWorkloadDockerSocketAccess: false
 ```
 
 ---
@@ -226,6 +228,18 @@ Recommended defaults:
 - Locked-down Kubernetes clusters: `kubernetes-job` (see §13).
 
 The mode is a deployment / profile decision. Task instructions cannot raise it.
+
+Docker deployments may set `MOONMIND_MANAGED_SESSION_DOCKER_MODE` to
+`docker-sidecar` or `no-docker` at the worker launcher boundary. When the
+variable is unset, the managed session launcher uses the workflow-provided
+Docker capability mode for that launch request and does not infer capability
+from unrelated ambient task text. The `docker-sidecar-rootless` mode remains a
+profile contract target, but Docker launcher materialization fails closed until
+that runtime shape is implemented.
+
+The Docker sidecar image defaults to the pinned generic image `docker:27-dind`.
+Operators may override it with `MOONMIND_MANAGED_SESSION_DOCKER_SIDECAR_IMAGE`,
+but the value must remain pinned to a non-`latest` tag or digest.
 
 ---
 
@@ -674,7 +688,7 @@ spec:
   purpose: moonmind-application-operations
   backend: docker
   exposedToManagedAgents: false
-  allowedOperations: [ status, deploy, restart, rollback, logs ]
+  allowedOperations: [ status, deploy, restart, rollback, imageRefresh, logs ]
   dockerBackend:
     hostDockerAccess: true
     component: moonmind-ops-runner

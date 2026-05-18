@@ -12,6 +12,7 @@ from moonmind.schemas.agent_runtime_models import (
     ManagedAgentRuntimeProfile,
     ManagedAgentProviderProfile,
     ManagedRuntimeProfile,
+    MoonMindOpsRuntime,
     LiveLogChunk,
     RuntimeCommandInvocation,
     RuntimeCommandRenderResult,
@@ -685,9 +686,10 @@ def _valid_docker_sidecar_profile() -> dict:
             },
         },
         "policy": {
-            "hostDockerAccess": "forbidden",
+            "hostDockerSocket": "forbidden",
+            "sharedDaemonAcrossUsers": "forbidden",
+            "moonmindDeploymentSecretsInSession": "forbidden",
             "appContainerControlFromSession": "forbidden",
-            "deploymentSecretsInSession": "forbidden",
             "apiContainerWorkloadDockerSocketAccess": False,
         },
     }
@@ -707,6 +709,9 @@ def test_managed_agent_runtime_profile_accepts_valid_docker_sidecar_contract() -
     assert profile.resources.docker_sidecar is not None
     assert profile.resources.docker_sidecar.ephemeral_storage == "40Gi"
     assert profile.cleanup.on_session_end.remove_docker_graph is True
+    assert profile.policy.host_docker_socket == "forbidden"
+    assert profile.policy.shared_daemon_across_users == "forbidden"
+    assert profile.policy.moonmind_deployment_secrets_in_session == "forbidden"
 
 
 def test_managed_agent_runtime_profile_builds_mm695_sidecar_launch_plan() -> None:
@@ -842,6 +847,74 @@ def test_managed_agent_runtime_profile_rejects_unsafe_sidecar_invariants(
         ManagedAgentRuntimeProfile.model_validate(payload)
 
 
+@pytest.mark.parametrize(
+    ("policy_key", "message"),
+    [
+        ("hostDockerSocket", "hostDockerSocket"),
+        ("sharedDaemonAcrossUsers", "sharedDaemonAcrossUsers"),
+        (
+            "moonmindDeploymentSecretsInSession",
+            "moonmindDeploymentSecretsInSession",
+        ),
+        ("appContainerControlFromSession", "appContainerControlFromSession"),
+    ],
+)
+def test_managed_agent_runtime_profile_forbids_mm694_policy_relaxation(
+    policy_key, message
+) -> None:
+    payload = _valid_docker_sidecar_profile()
+    payload["policy"][policy_key] = "allowed"
+
+    with pytest.raises(ValidationError, match=message):
+        ManagedAgentRuntimeProfile.model_validate(payload)
+
+
+def test_moonmind_ops_runtime_contract_is_hidden_from_managed_agents() -> None:
+    runtime = MoonMindOpsRuntime.model_validate(
+        {
+            "kind": "MoonMindOpsRuntime",
+            "name": "docker-admin-runtime",
+            "purpose": "moonmind-application-operations",
+            "backend": "docker",
+            "exposedToManagedAgents": False,
+            "allowedOperations": [
+                "status",
+                "deploy",
+                "restart",
+                "rollback",
+                "imageRefresh",
+                "logs",
+            ],
+            "dockerBackend": {
+                "hostDockerAccess": True,
+                "component": "moonmind-ops-runner",
+            },
+        }
+    )
+
+    assert runtime.exposed_to_managed_agents is False
+    assert runtime.allowed_operations == (
+        "status",
+        "deploy",
+        "restart",
+        "rollback",
+        "imageRefresh",
+        "logs",
+    )
+
+
+def test_moonmind_ops_runtime_rejects_managed_agent_exposure() -> None:
+    with pytest.raises(ValidationError, match="exposedToManagedAgents"):
+        MoonMindOpsRuntime.model_validate({"exposedToManagedAgents": True})
+
+
+def test_moonmind_ops_runtime_rejects_duplicate_allowed_operations() -> None:
+    with pytest.raises(ValidationError, match="duplicate operations"):
+        MoonMindOpsRuntime.model_validate(
+            {"allowedOperations": ["status", "deploy", "status"]}
+        )
+
+
 def _valid_no_docker_profile() -> dict:
     return {
         "workloadMode": "no-docker",
@@ -857,9 +930,10 @@ def _valid_no_docker_profile() -> dict:
             "mounts": [{"name": "workspace", "mountPath": "/work/agent_jobs"}],
         },
         "policy": {
-            "hostDockerAccess": "forbidden",
+            "hostDockerSocket": "forbidden",
+            "sharedDaemonAcrossUsers": "forbidden",
+            "moonmindDeploymentSecretsInSession": "forbidden",
             "appContainerControlFromSession": "forbidden",
-            "deploymentSecretsInSession": "forbidden",
         },
     }
 
@@ -934,9 +1008,10 @@ def test_no_docker_profile_cannot_be_raised_by_task_requested_mode() -> None:
                 "mounts": [{"name": "workspace", "mountPath": "/work/agent_jobs"}],
             },
             "policy": {
-                "hostDockerAccess": "forbidden",
+                "hostDockerSocket": "forbidden",
+                "sharedDaemonAcrossUsers": "forbidden",
+                "moonmindDeploymentSecretsInSession": "forbidden",
                 "appContainerControlFromSession": "forbidden",
-                "deploymentSecretsInSession": "forbidden",
             },
         }
     )
