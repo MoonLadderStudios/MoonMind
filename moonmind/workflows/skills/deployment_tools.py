@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from moonmind.schemas.agent_runtime_models import moonmind_ops_runtime_contract
+
 DEPLOYMENT_UPDATE_TOOL_NAME = "deployment.update_compose_stack"
 DEPLOYMENT_UPDATE_TOOL_VERSION = "1.0.0"
 
@@ -134,7 +136,12 @@ def build_deployment_update_tool_definition_payload() -> dict[str, Any]:
                 "non_retryable_error_codes": list(_NON_RETRYABLE_DEPLOYMENT_ERRORS),
             },
         },
-        "security": {"allowed_roles": ["admin"]},
+        "security": {
+            "allowed_roles": ["admin"],
+            "opsRuntime": moonmind_ops_runtime_contract().model_dump(
+                by_alias=True, mode="json"
+            ),
+        },
     }
 
 

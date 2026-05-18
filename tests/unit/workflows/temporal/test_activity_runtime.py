@@ -757,6 +757,8 @@ async def test_default_skill_registry_payload_uses_curated_deployment_tool_defin
         "docker_admin",
     ]
     assert definition["security"]["allowed_roles"] == ["admin"]
+    assert definition["security"]["opsRuntime"]["kind"] == "MoonMindOpsRuntime"
+    assert definition["security"]["opsRuntime"]["exposedToManagedAgents"] is False
 
     input_schema = definition["inputs"]["schema"]
     assert input_schema["required"] == ["stack", "image"]
