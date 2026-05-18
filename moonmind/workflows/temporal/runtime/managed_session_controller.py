@@ -69,7 +69,6 @@ _MANAGED_SESSION_WORKLOAD_MODES = frozenset(
     {"no-docker", "docker-sidecar", "docker-sidecar-rootless"}
 )
 _SIDECAR_SOCKET_MOUNT_PATH = "/var/run/moonmind-docker"
-_SIDECAR_SOCKET_PATH = f"{_SIDECAR_SOCKET_MOUNT_PATH}/docker.sock"
 _SIDECAR_GRAPH_MOUNT_PATH = "/var/lib/docker"
 logger = logging.getLogger(__name__)
 
@@ -282,6 +281,16 @@ class DockerCodexManagedSessionController:
         return f"{self._container_name(session_id)}-docker-sidecar"
 
     @staticmethod
+    def _sidecar_default_volume_names(session_id: str) -> tuple[str, str]:
+        sanitized_session = _CONTAINER_NAME_SANITIZER.sub("-", session_id).strip("-")
+        if not sanitized_session:
+            sanitized_session = "managed-session"
+        return (
+            f"mm-docker-socket-{sanitized_session}",
+            f"mm-docker-graph-{sanitized_session}",
+        )
+
+    @staticmethod
     def _session_workload_mode(
         request: LaunchCodexManagedSessionRequest,
     ) -> str:
@@ -321,21 +330,23 @@ class DockerCodexManagedSessionController:
         ).strip()
         if not image_ref:
             raise ValueError("dockerSidecar.imageRef is required when enabled")
-        sanitized_session = _CONTAINER_NAME_SANITIZER.sub(
-            "-", request.session_id
-        ).strip("-") or "managed-session"
+        default_socket_volume_name, default_graph_volume_name = (
+            DockerCodexManagedSessionController._sidecar_default_volume_names(
+                request.session_id
+            )
+        )
         socket_volume_name = str(
-            raw_config.get("socketVolumeName")
-            or f"mm-docker-socket-{sanitized_session}"
+            raw_config.get("socketVolumeName") or default_socket_volume_name
         ).strip()
         graph_volume_name = str(
-            raw_config.get("graphVolumeName")
-            or f"mm-docker-graph-{sanitized_session}"
+            raw_config.get("graphVolumeName") or default_graph_volume_name
         ).strip()
         socket_mount_path = str(
             raw_config.get("socketMountPath") or _SIDECAR_SOCKET_MOUNT_PATH
         ).strip()
-        socket_path = str(raw_config.get("socketPath") or _SIDECAR_SOCKET_PATH).strip()
+        socket_path = str(
+            raw_config.get("socketPath") or f"{socket_mount_path}/docker.sock"
+        ).strip()
         graph_mount_path = str(
             raw_config.get("graphMountPath") or _SIDECAR_GRAPH_MOUNT_PATH
         ).strip()
@@ -741,6 +752,25 @@ class DockerCodexManagedSessionController:
         handle: CodexManagedSessionHandle,
     ) -> CodexManagedSessionRecord:
         now = datetime.now(tz=UTC)
+        request_metadata = dict(request.metadata)
+        handle_metadata = dict(handle.metadata)
+        metadata = {**request_metadata, **handle_metadata}
+        if (
+            isinstance(request_metadata.get("dockerSidecar"), Mapping)
+            or isinstance(handle_metadata.get("dockerSidecar"), Mapping)
+        ):
+            metadata["dockerSidecar"] = {
+                **(
+                    dict(request_metadata.get("dockerSidecar"))
+                    if isinstance(request_metadata.get("dockerSidecar"), Mapping)
+                    else {}
+                ),
+                **(
+                    dict(handle_metadata.get("dockerSidecar"))
+                    if isinstance(handle_metadata.get("dockerSidecar"), Mapping)
+                    else {}
+                ),
+            }
         return CodexManagedSessionRecord(
             sessionId=request.session_id,
             sessionEpoch=handle.session_state.session_epoch,
@@ -755,7 +785,7 @@ class DockerCodexManagedSessionController:
             workspacePath=request.workspace_path,
             sessionWorkspacePath=request.session_workspace_path,
             artifactSpoolPath=request.artifact_spool_path,
-            metadata={**dict(request.metadata), **dict(handle.metadata)},
+            metadata=metadata,
             startedAt=now,
             updatedAt=now,
         )
@@ -878,12 +908,57 @@ class DockerCodexManagedSessionController:
         container_identifier: str,
         *,
         ignore_failure: bool,
-    ) -> None:
+    ) -> bool:
         try:
             await self._run((self._docker_binary, "rm", "-f", container_identifier))
+            return True
         except RuntimeError:
             if not ignore_failure:
                 raise
+            return False
+
+    async def _remove_volume(
+        self,
+        volume_name: str,
+        *,
+        ignore_failure: bool,
+    ) -> None:
+        try:
+            await self._run((self._docker_binary, "volume", "rm", volume_name))
+        except RuntimeError:
+            if not ignore_failure:
+                raise
+
+    async def _remove_docker_sidecar_resources(
+        self,
+        *,
+        session_id: str,
+        sidecar_metadata: Mapping[str, Any] | None,
+        ignore_failure: bool,
+    ) -> None:
+        container_identifier = self._sidecar_container_name(session_id)
+        if sidecar_metadata is not None:
+            container_identifier = str(
+                sidecar_metadata.get("containerId")
+                or sidecar_metadata.get("containerName")
+                or container_identifier
+            )
+        removed_container = await self._remove_container(
+            container_identifier,
+            ignore_failure=ignore_failure,
+        )
+        if sidecar_metadata is None and not removed_container:
+            return
+        if sidecar_metadata is None:
+            volume_names = self._sidecar_default_volume_names(session_id)
+        else:
+            volume_names = tuple(
+                str(sidecar_metadata.get(key) or "").strip()
+                for key in ("socketVolumeName", "graphVolumeName")
+            )
+        for volume_name in volume_names:
+            if volume_name:
+                await self._remove_volume(volume_name, ignore_failure=ignore_failure)
 
     async def _connect_container_network(
         self,
@@ -1722,6 +1797,7 @@ class DockerCodexManagedSessionController:
                 str(sidecar_config["imageRef"]),
                 "dockerd",
                 f"--host=unix://{sidecar_config['socketPath']}",
+                f"--data-root={sidecar_config['graphMountPath']}",
             ]
         )
         stdout, _stderr = await self._run(command)
@@ -1731,6 +1807,8 @@ class DockerCodexManagedSessionController:
         return {
             "containerId": container_id,
             "containerName": sidecar_name,
+            "socketVolumeName": str(sidecar_config["socketVolumeName"]),
+            "graphVolumeName": str(sidecar_config["graphVolumeName"]),
             "labels": labels,
             "logAuthority": "worker_logs",
             "debugArtifactAttached": bool(
@@ -2102,14 +2180,14 @@ class DockerCodexManagedSessionController:
                     network_name=unrestricted_proxy_network,
                 )
         except Exception:
-            if container_id:
-                await self._remove_container(container_id, ignore_failure=True)
+            await self._remove_container(
+                container_id or container_name,
+                ignore_failure=True,
+            )
             if sidecar_metadata is not None:
-                await self._remove_container(
-                    str(
-                        sidecar_metadata.get("containerId")
-                        or sidecar_metadata.get("containerName")
-                    ),
+                await self._remove_docker_sidecar_resources(
+                    session_id=request.session_id,
+                    sidecar_metadata=sidecar_metadata,
                     ignore_failure=True,
                 )
             if github_broker_started:
@@ -2142,11 +2220,9 @@ class DockerCodexManagedSessionController:
         except Exception:
             await self._remove_container(container_id, ignore_failure=True)
             if sidecar_metadata is not None:
-                await self._remove_container(
-                    str(
-                        sidecar_metadata.get("containerId")
-                        or sidecar_metadata.get("containerName")
-                    ),
+                await self._remove_docker_sidecar_resources(
+                    session_id=request.session_id,
+                    sidecar_metadata=sidecar_metadata,
                     ignore_failure=True,
                 )
             if github_broker_started:
@@ -2462,8 +2538,11 @@ class DockerCodexManagedSessionController:
                 self._matches_locator(record, request)
                 await self._remove_container(record.container_id, ignore_failure=True)
                 if self._record_has_docker_sidecar(record):
-                    await self._remove_container(
-                        self._sidecar_container_name(request.session_id),
+                    await self._remove_docker_sidecar_resources(
+                        session_id=request.session_id,
+                        sidecar_metadata=record.metadata.get("dockerSidecar")
+                        if isinstance(record.metadata.get("dockerSidecar"), Mapping)
+                        else None,
                         ignore_failure=True,
                     )
                 await self._github_auth_brokers.stop(request.session_id)
@@ -2480,8 +2559,18 @@ class DockerCodexManagedSessionController:
         )
         await self._remove_container(request.container_id, ignore_failure=True)
         if self._record_has_docker_sidecar(record_for_cleanup):
-            await self._remove_container(
-                self._sidecar_container_name(request.session_id),
+            await self._remove_docker_sidecar_resources(
+                session_id=request.session_id,
+                sidecar_metadata=record_for_cleanup.metadata.get("dockerSidecar")
+                if record_for_cleanup is not None
+                and isinstance(record_for_cleanup.metadata.get("dockerSidecar"), Mapping)
+                else None,
+                ignore_failure=True,
+            )
+        elif record_for_cleanup is None:
+            await self._remove_docker_sidecar_resources(
+                session_id=request.session_id,
+                sidecar_metadata=None,
                 ignore_failure=True,
             )
         await self._github_auth_brokers.stop(request.session_id)

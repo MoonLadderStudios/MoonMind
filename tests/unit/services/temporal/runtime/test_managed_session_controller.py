@@ -187,6 +187,51 @@ async def test_controller_launches_container_and_returns_typed_handle(
     session_supervisor.start.assert_awaited_once()
 
 @pytest.mark.asyncio
+async def test_controller_removes_named_container_when_docker_run_returns_blank(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "agent_jobs"
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_root / "task-1" / "repo"),
+        sessionWorkspacePath=str(workspace_root / "task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        del input_text, env
+        commands.append(command)
+        if command[:3] == ("docker", "rm", "-f"):
+            return 0, "", ""
+        if command[:2] == ("docker", "run"):
+            return 0, "\n", ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    with pytest.raises(RuntimeError, match="blank container id"):
+        await controller.launch_session(request)
+
+    container_name = "mm-codex-session-sess-1"
+    assert commands.count(("docker", "rm", "-f", container_name)) == 2
+
+@pytest.mark.asyncio
 async def test_controller_launches_sidecar_with_audit_labels_and_status_metadata(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -209,6 +254,8 @@ async def test_controller_launches_sidecar_with_audit_labels_and_status_metadata
             "dockerSidecar": {
                 "enabled": True,
                 "imageRef": "docker:27-dind",
+                "socketMountPath": "/custom/docker-run",
+                "graphMountPath": "/custom/docker-lib",
             },
         },
     )
@@ -223,6 +270,8 @@ async def test_controller_launches_sidecar_with_audit_labels_and_status_metadata
     ) -> tuple[int, str, str]:
         commands.append(command)
         if command[:3] == ("docker", "rm", "-f"):
+            return 0, "", ""
+        if command[:3] == ("docker", "volume", "rm"):
             return 0, "", ""
         if command[:2] == ("docker", "run"):
             if "session-docker-sidecar" in " ".join(command):
@@ -288,7 +337,8 @@ async def test_controller_launches_sidecar_with_audit_labels_and_status_metadata
         assert "moonmind.session_epoch=1" in command
         assert "moonmind.task_run_id=task-1" in command
         assert "moonmind.workload_mode=docker-sidecar" in command
-    assert "DOCKER_HOST=unix:///var/run/moonmind-docker/docker.sock" in agent_run
+    assert "DOCKER_HOST=unix:///custom/docker-run/docker.sock" in agent_run
+    assert "--data-root=/custom/docker-lib" in sidecar_run
     assert handle.metadata["docker"] == {
         "mode": "docker-sidecar",
         "readiness": "ready",
@@ -311,10 +361,17 @@ async def test_controller_launches_sidecar_with_audit_labels_and_status_metadata
     assert handle.metadata["dockerSidecar"]["logAuthority"] == "worker_logs"
     assert handle.metadata["dockerSidecar"]["debugArtifactAttached"] is False
     assert launch_payloads[0]["environment"]["DOCKER_HOST"] == (
-        "unix:///var/run/moonmind-docker/docker.sock"
+        "unix:///custom/docker-run/docker.sock"
     )
     stored = session_store.load("sess-1")
     assert stored is not None
+    assert stored.metadata["dockerSidecar"]["imageRef"] == "docker:27-dind"
+    assert stored.metadata["dockerSidecar"]["socketVolumeName"] == (
+        "mm-docker-socket-sess-1"
+    )
+    assert stored.metadata["dockerSidecar"]["graphVolumeName"] == (
+        "mm-docker-graph-sess-1"
+    )
     assert stored.metadata["docker"]["daemonVersion"] == "27.0.3"
     status_handle = await controller.session_status(
         CodexManagedSessionLocator(
@@ -330,6 +387,18 @@ async def test_controller_launches_sidecar_with_audit_labels_and_status_metadata
         "available": True,
         "mode": "docker-sidecar",
     }
+    terminated = await controller.terminate_session(
+        TerminateCodexManagedSessionRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+        )
+    )
+    assert terminated.status == "terminated"
+    assert ("docker", "rm", "-f", "sidecar-1") in commands
+    assert ("docker", "volume", "rm", "mm-docker-socket-sess-1") in commands
+    assert ("docker", "volume", "rm", "mm-docker-graph-sess-1") in commands
 
 @pytest.mark.asyncio
 async def test_controller_sidecar_readiness_failure_logs_daemon_output(
@@ -364,6 +433,8 @@ async def test_controller_sidecar_readiness_failure_logs_daemon_output(
     ) -> tuple[int, str, str]:
         commands.append(command)
         if command[:3] == ("docker", "rm", "-f"):
+            return 0, "", ""
+        if command[:3] == ("docker", "volume", "rm"):
             return 0, "", ""
         if command[:2] == ("docker", "run"):
             if "session-docker-sidecar" in " ".join(command):
@@ -2867,6 +2938,48 @@ async def test_controller_duplicate_terminate_retries_container_cleanup(
 
     assert handle.status == "terminated"
     assert commands == [("docker", "rm", "-f", "ctr-1")]
+
+@pytest.mark.asyncio
+async def test_controller_terminate_without_store_removes_deterministic_sidecar(
+    tmp_path: Path,
+) -> None:
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        del input_text, env
+        commands.append(command)
+        if command[:3] == ("docker", "rm", "-f"):
+            return 0, "", ""
+        if command[:3] == ("docker", "volume", "rm"):
+            return 0, "", ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(tmp_path / "agent_jobs"),
+        command_runner=_fake_runner,
+    )
+
+    handle = await controller.terminate_session(
+        TerminateCodexManagedSessionRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+        )
+    )
+
+    assert handle.status == "terminated"
+    assert ("docker", "rm", "-f", "ctr-1") in commands
+    assert ("docker", "rm", "-f", "mm-codex-session-sess-1-docker-sidecar") in commands
+    assert ("docker", "volume", "rm", "mm-docker-socket-sess-1") in commands
+    assert ("docker", "volume", "rm", "mm-docker-graph-sess-1") in commands
 
 @pytest.mark.asyncio
 async def test_controller_duplicate_terminate_rejects_stale_locator(
