@@ -5626,9 +5626,11 @@ class MoonMindRunWorkflow:
     def _publish_not_required_reason(self, outputs: Mapping[str, Any]) -> str | None:
         for source in self._publish_outcome_sources(outputs):
             status = self._coerce_text(
-                source.get("status")
-                or source.get("publishStatus")
+                source.get("publishStatus")
                 or source.get("publish_status")
+                or source.get("publishOutcome")
+                or source.get("publish_outcome")
+                or source.get("status")
                 or source.get("outcome"),
                 max_chars=80,
             )
@@ -5645,7 +5647,9 @@ class MoonMindRunWorkflow:
                 continue
 
             reason = self._coerce_text(
-                source.get("reason")
+                source.get("publishReason")
+                or source.get("publish_reason")
+                or source.get("reason")
                 or source.get("summary")
                 or source.get("message")
                 or outputs.get("operator_summary")
@@ -5662,32 +5666,7 @@ class MoonMindRunWorkflow:
             candidate = outputs.get(key)
             if isinstance(candidate, Mapping):
                 yield candidate
-
-        flattened: dict[str, Any] = {}
-        for key in (
-            "publishStatus",
-            "publish_status",
-            "publishOutcome",
-            "publish_outcome",
-            "prRequired",
-            "pr_required",
-            "publishReason",
-            "publish_reason",
-        ):
-            if key in outputs:
-                flattened[key] = outputs[key]
-        if flattened:
-            if "reason" not in flattened:
-                flattened["reason"] = flattened.get("publishReason") or flattened.get(
-                    "publish_reason"
-                )
-            if "status" not in flattened:
-                flattened["status"] = flattened.get("publishStatus") or flattened.get(
-                    "publish_status"
-                ) or flattened.get("publishOutcome") or flattened.get(
-                    "publish_outcome"
-                )
-            yield flattened
+        yield outputs
 
     @staticmethod
     def _is_successful_jira_story_output(*, mode: str, status: str) -> bool:
@@ -5864,9 +5843,10 @@ class MoonMindRunWorkflow:
 
     def _pr_publish_optional_for_task(self, parameters: Mapping[str, Any]) -> bool:
         task_payload = self._mapping_value(parameters, "task")
-        return bool(
-            self._task_skill_names(parameters, task_payload) & _PR_OPTIONAL_TASK_SKILLS
-        )
+        skill_names = self._task_skill_names(parameters, task_payload)
+        if not skill_names:
+            return False
+        return skill_names.issubset(_PR_OPTIONAL_TASK_SKILLS)
 
     def _task_skill_names(
         self,

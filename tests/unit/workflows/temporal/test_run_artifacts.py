@@ -2622,6 +2622,65 @@ def test_jira_story_output_status_satisfies_pr_publish(story_status: str) -> Non
     )
 
 
+def test_pr_publish_optional_for_task_requires_all_skills_pr_optional() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    pure_task = {
+        "task": {"skills": {"include": [{"name": "jira-implement"}]}}
+    }
+    mixed_task = {
+        "task": {
+            "skills": {
+                "include": [
+                    {"name": "jira-implement"},
+                    {"name": "general-coder"},
+                ]
+            }
+        }
+    }
+    empty_task = {"task": {"skills": {"include": []}}}
+
+    assert workflow._pr_publish_optional_for_task(pure_task) is True
+    assert workflow._pr_publish_optional_for_task(mixed_task) is False
+    assert workflow._pr_publish_optional_for_task(empty_task) is False
+
+
+def test_publish_not_required_reason_reads_flattened_outputs() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    reason = workflow._publish_not_required_reason(
+        {
+            "publish_status": "not_required",
+            "publish_reason": "Jira issue agent completed; no PR output required",
+        }
+    )
+
+    assert reason == "Jira issue agent completed; no PR output required"
+
+
+def test_publish_not_required_reason_reads_required_false_in_outputs() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    reason = workflow._publish_not_required_reason(
+        {
+            "required": False,
+            "summary": "Plan blocked upstream; nothing to publish.",
+        }
+    )
+
+    assert reason == "Plan blocked upstream; nothing to publish."
+
+
+def test_publish_not_required_reason_ignores_unrelated_status_in_outputs() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    reason = workflow._publish_not_required_reason(
+        {"status": "COMPLETED", "summary": "Agent finished."}
+    )
+
+    assert reason is None
+
+
 @pytest.mark.asyncio
 async def test_run_execution_stage_jira_implement_not_required_skips_native_pr(
     monkeypatch: pytest.MonkeyPatch,
