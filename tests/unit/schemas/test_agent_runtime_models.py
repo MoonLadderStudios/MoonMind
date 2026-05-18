@@ -835,6 +835,18 @@ def test_managed_agent_runtime_profile_builds_mm695_sidecar_launch_plan() -> Non
             ),
             "arbitrary host path mounts are not allowed",
         ),
+        (
+            lambda p: p["agent"]["mounts"].append(
+                {"source": "./cache", "mountPath": "/cache"}
+            ),
+            "arbitrary host path mounts are not allowed",
+        ),
+        (
+            lambda p: p["dockerSidecar"]["mounts"].append(
+                {"source": "../tmp", "mountPath": "/cache"}
+            ),
+            "arbitrary host path mounts are not allowed",
+        ),
     ],
 )
 def test_managed_agent_runtime_profile_rejects_unsafe_sidecar_invariants(

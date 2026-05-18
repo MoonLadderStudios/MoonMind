@@ -1003,8 +1003,11 @@ def _mounts_arbitrary_host_path(mounts: list[RuntimeProfileMount]) -> bool:
         source = str(mount.source or "").strip()
         if not source:
             continue
+        if source in {".", ".."} or source.startswith(("./", "../")):
+            return True
         try:
-            if _normalize_posix_path(source).startswith("/"):
+            normalized = _normalize_posix_path(source)
+            if normalized.startswith("/") or normalized in {".", ".."}:
                 return True
         except (TypeError, ValueError):
             continue
@@ -1143,15 +1146,17 @@ class ManagedAgentRuntimeProfile(BaseModel):
         return self
 
     def _validate_sidecar_resources(self) -> None:
-        missing: list[str] = []
-        if self.resources.session is None:
-            missing.append("resources.session.maxRuntimeSeconds")
-        if self.resources.agent is None:
-            missing.append("resources.agent")
-        if self.resources.docker_sidecar is None:
-            missing.append("resources.dockerSidecar")
-        if self.resources.nested_containers is None:
-            missing.append("resources.nestedContainers")
+        required_resources = (
+            ("session", "resources.session.maxRuntimeSeconds"),
+            ("agent", "resources.agent"),
+            ("docker_sidecar", "resources.dockerSidecar"),
+            ("nested_containers", "resources.nestedContainers"),
+        )
+        missing = [
+            label
+            for field_name, label in required_resources
+            if getattr(self.resources, field_name) is None
+        ]
         if missing:
             raise ValueError(
                 "Docker sidecar profiles must declare outer resource limits: "
@@ -1175,28 +1180,43 @@ class ManagedAgentRuntimeProfile(BaseModel):
             )
 
     def _validate_sidecar_cleanup(self) -> None:
-        if not self.cleanup.idempotent:
-            raise ValueError(
-                "cleanup.idempotent must be true for Docker sidecar profiles"
-            )
-        if not self.cleanup.on_session_end.stop_sidecar:
-            raise ValueError("cleanup.onSessionEnd.stopSidecar must be true")
-        if not self.cleanup.on_session_end.stop_nested_containers:
-            raise ValueError("cleanup.onSessionEnd.stopNestedContainers must be true")
-        if not self.cleanup.on_session_end.remove_docker_graph:
-            raise ValueError("cleanup.onSessionEnd.removeDockerGraph must be true")
-        if not self.cleanup.on_session_end.remove_docker_socket:
-            raise ValueError("cleanup.onSessionEnd.removeDockerSocket must be true")
-        if not self.cleanup.on_sidecar_failure.mark_docker_capability_unavailable:
-            raise ValueError(
-                "cleanup.onSidecarFailure.markDockerCapabilityUnavailable must be true"
-            )
-        if not self.cleanup.on_sidecar_failure.preserve_agent_session:
-            raise ValueError(
-                "cleanup.onSidecarFailure.preserveAgentSession must be true"
-            )
-        if not self.cleanup.on_agent_failure.stop_sidecar:
-            raise ValueError("cleanup.onAgentFailure.stopSidecar must be true")
+        cleanup_checks = (
+            (
+                self.cleanup.idempotent,
+                "cleanup.idempotent must be true for Docker sidecar profiles",
+            ),
+            (
+                self.cleanup.on_session_end.stop_sidecar,
+                "cleanup.onSessionEnd.stopSidecar must be true",
+            ),
+            (
+                self.cleanup.on_session_end.stop_nested_containers,
+                "cleanup.onSessionEnd.stopNestedContainers must be true",
+            ),
+            (
+                self.cleanup.on_session_end.remove_docker_graph,
+                "cleanup.onSessionEnd.removeDockerGraph must be true",
+            ),
+            (
+                self.cleanup.on_session_end.remove_docker_socket,
+                "cleanup.onSessionEnd.removeDockerSocket must be true",
+            ),
+            (
+                self.cleanup.on_sidecar_failure.mark_docker_capability_unavailable,
+                "cleanup.onSidecarFailure.markDockerCapabilityUnavailable must be true",
+            ),
+            (
+                self.cleanup.on_sidecar_failure.preserve_agent_session,
+                "cleanup.onSidecarFailure.preserveAgentSession must be true",
+            ),
+            (
+                self.cleanup.on_agent_failure.stop_sidecar,
+                "cleanup.onAgentFailure.stopSidecar must be true",
+            ),
+        )
+        for valid, message in cleanup_checks:
+            if not valid:
+                raise ValueError(message)
 
 
 def resolve_managed_runtime_workload_mode(
