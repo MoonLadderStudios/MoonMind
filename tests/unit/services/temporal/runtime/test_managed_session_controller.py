@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-import moonmind.workflows.temporal.runtime.managed_session_controller as managed_session_controller
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionClearRequest,
     CodexManagedSessionLocator,
@@ -383,7 +384,7 @@ async def test_mm693_zero_interval_docker_capability_probe_yields(
     monotonic_values = [0.0, 0.0, 1.0]
     monotonic_index = 0
     sleeps: list[float] = []
-    original_sleep = managed_session_controller.asyncio.sleep
+    original_sleep = asyncio.sleep
 
     def _monotonic() -> float:
         nonlocal monotonic_index
@@ -395,8 +396,8 @@ async def test_mm693_zero_interval_docker_capability_probe_yields(
         sleeps.append(delay)
         await original_sleep(0)
 
-    monkeypatch.setattr(managed_session_controller.time, "monotonic", _monotonic)
-    monkeypatch.setattr(managed_session_controller.asyncio, "sleep", _sleep)
+    monkeypatch.setattr(time, "monotonic", _monotonic)
+    monkeypatch.setattr(asyncio, "sleep", _sleep)
 
     async def _fake_runner(
         command: tuple[str, ...],
