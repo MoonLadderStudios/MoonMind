@@ -1053,6 +1053,62 @@ def test_determine_publish_completion_fails_for_no_commit_pr_publish(
     assert "Files edited in this run: none." in message
     assert publish_failure is True
 
+def test_structured_publish_not_required_satisfies_pr_publish_mode(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    execution_result = {
+        "outputs": {
+            "publishOutcome": {
+                "status": "not_required",
+                "reason": "Jira issue already implemented; no pull request required.",
+                "prRequired": False,
+            },
+            "operator_summary": "MM-697 was transitioned to Done.",
+        }
+    }
+
+    mock_run_workflow._record_execution_context(
+        node_id="step-8",
+        execution_result=execution_result,
+    )
+    mock_run_workflow._record_publish_result(
+        parameters={
+            "publishMode": "pr",
+            "mergeAutomation": {"enabled": True, "jiraIssueKey": "MM-697"},
+        },
+        execution_result=execution_result,
+    )
+
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={
+            "publishMode": "pr",
+            "mergeAutomation": {"enabled": True, "jiraIssueKey": "MM-697"},
+        }
+    )
+
+    assert mock_run_workflow._publish_status == "not_required"
+    assert mock_run_workflow._publish_context["mergeAutomationStatus"] == "not_applicable"
+    assert status == "success"
+    assert "Jira issue already implemented" in message
+    assert publish_failure is False
+
+
+def test_jira_implement_task_makes_pr_publish_optional(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    assert mock_run_workflow._pr_publish_optional_for_task(
+        {
+            "publishMode": "pr",
+            "task": {
+                "skills": {
+                    "include": [
+                        {"name": "jira-implement"},
+                    ]
+                }
+            },
+        }
+    )
+
 def test_native_pr_branch_resolution_keeps_legacy_branch_only_replay_shape(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,
