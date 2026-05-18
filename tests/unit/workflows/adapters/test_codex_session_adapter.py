@@ -620,6 +620,7 @@ async def test_start_passes_managed_session_dood_context(
         slot_releaser=_async_noop,
         cooldown_reporter=_async_noop,
         workflow_id="wf-agent-run-1",
+        task_workflow_id="wf-parent-task-1",
         runtime_id="codex_cli",
         run_store=ManagedRunStore(tmp_path / "managed_runs"),
         load_session_snapshot=_load_snapshot,
@@ -643,6 +644,8 @@ async def test_start_passes_managed_session_dood_context(
     launch_environment = launch_calls[0]["request"]["environment"]
     assert launch_environment["MOONMIND_WORKDIR"] == str(workspace_root)
     assert launch_environment["MOONMIND_JOB_ID"] == binding.task_run_id
+    assert launch_environment["MOONMIND_TASK_WORKFLOW_ID"] == "wf-parent-task-1"
+    assert launch_environment["MOONMIND_TASK_RUN_ID"] == binding.task_run_id
     assert (
         launch_environment["MOONMIND_CONTAINER_WORKSPACE_VOLUME"]
         == "agent_workspaces_test"
