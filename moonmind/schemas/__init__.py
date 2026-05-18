@@ -6,6 +6,7 @@ from .agent_runtime_models import (
     ManagedAgentRuntimeProfile,
     ManagedAgentProviderProfile,
     ManagedRuntimeWorkloadMode,
+    build_docker_sidecar_launch_plan,
     MoonMindOpsRuntime,
     MoonMindOpsRuntimeOperation,
     moonmind_ops_runtime_contract,
