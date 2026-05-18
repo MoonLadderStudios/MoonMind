@@ -206,6 +206,7 @@ async def test_start_terminal_bridge_container_uses_provider_bootstrap_command(
     )
 
     assert result["container_name"] == "moonmind_auth_oas_terminal_runner"
+    assert "--init" in observed
     assert "-v" in observed
     assert "codex_auth_volume:/home/app/.codex" in observed
     assert "--user" in observed

@@ -306,7 +306,7 @@ async def start_terminal_bridge_container(
     )
     try:
         proc = await asyncio.create_subprocess_exec(
-            "docker", "run", "-d", "-i", "-t", "--rm",
+            "docker", "run", "-d", "--init", "-i", "-t", "--rm",
             "--name", container_name,
             "--label", "moonmind.oauth_session=true",
             "--label", f"moonmind.oauth_session_id={session_id}",

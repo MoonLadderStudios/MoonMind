@@ -22,6 +22,7 @@ services:
 
   api:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
+    init: true
     ports:
       - "8000:8000"
     environment:
@@ -258,6 +259,7 @@ services:
 
   temporal-worker-workflow:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
+    init: true
     environment:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
@@ -312,6 +314,7 @@ services:
 
   temporal-worker-artifacts:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
+    init: true
     environment:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
@@ -366,6 +369,7 @@ services:
 
   temporal-worker-llm:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
+    init: true
     environment:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
@@ -422,6 +426,7 @@ services:
 
   temporal-worker-sandbox:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
+    init: true
     environment:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
@@ -506,6 +511,7 @@ services:
 
   temporal-worker-agent-runtime:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
+    init: true
     environment:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
@@ -607,6 +613,7 @@ services:
 
   temporal-worker-integrations:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
+    init: true
     environment:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
