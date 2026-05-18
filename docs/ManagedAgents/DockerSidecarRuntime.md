@@ -201,9 +201,11 @@ spec:
       probes: [ "docker version", "docker info" ]
 
   policy:
-    hostDockerAccess: forbidden
+    hostDockerSocket: forbidden
+    sharedDaemonAcrossUsers: forbidden
+    moonmindDeploymentSecretsInSession: forbidden
     appContainerControlFromSession: forbidden
-    deploymentSecretsInSession: forbidden
+    apiContainerWorkloadDockerSocketAccess: false
 ```
 
 ---
@@ -674,7 +676,7 @@ spec:
   purpose: moonmind-application-operations
   backend: docker
   exposedToManagedAgents: false
-  allowedOperations: [ status, deploy, restart, rollback, logs ]
+  allowedOperations: [ status, deploy, restart, rollback, imageRefresh, logs ]
   dockerBackend:
     hostDockerAccess: true
     component: moonmind-ops-runner

@@ -81,6 +81,26 @@ def test_deployment_update_tool_definition_matches_mm519_contract() -> None:
         "docker_admin",
     )
     assert definition.allowed_roles == ("admin",)
+    raw_payload = build_deployment_update_tool_definition_payload()
+    assert raw_payload["security"]["opsRuntime"] == {
+        "kind": "MoonMindOpsRuntime",
+        "name": "docker-admin-runtime",
+        "purpose": "moonmind-application-operations",
+        "backend": "docker",
+        "exposedToManagedAgents": False,
+        "allowedOperations": [
+            "status",
+            "deploy",
+            "restart",
+            "rollback",
+            "imageRefresh",
+            "logs",
+        ],
+        "dockerBackend": {
+            "hostDockerAccess": True,
+            "component": "moonmind-ops-runner",
+        },
+    }
     assert definition.policies.retries.max_attempts == 1
     assert definition.policies.retries.non_retryable_error_codes == (
         "INVALID_INPUT",
