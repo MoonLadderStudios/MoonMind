@@ -29,6 +29,7 @@ from moonmind.schemas.managed_session_models import (
     FetchCodexManagedSessionSummaryRequest,
     InterruptCodexManagedSessionTurnRequest,
     LaunchCodexManagedSessionRequest,
+    ManagedSessionDockerCapabilityRequest,
     ManagedSessionRecordStatus,
     PublishCodexManagedSessionArtifactsRequest,
     SendCodexManagedSessionTurnRequest,
@@ -583,6 +584,128 @@ class DockerCodexManagedSessionController:
             if isinstance(value, str) and value.strip():
                 return value.strip()
         return None
+
+    @staticmethod
+    def _merge_capability_metadata(
+        metadata: Mapping[str, Any],
+        capability_metadata: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        merged = dict(metadata)
+        capabilities = dict(merged.get("capabilities") or {})
+        capabilities.update(dict(capability_metadata.get("capabilities") or {}))
+        if capabilities:
+            merged["capabilities"] = capabilities
+        return merged
+
+    async def _run_docker_capability_probe(
+        self,
+        *,
+        container_id: str,
+        args: tuple[str, ...],
+    ) -> tuple[bool, str]:
+        command = (
+            self._docker_binary,
+            "exec",
+            container_id,
+            "docker",
+            *args,
+        )
+        returncode, stdout, stderr = await self._command_runner(
+            command,
+            env=self._docker_env(),
+        )
+        detail = (stdout.strip() or stderr.strip())[:500]
+        return returncode == 0, detail
+
+    async def _evaluate_docker_capability_once(
+        self,
+        *,
+        container_id: str,
+        request: LaunchCodexManagedSessionRequest,
+        capability: ManagedSessionDockerCapabilityRequest,
+    ) -> dict[str, Any]:
+        docker_host = (
+            capability.docker_host
+            or request.environment.get("DOCKER_HOST")
+            or ""
+        )
+        checks: dict[str, str] = {}
+        version_ok, version_text = await self._run_docker_capability_probe(
+            container_id=container_id,
+            args=("version", "--format", "{{.Server.Version}}"),
+        )
+        checks["dockerVersion"] = "passed" if version_ok else "failed"
+        info_ok, _info_text = await self._run_docker_capability_probe(
+            container_id=container_id,
+            args=("info",),
+        )
+        checks["dockerInfo"] = "passed" if info_ok else "failed"
+        compose_available = False
+        if capability.compose_support:
+            compose_ok, _compose_text = await self._run_docker_capability_probe(
+                container_id=container_id,
+                args=("compose", "version"),
+            )
+            checks["dockerCompose"] = "passed" if compose_ok else "failed"
+            compose_available = compose_ok
+
+        available = version_ok and info_ok and (
+            compose_available if capability.compose_support else True
+        )
+        docker_status: dict[str, Any] = {
+            "available": available,
+            "mode": capability.mode,
+            "dockerHost": docker_host,
+            "composeAvailable": compose_available,
+            "daemon": {
+                "ready": available,
+                "version": version_text if version_ok else "",
+            },
+            "checks": checks,
+        }
+        if not available:
+            docker_status.update(
+                {
+                    "reason": "sidecar_not_ready",
+                    "message": (
+                        "Docker daemon did not become ready before session launch."
+                    ),
+                }
+            )
+        return {"capabilities": {"docker": docker_status}}
+
+    async def _evaluate_docker_capability(
+        self,
+        *,
+        container_id: str,
+        request: LaunchCodexManagedSessionRequest,
+    ) -> dict[str, Any]:
+        capability = request.docker_capability
+        if capability is None:
+            return {}
+        deadline = time.monotonic() + capability.timeout_seconds
+        last_status: dict[str, Any] = {}
+        while True:
+            last_status = await self._evaluate_docker_capability_once(
+                container_id=container_id,
+                request=request,
+                capability=capability,
+            )
+            docker_status = (
+                last_status.get("capabilities", {}).get("docker", {})
+                if isinstance(last_status, dict)
+                else {}
+            )
+            if docker_status.get("available") is True:
+                return last_status
+            if time.monotonic() >= deadline:
+                break
+            if capability.interval_seconds > 0:
+                await asyncio.sleep(capability.interval_seconds)
+
+        if capability.required:
+            raise RuntimeError("sidecar_not_ready: Docker capability is required")
+        return last_status
 
     @staticmethod
     def _locator_from_session_state(
@@ -1543,11 +1666,16 @@ class DockerCodexManagedSessionController:
         locator: CodexManagedSessionLocator,
         status: str,
         active_turn_id: str | None,
+        metadata: Mapping[str, Any] | None = None,
     ) -> CodexManagedSessionRecord | None:
         if self._session_store is None:
             return None
-        if self._session_store.load(locator.session_id) is None:
+        existing = self._session_store.load(locator.session_id)
+        if existing is None:
             return None
+        next_metadata = dict(existing.metadata)
+        if metadata:
+            next_metadata = self._merge_capability_metadata(next_metadata, metadata)
         return await self._session_store.update(
             locator.session_id,
             session_epoch=locator.session_epoch,
@@ -1555,6 +1683,7 @@ class DockerCodexManagedSessionController:
             thread_id=locator.thread_id,
             active_turn_id=active_turn_id,
             status=self._record_status_from_handle_status(status),
+            metadata=next_metadata,
             updated_at=datetime.now(tz=UTC),
             error_message=None,
         )
@@ -1734,8 +1863,19 @@ class DockerCodexManagedSessionController:
             raise
         try:
             await self._wait_ready(container_id=container_id)
+            docker_capability_metadata = await self._evaluate_docker_capability(
+                container_id=container_id,
+                request=request.model_copy(update={"environment": session_environment}),
+            )
+            launch_metadata = self._merge_capability_metadata(
+                request.metadata,
+                docker_capability_metadata,
+            )
             container_request = request.model_copy(
-                update={"environment": session_environment}
+                update={
+                    "environment": session_environment,
+                    "metadata": launch_metadata,
+                }
             )
             container_payload = container_request.model_dump(
                 by_alias=True,
@@ -1753,8 +1893,20 @@ class DockerCodexManagedSessionController:
                 await self._github_auth_brokers.stop(request.session_id)
             raise
         handle = CodexManagedSessionHandle.model_validate(payload)
+        if docker_capability_metadata:
+            handle = handle.model_copy(
+                update={
+                    "metadata": self._merge_capability_metadata(
+                        handle.metadata,
+                        docker_capability_metadata,
+                    )
+                }
+            )
         if self._session_store is not None:
-            record = self._record_from_launch(request=request, handle=handle)
+            record = self._record_from_launch(
+                request=request.model_copy(update={"metadata": launch_metadata}),
+                handle=handle,
+            )
             self._session_store.save(record)
             if self._session_supervisor is not None:
                 await self._session_supervisor.start(record)
@@ -1783,8 +1935,17 @@ class DockerCodexManagedSessionController:
             locator=self._locator_from_session_state(handle.session_state),
             status=handle.status,
             active_turn_id=handle.session_state.active_turn_id,
+            metadata=handle.metadata,
         )
         if record is not None:
+            handle = handle.model_copy(
+                update={
+                    "metadata": self._merge_capability_metadata(
+                        handle.metadata,
+                        record.metadata,
+                    )
+                }
+            )
             await self._emit_session_event(
                 record=record,
                 kind="session_resumed",

@@ -187,6 +187,229 @@ async def test_controller_launches_container_and_returns_typed_handle(
     session_supervisor.start.assert_awaited_once()
 
 @pytest.mark.asyncio
+async def test_mm693_launch_reports_required_docker_capability_ready(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
+    monkeypatch.delenv("MOONMIND_DOCKER_NETWORK", raising=False)
+    workspace_root = tmp_path / "agent_jobs"
+    session_store = ManagedSessionStore(tmp_path / "session-store")
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_root / "task-1" / "repo"),
+        sessionWorkspacePath=str(workspace_root / "task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        environment={
+            "DOCKER_HOST": "unix:///var/run/moonmind-docker/docker.sock",
+        },
+        dockerCapability={
+            "required": True,
+            "mode": "sidecar-dind",
+            "composeSupport": True,
+            "timeoutSeconds": 0,
+            "intervalSeconds": 0,
+        },
+    )
+    launch_payloads: list[dict[str, object]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        if command[:3] == ("docker", "rm", "-f"):
+            return 1, "", "No such container"
+        if command[:2] == ("docker", "run"):
+            return 0, "ctr-1\n", ""
+        if "ready" in command:
+            return 0, '{"ready": true}\n', ""
+        if command[:5] == ("docker", "exec", "ctr-1", "docker", "version"):
+            return 0, "27.3.1\n", ""
+        if command[:5] == ("docker", "exec", "ctr-1", "docker", "info"):
+            return 0, "ok\n", ""
+        if command[:5] == ("docker", "exec", "ctr-1", "docker", "compose"):
+            return 0, "Docker Compose version v2.29.0\n", ""
+        if "launch_session" in command:
+            launch_payloads.append(json.loads(input_text or "{}"))
+            payload = {
+                "sessionState": {
+                    "sessionId": "sess-1",
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-1",
+                    "threadId": "logical-thread-1",
+                },
+                "status": "ready",
+                "imageRef": request.image_ref,
+                "controlUrl": "docker-exec://mm-codex-session-sess-1",
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        session_store=session_store,
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    handle = await controller.launch_session(request)
+
+    docker_status = handle.metadata["capabilities"]["docker"]
+    assert docker_status == {
+        "available": True,
+        "mode": "sidecar-dind",
+        "dockerHost": "unix:///var/run/moonmind-docker/docker.sock",
+        "composeAvailable": True,
+        "daemon": {"ready": True, "version": "27.3.1"},
+        "checks": {
+            "dockerVersion": "passed",
+            "dockerInfo": "passed",
+            "dockerCompose": "passed",
+        },
+    }
+    assert launch_payloads[0]["metadata"] == handle.metadata
+    stored = session_store.load("sess-1")
+    assert stored is not None
+    assert stored.metadata["capabilities"]["docker"]["available"] is True
+
+@pytest.mark.asyncio
+async def test_mm693_optional_docker_capability_failure_starts_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
+    monkeypatch.delenv("MOONMIND_DOCKER_NETWORK", raising=False)
+    workspace_root = tmp_path / "agent_jobs"
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_root / "task-1" / "repo"),
+        sessionWorkspacePath=str(workspace_root / "task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        dockerCapability={
+            "required": False,
+            "mode": "sidecar-dind",
+            "composeSupport": False,
+            "timeoutSeconds": 0,
+            "intervalSeconds": 0,
+        },
+    )
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        if command[:3] == ("docker", "rm", "-f"):
+            return 1, "", "No such container"
+        if command[:2] == ("docker", "run"):
+            return 0, "ctr-1\n", ""
+        if "ready" in command:
+            return 0, '{"ready": true}\n', ""
+        if command[:4] == ("docker", "exec", "ctr-1", "docker"):
+            return 1, "", "docker daemon unavailable"
+        if "launch_session" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": "sess-1",
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-1",
+                    "threadId": "logical-thread-1",
+                },
+                "status": "ready",
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    handle = await controller.launch_session(request)
+
+    docker_status = handle.metadata["capabilities"]["docker"]
+    assert docker_status["available"] is False
+    assert docker_status["reason"] == "sidecar_not_ready"
+    assert docker_status["checks"] == {
+        "dockerVersion": "failed",
+        "dockerInfo": "failed",
+    }
+
+@pytest.mark.asyncio
+async def test_mm693_required_docker_capability_failure_blocks_launch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
+    monkeypatch.delenv("MOONMIND_DOCKER_NETWORK", raising=False)
+    workspace_root = tmp_path / "agent_jobs"
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_root / "task-1" / "repo"),
+        sessionWorkspacePath=str(workspace_root / "task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        dockerCapability={
+            "required": True,
+            "mode": "sidecar-dind",
+            "timeoutSeconds": 0,
+            "intervalSeconds": 0,
+        },
+    )
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        if command[:3] == ("docker", "rm", "-f"):
+            return 1, "", "No such container"
+        if command[:2] == ("docker", "run"):
+            return 0, "ctr-1\n", ""
+        if "ready" in command:
+            return 0, '{"ready": true}\n', ""
+        if command[:4] == ("docker", "exec", "ctr-1", "docker"):
+            return 1, "", "docker daemon unavailable"
+        if "launch_session" in command:
+            raise AssertionError("launch_session should not run")
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    with pytest.raises(RuntimeError, match="sidecar_not_ready"):
+        await controller.launch_session(request)
+
+    assert ("docker", "rm", "-f", "ctr-1") in commands
+
+@pytest.mark.asyncio
 async def test_controller_record_keeps_auth_and_runtime_homes_out_of_artifact_refs(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3484,6 +3707,21 @@ async def test_controller_reconcile_degrades_when_container_inspect_fails(
 async def test_controller_session_status_persists_returned_session_identity(
     tmp_path: Path,
 ) -> None:
+    docker_metadata = {
+        "capabilities": {
+            "docker": {
+                "available": True,
+                "mode": "sidecar-dind",
+                "dockerHost": "unix:///var/run/moonmind-docker/docker.sock",
+                "composeAvailable": False,
+                "daemon": {"ready": True, "version": "27.3.1"},
+                "checks": {
+                    "dockerVersion": "passed",
+                    "dockerInfo": "passed",
+                },
+            }
+        }
+    }
     store = ManagedSessionStore(tmp_path / "session-store")
     store.save(
         CodexManagedSessionRecord(
@@ -3499,6 +3737,7 @@ async def test_controller_session_status_persists_returned_session_identity(
             workspacePath="/work/repo",
             sessionWorkspacePath="/work/session",
             artifactSpoolPath="/work/artifacts",
+            metadata=docker_metadata,
             startedAt="2026-04-06T12:00:00Z",
         )
     )
@@ -3530,7 +3769,7 @@ async def test_controller_session_status_persists_returned_session_identity(
         command_runner=_fake_runner,
     )
 
-    await controller.session_status(
+    handle = await controller.session_status(
         CodexManagedSessionLocator(
             sessionId="sess-1",
             sessionEpoch=1,
@@ -3543,6 +3782,8 @@ async def test_controller_session_status_persists_returned_session_identity(
     assert updated is not None
     assert updated.session_epoch == 2
     assert updated.container_id == "ctr-2"
+    assert handle.metadata["capabilities"]["docker"]["available"] is True
+    assert updated.metadata["capabilities"]["docker"]["available"] is True
     assert updated.thread_id == "thread-2"
 
 @pytest.mark.asyncio
