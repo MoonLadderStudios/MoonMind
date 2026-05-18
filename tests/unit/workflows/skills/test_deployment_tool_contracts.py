@@ -12,7 +12,10 @@ from moonmind.workflows.skills.plan_validation import (
     PlanValidationError,
     validate_plan_payload,
 )
-from moonmind.workflows.skills.tool_plan_contracts import parse_tool_definition
+from moonmind.workflows.skills.tool_plan_contracts import (
+    ContractValidationError,
+    parse_tool_definition,
+)
 from moonmind.workflows.skills.tool_registry import create_registry_snapshot
 
 
@@ -81,6 +84,7 @@ def test_deployment_update_tool_definition_matches_mm519_contract() -> None:
         "docker_admin",
     )
     assert definition.allowed_roles == ("admin",)
+    assert definition.ops_runtime is not None
     raw_payload = build_deployment_update_tool_definition_payload()
     assert raw_payload["security"]["opsRuntime"] == {
         "kind": "MoonMindOpsRuntime",
@@ -101,6 +105,9 @@ def test_deployment_update_tool_definition_matches_mm519_contract() -> None:
             "component": "moonmind-ops-runner",
         },
     }
+    assert definition.to_payload()["security"]["opsRuntime"] == raw_payload[
+        "security"
+    ]["opsRuntime"]
     assert definition.policies.retries.max_attempts == 1
     assert definition.policies.retries.non_retryable_error_codes == (
         "INVALID_INPUT",
@@ -137,6 +144,14 @@ def test_deployment_update_tool_definition_matches_mm519_contract() -> None:
     ]
     assert "verificationArtifactRef" in output_schema["properties"]
     assert "audit" in output_schema["properties"]
+
+
+def test_deployment_update_tool_definition_rejects_agent_exposed_ops_runtime() -> None:
+    payload = build_deployment_update_tool_definition_payload()
+    payload["security"]["opsRuntime"]["exposedToManagedAgents"] = True
+
+    with pytest.raises(ContractValidationError, match="exposedToManagedAgents"):
+        parse_tool_definition(payload)
 
 
 def test_representative_deployment_update_plan_validates_against_registry_snapshot(
