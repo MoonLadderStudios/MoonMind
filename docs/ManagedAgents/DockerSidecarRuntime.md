@@ -169,17 +169,19 @@ spec:
       - { name: workspace,     mountPath: /work/agent_jobs }
       - { name: docker-socket, mountPath: /var/run/moonmind-docker }
 
+  socket:
+    path: /var/run/moonmind-docker/docker.sock
+    volumeName: docker-socket
+
+  graph:
+    volumeName: docker-graph
+    mountPath: /var/lib/docker
+    lifecycle: session
+
   dockerSidecar:
     enabled: true
     mode: dind                      # or dind-rootless
     image: docker:27-dind            # pinned, not :latest
-    socket:
-      path: /var/run/moonmind-docker/docker.sock
-      volumeName: docker-socket
-    storage:
-      volumeName: docker-graph
-      mountPath: /var/lib/docker
-      lifecycle: session
     security:
       privileged: true              # required for classic dind
       hostDockerSocket: forbidden
@@ -722,8 +724,9 @@ backend-specific `dockerSidecar` rendering. `labels` are the durable ownership
 and observability metadata. `capabilities.docker` states whether Docker-like
 workload capability is available and which execution model provides it
 (`docker-sidecar`, `docker-sidecar-rootless`, or future `kubernetes-job`).
-Docker socket, graph storage, and sidecar image details remain rendering inputs
-for the Docker backend only.
+`socket` and `graph` are durable runtime resources shared by backend renderers;
+sidecar image, privilege, and mode details remain rendering inputs for the
+Docker backend only.
 
 ---
 
@@ -733,7 +736,7 @@ The session launcher must validate at least the following before starting a sess
 
 1. If `dockerSidecar.enabled=true`, then `agent.dockerClient.enabled=true`.
 2. `agent.dockerClient.daemonInAgent` must be `false`.
-3. `agent.env.DOCKER_HOST` must point at the declared sidecar socket path.
+3. `agent.env.DOCKER_HOST` must point at the declared `socket.path`.
 4. `agent.workspace.mountPath == dockerSidecar.workspace.mountPath` (§5.1).
 5. The sidecar mount set must not include the host Docker socket.
 6. Neither container may receive MoonMind deployment credentials, registry push secrets, or session-bridge tokens for unrelated sessions.
@@ -745,6 +748,8 @@ The session launcher must validate at least the following before starting a sess
 12. `workloadMode: kubernetes-job` requires
     `deploymentSupportsKubernetesJob: true` and must not enable a Docker sidecar
     or agent `DOCKER_HOST`.
+13. `socket` and `graph` are required for Docker sidecar modes and must be
+    absent for `no-docker` and `kubernetes-job`.
 
 Example failure message:
 

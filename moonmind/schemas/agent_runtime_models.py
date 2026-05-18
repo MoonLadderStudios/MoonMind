@@ -630,8 +630,8 @@ class RuntimeProfileAgent(BaseModel):
     mounts: list[RuntimeProfileMount] = Field(default_factory=list)
 
 
-class RuntimeProfileSidecarSocket(BaseModel):
-    """Docker sidecar Unix socket declaration."""
+class RuntimeProfileSocket(BaseModel):
+    """Runtime socket declaration shared across backend renderers."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -639,8 +639,8 @@ class RuntimeProfileSidecarSocket(BaseModel):
     volume_name: str = Field(..., alias="volumeName", min_length=1)
 
 
-class RuntimeProfileSidecarStorage(BaseModel):
-    """Docker sidecar graph storage declaration."""
+class RuntimeProfileGraphStorage(BaseModel):
+    """Runtime graph/storage declaration shared across backend renderers."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -672,8 +672,6 @@ class RuntimeProfileDockerSidecar(BaseModel):
     enabled: bool = False
     mode: Literal["dind", "dind-rootless"] = "dind"
     image: str | None = None
-    socket: RuntimeProfileSidecarSocket | None = None
-    storage: RuntimeProfileSidecarStorage | None = None
     workspace: RuntimeProfileWorkspace | None = None
     security: RuntimeProfileSidecarSecurity = Field(
         default_factory=RuntimeProfileSidecarSecurity
@@ -777,6 +775,8 @@ class ManagedAgentRuntimeProfile(BaseModel):
     docker_sidecar: RuntimeProfileDockerSidecar | None = Field(
         None, alias="dockerSidecar"
     )
+    socket: RuntimeProfileSocket | None = None
+    graph: RuntimeProfileGraphStorage | None = None
     resources: dict[str, Any] = Field(default_factory=dict)
     labels: dict[str, str] = Field(default_factory=dict)
     capabilities: RuntimeProfileCapabilities = Field(
@@ -829,6 +829,11 @@ class ManagedAgentRuntimeProfile(BaseModel):
                     "dockerSidecar.enabled must be false for no-docker profiles; "
                     "task instructions cannot raise Docker capability"
                 )
+            if self.socket is not None or self.graph is not None:
+                raise ValueError(
+                    "socket and graph must not be set for no-docker profiles; "
+                    "task instructions cannot raise Docker capability"
+                )
             if "DOCKER_HOST" in self.agent.env:
                 raise ValueError(
                     "agent.env.DOCKER_HOST must not be set for no-docker profiles; "
@@ -855,6 +860,12 @@ class ManagedAgentRuntimeProfile(BaseModel):
                     "dockerSidecar.enabled must be false for kubernetes-job "
                     "profiles; Kubernetes Job mode must not materialize a Docker "
                     "sidecar"
+                )
+            if self.socket is not None or self.graph is not None:
+                raise ValueError(
+                    "socket and graph must not be set for kubernetes-job profiles; "
+                    "Kubernetes Job mode uses deployment-native workload "
+                    "scheduling rather than a Docker daemon"
                 )
             if "DOCKER_HOST" in self.agent.env:
                 raise ValueError(
@@ -891,16 +902,16 @@ class ManagedAgentRuntimeProfile(BaseModel):
                 "agent.dockerClient.daemonInAgent must be false; running the daemon "
                 "inside the agent breaks sidecar isolation"
             )
-        if sidecar.socket is None:
+        if self.socket is None:
             raise ValueError(
-                "dockerSidecar.socket.path is required; DOCKER_HOST cannot be "
-                "validated without the declared sidecar socket"
+                "socket.path is required for Docker-capable profiles; DOCKER_HOST "
+                "cannot be validated without the declared runtime socket"
             )
-        expected_docker_host = f"unix://{sidecar.socket.path}"
+        expected_docker_host = f"unix://{self.socket.path}"
         actual_docker_host = str(self.agent.env.get("DOCKER_HOST") or "").strip()
         if actual_docker_host != expected_docker_host:
             raise ValueError(
-                "agent.env.DOCKER_HOST must point at dockerSidecar.socket.path; "
+                "agent.env.DOCKER_HOST must point at socket.path; "
                 "otherwise Docker commands may reach the wrong daemon or fail"
             )
         sidecar_workspace_path = (
@@ -917,12 +928,12 @@ class ManagedAgentRuntimeProfile(BaseModel):
                 "dockerSidecar.image sidecar image must be pinned to a non-latest "
                 "tag or digest; floating images make launches non-reproducible"
             )
-        if sidecar.storage is None:
+        if self.graph is None:
             raise ValueError(
-                "dockerSidecar.storage is required; the Docker graph volume must be "
-                "declared per session"
+                "graph is required for Docker-capable profiles; the Docker graph "
+                "volume must be declared per session"
             )
-        if sidecar.storage.daemon_scope != "session":
+        if self.graph.daemon_scope != "session":
             raise ValueError(
                 "Docker daemon scope must be per session; shared daemons can expose "
                 "containers, images, and credentials across sessions or users"

@@ -37,20 +37,20 @@ def _valid_docker_sidecar_profile() -> dict:
                 {"name": "docker-socket", "mountPath": "/var/run/moonmind-docker"},
             ],
         },
+        "socket": {
+            "path": "/var/run/moonmind-docker/docker.sock",
+            "volumeName": "docker-socket",
+        },
+        "graph": {
+            "volumeName": "docker-graph",
+            "mountPath": "/var/lib/docker",
+            "lifecycle": "session",
+            "daemonScope": "session",
+        },
         "dockerSidecar": {
             "enabled": True,
             "mode": "dind",
             "image": "docker:27-dind",
-            "socket": {
-                "path": "/var/run/moonmind-docker/docker.sock",
-                "volumeName": "docker-socket",
-            },
-            "storage": {
-                "volumeName": "docker-graph",
-                "mountPath": "/var/lib/docker",
-                "lifecycle": "session",
-                "daemonScope": "session",
-            },
             "workspace": {"mountPath": "/work/agent_jobs"},
             "security": {
                 "privileged": True,

@@ -610,20 +610,20 @@ def _valid_docker_sidecar_profile() -> dict:
                 {"name": "docker-socket", "mountPath": "/var/run/moonmind-docker"},
             ],
         },
+        "socket": {
+            "path": "/var/run/moonmind-docker/docker.sock",
+            "volumeName": "docker-socket",
+        },
+        "graph": {
+            "volumeName": "docker-graph",
+            "mountPath": "/var/lib/docker",
+            "lifecycle": "session",
+            "daemonScope": "session",
+        },
         "dockerSidecar": {
             "enabled": True,
             "mode": "dind",
             "image": "docker:27-dind",
-            "socket": {
-                "path": "/var/run/moonmind-docker/docker.sock",
-                "volumeName": "docker-socket",
-            },
-            "storage": {
-                "volumeName": "docker-graph",
-                "mountPath": "/var/lib/docker",
-                "lifecycle": "session",
-                "daemonScope": "session",
-            },
             "workspace": {"mountPath": "/work/agent_jobs"},
             "security": {
                 "privileged": True,
@@ -678,6 +678,10 @@ def test_managed_agent_runtime_profile_accepts_valid_docker_sidecar_contract() -
     )
     assert profile.docker_sidecar is not None
     assert profile.docker_sidecar.image == "docker:27-dind"
+    assert profile.socket is not None
+    assert profile.socket.volume_name == "docker-socket"
+    assert profile.graph is not None
+    assert profile.graph.volume_name == "docker-graph"
     assert profile.labels["moonmind.workload_mode"] == "docker-sidecar"
     assert profile.capabilities.docker.available is True
     assert profile.capabilities.docker.execution_model == "docker-sidecar"
@@ -698,7 +702,7 @@ def test_managed_agent_runtime_profile_accepts_valid_docker_sidecar_contract() -
             lambda p: p["agent"]["env"].update(
                 {"DOCKER_HOST": "unix:///tmp/docker.sock"}
             ),
-            "DOCKER_HOST must point at dockerSidecar.socket.path",
+            "DOCKER_HOST must point at socket.path",
         ),
         (
             lambda p: p["dockerSidecar"]["workspace"].update(
@@ -727,9 +731,7 @@ def test_managed_agent_runtime_profile_accepts_valid_docker_sidecar_contract() -
             "sidecar image must be pinned",
         ),
         (
-            lambda p: p["dockerSidecar"]["storage"].update(
-                {"daemonScope": "shared"}
-            ),
+            lambda p: p["graph"].update({"daemonScope": "shared"}),
             "Docker daemon scope must be per session",
         ),
         (
@@ -871,6 +873,8 @@ def test_kubernetes_job_profile_keeps_future_backend_separate() -> None:
 
     assert profile.workload_mode == "kubernetes-job"
     assert profile.deployment_supports_kubernetes_job is True
+    assert profile.socket is None
+    assert profile.graph is None
     assert profile.docker_sidecar is not None
     assert profile.docker_sidecar.enabled is False
     assert profile.capabilities.docker.execution_model == "kubernetes-job"
@@ -904,16 +908,6 @@ def test_no_docker_profile_rejects_enabled_sidecar() -> None:
     payload["dockerSidecar"] = {
         "enabled": True,
         "image": "docker:27-dind",
-        "socket": {
-            "path": "/var/run/moonmind-docker/docker.sock",
-            "volumeName": "docker-socket",
-        },
-        "storage": {
-            "volumeName": "docker-graph",
-            "mountPath": "/var/lib/docker",
-            "lifecycle": "session",
-            "daemonScope": "session",
-        },
         "workspace": {"mountPath": "/work/agent_jobs"},
     }
     with pytest.raises(
