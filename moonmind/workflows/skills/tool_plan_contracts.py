@@ -11,6 +11,10 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Mapping
 
+from pydantic import ValidationError as PydanticValidationError
+
+from moonmind.schemas.agent_runtime_models import MoonMindOpsRuntime
+
 ARTIFACT_REF_PREFIX = "art:sha256:"
 REGISTRY_DIGEST_PREFIX = "reg:sha256:"
 SUPPORTED_PLAN_VERSIONS = frozenset({"1.0"})
@@ -320,6 +324,7 @@ class ToolDefinition:
     required_capabilities: tuple[str, ...]
     policies: ToolPolicies
     allowed_roles: tuple[str, ...] = ()
+    ops_runtime: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         _ensure_non_empty(self.name, field_name="name")
@@ -343,6 +348,9 @@ class ToolDefinition:
         return self.name, self.version
 
     def to_payload(self) -> dict[str, Any]:
+        security: dict[str, Any] = {"allowed_roles": list(self.allowed_roles)}
+        if self.ops_runtime is not None:
+            security["opsRuntime"] = dict(self.ops_runtime)
         return {
             "name": self.name,
             "version": self.version,
@@ -352,7 +360,7 @@ class ToolDefinition:
             "executor": self.executor.to_payload(),
             "requirements": {"capabilities": list(self.required_capabilities)},
             "policies": self.policies.to_payload(),
-            "security": {"allowed_roles": list(self.allowed_roles)},
+            "security": security,
         }
 
 @dataclass(frozen=True, slots=True)
@@ -1168,12 +1176,27 @@ def parse_tool_definition(payload: Mapping[str, Any]) -> ToolDefinition:
         )
 
     allowed_roles: tuple[str, ...] = ()
+    ops_runtime: Mapping[str, Any] | None = None
     if isinstance(security, Mapping):
         roles = security.get("allowed_roles")
         if isinstance(roles, list):
             allowed_roles = tuple(
                 str(role).strip() for role in roles if str(role).strip()
             )
+        ops_runtime_payload = security.get("opsRuntime")
+        if ops_runtime_payload is not None:
+            if not isinstance(ops_runtime_payload, Mapping):
+                raise ContractValidationError(
+                    "invalid_registry", "security.opsRuntime must be an object"
+                )
+            try:
+                ops_runtime = MoonMindOpsRuntime.model_validate(
+                    ops_runtime_payload
+                ).model_dump(by_alias=True, mode="json")
+            except PydanticValidationError as exc:
+                raise ContractValidationError(
+                    "invalid_registry", f"security.opsRuntime invalid: {exc}"
+                ) from exc
 
     non_retryable = retry_payload.get("non_retryable_error_codes", [])
     if not isinstance(non_retryable, list):
@@ -1225,6 +1248,7 @@ def parse_tool_definition(payload: Mapping[str, Any]) -> ToolDefinition:
             ),
         ),
         allowed_roles=allowed_roles,
+        ops_runtime=ops_runtime,
     )
 
 # Backward-compatible aliases — existing consumers can keep importing Skill*

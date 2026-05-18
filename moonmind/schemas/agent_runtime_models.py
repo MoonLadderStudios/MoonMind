@@ -580,6 +580,14 @@ ManagedRuntimeWorkloadMode = Literal[
     "docker-sidecar-rootless",
     "no-docker",
 ]
+MoonMindOpsRuntimeOperation = Literal[
+    "status",
+    "deploy",
+    "restart",
+    "rollback",
+    "imageRefresh",
+    "logs",
+]
 
 
 class RuntimeProfileMount(BaseModel):
@@ -686,18 +694,68 @@ class RuntimeProfilePolicy(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    host_docker_access: Literal["forbidden"] = Field(
-        "forbidden", alias="hostDockerAccess"
+    host_docker_socket: Literal["forbidden"] = Field(
+        "forbidden", alias="hostDockerSocket"
+    )
+    shared_daemon_across_users: Literal["forbidden"] = Field(
+        "forbidden", alias="sharedDaemonAcrossUsers"
+    )
+    moonmind_deployment_secrets_in_session: Literal["forbidden"] = Field(
+        "forbidden", alias="moonmindDeploymentSecretsInSession"
     )
     app_container_control_from_session: Literal["forbidden"] = Field(
         "forbidden", alias="appContainerControlFromSession"
     )
-    deployment_secrets_in_session: Literal["forbidden"] = Field(
-        "forbidden", alias="deploymentSecretsInSession"
-    )
     api_container_workload_docker_socket_access: bool = Field(
         False, alias="apiContainerWorkloadDockerSocketAccess"
     )
+
+
+class MoonMindOpsDockerBackend(BaseModel):
+    """Docker backend declaration for MoonMind control-plane operations."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    host_docker_access: Literal[True] = Field(True, alias="hostDockerAccess")
+    component: Literal["moonmind-ops-runner"] = "moonmind-ops-runner"
+
+
+class MoonMindOpsRuntime(BaseModel):
+    """Dedicated control-plane Docker runtime hidden from managed sessions."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    kind: Literal["MoonMindOpsRuntime"] = "MoonMindOpsRuntime"
+    name: str = Field("docker-admin-runtime", min_length=1)
+    purpose: Literal["moonmind-application-operations"] = (
+        "moonmind-application-operations"
+    )
+    backend: Literal["docker"] = "docker"
+    exposed_to_managed_agents: Literal[False] = Field(
+        False, alias="exposedToManagedAgents"
+    )
+    allowed_operations: tuple[MoonMindOpsRuntimeOperation, ...] = Field(
+        ("status", "deploy", "restart", "rollback", "imageRefresh", "logs"),
+        alias="allowedOperations",
+    )
+    docker_backend: MoonMindOpsDockerBackend = Field(
+        default_factory=MoonMindOpsDockerBackend,
+        alias="dockerBackend",
+    )
+
+    @model_validator(mode="after")
+    def _validate_ops_runtime(self) -> "MoonMindOpsRuntime":
+        if not self.allowed_operations:
+            raise ValueError("allowedOperations must include at least one operation")
+        if len(self.allowed_operations) != len(set(self.allowed_operations)):
+            raise ValueError("allowedOperations must not contain duplicate operations")
+        return self
+
+
+def moonmind_ops_runtime_contract() -> MoonMindOpsRuntime:
+    """Return the closed MM-694 ops runtime contract for Docker admin access."""
+
+    return MoonMindOpsRuntime()
 
 
 def _image_is_pinned(image: str | None) -> bool:
@@ -1288,8 +1346,12 @@ __all__ = [
     "RuntimeCommandRenderResult",
     "RuntimeCommandRenderStatus",
     "ManagedAgentProviderProfile",
+    "ManagedAgentRuntimeProfile",
     "ManagedRunRecord",
     "ManagedRuntimeProfile",
+    "ManagedRuntimeWorkloadMode",
+    "MoonMindOpsRuntime",
+    "MoonMindOpsRuntimeOperation",
     "ProfileSelector",
     "ProviderCapabilityDescriptor",
     "TERMINAL_AGENT_RUN_STATES",
@@ -1301,4 +1363,6 @@ __all__ = [
     "build_canonical_start_handle",
     "build_canonical_status",
     "build_canonical_result",
+    "moonmind_ops_runtime_contract",
+    "resolve_managed_runtime_workload_mode",
 ]
