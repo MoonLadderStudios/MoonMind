@@ -162,6 +162,37 @@ def test_launch_codex_managed_session_request_freezes_remote_container_defaults(
     assert request.protocol == "codex_app_server"
     assert request.session_epoch == 1
 
+def test_mm693_launch_request_serializes_docker_capability_contract() -> None:
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="task-123",
+        sessionId="sess-123",
+        threadId="thread-1",
+        workspacePath="/work/task/repo",
+        sessionWorkspacePath="/work/task/session",
+        artifactSpoolPath="/work/task/artifacts",
+        codexHomePath="/work/task/codex-home",
+        imageRef="moonmind:latest",
+        dockerCapability={
+            "required": True,
+            "mode": "sidecar-dind-rootless",
+            "dockerHost": "unix:///var/run/moonmind-docker/docker.sock",
+            "composeSupport": True,
+            "timeoutSeconds": 30,
+            "intervalSeconds": 1,
+        },
+    )
+
+    payload = request.model_dump(mode="json", by_alias=True)
+
+    assert payload["dockerCapability"] == {
+        "required": True,
+        "mode": "sidecar-dind-rootless",
+        "dockerHost": "unix:///var/run/moonmind-docker/docker.sock",
+        "composeSupport": True,
+        "timeoutSeconds": 30.0,
+        "intervalSeconds": 1.0,
+    }
+
 def test_launch_codex_managed_session_request_rejects_local_control_mode() -> None:
     with pytest.raises(ValidationError, match="Input should be 'remote_container'"):
         LaunchCodexManagedSessionRequest(
