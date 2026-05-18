@@ -370,17 +370,17 @@ async def test_resume_attempt_manifest_preserves_source_lineage(
         "relationship": "resume_from_failed_step",
         "lineageAttemptOrdinal": 2,
     }
-    assert manifest["workspace"]["policy"] == "resume_from_source_attempt"
+    assert manifest["workspace"]["policy"] == "start_from_last_passed_commit"
+    assert manifest["workspace"]["checkpointRef"] == (
+        "artifact://workspace/before-implement"
+    )
+    assert manifest["workspace"]["evidenceAccepted"] is True
     assert manifest["workspace"]["sourceAttempt"] == {
         "workflowId": "mm:source",
         "runId": "run-source",
         "logicalStepId": "implement",
         "attempt": 1,
     }
-    assert (
-        manifest["workspace"]["restoredCheckpointRef"]
-        == "artifact://workspace/before-implement"
-    )
 
 
 def test_resume_source_rejects_missing_workspace_evidence() -> None:

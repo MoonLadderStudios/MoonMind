@@ -685,7 +685,11 @@ async def test_run_records_step_attempt_manifest_ref_when_work_begins(
     assert writes[0]["payload"]["outputs"] == {}
     assert writes[1]["payload"]["reason"] == "runtime_recovered"
     assert writes[1]["payload"]["execution"] == {}
-    assert writes[1]["payload"]["outputs"] == {}
+    assert writes[1]["payload"]["status"] == "blocked"
+    assert writes[1]["payload"]["terminalDisposition"] == "blocked"
+    assert writes[1]["payload"]["outputs"] == {
+        "summary": "Workspace policy rejected before launch."
+    }
     assert writes[1]["payload"]["workspace"]["policy"] == (
         "continue_from_previous_attempt"
     )
@@ -1376,7 +1380,10 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
             return {
                 "status": "COMPLETED",
                 "summary": "Patch applied cleanly",
-                "outputs": {"outputSummaryRef": f"art_summary_{len(skill_inputs)}"},
+                "outputs": {
+                    "outputSummaryRef": f"art_summary_{len(skill_inputs)}",
+                    "stateCheckpointRef": f"art_checkpoint_{len(skill_inputs)}",
+                },
             }
         if activity_type == "step.review":
             return next(review_verdicts)
@@ -1563,6 +1570,7 @@ async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_i
             "summary": "Agent run completed",
             "output_refs": ["art_output_1"],
             "failure_class": None,
+            "metadata": {"stateCheckpointRef": f"art_checkpoint_{len(child_requests)}"},
         }
 
     workflow_info = SimpleNamespace(
