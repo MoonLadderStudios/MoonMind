@@ -24,6 +24,7 @@ GitEffectDisposition = Literal[
     "candidate",
     "discarded",
     "superseded",
+    "blocked",
     "none",
 ]
 SideEffectClass = Literal[

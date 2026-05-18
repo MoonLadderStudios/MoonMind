@@ -1665,6 +1665,7 @@ class MoonMindRunWorkflow:
         *,
         updated_at: datetime,
         summary: str | None = None,
+        increment_attempt: bool = True,
     ) -> None:
         self._restore_resume_workspace_for_failed_step(logical_step_id)
         if not self._try_update_step_row(
@@ -1674,7 +1675,7 @@ class MoonMindRunWorkflow:
             summary=summary,
             waiting_reason=None,
             attention_required=False,
-            increment_attempt=True,
+            increment_attempt=increment_attempt,
             set_started_at=True,
         ):
             return
@@ -3800,8 +3801,9 @@ class MoonMindRunWorkflow:
                             execution_result = {
                                 "status": "FAILED",
                                 "outputs": {
-                                    "failureMessage": (
-                                        "missing_required_checkpoint_evidence"
+                                    "error": "missing_required_checkpoint_evidence",
+                                    "summary": (
+                                        "Workspace policy rejected before launch."
                                     ),
                                 },
                             }
@@ -4949,12 +4951,28 @@ class MoonMindRunWorkflow:
                 node_id,
                 updated_at=workflow.now(),
                 summary=f"Re-checking Jira blockers for {tool_name}",
+                increment_attempt=False,
             )
             await self._record_step_attempt_manifest_start(
                 node_id,
                 updated_at=workflow.now(),
                 reason="policy_revalidation",
             )
+            recheck_attempt = self._step_attempt_for(node_id) or 0
+            if self._is_step_attempt_launch_blocked(
+                node_id,
+                attempt=recheck_attempt,
+            ):
+                current_result = {
+                    "status": "FAILED",
+                    "outputs": {
+                        "error": "missing_required_checkpoint_evidence",
+                        "summary": (
+                            "Workspace policy rejected before launch."
+                        ),
+                    },
+                }
+                break
             recheck_payload = dict(execute_payload)
             idempotency_key = recheck_payload.get("idempotency_key")
             if isinstance(idempotency_key, str) and idempotency_key.strip():
