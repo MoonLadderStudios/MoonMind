@@ -44,6 +44,7 @@ from moonmind.schemas.agent_runtime_models import (
     ManagedRunRecord,
     ManagedRuntimeProfile,
     TERMINAL_AGENT_RUN_STATES,
+    build_docker_sidecar_launch_plan,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.tasks.runtime_defaults import resolve_runtime_defaults
@@ -186,6 +187,7 @@ class ManagedProfileLaunchContext:
     delta_env_overrides: dict[str, str]
     passthrough_env_keys: list[str]
     env_keys_count: int
+    docker_sidecar_launch_plan: dict[str, Any] | None = None
 
 def default_credential_source_for_runtime(runtime_id: str) -> str:
     """Return the deterministic default credential source for one runtime."""
@@ -207,13 +209,19 @@ def build_managed_profile_launch_context(
 
     del workflow_id  # Reserved for activity-side shaping.
     runtime_profile = profile.get("runtime_profile") or profile.get("runtimeProfile")
+    docker_sidecar_launch_plan: dict[str, Any] | None = None
     if runtime_profile is not None:
         if not isinstance(runtime_profile, Mapping):
             raise ValueError(
                 "runtime_profile must be a mapping of profile fields; "
                 "non-object runtime profiles cannot satisfy launch invariants"
             )
-        ManagedAgentRuntimeProfile.model_validate(runtime_profile)
+        validated_runtime_profile = ManagedAgentRuntimeProfile.model_validate(
+            runtime_profile
+        )
+        plan = build_docker_sidecar_launch_plan(validated_runtime_profile)
+        if plan is not None:
+            docker_sidecar_launch_plan = plan.model_dump(mode="json", by_alias=True)
     credential_source = str(
         profile.get("credential_source") or default_credential_source
     ).strip() or default_credential_source
@@ -257,6 +265,7 @@ def build_managed_profile_launch_context(
         delta_env_overrides=delta_env_overrides,
         passthrough_env_keys=passthrough_env_keys,
         env_keys_count=len(delta_env_overrides) + len(passthrough_env_keys),
+        docker_sidecar_launch_plan=docker_sidecar_launch_plan,
     )
 
 def _in_workflow_context() -> bool:
@@ -634,6 +643,9 @@ class ManagedAgentAdapter:
                 "profile_id": launch_context.profile_id,
                 "credential_source": credential_source,
                 "env_keys_count": launch_context.env_keys_count,
+                "docker_sidecar_launch_plan": (
+                    launch_context.docker_sidecar_launch_plan
+                ),
             },
         )
 

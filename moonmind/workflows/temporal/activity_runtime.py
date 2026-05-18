@@ -3707,6 +3707,7 @@ class TemporalAgentRuntimeActivities:
             delta_env_overrides=delta_env_overrides,
             passthrough_env_keys=passthrough_env_keys,
             env_keys_count=len(combined_env_keys),
+            docker_sidecar_launch_plan=context.docker_sidecar_launch_plan,
         )
         return {
             "profile_id": result.profile_id,
@@ -3714,6 +3715,7 @@ class TemporalAgentRuntimeActivities:
             "delta_env_overrides": result.delta_env_overrides,
             "passthrough_env_keys": result.passthrough_env_keys,
             "env_keys_count": result.env_keys_count,
+            "docker_sidecar_launch_plan": result.docker_sidecar_launch_plan,
         }
 
     async def agent_runtime_launch(
