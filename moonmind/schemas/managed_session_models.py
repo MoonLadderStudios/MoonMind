@@ -946,6 +946,32 @@ class ManagedGitHubCredentialDescriptor(BaseModel):
             )
         return self
 
+ManagedSessionDockerCapabilityMode = Literal[
+    "sidecar-dind",
+    "sidecar-dind-rootless",
+]
+
+class ManagedSessionDockerCapabilityRequest(BaseModel):
+    """Requested Docker capability readiness contract for managed-session launch."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    required: bool = Field(False, alias="required")
+    mode: ManagedSessionDockerCapabilityMode = Field("sidecar-dind", alias="mode")
+    docker_host: str | None = Field(None, alias="dockerHost")
+    compose_support: bool = Field(False, alias="composeSupport")
+    timeout_seconds: float = Field(60.0, alias="timeoutSeconds", ge=0)
+    interval_seconds: float = Field(2.0, alias="intervalSeconds", ge=0)
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "ManagedSessionDockerCapabilityRequest":
+        if self.docker_host is not None:
+            self.docker_host = require_non_blank(
+                self.docker_host,
+                field_name="dockerCapability.dockerHost",
+            )
+        return self
+
 class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
     """Launch contract for a task-scoped remote Codex session container."""
 
@@ -968,6 +994,10 @@ class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
     )
     environment: dict[str, str] = Field(default_factory=dict, alias="environment")
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
+    docker_capability: ManagedSessionDockerCapabilityRequest | None = Field(
+        None,
+        alias="dockerCapability",
+    )
     github_credential: ManagedGitHubCredentialDescriptor | None = Field(
         None,
         alias="githubCredential",
@@ -4545,6 +4575,8 @@ __all__ = [
     "LaunchCodexManagedSessionRequest",
     "ManagedGitHubCredentialDescriptor",
     "ManagedGitHubCredentialSource",
+    "ManagedSessionDockerCapabilityMode",
+    "ManagedSessionDockerCapabilityRequest",
     "ManagedSessionContainerBackend",
     "ManagedSessionControlAction",
     "ManagedSessionControlMode",
