@@ -65,6 +65,12 @@ _SESSION_STATE_FILENAME = ".moonmind-codex-session-state.json"
 _CONTAINER_LOG_EXCERPT_TAIL_LINES = 40
 _CONTAINER_LOG_EXCERPT_MAX_CHARS = 2000
 _LAST_ASSISTANT_TEXT_METADATA_MAX_BYTES = 4 * 1024
+_MANAGED_SESSION_WORKLOAD_MODES = frozenset(
+    {"no-docker", "docker-sidecar", "docker-sidecar-rootless"}
+)
+_SIDECAR_SOCKET_MOUNT_PATH = "/var/run/moonmind-docker"
+_SIDECAR_SOCKET_PATH = f"{_SIDECAR_SOCKET_MOUNT_PATH}/docker.sock"
+_SIDECAR_GRAPH_MOUNT_PATH = "/var/lib/docker"
 logger = logging.getLogger(__name__)
 
 def _last_assistant_text_metadata(value: str) -> dict[str, Any]:
@@ -271,6 +277,139 @@ class DockerCodexManagedSessionController:
         if not sanitized:
             sanitized = "managed-session"
         return f"mm-codex-session-{sanitized}"
+
+    def _sidecar_container_name(self, session_id: str) -> str:
+        return f"{self._container_name(session_id)}-docker-sidecar"
+
+    @staticmethod
+    def _session_workload_mode(
+        request: LaunchCodexManagedSessionRequest,
+    ) -> str:
+        raw_value = (
+            request.metadata.get("workloadMode")
+            or request.metadata.get("workload_mode")
+            or request.environment.get("MOONMIND_WORKLOAD_MODE")
+            or request.environment.get("MOONMIND_MANAGED_SESSION_WORKLOAD_MODE")
+            or "no-docker"
+        )
+        value = str(raw_value).strip()
+        if value not in _MANAGED_SESSION_WORKLOAD_MODES:
+            raise ValueError(f"unsupported managed-session workload mode: {value!r}")
+        return value
+
+    @staticmethod
+    def _sidecar_config(
+        request: LaunchCodexManagedSessionRequest,
+        *,
+        workload_mode: str,
+    ) -> dict[str, Any] | None:
+        raw_config = request.metadata.get("dockerSidecar")
+        if raw_config is None:
+            raw_config = request.metadata.get("docker_sidecar")
+        if not isinstance(raw_config, Mapping):
+            return None
+        enabled = bool(raw_config.get("enabled"))
+        if not enabled:
+            return None
+        if workload_mode not in {"docker-sidecar", "docker-sidecar-rootless"}:
+            raise ValueError(
+                "dockerSidecar.enabled requires workloadMode docker-sidecar "
+                "or docker-sidecar-rootless"
+            )
+        image_ref = str(
+            raw_config.get("imageRef") or raw_config.get("image") or ""
+        ).strip()
+        if not image_ref:
+            raise ValueError("dockerSidecar.imageRef is required when enabled")
+        sanitized_session = _CONTAINER_NAME_SANITIZER.sub(
+            "-", request.session_id
+        ).strip("-") or "managed-session"
+        socket_volume_name = str(
+            raw_config.get("socketVolumeName")
+            or f"mm-docker-socket-{sanitized_session}"
+        ).strip()
+        graph_volume_name = str(
+            raw_config.get("graphVolumeName")
+            or f"mm-docker-graph-{sanitized_session}"
+        ).strip()
+        socket_mount_path = str(
+            raw_config.get("socketMountPath") or _SIDECAR_SOCKET_MOUNT_PATH
+        ).strip()
+        socket_path = str(raw_config.get("socketPath") or _SIDECAR_SOCKET_PATH).strip()
+        graph_mount_path = str(
+            raw_config.get("graphMountPath") or _SIDECAR_GRAPH_MOUNT_PATH
+        ).strip()
+        if not socket_volume_name or not graph_volume_name:
+            raise ValueError("dockerSidecar volume names must be non-empty")
+        if not socket_mount_path.startswith("/") or not socket_path.startswith("/"):
+            raise ValueError("dockerSidecar socket paths must be absolute")
+        if not graph_mount_path.startswith("/"):
+            raise ValueError("dockerSidecar graphMountPath must be absolute")
+        return {
+            "imageRef": image_ref,
+            "socketVolumeName": socket_volume_name,
+            "graphVolumeName": graph_volume_name,
+            "socketMountPath": socket_mount_path,
+            "socketPath": socket_path,
+            "graphMountPath": graph_mount_path,
+            "privileged": bool(
+                raw_config.get("privileged", workload_mode == "docker-sidecar")
+            ),
+            "debugAttachLogsArtifact": bool(raw_config.get("debugAttachLogsArtifact")),
+        }
+
+    @staticmethod
+    def _ownership_labels(
+        *,
+        kind: str,
+        session_id: str,
+        session_epoch: int,
+        task_run_id: str | None,
+        workload_mode: str,
+    ) -> dict[str, str]:
+        labels = {
+            "moonmind.kind": kind,
+            "moonmind.session_id": session_id,
+            "moonmind.session_epoch": str(session_epoch),
+            "moonmind.workload_mode": workload_mode,
+        }
+        if task_run_id:
+            labels["moonmind.task_run_id"] = task_run_id
+        return labels
+
+    @staticmethod
+    def _append_label_args(command: list[str], labels: Mapping[str, str]) -> None:
+        for key, value in sorted(labels.items()):
+            command.extend(["--label", f"{key}={value}"])
+
+    @staticmethod
+    def _record_workload_mode(record: CodexManagedSessionRecord | None) -> str:
+        if record is None:
+            return "no-docker"
+        metadata = dict(record.metadata)
+        docker_metadata = metadata.get("docker")
+        if isinstance(docker_metadata, Mapping):
+            mode = str(docker_metadata.get("mode") or "").strip()
+            if mode in _MANAGED_SESSION_WORKLOAD_MODES:
+                return mode
+        labels_metadata = metadata.get("resourceLabels")
+        if isinstance(labels_metadata, Mapping):
+            agent_labels = labels_metadata.get("agent")
+            if isinstance(agent_labels, Mapping):
+                mode = str(agent_labels.get("moonmind.workload_mode") or "").strip()
+                if mode in _MANAGED_SESSION_WORKLOAD_MODES:
+                    return mode
+        return "no-docker"
+
+    @classmethod
+    def _record_has_docker_sidecar(
+        cls,
+        record: CodexManagedSessionRecord | None,
+    ) -> bool:
+        return cls._record_workload_mode(record) in {
+            "docker-sidecar",
+            "docker-sidecar-rootless",
+        }
 
     def _validate_workspace_path(self, value: str, *, field_name: str) -> None:
         workspace_root = _normalize_absolute_posix_path(
@@ -616,7 +755,7 @@ class DockerCodexManagedSessionController:
             workspacePath=request.workspace_path,
             sessionWorkspacePath=request.session_workspace_path,
             artifactSpoolPath=request.artifact_spool_path,
-            metadata=dict(request.metadata),
+            metadata={**dict(request.metadata), **dict(handle.metadata)},
             startedAt=now,
             updatedAt=now,
         )
@@ -1537,6 +1676,211 @@ class DockerCodexManagedSessionController:
         )
         return scrubbed_detail[-_CONTAINER_LOG_EXCERPT_MAX_CHARS:]
 
+    async def _launch_docker_sidecar(
+        self,
+        *,
+        request: LaunchCodexManagedSessionRequest,
+        sidecar_config: Mapping[str, Any],
+        workload_mode: str,
+        docker_network: str | None,
+    ) -> dict[str, Any]:
+        sidecar_name = self._sidecar_container_name(request.session_id)
+        await self._remove_container(sidecar_name, ignore_failure=True)
+        labels = self._ownership_labels(
+            kind="session-docker-sidecar",
+            session_id=request.session_id,
+            session_epoch=request.session_epoch,
+            task_run_id=request.task_run_id,
+            workload_mode=workload_mode,
+        )
+        command = [
+            self._docker_binary,
+            "run",
+            "-d",
+            "--name",
+            sidecar_name,
+            "--mount",
+            self._volume_mount(self._workspace_volume_name, self._workspace_root),
+            "--mount",
+            self._volume_mount(
+                str(sidecar_config["socketVolumeName"]),
+                str(sidecar_config["socketMountPath"]),
+            ),
+            "--mount",
+            self._volume_mount(
+                str(sidecar_config["graphVolumeName"]),
+                str(sidecar_config["graphMountPath"]),
+            ),
+        ]
+        if sidecar_config.get("privileged"):
+            command.append("--privileged")
+        if docker_network:
+            command.extend(["--network", docker_network])
+        self._append_label_args(command, labels)
+        command.extend(
+            [
+                str(sidecar_config["imageRef"]),
+                "dockerd",
+                f"--host=unix://{sidecar_config['socketPath']}",
+            ]
+        )
+        stdout, _stderr = await self._run(command)
+        container_id = stdout.strip()
+        if not container_id:
+            raise RuntimeError("docker sidecar run returned a blank container id")
+        return {
+            "containerId": container_id,
+            "containerName": sidecar_name,
+            "labels": labels,
+            "logAuthority": "worker_logs",
+            "debugArtifactAttached": bool(
+                sidecar_config.get("debugAttachLogsArtifact")
+            ),
+        }
+
+    async def _docker_sidecar_status(
+        self,
+        *,
+        container_id: str,
+        workload_mode: str,
+    ) -> dict[str, Any]:
+        if workload_mode not in {"docker-sidecar", "docker-sidecar-rootless"}:
+            return {
+                "mode": workload_mode,
+                "readiness": "disabled",
+                "daemonVersion": None,
+                "probeResults": [],
+            }
+        command = (
+            self._docker_binary,
+            "exec",
+            container_id,
+            "docker",
+            "version",
+            "--format",
+            "{{json .Server}}",
+        )
+        returncode, stdout, stderr = await self._command_runner(
+            command,
+            env=self._docker_env(),
+        )
+        if returncode == 0:
+            daemon_version = None
+            try:
+                payload = json.loads(stdout.strip() or "{}")
+            except json.JSONDecodeError:
+                payload = {}
+            if isinstance(payload, Mapping):
+                daemon_version = str(payload.get("Version") or "").strip() or None
+            return {
+                "mode": workload_mode,
+                "readiness": "ready",
+                "daemonVersion": daemon_version,
+                "probeResults": [
+                    {
+                        "name": "docker version",
+                        "status": "passed",
+                        "exitCode": 0,
+                    }
+                ],
+            }
+        summary = (stderr.strip() or stdout.strip() or "docker version failed")[
+            :300
+        ]
+        return {
+            "mode": workload_mode,
+            "readiness": "failed",
+            "daemonVersion": None,
+            "probeResults": [
+                {
+                    "name": "docker version",
+                    "status": "failed",
+                    "exitCode": returncode,
+                    "summary": summary,
+                }
+            ],
+        }
+
+    async def _wait_docker_sidecar_ready(
+        self,
+        *,
+        container_id: str,
+        sidecar_container_id: str | None,
+        workload_mode: str,
+    ) -> dict[str, Any]:
+        if workload_mode not in {"docker-sidecar", "docker-sidecar-rootless"}:
+            return await self._docker_sidecar_status(
+                container_id=container_id,
+                workload_mode=workload_mode,
+            )
+        last_status: dict[str, Any] | None = None
+        for _attempt in range(self._ready_poll_attempts):
+            last_status = await self._docker_sidecar_status(
+                container_id=container_id,
+                workload_mode=workload_mode,
+            )
+            if last_status.get("readiness") == "ready":
+                return last_status
+            if self._ready_poll_interval_seconds > 0:
+                await asyncio.sleep(self._ready_poll_interval_seconds)
+        if sidecar_container_id:
+            logs = await self._container_logs_excerpt(sidecar_container_id)
+            if logs:
+                logger.warning(
+                    "Docker sidecar daemon output for session container %s: %s",
+                    container_id,
+                    logs,
+                )
+        probe_summary = ""
+        if last_status:
+            probe_results = last_status.get("probeResults")
+            if isinstance(probe_results, list) and probe_results:
+                first_probe = probe_results[0]
+                if isinstance(first_probe, Mapping):
+                    probe_summary = str(first_probe.get("summary") or "").strip()
+        detail = f": {probe_summary}" if probe_summary else ""
+        raise RuntimeError(
+            f"docker sidecar for managed session container {container_id} "
+            f"did not become ready{detail}"
+        )
+
+    @staticmethod
+    def _handle_with_runtime_metadata(
+        handle: CodexManagedSessionHandle,
+        *,
+        docker_status: Mapping[str, Any],
+        agent_labels: Mapping[str, str] | None = None,
+        sidecar_metadata: Mapping[str, Any] | None = None,
+    ) -> CodexManagedSessionHandle:
+        metadata = dict(handle.metadata)
+        metadata["docker"] = dict(docker_status)
+        metadata["capabilities"] = {
+            **(
+                dict(metadata.get("capabilities"))
+                if isinstance(metadata.get("capabilities"), Mapping)
+                else {}
+            ),
+            "docker": {
+                "available": docker_status.get("readiness") == "ready",
+                "mode": docker_status.get("mode"),
+            },
+        }
+        resource_labels: dict[str, Any] = {}
+        if agent_labels is not None:
+            resource_labels["agent"] = dict(agent_labels)
+        if sidecar_metadata is not None:
+            sidecar_labels = sidecar_metadata.get("labels")
+            if isinstance(sidecar_labels, Mapping):
+                resource_labels["sidecar"] = dict(sidecar_labels)
+            metadata["dockerSidecar"] = {
+                key: value
+                for key, value in dict(sidecar_metadata).items()
+                if key != "labels"
+            }
+        if resource_labels:
+            metadata["resourceLabels"] = resource_labels
+        return handle.model_copy(update={"metadata": metadata})
+
     async def _persist_handle_transition(
         self,
         *,
@@ -1631,6 +1975,18 @@ class DockerCodexManagedSessionController:
                 )
         await self._ensure_workspace_paths(request)
         container_name = self._container_name(request.session_id)
+        workload_mode = self._session_workload_mode(request)
+        sidecar_config = self._sidecar_config(
+            request,
+            workload_mode=workload_mode,
+        )
+        agent_labels = self._ownership_labels(
+            kind="managed-session",
+            session_id=request.session_id,
+            session_epoch=request.session_epoch,
+            task_run_id=request.task_run_id,
+            workload_mode=workload_mode,
+        )
         await self._remove_container(container_name, ignore_failure=True)
         run_command = [
             self._docker_binary,
@@ -1668,8 +2024,27 @@ class DockerCodexManagedSessionController:
             session_environment=session_environment,
             docker_network=docker_network,
         )
+        sidecar_metadata: dict[str, Any] | None = None
+        if sidecar_config is not None:
+            sidecar_metadata = await self._launch_docker_sidecar(
+                request=request,
+                sidecar_config=sidecar_config,
+                workload_mode=workload_mode,
+                docker_network=docker_network,
+            )
+            session_environment["DOCKER_HOST"] = f"unix://{sidecar_config['socketPath']}"
+            run_command.extend(
+                [
+                    "--mount",
+                    self._volume_mount(
+                        str(sidecar_config["socketVolumeName"]),
+                        str(sidecar_config["socketMountPath"]),
+                    ),
+                ]
+            )
         if docker_network:
             run_command.extend(["--network", docker_network])
+        self._append_label_args(run_command, agent_labels)
         run_command.extend(
             [
                 "-e",
@@ -1729,11 +2104,28 @@ class DockerCodexManagedSessionController:
         except Exception:
             if container_id:
                 await self._remove_container(container_id, ignore_failure=True)
+            if sidecar_metadata is not None:
+                await self._remove_container(
+                    str(
+                        sidecar_metadata.get("containerId")
+                        or sidecar_metadata.get("containerName")
+                    ),
+                    ignore_failure=True,
+                )
             if github_broker_started:
                 await self._github_auth_brokers.stop(request.session_id)
             raise
         try:
             await self._wait_ready(container_id=container_id)
+            docker_status = await self._wait_docker_sidecar_ready(
+                container_id=container_id,
+                sidecar_container_id=(
+                    str(sidecar_metadata.get("containerId"))
+                    if sidecar_metadata is not None
+                    else None
+                ),
+                workload_mode=workload_mode,
+            )
             container_request = request.model_copy(
                 update={"environment": session_environment}
             )
@@ -1749,10 +2141,24 @@ class DockerCodexManagedSessionController:
             )
         except Exception:
             await self._remove_container(container_id, ignore_failure=True)
+            if sidecar_metadata is not None:
+                await self._remove_container(
+                    str(
+                        sidecar_metadata.get("containerId")
+                        or sidecar_metadata.get("containerName")
+                    ),
+                    ignore_failure=True,
+                )
             if github_broker_started:
                 await self._github_auth_brokers.stop(request.session_id)
             raise
         handle = CodexManagedSessionHandle.model_validate(payload)
+        handle = self._handle_with_runtime_metadata(
+            handle,
+            docker_status=docker_status,
+            agent_labels=agent_labels,
+            sidecar_metadata=sidecar_metadata,
+        )
         if self._session_store is not None:
             record = self._record_from_launch(request=request, handle=handle)
             self._session_store.save(record)
@@ -1779,6 +2185,43 @@ class DockerCodexManagedSessionController:
             payload=request.model_dump(by_alias=True),
         )
         handle = CodexManagedSessionHandle.model_validate(payload)
+        current_record = (
+            self._session_store.load(request.session_id)
+            if self._session_store is not None
+            else None
+        )
+        workload_mode = self._record_workload_mode(current_record)
+        docker_status = await self._docker_sidecar_status(
+            container_id=handle.session_state.container_id,
+            workload_mode=workload_mode,
+        )
+        prior_metadata = dict(current_record.metadata) if current_record is not None else {}
+        resource_labels = prior_metadata.get("resourceLabels")
+        agent_labels = None
+        sidecar_metadata = None
+        if isinstance(resource_labels, Mapping):
+            raw_agent_labels = resource_labels.get("agent")
+            if isinstance(raw_agent_labels, Mapping):
+                agent_labels = {
+                    str(key): str(value) for key, value in raw_agent_labels.items()
+                }
+            raw_sidecar_labels = resource_labels.get("sidecar")
+            if isinstance(raw_sidecar_labels, Mapping):
+                existing_sidecar = prior_metadata.get("dockerSidecar")
+                sidecar_metadata = (
+                    dict(existing_sidecar)
+                    if isinstance(existing_sidecar, Mapping)
+                    else {}
+                )
+                sidecar_metadata["labels"] = {
+                    str(key): str(value) for key, value in raw_sidecar_labels.items()
+                }
+        handle = self._handle_with_runtime_metadata(
+            handle,
+            docker_status=docker_status,
+            agent_labels=agent_labels,
+            sidecar_metadata=sidecar_metadata,
+        )
         record = await self._persist_handle_transition(
             locator=self._locator_from_session_state(handle.session_state),
             status=handle.status,
@@ -2018,6 +2461,11 @@ class DockerCodexManagedSessionController:
             if record is not None and record.status == "terminated":
                 self._matches_locator(record, request)
                 await self._remove_container(record.container_id, ignore_failure=True)
+                if self._record_has_docker_sidecar(record):
+                    await self._remove_container(
+                        self._sidecar_container_name(request.session_id),
+                        ignore_failure=True,
+                    )
                 await self._github_auth_brokers.stop(request.session_id)
                 return CodexManagedSessionHandle(
                     sessionState=record.session_state(),
@@ -2025,7 +2473,17 @@ class DockerCodexManagedSessionController:
                     imageRef=record.image_ref,
                     controlUrl=record.control_url,
                 )
+        record_for_cleanup = (
+            self._session_store.load(request.session_id)
+            if self._session_store is not None
+            else None
+        )
         await self._remove_container(request.container_id, ignore_failure=True)
+        if self._record_has_docker_sidecar(record_for_cleanup):
+            await self._remove_container(
+                self._sidecar_container_name(request.session_id),
+                ignore_failure=True,
+            )
         await self._github_auth_brokers.stop(request.session_id)
         handle = CodexManagedSessionHandle(
             sessionState={
