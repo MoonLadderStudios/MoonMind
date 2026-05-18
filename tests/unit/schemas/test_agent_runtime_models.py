@@ -15,6 +15,7 @@ from moonmind.schemas.agent_runtime_models import (
     LiveLogChunk,
     RuntimeCommandInvocation,
     RuntimeCommandRenderResult,
+    build_docker_sidecar_launch_plan,
     extract_durable_retrieval_metadata,
     is_terminal_agent_run_state,
     resolve_managed_runtime_workload_mode,
@@ -635,10 +636,46 @@ def _valid_docker_sidecar_profile() -> dict:
                 {"name": "docker-socket", "mountPath": "/var/run/moonmind-docker"},
                 {"name": "docker-graph", "mountPath": "/var/lib/docker"},
             ],
+            "optionalCaches": [
+                {
+                    "name": "pip-cache",
+                    "volumeName": "mm-cache-pip",
+                    "mountPath": "/cache/pip",
+                    "approvalRef": "deployment-approved-cache-pip",
+                }
+            ],
         },
         "resources": {
+            "session": {"maxRuntimeSeconds": 14400},
             "agent": {"cpu": "2", "memory": "4Gi"},
-            "dockerSidecar": {"cpu": "4", "memory": "8Gi"},
+            "dockerSidecar": {
+                "cpu": "4",
+                "memory": "8Gi",
+                "ephemeralStorage": "40Gi",
+            },
+            "nestedContainers": {
+                "defaultCpu": "2",
+                "defaultMemory": "4Gi",
+                "maxContainers": 16,
+            },
+        },
+        "cleanup": {
+            "idempotent": True,
+            "onSessionEnd": {
+                "stopSidecar": True,
+                "stopNestedContainers": True,
+                "removeDockerGraph": True,
+                "removeDockerSocket": True,
+                "preserveWorkspace": "retention_policy",
+            },
+            "onSidecarFailure": {
+                "markDockerCapabilityUnavailable": True,
+                "preserveAgentSession": True,
+            },
+            "onAgentFailure": {
+                "stopSidecar": True,
+                "preserveWorkspace": "retention_policy",
+            },
         },
         "readiness": {
             "docker": {
@@ -667,6 +704,47 @@ def test_managed_agent_runtime_profile_accepts_valid_docker_sidecar_contract() -
     )
     assert profile.docker_sidecar is not None
     assert profile.docker_sidecar.image == "docker:27-dind"
+    assert profile.resources.docker_sidecar is not None
+    assert profile.resources.docker_sidecar.ephemeral_storage == "40Gi"
+    assert profile.cleanup.on_session_end.remove_docker_graph is True
+
+
+def test_managed_agent_runtime_profile_builds_mm695_sidecar_launch_plan() -> None:
+    profile = ManagedAgentRuntimeProfile.model_validate(_valid_docker_sidecar_profile())
+
+    plan = build_docker_sidecar_launch_plan(profile)
+
+    assert plan is not None
+    dumped = plan.model_dump(mode="json", by_alias=True)
+    assert dumped["issueKey"] == "MM-695"
+    assert dumped["applyLimitsOutsideNestedDaemon"] is True
+    assert dumped["resources"]["session"]["maxRuntimeSeconds"] == 14400
+    assert dumped["resources"]["dockerSidecar"]["ephemeralStorage"] == "40Gi"
+    assert dumped["resources"]["nestedContainers"]["maxContainers"] == 16
+    assert dumped["cleanup"]["onSessionEnd"] == {
+        "stopSidecar": True,
+        "stopNestedContainers": True,
+        "removeDockerGraph": True,
+        "removeDockerSocket": True,
+        "preserveWorkspace": "retention_policy",
+    }
+    assert dumped["cleanup"]["onSidecarFailure"] == {
+        "markDockerCapabilityUnavailable": True,
+        "preserveAgentSession": True,
+    }
+    assert dumped["cleanup"]["onAgentFailure"] == {
+        "stopSidecar": True,
+        "preserveWorkspace": "retention_policy",
+    }
+    assert dumped["optionalCaches"] == [
+        {
+            "name": "pip-cache",
+            "volumeName": "mm-cache-pip",
+            "mountPath": "/cache/pip",
+            "approvalRef": "deployment-approved-cache-pip",
+            "readOnly": False,
+        }
+    ]
 
 
 @pytest.mark.parametrize(
@@ -717,6 +795,40 @@ def test_managed_agent_runtime_profile_accepts_valid_docker_sidecar_contract() -
                 {"daemonScope": "shared"}
             ),
             "Docker daemon scope must be per session",
+        ),
+        (
+            lambda p: p["resources"]["dockerSidecar"].pop("ephemeralStorage"),
+            "resources.dockerSidecar.ephemeralStorage",
+        ),
+        (
+            lambda p: p["resources"].pop("nestedContainers"),
+            "resources.nestedContainers",
+        ),
+        (
+            lambda p: p["resources"]["nestedContainers"].update({"defaultCpu": "8"}),
+            "defaultCpu must not exceed",
+        ),
+        (
+            lambda p: p["cleanup"]["onSessionEnd"].update(
+                {"removeDockerGraph": False}
+            ),
+            "removeDockerGraph must be true",
+        ),
+        (
+            lambda p: p["cleanup"]["onSessionEnd"].update({"stopSidecar": False}),
+            "onSessionEnd.stopSidecar must be true",
+        ),
+        (
+            lambda p: p["cleanup"]["onSidecarFailure"].update(
+                {"preserveAgentSession": False}
+            ),
+            "preserveAgentSession must be true",
+        ),
+        (
+            lambda p: p["agent"]["mounts"].append(
+                {"source": "/tmp/cache", "mountPath": "/cache"}
+            ),
+            "arbitrary host path mounts are not allowed",
         ),
     ],
 )

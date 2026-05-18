@@ -6,6 +6,7 @@ from .agent_runtime_models import (
     ManagedAgentRuntimeProfile,
     ManagedAgentProviderProfile,
     ManagedRuntimeWorkloadMode,
+    build_docker_sidecar_launch_plan,
     resolve_managed_runtime_workload_mode,
     is_terminal_agent_run_state,
 )
