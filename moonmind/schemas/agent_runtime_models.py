@@ -747,6 +747,8 @@ class MoonMindOpsRuntime(BaseModel):
     def _validate_ops_runtime(self) -> "MoonMindOpsRuntime":
         if not self.allowed_operations:
             raise ValueError("allowedOperations must include at least one operation")
+        if len(self.allowed_operations) != len(set(self.allowed_operations)):
+            raise ValueError("allowedOperations must not contain duplicate operations")
         return self
 
 

@@ -796,6 +796,13 @@ def test_moonmind_ops_runtime_rejects_managed_agent_exposure() -> None:
         MoonMindOpsRuntime.model_validate({"exposedToManagedAgents": True})
 
 
+def test_moonmind_ops_runtime_rejects_duplicate_allowed_operations() -> None:
+    with pytest.raises(ValidationError, match="duplicate operations"):
+        MoonMindOpsRuntime.model_validate(
+            {"allowedOperations": ["status", "deploy", "status"]}
+        )
+
+
 def _valid_no_docker_profile() -> dict:
     return {
         "workloadMode": "no-docker",
