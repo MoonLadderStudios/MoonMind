@@ -81,7 +81,10 @@ def test_api_service_runs_with_container_init():
     assert isinstance(
         api_service, dict
     ), "api service is missing from docker-compose.yaml"
-    assert api_service.get("init") is True
+    assert api_service.get("init") is True, (
+        "api service must run with an init process so child subprocesses "
+        "are reaped and shutdown signals are forwarded"
+    )
 
 
 def test_api_service_mounts_agent_runtime_workspace_volume():
