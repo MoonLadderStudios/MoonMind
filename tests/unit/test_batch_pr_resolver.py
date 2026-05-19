@@ -240,6 +240,8 @@ def test_parent_run_scope_uses_managed_session_spool(
 ) -> None:
     module = _load_module()
     parent_run_scope = module["_parent_run_scope"]
+    for env_key in ("MOONMIND_TASK_RUN_ID", "MOONMIND_RUN_ID", "TASK_RUN_ID"):
+        monkeypatch.delenv(env_key, raising=False)
 
     monkeypatch.setenv(
         "MOONMIND_SESSION_ARTIFACT_SPOOL_PATH",
@@ -255,6 +257,8 @@ def test_parent_run_scope_hashes_nonstandard_session_spool_path(
     module = _load_module()
     parent_run_scope = module["_parent_run_scope"]
     stable_scope_from_path = module["_stable_scope_from_path"]
+    for env_key in ("MOONMIND_TASK_RUN_ID", "MOONMIND_RUN_ID", "TASK_RUN_ID"):
+        monkeypatch.delenv(env_key, raising=False)
 
     spool = tmp_path / "custom-spool" / "output"
     monkeypatch.setenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH", str(spool))

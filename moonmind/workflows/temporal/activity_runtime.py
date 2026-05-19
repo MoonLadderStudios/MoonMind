@@ -5834,6 +5834,7 @@ class TemporalAgentRuntimeActivities:
             workflow_id=f"agent_runtime_activity:{run_id}",
             run_store=self._run_store,
         )
+        workspace_github_token: str | None = None
         try:
             result = await adapter.fetch_result(
                 run_id, pr_resolver_expected=pr_resolver_expected
@@ -5844,6 +5845,11 @@ class TemporalAgentRuntimeActivities:
                     self._normalize_workspace_git_alternates(record.workspace_path)
                     self._recover_orphan_workspace_object_stores(
                         record.workspace_path
+                    )
+                    workspace_github_token = (
+                        await self._resolve_workspace_push_github_token(
+                            record.workspace_path
+                        )
                     )
                 result = self._maybe_enrich_gemini_failure_result(
                     result=result,
@@ -5869,6 +5875,7 @@ class TemporalAgentRuntimeActivities:
                     run_id=run_id,
                     head_branch=head_branch,
                     base_branch=target_branch,
+                    github_token=workspace_github_token,
                 )
                 if merged_pr is not None:
                     result = self._apply_pr_reverify_override(
@@ -5935,6 +5942,7 @@ class TemporalAgentRuntimeActivities:
                     push_kwargs["commit_message"] = raw_commit_message.strip()
                 push_info = await self._push_workspace_branch(
                     run_id,
+                    github_token=workspace_github_token,
                     **push_kwargs,
                 )
                 meta.update(push_info)
@@ -5942,7 +5950,10 @@ class TemporalAgentRuntimeActivities:
             # Enrich result with pull_request_url detected from workspace git
             # state (CLI stdout may not always surface PR URLs reliably).
             if result.failure_class is None:
-                pr_url = self._detect_pr_url_from_workspace(run_id)
+                pr_url = self._detect_pr_url_from_workspace(
+                    run_id,
+                    github_token=workspace_github_token,
+                )
                 if pr_url:
                     meta["pull_request_url"] = pr_url
 
@@ -6726,20 +6737,29 @@ class TemporalAgentRuntimeActivities:
             )
 
     @staticmethod
-    def _workspace_command_env(workspace: str) -> dict[str, str]:
+    def _workspace_command_env(
+        workspace: str,
+        *,
+        github_token: str | None = None,
+    ) -> dict[str, str]:
         """Build a subprocess env that exposes workspace-local command shims."""
         env = dict(os.environ)
         support_root = Path(workspace).resolve().parent / ".moonmind"
         support_bin = support_root / "bin"
         support_gitconfig = support_root / "gitconfig"
-        github_token = str(env.get("GITHUB_TOKEN", "")).strip()
+        normalized_github_token = str(
+            github_token or env.get("GITHUB_TOKEN", "")
+        ).strip()
+        if normalized_github_token:
+            env["GITHUB_TOKEN"] = normalized_github_token
+            env["GH_TOKEN"] = normalized_github_token
         git_helper_path = support_bin / "git-credential-moonmind"
         helper_command: str | None = None
 
         try:
             support_root.mkdir(parents=True, exist_ok=True)
             support_bin.mkdir(parents=True, exist_ok=True)
-            if github_token:
+            if normalized_github_token:
                 helper_script = (
                     "#!/usr/bin/env python3\n"
                     "import os\n"
@@ -6819,6 +6839,14 @@ class TemporalAgentRuntimeActivities:
             env["GIT_COMMITTER_EMAIL"] = git_email
         env["GIT_TERMINAL_PROMPT"] = "0"
         return env
+
+    @staticmethod
+    async def _resolve_workspace_push_github_token(workspace: str) -> str:
+        repo = TemporalAgentRuntimeActivities._detect_repo_from_workspace(workspace)
+        from moonmind.auth.github_credentials import resolve_github_credential
+
+        resolved = await resolve_github_credential(repo=repo or None)
+        return str(resolved.token or "").strip()
 
     async def _commit_workspace_changes_if_needed(
         self,
@@ -7004,6 +7032,7 @@ class TemporalAgentRuntimeActivities:
         head_branch: str | None = None,
         commit_message: str | None = None,
         allow_target_branch_push: bool = False,
+        github_token: str | None = None,
     ) -> dict[str, Any]:
         """Push the workspace branch to origin.
 
@@ -7025,7 +7054,16 @@ class TemporalAgentRuntimeActivities:
         try:
             self._normalize_workspace_git_alternates(workspace)
             self._recover_orphan_workspace_object_stores(workspace)
+            resolved_github_token = str(github_token or "").strip()
+            if not resolved_github_token:
+                resolved_github_token = await self._resolve_workspace_push_github_token(
+                    workspace
+                )
             command_env = self._workspace_command_env(workspace)
+            auth_command_env = self._workspace_command_env(
+                workspace,
+                github_token=resolved_github_token,
+            )
             branch_proc = await asyncio.create_subprocess_exec(
                 *self._workspace_git_command(
                     workspace, "rev-parse", "--abbrev-ref", "HEAD",
@@ -7175,7 +7213,7 @@ class TemporalAgentRuntimeActivities:
                 workspace=workspace,
                 branch=current_branch,
                 run_id=run_id,
-                env=command_env,
+                env=auth_command_env,
             )
 
             push_proc = await asyncio.create_subprocess_exec(
@@ -7188,7 +7226,7 @@ class TemporalAgentRuntimeActivities:
                 ),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=command_env,
+                env=auth_command_env,
             )
             try:
                 push_stdout, push_stderr = await asyncio.wait_for(
@@ -7231,7 +7269,7 @@ class TemporalAgentRuntimeActivities:
                         ),
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
-                        env=command_env,
+                        env=auth_command_env,
                     )
                     try:
                         fetch_stdout, fetch_stderr = await asyncio.wait_for(
@@ -7272,7 +7310,7 @@ class TemporalAgentRuntimeActivities:
                                     workspace=workspace,
                                     branch=current_branch,
                                     run_id=run_id,
-                                    env=command_env,
+                                    env=auth_command_env,
                                 )
                             )
                         if (
@@ -7347,7 +7385,7 @@ class TemporalAgentRuntimeActivities:
                             ),
                             stdout=asyncio.subprocess.PIPE,
                             stderr=asyncio.subprocess.PIPE,
-                            env=command_env,
+                            env=auth_command_env,
                         )
                         try:
                             _, retry_push_stderr = await asyncio.wait_for(
@@ -7628,7 +7666,12 @@ class TemporalAgentRuntimeActivities:
             # branch publication handle any remote-side rejection.
             return -1
 
-    def _detect_pr_url_from_workspace(self, run_id: str) -> str | None:
+    def _detect_pr_url_from_workspace(
+        self,
+        run_id: str,
+        *,
+        github_token: str | None = None,
+    ) -> str | None:
         """Best-effort detection of a PR URL from the workspace git state."""
         import subprocess
 
@@ -7648,6 +7691,7 @@ class TemporalAgentRuntimeActivities:
                 capture_output=True,
                 text=True,
                 timeout=10,
+                env=self._workspace_command_env(workspace),
             )
             if branch_result.returncode != 0:
                 return None
@@ -7668,7 +7712,10 @@ class TemporalAgentRuntimeActivities:
                 text=True,
                 timeout=30,
                 cwd=workspace,
-                env=self._workspace_command_env(workspace),
+                env=self._workspace_command_env(
+                    workspace,
+                    github_token=github_token,
+                ),
             )
             if pr_result.returncode != 0:
                 return None
@@ -7724,6 +7771,7 @@ class TemporalAgentRuntimeActivities:
         run_id: str,
         head_branch: str | None,
         base_branch: str | None = None,
+        github_token: str | None = None,
     ) -> dict[str, Any] | None:
         """Return PR metadata when *head_branch*'s PR is merged on GitHub.
 
@@ -7771,7 +7819,10 @@ class TemporalAgentRuntimeActivities:
                 text=True,
                 timeout=30,
                 cwd=workspace,
-                env=self._workspace_command_env(workspace),
+                env=self._workspace_command_env(
+                    workspace,
+                    github_token=github_token,
+                ),
             )
             if pr_result.returncode != 0:
                 return None
