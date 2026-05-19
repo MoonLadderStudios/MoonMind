@@ -260,7 +260,7 @@ In the sidecar topology:
 
 This means a session may run ordinary `docker run`, `docker build`, and `docker compose` commands against its own private daemon. The session still cannot see other sessions' containers, cannot touch MoonMind application containers, and cannot reach the host daemon.
 
-Control-plane-launched workloads through the Docker-out-of-Docker (DooD) path defined in [`DockerOutOfDocker.md`](./DockerOutOfDocker.md) remain available, but are now reserved for the narrow set of operations that must originate from the control plane itself — MoonMind admin and update flows, and deliberately deployment-gated unrestricted execution classes. Ordinary repository test workloads use the sidecar, not the DooD tool surface.
+Control-plane-launched workloads through the Docker-out-of-Docker (DooD) path defined in [`DockerOutOfDocker.md`](./DockerOutOfDocker.md) remain available, but are now reserved for the narrow set of operations that must originate from the control plane itself: MoonMind admin/update flows, helper or one-shot workloads with no managed session attached, and deliberately deployment-gated exceptional execution classes. Ordinary repository test workloads use the sidecar, not the DooD tool surface.
 
 The security boundary between session continuity and generalized container launching is preserved by the sidecar topology rules, not by withholding the Docker CLI from the session.
 

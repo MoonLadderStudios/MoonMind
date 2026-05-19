@@ -24,11 +24,11 @@ This document defines MoonMind’s **Docker-out-of-Docker (DooD)** architecture 
 
 The default path for ordinary containerized work that originates from a managed agent session — repository tests, build toolchains, short-lived application containers — is the **per-session Docker sidecar** defined in [`DockerSidecarRuntime.md`](./DockerSidecarRuntime.md). The session container runs ordinary `docker run` and `docker compose` commands against a private daemon in a sibling sidecar container; no host Docker socket is exposed and no MoonMind deployment credentials reach the session.
 
-DooD remains the architecture for workloads that must originate from the **control plane itself**, including:
+DooD remains the architecture for workloads that must originate from the **control plane itself**. This is the residual control-plane scope referenced by the sidecar runtime contract and includes:
 
-* MoonMind admin and update flows (deploy, restart, rollback, image refresh)
-* deliberately deployment-gated unrestricted execution that should not run inside a managed session
-* control-plane-originated helper or one-shot workloads that have no managed agent session attached
+* MoonMind admin/update flows (deploy, restart, rollback, image refresh)
+* control-plane-originated helper or one-shot workloads with no managed session attached
+* deliberately deployment-gated exceptional execution that should not run inside a managed session
 
 Heavyweight toolchain workloads (Unreal, Unity, .NET, load test runners) that previously fit DooD's curated runner-profile path can still be modeled here when there is a control-plane reason to keep them out of the session sidecar (for example, dedicated hardware fleets, special registry credentials, or operator-driven runs without an active session). When that justification is absent, the sidecar path is preferred.
 

@@ -2,6 +2,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DOOD_DOC = REPO_ROOT / "docs" / "ManagedAgents" / "DockerOutOfDocker.md"
+SIDECAR_DOC = REPO_ROOT / "docs" / "ManagedAgents" / "DockerSidecarRuntime.md"
+ARCH_DOC = REPO_ROOT / "docs" / "ManagedAgents" / "ManagedAgentArchitecture.md"
 SESSION_DOC = REPO_ROOT / "docs" / "ManagedAgents" / "CodexCliManagedSessions.md"
 EXECUTION_DOC = (
     REPO_ROOT / "docs" / "Temporal" / "ManagedAndExternalAgentExecutionModel.md"
@@ -57,6 +59,18 @@ def test_dood_glossary_and_scope_terms_remain_present() -> None:
         "`moonmind.agentrun`",
     ):
         assert term in lowered
+
+def test_sidecar_and_dood_docs_share_control_plane_scope() -> None:
+    expected_scope_terms = (
+        "moonmind admin/update flows",
+        "helper or one-shot workloads with no managed session attached",
+        "deliberately deployment-gated exceptional",
+    )
+
+    for path in (SIDECAR_DOC, ARCH_DOC, DOOD_DOC):
+        text = _read(path).lower()
+        for term in expected_scope_terms:
+            assert term in text
 
 def test_tracker_is_listed_in_remaining_work_index() -> None:
     if not TRACKER_INDEX.exists():
