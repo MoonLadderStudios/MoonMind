@@ -1146,7 +1146,8 @@ def test_jira_implement_task_makes_pr_publish_optional(
             },
         }
     )
-    assert mock_run_workflow._pr_publish_optional_for_task(
+    # appliedStepTemplates alone must not relax PR creation for the whole run.
+    assert not mock_run_workflow._pr_publish_optional_for_task(
         {
             "publishMode": "pr",
             "task": {
@@ -1155,6 +1156,18 @@ def test_jira_implement_task_makes_pr_publish_optional(
                 ],
             },
         }
+    )
+    # It only relaxes the no-commit publish fallback when opted in explicitly.
+    assert mock_run_workflow._pr_publish_optional_for_task(
+        {
+            "publishMode": "pr",
+            "task": {
+                "appliedStepTemplates": [
+                    {"slug": "jira-implement", "version": "1.0.0"},
+                ],
+            },
+        },
+        include_applied_templates=True,
     )
 
 

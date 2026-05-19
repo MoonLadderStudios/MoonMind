@@ -4846,7 +4846,7 @@ class MoonMindRunWorkflow:
                     return message
             match = _PLAIN_TEXT_BLOCKED_OUTCOME_PATTERN.search(value)
             if match:
-                summary = self._coerce_text(value, max_chars=700)
+                summary = self._coerce_text(value[match.start():], max_chars=700)
                 if summary:
                     return f"Workflow blocked by plan step: {summary}"
 
@@ -5574,7 +5574,9 @@ class MoonMindRunWorkflow:
             return
 
         if push_status == "no_commits":
-            if publish_mode == "pr" and self._pr_publish_optional_for_task(parameters):
+            if publish_mode == "pr" and self._pr_publish_optional_for_task(
+                parameters, include_applied_templates=True
+            ):
                 self._publish_status = "not_required"
                 self._publish_reason = self._compose_no_change_publish_reason(
                     publish_mode=publish_mode,
@@ -5857,9 +5859,18 @@ class MoonMindRunWorkflow:
                 return False
         return True
 
-    def _pr_publish_optional_for_task(self, parameters: Mapping[str, Any]) -> bool:
+    def _pr_publish_optional_for_task(
+        self,
+        parameters: Mapping[str, Any],
+        *,
+        include_applied_templates: bool = False,
+    ) -> bool:
         task_payload = self._mapping_value(parameters, "task")
         skill_names = self._task_skill_names(parameters, task_payload)
+        if include_applied_templates:
+            skill_names = skill_names | self._task_applied_template_slugs(
+                parameters, task_payload
+            )
         if not skill_names:
             return False
         return skill_names.issubset(_PR_OPTIONAL_TASK_SKILLS)
@@ -5894,6 +5905,14 @@ class MoonMindRunWorkflow:
                         name = self._coerce_text(item, max_chars=120)
                     if name:
                         skill_names.add(name.lower())
+        return skill_names
+
+    def _task_applied_template_slugs(
+        self,
+        parameters: Mapping[str, Any],
+        task_payload: Mapping[str, Any],
+    ) -> set[str]:
+        slugs: set[str] = set()
         for payload in (parameters, task_payload):
             applied_templates = payload.get("appliedStepTemplates")
             if applied_templates is None:
@@ -5915,8 +5934,8 @@ class MoonMindRunWorkflow:
                     max_chars=120,
                 )
                 if slug:
-                    skill_names.add(slug.lower())
-        return skill_names
+                    slugs.add(slug.lower())
+        return slugs
 
     def _execution_result_has_publishable_changes(self, execution_result: Any) -> bool:
         if self._extract_pull_request_url(execution_result):
