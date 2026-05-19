@@ -4655,9 +4655,11 @@ class MoonMindRunWorkflow:
                 pull_request_url = self._extract_pull_request_url(execution_result)
 
                 # If still not found, check the diagnostics artifact if present
-                if pull_request_url is None and tool_type == "skill":
+                if pull_request_url is None:
                     outputs = self._get_from_result(execution_result, "outputs") or {}
-                    diag_ref = outputs.get("diagnostics_ref")
+                    diag_ref = outputs.get("diagnostics_ref") or outputs.get(
+                        "diagnosticsRef"
+                    )
                     if diag_ref:
                         try:
                             diag_payload = await execute_typed_activity(
