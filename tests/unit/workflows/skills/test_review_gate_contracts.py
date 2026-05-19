@@ -93,13 +93,22 @@ class TestReviewRequest:
 # ── ReviewVerdict ─────────────────────────────────────────────────────
 
 class TestReviewVerdict:
-    def test_pass(self):
-        v = ReviewVerdict(verdict="PASS", confidence=0.95)
-        assert v.verdict == "PASS"
+    def test_fully_implemented(self):
+        v = ReviewVerdict(verdict="FULLY_IMPLEMENTED", confidence=0.95)
+        assert v.verdict == "FULLY_IMPLEMENTED"
 
-    def test_fail_with_feedback(self):
-        v = ReviewVerdict(verdict="FAIL", confidence=0.8, feedback="Missing import")
+    def test_additional_work_with_feedback(self):
+        v = ReviewVerdict(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            confidence="medium",
+            feedback="Missing import",
+            remaining_work_ref="artifact://remaining",
+            recommended_next_action="reattempt_current_step",
+            recoverable_in_current_runtime=True,
+        )
         assert v.feedback == "Missing import"
+        assert v.to_payload()["remainingWorkRef"] == "artifact://remaining"
+        assert v.to_payload()["recoverableInCurrentRuntime"] is True
 
     def test_invalid_verdict_rejected(self):
         with pytest.raises(ContractValidationError, match="verdict"):
@@ -107,17 +116,17 @@ class TestReviewVerdict:
 
     def test_confidence_out_of_range_rejected(self):
         with pytest.raises(ContractValidationError, match="confidence"):
-            ReviewVerdict(verdict="PASS", confidence=1.5)
+            ReviewVerdict(verdict="FULLY_IMPLEMENTED", confidence=1.5)
 
     def test_to_payload(self):
         v = ReviewVerdict(
-            verdict="FAIL",
+            verdict="ADDITIONAL_WORK_NEEDED",
             confidence=0.7,
             feedback="bad",
             issues=({"severity": "error", "description": "missing"},),
         )
         p = v.to_payload()
-        assert p["verdict"] == "FAIL"
+        assert p["verdict"] == "ADDITIONAL_WORK_NEEDED"
         assert len(p["issues"]) == 1
 
 # ── parse_review_verdict ──────────────────────────────────────────────
@@ -125,18 +134,29 @@ class TestReviewVerdict:
 class TestParseReviewVerdict:
     def test_parse_valid(self):
         v = parse_review_verdict(
-            {"verdict": "pass", "confidence": 0.9, "feedback": None, "issues": []}
+            {
+                "verdict": "fully_implemented",
+                "confidence": "high",
+                "feedback": None,
+                "issues": [],
+                "validatedRefs": {"testReportRef": "artifact://tests"},
+            }
         )
-        assert v.verdict == "PASS"
-        assert v.confidence == 0.9
+        assert v.verdict == "FULLY_IMPLEMENTED"
+        assert v.confidence == "high"
+        assert v.validated_refs == {"testReportRef": "artifact://tests"}
+
+    def test_parse_legacy_pass_maps_to_fully_implemented(self):
+        v = parse_review_verdict({"verdict": "PASS", "confidence": 0.9})
+        assert v.verdict == "FULLY_IMPLEMENTED"
 
     def test_parse_unknown_verdict_becomes_inconclusive(self):
         v = parse_review_verdict({"verdict": "MAYBE"})
-        assert v.verdict == "INCONCLUSIVE"
+        assert v.verdict == "NO_DETERMINATION"
 
     def test_parse_missing_verdict(self):
         v = parse_review_verdict({})
-        assert v.verdict == "INCONCLUSIVE"
+        assert v.verdict == "NO_DETERMINATION"
 
     def test_parse_bad_confidence_clamped(self):
         v = parse_review_verdict({"verdict": "PASS", "confidence": 5.0})
@@ -146,6 +166,7 @@ class TestParseReviewVerdict:
         v = parse_review_verdict(
             {"verdict": "FAIL", "issues": [{"severity": "error"}, "not-a-dict", 42]}
         )
+        assert v.verdict == "ADDITIONAL_WORK_NEEDED"
         assert len(v.issues) == 1
 
 # ── build_feedback_input ──────────────────────────────────────────────

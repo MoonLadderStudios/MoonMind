@@ -447,6 +447,12 @@ def test_preserved_outputs_are_available_to_failed_step_dependencies() -> None:
         "prepare": {
             "outputSummary": "artifact://prepare-summary",
             "outputPrimary": "artifact://prepare-output",
+            "producingAttempt": {
+                "workflowId": "mm:source",
+                "runId": "run-source",
+                "logicalStepId": "prepare",
+                "attempt": 1,
+            },
         }
     }
 

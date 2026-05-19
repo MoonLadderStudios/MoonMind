@@ -1088,8 +1088,55 @@ def test_jira_implement_no_commit_pr_handoff_is_not_required(
 
     assert mock_run_workflow._publish_status == "not_required"
     assert status == "success"
-    assert "no publishable diff was produced" in message
+    assert "No pull request was required" in message
+    assert "Jira-oriented task completed without repository changes" in message
+    assert "MM-675 was already implemented" in message
+    assert "no publishable diff was produced" not in message
     assert publish_failure is False
+
+
+def test_jira_implement_no_commit_pr_handoff_without_agent_report_is_explicit(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    execution_result = {
+        "outputs": {
+            "push_status": "no_commits",
+            "push_branch": "feature/no-op",
+            "push_base_ref": "origin/main",
+            "push_commit_count": 0,
+        }
+    }
+    parameters = {
+        "publishMode": "pr",
+        "task": {
+            "appliedStepTemplates": [
+                {"slug": "jira-implement", "version": "1.0.0"},
+            ],
+        },
+    }
+
+    mock_run_workflow._record_execution_context(
+        node_id="step-7",
+        execution_result=execution_result,
+    )
+    mock_run_workflow._record_publish_result(
+        parameters=parameters,
+        execution_result=execution_result,
+    )
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters=parameters
+    )
+
+    assert mock_run_workflow._publish_status == "not_required"
+    assert status == "success"
+    assert "No pull request was required" in message
+    assert "Jira-oriented task completed without repository changes" in message
+    assert (
+        "no structured agent report confirmed whether the Jira issue was "
+        "already implemented"
+    ) in message
+    assert publish_failure is False
+
 
 def test_structured_publish_not_required_satisfies_pr_publish_mode(
     mock_run_workflow: MoonMindRunWorkflow,
@@ -1262,6 +1309,65 @@ def test_jira_implement_task_makes_pr_publish_optional(
         },
         include_applied_templates=True,
     )
+    assert mock_run_workflow._pr_publish_optional_for_task(
+        {
+            "publishMode": "pr",
+            "task": {
+                "tool": {"type": "skill", "name": "auto"},
+                "skill": {"name": "auto"},
+                "appliedStepTemplates": [
+                    {"slug": "jira-implement", "version": "1.0.0"},
+                ],
+            },
+        },
+        include_applied_templates=True,
+    )
+    # Templates carrying only presetSlug must also relax the no-commit fallback.
+    assert mock_run_workflow._pr_publish_optional_for_task(
+        {
+            "publishMode": "pr",
+            "task": {
+                "tool": {"type": "skill", "name": "auto"},
+                "skill": {"name": "auto"},
+                "appliedStepTemplates": [
+                    {"presetSlug": "jira-implement", "version": "1.0.0"},
+                ],
+            },
+        },
+        include_applied_templates=True,
+    )
+    assert mock_run_workflow._pr_publish_optional_for_task(
+        {
+            "publishMode": "pr",
+            "task": {
+                "appliedStepTemplates": [
+                    {
+                        "slug": "leaf",
+                        "version": "1.0.0",
+                        "skill": {"name": "jira-implement"},
+                    },
+                ],
+            },
+        }
+    )
+
+
+def test_jira_applied_template_without_composition_marks_task_jira_backed(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    assert (
+        mock_run_workflow._canonical_jira_issue_key_from_parameters(
+            {
+                "task": {
+                    "instructions": "Run Jira Implement for MM-719.",
+                    "appliedStepTemplates": [
+                        {"slug": "jira-implement", "version": "1.0.0"},
+                    ],
+                },
+            }
+        )
+        == "MM-719"
+    )
 
 
 def test_plain_text_blocked_result_short_circuits_publish(
@@ -1298,7 +1404,65 @@ def test_jira_implement_applied_template_makes_pr_publish_optional(
                     }
                 ],
             },
-        }
+        },
+        include_applied_templates=True,
+    )
+
+
+def test_jira_implement_applied_template_legacy_shapes_make_pr_publish_optional(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    parameters = {
+        "publishMode": "pr",
+        "task": {
+            "appliedStepTemplates": [
+                {"presetSlug": "jira-implement", "version": "1.0.0"},
+            ],
+        },
+    }
+
+    assert mock_run_workflow._task_applied_template_slugs(
+        parameters,
+        parameters["task"],
+    ) == {"jira-implement"}
+    assert mock_run_workflow._pr_publish_optional_for_task(
+        parameters,
+        include_applied_templates=True,
+    )
+
+
+def test_jira_implement_applied_template_composition_includes_make_pr_publish_optional(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    parameters = {
+        "publishMode": "pr",
+        "task": {
+            "appliedStepTemplates": [
+                {
+                    "slug": "parent-flow",
+                    "composition": {
+                        "includes": [
+                            {"presetSlug": "jira-implement"},
+                        ],
+                    },
+                }
+            ],
+        },
+    }
+
+    assert mock_run_workflow._task_applied_template_slugs(
+        parameters,
+        parameters["task"],
+    ) == {"parent-flow", "jira-implement"}
+    assert not mock_run_workflow._pr_publish_optional_for_task(
+        parameters,
+        include_applied_templates=True,
+    )
+
+    parameters["task"]["appliedStepTemplates"][0].pop("slug")
+    assert mock_run_workflow._pr_publish_optional_for_task(
+        parameters,
+        include_applied_templates=True,
     )
 
 
