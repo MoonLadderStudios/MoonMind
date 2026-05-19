@@ -645,8 +645,31 @@ class HostDockerComposeRunner:
             # aliases inside the worker. They continue to rely on explicit
             # local compose-file remapping.
             return
+        if host_dir.is_symlink() and not host_dir.exists():
+            # Broken symlink at the alias path: clear it so the create path can
+            # reinstall a valid link below.
+            with contextlib.suppress(OSError):
+                host_dir.unlink()
         if host_dir.exists():
-            return
+            try:
+                already_aliased = host_dir.resolve() == local_dir.resolve()
+            except OSError:
+                already_aliased = False
+            if already_aliased:
+                return
+            raise ToolFailure(
+                error_code="POLICY_VIOLATION",
+                message=(
+                    "Deployment compose project path already exists at the worker's "
+                    "host path but does not resolve to the active checkout."
+                ),
+                retryable=False,
+                details={
+                    "project_dir": str(host_dir),
+                    "local_project_dir": str(local_dir),
+                    "failureClass": "policy_violation",
+                },
+            )
         parent = host_dir.parent
         if parent.exists() and not parent.is_dir():
             raise ToolFailure(
@@ -663,6 +686,7 @@ class HostDockerComposeRunner:
             parent.mkdir(parents=True, exist_ok=True)
             host_dir.symlink_to(local_dir, target_is_directory=True)
         except FileExistsError:
+            # Race: another worker installed the alias between our checks.
             return
         except OSError as exc:
             raise ToolFailure(
@@ -1123,8 +1147,6 @@ def _ensure_runner_survives_update(
 ) -> None:
     if command_plan.runner_mode != "privileged_worker":
         return
-    if _compose_up_targets_specific_services(command_plan.up_args):
-        return
     current_container_id = _current_container_id()
     if not current_container_id:
         return
@@ -1133,6 +1155,9 @@ def _ensure_runner_survives_update(
         current_container_id,
     )
     if not matching_service:
+        return
+    targeted_services = _compose_up_target_services(command_plan.up_args)
+    if targeted_services and matching_service not in targeted_services:
         return
     raise ToolFailure(
         error_code="DEPLOYMENT_RUNNER_UNSAFE",
@@ -1150,19 +1175,21 @@ def _ensure_runner_survives_update(
     )
 
 
-def _compose_up_targets_specific_services(args: Sequence[str]) -> bool:
+def _compose_up_target_services(args: Sequence[str]) -> tuple[str, ...]:
+    services: list[str] = []
     passthrough = False
     for raw in args[3:]:
         part = str(raw)
         if passthrough:
-            return True
+            services.append(part)
+            continue
         if part == "--":
             passthrough = True
             continue
         if part.startswith("-"):
             continue
-        return True
-    return False
+        services.append(part)
+    return tuple(services)
 
 
 def _current_container_id() -> str:
