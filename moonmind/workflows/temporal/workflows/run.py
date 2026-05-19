@@ -5925,36 +5925,9 @@ class MoonMindRunWorkflow:
                         skill_names.add(name.lower())
 
         if include_applied_templates:
-            for payload in (parameters, task_payload):
-                applied_templates = payload.get("appliedStepTemplates")
-                if not isinstance(applied_templates, Sequence) or isinstance(
-                    applied_templates,
-                    (str, bytes, bytearray),
-                ):
-                    continue
-                for template in applied_templates:
-                    if not isinstance(template, Mapping):
-                        continue
-                    slug_sources: list[Any] = [template]
-                    composition = template.get("composition")
-                    for include_source in (composition, template):
-                        if not isinstance(include_source, Mapping):
-                            continue
-                        includes = include_source.get("includes")
-                        if isinstance(includes, Sequence) and not isinstance(
-                            includes,
-                            (str, bytes, bytearray),
-                        ):
-                            slug_sources.extend(includes)
-                    for slug_source in slug_sources:
-                        if not isinstance(slug_source, Mapping):
-                            continue
-                        slug = self._coerce_text(
-                            slug_source.get("slug") or slug_source.get("presetSlug"),
-                            max_chars=120,
-                        )
-                        if slug:
-                            skill_names.add(slug.lower())
+            skill_names.update(
+                self._task_applied_template_slugs(parameters, task_payload)
+            )
 
         skills_payload = task_payload.get("skills")
         if isinstance(skills_payload, Mapping):
@@ -5990,16 +5963,31 @@ class MoonMindRunWorkflow:
             for item in applied_templates:
                 if not isinstance(item, Mapping):
                     continue
-                slug = self._coerce_text(
-                    item.get("slug")
-                    or item.get("templateSlug")
-                    or item.get("template_slug")
-                    or item.get("id")
-                    or item.get("name"),
-                    max_chars=120,
-                )
-                if slug:
-                    slugs.add(slug.lower())
+                slug_sources: list[Any] = [item]
+                composition = item.get("composition")
+                for include_source in (composition, item):
+                    if not isinstance(include_source, Mapping):
+                        continue
+                    includes = include_source.get("includes")
+                    if isinstance(includes, Sequence) and not isinstance(
+                        includes,
+                        (str, bytes, bytearray),
+                    ):
+                        slug_sources.extend(includes)
+                for slug_source in slug_sources:
+                    if not isinstance(slug_source, Mapping):
+                        continue
+                    slug = self._coerce_text(
+                        slug_source.get("slug")
+                        or slug_source.get("presetSlug")
+                        or slug_source.get("templateSlug")
+                        or slug_source.get("template_slug")
+                        or slug_source.get("id")
+                        or slug_source.get("name"),
+                        max_chars=120,
+                    )
+                    if slug:
+                        slugs.add(slug.lower())
         return slugs
 
     def _execution_result_has_publishable_changes(self, execution_result: Any) -> bool:
