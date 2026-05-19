@@ -5824,6 +5824,7 @@ class MoonMindRunWorkflow:
                 self._publish_status = "not_required"
                 self._publish_reason = self._compose_no_change_publish_reason(
                     publish_mode=publish_mode,
+                    pr_publish_optional=True,
                 )
                 if self._merge_automation_requested(parameters):
                     self._publish_context["mergeAutomationStatus"] = "not_applicable"
@@ -6330,6 +6331,7 @@ class MoonMindRunWorkflow:
         self,
         *,
         publish_mode: str,
+        pr_publish_optional: bool = False,
     ) -> str:
         branch = self._coerce_text(self._publish_context.get("branch"), max_chars=120)
         base_ref = self._coerce_text(self._publish_context.get("baseRef"), max_chars=120)
@@ -6347,7 +6349,12 @@ class MoonMindRunWorkflow:
             commit_count = int(commit_count_value.strip())
 
         parts: list[str] = []
-        if publish_mode == "pr":
+        if publish_mode == "pr" and pr_publish_optional:
+            parts.append(
+                "No pull request was required because this Jira-oriented task "
+                "completed without repository changes"
+            )
+        elif publish_mode == "pr":
             parts.append(
                 "publishMode 'pr' requested, but no publishable diff was produced"
             )
@@ -6365,6 +6372,11 @@ class MoonMindRunWorkflow:
 
         if operator_summary:
             parts.append(f"final agent report: {operator_summary}")
+        elif publish_mode == "pr" and pr_publish_optional:
+            parts.append(
+                "no structured agent report confirmed whether the Jira issue was "
+                "already implemented"
+            )
 
         reason = ". ".join(part.rstrip(".") for part in parts if part)
         return f"{reason}." if reason else "publish skipped: no local changes"
@@ -6376,7 +6388,7 @@ class MoonMindRunWorkflow:
         publish_mode: str = "",
     ) -> str:
         parts = ["Workflow completed successfully"]
-        detail = self._coerce_text(publish_detail, max_chars=180)
+        detail = self._coerce_text(publish_detail, max_chars=900)
         if detail and detail.lower() not in {
             "completed",
             "workflow completed successfully",
