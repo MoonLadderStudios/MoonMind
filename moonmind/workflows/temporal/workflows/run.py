@@ -3792,6 +3792,12 @@ class MoonMindRunWorkflow:
                 if preserved_outputs:
                     previous_step_outputs = preserved_outputs
                 continue
+            current_step_row = self._step_ledger_row_for(node_id)
+            if (
+                isinstance(current_step_row, Mapping)
+                and current_step_row.get("status") == "pending"
+            ):
+                continue
             original_node_inputs = dict(node.get("inputs", {}))
             approval_policy = plan_definition.policy.approval_policy
             review_gate_active = self._review_gate_active(
@@ -4441,7 +4447,8 @@ class MoonMindRunWorkflow:
                     )
                     self._publish_status = "not_required"
                     self._publish_reason = self._plan_blocked_message
-                    return
+                    self._refresh_step_readiness(updated_at=workflow.now())
+                    continue
                 continue
 
             self._mark_step_terminal(
