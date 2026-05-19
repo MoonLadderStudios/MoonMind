@@ -5875,36 +5875,26 @@ class MoonMindRunWorkflow:
             for template in applied_templates:
                 if not isinstance(template, Mapping):
                     continue
-                slug = self._coerce_text(
-                    template.get("slug") or template.get("presetSlug"),
-                    max_chars=120,
-                )
-                if slug:
-                    skill_names.add(slug.lower())
+                slug_sources: list[Any] = [template]
                 composition = template.get("composition")
-                include_sources: list[Any] = []
-                if isinstance(composition, Mapping):
-                    composition_includes = composition.get("includes")
-                    if isinstance(composition_includes, Sequence) and not isinstance(
-                        composition_includes,
+                for include_source in (composition, template):
+                    if not isinstance(include_source, Mapping):
+                        continue
+                    includes = include_source.get("includes")
+                    if isinstance(includes, Sequence) and not isinstance(
+                        includes,
                         (str, bytes, bytearray),
                     ):
-                        include_sources.extend(composition_includes)
-                template_includes = template.get("includes")
-                if isinstance(template_includes, Sequence) and not isinstance(
-                    template_includes,
-                    (str, bytes, bytearray),
-                ):
-                    include_sources.extend(template_includes)
-                for include in include_sources:
-                    if not isinstance(include, Mapping):
+                        slug_sources.extend(includes)
+                for slug_source in slug_sources:
+                    if not isinstance(slug_source, Mapping):
                         continue
-                    include_slug = self._coerce_text(
-                        include.get("slug") or include.get("presetSlug"),
+                    slug = self._coerce_text(
+                        slug_source.get("slug") or slug_source.get("presetSlug"),
                         max_chars=120,
                     )
-                    if include_slug:
-                        skill_names.add(include_slug.lower())
+                    if slug:
+                        skill_names.add(slug.lower())
 
         skills_payload = task_payload.get("skills")
         if isinstance(skills_payload, Mapping):
