@@ -580,6 +580,7 @@ ManagedRuntimeWorkloadMode = Literal[
     "docker-sidecar",
     "docker-sidecar-rootless",
     "no-docker",
+    "kubernetes-job",
 ]
 MoonMindOpsRuntimeOperation = Literal[
     "status",
@@ -882,6 +883,7 @@ class RuntimeProfileDockerSidecarLaunchPlan(BaseModel):
         alias="applyLimitsOutsideNestedDaemon",
     )
     workload_mode: ManagedRuntimeWorkloadMode = Field(..., alias="workloadMode")
+    labels: dict[str, str] = Field(default_factory=dict)
     socket_volume_name: str = Field(..., alias="socketVolumeName", min_length=1)
     socket_path: str = Field(..., alias="socketPath", min_length=1)
     graph_volume_name: str = Field(..., alias="graphVolumeName", min_length=1)
@@ -913,6 +915,9 @@ class RuntimeProfilePolicy(BaseModel):
     )
     api_container_workload_docker_socket_access: bool = Field(
         False, alias="apiContainerWorkloadDockerSocketAccess"
+    )
+    kubernetes_job_runtime_supported: bool = Field(
+        False, alias="kubernetesJobRuntimeSupported"
     )
 
 
@@ -1014,6 +1019,15 @@ def _mounts_arbitrary_host_path(mounts: list[RuntimeProfileMount]) -> bool:
     return False
 
 
+def _normalize_profile_labels(labels: Mapping[str, str]) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    for raw_key, raw_value in labels.items():
+        key = require_non_blank(str(raw_key), field_name="labels key")
+        value = require_non_blank(str(raw_value), field_name=f"labels[{key}]")
+        normalized[key] = value
+    return normalized
+
+
 class ManagedAgentRuntimeProfile(BaseModel):
     """Validated managed-session runtime profile for Docker sidecar capability."""
 
@@ -1032,10 +1046,18 @@ class ManagedAgentRuntimeProfile(BaseModel):
         default_factory=RuntimeProfileCleanupPolicy
     )
     readiness: dict[str, Any] = Field(default_factory=dict)
+    labels: dict[str, str] = Field(default_factory=dict)
     policy: RuntimeProfilePolicy = Field(default_factory=RuntimeProfilePolicy)
 
     @model_validator(mode="after")
     def _validate_runtime_profile(self) -> "ManagedAgentRuntimeProfile":
+        self.labels = _normalize_profile_labels(self.labels)
+        if _contains_sensitive_key(self.labels):
+            raise ValueError(
+                "labels must not receive deployment credentials or unrelated "
+                "session tokens; credential exposure would leak MoonMind or "
+                "cross-session authority into the workload"
+            )
         if _contains_sensitive_key(self.agent.env):
             raise ValueError(
                 "agent.env must not receive deployment credentials or unrelated "
@@ -1069,6 +1091,10 @@ class ManagedAgentRuntimeProfile(BaseModel):
                 "API container must not have normal workload Docker socket access; "
                 "workload Docker control belongs to the isolated session sidecar"
             )
+
+        if self.workload_mode == "kubernetes-job":
+            self._validate_kubernetes_job_profile(sidecar)
+            return self
 
         if self.workload_mode == "no-docker":
             if self.agent.docker_client.enabled:
@@ -1144,6 +1170,40 @@ class ManagedAgentRuntimeProfile(BaseModel):
         self._validate_sidecar_resources()
         self._validate_sidecar_cleanup()
         return self
+
+    def _validate_kubernetes_job_profile(
+        self, sidecar: RuntimeProfileDockerSidecar | None
+    ) -> None:
+        if not self.policy.kubernetes_job_runtime_supported:
+            raise ValueError(
+                "workloadMode kubernetes-job requires explicit deployment support "
+                "via policy.kubernetesJobRuntimeSupported"
+            )
+        if self.agent.docker_client.enabled:
+            raise ValueError(
+                "agent.dockerClient.enabled must be false for kubernetes-job profiles; "
+                "Kubernetes Job workloads do not expose a Docker daemon to the agent"
+            )
+        if "DOCKER_HOST" in self.agent.env:
+            raise ValueError(
+                "agent.env.DOCKER_HOST must not be set for kubernetes-job profiles; "
+                "Kubernetes Job workloads are requested through MoonMind capability"
+            )
+        if sidecar is not None and sidecar.enabled:
+            raise ValueError(
+                "dockerSidecar.enabled must be false for kubernetes-job profiles; "
+                "Kubernetes Job workloads are not Docker sidecar materializations"
+            )
+        if self.resources.docker_sidecar is not None:
+            raise ValueError(
+                "resources.dockerSidecar must be omitted for kubernetes-job profiles; "
+                "backend-specific rendering owns Kubernetes Job resource mapping"
+            )
+        if self.resources.nested_containers is not None:
+            raise ValueError(
+                "resources.nestedContainers must be omitted for kubernetes-job "
+                "profiles; Kubernetes Job mode does not use nested Docker containers"
+            )
 
     def _validate_sidecar_resources(self) -> None:
         required_resources = (
@@ -1240,6 +1300,11 @@ def build_docker_sidecar_launch_plan(
 ) -> RuntimeProfileDockerSidecarLaunchPlan | None:
     """Return the compact MM-695 launch contract for Docker sidecar profiles."""
 
+    if profile.workload_mode == "kubernetes-job":
+        raise ValueError(
+            "workloadMode kubernetes-job is validated but cannot be launched until "
+            "the Kubernetes Job runtime renderer is wired into managed sessions"
+        )
     if profile.workload_mode == "no-docker":
         return None
     sidecar = profile.docker_sidecar
@@ -1247,6 +1312,7 @@ def build_docker_sidecar_launch_plan(
         raise ValueError("validated Docker sidecar profile is missing sidecar shape")
     return RuntimeProfileDockerSidecarLaunchPlan(
         workloadMode=profile.workload_mode,
+        labels=profile.labels,
         socketVolumeName=sidecar.socket.volume_name,
         socketPath=sidecar.socket.path,
         graphVolumeName=sidecar.storage.volume_name,
