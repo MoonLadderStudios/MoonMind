@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. tests/integration/test_interventions.py (score: 1.000, trust: canonical)\n    line 3: from httpx import AsyncClient, ASGITransport\n2. frontend/vite.config.ts (score: 1.000, trust: canonical)\n    line 1: import { defineConfig } from 'vite';\n3. moonmind/workflow_docker_mode.py (score: 1.000, trust: canonical)\n    line 3: from __future__ import annotations\n4. frontend/src/vite-config.test.ts (score: 1.000, trust: canonical)\n    line 1: import { describe, expect, it } from \"vitest\";\n5. moonmind/indexers/google_drive_indexer.py (score: 1.000, trust: canonical)\n    line 2: from typing import Dict, List, Optional, Union\n6. moonmind/indexers/local_data_indexer.py (score: 1.000, trust: canonical)\n    line 3: from typing import Dict, Union\n7. moonmind/indexers/confluence_indexer.py (score: 1.000, trust: canonical)\n    line 2: from typing import Dict, List, Optional, Union\n8. moonmind/indexers/jira_indexer.py (score: 1.000, trust: canonical)\n    line 2: from typing import Dict, Optional, Union",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "tests/integration/test_interventions.py",
+      "text": "line 3: from httpx import AsyncClient, ASGITransport",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "frontend/vite.config.ts",
+      "text": "line 1: import { defineConfig } from 'vite';",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/workflow_docker_mode.py",
+      "text": "line 3: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "frontend/src/vite-config.test.ts",
+      "text": "line 1: import { describe, expect, it } from \"vitest\";",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/google_drive_indexer.py",
+      "text": "line 2: from typing import Dict, List, Optional, Union",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 2,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/local_data_indexer.py",
+      "text": "line 3: from typing import Dict, Union",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/confluence_indexer.py",
+      "text": "line 2: from typing import Dict, List, Optional, Union",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 2,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/jira_indexer.py",
+      "text": "line 2: from typing import Dict, Optional, Union",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 2,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-05-19T20:46:30Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
