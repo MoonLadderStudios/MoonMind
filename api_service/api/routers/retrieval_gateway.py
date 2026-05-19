@@ -187,6 +187,21 @@ def _enforce_repo_scope(payload: RetrievalQuery, auth: RetrievalAuthContext) -> 
             detail=f"Repository '{repo}' is not permitted for this retrieval token.",
         )
 
+def _enforce_retrieval_available(service: ContextRetrievalService) -> None:
+    executable, reason = service.settings.retrieval_execution_reason(
+        os.environ,
+        preferred_transport="direct",
+    )
+    if executable:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=(
+            "Retrieval is unavailable for this managed session "
+            f"(reason: {reason})."
+        ),
+    )
+
 @router.get("/health")
 def health() -> Dict[str, str]:
     return {"status": "ok"}
@@ -199,6 +214,7 @@ async def retrieve_context_pack(
 ) -> Dict[str, object]:
     try:
         _enforce_repo_scope(payload, auth)
+        _enforce_retrieval_available(service)
         pack = await run_in_threadpool(
             service.retrieve,
             query=payload.query,

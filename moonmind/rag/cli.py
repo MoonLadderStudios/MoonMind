@@ -67,6 +67,15 @@ def run_search(
     cli_budgets = parse_budget_args(budget_args)
     budgets = _build_budget_config(cli_budgets)
     resolved_transport = settings.resolved_transport(transport)
+    executable, reason = settings.retrieval_execution_reason(
+        os.environ,
+        preferred_transport=resolved_transport,
+    )
+    if not executable:
+        raise CliError(
+            "Retrieval is unavailable for this managed session "
+            f"(reason: {reason})."
+        )
     service = ContextRetrievalService(settings=settings, env=os.environ)
     try:
         pack = service.retrieve(

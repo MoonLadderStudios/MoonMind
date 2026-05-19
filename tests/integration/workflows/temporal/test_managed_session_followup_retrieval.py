@@ -70,9 +70,12 @@ async def test_codex_launcher_includes_followup_retrieval_capability_note(
     )
 
     class _FakeContextInjectionService:
+        def __init__(self, *args, **kwargs) -> None:
+            _ = args, kwargs
+
         async def inject_context(self, *, request, workspace_path):
             assert workspace_path == workspace
-            request.instruction_ref = "Implement MM-506."
+            request.instruction_ref = "Implement MM-722."
 
     monkeypatch.setattr(
         "moonmind.rag.context_injection.ContextInjectionService",
