@@ -5762,6 +5762,21 @@ class MoonMindRunWorkflow:
         if not isinstance(outputs, Mapping):
             return None
 
+        for provider_key in (
+            "providerNativePullRequest",
+            "provider_native_pull_request",
+        ):
+            provider_native = outputs.get(provider_key)
+            if not isinstance(provider_native, Mapping):
+                continue
+            for field in ("url", "pullRequestUrl", "prUrl"):
+                value = provider_native.get(field)
+                if not isinstance(value, str) or not value.strip():
+                    continue
+                match = _GITHUB_PR_URL_PATTERN.search(value)
+                if match is not None:
+                    return match.group(0)
+
         candidate_fields = (
             "pull_request_url",
             "pullRequestUrl",
@@ -6023,6 +6038,7 @@ class MoonMindRunWorkflow:
         if pull_request_url:
             self._publish_context["pullRequestUrl"] = pull_request_url
         self._record_publish_metadata_context(outputs)
+        self._record_provider_native_publish_context(outputs)
         head_sha = self._coerce_text(
             outputs.get("head_sha")
             or outputs.get("headSha")
@@ -6055,6 +6071,72 @@ class MoonMindRunWorkflow:
             if value:
                 metadata[context_key] = value
         self._publish_context["prMetadata"] = metadata
+
+    def _record_provider_native_publish_context(
+        self, source: Mapping[str, Any]
+    ) -> None:
+        raw_provider_pr = source.get("providerNativePullRequest") or source.get(
+            "provider_native_pull_request"
+        )
+        if not isinstance(raw_provider_pr, Mapping):
+            return
+
+        readiness_state = self._coerce_text(
+            raw_provider_pr.get("readinessState")
+            or raw_provider_pr.get("readiness_state"),
+            max_chars=80,
+        )
+        if readiness_state:
+            self._publish_context["readinessState"] = readiness_state
+
+        head_branch = self._coerce_text(
+            raw_provider_pr.get("headBranch")
+            or raw_provider_pr.get("head_branch")
+            or raw_provider_pr.get("branch"),
+            max_chars=120,
+        )
+        if head_branch:
+            self._publish_context["branch"] = head_branch
+
+        base_branch = self._coerce_text(
+            raw_provider_pr.get("baseBranch")
+            or raw_provider_pr.get("base_branch")
+            or raw_provider_pr.get("baseRef")
+            or raw_provider_pr.get("base_ref"),
+            max_chars=120,
+        )
+        if base_branch:
+            self._publish_context["baseRef"] = base_branch
+
+        provider_metadata = raw_provider_pr.get("metadata")
+        if isinstance(provider_metadata, Mapping):
+            self._record_publish_metadata_context({"prMetadata": provider_metadata})
+            compact_metadata: dict[str, Any] = {}
+            for key, value in provider_metadata.items():
+                compact_key = self._coerce_text(key, max_chars=80)
+                if not compact_key:
+                    continue
+                if isinstance(value, (str, int, float, bool)) or value is None:
+                    compact_metadata[compact_key] = value
+                else:
+                    compact_value = self._coerce_text(value, max_chars=500)
+                    if compact_value:
+                        compact_metadata[compact_key] = compact_value
+            if compact_metadata:
+                self._publish_context["providerNativePrMetadata"] = compact_metadata
+
+        provider_record: dict[str, Any] = {}
+        for key, value in (
+            ("url", self._publish_context.get("pullRequestUrl")),
+            ("readinessState", readiness_state),
+            ("headBranch", head_branch),
+            ("baseBranch", base_branch),
+            ("source", self._coerce_text(raw_provider_pr.get("source"), max_chars=80)),
+        ):
+            if value:
+                provider_record[key] = value
+        if provider_record:
+            self._publish_context["providerNativePullRequest"] = provider_record
 
     def _record_report_result(self, execution_result: Any) -> None:
         metadata = self._get_from_result(execution_result, "metadata")
