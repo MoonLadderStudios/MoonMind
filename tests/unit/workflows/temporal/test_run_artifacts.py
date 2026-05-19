@@ -2748,6 +2748,7 @@ async def test_run_execution_stage_jira_implement_not_required_skips_native_pr(
             "summary": "Completed with status completed",
             "metadata": {
                 "operator_summary": "MM-697 was transitioned to Done.",
+                "push_status": "no_commits",
             },
             "output_refs": [],
         }

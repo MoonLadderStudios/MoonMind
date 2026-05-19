@@ -1227,7 +1227,7 @@ def test_plain_text_blocked_result_short_circuits_publish(
     assert "cannot transition Jira issue MM-675" in message
 
 
-def test_jira_implement_applied_template_makes_pr_publish_optional(
+def test_jira_implement_applied_template_makes_no_commit_publish_optional(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
     assert mock_run_workflow._pr_publish_optional_for_task(
@@ -1242,7 +1242,8 @@ def test_jira_implement_applied_template_makes_pr_publish_optional(
                     }
                 ],
             },
-        }
+        },
+        include_applied_templates=True,
     )
 
 
