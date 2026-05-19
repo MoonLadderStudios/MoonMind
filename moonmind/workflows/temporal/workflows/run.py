@@ -100,6 +100,7 @@ from moonmind.workflows.temporal.step_ledger import (
 from moonmind.workflows.temporal.step_attempts import (
     build_step_attempt_manifest_payload,
     git_effect_metadata,
+    logical_step_success_allowed,
     step_attempt_operation_idempotency_key,
     workspace_policy_metadata,
 )
@@ -813,6 +814,7 @@ class MoonMindRunWorkflow:
         reason: str,
         status: str,
         terminal_disposition: str,
+        budget: Mapping[str, Any] | None = None,
     ) -> str | None:
         attempt = self._step_attempt_for(logical_step_id)
         if attempt is None or attempt < 1:
@@ -869,7 +871,7 @@ class MoonMindRunWorkflow:
             ),
             sideEffects={},
             dependencyEffects={"invalidatedLogicalStepIds": []},
-            budget={},
+            budget=dict(budget or {}),
         )
         return await self._write_step_attempt_manifest(
             logical_step_id,
@@ -1732,6 +1734,7 @@ class MoonMindRunWorkflow:
         reason: str = "initial_execution",
         input_refs: Sequence[str] = (),
         execution: Mapping[str, Any] | None = None,
+        budget: Mapping[str, Any] | None = None,
     ) -> str | None:
         attempt = self._step_attempt_for(logical_step_id)
         if attempt is None or attempt <= 0:
@@ -1762,6 +1765,7 @@ class MoonMindRunWorkflow:
             input_refs=input_refs,
             workspace=workspace,
             execution=execution,
+            budget=budget,
         )
         if launch_blocked:
             manifest_payload["terminalDisposition"] = "blocked"
@@ -2125,20 +2129,92 @@ class MoonMindRunWorkflow:
 
     def _check_status_for_review_verdict(self, verdict: str) -> str:
         normalized = str(verdict or "").strip().upper()
-        if normalized == "PASS":
+        if normalized == "FULLY_IMPLEMENTED":
             return "passed"
-        if normalized == "FAIL":
+        if normalized in {
+            "ADDITIONAL_WORK_NEEDED",
+            "BLOCKED",
+            "FAILED_UNRECOVERABLE",
+        }:
             return "failed"
         return "inconclusive"
 
     def _accepted_review_summary(self, verdict: str, *, retry_count: int) -> str:
         normalized = str(verdict or "").strip().upper()
-        if normalized == "INCONCLUSIVE":
-            return "Review inconclusive; accepted execution"
+        if normalized != "FULLY_IMPLEMENTED":
+            return "Structured gate did not approve advancement"
         if retry_count > 0:
             retry_label = "retry" if retry_count == 1 else "retries"
             return f"Approved after {retry_count} {retry_label}"
         return "Approved by structured review"
+
+    def _review_gate_budget_metadata(
+        self,
+        *,
+        max_review_attempts: int,
+        review_retry_count: int,
+        verdict: str | None = None,
+        recommended_next_action: str | None = None,
+    ) -> dict[str, Any]:
+        attempts_allowed = max_review_attempts + 1
+        attempts_consumed = review_retry_count + 1
+        remaining_attempts = max(0, attempts_allowed - attempts_consumed)
+        metadata: dict[str, Any] = {
+            "gate": "approval_policy",
+            "maxAttempts": attempts_allowed,
+            "attemptsConsumed": attempts_consumed,
+            "remainingAttempts": remaining_attempts,
+            "stopRules": [
+                "structured_gate_verdict_required",
+                "accepted_output_evidence_required",
+                "budget_exhaustion_stops_before_publication",
+            ],
+            "exhausted": remaining_attempts == 0,
+        }
+        if verdict:
+            metadata["gateVerdict"] = str(verdict).strip().upper()
+        if recommended_next_action:
+            metadata["recommendedNextAction"] = recommended_next_action
+        return metadata
+
+    def _review_gate_retry_allowed(
+        self,
+        *,
+        verdict: Any,
+        review_retry_count: int,
+        max_review_attempts: int,
+    ) -> bool:
+        normalized = str(getattr(verdict, "verdict", "") or "").strip().upper()
+        if review_retry_count >= max_review_attempts:
+            return False
+        if normalized == "ADDITIONAL_WORK_NEEDED":
+            return True
+        return normalized == "NO_DETERMINATION" and bool(
+            getattr(verdict, "recoverable_in_current_runtime", False)
+        )
+
+    def _terminal_disposition_for_gate_stop(self, verdict: Any) -> str:
+        normalized = str(getattr(verdict, "verdict", "") or "").strip().upper()
+        if normalized == "BLOCKED":
+            return "blocked"
+        if normalized == "FAILED_UNRECOVERABLE":
+            return "failed_unrecoverable"
+        if normalized == "ADDITIONAL_WORK_NEEDED":
+            return "failed_with_remaining_work"
+        return "needs_human"
+
+    def _step_has_accepted_output_evidence(
+        self,
+        logical_step_id: str,
+        execution_result: Any,
+    ) -> bool:
+        outputs = self._get_from_result(execution_result, "outputs")
+        row_outputs = self._step_attempt_compact_output_refs(logical_step_id)
+        merged_outputs: dict[str, Any] = {}
+        if isinstance(outputs, Mapping):
+            merged_outputs.update(dict(outputs))
+        merged_outputs.update(row_outputs)
+        return logical_step_success_allowed(outputs=merged_outputs)
 
     def _review_gate_active(
         self,
@@ -3640,7 +3716,10 @@ class MoonMindRunWorkflow:
         publish_mode = self._publish_mode(parameters)
         pr_publish_optional = self._pr_publish_optional_for_plan(
             ordered_nodes
-        ) or self._pr_publish_optional_for_task(parameters)
+        ) or self._pr_publish_optional_for_task(
+            parameters,
+            include_applied_templates=True,
+        )
         require_pull_request_url = (
             publish_mode == "pr"
             and self._integration is None
@@ -3713,6 +3792,12 @@ class MoonMindRunWorkflow:
                 if preserved_outputs:
                     previous_step_outputs = preserved_outputs
                 continue
+            current_step_row = self._step_ledger_row_for(node_id)
+            if (
+                isinstance(current_step_row, Mapping)
+                and current_step_row.get("status") == "pending"
+            ):
+                continue
             original_node_inputs = dict(node.get("inputs", {}))
             approval_policy = plan_definition.policy.approval_policy
             review_gate_active = self._review_gate_active(
@@ -3731,6 +3816,7 @@ class MoonMindRunWorkflow:
             result_status: str | None = None
             execution_result = None
             accepted_execution = False
+            gate_stop_requested = False
             blocked_outcome_wait_skipped = False
             current_review_attempt = 1
 
@@ -3812,6 +3898,12 @@ class MoonMindRunWorkflow:
                                     operation="execute",
                                 ),
                             },
+                            budget=self._review_gate_budget_metadata(
+                                max_review_attempts=max_review_attempts,
+                                review_retry_count=review_retry_count,
+                            )
+                            if review_gate_active
+                            else None,
                         )
                         if self._is_step_attempt_launch_blocked(
                             node_id,
@@ -4233,24 +4325,28 @@ class MoonMindRunWorkflow:
                     review_verdict.verdict
                 )
 
-                if review_verdict.verdict == "FAIL":
-                    review_retry_count += 1
+                if review_verdict.verdict != "FULLY_IMPLEMENTED":
                     failed_review_summary = self._bounded_review_summary(
                         review_verdict.feedback,
-                        fallback="Review failed; retrying step",
+                        fallback="Structured gate did not approve advancement",
                     )
                     self._upsert_step_check(
                         node_id,
                         kind="approval_policy",
                         status=review_check_status,
                         summary=failed_review_summary,
-                        retry_count=review_retry_count,
+                        retry_count=review_retry_count + 1,
                         artifact_ref=review_artifact_ref,
                     )
-                    if review_retry_count <= max_review_attempts:
+                    if self._review_gate_retry_allowed(
+                        verdict=review_verdict,
+                        review_retry_count=review_retry_count,
+                        max_review_attempts=max_review_attempts,
+                    ):
+                        review_retry_count += 1
                         previous_review_feedback = (
                             review_verdict.feedback
-                            or "Structured review requested another retry."
+                            or "Structured gate requested another bounded attempt."
                         )
                         previous_review_issues = tuple(review_verdict.issues)
                         current_review_attempt += 1
@@ -4262,10 +4358,71 @@ class MoonMindRunWorkflow:
                         summary=failed_review_summary,
                         last_error="review_failed",
                     )
+                    await self._record_step_attempt_manifest_terminal(
+                        node_id,
+                        updated_at=workflow.now(),
+                        reason=attempt_reason,
+                        status="blocked"
+                        if review_verdict.verdict == "BLOCKED"
+                        else "failed",
+                        terminal_disposition=self._terminal_disposition_for_gate_stop(
+                            review_verdict
+                        ),
+                        budget=self._review_gate_budget_metadata(
+                            max_review_attempts=max_review_attempts,
+                            review_retry_count=review_retry_count,
+                            verdict=review_verdict.verdict,
+                            recommended_next_action=(
+                                review_verdict.recommended_next_action
+                            ),
+                        ),
+                    )
+                    gate_stop_requested = True
                     if failure_mode == "FAIL_FAST":
                         raise ValueError(
-                            f"plan node review failed after {review_retry_count} retry"
+                            "plan node structured gate stopped with verdict "
+                            f"{review_verdict.verdict}"
                         )
+                    break
+
+                if not self._step_has_accepted_output_evidence(
+                    node_id,
+                    execution_result,
+                ):
+                    missing_evidence_summary = (
+                        "Structured gate passed without accepted output evidence"
+                    )
+                    self._upsert_step_check(
+                        node_id,
+                        kind="approval_policy",
+                        status="failed",
+                        summary=missing_evidence_summary,
+                        retry_count=review_retry_count,
+                        artifact_ref=review_artifact_ref,
+                    )
+                    self._mark_step_terminal(
+                        node_id,
+                        status="failed",
+                        updated_at=workflow.now(),
+                        summary=missing_evidence_summary,
+                        last_error="missing_accepted_output_evidence",
+                    )
+                    await self._record_step_attempt_manifest_terminal(
+                        node_id,
+                        updated_at=workflow.now(),
+                        reason=attempt_reason,
+                        status="failed",
+                        terminal_disposition="needs_human",
+                        budget=self._review_gate_budget_metadata(
+                            max_review_attempts=max_review_attempts,
+                            review_retry_count=review_retry_count,
+                            verdict=review_verdict.verdict,
+                            recommended_next_action="needs_human",
+                        ),
+                    )
+                    gate_stop_requested = True
+                    if failure_mode == "FAIL_FAST":
+                        raise ValueError(missing_evidence_summary)
                     break
 
                 self._upsert_step_check(
@@ -4283,6 +4440,15 @@ class MoonMindRunWorkflow:
                 break
 
             if not accepted_execution:
+                if gate_stop_requested:
+                    self._plan_blocked_message = (
+                        self._plan_blocked_message
+                        or "Structured gate stopped before downstream handoff."
+                    )
+                    self._publish_status = "not_required"
+                    self._publish_reason = self._plan_blocked_message
+                    self._refresh_step_readiness(updated_at=workflow.now())
+                    continue
                 continue
 
             self._mark_step_terminal(
@@ -4299,6 +4465,14 @@ class MoonMindRunWorkflow:
                 reason=attempt_reason,
                 status="succeeded",
                 terminal_disposition="accepted",
+                budget=self._review_gate_budget_metadata(
+                    max_review_attempts=max_review_attempts,
+                    review_retry_count=review_retry_count,
+                    verdict="FULLY_IMPLEMENTED",
+                    recommended_next_action="advance",
+                )
+                if review_gate_active
+                else None,
             )
             self._record_step_checkpoint_evidence(
                 node_id,
@@ -5914,37 +6088,6 @@ class MoonMindRunWorkflow:
                     )
                     if name:
                         skill_names.add(name.lower())
-
-        for payload in (parameters, task_payload):
-            applied_templates = payload.get("appliedStepTemplates")
-            if not isinstance(applied_templates, Sequence) or isinstance(
-                applied_templates,
-                (str, bytes, bytearray),
-            ):
-                continue
-            for template in applied_templates:
-                if not isinstance(template, Mapping):
-                    continue
-                slug_sources: list[Any] = [template]
-                composition = template.get("composition")
-                for include_source in (composition, template):
-                    if not isinstance(include_source, Mapping):
-                        continue
-                    includes = include_source.get("includes")
-                    if isinstance(includes, Sequence) and not isinstance(
-                        includes,
-                        (str, bytes, bytearray),
-                    ):
-                        slug_sources.extend(includes)
-                for slug_source in slug_sources:
-                    if not isinstance(slug_source, Mapping):
-                        continue
-                    slug = self._coerce_text(
-                        slug_source.get("slug") or slug_source.get("presetSlug"),
-                        max_chars=120,
-                    )
-                    if slug:
-                        skill_names.add(slug.lower())
 
         skills_payload = task_payload.get("skills")
         if isinstance(skills_payload, Mapping):
