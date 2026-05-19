@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
+from collections import deque
 from collections.abc import Mapping
+from copy import deepcopy
 from datetime import datetime
 from typing import Any
 
@@ -49,16 +50,151 @@ def _has_semantic_output_ref(row: Mapping[str, Any]) -> bool:
     return False
 
 
+def _semantic_output_refs(row: Mapping[str, Any]) -> dict[str, str]:
+    artifacts = row.get("artifacts")
+    if not isinstance(artifacts, Mapping):
+        return {}
+    semantic_refs: dict[str, str] = {}
+    for key in ("outputSummary", "outputPrimary"):
+        value = artifacts.get(key)
+        if isinstance(value, str) and value.strip():
+            semantic_refs[key] = value.strip()
+    return semantic_refs
+
+
+def _source_attempt_value(row: Mapping[str, Any]) -> int:
+    attempt = row.get("attempt")
+    if isinstance(attempt, bool):
+        return 0
+    if isinstance(attempt, (int, float)):
+        return max(0, int(attempt))
+    return 0
+
+
+def _producing_attempt_identity(
+    row: Mapping[str, Any],
+    *,
+    workflow_id: str | None = None,
+    run_id: str | None = None,
+) -> dict[str, Any] | None:
+    logical_step_id = str(row.get("logicalStepId") or "").strip()
+    if not logical_step_id:
+        return None
+    preserved_from = row.get("preservedFrom")
+    if isinstance(preserved_from, Mapping):
+        source_workflow_id = str(preserved_from.get("workflowId") or "").strip()
+        source_run_id = str(preserved_from.get("runId") or "").strip()
+        source_logical_step_id = str(
+            preserved_from.get("logicalStepId") or logical_step_id
+        ).strip()
+        source_attempt = _source_attempt_value(preserved_from)
+        if source_workflow_id and source_run_id and source_attempt >= 1:
+            return {
+                "workflowId": source_workflow_id,
+                "runId": source_run_id,
+                "logicalStepId": source_logical_step_id or logical_step_id,
+                "attempt": source_attempt,
+            }
+        return None
+    attempt = _source_attempt_value(row)
+    if not workflow_id or not run_id or attempt < 1:
+        return None
+    return {
+        "workflowId": workflow_id,
+        "runId": run_id,
+        "logicalStepId": logical_step_id,
+        "attempt": attempt,
+    }
+
+
+def _dependency_output_signature(
+    row: Mapping[str, Any],
+    *,
+    workflow_id: str | None = None,
+    run_id: str | None = None,
+) -> dict[str, Any] | None:
+    refs = _semantic_output_refs(row)
+    if not refs:
+        return None
+    producing_attempt = _producing_attempt_identity(
+        row,
+        workflow_id=workflow_id,
+        run_id=run_id,
+    )
+    if producing_attempt is None:
+        return None
+    return {
+        "producingAttempt": producing_attempt,
+        "outputRefs": refs,
+    }
+
+
+def _mark_step_requires_revalidation(
+    row: dict[str, Any],
+    *,
+    dependency_id: str,
+    expected: Mapping[str, Any],
+    actual: dict[str, Any] | None,
+    updated_at: datetime,
+) -> None:
+    row["status"] = "pending"
+    row["waitingReason"] = "requires_revalidation"
+    row["dependencyReuseGate"] = {
+        "status": "requires_revalidation",
+        "dependencyId": dependency_id,
+        "expected": dict(expected),
+        "actual": actual,
+    }
+    row.pop("preservedFrom", None)
+    row.pop("resumePreservation", None)
+    row.pop("stateCheckpointRef", None)
+    row["updatedAt"] = updated_at.isoformat()
+
+
+def dependency_input_signatures(
+    rows: list[dict[str, Any]],
+    logical_step_id: str,
+    *,
+    workflow_id: str | None = None,
+    run_id: str | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Return exact producing attempts and output refs for direct dependencies."""
+
+    row_by_id = {
+        step_id: row
+        for row in rows
+        if (step_id := str(row.get("logicalStepId") or "").strip())
+    }
+    target_row = row_by_id.get(logical_step_id)
+    if target_row is None:
+        raise KeyError(f"Unknown logical step id: {logical_step_id}")
+
+    signatures: dict[str, dict[str, Any]] = {}
+    for dependency_id in target_row.get("dependsOn") or []:
+        dep_id = str(dependency_id or "").strip()
+        dependency_row = row_by_id.get(dep_id)
+        if dependency_row is None:
+            continue
+        signature = _dependency_output_signature(
+            dependency_row,
+            workflow_id=workflow_id,
+            run_id=run_id,
+        )
+        if signature is not None:
+            signatures[dep_id] = signature
+    return signatures
+
+
 def preserved_outputs_for_dependencies(
     rows: list[dict[str, Any]],
     logical_step_id: str,
-) -> dict[str, dict[str, str]]:
+) -> dict[str, dict[str, Any]]:
     """Return semantic output refs from preserved direct dependencies."""
 
     row_by_id = {
-        str(row.get("logicalStepId") or "").strip(): row
+        step_id: row
         for row in rows
-        if str(row.get("logicalStepId") or "").strip()
+        if (step_id := str(row.get("logicalStepId") or "").strip())
     }
     target_row = row_by_id.get(logical_step_id)
     if target_row is None:
@@ -70,17 +206,159 @@ def preserved_outputs_for_dependencies(
         dependency_row = row_by_id.get(dep_id)
         if dependency_row is None or "preservedFrom" not in dependency_row:
             continue
-        artifacts = dependency_row.get("artifacts")
-        if not isinstance(artifacts, Mapping):
-            continue
-        semantic_refs: dict[str, str] = {}
-        for key in ("outputSummary", "outputPrimary"):
-            value = artifacts.get(key)
-            if isinstance(value, str) and value.strip():
-                semantic_refs[key] = value.strip()
+        semantic_refs = _semantic_output_refs(dependency_row)
         if semantic_refs:
-            outputs[dep_id] = semantic_refs
+            output_payload: dict[str, Any] = dict(semantic_refs)
+            producing_attempt = _producing_attempt_identity(dependency_row)
+            if producing_attempt is not None:
+                output_payload["producingAttempt"] = producing_attempt
+            outputs[dep_id] = output_payload
     return outputs
+
+
+def validate_preserved_dependency_outputs(
+    rows: list[dict[str, Any]],
+    *,
+    updated_at: datetime,
+) -> None:
+    """Gate preserved downstream output reuse against exact dependency signatures."""
+
+    row_by_id = {
+        step_id: row
+        for row in rows
+        if (step_id := str(row.get("logicalStepId") or "").strip())
+    }
+    for row in rows:
+        if not isinstance(row.get("preservedFrom"), Mapping):
+            continue
+        expected = row.get("dependencyInputs")
+        if expected is None:
+            continue
+        if not isinstance(expected, Mapping):
+            raise ValueError(
+                f"preserved step {row.get('logicalStepId')} has invalid dependency input metadata"
+            )
+        dependencies = [
+            str(dep or "").strip() for dep in row.get("dependsOn") or []
+        ]
+        for dependency_id in dependencies:
+            if not dependency_id:
+                continue
+            expected_signature = expected.get(dependency_id)
+            if not isinstance(expected_signature, Mapping):
+                raise ValueError(
+                    f"preserved step {row.get('logicalStepId')} requires "
+                    f"dependency input metadata for {dependency_id}"
+                )
+            dependency_row = row_by_id.get(dependency_id)
+            if dependency_row is None:
+                raise ValueError(
+                    f"preserved step {row.get('logicalStepId')} references "
+                    f"unknown dependency {dependency_id}"
+                )
+            actual_signature = _dependency_output_signature(dependency_row)
+            if actual_signature != dict(expected_signature):
+                _mark_step_requires_revalidation(
+                    row,
+                    dependency_id=dependency_id,
+                    expected=expected_signature,
+                    actual=actual_signature,
+                    updated_at=updated_at,
+                )
+                raise ValueError(
+                    f"preserved step {row.get('logicalStepId')} dependency "
+                    f"{dependency_id} requires revalidation"
+                )
+        row["dependencyReuseGate"] = {
+            "status": "valid",
+            "checkedAt": updated_at.isoformat(),
+        }
+
+
+def record_dependency_inputs_for_step(
+    rows: list[dict[str, Any]],
+    logical_step_id: str,
+    *,
+    workflow_id: str,
+    run_id: str,
+    updated_at: datetime,
+) -> dict[str, dict[str, Any]]:
+    """Record the exact producing attempts a step consumed as dependencies."""
+
+    signatures = dependency_input_signatures(
+        rows,
+        logical_step_id,
+        workflow_id=workflow_id,
+        run_id=run_id,
+    )
+    for row in rows:
+        if row.get("logicalStepId") == logical_step_id:
+            row["dependencyInputs"] = deepcopy(signatures)
+            row["updatedAt"] = updated_at.isoformat()
+            return signatures
+    raise KeyError(f"Unknown logical step id: {logical_step_id}")
+
+
+def invalidate_downstream_steps_for_changed_output(
+    rows: list[dict[str, Any]],
+    logical_step_id: str,
+    *,
+    workflow_id: str,
+    run_id: str,
+    updated_at: datetime,
+) -> list[str]:
+    """Mark downstream rows for revalidation when an accepted producer changed."""
+
+    producer_row = next(
+        (row for row in rows if row.get("logicalStepId") == logical_step_id),
+        None,
+    )
+    if producer_row is None:
+        raise KeyError(f"Unknown logical step id: {logical_step_id}")
+    current_signature = _dependency_output_signature(
+        producer_row,
+        workflow_id=workflow_id,
+        run_id=run_id,
+    )
+    if current_signature is None:
+        return []
+
+    invalidated: list[str] = []
+    pending = deque([logical_step_id])
+    seen: set[str] = set()
+    while pending:
+        dependency_id = pending.popleft()
+        if dependency_id in seen:
+            continue
+        seen.add(dependency_id)
+        for row in rows:
+            row_id = str(row.get("logicalStepId") or "").strip()
+            if not row_id or row_id in seen:
+                continue
+            depends_on = [str(dep or "").strip() for dep in row.get("dependsOn") or []]
+            if dependency_id not in depends_on:
+                continue
+            dependency_inputs = row.get("dependencyInputs")
+            expected = (
+                dependency_inputs.get(logical_step_id)
+                if isinstance(dependency_inputs, Mapping)
+                else None
+            )
+            should_invalidate = (
+                expected is not None and dict(expected) != current_signature
+            )
+            if should_invalidate:
+                _mark_step_requires_revalidation(
+                    row,
+                    dependency_id=logical_step_id,
+                    expected=expected,
+                    actual=current_signature,
+                    updated_at=updated_at,
+                )
+                if row_id not in invalidated:
+                    invalidated.append(row_id)
+            pending.append(row_id)
+    return invalidated
 
 
 def _resume_preservation(
@@ -221,6 +499,11 @@ def materialize_preserved_steps(
             "logicalStepId": logical_step_id,
             "attempt": source_attempt,
         }
+        dependency_inputs = preserved.get("dependencyInputs") or preserved.get(
+            "dependency_inputs"
+        )
+        if isinstance(dependency_inputs, Mapping):
+            row["dependencyInputs"] = deepcopy(dict(dependency_inputs))
         row["updatedAt"] = updated_at.isoformat()
 
 

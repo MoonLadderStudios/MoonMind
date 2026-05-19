@@ -66,10 +66,10 @@ async def step_review_activity(payload: Mapping[str, Any]) -> dict[str, Any]:
 
     # ----- LLM call placeholder -----
     # In production, this calls the LLM fleet via mm.activity.llm or an
-    # equivalent routing mechanism.  For now we return PASS so the gate
-    # is non-blocking until the LLM integration is wired.
+    # equivalent routing mechanism.  For now we return FULLY_IMPLEMENTED so
+    # the gate is non-blocking until the LLM integration is wired.
     verdict = parse_review_verdict({
-        "verdict": "PASS",
+        "verdict": "FULLY_IMPLEMENTED",
         "confidence": 1.0,
         "feedback": None,
         "issues": [],
