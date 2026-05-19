@@ -3813,7 +3813,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [selectedDependencies, setSelectedDependencies] = useState<string[]>([]);
   const [dependencyMessage, setDependencyMessage] = useState<string | null>(null);
   const [selectedPresetKey, setSelectedPresetKey] = useState("");
-  const [presetManagementName, setPresetManagementName] = useState("");
   const [templateMessage, setTemplateMessage] = useState<string | null>(null);
   const [presetReapplyNeeded, setPresetReapplyNeeded] = useState(false);
   const [appliedTemplateFeatureRequest, setAppliedTemplateFeatureRequest] =
@@ -3875,6 +3874,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   );
   const [isApplyingPreset, setIsApplyingPreset] = useState(false);
   const [isDeletingPreset, setIsDeletingPreset] = useState(false);
+  const [isSavingPreset, setIsSavingPreset] = useState(false);
   const [presetDialogMode, setPresetDialogMode] = useState<
     "save" | "delete" | null
   >(null);
@@ -4679,8 +4679,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   const selectedPreset =
     templateItems.find((item) => item.key === selectedPresetKey) || null;
-  const selectedPresetDeleteEnabled =
-    taskTemplateSaveEnabled && selectedPreset?.scope === "personal";
   const effectiveSkillId = useMemo(
     () =>
       resolveEffectivePublishSkillId(
@@ -6377,14 +6375,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
   }
 
-  async function handleSaveCurrentStepsAsPreset(nameOverride?: string) {
-    if (!taskTemplateSaveEnabled) {
-      return;
+  async function handleSaveCurrentStepsAsPreset(nameOverride: string): Promise<boolean> {
+    if (!taskTemplateSaveEnabled || isSavingPreset) {
+      return false;
     }
-    const title = (nameOverride ?? presetManagementName).trim();
+    const title = nameOverride.trim();
     if (!title) {
       setTemplateMessage("Enter a preset name before saving.");
-      return;
+      return false;
     }
 
     const presetSteps: Record<string, unknown>[] = [];
@@ -6420,7 +6418,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             setTemplateMessage(
               `Step ${index + 1} Skill Args must be valid JSON object text.`,
             );
-            return;
+            return false;
           }
         }
         const normalizedTool = {
@@ -6444,9 +6442,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       setTemplateMessage(
         "Add at least one step with instructions before saving.",
       );
-      return;
+      return false;
     }
 
+    setIsSavingPreset(true);
     setTemplateMessage("Saving preset...");
     try {
       const response = await fetch(taskTemplateSaveEndpoint, {
@@ -6472,42 +6471,40 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const created = (await response.json()) as { title?: string };
       setTemplateMessage(`Saved preset '${created.title || title}'.`);
       await templateOptionsQuery.refetch();
+      return true;
     } catch (error) {
       const failure =
         error instanceof Error ? error : new Error("Failed to save preset.");
       setTemplateMessage(`Failed to save preset: ${failure.message}`);
+      return false;
+    } finally {
+      setIsSavingPreset(false);
     }
   }
 
-  async function handleDeleteSelectedPreset(nameOverride?: string) {
+  async function handleDeleteSelectedPreset(nameOverride: string): Promise<boolean> {
     if (!taskTemplateSaveEnabled || isDeletingPreset) {
-      return;
+      return false;
     }
-    let target = selectedPreset;
-    if (nameOverride !== undefined) {
-      const normalized = nameOverride.trim().toLowerCase();
-      if (!normalized) {
-        setTemplateMessage("Enter a preset name to delete.");
-        return;
-      }
-      target =
-        templateItems.find(
-          (item) => item.title.trim().toLowerCase() === normalized,
-        ) ||
-        templateItems.find(
-          (item) => item.slug.trim().toLowerCase() === normalized,
-        ) ||
-        null;
-      if (!target) {
-        setTemplateMessage(`No preset named '${nameOverride.trim()}' found.`);
-        return;
-      }
-      if (target.scope !== "personal") {
+    const normalized = nameOverride.trim().toLowerCase();
+    if (!normalized) {
+      setTemplateMessage("Enter a preset name to delete.");
+      return false;
+    }
+    const personalItems = templateItems.filter(
+      (item) => item.scope === "personal",
+    );
+    const matchesName = (item: (typeof templateItems)[number]) =>
+      item.title.trim().toLowerCase() === normalized ||
+      item.slug.trim().toLowerCase() === normalized;
+    const target = personalItems.find(matchesName);
+    if (!target) {
+      if (templateItems.some(matchesName)) {
         setTemplateMessage("Only personal presets can be deleted.");
-        return;
+      } else {
+        setTemplateMessage(`No preset named '${nameOverride.trim()}' found.`);
       }
-    } else if (!target || !selectedPresetDeleteEnabled) {
-      return;
+      return false;
     }
 
     setIsDeletingPreset(true);
@@ -6534,14 +6531,15 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         );
       }
       setSelectedPresetKey("");
-      setPresetManagementName("");
       setPresetReapplyNeeded(false);
       setTemplateMessage(`Deleted preset '${target.title}'.`);
       await templateOptionsQuery.refetch();
+      return true;
     } catch (error) {
       const failure =
         error instanceof Error ? error : new Error("Failed to delete preset.");
       setTemplateMessage(`Failed to delete preset: ${failure.message}`);
+      return false;
     } finally {
       setIsDeletingPreset(false);
     }
@@ -6570,11 +6568,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     if (!name) {
       return;
     }
-    closePresetDialog();
+    let succeeded = false;
     if (mode === "save") {
-      await handleSaveCurrentStepsAsPreset(name);
+      succeeded = await handleSaveCurrentStepsAsPreset(name);
     } else if (mode === "delete") {
-      await handleDeleteSelectedPreset(name);
+      succeeded = await handleDeleteSelectedPreset(name);
+    }
+    if (succeeded) {
+      closePresetDialog();
     }
   }
 
@@ -9199,7 +9200,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                     className="queue-step-icon-button"
                     aria-label="Save preset"
                     title="Save the current steps as a preset"
-                    aria-busy={presetDialogMode === "save"}
+                    aria-busy={isSavingPreset}
+                    disabled={isSavingPreset}
                     onClick={openPresetSaveDialog}
                   >
                     <SaveIcon />
