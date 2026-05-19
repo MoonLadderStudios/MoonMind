@@ -1053,6 +1053,44 @@ def test_determine_publish_completion_fails_for_no_commit_pr_publish(
     assert "Files edited in this run: none." in message
     assert publish_failure is True
 
+def test_jira_implement_no_commit_pr_handoff_is_not_required(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    execution_result = {
+        "outputs": {
+            "push_status": "no_commits",
+            "push_branch": "feature/no-op",
+            "push_base_ref": "origin/main",
+            "push_commit_count": 0,
+            "operator_summary": "MM-675 was already implemented.",
+        }
+    }
+    parameters = {
+        "publishMode": "pr",
+        "task": {
+            "appliedStepTemplates": [
+                {"slug": "jira-implement", "version": "1.0.0"},
+            ],
+        },
+    }
+
+    mock_run_workflow._record_execution_context(
+        node_id="step-7",
+        execution_result=execution_result,
+    )
+    mock_run_workflow._record_publish_result(
+        parameters=parameters,
+        execution_result=execution_result,
+    )
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters=parameters
+    )
+
+    assert mock_run_workflow._publish_status == "not_required"
+    assert status == "success"
+    assert "no publishable diff was produced" in message
+    assert publish_failure is False
+
 def test_structured_publish_not_required_satisfies_pr_publish_mode(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
@@ -1108,6 +1146,35 @@ def test_jira_implement_task_makes_pr_publish_optional(
             },
         }
     )
+    assert mock_run_workflow._pr_publish_optional_for_task(
+        {
+            "publishMode": "pr",
+            "task": {
+                "appliedStepTemplates": [
+                    {"slug": "jira-implement", "version": "1.0.0"},
+                ],
+            },
+        }
+    )
+
+
+def test_plain_text_blocked_result_short_circuits_publish(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    message = mock_run_workflow._blocked_outcome_message(
+        {
+            "outputs": {
+                "operator_summary": (
+                    "## Result: BLOCKED - cannot transition Jira issue MM-675\n\n"
+                    "The assessment verdict artifact is unavailable."
+                )
+            }
+        }
+    )
+
+    assert message is not None
+    assert message.startswith("Workflow blocked by plan step:")
+    assert "cannot transition Jira issue MM-675" in message
 
 def test_native_pr_branch_resolution_keeps_legacy_branch_only_replay_shape(
     mock_run_workflow: MoonMindRunWorkflow,

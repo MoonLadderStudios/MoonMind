@@ -147,6 +147,9 @@ _JIRA_ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
 _JIRA_BACKED_AGENT_SKILLS = frozenset(
     {"jira-implement", *JIRA_BACKED_AGENT_SKILLS}
 )
+_PLAIN_TEXT_BLOCKED_OUTCOME_PATTERN = re.compile(
+    r"(?im)^\s*(?:#{1,6}\s*)?(?:result|verdict|outcome)\s*:\s*blocked\b[^\n]*"
+)
 
 class RunWorkflowInput(TypedDict, total=False):
     """Input payload for the MoonMind.Run workflow."""
@@ -4841,6 +4844,11 @@ class MoonMindRunWorkflow:
                 message = self._blocked_outcome_message_from_mapping(candidate)
                 if message:
                     return message
+            match = _PLAIN_TEXT_BLOCKED_OUTCOME_PATTERN.search(value)
+            if match:
+                summary = self._coerce_text(value, max_chars=700)
+                if summary:
+                    return f"Workflow blocked by plan step: {summary}"
 
         return None
 
@@ -5566,6 +5574,14 @@ class MoonMindRunWorkflow:
             return
 
         if push_status == "no_commits":
+            if publish_mode == "pr" and self._pr_publish_optional_for_task(parameters):
+                self._publish_status = "not_required"
+                self._publish_reason = self._compose_no_change_publish_reason(
+                    publish_mode=publish_mode,
+                )
+                if self._merge_automation_requested(parameters):
+                    self._publish_context["mergeAutomationStatus"] = "not_applicable"
+                return
             self._publish_status = "skipped"
             self._publish_reason = self._compose_no_change_publish_reason(
                 publish_mode=publish_mode,
@@ -5878,6 +5894,28 @@ class MoonMindRunWorkflow:
                         name = self._coerce_text(item, max_chars=120)
                     if name:
                         skill_names.add(name.lower())
+        for payload in (parameters, task_payload):
+            applied_templates = payload.get("appliedStepTemplates")
+            if applied_templates is None:
+                applied_templates = payload.get("applied_step_templates")
+            if not isinstance(applied_templates, Sequence) or isinstance(
+                applied_templates,
+                (str, bytes),
+            ):
+                continue
+            for item in applied_templates:
+                if not isinstance(item, Mapping):
+                    continue
+                slug = self._coerce_text(
+                    item.get("slug")
+                    or item.get("templateSlug")
+                    or item.get("template_slug")
+                    or item.get("id")
+                    or item.get("name"),
+                    max_chars=120,
+                )
+                if slug:
+                    skill_names.add(slug.lower())
         return skill_names
 
     def _execution_result_has_publishable_changes(self, execution_result: Any) -> bool:
