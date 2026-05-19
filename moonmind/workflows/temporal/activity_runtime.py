@@ -6726,20 +6726,29 @@ class TemporalAgentRuntimeActivities:
             )
 
     @staticmethod
-    def _workspace_command_env(workspace: str) -> dict[str, str]:
+    def _workspace_command_env(
+        workspace: str,
+        *,
+        github_token: str | None = None,
+    ) -> dict[str, str]:
         """Build a subprocess env that exposes workspace-local command shims."""
         env = dict(os.environ)
         support_root = Path(workspace).resolve().parent / ".moonmind"
         support_bin = support_root / "bin"
         support_gitconfig = support_root / "gitconfig"
-        github_token = str(env.get("GITHUB_TOKEN", "")).strip()
+        normalized_github_token = str(
+            github_token or env.get("GITHUB_TOKEN", "")
+        ).strip()
+        if normalized_github_token:
+            env["GITHUB_TOKEN"] = normalized_github_token
+            env["GH_TOKEN"] = normalized_github_token
         git_helper_path = support_bin / "git-credential-moonmind"
         helper_command: str | None = None
 
         try:
             support_root.mkdir(parents=True, exist_ok=True)
             support_bin.mkdir(parents=True, exist_ok=True)
-            if github_token:
+            if normalized_github_token:
                 helper_script = (
                     "#!/usr/bin/env python3\n"
                     "import os\n"
@@ -6819,6 +6828,14 @@ class TemporalAgentRuntimeActivities:
             env["GIT_COMMITTER_EMAIL"] = git_email
         env["GIT_TERMINAL_PROMPT"] = "0"
         return env
+
+    @staticmethod
+    async def _resolve_workspace_push_github_token(workspace: str) -> str:
+        repo = TemporalAgentRuntimeActivities._detect_repo_from_workspace(workspace)
+        from moonmind.auth.github_credentials import resolve_github_credential
+
+        resolved = await resolve_github_credential(repo=repo or None)
+        return str(resolved.token or "").strip()
 
     async def _commit_workspace_changes_if_needed(
         self,
@@ -7025,7 +7042,11 @@ class TemporalAgentRuntimeActivities:
         try:
             self._normalize_workspace_git_alternates(workspace)
             self._recover_orphan_workspace_object_stores(workspace)
-            command_env = self._workspace_command_env(workspace)
+            github_token = await self._resolve_workspace_push_github_token(workspace)
+            command_env = self._workspace_command_env(
+                workspace,
+                github_token=github_token,
+            )
             branch_proc = await asyncio.create_subprocess_exec(
                 *self._workspace_git_command(
                     workspace, "rev-parse", "--abbrev-ref", "HEAD",
