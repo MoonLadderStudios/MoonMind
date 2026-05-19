@@ -6,10 +6,13 @@ import pytest
 
 from moonmind.workflows.temporal.step_ledger import (
     build_initial_step_rows,
+    invalidate_downstream_steps_for_changed_output,
     mark_step_checkpoint_evidence,
     materialize_preserved_steps,
+    record_dependency_inputs_for_step,
     refresh_ready_steps,
     update_step_row,
+    validate_preserved_dependency_outputs,
 )
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
@@ -263,6 +266,12 @@ def test_resume_preserved_outputs_are_injected_for_failed_step_continuation() ->
 
     assert outputs["prepare"]["outputSummary"] == "artifact://prepare-summary"
     assert outputs["prepare"]["outputPrimary"] == "artifact://prepare-output"
+    assert outputs["prepare"]["producingAttempt"] == {
+        "workflowId": "mm:source",
+        "runId": "run-source",
+        "logicalStepId": "prepare",
+        "attempt": 1,
+    }
 
 
 @pytest.mark.integration
@@ -297,6 +306,174 @@ def test_resume_failed_step_first_then_downstream_continues_after_success() -> N
         row for row in workflow._step_ledger_rows if row["logicalStepId"] == "verify"
     )
     assert verify_row["status"] == "ready"
+
+
+@pytest.mark.integration
+@pytest.mark.integration_ci
+def test_dependency_inputs_pin_specific_producing_attempt_outputs() -> None:
+    now = datetime.now(UTC)
+    rows = build_initial_step_rows(
+        ordered_nodes=[
+            {"id": "prepare", "title": "Prepare"},
+            {"id": "implement", "title": "Implement"},
+        ],
+        dependency_map={"implement": ["prepare"]},
+        updated_at=now,
+    )
+    materialize_preserved_steps(
+        rows,
+        source_workflow_id="mm:source",
+        source_run_id="run-source",
+        preserved_steps=[
+            {
+                "logicalStepId": "prepare",
+                "status": "succeeded",
+                "sourceAttempt": 2,
+                "artifacts": {
+                    "outputSummary": "artifact://prepare-summary",
+                    "outputPrimary": "artifact://prepare-output",
+                },
+                "stateCheckpointRef": "artifact://workspace/prepare",
+            }
+        ],
+        updated_at=now,
+    )
+
+    signatures = record_dependency_inputs_for_step(
+        rows,
+        "implement",
+        workflow_id="mm:resume",
+        run_id="run-resume",
+        updated_at=now,
+    )
+
+    assert signatures["prepare"] == {
+        "producingAttempt": {
+            "workflowId": "mm:source",
+            "runId": "run-source",
+            "logicalStepId": "prepare",
+            "attempt": 2,
+        },
+        "outputRefs": {
+            "outputSummary": "artifact://prepare-summary",
+            "outputPrimary": "artifact://prepare-output",
+        },
+    }
+    assert rows[1]["dependencyInputs"] == signatures
+
+
+@pytest.mark.integration
+@pytest.mark.integration_ci
+def test_changed_upstream_output_marks_executed_downstream_for_revalidation() -> None:
+    now = datetime.now(UTC)
+    rows = build_initial_step_rows(
+        ordered_nodes=[
+            {"id": "prepare", "title": "Prepare"},
+            {"id": "implement", "title": "Implement"},
+            {"id": "verify", "title": "Verify"},
+        ],
+        dependency_map={"implement": ["prepare"], "verify": ["implement"]},
+        updated_at=now,
+    )
+    update_step_row(
+        rows,
+        "implement",
+        updated_at=now,
+        status="succeeded",
+        increment_attempt=True,
+        artifacts={"outputPrimary": "artifact://implement-output-v1"},
+    )
+    record_dependency_inputs_for_step(
+        rows,
+        "verify",
+        workflow_id="mm:resume",
+        run_id="run-resume",
+        updated_at=now,
+    )
+    update_step_row(
+        rows,
+        "verify",
+        updated_at=now,
+        status="succeeded",
+        increment_attempt=True,
+        artifacts={"outputPrimary": "artifact://verify-output-v1"},
+    )
+    update_step_row(
+        rows,
+        "implement",
+        updated_at=now,
+        status="succeeded",
+        increment_attempt=True,
+        artifacts={"outputPrimary": "artifact://implement-output-v2"},
+    )
+
+    invalidated = invalidate_downstream_steps_for_changed_output(
+        rows,
+        "implement",
+        workflow_id="mm:resume",
+        run_id="run-resume",
+        updated_at=now,
+    )
+
+    assert invalidated == ["verify"]
+    assert rows[2]["status"] == "pending"
+    assert rows[2]["waitingReason"] == "requires_revalidation"
+    assert rows[2]["dependencyReuseGate"]["status"] == "requires_revalidation"
+
+
+@pytest.mark.integration
+@pytest.mark.integration_ci
+def test_preserved_downstream_reuse_requires_matching_dependency_gate() -> None:
+    now = datetime.now(UTC)
+    rows = build_initial_step_rows(
+        ordered_nodes=[
+            {"id": "implement", "title": "Implement"},
+            {"id": "verify", "title": "Verify"},
+        ],
+        dependency_map={"verify": ["implement"]},
+        updated_at=now,
+    )
+    materialize_preserved_steps(
+        rows,
+        source_workflow_id="mm:source",
+        source_run_id="run-source",
+        preserved_steps=[
+            {
+                "logicalStepId": "implement",
+                "status": "succeeded",
+                "sourceAttempt": 2,
+                "artifacts": {"outputPrimary": "artifact://implement-output-new"},
+                "stateCheckpointRef": "artifact://workspace/implement-new",
+            },
+            {
+                "logicalStepId": "verify",
+                "status": "succeeded",
+                "sourceAttempt": 1,
+                "artifacts": {"outputPrimary": "artifact://verify-output-old"},
+                "stateCheckpointRef": "artifact://workspace/verify-old",
+                "dependencyInputs": {
+                    "implement": {
+                        "producingAttempt": {
+                            "workflowId": "mm:source",
+                            "runId": "run-source",
+                            "logicalStepId": "implement",
+                            "attempt": 1,
+                        },
+                        "outputRefs": {
+                            "outputPrimary": "artifact://implement-output-old"
+                        },
+                    }
+                },
+            },
+        ],
+        updated_at=now,
+    )
+
+    with pytest.raises(ValueError, match="requires revalidation"):
+        validate_preserved_dependency_outputs(rows, updated_at=now)
+
+    assert rows[1]["status"] == "pending"
+    assert rows[1]["waitingReason"] == "requires_revalidation"
 
 
 @pytest.mark.integration

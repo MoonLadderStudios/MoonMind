@@ -89,13 +89,16 @@ from moonmind.workflows.temporal.step_ledger import (
     build_progress_summary,
     build_step_ledger_snapshot,
     clear_step_checkpoint_evidence,
+    invalidate_downstream_steps_for_changed_output,
     mark_step_attempt_manifest_evidence,
     materialize_preserved_steps,
     mark_step_checkpoint_evidence,
     preserved_outputs_for_dependencies,
+    record_dependency_inputs_for_step,
     refresh_ready_steps,
     upsert_step_check,
     update_step_row,
+    validate_preserved_dependency_outputs,
 )
 from moonmind.workflows.temporal.step_attempts import (
     build_step_attempt_manifest_payload,
@@ -556,6 +559,7 @@ class MoonMindRunWorkflow:
         self._step_checkpoint_refs: dict[str, str] = {}
         self._previous_step_checkpoint_refs: dict[str, str] = {}
         self._step_attempt_launch_blocks: set[str] = set()
+        self._step_dependency_effects: dict[str, dict[str, Any]] = {}
 
         # State tracking
         self._paused: bool = False
@@ -868,7 +872,10 @@ class MoonMindRunWorkflow:
                 or []
             ),
             sideEffects={},
-            dependencyEffects={"invalidatedLogicalStepIds": []},
+            dependencyEffects=self._step_dependency_effects.get(
+                logical_step_id,
+                {"invalidatedLogicalStepIds": []},
+            ),
             budget={},
         )
         return await self._write_step_attempt_manifest(
@@ -1580,11 +1587,44 @@ class MoonMindRunWorkflow:
     def _preserved_outputs_for_step(
         self,
         logical_step_id: str,
-    ) -> dict[str, dict[str, str]]:
+    ) -> dict[str, dict[str, Any]]:
         return preserved_outputs_for_dependencies(
             self._step_ledger_rows,
             logical_step_id,
         )
+
+    def _record_step_dependency_inputs(self, logical_step_id: str) -> None:
+        try:
+            record_dependency_inputs_for_step(
+                self._step_ledger_rows,
+                logical_step_id,
+                workflow_id=workflow.info().workflow_id,
+                run_id=workflow.info().run_id,
+                updated_at=workflow.now(),
+            )
+        except KeyError:
+            return
+
+    def _record_downstream_dependency_effects(
+        self,
+        logical_step_id: str,
+        *,
+        updated_at: datetime,
+    ) -> list[str]:
+        try:
+            invalidated = invalidate_downstream_steps_for_changed_output(
+                self._step_ledger_rows,
+                logical_step_id,
+                workflow_id=workflow.info().workflow_id,
+                run_id=workflow.info().run_id,
+                updated_at=updated_at,
+            )
+        except KeyError:
+            return []
+        self._step_dependency_effects[logical_step_id] = {
+            "invalidatedLogicalStepIds": list(invalidated),
+        }
+        return invalidated
 
     def _step_ledger_row_for(self, logical_step_id: str) -> dict[str, Any] | None:
         return self._step_ledger_by_id.get(logical_step_id)
@@ -1664,6 +1704,10 @@ class MoonMindRunWorkflow:
                     ],
                     updated_at=updated_at,
                 )
+                validate_preserved_dependency_outputs(
+                    self._step_ledger_rows,
+                    updated_at=updated_at,
+                )
                 refresh_ready_steps(self._step_ledger_rows, updated_at=updated_at)
         self._sync_progress_snapshot(updated_at=updated_at)
 
@@ -1740,6 +1784,11 @@ class MoonMindRunWorkflow:
             logical_step_id,
             attempt=attempt,
         )
+        lineage = self._step_attempt_lineage(
+            logical_step_id,
+            reason=reason,
+            source_attempt=source_attempt,
+        )
         workspace = self._step_attempt_workspace(
             logical_step_id,
             attempt=attempt,
@@ -1759,6 +1808,7 @@ class MoonMindRunWorkflow:
                 if launch_blocked
                 else summary
             ),
+            lineage=lineage,
             input_refs=input_refs,
             workspace=workspace,
             execution=execution,
@@ -3757,6 +3807,7 @@ class MoonMindRunWorkflow:
                 )
                 if current_previous_outputs:
                     node_inputs["previousOutputs"] = dict(current_previous_outputs)
+                self._record_step_dependency_inputs(node_id)
 
                 self._step_count = index
                 self._summary = (
@@ -4292,6 +4343,10 @@ class MoonMindRunWorkflow:
                 summary=self._get_from_result(execution_result, "summary")
                 or self._summary,
                 last_error=None,
+            )
+            self._record_downstream_dependency_effects(
+                node_id,
+                updated_at=workflow.now(),
             )
             await self._record_step_attempt_manifest_terminal(
                 node_id,
@@ -5925,26 +5980,15 @@ class MoonMindRunWorkflow:
             for template in applied_templates:
                 if not isinstance(template, Mapping):
                     continue
-                slug_sources: list[Any] = [template]
                 composition = template.get("composition")
-                for include_source in (composition, template):
-                    if not isinstance(include_source, Mapping):
-                        continue
-                    includes = include_source.get("includes")
-                    if isinstance(includes, Sequence) and not isinstance(
-                        includes,
-                        (str, bytes, bytearray),
-                    ):
-                        slug_sources.extend(includes)
-                for slug_source in slug_sources:
-                    if not isinstance(slug_source, Mapping):
-                        continue
-                    slug = self._coerce_text(
-                        slug_source.get("slug") or slug_source.get("presetSlug"),
-                        max_chars=120,
-                    )
-                    if slug:
-                        skill_names.add(slug.lower())
+                if not isinstance(composition, Mapping):
+                    continue
+                slug = self._coerce_text(
+                    template.get("slug") or template.get("presetSlug"),
+                    max_chars=120,
+                )
+                if slug:
+                    skill_names.add(slug.lower())
 
         skills_payload = task_payload.get("skills")
         if isinstance(skills_payload, Mapping):
