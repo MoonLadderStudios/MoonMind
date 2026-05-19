@@ -6388,14 +6388,14 @@ class MoonMindRunWorkflow:
                 (str, bytes, bytearray),
             ):
                 continue
-            for item in applied_templates:
-                if not isinstance(item, Mapping):
+            for template in applied_templates:
+                if not isinstance(template, Mapping):
                     continue
-                composition = item.get("composition")
+                slug_sources: list[Any] = [template]
+                composition = template.get("composition")
                 if require_composition and not isinstance(composition, Mapping):
                     continue
-                slug_sources: list[Any] = [item]
-                for include_source in (composition, item):
+                for include_source in (composition, template):
                     if not isinstance(include_source, Mapping):
                         continue
                     includes = include_source.get("includes")
