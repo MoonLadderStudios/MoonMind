@@ -787,11 +787,13 @@ class GitHubService:
                         return CreatePRResult(
                             url=existing_url or None,
                             created=False,
-                            adopted=False,
+                            adopted=bool(existing_url),
                             summary=(
-                                "GitHub create PR found an existing PR but could "
-                                "not update it because the PR number was missing."
+                                "adopted existing PR without metadata update "
+                                "because the PR number was missing: "
+                                f"{existing_url or 'unknown URL'}"
                             ),
+                            head_sha=(existing_pr.get("head") or {}).get("sha"),
                         )
                     update_response = await client.patch(
                         f"{api_url}/{pr_number}",
