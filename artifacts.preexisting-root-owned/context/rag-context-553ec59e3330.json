@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. api_service/__init__.py (score: 1.000, trust: canonical)\n    line 1: # This file is intentionally left empty to make 'fastapi' a package.\n2. api_service/auth_providers.py (score: 1.000, trust: canonical)\n    line 53: This removes the hard DB dependency from the vast majority of unit tests that\n3. api_service/main.py (score: 1.000, trust: canonical)\n    line 171: logger.error(f\"Failed to build vector store: {e}. This is a critical error.\")\n4. docs/ManagedAgents/AgentSessionDeploymentSafetyCutover.md (score: 1.000, trust: canonical)\n    line 3: Operator playbook for **replay-safe rollout** of durable `AgentSession` workflow changes. The deployment-safety gate expects this file to mention the topics below when sensitive workflow paths change.\n5. docs/UI/ManifestsPage.md (score: 1.000, trust: canonical)\n    line 12: This removes unnecessary tab switching, keeps submit feedback in context, and makes **Manifests** the single destination for launching and monitoring manifest work.\n6. docs/UI/EffectBorderBeam.md (score: 1.000, trust: canonical)\n    line 1: # Masked Conic Border Beam — Declarative Design\n7. docs/UI/SkillsTabDesign.md (score: 1.000, trust: canonical)\n    line 1: # Mission Control Skills Tab Design Document\n8. docs/UI/MissionControlArchitecture.md (score: 1.000, trust: canonical)\n    line 7: **Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "api_service/__init__.py",
+      "text": "line 1: # This file is intentionally left empty to make 'fastapi' a package.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/auth_providers.py",
+      "text": "line 53: This removes the hard DB dependency from the vast majority of unit tests that",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 53,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/main.py",
+      "text": "line 171: logger.error(f\"Failed to build vector store: {e}. This is a critical error.\")",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 171,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ManagedAgents/AgentSessionDeploymentSafetyCutover.md",
+      "text": "line 3: Operator playbook for **replay-safe rollout** of durable `AgentSession` workflow changes. The deployment-safety gate expects this file to mention the topics below when sensitive workflow paths change.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/UI/ManifestsPage.md",
+      "text": "line 12: This removes unnecessary tab switching, keeps submit feedback in context, and makes **Manifests** the single destination for launching and monitoring manifest work.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 12,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/UI/EffectBorderBeam.md",
+      "text": "line 1: # Masked Conic Border Beam — Declarative Design",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/UI/SkillsTabDesign.md",
+      "text": "line 1: # Mission Control Skills Tab Design Document",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/UI/MissionControlArchitecture.md",
+      "text": "line 7: **Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 7,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-05-19T06:54:18Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
