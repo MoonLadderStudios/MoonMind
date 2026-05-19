@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. docs/Memory/MemoryResearch.md (score: 1.000, trust: canonical)\n    line 11: From inspecting the MoonMind codebase and deployment manifests (via direct repository file inspection), MoonMind already has several foundational building blocks that align well with best-practice memory stacks:\n2. docs/Development/PreCommitWorkflow.md (score: 1.000, trust: canonical)\n    line 5: MoonMind uses `pre-commit` as a fast local quality gate for Python formatting and lint cleanup before longer test runs.\n3. moonmind/indexers/jira_indexer.py (score: 1.000, trust: canonical)\n    line 8: # LlamaIndex Jira reader (ensure this import path is correct if it's part of an integration package)\n4. moonmind/indexers/google_drive_indexer.py (score: 1.000, trust: canonical)\n    line 50: status_code=500,\n5. api_service/migrations/versions/1a2b3c4d5e6f_fix_claude_minimax_secret_refs.py (score: 1.000, trust: canonical)\n    line 11: The template entry was filtered by the adapter's sensitive-key guard before\n6. api_service/migrations/versions/7bd7130eae51_phase_5_oauthsession.py (score: 1.000, trust: canonical)\n    line 25: # PostgreSQL requires ALTER TYPE ADD VALUE to be committed before the new value\n7. api_service/migrations/versions/0b8e4befb8e5_initial_clean_migration.py (score: 1.000, trust: canonical)\n    line 46: op.create_table('codex_auth_volumes',\n8. moonmind/cli.py (score: 1.000, trust: canonical)\n    line 16: rag_app = typer.Typer(help=\"Retrieval helpers for Codex workers.\")",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "docs/Memory/MemoryResearch.md",
+      "text": "line 11: From inspecting the MoonMind codebase and deployment manifests (via direct repository file inspection), MoonMind already has several foundational building blocks that align well with best-practice memory stacks:",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 11,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Development/PreCommitWorkflow.md",
+      "text": "line 5: MoonMind uses `pre-commit` as a fast local quality gate for Python formatting and lint cleanup before longer test runs.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 5,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/jira_indexer.py",
+      "text": "line 8: # LlamaIndex Jira reader (ensure this import path is correct if it's part of an integration package)",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 8,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/google_drive_indexer.py",
+      "text": "line 50: status_code=500,",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 50,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/migrations/versions/1a2b3c4d5e6f_fix_claude_minimax_secret_refs.py",
+      "text": "line 11: The template entry was filtered by the adapter's sensitive-key guard before",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 11,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/migrations/versions/7bd7130eae51_phase_5_oauthsession.py",
+      "text": "line 25: # PostgreSQL requires ALTER TYPE ADD VALUE to be committed before the new value",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 25,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/migrations/versions/0b8e4befb8e5_initial_clean_migration.py",
+      "text": "line 46: op.create_table('codex_auth_volumes',",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 46,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/cli.py",
+      "text": "line 16: rag_app = typer.Typer(help=\"Retrieval helpers for Codex workers.\")",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 16,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-05-19T01:04:53Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
