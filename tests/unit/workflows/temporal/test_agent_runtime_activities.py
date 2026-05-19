@@ -1713,7 +1713,7 @@ async def test_fetch_result_skips_infrastructure_push_for_jules_runtime(
     from unittest.mock import patch
 
     store = _make_store(tmp_path)
-    _save_record(store, run_id="fr-jules", status="completed", runtime_id="jules")
+    _save_record(store, run_id="fr-jules", status="completed", runtime_id="jules-api")
 
     activities = TemporalAgentRuntimeActivities(run_store=store)
     push_branch = AsyncMock(return_value={"push_status": "pushed"})
@@ -1729,7 +1729,7 @@ async def test_fetch_result_skips_infrastructure_push_for_jules_runtime(
         )
 
         result = await activities.agent_runtime_fetch_result(
-            {"run_id": "fr-jules", "agent_id": "jules", "publishMode": "pr"}
+            {"run_id": "fr-jules", "publishMode": "pr"}
         )
 
     assert result.failure_class is None
