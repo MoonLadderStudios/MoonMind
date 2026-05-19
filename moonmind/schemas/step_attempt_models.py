@@ -39,6 +39,7 @@ AttemptTerminalDisposition = Literal[
     "discarded",
     "superseded",
     "failed_unrecoverable",
+    "failed_with_remaining_work",
 ]
 
 

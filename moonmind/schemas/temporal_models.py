@@ -91,6 +91,7 @@ StepAttemptTerminalDisposition = Literal[
     "discarded",
     "superseded",
     "failed_unrecoverable",
+    "failed_with_remaining_work",
 ]
 StepAttemptSemanticOperation = Literal["retry", "reattempt", "resume"]
 StepAttemptCheckpointBoundary = Literal[
