@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 JulesNormalizedStatus = Literal[
     "queued",
@@ -176,11 +176,19 @@ class JulesTaskResponse(BaseModel):
     status: Optional[str] = Field(None, alias="state")
     url: Optional[str] = Field(None, alias="url")
     name: Optional[str] = Field(None, alias="name")
+    response_pull_request_url: Optional[str] = Field(
+        None,
+        alias="pull_request_url",
+        validation_alias=AliasChoices("pull_request_url", "pullRequestUrl"),
+    )
     outputs: list[SessionOutput] = Field(default_factory=list, alias="outputs")
 
     @property
     def pull_request_url(self) -> Optional[str]:
-        """Return the URL of the first pull request output, if any."""
+        """Return the provider PR URL, preferring the task response field."""
+        response_url = str(self.response_pull_request_url or "").strip()
+        if response_url:
+            return response_url
         return next((
             output.pull_request.url
             for output in self.outputs
