@@ -3498,7 +3498,26 @@ def _is_ref_key(value: object) -> bool:
     return normalized.endswith("ref") or normalized.endswith("refs")
 
 
+def _camel_to_snake(value: str) -> str:
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", value).lower()
+
+
+def _field_value(value: Any, key: str) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(key)
+    if hasattr(value, key):
+        return getattr(value, key)
+    snake_key = _camel_to_snake(key)
+    if hasattr(value, snake_key):
+        return getattr(value, snake_key)
+    return None
+
+
 def _bounded_ref_projection(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        return _bounded_ref_projection(
+            value.model_dump(by_alias=True, exclude_none=True)
+        )
     if isinstance(value, Mapping):
         projected: dict[str, Any] = {}
         for key, nested in value.items():
@@ -3528,35 +3547,37 @@ def _first_text(*values: Any) -> str | None:
 
 def _quality_gate_verdict(checks: list[dict[str, Any]]) -> str | None:
     for check in checks:
-        if not isinstance(check, Mapping):
+        if not isinstance(check, (Mapping, BaseModel)):
             continue
-        kind = str(check.get("kind") or check.get("name") or "").lower()
+        kind = str(
+            _field_value(check, "kind") or _field_value(check, "name") or ""
+        ).lower()
         if "gate" not in kind and "quality" not in kind:
             continue
         verdict = _first_text(
-            check.get("verdict"),
-            check.get("status"),
-            check.get("result"),
+            _field_value(check, "verdict"),
+            _field_value(check, "status"),
+            _field_value(check, "result"),
         )
         if verdict:
             return verdict
     for check in checks:
-        if not isinstance(check, Mapping):
+        if not isinstance(check, (Mapping, BaseModel)):
             continue
         verdict = _first_text(
-            check.get("verdict"),
-            check.get("status"),
-            check.get("result"),
+            _field_value(check, "verdict"),
+            _field_value(check, "status"),
+            _field_value(check, "result"),
         )
         if verdict:
             return verdict
     return None
 
 
-def _runtime_child_refs(execution: Mapping[str, Any]) -> dict[str, Any]:
+def _runtime_child_refs(execution: Any) -> dict[str, Any]:
     refs = dict(_bounded_ref_projection(execution))
     for key in ("childWorkflowId", "childRunId", "taskRunId"):
-        value = execution.get(key)
+        value = _field_value(execution, key)
         if isinstance(value, str) and value.strip():
             refs[key] = value.strip()
     return refs
@@ -3577,8 +3598,8 @@ def _step_attempt_projection_payload(
         manifest.lineage.source_attempt if manifest.lineage is not None else None
     )
     summary = _first_text(
-        outputs.get("summary") if isinstance(outputs, Mapping) else None,
-        execution.get("summary") if isinstance(execution, Mapping) else None,
+        _field_value(outputs, "summary"),
+        _field_value(execution, "summary"),
     )
     return {
         "manifestArtifactRef": manifest_artifact_ref,
@@ -3597,16 +3618,12 @@ def _step_attempt_projection_payload(
         "summary": summary,
         "runtimeChildRefs": runtime_child_refs,
         "workspacePolicy": _first_text(
-            workspace.get("workspacePolicy")
-            if isinstance(workspace, Mapping)
-            else None,
-            workspace.get("policy") if isinstance(workspace, Mapping) else None,
+            _field_value(workspace, "workspacePolicy"),
+            _field_value(workspace, "policy"),
         ),
         "gitDisposition": _first_text(
-            side_effects.get("gitDisposition")
-            if isinstance(side_effects, Mapping)
-            else None,
-            workspace.get("gitDisposition") if isinstance(workspace, Mapping) else None,
+            _field_value(side_effects, "gitDisposition"),
+            _field_value(workspace, "gitDisposition"),
         ),
         "qualityGateVerdict": _quality_gate_verdict(checks),
         "manifestRefs": {"manifestArtifactRef": manifest_artifact_ref},
@@ -6980,21 +6997,27 @@ async def describe_execution_step_attempts(
     )
     row = _find_step_ledger_row(ledger, logical_step_id)
     artifact_service = get_temporal_artifact_service(session)
-    attempts: list[StepAttemptProjectionModel] = []
-    for manifest_ref in _step_attempt_manifest_refs(row):
-        manifest = await _read_step_attempt_manifest(
-            artifact_service=artifact_service,
-            artifact_ref=manifest_ref,
-            principal=str(getattr(user, "id", "") or "system"),
+    principal = str(getattr(user, "id", "") or "system")
+    manifest_refs = _step_attempt_manifest_refs(row)
+    manifests = await asyncio.gather(
+        *(
+            _read_step_attempt_manifest(
+                artifact_service=artifact_service,
+                artifact_ref=manifest_ref,
+                principal=principal,
+            )
+            for manifest_ref in manifest_refs
         )
-        attempts.append(
-            StepAttemptProjectionModel.model_validate(
-                _step_attempt_projection_payload(
-                    manifest,
-                    manifest_artifact_ref=manifest_ref,
-                )
+    )
+    attempts = [
+        StepAttemptProjectionModel.model_validate(
+            _step_attempt_projection_payload(
+                manifest,
+                manifest_artifact_ref=manifest_ref,
             )
         )
+        for manifest, manifest_ref in zip(manifests, manifest_refs, strict=True)
+    ]
     attempts.sort(key=lambda item: item.attempt)
     return StepAttemptListModel(
         workflowId=ledger.workflow_id,
@@ -7058,12 +7081,19 @@ async def describe_execution_step_attempt(
     )
     row = _find_step_ledger_row(ledger, logical_step_id)
     artifact_service = get_temporal_artifact_service(session)
-    for manifest_ref in _step_attempt_manifest_refs(row):
-        manifest = await _read_step_attempt_manifest(
-            artifact_service=artifact_service,
-            artifact_ref=manifest_ref,
-            principal=str(getattr(user, "id", "") or "system"),
+    principal = str(getattr(user, "id", "") or "system")
+    manifest_refs = _step_attempt_manifest_refs(row)
+    manifests = await asyncio.gather(
+        *(
+            _read_step_attempt_manifest(
+                artifact_service=artifact_service,
+                artifact_ref=manifest_ref,
+                principal=principal,
+            )
+            for manifest_ref in manifest_refs
         )
+    )
+    for manifest, manifest_ref in zip(manifests, manifest_refs, strict=True):
         if manifest.attempt != attempt:
             continue
         return StepAttemptDetailModel.model_validate(

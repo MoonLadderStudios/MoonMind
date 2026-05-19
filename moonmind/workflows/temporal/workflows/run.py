@@ -5925,10 +5925,36 @@ class MoonMindRunWorkflow:
             for template in applied_templates:
                 if not isinstance(template, Mapping):
                     continue
-                if "composition" not in template:
+                for key in ("tool", "skill"):
+                    nested = template.get(key)
+                    if isinstance(nested, Mapping):
+                        name = self._coerce_text(
+                            nested.get("name") or nested.get("id"),
+                            max_chars=120,
+                        )
+                        if name:
+                            skill_names.add(name.lower())
+                template_skills = template.get("skills")
+                if isinstance(template_skills, Mapping):
+                    include = template_skills.get("include")
+                    if isinstance(include, Sequence) and not isinstance(
+                        include,
+                        (str, bytes),
+                    ):
+                        for item in include:
+                            if isinstance(item, Mapping):
+                                name = self._coerce_text(
+                                    item.get("name") or item.get("id"),
+                                    max_chars=120,
+                                )
+                            else:
+                                name = self._coerce_text(item, max_chars=120)
+                            if name:
+                                skill_names.add(name.lower())
+                composition = template.get("composition")
+                if not isinstance(composition, Mapping):
                     continue
                 slug_sources: list[Any] = [template]
-                composition = template.get("composition")
                 for include_source in (composition, template):
                     if not isinstance(include_source, Mapping):
                         continue

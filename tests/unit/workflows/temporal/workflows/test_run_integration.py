@@ -1206,6 +1206,20 @@ def test_jira_implement_task_makes_pr_publish_optional(
         },
         include_applied_templates=True,
     )
+    assert mock_run_workflow._pr_publish_optional_for_task(
+        {
+            "publishMode": "pr",
+            "task": {
+                "appliedStepTemplates": [
+                    {
+                        "slug": "leaf",
+                        "version": "1.0.0",
+                        "skill": {"name": "jira-implement"},
+                    },
+                ],
+            },
+        }
+    )
 
 
 def test_plain_text_blocked_result_short_circuits_publish(

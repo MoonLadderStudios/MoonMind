@@ -6345,7 +6345,7 @@ def test_get_execution_step_attempts_returns_bounded_manifest_history() -> None:
         return SimpleNamespace(artifact_id=artifact_id), json.dumps(payload).encode()
 
     artifact_service = SimpleNamespace(read=AsyncMock(side_effect=_read_artifact))
-    app.dependency_overrides[get_async_session] = lambda: SimpleNamespace()
+    app.dependency_overrides[get_async_session] = _empty_session_override
 
     with patch(
         "api_service.api.routers.executions.get_temporal_artifact_service",
@@ -6447,7 +6447,7 @@ def test_get_execution_step_attempt_returns_bounded_detail_refs() -> None:
             ]
         )
     )
-    app.dependency_overrides[get_async_session] = lambda: SimpleNamespace()
+    app.dependency_overrides[get_async_session] = _empty_session_override
 
     with patch(
         "api_service.api.routers.executions.get_temporal_artifact_service",
@@ -6525,7 +6525,7 @@ def test_get_execution_step_attempts_preserves_artifact_authorization() -> None:
     artifact_service = SimpleNamespace(
         read=AsyncMock(side_effect=TemporalArtifactAuthorizationError())
     )
-    app.dependency_overrides[get_async_session] = lambda: SimpleNamespace()
+    app.dependency_overrides[get_async_session] = _empty_session_override
 
     with patch(
         "api_service.api.routers.executions.get_temporal_artifact_service",
