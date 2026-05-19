@@ -5895,7 +5895,7 @@ class MoonMindRunWorkflow:
                 parameters, task_payload
             )
             if applied_template_slugs:
-                skill_names = {name for name in skill_names if name != "auto"}
+                skill_names.discard("auto")
             skill_names = skill_names | applied_template_slugs
         if not skill_names:
             return False
@@ -5954,6 +5954,8 @@ class MoonMindRunWorkflow:
                     continue
                 slug = self._coerce_text(
                     item.get("slug")
+                    or item.get("presetSlug")
+                    or item.get("preset_slug")
                     or item.get("templateSlug")
                     or item.get("template_slug")
                     or item.get("id")
