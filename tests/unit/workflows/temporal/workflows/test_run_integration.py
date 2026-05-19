@@ -1208,6 +1208,24 @@ def test_jira_implement_task_makes_pr_publish_optional(
     )
 
 
+def test_jira_applied_template_without_composition_marks_task_jira_backed(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    assert (
+        mock_run_workflow._canonical_jira_issue_key_from_parameters(
+            {
+                "task": {
+                    "instructions": "Run Jira Implement for MM-719.",
+                    "appliedStepTemplates": [
+                        {"slug": "jira-implement", "version": "1.0.0"},
+                    ],
+                },
+            }
+        )
+        == "MM-719"
+    )
+
+
 def test_plain_text_blocked_result_short_circuits_publish(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
@@ -1242,7 +1260,8 @@ def test_jira_implement_applied_template_makes_pr_publish_optional(
                     }
                 ],
             },
-        }
+        },
+        include_applied_templates=True,
     )
 
 
