@@ -41,6 +41,13 @@ For Jira-backed PR-publishing tasks, the authored or preset-provided Jira issue 
 
 The publish path must not infer post-merge completion targets through fuzzy summary search or by transitioning every issue key found in PR metadata. PR metadata is only a strict fallback when stronger configured or captured Jira context is unavailable.
 
+If a Jira-oriented PR-publishing task completes with no repository changes
+because the issue is already implemented, `MoonMind.Run` completes that
+authoritative Jira issue through the same trusted Jira transition boundary used
+for post-merge completion. Ambiguous no-change results that do not explicitly
+confirm the issue is already implemented remain non-mutating and must say so in
+the run summary.
+
 ## Branch Naming
 
 ### Auto-generated Branches

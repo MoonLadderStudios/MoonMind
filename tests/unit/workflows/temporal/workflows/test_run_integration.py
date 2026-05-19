@@ -14,6 +14,7 @@ from moonmind.workflows.temporal.workflows.run import (
     NATIVE_PR_PUSH_STATUS_GATE_PATCH,
     RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
     RUN_PUBLISH_REPAIR_FEEDBACK_PATCH,
+    RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH,
     MoonMindRunWorkflow,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
@@ -1137,6 +1138,194 @@ def test_jira_implement_no_commit_pr_handoff_without_agent_report_is_explicit(
     ) in message
     assert publish_failure is False
 
+
+@pytest.mark.asyncio
+async def test_already_implemented_no_commit_pr_handoff_completes_jira_done(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    activity_calls: list[dict[str, Any]] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        activity_calls.append({"activityType": activity_type, "payload": payload})
+        return {
+            "status": "succeeded",
+            "required": True,
+            "issueKey": "MM-675",
+            "issueKeySource": "explicit_post_merge",
+            "alreadyDone": False,
+            "transitioned": True,
+            "transitionId": "41",
+            "transitionName": "Done",
+            "toStatusName": "Done",
+            "toStatusCategory": "done",
+        }
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    mock_run_workflow._publish_status = "not_required"
+    mock_run_workflow._publish_reason = (
+        "No pull request was required because this Jira-oriented task completed "
+        "without repository changes. final agent report: MM-675 was already implemented."
+    )
+    expected_evidence = mock_run_workflow._publish_reason[:700]
+
+    await mock_run_workflow._complete_already_implemented_jira_if_needed(
+        parameters={
+            "publishMode": "pr",
+            "task": {
+                "instructions": "Complete Jira issue MM-675.",
+                "appliedStepTemplates": [
+                    {"slug": "jira-implement", "version": "1.0.0"},
+                ],
+            },
+        }
+    )
+
+    assert activity_calls == [
+        {
+            "activityType": "merge_automation.complete_post_merge_jira",
+            "payload": {
+                "parentWorkflowId": "wf-1",
+                "parentRunId": "run-1",
+                "resolverDisposition": "already_implemented_no_changes",
+                "jiraIssueKey": "MM-675",
+                "postMergeJira": {
+                    "enabled": True,
+                    "required": True,
+                    "issueKey": "MM-675",
+                    "strategy": "done_category",
+                },
+                "candidateContext": {
+                    "taskOriginIssueKey": "MM-675",
+                    "taskMetadataIssueKey": "MM-675",
+                    "publishContextIssueKey": "MM-675",
+                    "alreadyImplementedEvidence": expected_evidence,
+                },
+            },
+        }
+    ]
+    assert mock_run_workflow._publish_context[
+        "alreadyImplementedJiraCompletion"
+    ] == {
+        "status": "succeeded",
+        "required": True,
+        "issueKey": "MM-675",
+        "issueKeySource": "explicit_post_merge",
+        "alreadyDone": False,
+        "transitioned": True,
+        "transitionId": "41",
+        "transitionName": "Done",
+        "toStatusName": "Done",
+        "toStatusCategory": "done",
+    }
+    assert "Jira issue MM-675 was moved to Done." in str(
+        mock_run_workflow._publish_reason
+    )
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_no_commit_pr_handoff_does_not_complete_jira_done(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    activity_calls: list[dict[str, Any]] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        activity_calls.append({"activityType": activity_type, "payload": payload})
+        return {"status": "succeeded"}
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    mock_run_workflow._publish_status = "not_required"
+    mock_run_workflow._publish_reason = (
+        "No pull request was required because this Jira-oriented task completed "
+        "without repository changes. no structured agent report confirmed whether "
+        "the Jira issue was already implemented."
+    )
+
+    await mock_run_workflow._complete_already_implemented_jira_if_needed(
+        parameters={
+            "publishMode": "pr",
+            "task": {
+                "instructions": "Complete Jira issue MM-675.",
+                "appliedStepTemplates": [
+                    {"slug": "jira-implement", "version": "1.0.0"},
+                ],
+            },
+        }
+    )
+
+    assert activity_calls == []
+    assert "alreadyImplementedJiraCompletion" not in mock_run_workflow._publish_context
+
+
+@pytest.mark.asyncio
+async def test_already_implemented_jira_completion_failure_blocks_success(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_execute_activity(
+        _activity_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        return {
+            "status": "blocked",
+            "required": True,
+            "issueKey": "MM-675",
+            "reason": "Expected exactly one done-category Jira transition.",
+        }
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    mock_run_workflow._publish_status = "not_required"
+    mock_run_workflow._publish_reason = "MM-675 was already implemented."
+
+    with pytest.raises(ValueError, match="Expected exactly one done-category"):
+        await mock_run_workflow._complete_already_implemented_jira_if_needed(
+            parameters={
+                "publishMode": "pr",
+                "task": {
+                    "instructions": "Complete Jira issue MM-675.",
+                    "appliedStepTemplates": [
+                        {"slug": "jira-implement", "version": "1.0.0"},
+                    ],
+                },
+            }
+        )
 
 def test_structured_publish_not_required_satisfies_pr_publish_mode(
     mock_run_workflow: MoonMindRunWorkflow,
