@@ -5572,6 +5572,7 @@ class MoonMindRunWorkflow:
         push_status = self._coerce_text(outputs.get("push_status"))
         if push_status is None:
             return
+        self._record_publish_metadata_context(outputs)
 
         if push_status == "no_commits":
             if publish_mode == "pr" and self._pr_publish_optional_for_task(
@@ -5777,6 +5778,7 @@ class MoonMindRunWorkflow:
         pull_request_url = self._extract_pull_request_url(execution_result)
         if pull_request_url:
             self._publish_context["pullRequestUrl"] = pull_request_url
+        self._record_publish_metadata_context(outputs)
         head_sha = self._coerce_text(
             outputs.get("head_sha")
             or outputs.get("headSha")
@@ -5788,6 +5790,27 @@ class MoonMindRunWorkflow:
             self._publish_context["headSha"] = head_sha
 
         self._record_report_result(execution_result)
+
+    def _record_publish_metadata_context(self, source: Mapping[str, Any]) -> None:
+        raw_metadata = source.get("prMetadata") or source.get("pr_metadata")
+        if not isinstance(raw_metadata, Mapping):
+            return
+        title = self._coerce_text(raw_metadata.get("title"), max_chars=200)
+        body = self._coerce_text(
+            raw_metadata.get("body"), max_chars=5000, flatten=False
+        )
+        if not title or not body:
+            return
+        metadata: dict[str, Any] = {"title": title, "body": body}
+        for output_key, context_key, max_chars in (
+            ("jiraIssueKey", "jiraIssueKey", 80),
+            ("moonSpecPath", "moonSpecPath", 300),
+            ("source", "source", 80),
+        ):
+            value = self._coerce_text(raw_metadata.get(output_key), max_chars=max_chars)
+            if value:
+                metadata[context_key] = value
+        self._publish_context["prMetadata"] = metadata
 
     def _record_report_result(self, execution_result: Any) -> None:
         metadata = self._get_from_result(execution_result, "metadata")

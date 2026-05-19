@@ -4528,6 +4528,68 @@ async def test_compose_step_instruction_dedupes_objective_text(
     assert "Do not activate repo skill bundles unless a task/step explicitly selects one." in instruction
     assert "- Skills are available via .agents/skills and .gemini/skills links." not in instruction
 
+async def test_compose_final_pr_step_requests_agent_metadata_artifact(
+    tmp_path: Path,
+) -> None:
+    """Final PR-publishing steps should ask the agent for post-diff metadata."""
+
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:8000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=FakeQueueClient(),
+        codex_exec_handler=FakeHandler(
+            WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+        ),
+    )  # type: ignore[arg-type]
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path / "job",
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=tmp_path / "context",
+        publish_result_path=tmp_path / "publish-result.json",
+        default_branch="main",
+        starting_branch="main",
+        new_branch="feature/branch",
+        working_branch="feature/branch",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+
+    instruction = worker._compose_step_instruction_for_runtime(
+        canonical_payload={
+            "task": {
+                "instructions": "Implement MM-674.",
+                "publish": {"mode": "pr"},
+            }
+        },
+        runtime_mode="codex",
+        step=ResolvedTaskStep(
+            step_index=1,
+            step_id="verify",
+            title="Verify",
+            instructions="Run focused tests.",
+            effective_skill_id="auto",
+            effective_skill_args={},
+            has_step_instructions=True,
+        ),
+        total_steps=2,
+        prepared=prepared,
+    )
+
+    assert "PULL REQUEST METADATA:" in instruction
+    assert str(prepared.artifacts_dir / "pr_metadata.json") in instruction
+    assert "final diff and verification evidence" in instruction
+
 async def test_compose_step_instruction_keeps_distinct_step_text(
     tmp_path: Path,
 ) -> None:
@@ -7130,6 +7192,7 @@ async def test_finish_reports_include_jules_runtime_artifact(
         publish_pr_url=None,
         publish_base_branch=None,
         publish_working_branch=None,
+        publish_pr_metadata=None,
         proposal_report=proposals,
         jules_runtime_records=jules_records,
     )
@@ -7156,6 +7219,69 @@ async def test_finish_reports_include_jules_runtime_artifact(
     assert runtime_payload["tasks"][0]["taskId"] == "task-123"
     assert runtime_payload["tasks"][0]["status"] == "completed"
     assert runtime_payload["tasks"][0]["providerStatus"] == "completed"
+
+
+async def test_finish_summary_adds_pr_metadata_without_publish_branches(
+    tmp_path: Path,
+) -> None:
+    """PR metadata should not depend on branch or PR URL fields being present."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:8000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(
+        config=config,
+        queue_client=FakeQueueClient(jobs=[]),
+        codex_exec_handler=FakeHandler(
+            WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+        ),
+    )  # type: ignore[arg-type]
+    now = datetime.now(UTC)
+
+    finish_summary = worker._build_finish_summary(
+        job=ClaimedJob(
+            id=uuid4(),
+            type="task",
+            payload={"type": "task"},
+            attempt=1,
+            max_attempts=3,
+        ),
+        canonical_payload={"repository": "owner/repo"},
+        runtime_mode="codex",
+        started_at=now,
+        finished_at=now,
+        stages=worker._new_finish_stages(),
+        finish_outcome=FinishOutcome(
+            code="PUBLISHED_PR",
+            stage="publish",
+            reason="published pull request",
+        ),
+        prepared=None,
+        publish_mode="pr",
+        publish_status="not_run",
+        publish_reason=None,
+        publish_pr_url=None,
+        publish_base_branch=None,
+        publish_working_branch=None,
+        publish_pr_metadata={"title": "MM-707 Metadata", "body": "Body"},
+        proposal_report=ProposalSubmissionReport(
+            requested=False,
+            hook_skills=[],
+            generated_count=0,
+            submitted_count=0,
+            errors=[],
+        ),
+    )
+
+    assert finish_summary["publish"]["prMetadata"] == {
+        "title": "MM-707 Metadata",
+        "body": "Body",
+    }
 
 
 async def test_finish_summary_includes_proposal_outcome_contract(
@@ -7227,6 +7353,7 @@ async def test_finish_summary_includes_proposal_outcome_contract(
         publish_pr_url=None,
         publish_base_branch=None,
         publish_working_branch=None,
+        publish_pr_metadata=None,
         proposal_report=proposals,
     )
 
@@ -8032,6 +8159,49 @@ async def test_validate_pr_metadata_rejects_control_plane_text() -> None:
             canonical_payload={"task": {"jiraIssueKey": "MM-707"}},
         )
 
+async def test_validate_pr_metadata_rejects_secret_like_text() -> None:
+    """PR metadata must not publish credentials copied from logs or diagnostics."""
+
+    with pytest.raises(ValueError, match="secret-like text"):
+        CodexWorker._validate_pull_request_metadata(
+            title="MM-707 Validate semantic pull request metadata",
+            body=(
+                "Jira: https://moonladder.atlassian.net/browse/MM-707\n"
+                "MoonSpec: specs/707-pr-metadata-validation\n"
+                "Summary: Added validation for token=ghp_abcdefghijklmnop.\n"
+                "Verification verdict: PASS.\n"
+                "Tests: unit\n"
+                "Remaining risks: None."
+            ),
+            canonical_payload={"task": {"jiraIssueKey": "MM-707"}},
+        )
+
+async def test_read_agent_pr_metadata_rejects_secret_like_text(tmp_path: Path) -> None:
+    """Agent-authored PR metadata artifacts should fail before publication."""
+
+    job_id = uuid4()
+    prepared = _build_execute_stage_workspace(tmp_path=tmp_path, job_id=job_id)
+    prepared.artifacts_dir.mkdir(parents=True, exist_ok=True)
+    (prepared.artifacts_dir / "pr_metadata.json").write_text(
+        json.dumps(
+            {
+                "title": "MM-707 Validate semantic pull request metadata",
+                "body": (
+                    "Jira: MM-707\n"
+                    "MoonSpec: specs/707-pr-metadata-validation\n"
+                    "Summary: copied github_pat_abcdefghijklmnop from diagnostics.\n"
+                    "Verification verdict: PASS.\n"
+                    "Tests: unit\n"
+                    "Remaining risks: None."
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="secret-like text"):
+        CodexWorker._read_agent_pull_request_metadata(prepared=prepared)
+
 async def test_validate_pr_metadata_accepts_jira_backed_review_metadata() -> None:
     """Jira-backed PR metadata should carry the required review fields."""
 
@@ -8713,7 +8883,134 @@ async def test_run_publish_stage_records_validated_pr_metadata(
         "body": pr_body,
         "jiraIssueKey": "MM-707",
         "moonSpecPath": "specs/707-pr-metadata-validation",
+        "source": "task.publish",
     }
+
+async def test_run_publish_stage_prefers_agent_pr_metadata_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Agent-proposed metadata should be consumed after execution evidence exists."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:8000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    run_calls: list[tuple[str, ...]] = []
+
+    async def _capture_stage_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+    ):
+        _ = (cwd, log_path, check, env, redaction_values, cancel_event)
+        normalized = tuple(str(part) for part in command)
+        run_calls.append(normalized)
+        if normalized[:2] == ("git", "status"):
+            return CommandResult(normalized, 0, " M worker.py\n", "")
+        if normalized[:3] == ("gh", "pr", "create"):
+            return CommandResult(
+                normalized,
+                0,
+                "https://github.com/MoonLadderStudios/MoonMind/pull/674\n",
+                "",
+            )
+        return CommandResult(normalized, 0, "", "")
+
+    monkeypatch.setattr(worker, "_run_stage_command", _capture_stage_command)
+
+    job_id = uuid4()
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path / str(job_id),
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=tmp_path / "context",
+        publish_result_path=tmp_path / "publish-result.json",
+        default_branch="main",
+        starting_branch="main",
+        new_branch="feature/branch",
+        working_branch="feature/branch",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+    prepared.repo_dir.mkdir(parents=True, exist_ok=True)
+    prepared.artifacts_dir.mkdir(parents=True, exist_ok=True)
+    prepared.task_context_path.mkdir(parents=True, exist_ok=True)
+    prepared.execute_log_path.write_text(
+        "[command] $ ./tools/test_unit.sh tests/unit/agents/codex_worker/test_worker.py\nok\n",
+        encoding="utf-8",
+    )
+    agent_title = "MM-674 Source PR metadata from agent semantics"
+    agent_body = (
+        "Jira: https://moonladder.atlassian.net/browse/MM-674\n"
+        "MoonSpec: specs/674-pr-metadata\n"
+        "Summary: Reads post-diff PR metadata from the agent artifact.\n"
+        "Verification verdict: PASS.\n"
+        "Tests: ./tools/test_unit.sh tests/unit/agents/codex_worker/test_worker.py\n"
+        "Remaining risks: None."
+    )
+    (prepared.artifacts_dir / "pr_metadata.json").write_text(
+        json.dumps({"title": agent_title, "body": agent_body}),
+        encoding="utf-8",
+    )
+
+    staged_artifacts: list[ArtifactUpload] = []
+    await worker._run_publish_stage(
+        job_id=job_id,
+        canonical_payload={
+            "task": {
+                "jiraIssueKey": "MM-674",
+                "moonSpecPath": "specs/674-pr-metadata",
+                "publish": {
+                    "mode": "pr",
+                    "prTitle": "MM-674 Ignore this stale authored title",
+                    "prBody": (
+                        "Jira: MM-674\n"
+                        "MoonSpec: stale\n"
+                        "Summary: stale\n"
+                        "Verification verdict: PASS.\n"
+                        "Tests: stale\n"
+                        "Remaining risks: stale."
+                    ),
+                },
+            }
+        },
+        prepared=prepared,
+        skill_meta={},
+        job_type="task",
+        staged_artifacts=staged_artifacts,
+    )
+
+    pr_call = next(call for call in run_calls if call[:3] == ("gh", "pr", "create"))
+    assert pr_call[pr_call.index("--title") + 1] == agent_title
+    assert pr_call[pr_call.index("--body") + 1] == agent_body
+    publish_payload = json.loads(
+        prepared.publish_result_path.read_text(encoding="utf-8")
+    )
+    assert publish_payload["prMetadata"]["source"] == "pr_metadata.json"
+    assert any(artifact.name == "pr_metadata.json" for artifact in staged_artifacts)
 
 async def test_run_publish_stage_defaults_jira_pr_metadata(
     tmp_path: Path,

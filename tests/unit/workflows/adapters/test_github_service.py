@@ -85,12 +85,22 @@ async def test_create_pr_adopts_existing_head_base_pr(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
 
     existing_pr = {
+        "number": 42,
         "html_url": "https://github.com/o/r/pull/42",
         "head": {"ref": "feature", "sha": "abc123", "repo": {"full_name": "o/r"}},
         "base": {"ref": "main"},
     }
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(return_value=_mock_get_response(200, [existing_pr]))
+    mock_client.patch = AsyncMock(
+        return_value=_mock_response(
+            200,
+            {
+                "html_url": "https://github.com/o/r/pull/42",
+                "head": {"sha": "def456"},
+            },
+        )
+    )
     mock_client.post = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -110,8 +120,13 @@ async def test_create_pr_adopts_existing_head_base_pr(monkeypatch):
     assert result.created is False
     assert result.adopted is True
     assert result.url == "https://github.com/o/r/pull/42"
-    assert result.head_sha == "abc123"
-    assert "adopted existing PR" in result.summary
+    assert result.head_sha == "def456"
+    assert "updated existing PR metadata" in result.summary
+    mock_client.patch.assert_awaited_once()
+    assert mock_client.patch.await_args.args == (
+        "https://api.github.com/repos/o/r/pulls/42",
+    )
+    assert mock_client.patch.await_args.kwargs["json"] == {"title": "T", "body": "B"}
     mock_client.post.assert_not_awaited()
 
 

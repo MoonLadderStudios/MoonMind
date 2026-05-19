@@ -1130,6 +1130,43 @@ def test_structured_publish_not_required_satisfies_pr_publish_mode(
     assert "Jira issue already implemented" in message
     assert publish_failure is False
 
+def test_record_publish_result_preserves_validated_pr_metadata_for_downstream(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    execution_result = {
+        "outputs": {
+            "push_status": "pushed",
+            "pullRequestUrl": "https://github.com/org/repo/pull/674",
+            "prMetadata": {
+                "title": "MM-674 Source PR metadata from agent semantics",
+                "body": "Jira: MM-674\nSummary: Implemented.",
+                "jiraIssueKey": "MM-674",
+                "moonSpecPath": "specs/674-pr-metadata",
+                "source": "pr_metadata.json",
+            },
+        }
+    }
+
+    mock_run_workflow._record_execution_context(
+        node_id="step-2",
+        execution_result=execution_result,
+    )
+    mock_run_workflow._record_publish_result(
+        parameters={"publishMode": "pr"},
+        execution_result=execution_result,
+    )
+
+    assert mock_run_workflow._publish_context["pullRequestUrl"] == (
+        "https://github.com/org/repo/pull/674"
+    )
+    assert mock_run_workflow._publish_context["prMetadata"] == {
+        "title": "MM-674 Source PR metadata from agent semantics",
+        "body": "Jira: MM-674\nSummary: Implemented.",
+        "jiraIssueKey": "MM-674",
+        "moonSpecPath": "specs/674-pr-metadata",
+        "source": "pr_metadata.json",
+    }
+
 
 def test_jira_implement_task_makes_pr_publish_optional(
     mock_run_workflow: MoonMindRunWorkflow,
