@@ -5864,6 +5864,38 @@ class MoonMindRunWorkflow:
                     )
                     if name:
                         skill_names.add(name.lower())
+
+        for payload in (parameters, task_payload):
+            applied_templates = payload.get("appliedStepTemplates")
+            if not isinstance(applied_templates, Sequence) or isinstance(
+                applied_templates,
+                (str, bytes, bytearray),
+            ):
+                continue
+            for template in applied_templates:
+                if not isinstance(template, Mapping):
+                    continue
+                slug_sources: list[Any] = [template]
+                composition = template.get("composition")
+                for include_source in (composition, template):
+                    if not isinstance(include_source, Mapping):
+                        continue
+                    includes = include_source.get("includes")
+                    if isinstance(includes, Sequence) and not isinstance(
+                        includes,
+                        (str, bytes, bytearray),
+                    ):
+                        slug_sources.extend(includes)
+                for slug_source in slug_sources:
+                    if not isinstance(slug_source, Mapping):
+                        continue
+                    slug = self._coerce_text(
+                        slug_source.get("slug") or slug_source.get("presetSlug"),
+                        max_chars=120,
+                    )
+                    if slug:
+                        skill_names.add(slug.lower())
+
         skills_payload = task_payload.get("skills")
         if isinstance(skills_payload, Mapping):
             include = skills_payload.get("include")
