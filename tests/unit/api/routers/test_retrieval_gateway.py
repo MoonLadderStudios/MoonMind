@@ -33,6 +33,16 @@ class StubService:
         )
 
 
+class FailingService:
+    def __init__(self, message: str = "qdrant unavailable") -> None:
+        self.settings = SimpleNamespace(similarity_top_k=3)
+        self.message = message
+
+    def retrieve(self, **kwargs):
+        _ = kwargs
+        raise RuntimeError(self.message)
+
+
 def _build_app() -> FastAPI:
     app = FastAPI()
     app.include_router(router)
@@ -93,6 +103,62 @@ def test_context_returns_gateway_context_pack_for_authorized_request() -> None:
     assert body["filters"]["repo"] == "moonmind"
     assert body["usage"]["latency_ms"] == 4
     assert body["items"][0]["source"] == "src/a.py"
+
+
+def test_context_returns_local_fallback_pack_when_semantic_retrieval_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    app = _build_app()
+    app.dependency_overrides[authorize_retrieval_request] = _oidc_auth
+    app.dependency_overrides[get_retrieval_service] = lambda: FailingService()
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "WorkflowRag.md").write_text(
+        "Follow-up retrieval may use local fallback when qdrant is unavailable.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MOONMIND_RETRIEVAL_WORKSPACE_ROOT", str(tmp_path))
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/retrieval/context",
+            json={
+                "query": "follow-up retrieval local fallback qdrant unavailable",
+                "filters": {"repo": "moonmind"},
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["transport"] == "local_fallback"
+    assert body["initiation_mode"] == "session"
+    assert body["usage"]["fallback_reason"] == "qdrant_unavailable"
+    assert body["usage"]["item_count"] == 1
+    assert body["items"][0]["source"] == "docs/WorkflowRag.md"
+
+
+def test_context_returns_deterministic_fallback_unavailable_reason() -> None:
+    app = _build_app()
+    app.dependency_overrides[authorize_retrieval_request] = _oidc_auth
+    app.dependency_overrides[get_retrieval_service] = lambda: FailingService()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/retrieval/context",
+            json={
+                "query": "follow-up retrieval local fallback qdrant unavailable",
+                "filters": {"repo": "moonmind"},
+            },
+        )
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail == {
+        "reason": "local_fallback_unavailable",
+        "fallback_reason": "qdrant_unavailable",
+        "transport": "local_fallback",
+        "item_count": 0,
+    }
 
 def test_context_accepts_scoped_retrieval_token_and_preserves_request_knobs(
     monkeypatch: pytest.MonkeyPatch,

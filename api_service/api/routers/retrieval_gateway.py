@@ -6,6 +6,7 @@ import logging
 import os
 import secrets
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -14,6 +15,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from api_service.auth_providers import get_current_user_optional
 from api_service.db.models import User
+from moonmind.rag.context_injection import ContextInjectionService
 from moonmind.rag.service import ContextRetrievalService, RetrievalBudgetExceededError
 from moonmind.rag.settings import RagRuntimeSettings
 
@@ -187,6 +189,15 @@ def _enforce_repo_scope(payload: RetrievalQuery, auth: RetrievalAuthContext) -> 
             detail=f"Repository '{repo}' is not permitted for this retrieval token.",
         )
 
+def _configured_workspace_fallback_root() -> Path | None:
+    raw = str(os.getenv("MOONMIND_RETRIEVAL_WORKSPACE_ROOT", "")).strip()
+    if not raw:
+        return None
+    path = Path(raw).expanduser().resolve()
+    if not path.is_dir():
+        return None
+    return path
+
 @router.get("/health")
 def health() -> Dict[str, str]:
     return {"status": "ok"}
@@ -221,6 +232,29 @@ async def retrieve_context_pack(
         )
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     except Exception as exc:  # pragma: no cover - runtime error path
+        fallback_reason = ContextInjectionService._normalize_retrieval_failure_reason(
+            exc
+        )
+        if ContextInjectionService.should_use_local_fallback(fallback_reason):
+            workspace_path = _configured_workspace_fallback_root()
+            if workspace_path is not None:
+                pack = ContextInjectionService.build_local_fallback_pack(
+                    instruction=payload.query,
+                    workspace_path=workspace_path,
+                    initiation_mode="session",
+                    fallback_reason=fallback_reason,
+                )
+                if pack is not None:
+                    return pack.to_dict()
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "reason": "local_fallback_unavailable",
+                    "fallback_reason": fallback_reason,
+                    "transport": "local_fallback",
+                    "item_count": 0,
+                },
+            ) from exc
         logger.exception("Retrieval gateway request failed.")
         raise HTTPException(
             status_code=500,

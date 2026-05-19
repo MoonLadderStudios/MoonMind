@@ -432,23 +432,43 @@ class ContextInjectionService:
         )
 
     @staticmethod
-    def _should_use_local_fallback(retrieval_skip_reason: str | None) -> bool:
+    def should_use_local_fallback(retrieval_skip_reason: str | None) -> bool:
         if retrieval_skip_reason is None:
             return True
         return retrieval_skip_reason in _LOCAL_FALLBACK_ALLOWED_SKIP_REASONS
+
+    @classmethod
+    def build_local_fallback_pack(
+        cls,
+        *,
+        instruction: str,
+        workspace_path: Path,
+        initiation_mode: str,
+        fallback_reason: str | None,
+    ) -> ContextPack | None:
+        return cls()._build_local_fallback_pack(
+            instruction=instruction,
+            workspace_path=workspace_path,
+            initiation_mode=initiation_mode,
+            fallback_reason=fallback_reason,
+        )
 
     def _build_local_fallback_pack(
         self,
         *,
         instruction: str,
         workspace_path: Path,
+        initiation_mode: str = "automatic",
+        fallback_reason: str | None = None,
     ) -> ContextPack | None:
         query_terms = self._extract_query_terms(instruction)
         if not query_terms:
             return None
 
         search_roots = [
-            root for root in _LOCAL_FALLBACK_SEARCH_ROOTS if (workspace_path / root).exists()
+            root
+            for root in _LOCAL_FALLBACK_SEARCH_ROOTS
+            if (workspace_path / root).exists()
         ]
         if not search_roots:
             return None
@@ -517,12 +537,19 @@ class ContextInjectionService:
             items=items,
             filters={"mode": "local_fallback"},
             budgets={},
-            usage={"matches": len(items)},
+            usage={
+                "matches": len(items),
+                "item_count": len(items),
+                "fallback_reason": str(fallback_reason or "").strip()
+                or "semantic_retrieval_unavailable",
+            },
             transport="local_fallback",
             telemetry_id="local-fallback",
             max_chars=2400,
-            initiation_mode="automatic",
+            initiation_mode=str(initiation_mode or "automatic").strip() or "automatic",
         )
+
+    _should_use_local_fallback = should_use_local_fallback
 
     @staticmethod
     def _extract_query_terms(instruction: str) -> list[str]:

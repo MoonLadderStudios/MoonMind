@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from moonmind.rag.context_pack import ContextPack
+from moonmind.rag.context_injection import ContextInjectionService
 from moonmind.rag.embedding import EmbeddingError
 from moonmind.rag.overlay import upsert_overlay_files
 from moonmind.rag.overlay_cleanup import clean_overlay_run
@@ -76,9 +77,27 @@ def run_search(
             overlay_policy=overlay_policy,
             budgets=budgets,
             transport=resolved_transport,
+            initiation_mode="session",
         )
-    except (EmbeddingError, RetrievalBudgetExceededError, RuntimeError) as exc:
+    except RetrievalBudgetExceededError as exc:
         raise CliError(str(exc)) from exc
+    except (EmbeddingError, RuntimeError) as exc:
+        fallback_reason = ContextInjectionService._normalize_retrieval_failure_reason(
+            exc
+        )
+        if not ContextInjectionService.should_use_local_fallback(fallback_reason):
+            raise CliError(str(exc)) from exc
+        pack = ContextInjectionService.build_local_fallback_pack(
+            instruction=query,
+            workspace_path=Path.cwd(),
+            initiation_mode="session",
+            fallback_reason=fallback_reason,
+        )
+        if pack is None:
+            raise CliError(
+                "local_fallback_unavailable: semantic retrieval failed "
+                f"({fallback_reason}) and no safe workspace fallback matches were found"
+            ) from exc
     if output_file:
         output_file.parent.mkdir(parents=True, exist_ok=True)
         output_file.write_text(pack.to_json(), encoding="utf-8")
