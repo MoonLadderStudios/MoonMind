@@ -3697,6 +3697,10 @@ class CodexWorker:
             raise ValueError(
                 f"{_AGENT_PR_METADATA_ARTIFACT_NAME} must include non-empty body"
             )
+        if cls._contains_secret_like_pr_metadata(f"{title}\n{body}"):
+            raise ValueError(
+                f"{_AGENT_PR_METADATA_ARTIFACT_NAME} contains secret-like text"
+            )
         return AgentPullRequestMetadataProposal(title=title, body=body, path=path)
 
     def _determine_finish_outcome(
@@ -3843,7 +3847,9 @@ class CodexWorker:
         if run_quality_reason is not None:
             summary["runQuality"] = dict(run_quality_reason)
         if publish_pr_metadata is not None:
-            summary["publish"]["prMetadata"] = dict(publish_pr_metadata)
+            summary.setdefault("publish", {})["prMetadata"] = dict(
+                publish_pr_metadata
+            )
         redacted = self._redact_payload(summary)
         return redacted if isinstance(redacted, dict) else summary
 
@@ -5170,6 +5176,12 @@ class CodexWorker:
             pattern.search(value) for pattern in _CONTROL_PLANE_PR_METADATA_PATTERNS
         )
 
+    @staticmethod
+    def _contains_secret_like_pr_metadata(value: str) -> bool:
+        """Detect credentials or secret assignments unsafe for PR publication."""
+
+        return _SECRET_LIKE_METADATA_PATTERN.search(value) is not None
+
     @classmethod
     def _validate_pull_request_metadata(
         cls,
@@ -5188,6 +5200,11 @@ class CodexWorker:
             raise ValueError("task.publish.prBody must be non-empty for PR publication")
 
         combined = f"{title_text}\n{body_text}"
+        if cls._contains_secret_like_pr_metadata(combined):
+            raise ValueError(
+                "task.publish PR metadata contains secret-like text; "
+                "remove credentials before publication"
+            )
         if cls._contains_control_plane_pr_metadata(combined):
             raise ValueError(
                 "task.publish PR metadata appears to contain control-plane instructions; "
