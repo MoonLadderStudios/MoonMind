@@ -777,6 +777,57 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
         self.assertEqual(request.runtime_command.command, "review")
         self.assertEqual(request.runtime_command.raw_command, "/review")
 
+    def test_build_agent_execution_request_includes_step_attempt_launch_policy(self) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "instructions": "Implement this step.",
+                    "runtime": {"mode": "codex_cli"},
+                    "resolvedSkillsetRef": "artifact://skillsets/resolved",
+                    "selectedSkill": "jira-implement",
+                },
+                node_id="node-runtime-attempt",
+                tool_name="codex_cli",
+            )
+
+        self.assertIsNotNone(request.step_attempt)
+        step_attempt = request.step_attempt
+        assert step_attempt is not None
+        self.assertEqual(step_attempt.workflow_id, "test-wf-id")
+        self.assertEqual(step_attempt.run_id, "test-run-id")
+        self.assertEqual(step_attempt.logical_step_id, "node-runtime-attempt")
+        self.assertEqual(step_attempt.attempt, 1)
+        self.assertEqual(
+            step_attempt.step_attempt_id,
+            "test-wf-id:test-run-id:node-runtime-attempt:attempt:1",
+        )
+        self.assertEqual(step_attempt.runtime_context_policy, "fresh_agent_run")
+        self.assertEqual(
+            step_attempt.context_bundle_ref,
+            request.parameters["metadata"]["moonmind"]["attemptContext"][
+                "contextBundleRef"
+            ],
+        )
+        self.assertEqual(
+            step_attempt.skill_source_policy["repoSkills"],
+            "resolver_policy_enforced",
+        )
+        self.assertEqual(
+            step_attempt.skill_source_policy["checkedInSkillMutation"],
+            "prohibited",
+        )
+
     def test_build_agent_execution_request_propagates_story_output_handoff(self) -> None:
         from unittest.mock import patch
 

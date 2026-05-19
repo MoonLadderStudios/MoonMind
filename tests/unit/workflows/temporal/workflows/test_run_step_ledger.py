@@ -681,10 +681,16 @@ async def test_run_records_step_attempt_manifest_ref_when_work_begins(
         "wf-run-1:run-1:delegate-agent:1:manifest"
     )
     assert writes[0]["payload"]["reason"] == "initial_execution"
-    assert writes[0]["payload"]["execution"] == {}
+    assert writes[0]["payload"]["execution"] == {
+        "runtimeContextPolicy": "fresh_agent_run"
+    }
     assert writes[0]["payload"]["outputs"] == {}
     assert writes[1]["payload"]["reason"] == "runtime_recovered"
-    assert writes[1]["payload"]["execution"] == {}
+    assert writes[1]["payload"]["execution"] == {
+        "runtimeContextPolicy": "fresh_agent_run",
+        "childWorkflowId": "wf-child-1",
+        "childRunId": "run-child-1",
+    }
     assert writes[1]["payload"]["status"] == "blocked"
     assert writes[1]["payload"]["terminalDisposition"] == "blocked"
     assert writes[1]["payload"]["outputs"] == {

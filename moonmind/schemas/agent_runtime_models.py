@@ -48,6 +48,98 @@ RuntimeCommandRenderMode = Literal[
     "materialized_command",
     "unsupported",
 ]
+RuntimeContextPolicy = Literal[
+    "fresh_agent_run",
+    "reuse_session_new_epoch",
+    "reuse_session_same_epoch",
+    "external_provider_continuation",
+]
+
+
+class AgentRuntimeStepAttemptLaunch(BaseModel):
+    """Compact adapter-visible launch envelope for one Step Attempt."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    schema_version: Literal["v1"] = Field("v1", alias="schemaVersion")
+    workflow_id: str = Field(..., alias="workflowId", min_length=1)
+    run_id: str = Field(..., alias="runId", min_length=1)
+    logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
+    attempt: int = Field(..., ge=1)
+    step_attempt_id: str = Field(..., alias="stepAttemptId", min_length=1)
+    reason: str = Field("initial_execution", min_length=1)
+    runtime_context_policy: RuntimeContextPolicy = Field(
+        ..., alias="runtimeContextPolicy"
+    )
+    context_bundle_ref: str | None = Field(None, alias="contextBundleRef")
+    context_bundle_digest: str | None = Field(None, alias="contextBundleDigest")
+    prepared_input_refs: list[str] = Field(
+        default_factory=list, alias="preparedInputRefs"
+    )
+    resolved_skillset_ref: str | None = Field(None, alias="resolvedSkillsetRef")
+    runtime_selection: dict[str, Any] = Field(
+        default_factory=dict, alias="runtimeSelection"
+    )
+    skill_source_policy: dict[str, Any] = Field(
+        default_factory=dict, alias="skillSourcePolicy"
+    )
+
+    @field_validator(
+        "workflow_id",
+        "run_id",
+        "logical_step_id",
+        "step_attempt_id",
+        "reason",
+        mode="after",
+    )
+    @classmethod
+    def _normalize_required_text(cls, value: str) -> str:
+        return require_non_blank(value, field_name="stepAttempt")
+
+    @field_validator("prepared_input_refs", mode="after")
+    @classmethod
+    def _validate_prepared_refs(cls, value: list[str]) -> list[str]:
+        return [
+            require_non_blank(item, field_name="stepAttempt.preparedInputRefs[]")
+            for item in value
+        ]
+
+    @field_validator(
+        "runtime_selection",
+        "skill_source_policy",
+        mode="after",
+    )
+    @classmethod
+    def _validate_compact_mappings(cls, value: dict[str, Any]) -> dict[str, Any]:
+        compact = validate_compact_temporal_mapping(value, field_name="stepAttempt")
+        if _contains_sensitive_key(compact):
+            raise ValueError("stepAttempt must not contain raw credential keys")
+        return compact
+
+    @model_validator(mode="after")
+    def _validate_identity_and_refs(self) -> "AgentRuntimeStepAttemptLaunch":
+        expected = (
+            f"{self.workflow_id}:{self.run_id}:{self.logical_step_id}:"
+            f"attempt:{self.attempt}"
+        )
+        if self.step_attempt_id != expected:
+            raise ValueError("stepAttemptId must match Step Attempt identity")
+        if self.context_bundle_ref is not None:
+            self.context_bundle_ref = require_non_blank(
+                self.context_bundle_ref,
+                field_name="stepAttempt.contextBundleRef",
+            )
+        if self.context_bundle_digest is not None:
+            self.context_bundle_digest = require_non_blank(
+                self.context_bundle_digest,
+                field_name="stepAttempt.contextBundleDigest",
+            )
+        if self.resolved_skillset_ref is not None:
+            self.resolved_skillset_ref = require_non_blank(
+                self.resolved_skillset_ref,
+                field_name="stepAttempt.resolvedSkillsetRef",
+            )
+        return self
 
 class RuntimeCommandInvocation(BaseModel):
     """Compact backend-normalized runtime command metadata for launch rendering."""
@@ -292,6 +384,9 @@ class AgentExecutionRequest(BaseModel):
     instruction_ref: str | None = Field(None, alias="instructionRef")
     runtime_command: RuntimeCommandInvocation | None = Field(
         None, alias="runtimeCommand"
+    )
+    step_attempt: AgentRuntimeStepAttemptLaunch | None = Field(
+        None, alias="stepAttempt"
     )
     resolved_skillset_ref: str | None = Field(None, alias="resolvedSkillsetRef")
     managed_session: CodexManagedSessionBinding | None = Field(
