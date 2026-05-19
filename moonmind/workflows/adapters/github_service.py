@@ -782,12 +782,37 @@ class GitHubService:
                 )
                 if existing_pr is not None:
                     existing_url = str(existing_pr.get("html_url") or "")
+                    pr_number = existing_pr.get("number")
+                    if pr_number is None:
+                        return CreatePRResult(
+                            url=existing_url or None,
+                            created=False,
+                            adopted=bool(existing_url),
+                            summary=(
+                                "adopted existing PR without metadata update "
+                                "because the PR number was missing: "
+                                f"{existing_url or 'unknown URL'}"
+                            ),
+                            head_sha=(existing_pr.get("head") or {}).get("sha"),
+                        )
+                    update_response = await client.patch(
+                        f"{api_url}/{pr_number}",
+                        headers=headers,
+                        json={"title": title, "body": body},
+                    )
+                    update_response.raise_for_status()
+                    updated_pr = update_response.json()
                     return CreatePRResult(
-                        url=existing_url or None,
+                        url=str(updated_pr.get("html_url") or existing_url) or None,
                         created=False,
                         adopted=True,
-                        summary=f"adopted existing PR: {existing_url}",
-                        head_sha=(existing_pr.get("head") or {}).get("sha"),
+                        summary=(
+                            "updated existing PR metadata: "
+                            f"{updated_pr.get('html_url') or existing_url}"
+                        ),
+                        head_sha=(
+                            updated_pr.get("head") or existing_pr.get("head") or {}
+                        ).get("sha"),
                     )
                 response = await client.post(
                     api_url, headers=headers, json=payload
