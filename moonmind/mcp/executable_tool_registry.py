@@ -71,7 +71,7 @@ _PENTEST_RUN_INPUT_SCHEMA: dict[str, Any] = {
             ),
         },
     },
-    "additionalProperties": True,
+    "additionalProperties": False,
 }
 
 
@@ -107,7 +107,7 @@ class ExecutableToolDiscoveryRegistry:
     def has_tool(self, name: str) -> bool:
         """Return whether this registry owns a discoverable executable tool."""
 
-        return str(name or "").strip() in self._tools
+        return name in self._tools
 
 
 __all__ = ["ExecutableToolDiscoveryRegistry"]
