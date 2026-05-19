@@ -1340,7 +1340,7 @@ class TestReviewGateHelpers(unittest.TestCase):
         wf = MoonMindRunWorkflow()
 
         self.assertEqual(
-            wf._accepted_review_summary("PASS", retry_count=2),
+            wf._accepted_review_summary("FULLY_IMPLEMENTED", retry_count=2),
             "Approved after 2 retries",
         )
 

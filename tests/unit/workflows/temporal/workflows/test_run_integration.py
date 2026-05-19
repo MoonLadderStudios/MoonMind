@@ -1260,7 +1260,8 @@ def test_jira_implement_applied_template_makes_pr_publish_optional(
                     }
                 ],
             },
-        }
+        },
+        include_applied_templates=True,
     )
 
 
