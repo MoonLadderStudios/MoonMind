@@ -435,17 +435,35 @@ def _docker_workflow_mode_forbidden_failure(*, workflow_docker_mode: str, tool_n
 
 CODEX_TRANSIENT_TURN_ERROR_TYPE = "CodexTransientTurnError"
 CODEX_PERMANENT_TURN_ERROR_TYPE = "CodexPermanentTurnError"
+CODEX_EMPTY_ASSISTANT_FAILURE_CAUSE = "app_server_protocol_empty_turn"
+
+
+def _is_empty_assistant_recovery_failure(
+    metadata: Mapping[str, Any] | None,
+) -> bool:
+    if not metadata:
+        return False
+    failure_cause = str(metadata.get("failureCause") or "").strip()
+    if failure_cause == CODEX_EMPTY_ASSISTANT_FAILURE_CAUSE:
+        return True
+    retry_action = str(metadata.get("retryRecommendedAction") or "").strip()
+    reason = str(metadata.get("reason") or "").strip()
+    return (
+        retry_action == "clear_session"
+        and "produced no assistant output" in reason
+    )
 
 def _codex_transient_turn_failure(
     reason: str,
     *,
     metadata: Mapping[str, Any] | None = None,
 ) -> temporal_exceptions.ApplicationError:
+    metadata_payload = dict(metadata or {})
     return temporal_exceptions.ApplicationError(
         reason or "codex turn produced no assistant output",
-        dict(metadata or {}),
+        metadata_payload,
         type=CODEX_TRANSIENT_TURN_ERROR_TYPE,
-        non_retryable=False,
+        non_retryable=_is_empty_assistant_recovery_failure(metadata_payload),
     )
 
 def _codex_permanent_turn_failure(

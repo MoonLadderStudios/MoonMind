@@ -1256,6 +1256,47 @@ async def test_send_turn_transient_failure_preserves_diagnostic_metadata() -> No
         )
 
     assert exc_info.value.type == "CodexTransientTurnError"
+    assert exc_info.value.non_retryable is True
+    assert exc_info.value.details == (failure_metadata,)
+
+
+async def test_send_turn_other_transient_failure_remains_retryable() -> None:
+    failure_metadata = {
+        "reason": "codex app-server temporarily unavailable",
+        "failureClass": "transient",
+    }
+    controller = AsyncMock()
+    controller.send_turn = AsyncMock(
+        return_value=CodexManagedSessionTurnResponse(
+            sessionState={
+                "sessionId": "sess-1",
+                "sessionEpoch": 1,
+                "containerId": "ctr-1",
+                "threadId": "thread-1",
+                "activeTurnId": None,
+            },
+            turnId="turn-1",
+            status="failed",
+            metadata=failure_metadata,
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    with pytest.raises(
+        activity_runtime_module.temporal_exceptions.ApplicationError
+    ) as exc_info:
+        await activities.agent_runtime_send_turn(
+            {
+                "sessionId": "sess-1",
+                "sessionEpoch": 1,
+                "containerId": "ctr-1",
+                "threadId": "thread-1",
+                "instructions": "Inspect the workspace",
+            }
+        )
+
+    assert exc_info.value.type == "CodexTransientTurnError"
+    assert exc_info.value.non_retryable is False
     assert exc_info.value.details == (failure_metadata,)
 
 async def test_send_turn_heartbeats_while_waiting_for_remote_session_controller(
