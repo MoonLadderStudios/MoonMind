@@ -21,7 +21,15 @@ SUPPORTED_PLAN_VERSIONS = frozenset({"1.0"})
 SUPPORTED_FAILURE_MODES = frozenset({"FAIL_FAST", "CONTINUE"})
 TOOL_RESULT_STATUSES = frozenset({"COMPLETED", "FAILED", "CANCELLED"})
 SKILL_RESULT_STATUSES = TOOL_RESULT_STATUSES  # backward-compat alias
-REVIEW_VERDICTS = frozenset({"PASS", "FAIL", "INCONCLUSIVE"})
+REVIEW_VERDICTS = frozenset(
+    {
+        "FULLY_IMPLEMENTED",
+        "ADDITIONAL_WORK_NEEDED",
+        "NO_DETERMINATION",
+        "BLOCKED",
+        "FAILED_UNRECOVERABLE",
+    }
+)
 DEFAULT_SKIP_TOOL_TYPES = ("repo.publish", "codex.execute")
 EXPLICIT_BINDING_REASONS = frozenset(
     {"stronger_isolation", "specialized_credentials", "clearer_routing"}
