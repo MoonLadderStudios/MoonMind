@@ -1949,6 +1949,13 @@ class CodexManagedSessionRuntime:
             return None
         return normalized if Path(normalized).is_file() else None
 
+    @staticmethod
+    def _resume_failure_allows_fallback(message: str) -> bool:
+        normalized = message.lower()
+        if "no rollout found" in normalized or "thread not found" in normalized:
+            return True
+        return "rollout at " in normalized and " is empty" in normalized
+
     def _resume_thread(
         self,
         *,
@@ -1962,17 +1969,19 @@ class CodexManagedSessionRuntime:
         params: dict[str, Any] = {"threadId": state.vendor_thread_id}
         if thread_path:
             params["path"] = thread_path
+        fallback_started = False
         try:
             resumed = client.request("thread/resume", params)
             thread_payload = resumed.get("thread")
         except RuntimeError as exc:
             message = str(exc)
-            if "no rollout found" not in message and "thread not found" not in message:
+            if not self._resume_failure_allows_fallback(message):
                 raise
             if not allow_fallback_start:
                 raise
             started = client.request("thread/start", {"cwd": str(self._workspace_path)})
             thread_payload = started.get("thread")
+            fallback_started = True
         if not isinstance(thread_payload, Mapping):
             raise RuntimeError(
                 "codex app-server thread/resume did not return a thread"
@@ -1982,9 +1991,9 @@ class CodexManagedSessionRuntime:
             raise RuntimeError(
                 "codex app-server thread/resume returned a blank thread id"
             )
-        recovered_thread_path = (
-            thread_path if vendor_thread_id == state.vendor_thread_id else None
-        )
+        recovered_thread_path = None
+        if not fallback_started and vendor_thread_id == state.vendor_thread_id:
+            recovered_thread_path = thread_path
         state.vendor_thread_id = vendor_thread_id
         state.vendor_thread_path = self._normalized_thread_path(
             thread_payload.get("path") or recovered_thread_path
