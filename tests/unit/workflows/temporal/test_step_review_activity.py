@@ -10,7 +10,7 @@ from moonmind.workflows.temporal.activities.step_review import (
 
 @pytest.mark.asyncio
 async def test_step_review_activity_returns_pass():
-    """The placeholder implementation always returns PASS."""
+    """The placeholder implementation always returns FULLY_IMPLEMENTED."""
     result = await step_review_activity(
         {
             "node_id": "n1",
@@ -25,7 +25,7 @@ async def test_step_review_activity_returns_pass():
             "workflow_context": {"plan_title": "Fix tests"},
         }
     )
-    assert result["verdict"] == "PASS"
+    assert result["verdict"] == "FULLY_IMPLEMENTED"
     assert result["confidence"] == 1.0
 
 @pytest.mark.asyncio
@@ -41,7 +41,7 @@ async def test_step_review_activity_with_minimal_payload():
             "tool_version": "1.0",
         }
     )
-    assert result["verdict"] == "PASS"
+    assert result["verdict"] == "FULLY_IMPLEMENTED"
 
 @pytest.mark.asyncio
 async def test_step_review_activity_with_previous_feedback():
@@ -61,4 +61,4 @@ async def test_step_review_activity_with_previous_feedback():
             "previous_feedback": "Missing import in utils.py",
         }
     )
-    assert result["verdict"] == "PASS"
+    assert result["verdict"] == "FULLY_IMPLEMENTED"
