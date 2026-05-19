@@ -276,6 +276,22 @@ If required completion returns `blocked` or `failed`, merge automation does not
 return terminal success. The failure is surfaced as a Jira-sourced blocker with
 operator-visible reason text.
 
+### 10.2.1 Already-implemented no-change completion
+
+For Jira-oriented PR-publishing runs where PR output is optional, the run may
+finish with no repository changes because the Jira issue is already implemented.
+When the agent or structured publish output explicitly confirms that already
+implemented outcome, `MoonMind.Run` invokes the same trusted Jira completion
+activity directly and requires the selected issue to reach a done-category
+status before the run can finish successfully.
+
+This path is intentionally not driven by fuzzy text search over arbitrary issue
+keys. The run uses the canonical Jira issue key from task metadata or a single
+validated Jira key from the Jira-backed task text. If the no-change result is
+ambiguous, for example it only says there was no diff but does not confirm the
+issue was already implemented, MoonMind does not mutate Jira and the run summary
+must state that no confirmation was available.
+
 ### 10.3 Output
 
 Merge automation summaries include compact `postMergeJira` evidence:
