@@ -7,7 +7,14 @@ import re
 from datetime import UTC, datetime
 from typing import Any, Literal, Mapping, NoReturn, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from moonmind.schemas._validation import require_non_blank
 from moonmind.schemas.managed_session_models import (
@@ -110,10 +117,14 @@ class AgentRuntimeStepAttemptLaunch(BaseModel):
         mode="after",
     )
     @classmethod
-    def _validate_compact_mappings(cls, value: dict[str, Any]) -> dict[str, Any]:
-        compact = validate_compact_temporal_mapping(value, field_name="stepAttempt")
+    def _validate_compact_mappings(
+        cls, value: dict[str, Any], info: ValidationInfo
+    ) -> dict[str, Any]:
+        field = cls.model_fields[info.field_name]
+        field_name = f"stepAttempt.{field.alias or info.field_name}"
+        compact = validate_compact_temporal_mapping(value, field_name=field_name)
         if _contains_sensitive_key(compact):
-            raise ValueError("stepAttempt must not contain raw credential keys")
+            raise ValueError(f"{field_name} must not contain raw credential keys")
         return compact
 
     @model_validator(mode="after")

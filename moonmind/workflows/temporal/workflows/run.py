@@ -1373,7 +1373,12 @@ class MoonMindRunWorkflow:
         if isinstance(tool, Mapping) and str(tool.get("type") or "").strip() == (
             "agent_runtime"
         ):
-            execution["runtimeContextPolicy"] = "fresh_agent_run"
+            agent_id = str(tool.get("name") or "").strip()
+            execution["runtimeContextPolicy"] = (
+                "fresh_agent_run"
+                if self._agent_kind_for_id(agent_id) == "managed"
+                else "external_provider_continuation"
+            )
         if isinstance(refs, Mapping):
             for source_key, target_key in (
                 ("childWorkflowId", "childWorkflowId"),
@@ -1766,8 +1771,10 @@ class MoonMindRunWorkflow:
             ),
             input_refs=input_refs,
             workspace=workspace,
-            execution=execution
-            or self._step_attempt_compact_execution_refs(logical_step_id),
+            execution={
+                **self._step_attempt_compact_execution_refs(logical_step_id),
+                **(execution or {}),
+            },
         )
         if launch_blocked:
             manifest_payload["terminalDisposition"] = "blocked"
@@ -3861,6 +3868,7 @@ class MoonMindRunWorkflow:
                                 resolved_skillset_ref=resolved_skillset_ref,
                                 workflow_parameters=parameters,
                                 step_attempt=current_step_attempt,
+                                attempt_reason=attempt_reason,
                             )
                             if workflow.patched(RUN_SLOT_CONTINUITY_PATCH):
                                 self._mark_slot_continuity_for_next_step(
@@ -5931,8 +5939,10 @@ class MoonMindRunWorkflow:
             for template in applied_templates:
                 if not isinstance(template, Mapping):
                     continue
-                slug_sources: list[Any] = [template]
                 composition = template.get("composition")
+                if not isinstance(composition, Mapping):
+                    continue
+                slug_sources: list[Any] = [template]
                 for include_source in (composition, template):
                     if not isinstance(include_source, Mapping):
                         continue
@@ -6969,6 +6979,7 @@ class MoonMindRunWorkflow:
         resolved_skillset_ref: str | None = None,
         workflow_parameters: Mapping[str, Any] | None = None,
         step_attempt: int | None = None,
+        attempt_reason: str = "initial_execution",
     ) -> "AgentExecutionRequest":
         """Build an ``AgentExecutionRequest`` from plan-node inputs and workflow context."""
         node_inputs = self._append_trusted_previous_outputs_to_agent_inputs(node_inputs)
@@ -7305,7 +7316,7 @@ class MoonMindRunWorkflow:
                 "logicalStepId": node_id,
                 "attempt": step_attempt_identity.attempt,
                 "stepAttemptId": build_step_attempt_id(step_attempt_identity),
-                "reason": "initial_execution",
+                "reason": attempt_reason,
                 "runtimeContextPolicy": runtime_context_policy,
                 "contextBundleRef": attempt_context.context_bundle_ref,
                 "contextBundleDigest": attempt_context.context_bundle_digest,

@@ -102,6 +102,20 @@ def test_step_attempt_launch_rejects_mismatched_identity_and_secret_keys() -> No
             skillSourcePolicy={"api_key": "raw-secret"},
         )
 
+    with pytest.raises(
+        ValidationError,
+        match="stepAttempt\\.runtimeSelection must not contain raw credential keys",
+    ):
+        AgentRuntimeStepAttemptLaunch(
+            workflowId="wf-1",
+            runId="run-1",
+            logicalStepId="implement",
+            attempt=2,
+            stepAttemptId="wf-1:run-1:implement:attempt:2",
+            runtimeContextPolicy="fresh_agent_run",
+            runtimeSelection={"password": "raw-secret"},
+        )
+
 def test_agent_execution_request_accepts_codex_managed_session_binding() -> None:
     request = AgentExecutionRequest(
         agentKind="managed",

@@ -799,6 +799,7 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
                 },
                 node_id="node-runtime-attempt",
                 tool_name="codex_cli",
+                attempt_reason="runtime_recovered",
             )
 
         self.assertIsNotNone(request.step_attempt)
@@ -808,6 +809,7 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
         self.assertEqual(step_attempt.run_id, "test-run-id")
         self.assertEqual(step_attempt.logical_step_id, "node-runtime-attempt")
         self.assertEqual(step_attempt.attempt, 1)
+        self.assertEqual(step_attempt.reason, "runtime_recovered")
         self.assertEqual(
             step_attempt.step_attempt_id,
             "test-wf-id:test-run-id:node-runtime-attempt:attempt:1",
