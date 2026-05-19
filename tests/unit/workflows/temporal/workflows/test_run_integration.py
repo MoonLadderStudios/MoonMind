@@ -1088,8 +1088,55 @@ def test_jira_implement_no_commit_pr_handoff_is_not_required(
 
     assert mock_run_workflow._publish_status == "not_required"
     assert status == "success"
-    assert "no publishable diff was produced" in message
+    assert "No pull request was required" in message
+    assert "Jira-oriented task completed without repository changes" in message
+    assert "MM-675 was already implemented" in message
+    assert "no publishable diff was produced" not in message
     assert publish_failure is False
+
+
+def test_jira_implement_no_commit_pr_handoff_without_agent_report_is_explicit(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    execution_result = {
+        "outputs": {
+            "push_status": "no_commits",
+            "push_branch": "feature/no-op",
+            "push_base_ref": "origin/main",
+            "push_commit_count": 0,
+        }
+    }
+    parameters = {
+        "publishMode": "pr",
+        "task": {
+            "appliedStepTemplates": [
+                {"slug": "jira-implement", "version": "1.0.0"},
+            ],
+        },
+    }
+
+    mock_run_workflow._record_execution_context(
+        node_id="step-7",
+        execution_result=execution_result,
+    )
+    mock_run_workflow._record_publish_result(
+        parameters=parameters,
+        execution_result=execution_result,
+    )
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters=parameters
+    )
+
+    assert mock_run_workflow._publish_status == "not_required"
+    assert status == "success"
+    assert "No pull request was required" in message
+    assert "Jira-oriented task completed without repository changes" in message
+    assert (
+        "no structured agent report confirmed whether the Jira issue was "
+        "already implemented"
+    ) in message
+    assert publish_failure is False
+
 
 def test_structured_publish_not_required_satisfies_pr_publish_mode(
     mock_run_workflow: MoonMindRunWorkflow,
