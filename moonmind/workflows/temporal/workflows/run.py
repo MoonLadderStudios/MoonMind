@@ -154,6 +154,18 @@ _JIRA_BACKED_AGENT_SKILLS = frozenset(
 _PLAIN_TEXT_BLOCKED_OUTCOME_PATTERN = re.compile(
     r"(?im)^\s*(?:#{1,6}\s*)?(?:result|verdict|outcome)\s*:\s*blocked\b[^\n]*"
 )
+_ALREADY_IMPLEMENTED_NO_WORK_PATTERN = re.compile(
+    r"\balready\s+(?:implemented|done|complete(?:d)?|satisfied|in\s+place)\b",
+    re.IGNORECASE,
+)
+_ALREADY_IMPLEMENTED_UNCERTAINTY_PATTERN = re.compile(
+    r"\b(?:whether|if|unless|until|unconfirmed|unclear|unknown|"
+    r"not\s+(?:confirm(?:ed)?|verified|clear|sure)|"
+    r"(?:could\s+not|couldn't|cannot|can't|unable\s+to|did\s+not|didn't|"
+    r"does\s+not|doesn't)\s+confirm|"
+    r"(?:without|no)\s+confirmation)\b",
+    re.IGNORECASE,
+)
 
 class RunWorkflowInput(TypedDict, total=False):
     """Input payload for the MoonMind.Run workflow."""
@@ -259,6 +271,9 @@ RUN_PAUSE_SAFE_BOUNDARIES_PATCH = "run-pause-safe-boundaries-v1"
 # Replay-stable patch id for stamping mm_started_at when real work begins.
 RUN_REAL_STARTED_AT_PATCH = "run-real-started-at-v1"
 RUN_STEP_ATTEMPT_MANIFEST_PATCH = "run-step-attempt-manifest-v1"
+RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH = (
+    "run-already-implemented-jira-completion-v1"
+)
 MM_STARTED_AT_SEARCH_ATTRIBUTE = "mm_started_at"
 _PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code", "gemini_cli")
 _MANAGED_AGENT_IDS = frozenset(
@@ -4870,6 +4885,9 @@ class MoonMindRunWorkflow:
             self._publish_status = "published"
             self._publish_reason = "published pull request"
             self._publish_context["pullRequestUrl"] = pull_request_url
+        await self._complete_already_implemented_jira_if_needed(
+            parameters=parameters,
+        )
         if self._plan_blocked_message:
             self._summary = self._plan_blocked_message
         else:
@@ -5818,6 +5836,7 @@ class MoonMindRunWorkflow:
         outputs = self._get_from_result(execution_result, "outputs")
         if not isinstance(outputs, Mapping):
             return
+        self._record_no_change_publish_evidence(outputs)
 
         not_required_reason = self._publish_not_required_reason(outputs)
         if not_required_reason is not None:
@@ -6177,6 +6196,26 @@ class MoonMindRunWorkflow:
             self._report_created = True
             self._report_ref = report_ref
             self._publish_context["reportRef"] = report_ref
+
+    def _record_no_change_publish_evidence(self, outputs: Mapping[str, Any]) -> None:
+        push_status = self._coerce_text(outputs.get("push_status"), max_chars=80)
+        if push_status == "no_commits":
+            self._publish_context["noChangePublish"] = {"status": "no_commits"}
+            return
+
+        for key in ("noChanges", "no_changes", "repositoryUnchanged"):
+            if outputs.get(key) is True:
+                self._publish_context["noChangePublish"] = {"status": key}
+                return
+
+        publish_outcome = outputs.get("publishOutcome") or outputs.get(
+            "publish_outcome"
+        )
+        if isinstance(publish_outcome, Mapping):
+            for key in ("noChanges", "no_changes", "repositoryUnchanged"):
+                if publish_outcome.get(key) is True:
+                    self._publish_context["noChangePublish"] = {"status": key}
+                    return
 
     @staticmethod
     def _node_selected_skill(node: Mapping[str, Any]) -> str:
@@ -7072,6 +7111,154 @@ class MoonMindRunWorkflow:
         if isinstance(post_merge_jira, Mapping):
             summary["postMergeJira"] = dict(post_merge_jira)
         return summary
+
+    async def _complete_already_implemented_jira_if_needed(
+        self,
+        *,
+        parameters: Mapping[str, Any],
+    ) -> None:
+        if not workflow.patched(RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH):
+            return
+        if self._publish_status != "not_required":
+            return
+        if self._publish_mode(parameters) != "pr":
+            return
+        if not self._pr_publish_optional_for_task(
+            parameters,
+            include_applied_templates=True,
+        ):
+            return
+        if not self._has_no_change_publish_evidence():
+            return
+        evidence = self._already_implemented_no_work_evidence()
+        if not evidence:
+            return
+
+        issue_key = self._canonical_jira_issue_key_from_parameters(parameters)
+        if not issue_key:
+            raise ValueError(
+                "Jira completion required for already-implemented no-change result, "
+                "but no authoritative Jira issue key was found."
+            )
+
+        post_merge_jira = self._already_implemented_jira_completion_config(
+            parameters=parameters,
+            issue_key=issue_key,
+        )
+        decision = await workflow.execute_activity(
+            "merge_automation.complete_post_merge_jira",
+            {
+                "parentWorkflowId": workflow.info().workflow_id,
+                "parentRunId": workflow.info().run_id,
+                "resolverDisposition": "already_implemented_no_changes",
+                "jiraIssueKey": issue_key,
+                "postMergeJira": post_merge_jira,
+                "candidateContext": {
+                    "taskOriginIssueKey": issue_key,
+                    "taskMetadataIssueKey": issue_key,
+                    "publishContextIssueKey": issue_key,
+                    "alreadyImplementedEvidence": evidence[:700],
+                },
+            },
+            start_to_close_timeout=timedelta(minutes=2),
+            task_queue=INTEGRATIONS_TASK_QUEUE,
+            retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+        )
+        decision_map = dict(decision) if isinstance(decision, Mapping) else {}
+        compact_result = {
+            key: value
+            for key, value in decision_map.items()
+            if key not in {"issueResolution", "transition", "artifactRefs"}
+        }
+        compact_result.setdefault("issueKey", issue_key)
+        self._publish_context["alreadyImplementedJiraCompletion"] = compact_result
+
+        status = self._coerce_text(decision_map.get("status"), max_chars=80)
+        if status not in {"succeeded", "noop_already_done"}:
+            reason = self._coerce_text(
+                decision_map.get("reason"),
+                max_chars=500,
+            )
+            raise ValueError(
+                reason
+                or "Jira completion failed for already-implemented no-change result."
+            )
+
+        completion_summary = self._already_implemented_jira_completion_summary(
+            decision_map=decision_map,
+            issue_key=issue_key,
+        )
+        if completion_summary and completion_summary not in str(
+            self._publish_reason or ""
+        ):
+            self._publish_reason = (
+                f"{str(self._publish_reason or '').rstrip('. ')}. "
+                f"{completion_summary}"
+            ).strip()
+
+    def _has_no_change_publish_evidence(self) -> bool:
+        evidence = self._publish_context.get("noChangePublish")
+        if not isinstance(evidence, Mapping):
+            return False
+        status = self._coerce_text(evidence.get("status"), max_chars=80)
+        return bool(status)
+
+    def _already_implemented_no_work_evidence(self) -> str | None:
+        for candidate in (
+            self._publish_reason,
+            self._operator_summary,
+            self._last_step_summary,
+        ):
+            text = self._coerce_text(candidate, max_chars=900)
+            if not text:
+                continue
+            match = _ALREADY_IMPLEMENTED_NO_WORK_PATTERN.search(text)
+            if not match:
+                continue
+            uncertainty_context = text[
+                max(0, match.start() - 140) : min(len(text), match.end() + 60)
+            ]
+            if _ALREADY_IMPLEMENTED_UNCERTAINTY_PATTERN.search(uncertainty_context):
+                continue
+            return text
+        return None
+
+    def _already_implemented_jira_completion_config(
+        self,
+        *,
+        parameters: Mapping[str, Any],
+        issue_key: str,
+    ) -> dict[str, Any]:
+        request = self._merge_automation_request(parameters) or {}
+        post_merge_jira = request.get("postMergeJira")
+        if not isinstance(post_merge_jira, Mapping):
+            post_merge_jira = {}
+        config = dict(post_merge_jira)
+        config["enabled"] = True
+        config["required"] = True
+        config["issueKey"] = issue_key
+        config.setdefault("strategy", "done_category")
+        return config
+
+    def _already_implemented_jira_completion_summary(
+        self,
+        *,
+        decision_map: Mapping[str, Any],
+        issue_key: str,
+    ) -> str:
+        status = self._coerce_text(decision_map.get("status"), max_chars=80)
+        if status == "succeeded":
+            transition_name = self._coerce_text(
+                decision_map.get("transitionName"),
+                max_chars=80,
+            )
+            if transition_name:
+                return f"Jira issue {issue_key} was moved to {transition_name}."
+            return f"Jira issue {issue_key} was moved to Done."
+        if status == "noop_already_done":
+            return f"Jira issue {issue_key} was already in a done-category status."
+        return ""
 
     def _merge_automation_child_succeeded(self, result: Any) -> bool:
         status = self._coerce_text(self._get_from_result(result, "status"), max_chars=40)
