@@ -1210,6 +1210,33 @@ def test_jira_implement_task_makes_pr_publish_optional(
         {
             "publishMode": "pr",
             "task": {
+                "tool": {"type": "skill", "name": "auto"},
+                "skill": {"name": "auto"},
+                "appliedStepTemplates": [
+                    {"slug": "jira-implement", "version": "1.0.0"},
+                ],
+            },
+        },
+        include_applied_templates=True,
+    )
+    # Templates carrying only presetSlug must also relax the no-commit fallback.
+    assert mock_run_workflow._pr_publish_optional_for_task(
+        {
+            "publishMode": "pr",
+            "task": {
+                "tool": {"type": "skill", "name": "auto"},
+                "skill": {"name": "auto"},
+                "appliedStepTemplates": [
+                    {"presetSlug": "jira-implement", "version": "1.0.0"},
+                ],
+            },
+        },
+        include_applied_templates=True,
+    )
+    assert mock_run_workflow._pr_publish_optional_for_task(
+        {
+            "publishMode": "pr",
+            "task": {
                 "appliedStepTemplates": [
                     {
                         "slug": "leaf",
