@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. tests/test_jira_story_planner.py (score: 1.000, trust: canonical)\n    line 5: from moonmind.planning import JiraStoryPlanner, JiraStoryPlannerError, StoryDraft\n2. tests/e2e/test_confluence_e2e.py (score: 1.000, trust: canonical)\n    line 84: assert response.status_code == 200, f\"API call failed: {response.text}\"\n3. tests/helpers/codex_session_runtime.py (score: 1.000, trust: canonical)\n    line 5: from moonmind.schemas.managed_session_models import LaunchCodexManagedSessionRequest\n4. tests/e2e/test_task_create_submit_browser.py (score: 1.000, trust: canonical)\n    line 105: \"codex\": {\"models\": [\"gpt-5.3-codex\"], \"efforts\": [\"high\"]},\n5. tests/helpers/step_type_payloads.py (score: 1.000, trust: canonical)\n    line 12: tool_id: str = \"jira.get_issue\",\n6. tests/integration/test_proposal_delivery_status_execution_detail.py (score: 1.000, trust: canonical)\n    line 39: \"code\": \"proposal_validation_error\",\n7. tests/integration/test_profile_creation_on_register.py (score: 1.000, trust: canonical)\n    line 46: assert resp.status_code == 201\n8. tests/integration/test_profile_chat_flow.py (score: 1.000, trust: canonical)\n    line 82: assert resp.status_code == 200",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "tests/test_jira_story_planner.py",
+      "text": "line 5: from moonmind.planning import JiraStoryPlanner, JiraStoryPlannerError, StoryDraft",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 5,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "tests/e2e/test_confluence_e2e.py",
+      "text": "line 84: assert response.status_code == 200, f\"API call failed: {response.text}\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 84,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "tests/helpers/codex_session_runtime.py",
+      "text": "line 5: from moonmind.schemas.managed_session_models import LaunchCodexManagedSessionRequest",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 5,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "tests/e2e/test_task_create_submit_browser.py",
+      "text": "line 105: \"codex\": {\"models\": [\"gpt-5.3-codex\"], \"efforts\": [\"high\"]},",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 105,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "tests/helpers/step_type_payloads.py",
+      "text": "line 12: tool_id: str = \"jira.get_issue\",",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 12,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "tests/integration/test_proposal_delivery_status_execution_detail.py",
+      "text": "line 39: \"code\": \"proposal_validation_error\",",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 39,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "tests/integration/test_profile_creation_on_register.py",
+      "text": "line 46: assert resp.status_code == 201",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 46,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "tests/integration/test_profile_chat_flow.py",
+      "text": "line 82: assert resp.status_code == 200",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 82,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-05-19T07:03:38Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
