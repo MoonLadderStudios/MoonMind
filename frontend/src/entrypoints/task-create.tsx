@@ -3610,6 +3610,16 @@ function PresetLayersIcon() {
   );
 }
 
+function InfoIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v6" />
+      <path d="M12 7.5v1.5" />
+    </svg>
+  );
+}
+
 export const LIQUID_GL_OPTIONS = {
   target: ".queue-floating-bar--liquid-glass",
   snapshot: "body",
@@ -3803,7 +3813,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [selectedDependencies, setSelectedDependencies] = useState<string[]>([]);
   const [dependencyMessage, setDependencyMessage] = useState<string | null>(null);
   const [selectedPresetKey, setSelectedPresetKey] = useState("");
-  const [presetManagementName, setPresetManagementName] = useState("");
   const [templateMessage, setTemplateMessage] = useState<string | null>(null);
   const [presetReapplyNeeded, setPresetReapplyNeeded] = useState(false);
   const [appliedTemplateFeatureRequest, setAppliedTemplateFeatureRequest] =
@@ -3865,6 +3874,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   );
   const [isApplyingPreset, setIsApplyingPreset] = useState(false);
   const [isDeletingPreset, setIsDeletingPreset] = useState(false);
+  const [isSavingPreset, setIsSavingPreset] = useState(false);
+  const [presetDialogMode, setPresetDialogMode] = useState<
+    "save" | "delete" | null
+  >(null);
+  const [presetDialogName, setPresetDialogName] = useState("");
+  const [dependencyInfoOpen, setDependencyInfoOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submitExpansionInFlightRef = useRef(false);
   const submitExpansionRequestIdRef = useRef(0);
@@ -4664,13 +4679,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   const selectedPreset =
     templateItems.find((item) => item.key === selectedPresetKey) || null;
-  const selectedPresetDeleteEnabled =
-    taskTemplateSaveEnabled && selectedPreset?.scope === "personal";
-  const deletePresetTooltip = selectedPreset
-    ? selectedPresetDeleteEnabled
-      ? "Delete the selected preset"
-      : "Only personal presets can be deleted"
-    : "Choose a preset to delete";
   const effectiveSkillId = useMemo(
     () =>
       resolveEffectivePublishSkillId(
@@ -5507,35 +5515,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     writeLocalPreference(LAST_REPOSITORY_OPTION_PREFERENCE_KEY, selectedOption);
   };
 
-  const presetStatusText = useMemo(() => {
-    if (presetReapplyNeeded) {
-      return PRESET_REAPPLY_REQUIRED_MESSAGE;
-    }
-    if (templateMessage) {
-      return templateMessage;
-    }
-    if (templateOptionsQuery.isLoading) {
-      return "Loading presets...";
-    }
-    if (templateOptionsQuery.isError) {
-      return "Failed to load presets.";
-    }
-    if (templateItems.length === 0) {
-      return "No presets available for your account.";
-    }
-    if ((templateOptionsQuery.data?.failedScopes || []).length > 0) {
-      return `Loaded ${templateItems.length} presets (missing scopes: ${(templateOptionsQuery.data?.failedScopes || []).join(", ")}).`;
-    }
-    return `Loaded ${templateItems.length} presets.`;
-  }, [
-    templateItems,
-    templateMessage,
-    presetReapplyNeeded,
-    templateOptionsQuery.data?.failedScopes,
-    templateOptionsQuery.isError,
-    templateOptionsQuery.isLoading,
-  ]);
-
   function stepPresetStatusText(step: StepState): string {
     if (step.presetMessage) {
       return step.presetMessage;
@@ -5872,17 +5851,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         };
       }),
     );
-  }
-
-  function handlePresetManagementNameChange(value: string) {
-    setPresetManagementName(value);
-    const normalized = value.trim().toLowerCase();
-    const matchedPreset =
-      templateItems.find((item) => item.title.trim().toLowerCase() === normalized) ||
-      templateItems.find((item) => item.slug.trim().toLowerCase() === normalized);
-    setSelectedPresetKey(matchedPreset?.key || "");
-    setTemplateMessage(null);
-    setPresetReapplyNeeded(false);
   }
 
   function addStep() {
@@ -6407,14 +6375,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
   }
 
-  async function handleSaveCurrentStepsAsPreset() {
-    if (!taskTemplateSaveEnabled) {
-      return;
+  async function handleSaveCurrentStepsAsPreset(nameOverride: string): Promise<boolean> {
+    if (!taskTemplateSaveEnabled || isSavingPreset) {
+      return false;
     }
-    const title = presetManagementName.trim();
+    const title = nameOverride.trim();
     if (!title) {
       setTemplateMessage("Enter a preset name before saving.");
-      return;
+      return false;
     }
 
     const presetSteps: Record<string, unknown>[] = [];
@@ -6450,7 +6418,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             setTemplateMessage(
               `Step ${index + 1} Skill Args must be valid JSON object text.`,
             );
-            return;
+            return false;
           }
         }
         const normalizedTool = {
@@ -6474,9 +6442,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       setTemplateMessage(
         "Add at least one step with instructions before saving.",
       );
-      return;
+      return false;
     }
 
+    setIsSavingPreset(true);
     setTemplateMessage("Saving preset...");
     try {
       const response = await fetch(taskTemplateSaveEndpoint, {
@@ -6502,23 +6471,40 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const created = (await response.json()) as { title?: string };
       setTemplateMessage(`Saved preset '${created.title || title}'.`);
       await templateOptionsQuery.refetch();
+      return true;
     } catch (error) {
       const failure =
         error instanceof Error ? error : new Error("Failed to save preset.");
       setTemplateMessage(`Failed to save preset: ${failure.message}`);
+      return false;
+    } finally {
+      setIsSavingPreset(false);
     }
   }
 
-  async function handleDeleteSelectedPreset() {
-    if (!selectedPreset || !selectedPresetDeleteEnabled || isDeletingPreset) {
-      return;
+  async function handleDeleteSelectedPreset(nameOverride: string): Promise<boolean> {
+    if (!taskTemplateSaveEnabled || isDeletingPreset) {
+      return false;
     }
-    const confirmed = window.confirm(
-      `Delete preset '${selectedPreset.title}'? This cannot be undone.`,
+    const normalized = nameOverride.trim().toLowerCase();
+    if (!normalized) {
+      setTemplateMessage("Enter a preset name to delete.");
+      return false;
+    }
+    const personalItems = templateItems.filter(
+      (item) => item.scope === "personal",
     );
-    if (!confirmed) {
-      setTemplateMessage("Preset delete cancelled.");
-      return;
+    const matchesName = (item: (typeof templateItems)[number]) =>
+      item.title.trim().toLowerCase() === normalized ||
+      item.slug.trim().toLowerCase() === normalized;
+    const target = personalItems.find(matchesName);
+    if (!target) {
+      if (templateItems.some(matchesName)) {
+        setTemplateMessage("Only personal presets can be deleted.");
+      } else {
+        setTemplateMessage(`No preset named '${nameOverride.trim()}' found.`);
+      }
+      return false;
     }
 
     setIsDeletingPreset(true);
@@ -6527,11 +6513,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const response = await fetch(
         withQueryParams(
           interpolatePath(taskTemplateDetailEndpoint, {
-            slug: selectedPreset.slug,
+            slug: target.slug,
           }),
           {
-            scope: selectedPreset.scope,
-            scopeRef: selectedPreset.scopeRef || undefined,
+            scope: target.scope,
+            scopeRef: target.scopeRef || undefined,
           },
         ),
         {
@@ -6545,16 +6531,51 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         );
       }
       setSelectedPresetKey("");
-      setPresetManagementName("");
       setPresetReapplyNeeded(false);
-      setTemplateMessage(`Deleted preset '${selectedPreset.title}'.`);
+      setTemplateMessage(`Deleted preset '${target.title}'.`);
       await templateOptionsQuery.refetch();
+      return true;
     } catch (error) {
       const failure =
         error instanceof Error ? error : new Error("Failed to delete preset.");
       setTemplateMessage(`Failed to delete preset: ${failure.message}`);
+      return false;
     } finally {
       setIsDeletingPreset(false);
+    }
+  }
+
+  function openPresetSaveDialog() {
+    setPresetDialogMode("save");
+    setPresetDialogName("");
+    setTemplateMessage(null);
+  }
+
+  function openPresetDeleteDialog() {
+    setPresetDialogMode("delete");
+    setPresetDialogName("");
+    setTemplateMessage(null);
+  }
+
+  function closePresetDialog() {
+    setPresetDialogMode(null);
+    setPresetDialogName("");
+  }
+
+  async function confirmPresetDialog() {
+    const mode = presetDialogMode;
+    const name = presetDialogName.trim();
+    if (!name) {
+      return;
+    }
+    let succeeded = false;
+    if (mode === "save") {
+      succeeded = await handleSaveCurrentStepsAsPreset(name);
+    } else if (mode === "delete") {
+      succeeded = await handleDeleteSelectedPreset(name);
+    }
+    if (succeeded) {
+      closePresetDialog();
     }
   }
 
@@ -9166,153 +9187,51 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               </button>
             </div>
 
-          </div>
-        </section>
-
-        {taskTemplateCatalogEnabled ? (
-          <section
-            className="card stack"
-            aria-label="Preset Management"
-          >
-            <div className="actions">
-              <strong>Preset Management</strong>
-            </div>
-            <label>
-              Preset Name
-              <input
-                id="queue-template-preset-name"
-                list="queue-template-preset-name-options"
-                value={presetManagementName}
-                placeholder="New preset name"
-                onChange={(event) =>
-                  handlePresetManagementNameChange(event.target.value)
-                }
-              />
-              <datalist id="queue-template-preset-name-options">
-                {templateItems.map((item) => (
-                  <option key={item.key} value={item.title} />
-                ))}
-              </datalist>
-            </label>
-            <div className="actions queue-template-actions">
-              {taskTemplateSaveEnabled ? (
-                <button
-                  type="button"
-                  id="queue-template-save-current"
-                  className="queue-step-icon-button"
-                  aria-label="Save preset"
-                  title="Save the current steps using the preset name"
-                  aria-disabled={!presetManagementName.trim()}
-                  disabled={!presetManagementName.trim()}
-                  onClick={handleSaveCurrentStepsAsPreset}
+            {taskTemplateCatalogEnabled && taskTemplateSaveEnabled ? (
+              <div className="stack queue-preset-management-block">
+                <div
+                  className="actions queue-template-actions queue-preset-management-inline"
+                  aria-label="Preset Management"
                 >
-                  <SaveIcon />
-                </button>
-              ) : null}
-              {taskTemplateSaveEnabled ? (
-                <button
-                  type="button"
-                  id="queue-template-delete-current"
-                  className="queue-step-icon-button destructive"
-                  aria-label="Delete preset"
-                  aria-disabled={
-                    !selectedPresetDeleteEnabled || isDeletingPreset
-                  }
-                  aria-busy={isDeletingPreset}
-                  title={deletePresetTooltip}
-                  disabled={!selectedPresetDeleteEnabled || isDeletingPreset}
-                  onClick={handleDeleteSelectedPreset}
-                >
-                  <TrashIcon />
-                </button>
-              ) : null}
-            </div>
-            <p className="small" id="queue-template-message">
-              {presetStatusText}
-            </p>
-          </section>
-        ) : null}
+                  <strong>Preset Management</strong>
+                  <button
+                    type="button"
+                    id="queue-template-save-current"
+                    className="queue-step-icon-button"
+                    aria-label="Save preset"
+                    title="Save the current steps as a preset"
+                    aria-busy={isSavingPreset}
+                    disabled={isSavingPreset}
+                    onClick={openPresetSaveDialog}
+                  >
+                    <SaveIcon />
+                  </button>
+                  <button
+                    type="button"
+                    id="queue-template-delete-current"
+                    className="queue-step-icon-button destructive"
+                    aria-label="Delete preset"
+                    aria-busy={isDeletingPreset}
+                    title="Delete a personal preset by name"
+                    disabled={isDeletingPreset}
+                    onClick={openPresetDeleteDialog}
+                  >
+                    <TrashIcon />
+                  </button>
+                </div>
+                {presetReapplyNeeded ? (
+                  <p className="small notice" id="queue-template-message">
+                    {PRESET_REAPPLY_REQUIRED_MESSAGE}
+                  </p>
+                ) : templateMessage ? (
+                  <p className="small" id="queue-template-message">
+                    {templateMessage}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
 
-        <section
-          className="card stack"
-          data-canonical-create-section="Dependencies"
-          aria-label="Dependencies"
-        >
-          <div>
-            <strong>Dependencies</strong>
-            <p className="small">
-              Add up to {DEPENDENCY_LIMIT} existing <code>MoonMind.Run</code> prerequisites. The new run stays blocked until each prerequisite finishes in <code>completed</code> state.
-            </p>
           </div>
-          <div className="grid-2">
-            <label>
-              Existing run
-              <select
-                id="queue-dependency-picker"
-                value={selectedDependencyWorkflowId}
-                onChange={(event) => {
-                  setSelectedDependencyWorkflowId(event.target.value);
-                  setDependencyMessage(null);
-                }}
-              >
-                <option value="">Select prerequisite...</option>
-                {availableDependencyOptions.map((item) => (
-                  <option key={item.taskId} value={item.taskId}>
-                    {`${item.title} (${item.taskId})`}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="actions" style={{ alignItems: "flex-end" }}>
-              <button
-                type="button"
-                id="queue-dependency-add"
-                title="Add the selected prerequisite run"
-                onClick={() => addDependency(selectedDependencyWorkflowId)}
-              >
-                Add dependency
-              </button>
-            </div>
-          </div>
-          <p className="small">
-            {dependencyOptionsQuery.isLoading
-              ? "Loading recent runs..."
-              : dependencyOptionsQuery.isError
-                ? "Failed to load recent runs. You can still create the task without dependencies, or try refreshing."
-                : availableDependencyOptions.length > 0
-                  ? `${availableDependencyOptions.length} recent runs available.`
-                  : "No recent prerequisite runs available."}
-          </p>
-          {selectedDependencies.length > 0 ? (
-            <ul className="list" id="queue-dependency-list">
-              {selectedDependencies.map((workflowId) => {
-                const match = (dependencyOptionsQuery.data || []).find(
-                  (item) => item.taskId === workflowId,
-                );
-                return (
-                  <li key={workflowId}>
-                    <span>
-                      <strong>{match?.title || workflowId}</strong>{" "}
-                      <code>{workflowId}</code>
-                    </span>
-                    <button
-                      type="button"
-                      className="secondary small"
-                      title={`Remove dependency ${workflowId}`}
-                      onClick={() => removeDependency(workflowId)}
-                    >
-                      Remove
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          ) : (
-            <p className="small">No prerequisites selected.</p>
-          )}
-          <p className={dependencyMessage ? "notice error" : "small"}>
-            {dependencyMessage || "Direct dependencies only. The new run stays blocked while a prerequisite is running, failed, canceled, terminated, timed out, or unresolvable, and unblocks once the prerequisite completes successfully. Cancel this run or bypass the dependency to proceed without that prerequisite."}
-          </p>
         </section>
 
         <section
@@ -9440,6 +9359,22 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           />
           Report
         </label>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={showAdvancedStepOptions}
+            aria-label="Show advanced step options"
+            onChange={(event) =>
+              setShowAdvancedStepOptions(event.target.checked)
+            }
+          />
+          Advanced mode
+          <span className="small">
+            Adds skill args and required capabilities to each step. Optional
+            worker routing overrides; runtime, publish mode, skills, and
+            presets already add the common capabilities automatically.
+          </span>
+        </label>
         </section>
 
         {pageMode.mode === "create" ? (
@@ -9554,22 +9489,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           data-canonical-create-section="Submit"
           aria-label="Submit"
         >
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            checked={showAdvancedStepOptions}
-            aria-label="Show advanced step options"
-            onChange={(event) =>
-              setShowAdvancedStepOptions(event.target.checked)
-            }
-          />
-          Advanced mode
-          <span className="small">
-            Adds skill args and required capabilities to each step. Optional
-            worker routing overrides; runtime, publish mode, skills, and
-            presets already add the common capabilities automatically.
-          </span>
-        </label>
         <p
           id="queue-submit-message"
           role={
@@ -9759,8 +9678,199 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           </div>
         </div>
         </section>
+
+        <section
+          className="stack queue-dependencies-bottom"
+          data-canonical-create-section="Dependencies"
+          aria-label="Dependencies"
+        >
+          <div className="queue-dependencies-heading">
+            <strong>Dependencies</strong>
+            <button
+              type="button"
+              className="queue-step-icon-button queue-dependencies-info-toggle"
+              aria-label="Dependencies info"
+              aria-expanded={dependencyInfoOpen}
+              aria-controls="queue-dependencies-info-panel"
+              title="About dependencies"
+              onClick={() => setDependencyInfoOpen((open) => !open)}
+            >
+              <InfoIcon />
+            </button>
+          </div>
+          {dependencyInfoOpen ? (
+            <div
+              id="queue-dependencies-info-panel"
+              className="notice queue-dependencies-info-panel"
+              role="note"
+            >
+              <p className="small">
+                Add up to {DEPENDENCY_LIMIT} existing <code>MoonMind.Run</code>{" "}
+                prerequisites. The new run stays blocked until each
+                prerequisite finishes in <code>completed</code> state.
+              </p>
+              <p className="small">
+                Direct dependencies only. The new run stays blocked while a
+                prerequisite is running, failed, canceled, terminated, timed
+                out, or unresolvable, and unblocks once the prerequisite
+                completes successfully. Cancel this run or bypass the
+                dependency to proceed without that prerequisite.
+              </p>
+              <p className="small">
+                {dependencyOptionsQuery.isLoading
+                  ? "Loading recent runs..."
+                  : dependencyOptionsQuery.isError
+                    ? "Failed to load recent runs. You can still create the task without dependencies, or try refreshing."
+                    : `${availableDependencyOptions.length} recent runs available.`}
+              </p>
+            </div>
+          ) : null}
+          <div className="grid-2">
+            <label>
+              Existing run
+              <select
+                id="queue-dependency-picker"
+                value={selectedDependencyWorkflowId}
+                onChange={(event) => {
+                  setSelectedDependencyWorkflowId(event.target.value);
+                  setDependencyMessage(null);
+                }}
+              >
+                <option value="">Select prerequisite...</option>
+                {availableDependencyOptions.map((item) => (
+                  <option key={item.taskId} value={item.taskId}>
+                    {`${item.title} (${item.taskId})`}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="actions" style={{ alignItems: "flex-end" }}>
+              <button
+                type="button"
+                id="queue-dependency-add"
+                title="Add the selected prerequisite run"
+                onClick={() => addDependency(selectedDependencyWorkflowId)}
+              >
+                Add dependency
+              </button>
+            </div>
+          </div>
+          {selectedDependencies.length > 0 ? (
+            <ul className="list" id="queue-dependency-list">
+              {selectedDependencies.map((workflowId) => {
+                const match = (dependencyOptionsQuery.data || []).find(
+                  (item) => item.taskId === workflowId,
+                );
+                return (
+                  <li key={workflowId}>
+                    <span>
+                      <strong>{match?.title || workflowId}</strong>{" "}
+                      <code>{workflowId}</code>
+                    </span>
+                    <button
+                      type="button"
+                      className="secondary small"
+                      title={`Remove dependency ${workflowId}`}
+                      onClick={() => removeDependency(workflowId)}
+                    >
+                      Remove
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+          {dependencyMessage ? (
+            <p className="notice error">{dependencyMessage}</p>
+          ) : null}
+        </section>
         </fieldset>
       </form>
+      {presetDialogMode ? (
+        <div className="jira-browser-backdrop">
+          <section
+            className="jira-browser-panel stack queue-preset-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="queue-preset-dialog-title"
+          >
+            <div className="queue-step-header">
+              <h3 id="queue-preset-dialog-title">
+                {presetDialogMode === "save"
+                  ? "Save preset"
+                  : "Delete preset"}
+              </h3>
+              <button
+                type="button"
+                className="queue-step-icon-button"
+                aria-label="Close preset dialog"
+                title="Close"
+                onClick={closePresetDialog}
+              >
+                <CloseIcon />
+              </button>
+            </div>
+            <label>
+              Preset Name
+              <input
+                autoFocus
+                list="queue-template-preset-name-options"
+                value={presetDialogName}
+                placeholder={
+                  presetDialogMode === "save"
+                    ? "New preset name"
+                    : "Existing preset name"
+                }
+                onChange={(event) => setPresetDialogName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void confirmPresetDialog();
+                  }
+                }}
+              />
+              <datalist id="queue-template-preset-name-options">
+                {templateItems.map((item) => (
+                  <option key={item.key} value={item.title} />
+                ))}
+              </datalist>
+            </label>
+            <div className="actions queue-template-actions">
+              <button
+                type="button"
+                className="secondary"
+                onClick={closePresetDialog}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className={
+                  presetDialogMode === "delete"
+                    ? "queue-step-icon-button destructive"
+                    : "queue-step-icon-button"
+                }
+                aria-label={
+                  presetDialogMode === "save"
+                    ? "Confirm save preset"
+                    : "Confirm delete preset"
+                }
+                title={
+                  presetDialogMode === "save"
+                    ? "Save preset"
+                    : "Delete preset"
+                }
+                disabled={!presetDialogName.trim()}
+                onClick={() => {
+                  void confirmPresetDialog();
+                }}
+              >
+                {presetDialogMode === "save" ? <SaveIcon /> : <TrashIcon />}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }

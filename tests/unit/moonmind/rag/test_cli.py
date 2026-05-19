@@ -28,6 +28,10 @@ def test_run_search_returns_context_pack_and_writes_json(
         def resolved_transport(self, preferred):
             return preferred or "direct"
 
+        def retrieval_execution_reason(self, source, *, preferred_transport=None):
+            _ = source, preferred_transport
+            return True, "ok"
+
     pack = build_context_pack(
         items=[ContextItem(score=0.91, source="src/app.py", text="retrieved text")],
         filters={"repo": "moonmind"},
@@ -82,6 +86,10 @@ def test_run_search_wraps_embedding_errors_as_cli_errors(monkeypatch):
         def resolved_transport(self, preferred):
             return preferred or "direct"
 
+        def retrieval_execution_reason(self, source, *, preferred_transport=None):
+            _ = source, preferred_transport
+            return True, "ok"
+
     class StubService:
         def __init__(self, *, settings, env):
             _ = settings, env
@@ -98,6 +106,44 @@ def test_run_search_wraps_embedding_errors_as_cli_errors(monkeypatch):
     monkeypatch.setattr(rag_cli, "ContextRetrievalService", StubService)
 
     with pytest.raises(rag_cli.CliError, match="GOOGLE_API_KEY"):
+        rag_cli.run_search(
+            query="How does worker retrieval work?",
+            filter_args=[],
+            budget_args=[],
+            top_k=None,
+            overlay_policy="include",
+            transport=None,
+            output_file=None,
+        )
+
+
+def test_run_search_fails_fast_when_retrieval_unavailable(monkeypatch):
+    class StubSettings:
+        similarity_top_k = 7
+
+        def as_filter_metadata(self):
+            return {}
+
+        def resolved_transport(self, preferred):
+            return preferred or "direct"
+
+        def retrieval_execution_reason(self, source, *, preferred_transport=None):
+            _ = source, preferred_transport
+            return False, "rag_disabled"
+
+    class UnexpectedService:
+        def __init__(self, **kwargs):
+            _ = kwargs
+            pytest.fail("ContextRetrievalService should not be constructed")
+
+    monkeypatch.setattr(
+        rag_cli.RagRuntimeSettings,
+        "from_env",
+        classmethod(lambda _cls, _source=None: StubSettings()),
+    )
+    monkeypatch.setattr(rag_cli, "ContextRetrievalService", UnexpectedService)
+
+    with pytest.raises(rag_cli.CliError, match="rag_disabled"):
         rag_cli.run_search(
             query="How does worker retrieval work?",
             filter_args=[],
