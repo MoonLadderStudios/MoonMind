@@ -158,6 +158,14 @@ _ALREADY_IMPLEMENTED_NO_WORK_PATTERN = re.compile(
     r"\balready\s+(?:implemented|done|complete(?:d)?|satisfied|in\s+place)\b",
     re.IGNORECASE,
 )
+_ALREADY_IMPLEMENTED_UNCERTAINTY_PATTERN = re.compile(
+    r"\b(?:whether|if|unless|until|unconfirmed|unclear|unknown|"
+    r"not\s+(?:confirm(?:ed)?|verified|clear|sure)|"
+    r"(?:could\s+not|couldn't|cannot|can't|unable\s+to|did\s+not|didn't|"
+    r"does\s+not|doesn't)\s+confirm|"
+    r"(?:without|no)\s+confirmation)\b",
+    re.IGNORECASE,
+)
 
 class RunWorkflowInput(TypedDict, total=False):
     """Input payload for the MoonMind.Run workflow."""
@@ -5813,6 +5821,7 @@ class MoonMindRunWorkflow:
         outputs = self._get_from_result(execution_result, "outputs")
         if not isinstance(outputs, Mapping):
             return
+        self._record_no_change_publish_evidence(outputs)
 
         not_required_reason = self._publish_not_required_reason(outputs)
         if not_required_reason is not None:
@@ -6105,6 +6114,26 @@ class MoonMindRunWorkflow:
             self._report_created = True
             self._report_ref = report_ref
             self._publish_context["reportRef"] = report_ref
+
+    def _record_no_change_publish_evidence(self, outputs: Mapping[str, Any]) -> None:
+        push_status = self._coerce_text(outputs.get("push_status"), max_chars=80)
+        if push_status == "no_commits":
+            self._publish_context["noChangePublish"] = {"status": "no_commits"}
+            return
+
+        for key in ("noChanges", "no_changes", "repositoryUnchanged"):
+            if outputs.get(key) is True:
+                self._publish_context["noChangePublish"] = {"status": key}
+                return
+
+        publish_outcome = outputs.get("publishOutcome") or outputs.get(
+            "publish_outcome"
+        )
+        if isinstance(publish_outcome, Mapping):
+            for key in ("noChanges", "no_changes", "repositoryUnchanged"):
+                if publish_outcome.get(key) is True:
+                    self._publish_context["noChangePublish"] = {"status": key}
+                    return
 
     @staticmethod
     def _node_selected_skill(node: Mapping[str, Any]) -> str:
@@ -7017,6 +7046,8 @@ class MoonMindRunWorkflow:
             include_applied_templates=True,
         ):
             return
+        if not self._has_no_change_publish_evidence():
+            return
         evidence = self._already_implemented_no_work_evidence()
         if not evidence:
             return
@@ -7084,6 +7115,13 @@ class MoonMindRunWorkflow:
                 f"{completion_summary}"
             ).strip()
 
+    def _has_no_change_publish_evidence(self) -> bool:
+        evidence = self._publish_context.get("noChangePublish")
+        if not isinstance(evidence, Mapping):
+            return False
+        status = self._coerce_text(evidence.get("status"), max_chars=80)
+        return bool(status)
+
     def _already_implemented_no_work_evidence(self) -> str | None:
         for candidate in (
             self._publish_reason,
@@ -7096,8 +7134,10 @@ class MoonMindRunWorkflow:
             match = _ALREADY_IMPLEMENTED_NO_WORK_PATTERN.search(text)
             if not match:
                 continue
-            uncertainty_prefix = text[max(0, match.start() - 80) : match.start()]
-            if "whether" in uncertainty_prefix.lower():
+            uncertainty_context = text[
+                max(0, match.start() - 140) : min(len(text), match.end() + 60)
+            ]
+            if _ALREADY_IMPLEMENTED_UNCERTAINTY_PATTERN.search(uncertainty_context):
                 continue
             return text
         return None
