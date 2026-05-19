@@ -1015,21 +1015,37 @@ def _template_step_id_matches(
     return len(parts) >= 4 and parts[3] == f"{step_index:02d}"
 
 
-def _is_jira_orchestrate_pr_handoff_node(
+def _is_jira_pr_handoff_node(
     node: Mapping[str, Any],
     *,
     task_payload: Mapping[str, Any],
 ) -> bool:
-    if not _task_has_applied_template(task_payload, "jira-orchestrate"):
+    has_jira_orchestrate = _task_has_applied_template(task_payload, "jira-orchestrate")
+    has_jira_implement = _task_has_applied_template(task_payload, "jira-implement")
+    if not has_jira_orchestrate and not has_jira_implement:
         return False
     inputs = node.get("inputs")
     if not isinstance(inputs, Mapping):
         return False
     annotations = inputs.get("annotations")
     if isinstance(annotations, Mapping):
-        role = str(annotations.get("jiraOrchestrateRole") or "").strip().lower()
+        role = (
+            str(
+                annotations.get("jiraOrchestrateRole")
+                or annotations.get("jiraImplementRole")
+                or ""
+            )
+            .strip()
+            .lower()
+        )
         if role == "pull-request-handoff":
             return True
+    if has_jira_implement and _template_step_id_matches(
+        node,
+        slug="jira-implement",
+        step_index=7,
+    ):
+        return True
     return any(
         _template_step_id_matches(
             node,
@@ -1711,7 +1727,7 @@ def _build_runtime_planner():
             if (
                 publish_tool not in _TOOLS_WITH_AUTO_PR_CREATION
                 and not _jira_agent_skill_selected(publish_selected_skill)
-                and not _is_jira_orchestrate_pr_handoff_node(
+                and not _is_jira_pr_handoff_node(
                     publish_node,
                     task_payload=task_payload,
                 )

@@ -2392,6 +2392,57 @@ def test_runtime_planner_preserves_jira_orchestrate_pr_handoff_instructions():
     assert "commit your work" not in pr_node["inputs"]["instructions"]
 
 
+def test_runtime_planner_preserves_jira_implement_pr_handoff_instructions():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Run Jira Implement for THOR-352.",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+                "appliedStepTemplates": [{"slug": "jira-implement"}],
+                "steps": [
+                    {
+                        "id": "implement",
+                        "title": "Implement",
+                        "instructions": "Implement the Jira issue.",
+                    },
+                    {
+                        "id": "create-pr",
+                        "title": "Create pull request",
+                        "annotations": {
+                            "jiraImplementRole": "pull-request-handoff",
+                        },
+                        "instructions": (
+                            "Create a pull request and record pull_request_url."
+                        ),
+                    },
+                    {
+                        "id": "finalize-jira",
+                        "title": "Finalize Jira status",
+                        "tool": {"type": "skill", "name": "jira-issue-updater"},
+                        "instructions": "Move the Jira issue after PR creation.",
+                    },
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    pr_node = plan["nodes"][1]
+    assert pr_node["inputs"]["title"] == "Create pull request"
+    assert pr_node["inputs"]["publishMode"] == "pr"
+    assert "Create a pull request" in pr_node["inputs"]["instructions"]
+    assert (
+        "Do NOT push or create a pull request"
+        not in pr_node["inputs"]["instructions"]
+    )
+    assert "commit your work" not in pr_node["inputs"]["instructions"]
+
+
 @pytest.mark.parametrize("step_index", [12, 13])
 def test_runtime_planner_preserves_jira_orchestrate_pr_handoff_step_id_fallback(
     step_index,
@@ -2425,6 +2476,53 @@ def test_runtime_planner_preserves_jira_orchestrate_pr_handoff_step_id_fallback(
                         "title": "Move Jira issue to Code Review",
                         "tool": {"type": "skill", "name": "jira-issue-updater"},
                         "instructions": "Move the Jira issue to Code Review.",
+                    },
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    pr_node = plan["nodes"][1]
+    assert pr_node["inputs"]["title"] == "Create pull request"
+    assert "Create a pull request" in pr_node["inputs"]["instructions"]
+    assert (
+        "Do NOT push or create a pull request"
+        not in pr_node["inputs"]["instructions"]
+    )
+    assert "commit your work" not in pr_node["inputs"]["instructions"]
+
+
+def test_runtime_planner_preserves_jira_implement_pr_handoff_step_id_fallback():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Run Jira Implement for THOR-352.",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+                "appliedStepTemplates": [{"slug": "jira-implement"}],
+                "steps": [
+                    {
+                        "id": "tpl:jira-implement:1.0.0:06:verify",
+                        "title": "Verify implementation",
+                        "instructions": "Verify the Jira issue.",
+                    },
+                    {
+                        "id": "tpl:jira-implement:1.0.0:07:create-pr",
+                        "title": "Create pull request",
+                        "instructions": (
+                            "Create a pull request and record pull_request_url."
+                        ),
+                    },
+                    {
+                        "id": "tpl:jira-implement:1.0.0:08:finalize",
+                        "title": "Finalize Jira status",
+                        "tool": {"type": "skill", "name": "jira-issue-updater"},
+                        "instructions": "Finalize Jira after PR creation.",
                     },
                 ],
             }
