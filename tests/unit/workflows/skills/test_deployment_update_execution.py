@@ -1191,7 +1191,14 @@ async def test_host_compose_runner_aliases_host_project_path_for_file_reads(
     local_dir = tmp_path / "workspace" / "host_project"
     local_dir.mkdir(parents=True)
     compose = local_dir / "docker-compose.yaml"
-    compose.write_text("services: {}\n", encoding="utf-8")
+    compose.write_text(
+        "services:\n"
+        "  api:\n"
+        "    image: example/app:latest\n"
+        "    env_file:\n"
+        "      - .env\n",
+        encoding="utf-8",
+    )
     dotenv = local_dir / ".env"
     dotenv.write_text("POSTGRES_PASSWORD=secret\n", encoding="utf-8")
     host_dir = tmp_path / "host" / "MoonMind"
@@ -1225,8 +1232,9 @@ async def test_host_compose_runner_aliases_host_project_path_for_file_reads(
         local_project_dir=str(local_dir),
     )
 
-    await runner._run_compose_command(("docker", "compose", "up", "-d"))
+    result = await runner._run_compose_command(("docker", "compose", "up", "-d"))
 
+    assert result["exitCode"] == 0
     assert host_dir.is_symlink()
     assert host_dir.resolve() == local_dir
     assert captured["cwd"] == str(local_dir)
