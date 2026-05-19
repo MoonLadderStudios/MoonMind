@@ -1277,6 +1277,90 @@ def test_runtime_planner_routes_jira_orchestrate_task_creator_as_skill_step():
     }
 
 
+def test_runtime_planner_routes_jira_implement_task_creator_as_skill_step():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "title": "Jira Breakdown and Implement",
+                "instructions": "Break down docs/Design.md into Jira stories.",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "none"},
+                "steps": [
+                    {
+                        "id": "breakdown",
+                        "tool": {"type": "skill", "name": "moonspec-breakdown"},
+                        "instructions": "Extract MoonSpec stories.",
+                    },
+                    {
+                        "id": "reconcile",
+                        "tool": {
+                            "type": "skill",
+                            "name": "story-reconcile-implementation",
+                        },
+                        "instructions": "Reconcile stories with current implementation.",
+                    },
+                    {
+                        "id": "jira",
+                        "tool": {"type": "skill", "name": "story.create_jira_issues"},
+                        "instructions": "Create Jira issues from the generated breakdown.",
+                        "storyOutput": {
+                            "mode": "jira",
+                            "jira": {
+                                "projectKey": "MM",
+                                "issueTypeName": "Story",
+                                "dependencyMode": "linear_blocker_chain",
+                            },
+                        },
+                    },
+                    {
+                        "id": "implement",
+                        "tool": {
+                            "type": "skill",
+                            "name": "story.create_jira_implement_tasks",
+                        },
+                        "instructions": "Create dependent Jira Implement tasks.",
+                        "jiraOrchestration": {
+                            "task": {
+                                "repository": "MoonLadderStudios/MoonMind",
+                                "runtime": {"mode": "codex_cli"},
+                                "publish": {
+                                    "mode": "pr",
+                                    "mergeAutomation": {"enabled": True},
+                                },
+                            },
+                            "traceability": {"sourceIssueKey": "MM-404"},
+                        },
+                    },
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    implement = plan["nodes"][3]
+
+    assert implement["tool"] == {
+        "type": "skill",
+        "name": "story.create_jira_implement_tasks",
+        "version": "1.0",
+    }
+    assert implement["inputs"]["selectedSkill"] == "story.create_jira_implement_tasks"
+    assert implement["inputs"]["jiraOrchestration"]["task"]["publish"] == {
+        "mode": "pr",
+        "mergeAutomation": {"enabled": True},
+    }
+    assert implement["inputs"]["jiraOrchestration"]["traceability"] == {
+        "sourceIssueKey": "MM-404"
+    }
+
+
 def test_runtime_planner_dedupes_repeated_identical_preset_steps():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(

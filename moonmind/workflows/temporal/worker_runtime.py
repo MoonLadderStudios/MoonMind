@@ -125,6 +125,7 @@ from moonmind.workflows.temporal.runtime.managed_session_supervisor import (
 from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
 from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
 from moonmind.workflows.temporal.story_output_tools import (
+    JIRA_STORY_TOOL_NAMES,
     register_story_output_tool_handlers,
 )
 from moonmind.workflows.temporal.service import TemporalExecutionService
@@ -849,9 +850,7 @@ def _normalize_runtime_mode(raw_mode: Any) -> str:
     return normalized
 
 _JIRA_AGENT_SKILLS = JIRA_AGENT_SKILLS
-_JIRA_STORY_OUTPUT_TOOLS = frozenset(
-    {"story.create_jira_issues", "story.create_jira_orchestrate_tasks"}
-)
+_JIRA_STORY_OUTPUT_TOOLS = JIRA_STORY_TOOL_NAMES
 _MOONSPEC_BREAKDOWN_TOOLS = frozenset({"moonspec-breakdown"})
 
 def _requires_branch_publish_for_story_output(value: Any) -> bool:
