@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. api_service/auth.py (score: 1.000, trust: canonical)\n    line 87: # Hardcoded default user details for disabled auth mode\n2. moonmind/integrations/jira/client.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Low-level Jira REST client with bounded retries and sanitized errors.\"\"\"\n3. moonmind/integrations/jira/auth.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Trusted Jira auth resolution for managed-agent tool execution.\"\"\"\n4. moonmind/integrations/jira/models.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Strict request models for Jira MCP tools.\"\"\"\n5. moonmind/integrations/jira/tool.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"High-level Jira tool orchestration and policy enforcement.\"\"\"\n6. moonmind/integrations/jira/adf.py (score: 1.000, trust: canonical)\n    line 27: \"\"\"Return an ADF document for one Jira rich-text field value.\"\"\"\n7. moonmind/integrations/pentest/models.py (score: 1.000, trust: canonical)\n    line 150: @field_validator(\"provider_id\", mode=\"before\")\n8. moonmind/integrations/jira/__init__.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Trusted Jira integration primitives for managed-agent tools.\"\"\"",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "api_service/auth.py",
+      "text": "line 87: # Hardcoded default user details for disabled auth mode",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 87,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/integrations/jira/client.py",
+      "text": "line 1: \"\"\"Low-level Jira REST client with bounded retries and sanitized errors.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/integrations/jira/auth.py",
+      "text": "line 1: \"\"\"Trusted Jira auth resolution for managed-agent tool execution.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/integrations/jira/models.py",
+      "text": "line 1: \"\"\"Strict request models for Jira MCP tools.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/integrations/jira/tool.py",
+      "text": "line 1: \"\"\"High-level Jira tool orchestration and policy enforcement.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/integrations/jira/adf.py",
+      "text": "line 27: \"\"\"Return an ADF document for one Jira rich-text field value.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 27,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/integrations/pentest/models.py",
+      "text": "line 150: @field_validator(\"provider_id\", mode=\"before\")",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 150,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/integrations/jira/__init__.py",
+      "text": "line 1: \"\"\"Trusted Jira integration primitives for managed-agent tools.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-05-19T22:43:40Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
