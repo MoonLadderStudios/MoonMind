@@ -406,10 +406,7 @@ export function OperationsSettingsSection({
     if (!targetRepository) {
       setTargetRepository(firstRepository.repository);
     }
-    if (!targetReference) {
-      setTargetReference(DEFAULT_TARGET_REFERENCE);
-    }
-  }, [imageTargets, targetReference, targetRepository]);
+  }, [imageTargets, targetRepository]);
 
   useEffect(() => {
     if (allowedModes.length > 0 && !allowedModes.includes(updateMode)) {
