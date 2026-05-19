@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
+    AgentRuntimeStepAttemptLaunch,
     AgentRunResult,
     AgentRunStatus,
     ManagedAgentRuntimeProfile,
@@ -43,6 +44,76 @@ def test_agent_execution_request_rejects_sensitive_parameter_keys() -> None:
             correlationId="corr-1",
             idempotencyKey="idem-1",
             parameters={"api_key": "should-not-be-accepted"},
+        )
+
+def test_agent_execution_request_accepts_compact_step_attempt_launch_policy() -> None:
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex",
+        correlationId="corr-1",
+        idempotencyKey="idem-1",
+        stepAttempt={
+            "workflowId": "wf-1",
+            "runId": "run-1",
+            "logicalStepId": "implement",
+            "attempt": 2,
+            "stepAttemptId": "wf-1:run-1:implement:attempt:2",
+            "reason": "tests_failed",
+            "runtimeContextPolicy": "fresh_agent_run",
+            "contextBundleRef": "attempt-context-bundle://sha256:abc",
+            "contextBundleDigest": "sha256:abc",
+            "preparedInputRefs": ["artifact://prepared"],
+            "resolvedSkillsetRef": "artifact://skillsets/resolved",
+            "runtimeSelection": {"runtimeId": "codex", "agentKind": "managed"},
+            "skillSourcePolicy": {
+                "repoSkills": "resolver_policy_enforced",
+                "localSkills": "resolver_policy_enforced",
+            },
+        },
+    )
+
+    assert request.step_attempt is not None
+    assert request.step_attempt.runtime_context_policy == "fresh_agent_run"
+    assert request.step_attempt.prepared_input_refs == ["artifact://prepared"]
+    assert request.model_dump(by_alias=True)["stepAttempt"][
+        "runtimeContextPolicy"
+    ] == "fresh_agent_run"
+
+
+def test_step_attempt_launch_rejects_mismatched_identity_and_secret_keys() -> None:
+    with pytest.raises(ValidationError, match="stepAttemptId must match"):
+        AgentRuntimeStepAttemptLaunch(
+            workflowId="wf-1",
+            runId="run-1",
+            logicalStepId="implement",
+            attempt=2,
+            stepAttemptId="wf-1:run-1:implement:attempt:1",
+            runtimeContextPolicy="fresh_agent_run",
+        )
+
+    with pytest.raises(ValidationError, match="raw credential keys"):
+        AgentRuntimeStepAttemptLaunch(
+            workflowId="wf-1",
+            runId="run-1",
+            logicalStepId="implement",
+            attempt=2,
+            stepAttemptId="wf-1:run-1:implement:attempt:2",
+            runtimeContextPolicy="fresh_agent_run",
+            skillSourcePolicy={"api_key": "raw-secret"},
+        )
+
+    with pytest.raises(
+        ValidationError,
+        match="stepAttempt\\.runtimeSelection must not contain raw credential keys",
+    ):
+        AgentRuntimeStepAttemptLaunch(
+            workflowId="wf-1",
+            runId="run-1",
+            logicalStepId="implement",
+            attempt=2,
+            stepAttemptId="wf-1:run-1:implement:attempt:2",
+            runtimeContextPolicy="fresh_agent_run",
+            runtimeSelection={"password": "raw-secret"},
         )
 
 def test_agent_execution_request_accepts_codex_managed_session_binding() -> None:
