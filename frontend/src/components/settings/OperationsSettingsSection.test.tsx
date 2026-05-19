@@ -283,15 +283,13 @@ describe('OperationsSettingsSection deployment update card', () => {
     expect(screen.queryByRole('navigation', { name: /deployment/i })).toBeNull();
   });
 
-  it('prefers recent release tags, warns for mutable tags, and omits runner image controls', async () => {
+  it('defaults the target reference to latest, warns for mutable tags, and omits runner image controls', async () => {
     renderOperations();
 
     const card = await screen.findByRole('region', { name: /deployment update/i });
     const reference = (await within(card).findByLabelText(/target reference/i)) as HTMLInputElement;
-    expect(reference.value).toBe('20260425.1234');
-    expect(within(card).getByDisplayValue('20260425.1234')).toBeTruthy();
-
-    fireEvent.change(reference, { target: { value: 'latest' } });
+    expect(reference.value).toBe('latest');
+    expect(within(card).getByDisplayValue('latest')).toBeTruthy();
     expect(within(card).getByText(/latest may resolve differently/i)).toBeTruthy();
 
     const mode = within(card).getByLabelText(/update mode/i) as HTMLSelectElement;
