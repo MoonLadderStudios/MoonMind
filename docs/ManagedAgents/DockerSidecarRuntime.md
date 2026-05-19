@@ -32,7 +32,7 @@ This document supersedes two specific clauses in the prior architecture for the 
 
 All other invariants from those documents still apply: artifacts and bounded metadata remain authoritative, session identity and workload identity remain separable, deployment credentials never reach the session, and the host Docker socket is never exposed to a managed session.
 
-Follow-up edits to the superseded sections of those documents are tracked in §28.
+The related architecture documents carry the same desired-state split: ordinary session-originated Docker work uses the sidecar runtime; control-plane DooD remains reserved for MoonMind admin/update, helper, and deliberately gated exceptional workloads.
 
 ---
 
@@ -829,12 +829,11 @@ Mental model:
 
 ---
 
-## 28. Follow-up alignment work
+## 28. Related architecture alignment
 
-This document supersedes specific clauses in two related architecture documents. Those docs need follow-up edits so that the canonical narrative stays coherent:
+The related managed-agent architecture documents use this document as the
+reference for sidecar runtime semantics:
 
-- `docs/ManagedAgents/ManagedAgentArchitecture.md §5.5` — rewrite to describe the sidecar topology as the default Docker capability path for managed sessions, and to keep the security boundary (no host socket, no app-container control) intact.
-- `docs/ManagedAgents/DockerOutOfDocker.md` — narrow the scope to MoonMind admin/update operations (and any deliberately exceptional control-plane workloads), and update §17.3 so it no longer asserts that session containers must request all Docker work through the control plane.
-- `docs/ManagedAgents/ManagedAgentArchitecture.md`'s "Related" list and any architecture-overview diagrams that imply DooD is the canonical workload path.
-
-Track those edits as part of adopting the sidecar runtime; do not leave them implicit.
+- `docs/ManagedAgents/ManagedAgentArchitecture.md §5.5` describes the sidecar as the default Docker capability path for managed sessions while preserving the no-host-socket and no-app-container-control boundary.
+- `docs/ManagedAgents/DockerOutOfDocker.md` defines the remaining control-plane Docker workload scope for MoonMind admin/update, helper, and deliberately gated exceptional workloads.
+- Top-level architecture references distinguish ordinary session-originated Docker work from control-plane DooD workloads.

@@ -27,7 +27,9 @@ def test_canonical_dood_doc_does_not_link_removed_phase0_tracker() -> None:
 def test_session_plane_doc_declares_session_assisted_workloads_outside_identity() -> None:
     session_text = _read(SESSION_DOC)
 
-    assert "control-plane tools" in session_text
+    assert "per-session sidecar runtime" in session_text
+    assert "does not receive the host socket" in session_text
+    assert "Control-plane Docker workload tools" in session_text
     assert "workload containers remain outside session identity" in session_text
 
 def test_execution_model_doc_keeps_docker_workloads_on_tool_path() -> None:
