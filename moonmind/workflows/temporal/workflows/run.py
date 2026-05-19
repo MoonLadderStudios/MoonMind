@@ -6137,6 +6137,10 @@ class MoonMindRunWorkflow:
             task_payload,
             include_applied_templates=False,
         )
+        skill_names = skill_names | self._task_applied_template_skill_names(
+            parameters,
+            task_payload,
+        )
         skill_names = skill_names | self._task_applied_template_slugs(
             parameters,
             task_payload,
@@ -6171,6 +6175,10 @@ class MoonMindRunWorkflow:
                         skill_names.add(name.lower())
 
         if include_applied_templates:
+            skill_names = skill_names | self._task_applied_template_skill_names(
+                parameters,
+                task_payload,
+            )
             for payload in (parameters, task_payload):
                 applied_templates = payload.get("appliedStepTemplates")
                 if not isinstance(applied_templates, Sequence) or isinstance(
@@ -6202,6 +6210,52 @@ class MoonMindRunWorkflow:
                         name = self._coerce_text(item, max_chars=120)
                     if name:
                         skill_names.add(name.lower())
+        return skill_names
+
+    def _task_applied_template_skill_names(
+        self,
+        parameters: Mapping[str, Any],
+        task_payload: Mapping[str, Any],
+    ) -> set[str]:
+        skill_names: set[str] = set()
+        for payload in (parameters, task_payload):
+            applied_templates = payload.get("appliedStepTemplates")
+            if applied_templates is None:
+                applied_templates = payload.get("applied_step_templates")
+            if not isinstance(applied_templates, Sequence) or isinstance(
+                applied_templates,
+                (str, bytes, bytearray),
+            ):
+                continue
+            for template in applied_templates:
+                if not isinstance(template, Mapping):
+                    continue
+                for key in ("tool", "skill"):
+                    nested = template.get(key)
+                    if isinstance(nested, Mapping):
+                        name = self._coerce_text(
+                            nested.get("name") or nested.get("id"),
+                            max_chars=120,
+                        )
+                        if name:
+                            skill_names.add(name.lower())
+                template_skills = template.get("skills")
+                if isinstance(template_skills, Mapping):
+                    include = template_skills.get("include")
+                    if isinstance(include, Sequence) and not isinstance(
+                        include,
+                        (str, bytes),
+                    ):
+                        for item in include:
+                            if isinstance(item, Mapping):
+                                name = self._coerce_text(
+                                    item.get("name") or item.get("id"),
+                                    max_chars=120,
+                                )
+                            else:
+                                name = self._coerce_text(item, max_chars=120)
+                            if name:
+                                skill_names.add(name.lower())
         return skill_names
 
     def _task_applied_template_slugs(

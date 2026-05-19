@@ -1331,6 +1331,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executions/{workflow_id}/steps/{logical_step_id}/attempts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Describe Execution Step Attempts */
+        get: operations["describe_execution_step_attempts_api_executions__workflow_id__steps__logical_step_id__attempts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/executions/{workflow_id}/steps/{logical_step_id}/attempts/{attempt}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Describe Execution Step Attempt */
+        get: operations["describe_execution_step_attempt_api_executions__workflow_id__steps__logical_step_id__attempts__attempt__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executions/{workflow_id}/steps": {
         parameters: {
             query?: never;
@@ -6550,6 +6584,186 @@ export interface components {
             }[];
         };
         /**
+         * StepAttemptDetailModel
+         * @description Bounded Step Attempt detail projection with section refs only.
+         */
+        StepAttemptDetailModel: {
+            /** Manifestartifactref */
+            manifestArtifactRef: string;
+            /** Stepattemptid */
+            stepAttemptId: string;
+            /** Workflowid */
+            workflowId: string;
+            /** Runid */
+            runId: string;
+            /** Logicalstepid */
+            logicalStepId: string;
+            /** Attempt */
+            attempt: number;
+            /** Sourceattempt */
+            sourceAttempt?: number | null;
+            lineage?: components["schemas"]["StepAttemptLineageModel"] | null;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "resume_from_failed_step" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "preparing" | "running" | "checking" | "succeeded" | "failed" | "blocked" | "canceled" | "superseded";
+            /** Terminaldisposition */
+            terminalDisposition?: ("accepted" | "retryable" | "blocked" | "needs_human" | "discarded" | "superseded" | "failed_unrecoverable" | "failed_with_remaining_work") | null;
+            /** Startedat */
+            startedAt?: string | null;
+            /** Updatedat */
+            updatedAt?: string | null;
+            /** Summary */
+            summary?: string | null;
+            /** Runtimechildrefs */
+            runtimeChildRefs?: {
+                [key: string]: unknown;
+            };
+            /** Workspacepolicy */
+            workspacePolicy?: string | null;
+            /** Gitdisposition */
+            gitDisposition?: string | null;
+            /** Qualitygateverdict */
+            qualityGateVerdict?: string | null;
+            /** Manifestrefs */
+            manifestRefs?: {
+                [key: string]: unknown;
+            };
+            /** Outputrefs */
+            outputRefs?: {
+                [key: string]: unknown;
+            };
+            /** Inputrefs */
+            inputRefs?: {
+                [key: string]: unknown;
+            };
+            /** Contextrefs */
+            contextRefs?: {
+                [key: string]: unknown;
+            };
+            /** Workspacerefs */
+            workspaceRefs?: {
+                [key: string]: unknown;
+            };
+            /** Executionrefs */
+            executionRefs?: {
+                [key: string]: unknown;
+            };
+            /** Checkrefs */
+            checkRefs?: {
+                [key: string]: unknown;
+            } | unknown[];
+            /** Sideeffectrefs */
+            sideEffectRefs?: {
+                [key: string]: unknown;
+            };
+            /** Dependencyeffectrefs */
+            dependencyEffectRefs?: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * StepAttemptLineageModel
+         * @description Optional cross-run provenance for resumed or related attempts.
+         */
+        StepAttemptLineageModel: {
+            /** Sourceworkflowid */
+            sourceWorkflowId: string;
+            /** Sourcerunid */
+            sourceRunId: string;
+            /** Sourcelogicalstepid */
+            sourceLogicalStepId: string;
+            /** Sourceattempt */
+            sourceAttempt: number;
+            /** Relationship */
+            relationship?: string | null;
+            /** Lineageattemptordinal */
+            lineageAttemptOrdinal?: number | null;
+        };
+        /**
+         * StepAttemptListModel
+         * @description Bounded attempt history for one logical step.
+         */
+        StepAttemptListModel: {
+            /** Workflowid */
+            workflowId: string;
+            /** Runid */
+            runId: string;
+            /**
+             * Runscope
+             * @default latest
+             * @constant
+             */
+            runScope: "latest";
+            /** Logicalstepid */
+            logicalStepId: string;
+            /** Attempts */
+            attempts?: components["schemas"]["StepAttemptProjectionModel"][];
+        };
+        /**
+         * StepAttemptProjectionModel
+         * @description Bounded Step Attempt projection derived from manifest refs.
+         */
+        StepAttemptProjectionModel: {
+            /** Manifestartifactref */
+            manifestArtifactRef: string;
+            /** Stepattemptid */
+            stepAttemptId: string;
+            /** Workflowid */
+            workflowId: string;
+            /** Runid */
+            runId: string;
+            /** Logicalstepid */
+            logicalStepId: string;
+            /** Attempt */
+            attempt: number;
+            /** Sourceattempt */
+            sourceAttempt?: number | null;
+            lineage?: components["schemas"]["StepAttemptLineageModel"] | null;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "resume_from_failed_step" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "preparing" | "running" | "checking" | "succeeded" | "failed" | "blocked" | "canceled" | "superseded";
+            /** Terminaldisposition */
+            terminalDisposition?: ("accepted" | "retryable" | "blocked" | "needs_human" | "discarded" | "superseded" | "failed_unrecoverable" | "failed_with_remaining_work") | null;
+            /** Startedat */
+            startedAt?: string | null;
+            /** Updatedat */
+            updatedAt?: string | null;
+            /** Summary */
+            summary?: string | null;
+            /** Runtimechildrefs */
+            runtimeChildRefs?: {
+                [key: string]: unknown;
+            };
+            /** Workspacepolicy */
+            workspacePolicy?: string | null;
+            /** Gitdisposition */
+            gitDisposition?: string | null;
+            /** Qualitygateverdict */
+            qualityGateVerdict?: string | null;
+            /** Manifestrefs */
+            manifestRefs?: {
+                [key: string]: unknown;
+            };
+            /** Outputrefs */
+            outputRefs?: {
+                [key: string]: unknown;
+            };
+        };
+        /**
          * StepLedgerArtifactsModel
          * @description Stable semantic artifact slots for step evidence.
          */
@@ -10885,6 +11099,71 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ExecutionFacetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    describe_execution_step_attempts_api_executions__workflow_id__steps__logical_step_id__attempts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+                logical_step_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StepAttemptListModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    describe_execution_step_attempt_api_executions__workflow_id__steps__logical_step_id__attempts__attempt__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+                logical_step_id: string;
+                attempt: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StepAttemptDetailModel"];
                 };
             };
             /** @description Validation Error */

@@ -1740,6 +1740,69 @@ class StepLedgerSnapshotModel(BaseModel):
     steps: list[StepLedgerRowModel] = Field(default_factory=list, alias="steps")
 
 
+class StepAttemptProjectionModel(BaseModel):
+    """Bounded Step Attempt projection derived from manifest refs."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    manifest_artifact_ref: str = Field(..., alias="manifestArtifactRef", min_length=1)
+    step_attempt_id: str = Field(..., alias="stepAttemptId", min_length=1)
+    workflow_id: str = Field(..., alias="workflowId", min_length=1)
+    run_id: str = Field(..., alias="runId", min_length=1)
+    logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
+    attempt: int = Field(..., alias="attempt", ge=1)
+    source_attempt: int | None = Field(None, alias="sourceAttempt", ge=1)
+    lineage: StepAttemptLineageModel | None = Field(None, alias="lineage")
+    reason: StepAttemptReason = Field(..., alias="reason")
+    status: StepAttemptStatus = Field(..., alias="status")
+    terminal_disposition: StepAttemptTerminalDisposition | None = Field(
+        None, alias="terminalDisposition"
+    )
+    started_at: datetime | None = Field(None, alias="startedAt")
+    updated_at: datetime | None = Field(None, alias="updatedAt")
+    summary: str | None = Field(None, alias="summary", max_length=1000)
+    runtime_child_refs: dict[str, Any] = Field(
+        default_factory=dict, alias="runtimeChildRefs"
+    )
+    workspace_policy: str | None = Field(None, alias="workspacePolicy")
+    git_disposition: str | None = Field(None, alias="gitDisposition")
+    quality_gate_verdict: str | None = Field(None, alias="qualityGateVerdict")
+    manifest_refs: dict[str, Any] = Field(default_factory=dict, alias="manifestRefs")
+    output_refs: dict[str, Any] = Field(default_factory=dict, alias="outputRefs")
+
+
+class StepAttemptDetailModel(StepAttemptProjectionModel):
+    """Bounded Step Attempt detail projection with section refs only."""
+
+    input_refs: dict[str, Any] = Field(default_factory=dict, alias="inputRefs")
+    context_refs: dict[str, Any] = Field(default_factory=dict, alias="contextRefs")
+    workspace_refs: dict[str, Any] = Field(default_factory=dict, alias="workspaceRefs")
+    execution_refs: dict[str, Any] = Field(default_factory=dict, alias="executionRefs")
+    check_refs: dict[str, Any] | list[Any] = Field(
+        default_factory=dict, alias="checkRefs"
+    )
+    side_effect_refs: dict[str, Any] = Field(
+        default_factory=dict, alias="sideEffectRefs"
+    )
+    dependency_effect_refs: dict[str, Any] = Field(
+        default_factory=dict, alias="dependencyEffectRefs"
+    )
+
+
+class StepAttemptListModel(BaseModel):
+    """Bounded attempt history for one logical step."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    workflow_id: str = Field(..., alias="workflowId", min_length=1)
+    run_id: str = Field(..., alias="runId", min_length=1)
+    run_scope: Literal["latest"] = Field("latest", alias="runScope")
+    logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
+    attempts: list[StepAttemptProjectionModel] = Field(
+        default_factory=list, alias="attempts"
+    )
+
+
 class ExecutionReportProjectionModel(BaseModel):
     """Bounded report summary surfaced on execution detail responses."""
 
