@@ -1052,6 +1052,12 @@ class ManagedAgentRuntimeProfile(BaseModel):
     @model_validator(mode="after")
     def _validate_runtime_profile(self) -> "ManagedAgentRuntimeProfile":
         self.labels = _normalize_profile_labels(self.labels)
+        if _contains_sensitive_key(self.labels):
+            raise ValueError(
+                "labels must not receive deployment credentials or unrelated "
+                "session tokens; credential exposure would leak MoonMind or "
+                "cross-session authority into the workload"
+            )
         if _contains_sensitive_key(self.agent.env):
             raise ValueError(
                 "agent.env must not receive deployment credentials or unrelated "
@@ -1294,7 +1300,12 @@ def build_docker_sidecar_launch_plan(
 ) -> RuntimeProfileDockerSidecarLaunchPlan | None:
     """Return the compact MM-695 launch contract for Docker sidecar profiles."""
 
-    if profile.workload_mode in {"no-docker", "kubernetes-job"}:
+    if profile.workload_mode == "kubernetes-job":
+        raise ValueError(
+            "workloadMode kubernetes-job is validated but cannot be launched until "
+            "the Kubernetes Job runtime renderer is wired into managed sessions"
+        )
+    if profile.workload_mode == "no-docker":
         return None
     sidecar = profile.docker_sidecar
     if sidecar is None or sidecar.socket is None or sidecar.storage is None:

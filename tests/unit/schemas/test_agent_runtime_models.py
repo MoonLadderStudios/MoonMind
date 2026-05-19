@@ -722,6 +722,14 @@ def test_managed_agent_runtime_profile_accepts_valid_docker_sidecar_contract() -
     assert profile.policy.moonmind_deployment_secrets_in_session == "forbidden"
 
 
+def test_managed_agent_runtime_profile_rejects_sensitive_label_keys() -> None:
+    payload = _valid_docker_sidecar_profile()
+    payload["labels"]["moonmind.session_token"] = "should-not-leak"
+
+    with pytest.raises(ValidationError, match="labels must not receive deployment"):
+        ManagedAgentRuntimeProfile.model_validate(payload)
+
+
 def test_managed_agent_runtime_profile_builds_mm695_sidecar_launch_plan() -> None:
     profile = ManagedAgentRuntimeProfile.model_validate(_valid_docker_sidecar_profile())
 
@@ -1111,7 +1119,15 @@ def test_mm698_kubernetes_job_profile_is_backend_portable_when_supported() -> No
     assert profile.resources.docker_sidecar is None
     assert profile.resources.nested_containers is None
     assert profile.labels["moonmind.workload_mode"] == "kubernetes-job"
-    assert build_docker_sidecar_launch_plan(profile) is None
+
+
+def test_mm698_kubernetes_job_profile_fails_fast_without_runtime_renderer() -> None:
+    profile = ManagedAgentRuntimeProfile.model_validate(
+        _valid_kubernetes_job_profile()
+    )
+
+    with pytest.raises(ValueError, match="cannot be launched until"):
+        build_docker_sidecar_launch_plan(profile)
 
 
 @pytest.mark.parametrize(

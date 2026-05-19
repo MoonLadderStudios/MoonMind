@@ -219,16 +219,15 @@ def test_launch_context_rejects_mm698_ungated_kubernetes_job_mode() -> None:
         )
 
 
-def test_launch_context_accepts_mm698_supported_kubernetes_job_without_plan() -> None:
-    context = build_managed_profile_launch_context(
-        profile={
-            "profile_id": "codex_default",
-            "credential_source": "oauth_volume",
-            "runtime_profile": _valid_kubernetes_job_profile(),
-        },
-        runtime_for_profile="codex_cli",
-        workflow_id="wf-agent-run-1",
-        default_credential_source="oauth_volume",
-    )
-
-    assert context.docker_sidecar_launch_plan is None
+def test_launch_context_rejects_mm698_supported_kubernetes_job_without_renderer() -> None:
+    with pytest.raises(ValueError, match="cannot be launched until"):
+        build_managed_profile_launch_context(
+            profile={
+                "profile_id": "codex_default",
+                "credential_source": "oauth_volume",
+                "runtime_profile": _valid_kubernetes_job_profile(),
+            },
+            runtime_for_profile="codex_cli",
+            workflow_id="wf-agent-run-1",
+            default_credential_source="oauth_volume",
+        )
