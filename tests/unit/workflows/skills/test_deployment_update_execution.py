@@ -196,6 +196,22 @@ class FailingPullRunner(RecordingRunner):
         return {"stack": stack, "command": list(command), "exitCode": 23}
 
 
+class SelfHostedComposeRunner(RecordingRunner):
+    async def capture_state(self, *, stack: str, phase: str) -> Mapping[str, Any]:
+        self.events.append(f"runner:capture:{phase}")
+        return {
+            "stack": stack,
+            "phase": phase,
+            "services": [
+                {
+                    "ID": "abc123def456",
+                    "Service": "temporal-worker-agent-runtime",
+                    "State": "running",
+                }
+            ],
+        }
+
+
 class SecretRecordingRunner(RecordingRunner):
     async def capture_state(self, *, stack: str, phase: str) -> Mapping[str, Any]:
         self.events.append(f"runner:capture:{phase}")
@@ -649,6 +665,33 @@ async def test_failed_command_result_stops_execution_and_persists_diagnostics() 
     assert command_payload["error"]["error_code"] == "DEPLOYMENT_COMMAND_FAILED"
 
 
+@pytest.mark.asyncio
+async def test_privileged_worker_fails_before_recreating_its_own_container(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HOSTNAME", "abc123def456")
+    events: list[str] = []
+    runner = SelfHostedComposeRunner(events)
+    executor, store, evidence, _runner, _events = _executor(
+        runner=runner, events=events
+    )
+
+    with pytest.raises(ToolFailure) as exc_info:
+        await executor.execute(_inputs())
+
+    assert exc_info.value.error_code == "DEPLOYMENT_RUNNER_UNSAFE"
+    assert exc_info.value.details["failureClass"] == "runner_self_recreation_unsafe"
+    assert exc_info.value.details["service"] == "temporal-worker-agent-runtime"
+    assert store.records == []
+    assert "runner:pull" not in events
+    assert "runner:up" not in events
+    assert [kind for kind, _payload in evidence.records] == [
+        "before-state",
+        "command-log",
+        "after-state",
+    ]
+
+
 def test_unsupported_runner_mode_fails_closed() -> None:
     with pytest.raises(ToolFailure) as exc_info:
         build_compose_command_plan(
@@ -1019,6 +1062,56 @@ async def test_host_compose_runner_returns_bounded_command_output_tails(
     assert result["stderr"] == "err tail"
     assert result["command"][-1] == "ps"
     assert captured["cwd"] == str(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_host_compose_runner_aliases_host_project_path_for_file_reads(
+    tmp_path, monkeypatch
+):
+    local_dir = tmp_path / "workspace" / "host_project"
+    local_dir.mkdir(parents=True)
+    compose = local_dir / "docker-compose.yaml"
+    compose.write_text("services: {}\n", encoding="utf-8")
+    dotenv = local_dir / ".env"
+    dotenv.write_text("POSTGRES_PASSWORD=secret\n", encoding="utf-8")
+    host_dir = tmp_path / "host" / "MoonMind"
+    captured: dict[str, Any] = {}
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self):
+            return b"ok", b""
+
+    async def fake_create_subprocess_exec(
+        *args: str,
+        cwd: str,
+        env: Mapping[str, str],
+        stdout: Any,
+        stderr: Any,
+    ):
+        captured["args"] = args
+        captured["cwd"] = cwd
+        assert (host_dir / ".env").read_text(encoding="utf-8") == (
+            "POSTGRES_PASSWORD=secret\n"
+        )
+        return FakeProcess()
+
+    monkeypatch.setattr(
+        asyncio, "create_subprocess_exec", fake_create_subprocess_exec
+    )
+    runner = HostDockerComposeRunner(
+        project_dir=str(host_dir),
+        local_project_dir=str(local_dir),
+    )
+
+    await runner._run_compose_command(("docker", "compose", "up", "-d"))
+
+    assert host_dir.is_symlink()
+    assert host_dir.resolve() == local_dir
+    assert captured["cwd"] == str(local_dir)
+    assert "--project-directory" in captured["args"]
+    assert str(host_dir) in captured["args"]
 
 
 @pytest.mark.asyncio

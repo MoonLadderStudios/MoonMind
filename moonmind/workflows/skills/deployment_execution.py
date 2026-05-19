@@ -633,6 +633,52 @@ class HostDockerComposeRunner:
             )
         return [*self._compose_base_command(), *parts[2:]]
 
+    def _ensure_host_project_read_alias(self) -> None:
+        """Expose the local checkout at the host path for Compose-side file reads."""
+
+        host_dir = self._host_dir()
+        local_dir = self._local_dir()
+        if host_dir == local_dir:
+            return
+        if not host_dir.is_absolute():
+            # Windows host paths are not representable as Linux filesystem
+            # aliases inside the worker. They continue to rely on explicit
+            # local compose-file remapping.
+            return
+        if host_dir.exists():
+            return
+        parent = host_dir.parent
+        if parent.exists() and not parent.is_dir():
+            raise ToolFailure(
+                error_code="POLICY_VIOLATION",
+                message="Deployment compose project path parent is not a directory.",
+                retryable=False,
+                details={
+                    "project_dir": str(host_dir),
+                    "parent": str(parent),
+                    "failureClass": "policy_violation",
+                },
+            )
+        try:
+            parent.mkdir(parents=True, exist_ok=True)
+            host_dir.symlink_to(local_dir, target_is_directory=True)
+        except FileExistsError:
+            return
+        except OSError as exc:
+            raise ToolFailure(
+                error_code="POLICY_VIOLATION",
+                message=(
+                    "Deployment compose project directory is not readable at its "
+                    "host path inside the worker."
+                ),
+                retryable=False,
+                details={
+                    "project_dir": str(host_dir),
+                    "local_project_dir": str(local_dir),
+                    "failureClass": "policy_violation",
+                },
+            ) from exc
+
     async def _run_compose_command(
         self,
         command: Sequence[str],
@@ -641,6 +687,7 @@ class HostDockerComposeRunner:
         max_stdout_chars: int | None = 512,
         max_stderr_chars: int | None = 512,
     ) -> Mapping[str, Any]:
+        self._ensure_host_project_read_alias()
         resolved = self._compose_command(command)
         env = os.environ.copy()
         if requested_image and not self.env_file:
@@ -852,6 +899,10 @@ class DeploymentUpdateExecutor:
                     stack=parsed["stack"], phase="before"
                 )
                 before_ref = await write_evidence("before-state", before_state)
+                _ensure_runner_survives_update(
+                    command_plan=command_plan,
+                    before_state=before_state,
+                )
 
                 _add_progress(
                     progress_events,
@@ -1063,6 +1114,91 @@ def _verification_failure_reason(verification: ComposeVerification) -> str | Non
     if not verification.succeeded:
         return "Deployment verification did not prove desired state."
     return None
+
+
+def _ensure_runner_survives_update(
+    *,
+    command_plan: ComposeCommandPlan,
+    before_state: Mapping[str, Any],
+) -> None:
+    if command_plan.runner_mode != "privileged_worker":
+        return
+    if _compose_up_targets_specific_services(command_plan.up_args):
+        return
+    current_container_id = _current_container_id()
+    if not current_container_id:
+        return
+    matching_service = _service_for_container_id(
+        before_state.get("services"),
+        current_container_id,
+    )
+    if not matching_service:
+        return
+    raise ToolFailure(
+        error_code="DEPLOYMENT_RUNNER_UNSAFE",
+        message=(
+            "Deployment update would recreate the worker container that is "
+            "running the update command. Configure an external or ephemeral "
+            "deployment updater before running full-stack updates."
+        ),
+        retryable=False,
+        details={
+            "runnerMode": command_plan.runner_mode,
+            "service": matching_service,
+            "failureClass": "runner_self_recreation_unsafe",
+        },
+    )
+
+
+def _compose_up_targets_specific_services(args: Sequence[str]) -> bool:
+    passthrough = False
+    for raw in args[3:]:
+        part = str(raw)
+        if passthrough:
+            return True
+        if part == "--":
+            passthrough = True
+            continue
+        if part.startswith("-"):
+            continue
+        return True
+    return False
+
+
+def _current_container_id() -> str:
+    for name in ("MOONMIND_CONTAINER_ID", "HOSTNAME"):
+        value = str(os.environ.get(name) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _service_for_container_id(services: Any, container_id: str) -> str:
+    needle = container_id.strip().lower()
+    if not needle:
+        return ""
+    if not isinstance(services, Sequence) or isinstance(services, (str, bytes)):
+        return ""
+    for service in services:
+        if not isinstance(service, Mapping):
+            continue
+        candidate = str(
+            service.get("ID")
+            or service.get("Id")
+            or service.get("ContainerID")
+            or service.get("container_id")
+            or ""
+        ).strip().lower()
+        if not candidate:
+            continue
+        if candidate.startswith(needle) or needle.startswith(candidate):
+            return str(
+                service.get("Service")
+                or service.get("Name")
+                or service.get("Names")
+                or ""
+            ).strip()
+    return ""
 
 
 def _failure_reason(exc: Exception) -> str:
