@@ -166,11 +166,12 @@ class PublishService:
         )
         token = ""
         push_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        resolved_github_credential = None
         if repo:
             from moonmind.auth.github_credentials import resolve_github_credential
 
-            resolved = await resolve_github_credential(repo=repo)
-            token = resolved.token or ""
+            resolved_github_credential = await resolve_github_credential(repo=repo)
+            token = resolved_github_credential.token or ""
             if token:
                 push_env["GITHUB_TOKEN"] = token
                 push_env["GH_TOKEN"] = token
@@ -216,11 +217,22 @@ class PublishService:
                 return f"published PR {url}"
             return f"published PR from {branch_name}"
 
+        if resolved_github_credential is None:
+            from moonmind.auth.github_credentials import resolve_github_credential
+
+            resolved_github_credential = await resolve_github_credential()
+            token = resolved_github_credential.token or ""
+        if not token:
+            raise RuntimeError(
+                "GitHub CLI PR fallback requires an explicit resolved token; "
+                "ambient gh auth state is not a managed publishing contract. "
+                f"{resolved_github_credential.safe_summary}"
+            )
+
         verify_cli_is_executable(self._gh_binary)
         gh_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
-        if token:
-            gh_env["GITHUB_TOKEN"] = token
-            gh_env["GH_TOKEN"] = token
+        gh_env["GITHUB_TOKEN"] = token
+        gh_env["GH_TOKEN"] = token
         if repo:
             gh_env["GH_REPO"] = repo
         await run_command(
