@@ -57,7 +57,7 @@ def _make_subprocess_result(
         args=[], returncode=returncode, stdout=stdout, stderr=stderr,
     )
 
-def test_detect_pr_url_uses_workspace_command_shims(tmp_path):
+def test_detect_pr_url_uses_workspace_command_shims_and_resolved_token(tmp_path):
     store = _make_mock_store(workspace_path=str(tmp_path / "run-1" / "repo"))
     activities = TemporalAgentRuntimeActivities(run_store=store)
     workspace = Path(str(store.load.return_value.workspace_path))
@@ -74,7 +74,10 @@ def test_detect_pr_url_uses_workspace_command_shims(tmp_path):
         return _make_subprocess_result(stdout='[{"url":"https://github.com/o/r/pull/1"}]\n')
 
     with patch("subprocess.run", side_effect=_mock_run):
-        pr_url = activities._detect_pr_url_from_workspace("run-1")
+        pr_url = activities._detect_pr_url_from_workspace(
+            "run-1",
+            github_token="resolved-token",
+        )
 
     assert pr_url == "https://github.com/o/r/pull/1"
     assert len(calls) == 3
@@ -82,6 +85,8 @@ def test_detect_pr_url_uses_workspace_command_shims(tmp_path):
     gh_env = gh_call["kwargs"]["env"]
     assert isinstance(gh_env, dict)
     assert gh_env["PATH"].startswith(str(workspace.parent / ".moonmind" / "bin"))
+    assert gh_env["GITHUB_TOKEN"] == "resolved-token"
+    assert gh_env["GH_TOKEN"] == "resolved-token"
 
 def test_parse_git_status_paths_handles_nul_delimited_non_ascii_and_renames() -> None:
     status_output = (
@@ -1437,6 +1442,87 @@ class TestPushWorkspaceBranch:
         assert captured_push_env["GIT_TERMINAL_PROMPT"] == "0"
 
     @pytest.mark.asyncio
+    async def test_push_does_not_expose_resolved_token_to_commit_env(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        captured_commit_env: dict[str, str] | None = None
+        captured_push_env: dict[str, str] | None = None
+
+        async def _mock_exec(*args, **kwargs):
+            nonlocal captured_commit_env, captured_push_env
+            command = [str(arg) for arg in args]
+            proc = AsyncMock()
+            if "rev-parse" in command and "--abbrev-ref" in command:
+                proc.communicate = AsyncMock(
+                    return_value=(b"feature/token-scope\n", b"")
+                )
+                proc.returncode = 0
+            elif "status" in command:
+                proc.communicate = AsyncMock(return_value=(b"M  changed.txt\0", b""))
+                proc.returncode = 0
+            elif "add" in command:
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif "diff" in command and "--cached" in command:
+                proc.communicate = AsyncMock(return_value=(b"changed.txt\n", b""))
+                proc.returncode = 0
+            elif "commit" in command:
+                captured_commit_env = kwargs["env"]
+                proc.communicate = AsyncMock(return_value=(b"[feature abc] msg\n", b""))
+                proc.returncode = 0
+            elif "symbolic-ref" in command:
+                proc.communicate = AsyncMock(return_value=(b"origin/main\n", b""))
+                proc.returncode = 0
+            elif "rev-parse" in command and "--verify" in command:
+                proc.communicate = AsyncMock(return_value=(b"", b"missing ref"))
+                proc.returncode = 1
+            elif "ls-remote" in command:
+                proc.communicate = AsyncMock(
+                    return_value=(
+                        b"remote-sha\trefs/heads/feature/token-scope\n",
+                        b"",
+                    )
+                )
+                proc.returncode = 0
+            elif "push" in command:
+                captured_push_env = kwargs["env"]
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif "rev-parse" in command and "HEAD" in command:
+                proc.communicate = AsyncMock(return_value=(b"head-sha\n", b""))
+                proc.returncode = 0
+            elif "rev-list" in command:
+                proc.communicate = AsyncMock(return_value=(b"1\n", b""))
+                proc.returncode = 0
+            else:
+                raise AssertionError(f"unexpected command: {command!r}")
+            return proc
+
+        with (
+            patch.object(
+                TemporalAgentRuntimeActivities,
+                "_resolve_workspace_push_github_token",
+                new_callable=AsyncMock,
+                return_value="resolved-push-token",
+            ),
+            patch("asyncio.create_subprocess_exec", side_effect=_mock_exec),
+        ):
+            result = await activities._push_workspace_branch("run-1")
+
+        assert result["push_status"] == "pushed"
+        assert captured_commit_env is not None
+        assert "GITHUB_TOKEN" not in captured_commit_env
+        assert "GH_TOKEN" not in captured_commit_env
+        assert captured_push_env is not None
+        assert captured_push_env["GITHUB_TOKEN"] == "resolved-push-token"
+        assert captured_push_env["GH_TOKEN"] == "resolved-push-token"
+
+    @pytest.mark.asyncio
     async def test_push_revlist_nonzero_returncode_falls_through(self):
         """Non-zero rev-list returncode falls through to 'pushed' instead of false no_commits."""
         store = _make_mock_store()
@@ -1545,6 +1631,12 @@ class TestFetchResultPushIntegration:
                 activities, "_detect_pr_url_from_workspace",
                 return_value=None,
             ),
+            patch.object(
+                activities,
+                "_resolve_workspace_push_github_token",
+                new_callable=AsyncMock,
+                return_value="resolved-token",
+            ),
             patch(
                 "moonmind.workflows.temporal.activity_runtime.ManagedAgentAdapter",
             ) as MockAdapter,
@@ -1559,7 +1651,11 @@ class TestFetchResultPushIntegration:
                 {"run_id": "run-1", "agent_id": "claude", "publish_mode": "pr"},
             )
 
-        mock_push.assert_called_once_with("run-1", target_branch=None)
+        mock_push.assert_called_once_with(
+            "run-1",
+            github_token="resolved-token",
+            target_branch=None,
+        )
         assert result.metadata["push_status"] == "pushed"
         assert result.metadata["push_branch"] == "my-branch"
 
@@ -1583,6 +1679,12 @@ class TestFetchResultPushIntegration:
                 "_detect_pr_url_from_workspace",
                 return_value=None,
             ),
+            patch.object(
+                activities,
+                "_resolve_workspace_push_github_token",
+                new_callable=AsyncMock,
+                return_value="resolved-token",
+            ),
             patch(
                 "moonmind.workflows.temporal.activity_runtime.ManagedAgentAdapter",
             ) as MockAdapter,
@@ -1605,6 +1707,7 @@ class TestFetchResultPushIntegration:
 
         mock_push.assert_called_once_with(
             "run-1",
+            github_token="resolved-token",
             target_branch="feature/existing",
             allow_target_branch_push=True,
             head_branch="feature/existing",
@@ -1653,6 +1756,12 @@ class TestFetchResultPushIntegration:
                 activities, "_detect_pr_url_from_workspace",
                 return_value=None,
             ),
+            patch.object(
+                activities,
+                "_resolve_workspace_push_github_token",
+                new_callable=AsyncMock,
+                return_value="resolved-token",
+            ),
             patch(
                 "moonmind.workflows.temporal.activity_runtime.ManagedAgentAdapter",
             ) as MockAdapter,
@@ -1695,6 +1804,12 @@ class TestFetchResultPushIntegration:
             patch.object(
                 activities, "_detect_pr_url_from_workspace",
                 return_value=None,
+            ),
+            patch.object(
+                activities,
+                "_resolve_workspace_push_github_token",
+                new_callable=AsyncMock,
+                return_value="resolved-token",
             ),
             patch(
                 "moonmind.workflows.temporal.activity_runtime.ManagedAgentAdapter",
@@ -1795,6 +1910,12 @@ class TestFetchResultPushIntegration:
                 activities, "_detect_pr_url_from_workspace",
                 return_value=None,
             ),
+            patch.object(
+                activities,
+                "_resolve_workspace_push_github_token",
+                new_callable=AsyncMock,
+                return_value="resolved-token",
+            ),
             patch(
                 "moonmind.workflows.temporal.activity_runtime.ManagedAgentAdapter",
             ) as MockAdapter,
@@ -1816,6 +1937,7 @@ class TestFetchResultPushIntegration:
 
         mock_push.assert_called_once_with(
             "run-1",
+            github_token="resolved-token",
             target_branch=None,
             commit_message="Use explicit publish commit",
         )
