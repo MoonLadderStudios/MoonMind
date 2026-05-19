@@ -4,6 +4,7 @@ from pathlib import Path
 
 from moonmind.schemas.managed_session_models import LaunchCodexManagedSessionRequest
 
+
 def write_fake_app_server(
     tmp_path: Path,
     *,
@@ -25,6 +26,7 @@ def write_fake_app_server(
     steer_record_path: Path | None = None,
     interrupt_record_path: Path | None = None,
     codex_home_record_path: Path | None = None,
+    thread_resume_error_message: str | None = None,
 ) -> Path:
     script = tmp_path / "fake_app_server.py"
     completion_block = """
@@ -48,6 +50,7 @@ INTERRUPT_RECORD_PATH = __INTERRUPT_RECORD_PATH__
 STEER_RECORD_PATH = __STEER_RECORD_PATH__
 CODEX_HOME_RECORD_PATH = __CODEX_HOME_RECORD_PATH__
 FAIL_THREAD_RESUME = __FAIL_THREAD_RESUME__
+THREAD_RESUME_ERROR_MESSAGE = __THREAD_RESUME_ERROR_MESSAGE__
 RESUME_REQUIRES_EXISTING_ROLLOUT_PATH = __RESUME_REQUIRES_EXISTING_ROLLOUT_PATH__
 START_THREAD_ID = __START_THREAD_ID__
 START_THREAD_PATH = __START_THREAD_PATH__
@@ -153,7 +156,10 @@ for line in sys.stdin:
         if FAIL_THREAD_RESUME:
             sys.stdout.write(json.dumps({
                 "id": msg_id,
-                "error": {"code": -32600, "message": "no rollout found for thread id vendor-thread-1"},
+                "error": {
+                    "code": -32603 if THREAD_RESUME_ERROR_MESSAGE else -32600,
+                    "message": THREAD_RESUME_ERROR_MESSAGE or "no rollout found for thread id vendor-thread-1",
+                },
             }) + "\\n")
             sys.stdout.flush()
             continue
@@ -316,6 +322,7 @@ __COMPLETION_BLOCK__
             repr(str(codex_home_record_path) if codex_home_record_path is not None else ""),
         )
         .replace("__FAIL_THREAD_RESUME__", "True" if fail_thread_resume else "False")
+        .replace("__THREAD_RESUME_ERROR_MESSAGE__", repr(thread_resume_error_message))
         .replace(
             "__RESUME_REQUIRES_EXISTING_ROLLOUT_PATH__",
             "True" if resume_requires_existing_rollout_path else "False",

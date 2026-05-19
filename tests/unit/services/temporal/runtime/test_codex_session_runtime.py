@@ -2544,6 +2544,64 @@ def test_runtime_send_turn_drops_stale_vendor_thread_path_when_fallback_starts_n
     assert updated_state["vendorThreadId"] == "vendor-thread-2"
     assert "vendorThreadPath" not in updated_state
 
+
+def test_runtime_send_turn_starts_new_thread_when_rollout_resume_file_is_empty(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    empty_rollout = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "05"
+        / "18"
+        / "rollout-2026-05-18T23-33-21-vendor-thread-1.jsonl"
+    )
+    empty_rollout.parent.mkdir(parents=True)
+    empty_rollout.write_text("", encoding="utf-8")
+    script = write_fake_app_server(
+        tmp_path,
+        fail_thread_resume=True,
+        thread_resume_error_message=(
+            "failed to read thread: thread-store internal error: failed to read "
+            f"thread {empty_rollout}: rollout at {empty_rollout} is empty"
+        ),
+        start_thread_id="vendor-thread-2",
+        start_thread_path=None,
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+
+    state_path = Path(request.session_workspace_path) / ".moonmind-codex-session-state.json"
+    state_payload = json.loads(state_path.read_text(encoding="utf-8"))
+    state_payload["vendorThreadPath"] = str(empty_rollout)
+    state_path.write_text(json.dumps(state_payload) + "\n", encoding="utf-8")
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "completed"
+    updated_state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert updated_state["vendorThreadId"] == "vendor-thread-2"
+    assert "vendorThreadPath" not in updated_state
+
+
 def test_runtime_send_turn_ignores_nonexistent_vendor_thread_path_from_state(
     tmp_path: Path,
 ) -> None:
