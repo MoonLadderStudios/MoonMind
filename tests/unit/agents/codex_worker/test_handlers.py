@@ -1515,8 +1515,10 @@ async def test_handler_resolves_relative_workdir_for_clone_destination() -> None
     clone_cmd = next(cmd for cmd in calls if cmd[:2] == ["git", "clone"])
     assert Path(clone_cmd[-1]).is_absolute()
 
-async def test_handler_publish_pr_invokes_gh(tmp_path: Path, monkeypatch) -> None:
-    """Publish mode `pr` should invoke gh PR creation command."""
+async def test_handler_publish_pr_rejects_gh_without_explicit_token(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Publish mode `pr` should not let gh use ambient auth without a token."""
 
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GH_TOKEN", raising=False)
@@ -1575,7 +1577,10 @@ async def test_handler_publish_pr_invokes_gh(tmp_path: Path, monkeypatch) -> Non
         },
     )
 
-    assert result.succeeded is True
+    assert result.succeeded is False
+    assert result.error_message is not None
+    assert "requires an explicit resolved token" in result.error_message
+    assert "ambient gh auth state is not a managed publishing contract" in result.error_message
     commit_call = next(
         call for call in calls if tuple(call["command"][:3]) == ("git", "commit", "-m")
     )
@@ -1585,22 +1590,9 @@ async def test_handler_publish_pr_invokes_gh(tmp_path: Path, monkeypatch) -> Non
     assert "123e4567-e89b-12d3-a456-426614174000" not in commit_cmd[3]
     assert commit_call["redaction_values"] == (commit_cmd[3],)
 
-    pr_call = next(
-        call for call in calls if tuple(call["command"][:3]) == ("gh", "pr", "create")
+    assert not any(
+        tuple(call["command"][:3]) == ("gh", "pr", "create") for call in calls
     )
-    pr_cmd = pr_call["command"]
-    pr_title = pr_cmd[pr_cmd.index("--title") + 1]
-    pr_body = pr_cmd[pr_cmd.index("--body") + 1]
-    assert pr_title == "implement publish test for job."
-    assert "MoonMind" not in pr_title
-    assert "123e4567-e89b-12d3-a456-426614174000" not in pr_title
-    assert "<!-- moonmind:begin -->" in pr_body
-    assert f"MoonMind Job: {job_id}" in pr_body
-    assert "Runtime: codex" in pr_body
-    assert "Base: main" in pr_body
-    assert "Head: moonmind-job-" in pr_body
-    assert "<!-- moonmind:end -->" in pr_body
-    assert pr_call["redaction_values"] == (pr_title, pr_body)
 
 async def test_derive_default_pr_body_sanitizes_metadata_values() -> None:
     """Generated handler footer should redact secret-like metadata values."""
