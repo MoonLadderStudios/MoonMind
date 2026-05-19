@@ -1,4 +1,4 @@
-"""Router tests for Jira MCP discovery and dispatch."""
+"""Router tests for MCP discovery and dispatch."""
 
 from __future__ import annotations
 
@@ -60,8 +60,50 @@ async def test_list_tools_includes_enabled_jira_tools(
         response = await client.get("/api/mcp/tools")
 
     assert response.status_code == 200
-    names = sorted(tool["name"] for tool in response.json()["tools"])
-    assert names == ["jira.get_issue", "jira.verify_connection"]
+    names = {tool["name"] for tool in response.json()["tools"]}
+    assert {"jira.get_issue", "jira.verify_connection"}.issubset(names)
+
+async def test_list_tools_includes_curated_pentest_execution_tool(
+    router_app: FastAPI,
+) -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get("/api/mcp/tools")
+
+    assert response.status_code == 200
+    tools = {tool["name"]: tool for tool in response.json()["tools"]}
+    pentest = tools["security.pentest.run"]
+    assert "PentestGPT" in pentest["description"]
+    assert pentest["inputSchema"]["required"] == [
+        "target",
+        "scope_artifact_ref",
+        "operation_mode",
+        "runner_profile_id",
+    ]
+    assert (
+        pentest["inputSchema"]["x-moonmind-invocation"]
+        == "temporal_task_submission"
+    )
+
+async def test_call_curated_execution_tool_requires_task_submission(
+    router_app: FastAPI,
+) -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/mcp/tools/call",
+            json={"tool": "security.pentest.run", "arguments": {}},
+        )
+
+    assert response.status_code == 409
+    assert (
+        response.json()["detail"]["code"]
+        == "execution_tool_requires_task_submission"
+    )
 
 async def test_call_tool_dispatches_to_jira_service(
     router_app: FastAPI,

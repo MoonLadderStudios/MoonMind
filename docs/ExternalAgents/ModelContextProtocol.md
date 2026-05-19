@@ -108,6 +108,11 @@ Field names match the Pydantic models in [`moonmind/mcp/tool_registry.py`](../mo
 
 **What is registered today**
 
+- **Temporal executable tools** — The discovery response includes governed
+  task-submission tools such as **`security.pentest.run`** so Mission Control can
+  offer them in the Create page Tool picker. These tools execute through the
+  Temporal task/plan path, not as immediate `/mcp/tools/call` RPCs; direct calls
+  return `execution_tool_requires_task_submission`.
 - **Jules** — When `JULES_ENABLED` is true and both `JULES_API_URL` and `JULES_API_KEY` are set, the server registers **`jules.create_task`**, **`jules.resolve_task`**, and **`jules.get_task`** (see [`moonmind/mcp/jules_tool_registry.py`](../moonmind/mcp/jules_tool_registry.py)).
 - **Legacy queue tools** — The queue-backed MCP tools were removed as part of the **single-substrate (Temporal)** migration. [`QueueToolRegistry`](../moonmind/mcp/tool_registry.py) remains as a compatibility stub and does not register queue tools in production. Do not rely on `queue.*` tool names from older docs or specs.
 
@@ -132,7 +137,7 @@ Successful response:
 }
 ```
 
-The shape of `result` is tool-specific (for Jules tools, task payloads are JSON-serialized per the Jules client). Errors use HTTP status codes with a JSON `detail` object; common `code` values include `tool_not_found`, `invalid_tool_arguments`, and Jules-specific `jules_rate_limited` / `jules_request_failed` (see [`mcp_tools.py`](../api_service/api/routers/mcp_tools.py)).
+The shape of `result` is tool-specific (for Jules tools, task payloads are JSON-serialized per the Jules client). Errors use HTTP status codes with a JSON `detail` object; common `code` values include `tool_not_found`, `invalid_tool_arguments`, `execution_tool_requires_task_submission`, and Jules-specific `jules_rate_limited` / `jules_request_failed` (see [`mcp_tools.py`](../api_service/api/routers/mcp_tools.py)).
 
 ### Configuring Codex (and similar clients)
 

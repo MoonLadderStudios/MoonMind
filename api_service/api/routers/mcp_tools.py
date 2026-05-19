@@ -12,6 +12,7 @@ from api_service.db.models import User
 from moonmind.config.settings import settings
 from moonmind.integrations.jira.errors import JiraToolError
 from moonmind.integrations.jira.tool import JiraToolService
+from moonmind.mcp.executable_tool_registry import ExecutableToolDiscoveryRegistry
 from moonmind.mcp.jira_tool_registry import (
     JiraToolExecutionContext,
     JiraToolRegistry,
@@ -36,6 +37,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/mcp", tags=["mcp-tools"])
 
 _queue_registry = QueueToolRegistry()
+_execution_tool_registry = ExecutableToolDiscoveryRegistry()
 _jira_registry: JiraToolRegistry | None = None
 _jira_service: JiraToolService | None = None
 _jules_registry: JulesToolRegistry | None = None
@@ -109,7 +111,7 @@ async def list_tools(
     _user: User = Depends(get_current_user()),
 ) -> ToolListResponse:
     """Return all registered MCP tool definitions."""
-    tools = _queue_registry.list_tools()
+    tools = _queue_registry.list_tools() + _execution_tool_registry.list_tools()
     if _jira_registry is not None:
         tools = tools + _jira_registry.list_tools()
     if _jules_registry is not None:
@@ -124,6 +126,18 @@ async def call_tool(
     """Dispatch one MCP tool invocation."""
 
     try:
+        if _execution_tool_registry.has_tool(payload.tool):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "execution_tool_requires_task_submission",
+                    "message": (
+                        f"Tool '{payload.tool}' is a Temporal executable tool. "
+                        "Submit it as a task or plan step instead of calling "
+                        "/mcp/tools/call directly."
+                    ),
+                },
+            )
         if payload.tool.startswith("jira.") and _jira_registry is not None:
             if _jira_service is None:  # pragma: no cover
                 raise ToolNotFoundError(payload.tool)
@@ -152,6 +166,8 @@ async def call_tool(
                 arguments=payload.arguments,
                 context=queue_context,
             )
+    except HTTPException:
+        raise
     except JiraToolError as exc:
         raise _to_http_exception(exc) from None
     except Exception as exc:  # pragma: no cover - mapping layer
