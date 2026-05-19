@@ -685,6 +685,10 @@ def _valid_docker_sidecar_profile() -> dict:
                 "intervalSeconds": 2,
             },
         },
+        "labels": {
+            "moonmind.kind": "managed-session",
+            "moonmind.workload_mode": "docker-sidecar",
+        },
         "policy": {
             "hostDockerSocket": "forbidden",
             "sharedDaemonAcrossUsers": "forbidden",
@@ -708,6 +712,10 @@ def test_managed_agent_runtime_profile_accepts_valid_docker_sidecar_contract() -
     assert profile.docker_sidecar.image == "docker:27-dind"
     assert profile.resources.docker_sidecar is not None
     assert profile.resources.docker_sidecar.ephemeral_storage == "40Gi"
+    assert profile.labels == {
+        "moonmind.kind": "managed-session",
+        "moonmind.workload_mode": "docker-sidecar",
+    }
     assert profile.cleanup.on_session_end.remove_docker_graph is True
     assert profile.policy.host_docker_socket == "forbidden"
     assert profile.policy.shared_daemon_across_users == "forbidden"
@@ -724,6 +732,10 @@ def test_managed_agent_runtime_profile_builds_mm695_sidecar_launch_plan() -> Non
     assert dumped["issueKey"] == "MM-695"
     assert dumped["applyLimitsOutsideNestedDaemon"] is True
     assert dumped["resources"]["session"]["maxRuntimeSeconds"] == 14400
+    assert dumped["labels"] == {
+        "moonmind.kind": "managed-session",
+        "moonmind.workload_mode": "docker-sidecar",
+    }
     assert dumped["resources"]["dockerSidecar"]["ephemeralStorage"] == "40Gi"
     assert dumped["resources"]["nestedContainers"]["maxContainers"] == 16
     assert dumped["cleanup"]["onSessionEnd"] == {
@@ -1033,3 +1045,123 @@ def test_no_docker_profile_cannot_be_raised_by_task_requested_mode() -> None:
             profile,
             task_requested_workload_mode="docker-sidecar",
         )
+
+
+def _valid_kubernetes_job_profile(*, supported: bool = True) -> dict:
+    return {
+        "workloadMode": "kubernetes-job",
+        "workspace": {
+            "volume": "agent_workspaces",
+            "mountPath": "/work/agent_jobs",
+            "repoEnv": "MOONMIND_REPO_DIR",
+            "lifecycle": "session",
+        },
+        "agent": {
+            "image": "moonmind/managed-agent:2026-05-16",
+            "workspace": {"mountPath": "/work/agent_jobs"},
+            "dockerClient": {
+                "enabled": False,
+                "composePlugin": False,
+                "daemonInAgent": False,
+            },
+            "env": {},
+            "mounts": [
+                {"name": "workspace", "mountPath": "/work/agent_jobs"},
+            ],
+        },
+        "dockerSidecar": {"enabled": False},
+        "resources": {
+            "session": {"maxRuntimeSeconds": 14400},
+            "agent": {"cpu": "2", "memory": "4Gi"},
+        },
+        "labels": {
+            "moonmind.kind": "managed-session",
+            "moonmind.workload_mode": "kubernetes-job",
+        },
+        "policy": {
+            "hostDockerSocket": "forbidden",
+            "sharedDaemonAcrossUsers": "forbidden",
+            "moonmindDeploymentSecretsInSession": "forbidden",
+            "appContainerControlFromSession": "forbidden",
+            "apiContainerWorkloadDockerSocketAccess": False,
+            "kubernetesJobRuntimeSupported": supported,
+        },
+    }
+
+
+def test_mm698_kubernetes_job_profile_requires_explicit_deployment_support() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="kubernetes-job requires explicit deployment support",
+    ):
+        ManagedAgentRuntimeProfile.model_validate(
+            _valid_kubernetes_job_profile(supported=False)
+        )
+
+
+def test_mm698_kubernetes_job_profile_is_backend_portable_when_supported() -> None:
+    profile = ManagedAgentRuntimeProfile.model_validate(
+        _valid_kubernetes_job_profile()
+    )
+
+    assert profile.workload_mode == "kubernetes-job"
+    assert profile.agent.docker_client.enabled is False
+    assert profile.docker_sidecar is not None
+    assert profile.docker_sidecar.enabled is False
+    assert profile.resources.docker_sidecar is None
+    assert profile.resources.nested_containers is None
+    assert profile.labels["moonmind.workload_mode"] == "kubernetes-job"
+    assert build_docker_sidecar_launch_plan(profile) is None
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda p: p["agent"]["dockerClient"].update({"enabled": True}),
+            "agent.dockerClient.enabled must be false for kubernetes-job",
+        ),
+        (
+            lambda p: p["agent"]["env"].update(
+                {"DOCKER_HOST": "unix:///var/run/moonmind-docker/docker.sock"}
+            ),
+            "DOCKER_HOST must not be set for kubernetes-job",
+        ),
+        (
+            lambda p: p["dockerSidecar"].update({"enabled": True}),
+            "dockerSidecar.enabled must be false for kubernetes-job",
+        ),
+        (
+            lambda p: p["resources"].update(
+                {
+                    "dockerSidecar": {
+                        "cpu": "4",
+                        "memory": "8Gi",
+                        "ephemeralStorage": "40Gi",
+                    }
+                }
+            ),
+            "resources.dockerSidecar must be omitted for kubernetes-job",
+        ),
+        (
+            lambda p: p["resources"].update(
+                {
+                    "nestedContainers": {
+                        "defaultCpu": "2",
+                        "defaultMemory": "4Gi",
+                        "maxContainers": 16,
+                    }
+                }
+            ),
+            "resources.nestedContainers must be omitted for kubernetes-job",
+        ),
+    ],
+)
+def test_mm698_kubernetes_job_profile_rejects_docker_sidecar_assumptions(
+    mutate, message
+) -> None:
+    payload = _valid_kubernetes_job_profile()
+    mutate(payload)
+
+    with pytest.raises(ValidationError, match=message):
+        ManagedAgentRuntimeProfile.model_validate(payload)

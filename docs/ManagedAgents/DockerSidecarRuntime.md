@@ -193,6 +193,10 @@ spec:
     agent:         { cpu: "2", memory: 4Gi }
     dockerSidecar: { cpu: "4", memory: 8Gi, ephemeralStorage: 40Gi }
 
+  labels:
+    moonmind.kind: managed-session
+    moonmind.workload_mode: docker-sidecar
+
   readiness:
     docker:
       required: true
@@ -206,6 +210,7 @@ spec:
     moonmindDeploymentSecretsInSession: forbidden
     appContainerControlFromSession: forbidden
     apiContainerWorkloadDockerSocketAccess: false
+    kubernetesJobRuntimeSupported: false
 ```
 
 ---
@@ -228,6 +233,10 @@ Recommended defaults:
 - Locked-down Kubernetes clusters: `kubernetes-job` (see §13).
 
 The mode is a deployment / profile decision. Task instructions cannot raise it.
+The durable profile contract includes the future `kubernetes-job` mode so the
+workspace, labels, capability, and resource semantics remain portable, but that
+mode fails closed unless the deployment profile explicitly sets
+`policy.kubernetesJobRuntimeSupported: true`.
 
 Docker deployments may set `MOONMIND_MANAGED_SESSION_DOCKER_MODE` to
 `docker-sidecar` or `no-docker` at the worker launcher boundary. When the
@@ -779,6 +788,14 @@ workspace: current-session
 ```
 
 That mode preserves the principle (no host Docker, no shared daemon) but trades the "agents see normal Docker" property for native cluster scheduling. It is a future option, not the default execution path today.
+
+The profile-level `labels` map is part of the durable runtime profile rather
+than a Docker-rendering detail. Docker launchers render those labels as Docker
+labels today; Kubernetes renderers map the same values to Pod or Job metadata.
+Kubernetes Job profiles omit `dockerSidecar`, `resources.dockerSidecar`, and
+`resources.nestedContainers`; backend-specific rendering owns the Job resource
+shape after `policy.kubernetesJobRuntimeSupported` has explicitly opted the
+deployment into that mode.
 
 ---
 
