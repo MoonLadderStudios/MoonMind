@@ -4207,6 +4207,47 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   justify-content: flex-end;
 }
 
+.queue-preset-management-inline {
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.queue-preset-management-inline > strong {
+  margin-right: auto;
+}
+
+.queue-dependencies-bottom {
+  margin-top: 1rem;
+}
+
+.queue-dependencies-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.queue-dependencies-info-toggle {
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 999px;
+}
+
+.queue-dependencies-info-toggle svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.queue-dependencies-info-panel {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.queue-preset-dialog {
+  width: min(440px, 100%);
+}
+
 .queue-step-actions {
   align-items: center;
   justify-content: space-between;

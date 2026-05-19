@@ -7593,25 +7593,20 @@ describe.skip("Task Create Entrypoint", () => {
     ).toBe(false);
   });
 
-  it("deletes the selected preset from Preset Management", async () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
-
+  it("deletes a preset entered via the delete preset dialog", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
     const presetsSection = await screen.findByLabelText("Preset Management");
-    await screen.findByText("Loaded 4 presets.");
-    fireEvent.change(within(presetsSection).getByLabelText("Preset Name"), {
-      target: { value: "Personal Demo" },
-    });
-    await waitFor(() => {
-      expect(
-        within(presetsSection)
-          .getByRole("button", { name: "Delete preset" })
-          .getAttribute("title"),
-      ).toBe("Delete the selected preset");
-    });
     fireEvent.click(
       within(presetsSection).getByRole("button", { name: "Delete preset" }),
+    );
+
+    const dialog = await screen.findByRole("dialog", { name: "Delete preset" });
+    fireEvent.change(within(dialog).getByLabelText("Preset Name"), {
+      target: { value: "Personal Demo" },
+    });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Confirm delete preset" }),
     );
 
     await waitFor(() => {
@@ -7622,28 +7617,27 @@ describe.skip("Task Create Entrypoint", () => {
         }),
       );
     });
-    expect(confirmSpy).toHaveBeenCalledWith(
-      "Delete preset 'Personal Demo'? This cannot be undone.",
-    );
     expect(await screen.findByText("Deleted preset 'Personal Demo'.")).toBeTruthy();
-
-    confirmSpy.mockRestore();
   });
 
-  it("saves presets from a typed Preset Name", async () => {
+  it("saves presets via the save preset dialog", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
     const presetsSection = await screen.findByLabelText("Preset Management");
-    await screen.findByText("Loaded 4 presets.");
-    fireEvent.change(within(presetsSection).getByLabelText("Preset Name"), {
-      target: { value: "New Draft Preset" },
-    });
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Save these instructions." },
     });
-    fireEvent.click(within(presetsSection).getByRole("button", {
-      name: "Save preset",
-    }));
+    fireEvent.click(
+      within(presetsSection).getByRole("button", { name: "Save preset" }),
+    );
+
+    const dialog = await screen.findByRole("dialog", { name: "Save preset" });
+    fireEvent.change(within(dialog).getByLabelText("Preset Name"), {
+      target: { value: "New Draft Preset" },
+    });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Confirm save preset" }),
+    );
 
     await waitFor(() => {
       const saveCall = fetchSpy.mock.calls.find(
