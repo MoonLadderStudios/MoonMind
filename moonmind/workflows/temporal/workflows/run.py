@@ -5864,6 +5864,48 @@ class MoonMindRunWorkflow:
                     )
                     if name:
                         skill_names.add(name.lower())
+
+        for payload in (parameters, task_payload):
+            applied_templates = payload.get("appliedStepTemplates")
+            if not isinstance(applied_templates, Sequence) or isinstance(
+                applied_templates,
+                (str, bytes, bytearray),
+            ):
+                continue
+            for template in applied_templates:
+                if not isinstance(template, Mapping):
+                    continue
+                slug = self._coerce_text(
+                    template.get("slug") or template.get("presetSlug"),
+                    max_chars=120,
+                )
+                if slug:
+                    skill_names.add(slug.lower())
+                composition = template.get("composition")
+                include_sources: list[Any] = []
+                if isinstance(composition, Mapping):
+                    composition_includes = composition.get("includes")
+                    if isinstance(composition_includes, Sequence) and not isinstance(
+                        composition_includes,
+                        (str, bytes, bytearray),
+                    ):
+                        include_sources.extend(composition_includes)
+                template_includes = template.get("includes")
+                if isinstance(template_includes, Sequence) and not isinstance(
+                    template_includes,
+                    (str, bytes, bytearray),
+                ):
+                    include_sources.extend(template_includes)
+                for include in include_sources:
+                    if not isinstance(include, Mapping):
+                        continue
+                    include_slug = self._coerce_text(
+                        include.get("slug") or include.get("presetSlug"),
+                        max_chars=120,
+                    )
+                    if include_slug:
+                        skill_names.add(include_slug.lower())
+
         skills_payload = task_payload.get("skills")
         if isinstance(skills_payload, Mapping):
             include = skills_payload.get("include")

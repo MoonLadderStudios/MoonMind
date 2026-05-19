@@ -1109,6 +1109,26 @@ def test_jira_implement_task_makes_pr_publish_optional(
         }
     )
 
+
+def test_jira_implement_applied_template_makes_pr_publish_optional(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    assert mock_run_workflow._pr_publish_optional_for_task(
+        {
+            "publishMode": "pr",
+            "task": {
+                "appliedStepTemplates": [
+                    {
+                        "slug": "jira-implement",
+                        "version": "1.0.0",
+                        "composition": {"includes": []},
+                    }
+                ],
+            },
+        }
+    )
+
+
 def test_native_pr_branch_resolution_keeps_legacy_branch_only_replay_shape(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,

@@ -2792,11 +2792,13 @@ async def test_run_execution_stage_jira_implement_not_required_skips_native_pr(
             "publishMode": "pr",
             "mergeAutomation": {"enabled": True, "jiraIssueKey": "MM-697"},
             "task": {
-                "skills": {
-                    "include": [
-                        {"name": "jira-implement"},
-                    ],
-                },
+                "appliedStepTemplates": [
+                    {
+                        "slug": "jira-implement",
+                        "version": "1.0.0",
+                        "composition": {"includes": []},
+                    }
+                ],
             },
         },
         plan_ref="art_plan_1",
@@ -2805,6 +2807,7 @@ async def test_run_execution_stage_jira_implement_not_required_skips_native_pr(
     assert not create_pr_called
     assert workflow._publish_status == "not_required"
     assert workflow._publish_context["mergeAutomationStatus"] == "not_applicable"
+
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_publish_mode_pr_jules_skips_native_pr(
