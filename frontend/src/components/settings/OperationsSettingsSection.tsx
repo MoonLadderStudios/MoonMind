@@ -153,7 +153,6 @@ const ImageTargetsSchema = z
 
 type DeploymentStackState = z.infer<typeof DeploymentStackStateSchema>;
 type ImageTargets = z.infer<typeof ImageTargetsSchema>;
-type ImageTargetRepository = ImageTargets['repositories'][number];
 type DeploymentAction = DeploymentStackState['recentActions'][number];
 
 export interface WorkerPauseConfig {
@@ -173,15 +172,7 @@ function isMutableReference(reference: string): boolean {
   return normalized === 'latest' || normalized === 'stable';
 }
 
-function preferredReference(repository: ImageTargetRepository | undefined): string {
-  if (!repository) {
-    return '';
-  }
-  const digest = repository.allowedReferences.find((reference) =>
-    reference.startsWith('sha256:'),
-  );
-  return digest || repository.recentTags[0] || repository.allowedReferences[0] || '';
-}
+const DEFAULT_TARGET_REFERENCE = 'latest';
 
 function modeLabel(mode: string): string {
   if (mode === 'force_recreate') {
@@ -245,7 +236,7 @@ export function OperationsSettingsSection({
   const [pauseReason, setPauseReason] = useState('');
   const [resumeReason, setResumeReason] = useState('');
   const [targetRepository, setTargetRepository] = useState('');
-  const [targetReference, setTargetReference] = useState('');
+  const [targetReference, setTargetReference] = useState(DEFAULT_TARGET_REFERENCE);
   const [updateMode, setUpdateMode] = useState('changed_services');
   const [removeOrphans, setRemoveOrphans] = useState(true);
   const [waitForServices, setWaitForServices] = useState(true);
@@ -415,10 +406,7 @@ export function OperationsSettingsSection({
     if (!targetRepository) {
       setTargetRepository(firstRepository.repository);
     }
-    if (!targetReference) {
-      setTargetReference(preferredReference(firstRepository));
-    }
-  }, [imageTargets, targetReference, targetRepository]);
+  }, [imageTargets, targetRepository]);
 
   useEffect(() => {
     if (allowedModes.length > 0 && !allowedModes.includes(updateMode)) {
@@ -887,12 +875,8 @@ export function OperationsSettingsSection({
                   className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                   value={targetRepository}
                   onChange={(event) => {
-                    const nextRepository = event.target.value;
-                    setTargetRepository(nextRepository);
-                    const repository = imageTargets?.repositories.find(
-                      (candidate) => candidate.repository === nextRepository,
-                    );
-                    setTargetReference(preferredReference(repository));
+                    setTargetRepository(event.target.value);
+                    setTargetReference(DEFAULT_TARGET_REFERENCE);
                   }}
                 >
                   {imageTargets?.repositories.map((repository) => (
