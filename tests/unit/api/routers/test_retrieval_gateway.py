@@ -15,9 +15,21 @@ from api_service.api.routers.retrieval_gateway import (
 from moonmind.rag.context_pack import ContextItem, build_context_pack
 
 
+class StubSettings:
+    similarity_top_k = 3
+
+    def __init__(self, *, executable: bool = True, reason: str = "ok") -> None:
+        self.executable = executable
+        self.reason = reason
+
+    def retrieval_execution_reason(self, source, *, preferred_transport=None):
+        _ = source, preferred_transport
+        return self.executable, self.reason
+
+
 class StubService:
-    def __init__(self) -> None:
-        self.settings = SimpleNamespace(similarity_top_k=3)
+    def __init__(self, *, executable: bool = True, reason: str = "ok") -> None:
+        self.settings = StubSettings(executable=executable, reason=reason)
         self.calls: list[dict[str, object]] = []
 
     def retrieve(self, **kwargs):
@@ -131,6 +143,31 @@ def test_context_accepts_scoped_retrieval_token_and_preserves_request_knobs(
             "initiation_mode": "session",
         }
     ]
+
+
+def test_context_fails_fast_when_retrieval_unavailable_for_session() -> None:
+    app = _build_app()
+    app.dependency_overrides[authorize_retrieval_request] = _oidc_auth
+    service = StubService(executable=False, reason="rag_disabled")
+    app.dependency_overrides[get_retrieval_service] = lambda: service
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/retrieval/context",
+            json={
+                "query": "q",
+                "filters": {"repo": "moonmind"},
+                "top_k": 2,
+                "overlay_policy": "include",
+                "budgets": {"tokens": 32},
+            },
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "Retrieval is unavailable for this managed session (reason: rag_disabled)."
+    )
+    assert service.calls == []
 
 
 def test_context_retrieval_token_enforces_allowed_repository_scope(

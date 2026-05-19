@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. api_service/ui_assets.py (score: 1.000, trust: canonical)\n    line 1: import json\n2. moonmind/indexers/confluence_indexer.py (score: 1.000, trust: canonical)\n    line 6: from llama_index.readers.confluence import ConfluenceReader\n3. moonmind/indexers/google_drive_indexer.py (score: 1.000, trust: canonical)\n    line 7: from llama_index.readers.google import GoogleDriveReader\n4. moonmind/indexers/local_data_indexer.py (score: 1.000, trust: canonical)\n    line 9: # Import SimpleDirectoryReader with fallbacks to support multiple versions of\n5. moonmind/indexers/jira_indexer.py (score: 1.000, trust: canonical)\n    line 8: # LlamaIndex Jira reader (ensure this import path is correct if it's part of an integration package)\n6. moonmind/indexers/github_indexer.py (score: 1.000, trust: canonical)\n    line 8: from llama_index.readers.github import GithubRepositoryReader\n7. moonmind/factories/vector_store_factory.py (score: 1.000, trust: canonical)\n    line 49: f\"Collection '{settings.vector_store_collection_name}' already exists with \"\n8. moonmind/factories/openai_factory.py (score: 1.000, trust: canonical)\n    line 43: # Example of how to adjust settings if they are not already structured for openai",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "api_service/ui_assets.py",
+      "text": "line 1: import json",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/confluence_indexer.py",
+      "text": "line 6: from llama_index.readers.confluence import ConfluenceReader",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 6,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/google_drive_indexer.py",
+      "text": "line 7: from llama_index.readers.google import GoogleDriveReader",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 7,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/local_data_indexer.py",
+      "text": "line 9: # Import SimpleDirectoryReader with fallbacks to support multiple versions of",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 9,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/jira_indexer.py",
+      "text": "line 8: # LlamaIndex Jira reader (ensure this import path is correct if it's part of an integration package)",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 8,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/github_indexer.py",
+      "text": "line 8: from llama_index.readers.github import GithubRepositoryReader",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 8,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/factories/vector_store_factory.py",
+      "text": "line 49: f\"Collection '{settings.vector_store_collection_name}' already exists with \"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 49,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/factories/openai_factory.py",
+      "text": "line 43: # Example of how to adjust settings if they are not already structured for openai",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 43,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-05-19T20:27:34Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
