@@ -1175,6 +1175,10 @@ def test_record_execution_context_preserves_provider_native_pr_record(
         AgentRunResult(
             summary="Provider created PR.",
             metadata={
+                "prMetadata": {
+                    "title": "Generic title should not win",
+                    "body": "Generic body should not win.",
+                },
                 "providerNativePullRequest": {
                     "url": "https://github.com/org/repo/pull/676",
                     "readinessState": "pending",

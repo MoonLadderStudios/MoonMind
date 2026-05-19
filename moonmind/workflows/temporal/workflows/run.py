@@ -5793,8 +5793,8 @@ class MoonMindRunWorkflow:
         pull_request_url = self._extract_pull_request_url(execution_result)
         if pull_request_url:
             self._publish_context["pullRequestUrl"] = pull_request_url
-        self._record_provider_native_publish_context(outputs)
         self._record_publish_metadata_context(outputs)
+        self._record_provider_native_publish_context(outputs)
         head_sha = self._coerce_text(
             outputs.get("head_sha")
             or outputs.get("headSha")
@@ -5836,17 +5836,6 @@ class MoonMindRunWorkflow:
         )
         if not isinstance(raw_provider_pr, Mapping):
             return
-
-        pull_request_url = self._coerce_text(
-            raw_provider_pr.get("url")
-            or raw_provider_pr.get("pullRequestUrl")
-            or raw_provider_pr.get("prUrl"),
-            max_chars=500,
-        )
-        if pull_request_url:
-            match = _GITHUB_PR_URL_PATTERN.search(pull_request_url)
-            if match is not None:
-                self._publish_context["pullRequestUrl"] = match.group(0)
 
         readiness_state = self._coerce_text(
             raw_provider_pr.get("readinessState")
@@ -5982,11 +5971,27 @@ class MoonMindRunWorkflow:
         include_applied_templates: bool = False,
     ) -> bool:
         task_payload = self._mapping_value(parameters, "task")
-        skill_names = self._task_skill_names(parameters, task_payload)
+        skill_names = self._task_skill_names(
+            parameters,
+            task_payload,
+            include_applied_templates=False,
+        )
+        skill_names = skill_names | self._task_applied_template_skill_names(
+            parameters,
+            task_payload,
+        )
+        skill_names = skill_names | self._task_applied_template_slugs(
+            parameters,
+            task_payload,
+            require_composition=True,
+        )
         if include_applied_templates:
-            skill_names = skill_names | self._task_applied_template_slugs(
+            applied_template_slugs = self._task_applied_template_slugs(
                 parameters, task_payload
             )
+            if applied_template_slugs:
+                skill_names.discard("auto")
+            skill_names = skill_names | applied_template_slugs
         if not skill_names:
             return False
         return skill_names.issubset(_PR_OPTIONAL_TASK_SKILLS)
@@ -5995,6 +6000,8 @@ class MoonMindRunWorkflow:
         self,
         parameters: Mapping[str, Any],
         task_payload: Mapping[str, Any],
+        *,
+        include_applied_templates: bool = True,
     ) -> set[str]:
         skill_names: set[str] = set()
         for payload in (parameters, task_payload):
@@ -6008,36 +6015,15 @@ class MoonMindRunWorkflow:
                     if name:
                         skill_names.add(name.lower())
 
-        for payload in (parameters, task_payload):
-            applied_templates = payload.get("appliedStepTemplates")
-            if not isinstance(applied_templates, Sequence) or isinstance(
-                applied_templates,
-                (str, bytes, bytearray),
-            ):
-                continue
-            for template in applied_templates:
-                if not isinstance(template, Mapping):
-                    continue
-                slug_sources: list[Any] = [template]
-                composition = template.get("composition")
-                for include_source in (composition, template):
-                    if not isinstance(include_source, Mapping):
-                        continue
-                    includes = include_source.get("includes")
-                    if isinstance(includes, Sequence) and not isinstance(
-                        includes,
-                        (str, bytes, bytearray),
-                    ):
-                        slug_sources.extend(includes)
-                for slug_source in slug_sources:
-                    if not isinstance(slug_source, Mapping):
-                        continue
-                    slug = self._coerce_text(
-                        slug_source.get("slug") or slug_source.get("presetSlug"),
-                        max_chars=120,
-                    )
-                    if slug:
-                        skill_names.add(slug.lower())
+        if include_applied_templates:
+            skill_names = skill_names | self._task_applied_template_skill_names(
+                parameters,
+                task_payload,
+            )
+            skill_names = skill_names | self._task_applied_template_slugs(
+                parameters,
+                task_payload,
+            )
 
         skills_payload = task_payload.get("skills")
         if isinstance(skills_payload, Mapping):
@@ -6055,10 +6041,58 @@ class MoonMindRunWorkflow:
                         skill_names.add(name.lower())
         return skill_names
 
+    def _task_applied_template_skill_names(
+        self,
+        parameters: Mapping[str, Any],
+        task_payload: Mapping[str, Any],
+    ) -> set[str]:
+        skill_names: set[str] = set()
+        for payload in (parameters, task_payload):
+            applied_templates = payload.get("appliedStepTemplates")
+            if applied_templates is None:
+                applied_templates = payload.get("applied_step_templates")
+            if not isinstance(applied_templates, Sequence) or isinstance(
+                applied_templates,
+                (str, bytes, bytearray),
+            ):
+                continue
+            for template in applied_templates:
+                if not isinstance(template, Mapping):
+                    continue
+                for key in ("tool", "skill"):
+                    nested = template.get(key)
+                    if isinstance(nested, Mapping):
+                        name = self._coerce_text(
+                            nested.get("name") or nested.get("id"),
+                            max_chars=120,
+                        )
+                        if name:
+                            skill_names.add(name.lower())
+                template_skills = template.get("skills")
+                if isinstance(template_skills, Mapping):
+                    include = template_skills.get("include")
+                    if isinstance(include, Sequence) and not isinstance(
+                        include,
+                        (str, bytes),
+                    ):
+                        for item in include:
+                            if isinstance(item, Mapping):
+                                name = self._coerce_text(
+                                    item.get("name") or item.get("id"),
+                                    max_chars=120,
+                                )
+                            else:
+                                name = self._coerce_text(item, max_chars=120)
+                            if name:
+                                skill_names.add(name.lower())
+        return skill_names
+
     def _task_applied_template_slugs(
         self,
         parameters: Mapping[str, Any],
         task_payload: Mapping[str, Any],
+        *,
+        require_composition: bool = False,
     ) -> set[str]:
         slugs: set[str] = set()
         for payload in (parameters, task_payload):
@@ -6073,16 +6107,34 @@ class MoonMindRunWorkflow:
             for item in applied_templates:
                 if not isinstance(item, Mapping):
                     continue
-                slug = self._coerce_text(
-                    item.get("slug")
-                    or item.get("templateSlug")
-                    or item.get("template_slug")
-                    or item.get("id")
-                    or item.get("name"),
-                    max_chars=120,
-                )
-                if slug:
-                    slugs.add(slug.lower())
+                composition = item.get("composition")
+                if require_composition and not isinstance(composition, Mapping):
+                    continue
+                slug_sources: list[Any] = [item]
+                for include_source in (composition, item):
+                    if not isinstance(include_source, Mapping):
+                        continue
+                    includes = include_source.get("includes")
+                    if isinstance(includes, Sequence) and not isinstance(
+                        includes,
+                        (str, bytes, bytearray),
+                    ):
+                        slug_sources.extend(includes)
+                for slug_source in slug_sources:
+                    if not isinstance(slug_source, Mapping):
+                        continue
+                    slug = self._coerce_text(
+                        slug_source.get("slug")
+                        or slug_source.get("presetSlug")
+                        or slug_source.get("preset_slug")
+                        or slug_source.get("templateSlug")
+                        or slug_source.get("template_slug")
+                        or slug_source.get("id")
+                        or slug_source.get("name"),
+                        max_chars=120,
+                    )
+                    if slug:
+                        slugs.add(slug.lower())
         return slugs
 
     def _execution_result_has_publishable_changes(self, execution_result: Any) -> bool:
