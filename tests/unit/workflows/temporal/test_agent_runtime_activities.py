@@ -1760,6 +1760,7 @@ async def test_fetch_result_reverifies_and_clears_pr_not_found_when_merged(
         run_id="fr-reverify",
         head_branch="mm-398-e3573b0c",
         base_branch="main",
+        github_token=None,
     )
     assert result.failure_class is None, (
         "PR re-verified as merged: failure_class must be cleared"
@@ -1870,6 +1871,7 @@ async def test_fetch_result_reverifies_blocked_resolver_by_pr_number_when_merged
         run_id=run_id,
         head_branch=None,
         base_branch=None,
+        github_token=None,
     )
     assert result.failure_class is None
     assert "#1727" in (result.summary or "")
