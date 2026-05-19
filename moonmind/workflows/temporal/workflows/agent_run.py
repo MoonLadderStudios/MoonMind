@@ -666,7 +666,6 @@ class MoonMindAgentRun:
             or existing_map.get("pullRequestUrl")
             or metadata.get("pullRequestUrl")
             or metadata.get("prUrl")
-            or metadata.get("externalUrl")
         )
         pull_request_url = str(raw_url or "").strip()
         if not pull_request_url:
