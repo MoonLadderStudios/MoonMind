@@ -44,6 +44,7 @@ agent_jobs/
 # Runtime / ephemeral data (never commit)
 /var/
 /artifacts/
+/artifacts.root-readonly/
 /specs/
 /deploy/state/.env.deploy
 /deploy/state/desired-state.json
