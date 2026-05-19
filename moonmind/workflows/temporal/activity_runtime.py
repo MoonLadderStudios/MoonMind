@@ -436,6 +436,13 @@ def _docker_workflow_mode_forbidden_failure(*, workflow_docker_mode: str, tool_n
 CODEX_TRANSIENT_TURN_ERROR_TYPE = "CodexTransientTurnError"
 CODEX_PERMANENT_TURN_ERROR_TYPE = "CodexPermanentTurnError"
 CODEX_EMPTY_ASSISTANT_FAILURE_CAUSE = "app_server_protocol_empty_turn"
+_PROVIDER_NATIVE_PR_AGENT_IDS = frozenset({"jules", "jules_api"})
+
+
+def _normalize_provider_native_pr_agent_id(agent_id: str | None) -> str:
+    if not isinstance(agent_id, str):
+        return ""
+    return agent_id.strip().lower().replace("-", "_")
 
 
 def _is_empty_assistant_recovery_failure(
@@ -5795,7 +5802,7 @@ class TemporalAgentRuntimeActivities:
                 runId=request.run_id,
                 agentId=request.agent_id,
             )
-        run_id, _agent_id = self._agent_runtime_request_identifiers(request)
+        run_id, agent_id = self._agent_runtime_request_identifiers(request)
 
         publish_mode = (
             request.publish_mode
@@ -5922,7 +5929,15 @@ class TemporalAgentRuntimeActivities:
 
             # Push the agent's work branch if publish_mode requires it and the
             # agent completed without failure.
-            if result.failure_class is None and publish_mode != "none":
+            publish_agent_id = agent_id
+            if record is not None:
+                publish_agent_id = record.runtime_id or record.agent_id or agent_id
+            if (
+                result.failure_class is None
+                and publish_mode != "none"
+                and _normalize_provider_native_pr_agent_id(publish_agent_id)
+                not in _PROVIDER_NATIVE_PR_AGENT_IDS
+            ):
                 raw_commit_message = (
                     request.commit_message
                     if isinstance(request, AgentRuntimeFetchResultInput)

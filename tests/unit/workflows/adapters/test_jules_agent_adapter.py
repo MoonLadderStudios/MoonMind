@@ -18,11 +18,13 @@ class _FakeJulesAdapterClient:
         create_status: str = "pending",
         get_status: str = "completed",
         get_pull_request_url: str | None = None,
+        get_response_pull_request_url: str | None = None,
         resolve_raises: bool = False,
     ) -> None:
         self.create_status = create_status
         self.get_status = get_status
         self.get_pull_request_url = get_pull_request_url
+        self.get_response_pull_request_url = get_response_pull_request_url
         self.resolve_raises = resolve_raises
         self.created: list[object] = []
         self.lookups: list[object] = []
@@ -47,6 +49,7 @@ class _FakeJulesAdapterClient:
             task_id=request.task_id,
             status=self.get_status,
             url=f"https://jules.example.test/tasks/{request.task_id}",
+            response_pull_request_url=self.get_response_pull_request_url,
             outputs=outputs,
         )
 
@@ -128,6 +131,40 @@ async def test_status_and_fetch_result_prefer_pull_request_url():
     assert result.metadata["normalizedStatus"] == "completed"
     assert result.metadata["externalUrl"] == "https://github.com/org/repo/pull/123"
     assert result.metadata["pullRequestUrl"] == "https://github.com/org/repo/pull/123"
+
+
+async def test_status_and_fetch_result_prefer_response_pull_request_url_field():
+    client = _FakeJulesAdapterClient(
+        get_status="in_progress",
+        get_response_pull_request_url="https://github.com/org/repo/pull/456",
+        get_pull_request_url="https://github.com/org/repo/pull/123",
+    )
+    adapter = JulesAgentAdapter(client_factory=lambda: client)
+
+    status = await adapter.status("task-pr")
+    result = await adapter.fetch_result("task-pr")
+
+    assert status.status == "completed"
+    assert status.metadata["externalUrl"] == "https://github.com/org/repo/pull/456"
+    assert status.metadata["pullRequestUrl"] == "https://github.com/org/repo/pull/456"
+    assert result.metadata["externalUrl"] == "https://github.com/org/repo/pull/456"
+    assert result.metadata["pullRequestUrl"] == "https://github.com/org/repo/pull/456"
+
+
+async def test_task_response_accepts_top_level_pull_request_url_alias():
+    response = JulesTaskResponse.model_validate(
+        {
+            "id": "task-123",
+            "state": "IN_PROGRESS",
+            "pull_request_url": "https://github.com/org/repo/pull/789",
+            "outputs": [
+                {"pullRequest": {"url": "https://github.com/org/repo/pull/123"}}
+            ],
+        }
+    )
+
+    assert response.pull_request_url == "https://github.com/org/repo/pull/789"
+
 
 async def test_cancel_returns_intervention_requested_when_provider_rejects_cancel():
     client = _FakeJulesAdapterClient(resolve_raises=True)
