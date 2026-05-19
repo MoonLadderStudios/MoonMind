@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
+from collections import deque
 from collections.abc import Mapping
+from copy import deepcopy
 from datetime import datetime
 from typing import Any
 
@@ -128,6 +129,28 @@ def _dependency_output_signature(
     }
 
 
+def _mark_step_requires_revalidation(
+    row: dict[str, Any],
+    *,
+    dependency_id: str,
+    expected: Mapping[str, Any],
+    actual: dict[str, Any] | None,
+    updated_at: datetime,
+) -> None:
+    row["status"] = "pending"
+    row["waitingReason"] = "requires_revalidation"
+    row["dependencyReuseGate"] = {
+        "status": "requires_revalidation",
+        "dependencyId": dependency_id,
+        "expected": dict(expected),
+        "actual": actual,
+    }
+    row.pop("preservedFrom", None)
+    row.pop("resumePreservation", None)
+    row.pop("stateCheckpointRef", None)
+    row["updatedAt"] = updated_at.isoformat()
+
+
 def dependency_input_signatures(
     rows: list[dict[str, Any]],
     logical_step_id: str,
@@ -138,9 +161,9 @@ def dependency_input_signatures(
     """Return exact producing attempts and output refs for direct dependencies."""
 
     row_by_id = {
-        str(row.get("logicalStepId") or "").strip(): row
+        step_id: row
         for row in rows
-        if str(row.get("logicalStepId") or "").strip()
+        if (step_id := str(row.get("logicalStepId") or "").strip())
     }
     target_row = row_by_id.get(logical_step_id)
     if target_row is None:
@@ -169,9 +192,9 @@ def preserved_outputs_for_dependencies(
     """Return semantic output refs from preserved direct dependencies."""
 
     row_by_id = {
-        str(row.get("logicalStepId") or "").strip(): row
+        step_id: row
         for row in rows
-        if str(row.get("logicalStepId") or "").strip()
+        if (step_id := str(row.get("logicalStepId") or "").strip())
     }
     target_row = row_by_id.get(logical_step_id)
     if target_row is None:
@@ -201,9 +224,9 @@ def validate_preserved_dependency_outputs(
     """Gate preserved downstream output reuse against exact dependency signatures."""
 
     row_by_id = {
-        str(row.get("logicalStepId") or "").strip(): row
+        step_id: row
         for row in rows
-        if str(row.get("logicalStepId") or "").strip()
+        if (step_id := str(row.get("logicalStepId") or "").strip())
     }
     for row in rows:
         if not isinstance(row.get("preservedFrom"), Mapping):
@@ -235,15 +258,13 @@ def validate_preserved_dependency_outputs(
                 )
             actual_signature = _dependency_output_signature(dependency_row)
             if actual_signature != dict(expected_signature):
-                row["status"] = "pending"
-                row["waitingReason"] = "requires_revalidation"
-                row["dependencyReuseGate"] = {
-                    "status": "requires_revalidation",
-                    "dependencyId": dependency_id,
-                    "expected": dict(expected_signature),
-                    "actual": actual_signature,
-                }
-                row["updatedAt"] = updated_at.isoformat()
+                _mark_step_requires_revalidation(
+                    row,
+                    dependency_id=dependency_id,
+                    expected=expected_signature,
+                    actual=actual_signature,
+                    updated_at=updated_at,
+                )
                 raise ValueError(
                     f"preserved step {row.get('logicalStepId')} dependency "
                     f"{dependency_id} requires revalidation"
@@ -303,10 +324,10 @@ def invalidate_downstream_steps_for_changed_output(
         return []
 
     invalidated: list[str] = []
-    pending = [logical_step_id]
+    pending = deque([logical_step_id])
     seen: set[str] = set()
     while pending:
-        dependency_id = pending.pop(0)
+        dependency_id = pending.popleft()
         if dependency_id in seen:
             continue
         seen.add(dependency_id)
@@ -323,17 +344,17 @@ def invalidate_downstream_steps_for_changed_output(
                 if isinstance(dependency_inputs, Mapping)
                 else None
             )
-            should_invalidate = expected is not None and dict(expected) != current_signature
+            should_invalidate = (
+                expected is not None and dict(expected) != current_signature
+            )
             if should_invalidate:
-                row["status"] = "pending"
-                row["waitingReason"] = "requires_revalidation"
-                row["dependencyReuseGate"] = {
-                    "status": "requires_revalidation",
-                    "dependencyId": logical_step_id,
-                    "expected": dict(expected),
-                    "actual": current_signature,
-                }
-                row["updatedAt"] = updated_at.isoformat()
+                _mark_step_requires_revalidation(
+                    row,
+                    dependency_id=logical_step_id,
+                    expected=expected,
+                    actual=current_signature,
+                    updated_at=updated_at,
+                )
                 if row_id not in invalidated:
                     invalidated.append(row_id)
             pending.append(row_id)

@@ -423,6 +423,71 @@ def test_changed_upstream_output_marks_executed_downstream_for_revalidation() ->
 
 @pytest.mark.integration
 @pytest.mark.integration_ci
+def test_changed_upstream_output_clears_preserved_downstream_revalidation_marker() -> None:
+    now = datetime.now(UTC)
+    rows = build_initial_step_rows(
+        ordered_nodes=[
+            {"id": "implement", "title": "Implement"},
+            {"id": "verify", "title": "Verify"},
+        ],
+        dependency_map={"verify": ["implement"]},
+        updated_at=now,
+    )
+    materialize_preserved_steps(
+        rows,
+        source_workflow_id="mm:source",
+        source_run_id="run-source",
+        preserved_steps=[
+            {
+                "logicalStepId": "verify",
+                "status": "succeeded",
+                "sourceAttempt": 1,
+                "artifacts": {"outputPrimary": "artifact://verify-output-old"},
+                "stateCheckpointRef": "artifact://workspace/verify-old",
+                "dependencyInputs": {
+                    "implement": {
+                        "producingAttempt": {
+                            "workflowId": "mm:resume",
+                            "runId": "run-resume",
+                            "logicalStepId": "implement",
+                            "attempt": 1,
+                        },
+                        "outputRefs": {
+                            "outputPrimary": "artifact://implement-output-old"
+                        },
+                    }
+                },
+            },
+        ],
+        updated_at=now,
+    )
+    update_step_row(
+        rows,
+        "implement",
+        updated_at=now,
+        status="succeeded",
+        increment_attempt=True,
+        artifacts={"outputPrimary": "artifact://implement-output-new"},
+    )
+
+    invalidated = invalidate_downstream_steps_for_changed_output(
+        rows,
+        "implement",
+        workflow_id="mm:resume",
+        run_id="run-resume",
+        updated_at=now,
+    )
+
+    assert invalidated == ["verify"]
+    assert rows[1]["status"] == "pending"
+    assert rows[1]["waitingReason"] == "requires_revalidation"
+    assert "preservedFrom" not in rows[1]
+    assert "resumePreservation" not in rows[1]
+    assert "stateCheckpointRef" not in rows[1]
+
+
+@pytest.mark.integration
+@pytest.mark.integration_ci
 def test_preserved_downstream_reuse_requires_matching_dependency_gate() -> None:
     now = datetime.now(UTC)
     rows = build_initial_step_rows(
@@ -474,6 +539,9 @@ def test_preserved_downstream_reuse_requires_matching_dependency_gate() -> None:
 
     assert rows[1]["status"] == "pending"
     assert rows[1]["waitingReason"] == "requires_revalidation"
+    assert "preservedFrom" not in rows[1]
+    assert "resumePreservation" not in rows[1]
+    assert "stateCheckpointRef" not in rows[1]
 
 
 @pytest.mark.integration
