@@ -130,6 +130,7 @@ _JIRA_PR_BODY_REQUIRED_FIELDS = (
     ("Tests", ("tests", "test evidence")),
     ("Remaining risks", ("remaining risks", "risks", "risk")),
 )
+_AGENT_PR_METADATA_ARTIFACT_NAME = "pr_metadata.json"
 _MOONMIND_SIGNAL_TAGS = frozenset(
     {
         "retry",
@@ -162,6 +163,15 @@ class ValidatedPullRequestMetadata:
         if self.moon_spec_path:
             payload["moonSpecPath"] = self.moon_spec_path
         return payload
+
+
+@dataclass(frozen=True)
+class AgentPullRequestMetadataProposal:
+    """Structured PR metadata proposed by an agent after implementation."""
+
+    title: str
+    body: str
+    path: Path
 
 # Worker runtime modes accepted by MOONMIND_WORKER_RUNTIME. Intentionally a subset
 # of SUPPORTED_RUNTIME_MODES: `codex_cloud` is excluded because it is not a local
@@ -2168,6 +2178,7 @@ class CodexWorker:
         publish_pr_url: str | None = None
         publish_base_branch: str | None = None
         publish_working_branch: str | None = None
+        publish_pr_metadata: dict[str, Any] | None = None
 
         async def _finalize_and_transition(
             *,
@@ -2181,6 +2192,7 @@ class CodexWorker:
             nonlocal publish_pr_url
             nonlocal publish_base_branch
             nonlocal publish_working_branch
+            nonlocal publish_pr_metadata
 
             publish_payload = self._read_publish_result(prepared=prepared)
             if publish_payload:
@@ -2197,6 +2209,10 @@ class CodexWorker:
                 )
                 publish_working_branch = (
                     str(publish_payload.get("branch") or "").strip() or None
+                )
+                raw_pr_metadata = publish_payload.get("prMetadata")
+                publish_pr_metadata = (
+                    dict(raw_pr_metadata) if isinstance(raw_pr_metadata, Mapping) else None
                 )
 
             resolved_failure_stage = failure_stage_override or failure_stage
@@ -2244,6 +2260,7 @@ class CodexWorker:
                 publish_pr_url=publish_pr_url,
                 publish_base_branch=publish_base_branch,
                 publish_working_branch=publish_working_branch,
+                publish_pr_metadata=publish_pr_metadata,
                 proposal_report=proposal_report,
                 jules_runtime_records=jules_runtime_records,
                 run_quality_reason=(
@@ -2291,6 +2308,7 @@ class CodexWorker:
                     publish_pr_url=publish_pr_url,
                     publish_base_branch=publish_base_branch,
                     publish_working_branch=publish_working_branch,
+                    publish_pr_metadata=publish_pr_metadata,
                     proposal_report=proposal_report,
                     jules_runtime_records=jules_runtime_records,
                     run_quality_reason=(
@@ -2548,6 +2566,12 @@ class CodexWorker:
                             publish_working_branch = (
                                 str(publish_payload.get("branch") or "").strip()
                                 or publish_working_branch
+                            )
+                            raw_pr_metadata = publish_payload.get("prMetadata")
+                            publish_pr_metadata = (
+                                dict(raw_pr_metadata)
+                                if isinstance(raw_pr_metadata, Mapping)
+                                else None
                             )
                         if publish_note:
                             base_summary = result.summary or "task completed"
@@ -2978,6 +3002,7 @@ class CodexWorker:
             publish_pr_url=state.publish_pr_url,
             publish_base_branch=state.publish_base_branch,
             publish_working_branch=state.publish_working_branch,
+            publish_pr_metadata=None,
             proposal_report=state.proposal_report,
             jules_runtime_records=(jules_record,),
         )
@@ -3639,6 +3664,41 @@ class CodexWorker:
             return None
         return dict(payload) if isinstance(payload, Mapping) else None
 
+    @staticmethod
+    def _agent_pr_metadata_path(prepared: PreparedTaskWorkspace) -> Path:
+        return prepared.artifacts_dir / _AGENT_PR_METADATA_ARTIFACT_NAME
+
+    @classmethod
+    def _read_agent_pull_request_metadata(
+        cls,
+        *,
+        prepared: PreparedTaskWorkspace,
+    ) -> AgentPullRequestMetadataProposal | None:
+        path = cls._agent_pr_metadata_path(prepared)
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"{_AGENT_PR_METADATA_ARTIFACT_NAME} must be valid JSON"
+            ) from exc
+        if not isinstance(payload, Mapping):
+            raise ValueError(
+                f"{_AGENT_PR_METADATA_ARTIFACT_NAME} must contain a JSON object"
+            )
+        title = payload.get("title")
+        body = payload.get("body")
+        if not isinstance(title, str) or not title.strip():
+            raise ValueError(
+                f"{_AGENT_PR_METADATA_ARTIFACT_NAME} must include non-empty title"
+            )
+        if not isinstance(body, str) or not body.strip():
+            raise ValueError(
+                f"{_AGENT_PR_METADATA_ARTIFACT_NAME} must include non-empty body"
+            )
+        return AgentPullRequestMetadataProposal(title=title, body=body, path=path)
+
     def _determine_finish_outcome(
         self,
         *,
@@ -3712,6 +3772,7 @@ class CodexWorker:
         publish_pr_url: str | None,
         publish_base_branch: str | None,
         publish_working_branch: str | None,
+        publish_pr_metadata: Mapping[str, Any] | None,
         proposal_report: ProposalSubmissionReport,
         jules_runtime_records: Sequence[JulesRuntimeTaskRecord] = (),
         run_quality_reason: dict[str, Any] | None = None,
@@ -3781,6 +3842,8 @@ class CodexWorker:
             )
         if run_quality_reason is not None:
             summary["runQuality"] = dict(run_quality_reason)
+        if publish_pr_metadata is not None:
+            summary["publish"]["prMetadata"] = dict(publish_pr_metadata)
         redacted = self._redact_payload(summary)
         return redacted if isinstance(redacted, dict) else summary
 
@@ -6128,6 +6191,7 @@ class CodexWorker:
             validated_pr_metadata: ValidatedPullRequestMetadata | None = None
             pr_title: str | None = None
             pr_body: str | None = None
+            pr_metadata_source: str | None = None
 
             if publish_mode == "pr":
                 try:
@@ -6182,22 +6246,46 @@ class CodexWorker:
                     )
                     raise
 
-                pr_title = self._resolve_publish_text_override(
-                    publish.get("prTitle")
-                ) or self._derive_default_jira_pr_title(
-                    job_id=job_id,
-                    canonical_payload=canonical_payload,
-                    resolved_steps=self._resolve_task_steps(canonical_payload),
+                agent_pr_metadata = self._read_agent_pull_request_metadata(
+                    prepared=prepared
                 )
-                pr_body = self._resolve_publish_text_override(
-                    publish.get("prBody")
-                ) or self._derive_default_jira_pr_body(
-                    job_id=job_id,
-                    canonical_payload=canonical_payload,
-                    runtime_mode=self._resolve_publish_runtime_mode(canonical_payload),
-                    base_branch=pr_base,
-                    head_branch=prepared.working_branch,
-                )
+                if agent_pr_metadata is not None:
+                    pr_title = agent_pr_metadata.title
+                    pr_body = agent_pr_metadata.body
+                    pr_metadata_source = _AGENT_PR_METADATA_ARTIFACT_NAME
+                    staged_artifacts.append(
+                        ArtifactUpload(
+                            path=agent_pr_metadata.path,
+                            name=_AGENT_PR_METADATA_ARTIFACT_NAME,
+                            content_type="application/json",
+                            required=False,
+                        )
+                    )
+                else:
+                    pr_title = self._resolve_publish_text_override(
+                        publish.get("prTitle")
+                    ) or self._derive_default_jira_pr_title(
+                        job_id=job_id,
+                        canonical_payload=canonical_payload,
+                        resolved_steps=self._resolve_task_steps(canonical_payload),
+                    )
+                    pr_body = self._resolve_publish_text_override(
+                        publish.get("prBody")
+                    ) or self._derive_default_jira_pr_body(
+                        job_id=job_id,
+                        canonical_payload=canonical_payload,
+                        runtime_mode=self._resolve_publish_runtime_mode(
+                            canonical_payload
+                        ),
+                        base_branch=pr_base,
+                        head_branch=prepared.working_branch,
+                    )
+                    pr_metadata_source = (
+                        "task.publish"
+                        if self._resolve_publish_text_override(publish.get("prTitle"))
+                        or self._resolve_publish_text_override(publish.get("prBody"))
+                        else "derived"
+                    )
                 if preflight_result and preflight_result.verification_skip_reason:
                     pr_body = self._append_skip_reason_to_pr_body(
                         pr_body=pr_body,
@@ -6240,7 +6328,7 @@ class CodexWorker:
                         body=pr_body,
                         github_token=github_token,
                     )
-                    if not pr_result.created:
+                    if not pr_result.created and not pr_result.adopted:
                         raise RuntimeError(pr_result.summary)
                     pr_url = pr_result.url
                 else:
@@ -6292,6 +6380,9 @@ class CodexWorker:
                 result_payload["readinessState"] = "pending"
                 if validated_pr_metadata is not None:
                     result_payload["prMetadata"] = validated_pr_metadata.to_payload()
+                    result_payload["prMetadata"]["source"] = (
+                        pr_metadata_source or "unknown"
+                    )
             prepared.publish_result_path.write_text(
                 json.dumps(result_payload, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
@@ -10885,6 +10976,21 @@ class CodexWorker:
             prepared=prepared,
             step=step,
         )
+        pr_metadata_instruction = ""
+        if (
+            publish_mode == "pr"
+            and prepared is not None
+            and step.step_index == total_steps - 1
+        ):
+            pr_metadata_path = self._agent_pr_metadata_path(prepared)
+            pr_metadata_instruction = (
+                "\nPULL REQUEST METADATA:\n"
+                "- After reviewing the final diff and verification evidence, write "
+                f"{pr_metadata_path} as JSON with exactly these string fields: "
+                "title and body.\n"
+                "- The title and body must describe the implemented code change and "
+                "must not describe workflow control actions.\n"
+            )
 
         instruction = (
             "MOONMIND TASK OBJECTIVE:\n"
@@ -10897,7 +11003,8 @@ class CodexWorker:
             "WORKSPACE:\n"
             "- Repo is already checked out on the working branch.\n"
             f"{workspace_publish_line}\n"
-            "- Write logs to stdout/stderr; MoonMind captures them.\n\n"
+            "- Write logs to stdout/stderr; MoonMind captures them.\n"
+            f"{pr_metadata_instruction}\n"
         )
         if step.effective_skill_id == "auto":
             instruction += (
