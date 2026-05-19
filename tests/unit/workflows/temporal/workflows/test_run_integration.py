@@ -1306,6 +1306,63 @@ def test_jira_implement_applied_template_makes_pr_publish_optional(
     )
 
 
+def test_jira_implement_applied_template_legacy_shapes_make_pr_publish_optional(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    parameters = {
+        "publishMode": "pr",
+        "task": {
+            "appliedStepTemplates": [
+                {"presetSlug": "jira-implement", "version": "1.0.0"},
+            ],
+        },
+    }
+
+    assert mock_run_workflow._task_applied_template_slugs(
+        parameters,
+        parameters["task"],
+    ) == {"jira-implement"}
+    assert mock_run_workflow._pr_publish_optional_for_task(
+        parameters,
+        include_applied_templates=True,
+    )
+
+
+def test_jira_implement_applied_template_composition_includes_make_pr_publish_optional(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    parameters = {
+        "publishMode": "pr",
+        "task": {
+            "appliedStepTemplates": [
+                {
+                    "slug": "parent-flow",
+                    "composition": {
+                        "includes": [
+                            {"presetSlug": "jira-implement"},
+                        ],
+                    },
+                }
+            ],
+        },
+    }
+
+    assert mock_run_workflow._task_applied_template_slugs(
+        parameters,
+        parameters["task"],
+    ) == {"parent-flow", "jira-implement"}
+    assert not mock_run_workflow._pr_publish_optional_for_task(
+        parameters,
+        include_applied_templates=True,
+    )
+
+    parameters["task"]["appliedStepTemplates"][0].pop("slug")
+    assert mock_run_workflow._pr_publish_optional_for_task(
+        parameters,
+        include_applied_templates=True,
+    )
+
+
 def test_native_pr_branch_resolution_keeps_legacy_branch_only_replay_shape(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,
