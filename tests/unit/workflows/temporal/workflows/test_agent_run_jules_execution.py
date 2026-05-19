@@ -165,6 +165,17 @@ async def test_agent_run_jules_branch_publish_failure_maps_to_non_success(
     assert result.failure_class == "execution_error"
     assert result.provider_error_code == "branch_publish_failed"
     assert result.metadata["publishOutcome"] == "publish_failed"
+    assert result.metadata["providerNativePullRequest"] == {
+        "url": "https://github.com/org/repo/pull/123",
+        "readinessState": "pending",
+        "source": "jules",
+        "headBranch": "feature-branch",
+        "baseBranch": "main",
+    }
+    assert result.metadata["pullRequestUrl"] == "https://github.com/org/repo/pull/123"
+    assert result.metadata["headBranch"] == "feature-branch"
+    assert result.metadata["baseBranch"] == "main"
+    assert result.metadata["readinessState"] == "pending"
 
 async def test_agent_run_external_poll_and_fetch_use_typed_activity_inputs(
     monkeypatch: pytest.MonkeyPatch,

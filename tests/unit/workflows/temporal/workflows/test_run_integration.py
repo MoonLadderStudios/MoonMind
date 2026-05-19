@@ -1168,6 +1168,58 @@ def test_record_publish_result_preserves_validated_pr_metadata_for_downstream(
     }
 
 
+def test_record_execution_context_preserves_provider_native_pr_record(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    execution_result = mock_run_workflow._map_agent_run_result(
+        AgentRunResult(
+            summary="Provider created PR.",
+            metadata={
+                "providerNativePullRequest": {
+                    "url": "https://github.com/org/repo/pull/676",
+                    "readinessState": "pending",
+                    "headBranch": "feature/provider-native",
+                    "baseBranch": "main",
+                    "source": "jules",
+                    "metadata": {
+                        "title": "MM-676 Capture provider-native PR metadata",
+                        "body": "Jira: MM-676\nSummary: Captured provider metadata.",
+                        "provider": "jules",
+                    },
+                },
+            },
+        )
+    )
+
+    mock_run_workflow._record_execution_context(
+        node_id="step-provider-native",
+        execution_result=execution_result,
+    )
+
+    assert mock_run_workflow._publish_context["pullRequestUrl"] == (
+        "https://github.com/org/repo/pull/676"
+    )
+    assert mock_run_workflow._publish_context["readinessState"] == "pending"
+    assert mock_run_workflow._publish_context["branch"] == "feature/provider-native"
+    assert mock_run_workflow._publish_context["baseRef"] == "main"
+    assert mock_run_workflow._publish_context["providerNativePullRequest"] == {
+        "url": "https://github.com/org/repo/pull/676",
+        "readinessState": "pending",
+        "headBranch": "feature/provider-native",
+        "baseBranch": "main",
+        "source": "jules",
+    }
+    assert mock_run_workflow._publish_context["providerNativePrMetadata"] == {
+        "title": "MM-676 Capture provider-native PR metadata",
+        "body": "Jira: MM-676\nSummary: Captured provider metadata.",
+        "provider": "jules",
+    }
+    assert mock_run_workflow._publish_context["prMetadata"] == {
+        "title": "MM-676 Capture provider-native PR metadata",
+        "body": "Jira: MM-676\nSummary: Captured provider metadata.",
+    }
+
+
 def test_jira_implement_task_makes_pr_publish_optional(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:

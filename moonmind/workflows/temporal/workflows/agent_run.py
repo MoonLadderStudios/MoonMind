@@ -507,6 +507,10 @@ class MoonMindAgentRun:
         metadata = dict(result.metadata or {})
         metadata.setdefault("childWorkflowId", workflow.info().workflow_id)
         metadata.setdefault("childRunId", workflow.info().run_id)
+        self._record_provider_native_pr_metadata(
+            request=request,
+            metadata=metadata,
+        )
 
         task_run_id = ""
         if request.managed_session is not None:
@@ -645,6 +649,96 @@ class MoonMindAgentRun:
                 metadata["storyOutput"] = story_output_metadata
 
         return result.model_copy(update={"metadata": metadata})
+
+    def _record_provider_native_pr_metadata(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        metadata: dict[str, Any],
+    ) -> None:
+        if request.agent_kind != "external":
+            return
+
+        existing = metadata.get("providerNativePullRequest")
+        existing_map = existing if isinstance(existing, Mapping) else {}
+        raw_url = (
+            existing_map.get("url")
+            or existing_map.get("pullRequestUrl")
+            or metadata.get("pullRequestUrl")
+            or metadata.get("prUrl")
+            or metadata.get("externalUrl")
+        )
+        pull_request_url = str(raw_url or "").strip()
+        if not pull_request_url:
+            return
+
+        workspace_spec = request.workspace_spec or {}
+        parameters = (
+            request.parameters if isinstance(request.parameters, Mapping) else {}
+        )
+
+        def _text(*values: Any) -> str | None:
+            for value in values:
+                candidate = str(value or "").strip()
+                if candidate:
+                    return candidate
+            return None
+
+        head_branch = _text(
+            existing_map.get("headBranch"),
+            existing_map.get("branch"),
+            metadata.get("headBranch"),
+            metadata.get("branch"),
+            workspace_spec.get("headBranch"),
+            workspace_spec.get("branch"),
+            workspace_spec.get("startingBranch"),
+        )
+        base_branch = _text(
+            existing_map.get("baseBranch"),
+            existing_map.get("baseRef"),
+            metadata.get("baseBranch"),
+            metadata.get("baseRef"),
+            parameters.get("targetBranch"),
+            parameters.get("publishBaseBranch"),
+            workspace_spec.get("targetBranch"),
+            workspace_spec.get("publishBaseBranch"),
+        )
+        readiness_state = _text(
+            existing_map.get("readinessState"),
+            metadata.get("readinessState"),
+        )
+        if readiness_state is None:
+            readiness_state = (
+                "merged"
+                if str(metadata.get("publishOutcome") or "").strip() == "branch_merged"
+                else "pending"
+            )
+
+        provider_metadata = existing_map.get("metadata")
+        if not isinstance(provider_metadata, Mapping):
+            provider_metadata = metadata.get("prMetadata")
+        if not isinstance(provider_metadata, Mapping):
+            provider_metadata = {}
+
+        envelope: dict[str, Any] = {
+            "url": pull_request_url,
+            "readinessState": readiness_state,
+            "source": _text(existing_map.get("source"), request.agent_id) or "external",
+        }
+        if head_branch:
+            envelope["headBranch"] = head_branch
+        if base_branch:
+            envelope["baseBranch"] = base_branch
+        if provider_metadata:
+            envelope["metadata"] = dict(provider_metadata)
+
+        metadata["providerNativePullRequest"] = envelope
+        metadata.setdefault("pullRequestUrl", pull_request_url)
+        metadata.setdefault("readinessState", readiness_state)
+        if head_branch:
+            metadata.setdefault("headBranch", head_branch)
+        if base_branch:
+            metadata.setdefault("baseBranch", base_branch)
 
     def _managed_start_failure_result(
         self,
