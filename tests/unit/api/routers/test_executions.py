@@ -6233,6 +6233,312 @@ def test_get_execution_steps_enriches_missing_agent_task_run_ids_once() -> None:
         ),
     )
 
+
+def _step_attempt_manifest_payload(
+    *,
+    artifact_ref: str,
+    attempt: int,
+    status: str = "succeeded",
+) -> dict[str, object]:
+    return {
+        "schemaVersion": "v1",
+        "stepAttemptId": f"mm:wf-1:run-99:implement:attempt:{attempt}",
+        "workflowId": "mm:wf-1",
+        "runId": "run-99",
+        "logicalStepId": "implement",
+        "attempt": attempt,
+        "attemptScope": "run",
+        "lineage": {
+            "sourceWorkflowId": "mm:source",
+            "sourceRunId": "source-run",
+            "sourceLogicalStepId": "implement",
+            "sourceAttempt": attempt,
+            "relationship": "resume_from_failed_step",
+            "lineageAttemptOrdinal": attempt + 1,
+        },
+        "reason": "resume_from_failed_step" if attempt > 1 else "initial_execution",
+        "status": status,
+        "terminalDisposition": "accepted" if status == "succeeded" else "retryable",
+        "startedAt": "2026-05-19T10:00:00Z",
+        "updatedAt": "2026-05-19T10:01:00Z",
+        "input": {"preparedInputRef": f"art-input-{attempt}"},
+        "context": {"contextBundleRef": f"art-context-{attempt}"},
+        "workspace": {
+            "workspacePolicy": "continue_from_previous_attempt",
+            "baselineRef": f"art-workspace-{attempt}",
+            "gitDisposition": "candidate",
+        },
+        "execution": {
+            "childWorkflowId": f"child-{attempt}",
+            "childRunId": f"child-run-{attempt}",
+            "taskRunId": f"task-run-{attempt}",
+        },
+        "outputs": {
+            "summary": f"Attempt {attempt} summary",
+            "outputSummaryRef": f"art-summary-{attempt}",
+            "outputPrimaryRef": f"art-output-{attempt}",
+        },
+        "checks": [
+            {
+                "kind": "quality_gate",
+                "status": "passed" if status == "succeeded" else "failed",
+                "artifactRef": f"art-check-{attempt}",
+            }
+        ],
+        "sideEffects": {
+            "gitDisposition": "candidate",
+            "publicationRef": f"art-publish-{attempt}",
+        },
+        "dependencyEffects": {"invalidatedStepRefs": [artifact_ref]},
+        "budget": {"budgetRef": f"art-budget-{attempt}"},
+    }
+
+
+def test_get_execution_step_attempts_returns_bounded_manifest_history() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(
+        app,
+        ledger={
+            "workflowId": "mm:wf-1",
+            "runId": "run-99",
+            "runScope": "latest",
+            "steps": [
+                {
+                    "logicalStepId": "implement",
+                    "order": 1,
+                    "title": "Implement",
+                    "tool": {"type": "skill", "name": "jira-implement", "version": "1"},
+                    "dependsOn": [],
+                    "status": "succeeded",
+                    "waitingReason": None,
+                    "attentionRequired": False,
+                    "attempt": 2,
+                    "startedAt": "2026-05-19T10:00:00Z",
+                    "updatedAt": "2026-05-19T10:01:00Z",
+                    "summary": "Done",
+                    "checks": [],
+                    "refs": {
+                        "childWorkflowId": None,
+                        "childRunId": None,
+                        "taskRunId": None,
+                        "latestAttemptManifestRef": "art-attempt-2",
+                        "attemptManifestRefs": ["art-attempt-1", "art-attempt-2"],
+                    },
+                    "artifacts": {},
+                    "lastError": None,
+                }
+            ],
+        },
+    )
+    user = _override_user_dependencies(app, is_superuser=True)
+
+    async def _read_artifact(**kwargs):
+        artifact_id = kwargs["artifact_id"]
+        payload = _step_attempt_manifest_payload(
+            artifact_ref=artifact_id,
+            attempt=1 if artifact_id == "art-attempt-1" else 2,
+        )
+        return SimpleNamespace(artifact_id=artifact_id), json.dumps(payload).encode()
+
+    artifact_service = SimpleNamespace(read=AsyncMock(side_effect=_read_artifact))
+    app.dependency_overrides[get_async_session] = lambda: SimpleNamespace()
+
+    with patch(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        return_value=artifact_service,
+    ):
+        with TestClient(app) as test_client:
+            response = test_client.get(
+                "/api/executions/mm:wf-1/steps/implement/attempts"
+            )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["workflowId"] == "mm:wf-1"
+    assert payload["runId"] == "run-99"
+    assert payload["logicalStepId"] == "implement"
+    assert [item["attempt"] for item in payload["attempts"]] == [1, 2]
+    assert payload["attempts"][1]["manifestRefs"] == {
+        "manifestArtifactRef": "art-attempt-2"
+    }
+    assert payload["attempts"][1]["runtimeChildRefs"] == {
+        "childWorkflowId": "child-2",
+        "childRunId": "child-run-2",
+        "taskRunId": "task-run-2",
+    }
+    assert payload["attempts"][1]["workspacePolicy"] == (
+        "continue_from_previous_attempt"
+    )
+    assert payload["attempts"][1]["gitDisposition"] == "candidate"
+    assert payload["attempts"][1]["qualityGateVerdict"] == "passed"
+    assert "summary" not in payload["attempts"][1]["outputRefs"]
+    assert artifact_service.read.await_args_list[0] == call(
+        artifact_id="art-attempt-1",
+        principal=str(user.id),
+        allow_restricted_raw=True,
+    )
+
+
+def test_get_execution_step_attempt_returns_bounded_detail_refs() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(
+        app,
+        ledger={
+            "workflowId": "mm:wf-1",
+            "runId": "run-99",
+            "runScope": "latest",
+            "steps": [
+                {
+                    "logicalStepId": "implement",
+                    "order": 1,
+                    "title": "Implement",
+                    "tool": {"type": "skill", "name": "jira-implement", "version": "1"},
+                    "dependsOn": [],
+                    "status": "succeeded",
+                    "waitingReason": None,
+                    "attentionRequired": False,
+                    "attempt": 2,
+                    "startedAt": "2026-05-19T10:00:00Z",
+                    "updatedAt": "2026-05-19T10:01:00Z",
+                    "summary": "Done",
+                    "checks": [],
+                    "refs": {
+                        "childWorkflowId": None,
+                        "childRunId": None,
+                        "taskRunId": None,
+                        "latestAttemptManifestRef": "art-attempt-2",
+                        "attemptManifestRefs": ["art-attempt-1", "art-attempt-2"],
+                    },
+                    "artifacts": {},
+                    "lastError": None,
+                }
+            ],
+        },
+    )
+    _override_user_dependencies(app, is_superuser=True)
+    payload = _step_attempt_manifest_payload(
+        artifact_ref="art-attempt-2",
+        attempt=2,
+    )
+    artifact_service = SimpleNamespace(
+        read=AsyncMock(
+            side_effect=[
+                (
+                    SimpleNamespace(artifact_id="art-attempt-1"),
+                    json.dumps(
+                        _step_attempt_manifest_payload(
+                            artifact_ref="art-attempt-1",
+                            attempt=1,
+                        )
+                    ).encode(),
+                ),
+                (
+                    SimpleNamespace(artifact_id="art-attempt-2"),
+                    json.dumps(payload).encode(),
+                ),
+            ]
+        )
+    )
+    app.dependency_overrides[get_async_session] = lambda: SimpleNamespace()
+
+    with patch(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        return_value=artifact_service,
+    ):
+        with TestClient(app) as test_client:
+            response = test_client.get(
+                "/api/executions/mm:wf-1/steps/implement/attempts/2"
+            )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["attempt"] == 2
+    assert body["sourceAttempt"] == 2
+    assert body["lineage"]["relationship"] == "resume_from_failed_step"
+    assert body["inputRefs"] == {"preparedInputRef": "art-input-2"}
+    assert body["contextRefs"] == {"contextBundleRef": "art-context-2"}
+    assert body["workspaceRefs"] == {
+        "baselineRef": "art-workspace-2",
+    }
+    assert body["executionRefs"] == {
+        "childWorkflowId": "child-2",
+        "childRunId": "child-run-2",
+        "taskRunId": "task-run-2",
+    }
+    assert body["checkRefs"] == [{"artifactRef": "art-check-2"}]
+    assert body["sideEffectRefs"] == {"publicationRef": "art-publish-2"}
+    assert body["dependencyEffectRefs"] == {
+        "invalidatedStepRefs": ["art-attempt-2"]
+    }
+    assert "outputs" not in body
+
+
+def test_get_execution_step_attempts_preserves_artifact_authorization() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(
+        app,
+        ledger={
+            "workflowId": "mm:wf-1",
+            "runId": "run-99",
+            "runScope": "latest",
+            "steps": [
+                {
+                    "logicalStepId": "implement",
+                    "order": 1,
+                    "title": "Implement",
+                    "tool": {},
+                    "dependsOn": [],
+                    "status": "failed",
+                    "waitingReason": None,
+                    "attentionRequired": False,
+                    "attempt": 1,
+                    "startedAt": "2026-05-19T10:00:00Z",
+                    "updatedAt": "2026-05-19T10:01:00Z",
+                    "summary": None,
+                    "checks": [],
+                    "refs": {
+                        "childWorkflowId": None,
+                        "childRunId": None,
+                        "taskRunId": None,
+                        "latestAttemptManifestRef": "art-attempt-1",
+                        "attemptManifestRefs": ["art-attempt-1"],
+                    },
+                    "artifacts": {},
+                    "lastError": None,
+                }
+            ],
+        },
+    )
+    _override_user_dependencies(app, is_superuser=True)
+    artifact_service = SimpleNamespace(
+        read=AsyncMock(side_effect=TemporalArtifactAuthorizationError())
+    )
+    app.dependency_overrides[get_async_session] = lambda: SimpleNamespace()
+
+    with patch(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        return_value=artifact_service,
+    ):
+        with TestClient(app) as test_client:
+            response = test_client.get(
+                "/api/executions/mm:wf-1/steps/implement/attempts"
+            )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "attempt_manifest_unauthorized"
+
 def test_get_execution_steps_returns_503_for_temporal_rpc_errors() -> None:
     app = FastAPI()
     app.include_router(router)

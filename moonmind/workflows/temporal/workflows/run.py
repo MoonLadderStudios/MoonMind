@@ -5925,6 +5925,8 @@ class MoonMindRunWorkflow:
             for template in applied_templates:
                 if not isinstance(template, Mapping):
                     continue
+                if "composition" not in template:
+                    continue
                 slug_sources: list[Any] = [template]
                 composition = template.get("composition")
                 for include_source in (composition, template):
