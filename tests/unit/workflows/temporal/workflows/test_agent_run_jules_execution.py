@@ -165,6 +165,36 @@ async def test_agent_run_jules_branch_publish_failure_maps_to_non_success(
     assert result.failure_class == "execution_error"
     assert result.provider_error_code == "branch_publish_failed"
     assert result.metadata["publishOutcome"] == "publish_failed"
+    assert result.metadata["providerNativePullRequest"] == {
+        "url": "https://github.com/org/repo/pull/123",
+        "readinessState": "pending",
+        "source": "jules",
+        "headBranch": "feature-branch",
+        "baseBranch": "main",
+    }
+    assert result.metadata["pullRequestUrl"] == "https://github.com/org/repo/pull/123"
+    assert result.metadata["headBranch"] == "feature-branch"
+    assert result.metadata["baseBranch"] == "main"
+    assert result.metadata["readinessState"] == "pending"
+
+async def test_agent_run_does_not_treat_generic_external_url_as_native_pr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = MoonMindAgentRun()
+    _configure_workflow_runtime(monkeypatch)
+
+    result = run._enrich_result_metadata(
+        request=_request(),
+        result=AgentRunResult(
+            summary="Provider task complete.",
+            metadata={"externalUrl": "https://jules.example.test/tasks/task-123"},
+        ),
+    )
+
+    assert result is not None
+    assert "providerNativePullRequest" not in result.metadata
+    assert "pullRequestUrl" not in result.metadata
+    assert result.metadata["externalUrl"] == "https://jules.example.test/tasks/task-123"
 
 async def test_agent_run_external_poll_and_fetch_use_typed_activity_inputs(
     monkeypatch: pytest.MonkeyPatch,
