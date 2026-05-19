@@ -6147,10 +6147,13 @@ class MoonMindRunWorkflow:
             require_composition=True,
         )
         if include_applied_templates:
-            skill_names = skill_names | self._task_applied_template_slugs(
+            applied_template_slugs = self._task_applied_template_slugs(
                 parameters,
                 task_payload,
             )
+            if applied_template_slugs:
+                skill_names.discard("auto")
+            skill_names = skill_names | applied_template_slugs
         if not skill_names:
             return False
         return skill_names.issubset(_PR_OPTIONAL_TASK_SKILLS)
@@ -6285,6 +6288,8 @@ class MoonMindRunWorkflow:
                     continue
                 slug = self._coerce_text(
                     item.get("slug")
+                    or item.get("presetSlug")
+                    or item.get("preset_slug")
                     or item.get("templateSlug")
                     or item.get("template_slug")
                     or item.get("id")
