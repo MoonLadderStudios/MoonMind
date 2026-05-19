@@ -681,10 +681,16 @@ async def test_run_records_step_attempt_manifest_ref_when_work_begins(
         "wf-run-1:run-1:delegate-agent:1:manifest"
     )
     assert writes[0]["payload"]["reason"] == "initial_execution"
-    assert writes[0]["payload"]["execution"] == {}
+    assert writes[0]["payload"]["execution"] == {
+        "runtimeContextPolicy": "fresh_agent_run"
+    }
     assert writes[0]["payload"]["outputs"] == {}
     assert writes[1]["payload"]["reason"] == "runtime_recovered"
-    assert writes[1]["payload"]["execution"] == {}
+    assert writes[1]["payload"]["execution"] == {
+        "runtimeContextPolicy": "fresh_agent_run",
+        "childWorkflowId": "wf-child-1",
+        "childRunId": "run-child-1",
+    }
     assert writes[1]["payload"]["status"] == "blocked"
     assert writes[1]["payload"]["terminalDisposition"] == "blocked"
     assert writes[1]["payload"]["outputs"] == {
@@ -700,6 +706,81 @@ async def test_run_records_step_attempt_manifest_ref_when_work_begins(
         "attempt": 1,
     }
     assert "lineage" not in writes[1]["payload"]
+
+
+@pytest.mark.asyncio
+async def test_step_attempt_manifest_merges_explicit_execution_with_refs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+    writes: list[dict[str, Any]] = []
+
+    async def fake_write_json_artifact(
+        *,
+        name: str,
+        payload: dict[str, Any],
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
+    ) -> str:
+        writes.append(
+            {
+                "name": name,
+                "payload": payload,
+                "content_type": content_type,
+                "metadata_json": metadata_json,
+            }
+        )
+        return f"artifact-attempt-{len(writes)}"
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[
+            {
+                "id": "delegate-external",
+                "tool": {"type": "agent_runtime", "name": "jules", "version": ""},
+                "inputs": {"title": "Delegate external agent"},
+            }
+        ],
+        dependency_map={"delegate-external": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running(
+        "delegate-external",
+        updated_at=now,
+        summary="Launching external runtime",
+    )
+    workflow._record_step_result_evidence(
+        "delegate-external",
+        execution_result={
+            "status": "RUNNING",
+            "outputs": {
+                "childWorkflowId": "wf-child-from-ledger",
+                "childRunId": "run-child-from-ledger",
+                "diagnosticsRef": "artifact://diagnostics/external",
+            },
+        },
+        updated_at=now,
+    )
+
+    await workflow._record_step_attempt_manifest_started(
+        "delegate-external",
+        updated_at=now,
+        reason="initial_execution",
+        execution={
+            "kind": "agent_runtime",
+            "childWorkflowId": "wf-child-explicit",
+        },
+    )
+
+    assert writes[0]["payload"]["execution"] == {
+        "runtimeContextPolicy": "external_provider_continuation",
+        "childWorkflowId": "wf-child-explicit",
+        "childRunId": "run-child-from-ledger",
+        "diagnosticsRef": "artifact://diagnostics/external",
+        "kind": "agent_runtime",
+    }
 
 
 @pytest.mark.asyncio
