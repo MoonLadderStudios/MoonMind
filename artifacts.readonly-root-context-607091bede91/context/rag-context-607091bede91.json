@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. moonmind/cli.py (score: 1.000, trust: canonical)\n    line 16: rag_app = typer.Typer(help=\"Retrieval helpers for Codex workers.\")\n2. moonmind/integrations/jira/client.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Low-level Jira REST client with bounded retries and sanitized errors.\"\"\"\n3. moonmind/integrations/pentest/models.py (score: 1.000, trust: canonical)\n    line 150: @field_validator(\"provider_id\", mode=\"before\")\n4. frontend/src/lib/liquidGL/useLiquidGL.test.tsx (score: 1.000, trust: canonical)\n    line 369: it(\"adapts HTMLElement targets into a selector before calling liquidGL\", async () => {\n5. frontend/src/components/skills/SkillProvenanceBadge.tsx (score: 1.000, trust: canonical)\n    line 93: <code className=\"small break-all\">{runtimeRef}</code>\n6. frontend/src/components/secrets/SecretManager.tsx (score: 1.000, trust: canonical)\n    line 28: code: string;\n7. frontend/src/lib/liquidGL/liquidGL.vendor.test.ts (score: 1.000, trust: canonical)\n    line 6: it(\"sanitizes modern CSS color functions before html2canvas parses snapshots\", () => {\n8. frontend/src/lib/temporalTaskEditing.ts (score: 1.000, trust: canonical)\n    line 132: jiraOrchestration?: Record<string, unknown>;",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "moonmind/cli.py",
+      "text": "line 16: rag_app = typer.Typer(help=\"Retrieval helpers for Codex workers.\")",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 16,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/integrations/jira/client.py",
+      "text": "line 1: \"\"\"Low-level Jira REST client with bounded retries and sanitized errors.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/integrations/pentest/models.py",
+      "text": "line 150: @field_validator(\"provider_id\", mode=\"before\")",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 150,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "frontend/src/lib/liquidGL/useLiquidGL.test.tsx",
+      "text": "line 369: it(\"adapts HTMLElement targets into a selector before calling liquidGL\", async () => {",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 369,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "frontend/src/components/skills/SkillProvenanceBadge.tsx",
+      "text": "line 93: <code className=\"small break-all\">{runtimeRef}</code>",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 93,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "frontend/src/components/secrets/SecretManager.tsx",
+      "text": "line 28: code: string;",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 28,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "frontend/src/lib/liquidGL/liquidGL.vendor.test.ts",
+      "text": "line 6: it(\"sanitizes modern CSS color functions before html2canvas parses snapshots\", () => {",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 6,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "frontend/src/lib/temporalTaskEditing.ts",
+      "text": "line 132: jiraOrchestration?: Record<string, unknown>;",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 132,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-05-19T06:55:47Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
