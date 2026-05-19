@@ -6,6 +6,7 @@ Last updated: 2026-04-09
 Related:
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
 - [`docs/Temporal/ArtifactPresentationContract.md`](../Temporal/ArtifactPresentationContract.md)
+- [`docs/ManagedAgents/DockerSidecarRuntime.md`](./DockerSidecarRuntime.md)
 - [`docs/ManagedAgents/DockerOutOfDocker.md`](./DockerOutOfDocker.md)
 - [`docs/Tasks/AgentSkillSystem.md`](../Tasks/AgentSkillSystem.md)
 
@@ -18,6 +19,7 @@ It freezes the smallest supported session-plane shape before broader implementat
 - Codex only
 - Docker only
 - one task-scoped session container per task
+- optional per-session Docker sidecar for ordinary repo Docker commands
 - no cross-task session reuse
 - artifact-first logs and continuity
 - no Kubernetes orchestration
@@ -64,7 +66,19 @@ The managed session plane is the task-scoped Codex runtime environment:
 
 The session plane is a continuity and performance cache. It is not durable truth.
 
-Managed-session steps may invoke **control-plane tools** that launch separate workload containers as described in [`docs/ManagedAgents/DockerOutOfDocker.md`](./DockerOutOfDocker.md). Those workload containers remain outside session identity: they do not become `session_id`, `session_epoch`, `container_id`, `thread_id`, or `active_turn_id`, and they do not replace the task-scoped session container.
+Ordinary repository Docker work that originates from the session uses the
+per-session sidecar runtime described in
+[`docs/ManagedAgents/DockerSidecarRuntime.md`](./DockerSidecarRuntime.md). The
+session container runs normal Docker commands against its own private daemon and
+does not receive the host socket, a shared daemon, or MoonMind deployment
+credentials.
+
+Control-plane Docker workload tools from
+[`docs/ManagedAgents/DockerOutOfDocker.md`](./DockerOutOfDocker.md) remain
+available for MoonMind admin/update, helper, and deliberately gated exceptional
+workloads. Those workload containers remain outside session identity: they do
+not become `session_id`, `session_epoch`, `container_id`, `thread_id`, or
+`active_turn_id`, and they do not replace the task-scoped session container.
 
 Codex session containers that need to create additional MoonMind tasks must be
 launched on the configured MoonMind Docker network and receive `MOONMIND_URL`

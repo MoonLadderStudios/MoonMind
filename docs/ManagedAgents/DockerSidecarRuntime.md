@@ -21,18 +21,18 @@ This document defines how MoonMind gives **managed agent sessions** the ability 
 
 The model is a **per-session Docker sidecar**: the managed session container holds a Docker CLI only, and a sibling container holds a private Docker daemon scoped to that session.
 
-This is the **default execution path** for containerized work that originates from a managed agent session. The Temporal-launched Docker-out-of-Docker (DooD) workload plane defined in [`DockerOutOfDocker.md`](./DockerOutOfDocker.md) remains, but is now reserved for the narrow set of operations that must run from the control plane itself, such as MoonMind admin and update flows.
+This is the **default execution path** for containerized work that originates from a managed agent session. The Temporal-launched Docker-out-of-Docker (DooD) workload plane defined in [`DockerOutOfDocker.md`](./DockerOutOfDocker.md) remains, but is now reserved for the narrow set of operations that must run from the control plane itself: MoonMind admin/update flows, helper or one-shot workloads with no managed session attached, and deliberately deployment-gated exceptional workloads.
 
 ### 1.1 Relationship to existing architecture
 
 This document supersedes two specific clauses in the prior architecture for the case of normal task workloads originating from a managed agent session:
 
 - `ManagedAgentArchitecture.md §5.5` ("No direct Docker control from the managed session by default") — replaced for the sidecar deployment shape. A managed session with the sidecar runtime enabled has a private `DOCKER_HOST` pointing at its own daemon. It never gets the host socket and never sees other sessions' containers.
-- `DockerOutOfDocker.md §17.3` ("Important boundary") — replaced for ordinary repository test workloads. Control-plane-launched Docker workloads remain the model for admin and update flows; they are no longer the default model for repo tests.
+- `DockerOutOfDocker.md §17.3` ("Important boundary") — replaced for ordinary repository test workloads. Control-plane-launched Docker workloads remain the model for MoonMind admin/update flows, helper or one-shot workloads with no managed session attached, and deliberately deployment-gated exceptional workloads; they are no longer the default model for repo tests.
 
 All other invariants from those documents still apply: artifacts and bounded metadata remain authoritative, session identity and workload identity remain separable, deployment credentials never reach the session, and the host Docker socket is never exposed to a managed session.
 
-Follow-up edits to the superseded sections of those documents are tracked in §28.
+The related architecture documents carry the same desired-state split: ordinary session-originated Docker work uses the sidecar runtime; control-plane DooD remains reserved for MoonMind admin/update, helper, and deliberately gated exceptional workloads.
 
 ---
 
@@ -44,7 +44,7 @@ Follow-up edits to the superseded sections of those documents are tracked in §2
 4. **The Docker sidecar image is prebuilt and generic.** It does not need the MoonMind codebase, MoonMind deployment credentials, or registry secrets.
 5. **The workspace is mounted at the same absolute path in both containers.** Bind mounts of the form `-v "$PWD":/workspace` resolve identically on the agent CLI and the sidecar daemon.
 6. **The Docker daemon scope is per session.** Containers, images, and graph storage do not bleed across sessions or across users.
-7. **The control-plane DooD path is preserved for MoonMind admin/update operations only**, not for ordinary task workloads.
+7. **The control-plane DooD path is preserved for operations that must originate from the control plane**, including MoonMind admin/update flows, helper or one-shot workloads with no managed session attached, and deliberately deployment-gated exceptional workloads. It is not the default path for ordinary task workloads.
 8. **The design has a clean Kubernetes mapping** as a future-state target (sidecar container in the same Pod, shared volumes for workspace and socket).
 
 ---
@@ -705,7 +705,7 @@ spec:
   futureBackends: [ kubernetes ]
 ```
 
-This is the residual scope of the older Docker-out-of-Docker plane described in [`DockerOutOfDocker.md`](./DockerOutOfDocker.md). For ordinary repo tests, builds, and compose-driven workloads, use the sidecar runtime defined in this document, not `container.run_workload` / `container.run_container` / `container.run_docker`.
+This is one part of the residual scope of the older Docker-out-of-Docker plane described in [`DockerOutOfDocker.md`](./DockerOutOfDocker.md). The same control-plane DooD boundary also covers helper or one-shot workloads with no managed session attached and deliberately deployment-gated exceptional workloads. For ordinary repo tests, builds, and compose-driven workloads, use the sidecar runtime defined in this document, not `container.run_workload` / `container.run_container` / `container.run_docker`.
 
 If the MoonMind API container ever needs Docker access for admin reasons, that access lives in a dedicated `moonmind-ops-runner`, not in the API container itself.
 
@@ -808,7 +808,7 @@ The rules below remain stable as implementation details evolve.
 3. The workspace volume is mounted at the same absolute path in the agent and the sidecar.
 4. The Docker daemon scope is per session; no daemon is shared across sessions or users.
 5. The Docker sidecar image is prebuilt and generic; it does not need the MoonMind codebase or deployment credentials.
-6. The session container is the actor for ordinary containerized work; control-plane-launched Docker workloads (DooD) are reserved for MoonMind admin/update flows.
+6. The session container is the actor for ordinary containerized work; control-plane-launched Docker workloads (DooD) are reserved for MoonMind admin/update flows, helper or one-shot workloads with no managed session attached, and deliberately deployment-gated exceptional workloads.
 7. Artifacts and bounded session metadata remain authoritative; nested container state is not durable truth.
 8. The design has a clean Kubernetes mapping (sidecar in Pod, shared volumes) and a fallback to Kubernetes Jobs where DinD is disallowed.
 9. Resource limits live outside the nested daemon.
@@ -854,18 +854,17 @@ Mental model:
 - Agents run Docker like normal developers.
 - The Docker daemon is private to the session.
 - The workspace is shared with the sidecar at the same path.
-- MoonMind admin/update is a separate, narrow Docker path.
+- MoonMind admin/update, helper or one-shot workloads with no managed session attached, and deliberately deployment-gated exceptional workloads use a separate, narrow Docker path.
 - The MoonMind API container stays lightweight.
 - The sidecar is prebuilt and carries no MoonMind code or credentials.
 
 ---
 
-## 28. Follow-up alignment work
+## 28. Related architecture alignment
 
-This document supersedes specific clauses in two related architecture documents. Those docs need follow-up edits so that the canonical narrative stays coherent:
+The related managed-agent architecture documents use this document as the
+reference for sidecar runtime semantics:
 
-- `docs/ManagedAgents/ManagedAgentArchitecture.md §5.5` — rewrite to describe the sidecar topology as the default Docker capability path for managed sessions, and to keep the security boundary (no host socket, no app-container control) intact.
-- `docs/ManagedAgents/DockerOutOfDocker.md` — narrow the scope to MoonMind admin/update operations (and any deliberately exceptional control-plane workloads), and update §17.3 so it no longer asserts that session containers must request all Docker work through the control plane.
-- `docs/ManagedAgents/ManagedAgentArchitecture.md`'s "Related" list and any architecture-overview diagrams that imply DooD is the canonical workload path.
-
-Track those edits as part of adopting the sidecar runtime; do not leave them implicit.
+- `docs/ManagedAgents/ManagedAgentArchitecture.md §5.5` describes the sidecar as the default Docker capability path for managed sessions while preserving the no-host-socket and no-app-container-control boundary.
+- `docs/ManagedAgents/DockerOutOfDocker.md` defines the remaining control-plane Docker workload scope for MoonMind admin/update, helper, and deliberately gated exceptional workloads.
+- Top-level architecture references distinguish ordinary session-originated Docker work from control-plane DooD workloads.
