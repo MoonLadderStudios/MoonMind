@@ -63,12 +63,12 @@ MoonMind runs as a set of decoupled containers from a single `docker-compose.yam
 | **API Service** | FastAPI control plane for Mission Control, `/api/executions`, artifacts, templates, proposals, and MCP/context surfaces. |
 | **Temporal Server** | Durable execution engine with PostgreSQL persistence. |
 | **Worker Fleet** | Specialized isolated workers for orchestration, sandbox execution, LLM calls, managed runtime supervision, and external integrations. |
-| **Managed Session Plane** | Task-scoped owned runtime sessions. Codex is the current concrete session-plane implementation; future runtime adapters can adopt the same pattern. |
+| **Managed Session Plane** | Task-scoped owned runtime sessions. Codex is the current concrete session-plane implementation; ordinary managed-session Docker work uses a per-session sidecar daemon rather than the host socket. Future runtime adapters can adopt the same pattern. |
 | **External Agent Adapters** | Provider adapters for delegated external agents such as Jules and Codex Cloud. |
-| **Docker Workload Plane** | Tool-backed specialized workload containers, such as build/test toolchain images, kept separate from managed agent session identity. |
+| **Docker Workload Plane** | Control-plane-launched specialized workload containers for MoonMind admin/update, helper, and deliberately gated exceptional workloads, kept separate from managed agent session identity. |
 | **Mission Control** | Operational dashboard for managing tasks, reviewing per-step progress, and inspecting logs, diagnostics, and artifacts. |
 | **Qdrant & MinIO** | Vector database for RAG/memory, and S3-compatible artifact storage. |
-| **Docker Proxy** | Restricted Docker socket access for sandboxed worker containers. |
+| **Docker Proxy** | Restricted Docker socket access for control-plane workload workers; ordinary managed sessions use their private sidecar daemon instead of the host socket. |
 
 ## License
 

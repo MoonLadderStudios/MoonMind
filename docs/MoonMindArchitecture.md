@@ -77,6 +77,7 @@ flowchart LR
 
   subgraph CodexSessionPlane["Codex Managed Session Components<br/>(controlled by Agent Runtime activities)"]
     CSESS["Codex task-scoped session container"]
+    DSIDE["Per-session Docker sidecar<br/>private daemon for repo work"]
     CAPP["Codex App Server / control transport"]
     TURN["Turn control<br/>send / steer / interrupt / clear"]
     EPOCH["Session epochs<br/>thread + reset boundaries"]
@@ -95,9 +96,9 @@ flowchart LR
     EXT[Future delegated agents]
   end
 
-  subgraph DockerWorkloadPlane["Docker Workload Plane"]
+  subgraph DockerWorkloadPlane["Control-Plane Docker Workload Plane"]
     DP[Docker Socket Proxy]
-    WL["Specialized workload containers<br/>build / test / toolchain / scanners"]
+    WL["Exceptional workload containers<br/>ops / helpers / gated toolchains"]
   end
 
   subgraph DataPlane["Data Plane"]
@@ -158,7 +159,7 @@ flowchart LR
   AO --> AUTHVOL
   AO --> PTY
   AO --> CSESS
-  AO --> DP
+  AO --> DSIDE
 
   STRAT --> CC
   STRAT --> CX
@@ -170,10 +171,10 @@ flowchart LR
   SUP --> MINIO
 
   CSESS --> CAPP
+  CSESS --> DSIDE
   CAPP --> TURN
   CAPP --> EPOCH
   DP --> WL
-  DP --> CSESS
 
   PROFILES --> SECRETS
   PROFILES --> AUTHVOL
@@ -198,7 +199,8 @@ Diagram rules:
 | `gemini_cli` | Managed CLI runtime | Registered managed-runtime strategy and supported architecture target | Gemini participates in the same strategy/launcher/profile model, but this document's current focus is Codex CLI and Claude Code. |
 | Jules | External delegated agent | Concrete external-agent path | Delegated through integration adapters and canonical `AgentRun` contracts. |
 | Codex Cloud | External delegated agent | Concrete external-agent path | Coordinated through integration activities and canonical result/status contracts. |
-| Specialized Docker workloads | Tool-backed workload containers | Concrete sibling plane | Used for build/test/toolchain/security workloads. They are not managed sessions and not true agent runs unless the launched workload is itself an agent runtime. |
+| Per-session Docker sidecar | Managed-session Docker capability | Desired-state default for ordinary repo Docker work | A managed session can run ordinary `docker`, `docker build`, and `docker compose` commands against its own private sidecar daemon without receiving the host socket or MoonMind deployment credentials. |
+| Control-plane Docker workloads | Tool-backed workload containers | Concrete sibling plane | Used for MoonMind admin/update operations, helper workloads with no active session, and deliberately deployment-gated exceptional toolchain/security workloads. They are not managed sessions and not true agent runs unless the launched workload is itself an agent runtime. |
 
 ---
 
@@ -238,6 +240,11 @@ Claude Code lives here today as a concrete managed runtime.
 
 The Codex Managed Session Plane is a stateful, Codex-specific path. It uses `MoonMind.AgentSession` as a Temporal entity workflow for task-scoped session orchestration and compact session metadata. The workflow does not hold a container or socket connection directly. It schedules Agent Runtime activities that launch/resume/control the Codex session container and publish session artifacts.
 
+Ordinary Docker work that originates from the session uses the per-session
+Docker sidecar described in `docs/ManagedAgents/DockerSidecarRuntime.md`. The
+session gets a Docker CLI pointed at its private sidecar daemon, not the host
+socket or a shared MoonMind daemon.
+
 **Codex App Server** means the MoonMind-launched control surface inside or beside the Codex managed-session container. It is not a Temporal component and is not directly contacted by workflow code. It is reached only by session-control activities such as `agent_runtime.send_turn`, `agent_runtime.steer_turn`, `agent_runtime.interrupt_turn`, `agent_runtime.clear_session`, and `agent_runtime.terminate_session`.
 
 This plane is currently Codex-specific. Future work may extract runtime-neutral managed-session contracts after a second session runtime is implemented.
@@ -258,7 +265,15 @@ External agents may complete through polling activities, provider callbacks, or 
 
 ### Docker Workload Plane
 
-Specialized workload containers are sibling execution resources for bounded non-agent work. They are routed through approved tools and Docker policies, not through managed session identity.
+Control-plane Docker workload containers are sibling execution resources for
+bounded non-agent work that must originate from MoonMind itself. They cover
+MoonMind admin/update operations, helper workloads with no active session, and
+deliberately deployment-gated exceptional workloads. They are routed through
+approved tools and Docker policies, not through managed session identity.
+
+Ordinary repository tests, builds, and compose-driven workloads that originate
+from a managed session use the per-session Docker sidecar instead of this
+control-plane workload plane.
 
 ### Data Plane
 
@@ -928,6 +943,7 @@ MoonMind's safety model depends on explicit boundaries.
 - secret-resolution boundary
 - runtime auth/home volume boundary
 - workspace boundary
+- per-session Docker sidecar boundary
 - Docker socket proxy boundary
 - artifact publication boundary
 - observability API boundary
@@ -949,7 +965,7 @@ MoonMind's safety model depends on explicit boundaries.
 
 ### Docker policy requirements
 
-Docker access must be mediated by an allowlisted policy boundary. The policy should cover:
+Docker access must be mediated by an allowlisted policy boundary. Ordinary managed-session Docker work uses the per-session sidecar boundary from `docs/ManagedAgents/DockerSidecarRuntime.md`; control-plane-originated Docker workloads use the Docker socket proxy and DooD boundary from `docs/ManagedAgents/DockerOutOfDocker.md`. The policy should cover:
 
 - allowed images
 - allowed commands and entrypoints where practical
