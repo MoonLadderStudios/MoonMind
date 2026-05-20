@@ -109,6 +109,7 @@ The hard switch reduces ambiguity, makes MoonMind feel Temporal-native, and prev
 | **Workflow** | UI shorthand for a MoonMind Workflow Execution when ambiguity is low. |
 | **Workflow Execution** | The top-level MoonMind product/runtime entity. A durable Temporal-backed execution identified by `workflowId`. |
 | **Workflow Type** | The root orchestration category, such as `MoonMind.UserWorkflow`, `MoonMind.AgentRun`, or `MoonMind.ManifestIngest`. |
+| **Workflow Entry** | A short, URL-safe slug representing a `Workflow Type` for API payloads and routing (for example `user_workflow` for `MoonMind.UserWorkflow`). Surfaced as the `entry` field on canonical responses. |
 | **Workflow ID** | The stable product identity and route key. Preserved across Continue-As-New. |
 | **Run ID** | The current/latest Temporal run instance for a Workflow Execution. Useful for debugging, artifacts, and run history. |
 | **Latest Run** | The current run for a Workflow Execution. The default detail view follows it automatically. |
@@ -169,7 +170,7 @@ WorkflowRun only when explicitly referring to a Temporal run-history surface
 workflow detail
 workflow list
 workflow state
-workflow entry / workflow type
+workflow entry (the URL-safe slug for workflow type; see Glossary)
 workflow start
 workflow input
 workflow route
@@ -385,9 +386,12 @@ If `/api/task-runs/*` currently means managed runtime observability, rename it t
       "closedAt": null,
       "progress": {
         "total": 6,
+        "pending": 2,
         "running": 1,
         "succeeded": 3,
-        "failed": 0
+        "failed": 0,
+        "canceled": 0,
+        "skipped": 0
       },
       "links": {
         "self": "/api/executions/mm:01JNX7SYH6A3K1V8Q2D7E9F4AB",
@@ -426,6 +430,8 @@ If `/api/task-runs/*` currently means managed runtime observability, rename it t
     "running": 1,
     "succeeded": 3,
     "failed": 0,
+    "canceled": 0,
+    "skipped": 0,
     "currentStepTitle": "Run tests"
   },
   "inputRef": "art_input",
@@ -930,11 +936,13 @@ Rename:
 
 ```text
 tasks                 -> workflow_executions
-task_steps            -> workflow_steps or execution_steps
+task_steps            -> workflow_steps
 task_artifacts        -> workflow_artifacts
-task_runs             -> agent_runs / runtime_runs / workflow_runs depending on actual meaning
+task_runs             -> agent_runs
 task_dependencies     -> workflow_dependencies
 ```
+
+The canonical step table name is `workflow_steps` (consistent with `workflow_executions`); do not introduce a parallel `execution_steps` table. The historical `task_runs` table tracks managed-agent runtime invocations and becomes `agent_runs`; if any installation has used the table for a different meaning, archive that data separately rather than reintroducing alternative names.
 
 ### 14.2 Column Renames
 
@@ -942,7 +950,7 @@ Rename:
 
 ```text
 task_id         -> workflow_id
-task_run_id     -> run_id or agent_run_id depending on meaning
+task_run_id     -> agent_run_id (managed-agent runtime invocations); use run_id only where the column already referred to the Temporal run identifier
 task_status     -> state
 task_title      -> title
 task_summary    -> summary
@@ -956,7 +964,7 @@ Rename:
 
 ```text
 idx_tasks_task_id        -> idx_workflow_executions_workflow_id
-fk_task_steps_task_id    -> fk_execution_steps_workflow_id
+fk_task_steps_task_id    -> fk_workflow_steps_workflow_id
 ```
 
 ### 14.4 Data Semantics
@@ -1179,7 +1187,7 @@ where `attempt` refers to MoonMind Step Execution identity rather than low-level
 
 ### 18.1 Banned-Term CI Check
 
-Add a repository lint check for:
+Add a repository lint check for identifier-shaped tokens that are unambiguous when matched literally:
 
 ```text
 taskId
@@ -1191,8 +1199,6 @@ task_dashboard
 TaskDetail
 task-detail
 task-create
-/tasks
-/api/tasks
 MoonMind task
 task-oriented
 task-first
@@ -1200,6 +1206,20 @@ StepAttempt
 stepAttemptId
 step-attempt
 ```
+
+The route-shaped banned terms `/tasks` and `/api/tasks` MUST be scoped, not matched against the entire repository tree. Scope the check to:
+
+1. Runtime route definitions: FastAPI/Pydantic route decorators, OpenAPI path strings, frontend router config, and reverse-proxy / nginx route maps.
+2. Runtime response schemas and link fields that publish URLs (for example `links.self`, `links.ui`, OpenAPI `paths`, generated client URL builders).
+
+The check MUST NOT fail on:
+
+- Banned-term lint rule documentation itself (this section is a built-in allowlisted location).
+- Historical examples, migration notes, and changelogs under `docs/**` and `specs/**`.
+- Tests/fixtures that explicitly assert the absence or removal of the legacy routes.
+- Strings inside repo-internal code comments that quote the legacy path for context only.
+
+Implementations should provide an explicit per-rule allowlist (file globs or context predicates) and fail closed on new occurrences outside those locations, so the gate stays actionable.
 
 ### 18.2 Allowlist
 
@@ -1279,6 +1299,19 @@ executionOrdinal
 Remove task alias fields and Step Attempt fields.
 
 Regenerate frontend OpenAPI types.
+
+#### Phase 3.1: In-flight Workflow Compatibility
+
+Removing task-shaped and Step Attempt fields from API schemas, workflow update/signal payloads, and serialized activity inputs is a non-additive Temporal contract change. Already-running workflow histories and any signal/update messages enqueued before the cutover are deserialized against the prior shapes, so a bare deletion will break in-flight runs on the new worker code.
+
+Before any field deletion ships, this hard switch requires an explicit versioned cutover plan covering:
+
+1. **Workflow version boundary.** Identify each affected workflow and gate the new payload shapes behind `workflow.patched` / `GetVersion` markers, or a `MoonMind.UserWorkflow.v2` workflow type, so that pre-cutover histories continue to replay on the old branch while new runs use the renamed contracts.
+2. **Worker/task-queue split.** Run the previous worker build on its existing Task Queue until in-flight runs drain, and route new starts to a new Task Queue served by the renamed-contract worker. Do not allow a single worker build to serve both shapes silently.
+3. **Drain or terminate plan.** For each environment, document whether in-flight runs are drained to completion, paused and resumed on the new branch, or explicitly terminated and restarted. Hard-switch installs must record the chosen option per environment before deploy.
+4. **Activity/signal/update payload coverage.** Apply the same versioning to activity input/output payloads, signal names/shapes, and update names/shapes whose fields are being renamed or removed.
+
+This is consistent with the constitution's Temporal-facing contract rules in `.specify/memory/constitution.md`: workflow/activity/update/signal payload shapes are compatibility-sensitive, and any non-additive change must preserve worker-bound invocation compatibility for in-flight runs or be versioned with an explicit migration/cutover plan. The Phase 10 release notes MUST link to the per-environment cutover record before the breaking release is published.
 
 ### Phase 4: Rename Backend Services and Routes
 
