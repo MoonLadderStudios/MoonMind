@@ -34,12 +34,12 @@ from api_service.db.models import (
 )
 from moonmind.workflows.temporal.service import (
     TemporalExecutionNotFoundError,
-    TemporalExecutionResumeCheckpointError,
+    TemporalExecutionRecoveryCheckpointError,
     TemporalExecutionService,
     TemporalExecutionValidationError,
     _get_managed_session_store_root,
 )
-from moonmind.schemas.temporal_models import ResumeCheckpointModel
+from moonmind.schemas.temporal_models import RecoveryCheckpointModel
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 from moonmind.workflows.temporal.runtime.managed_session_store import ManagedSessionStore
 
@@ -1900,23 +1900,23 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(
             failure_policy=None,
             initial_parameters={
                 "taskRunId": "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d",
-                "resumeSource": {"workflowId": "mm:source", "runId": "run-old"},
-                "resumeCheckpointRef": "artifact://checkpoint/old",
+                "recoverySource": {"workflowId": "mm:source", "runId": "run-old"},
+                "recoveryCheckpointRef": "artifact://checkpoint/old",
                 "preservedSteps": [{"id": "step-1"}],
                 "completedSteps": [{"id": "step-0"}],
                 "task": {
                     "instructions": "Original task",
                     "recovery": {
-                        "kind": "resume_from_failed_step",
+                        "kind": "recover_from_failed_step",
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-old",
                     },
-                    "resume": {
-                        "kind": "resume_from_failed_step",
+                    "recover": {
+                        "kind": "recover_from_failed_step",
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-old",
                         "failedStepId": "implement",
-                        "resumeCheckpointRef": "artifact://checkpoint/old",
+                        "recoveryCheckpointRef": "artifact://checkpoint/old",
                         "taskInputSnapshotRef": "artifact://snapshot/old",
                     },
                 },
@@ -1957,8 +1957,8 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(
         assert refreshed.memo["latest_temporal_run_id"] == refreshed.run_id
         assert "taskRunId" not in refreshed.memo
         assert "taskRunId" not in refreshed.parameters
-        assert "resumeSource" not in refreshed.parameters
-        assert "resumeCheckpointRef" not in refreshed.parameters
+        assert "recoverySource" not in refreshed.parameters
+        assert "recoveryCheckpointRef" not in refreshed.parameters
         assert "preservedSteps" not in refreshed.parameters
         assert "completedSteps" not in refreshed.parameters
         assert refreshed.parameters["task"] == {
@@ -1990,23 +1990,23 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
             initial_parameters={
                 "taskRunId": "old-task-run",
                 "task_run_id": "old-task-run-snake",
-                "resumeSource": {"workflowId": "mm:source", "runId": "run-old"},
-                "resumeCheckpointRef": "artifact://checkpoint/old",
+                "recoverySource": {"workflowId": "mm:source", "runId": "run-old"},
+                "recoveryCheckpointRef": "artifact://checkpoint/old",
                 "preservedSteps": [{"id": "step-1"}],
                 "completedSteps": [{"id": "step-0"}],
                 "task": {
                     "instructions": "Original task",
                     "recovery": {
-                        "kind": "resume_from_failed_step",
+                        "kind": "recover_from_failed_step",
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-old",
                     },
-                    "resume": {
-                        "kind": "resume_from_failed_step",
+                    "recover": {
+                        "kind": "recover_from_failed_step",
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-old",
                         "failedStepId": "implement",
-                        "resumeCheckpointRef": "artifact://checkpoint/old",
+                        "recoveryCheckpointRef": "artifact://checkpoint/old",
                         "taskInputSnapshotRef": "artifact://snapshot/old",
                     },
                 },
@@ -2052,8 +2052,8 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
         }
         assert "taskRunId" not in rerun.parameters
         assert "task_run_id" not in rerun.parameters
-        assert "resumeSource" not in rerun.parameters
-        assert "resumeCheckpointRef" not in rerun.parameters
+        assert "recoverySource" not in rerun.parameters
+        assert "recoveryCheckpointRef" not in rerun.parameters
         assert "preservedSteps" not in rerun.parameters
         assert "completedSteps" not in rerun.parameters
         assert rerun.parameters["task"] == {
@@ -2180,7 +2180,7 @@ def test_exact_full_rerun_recovery_rejects_missing_source_identity(
         )
 
 
-def _valid_resume_checkpoint_payload(
+def _valid_recovery_checkpoint_payload(
     *,
     workflow_id: str,
     run_id: str,
@@ -2194,7 +2194,7 @@ def _valid_resume_checkpoint_payload(
         "failedStep": {
             "logicalStepId": "implement",
             "order": 2,
-            "attempt": 1,
+            "executionOrdinal": 1,
             "title": "Implement",
         },
         "preservedSteps": [
@@ -2202,18 +2202,18 @@ def _valid_resume_checkpoint_payload(
                 "logicalStepId": "plan",
                 "order": 1,
                 "status": "succeeded",
-                "sourceAttempt": 1,
+                "sourceExecutionOrdinal": 1,
                 "artifacts": {"outputSummary": "artifact://summary"},
                 "stateCheckpointRef": "artifact://workspace/before-plan",
             }
         ],
         "preparedArtifactRefs": ["artifact://prepared"],
-        "resumeWorkspace": {"branch": "feature", "commit": "abc123"},
+        "recoveryWorkspace": {"branch": "feature", "commit": "abc123"},
     }
 
-def test_resume_checkpoint_model_requires_plan_identity() -> None:
+def test_recovery_checkpoint_model_requires_plan_identity() -> None:
     with pytest.raises(ValidationError, match="plan identity"):
-        ResumeCheckpointModel.model_validate(
+        RecoveryCheckpointModel.model_validate(
             {
                 "schemaVersion": "v1",
                 "source": {"workflowId": "mm:source", "runId": "run-source"},
@@ -2221,16 +2221,16 @@ def test_resume_checkpoint_model_requires_plan_identity() -> None:
                 "failedStep": {
                     "logicalStepId": "implement",
                     "order": 2,
-                    "attempt": 1,
+                    "executionOrdinal": 1,
                 },
-                "resumeWorkspace": {"branch": "feature", "commit": "abc123"},
+                "recoveryWorkspace": {"branch": "feature", "commit": "abc123"},
             }
         )
 
 
-def test_resume_checkpoint_model_requires_workspace_checkpoint() -> None:
+def test_recovery_checkpoint_model_requires_workspace_checkpoint() -> None:
     with pytest.raises(ValidationError, match="workspace"):
-        ResumeCheckpointModel.model_validate(
+        RecoveryCheckpointModel.model_validate(
             {
                 "schemaVersion": "v1",
                 "source": {"workflowId": "mm:source", "runId": "run-source"},
@@ -2239,15 +2239,15 @@ def test_resume_checkpoint_model_requires_workspace_checkpoint() -> None:
                 "failedStep": {
                     "logicalStepId": "implement",
                     "order": 2,
-                    "attempt": 1,
+                    "executionOrdinal": 1,
                 },
             }
         )
 
 
-def test_resume_checkpoint_model_requires_preserved_step_state_checkpoint() -> None:
+def test_recovery_checkpoint_model_requires_preserved_step_state_checkpoint() -> None:
     with pytest.raises(ValidationError, match="state checkpoint"):
-        ResumeCheckpointModel.model_validate(
+        RecoveryCheckpointModel.model_validate(
             {
                 "schemaVersion": "v1",
                 "source": {"workflowId": "mm:source", "runId": "run-source"},
@@ -2256,24 +2256,24 @@ def test_resume_checkpoint_model_requires_preserved_step_state_checkpoint() -> N
                 "failedStep": {
                     "logicalStepId": "implement",
                     "order": 2,
-                    "attempt": 1,
+                    "executionOrdinal": 1,
                 },
                 "preservedSteps": [
                     {
                         "logicalStepId": "plan",
                         "order": 1,
                         "status": "succeeded",
-                        "sourceAttempt": 1,
+                        "sourceExecutionOrdinal": 1,
                         "artifacts": {"outputSummary": "artifact://summary"},
                     }
                 ],
-                "resumeWorkspace": {"branch": "feature", "commit": "abc123"},
+                "recoveryWorkspace": {"branch": "feature", "commit": "abc123"},
             }
         )
 
 
-def test_resume_checkpoint_model_accepts_complete_evidence() -> None:
-    checkpoint = ResumeCheckpointModel.model_validate(
+def test_recovery_checkpoint_model_accepts_complete_evidence() -> None:
+    checkpoint = RecoveryCheckpointModel.model_validate(
         {
             "schemaVersion": "v1",
             "source": {"workflowId": "mm:source", "runId": "run-source"},
@@ -2282,54 +2282,54 @@ def test_resume_checkpoint_model_accepts_complete_evidence() -> None:
             "failedStep": {
                 "logicalStepId": "implement",
                 "order": 2,
-                "attempt": 1,
+                "executionOrdinal": 1,
             },
-            "resumeWorkspace": {"branch": "feature", "commit": "abc123"},
+            "recoveryWorkspace": {"branch": "feature", "commit": "abc123"},
         }
     )
 
     assert checkpoint.preserved_steps == []
     assert checkpoint.prepared_artifact_refs == []
-    assert checkpoint.resume_workspace == {"branch": "feature", "commit": "abc123"}
+    assert checkpoint.recovery_workspace == {"branch": "feature", "commit": "abc123"}
 
 
-def test_resume_checkpoint_model_rejects_inline_checkpoint_payload() -> None:
-    payload = _valid_resume_checkpoint_payload(
+def test_recovery_checkpoint_model_rejects_inline_checkpoint_payload() -> None:
+    payload = _valid_recovery_checkpoint_payload(
         workflow_id="mm:source",
         run_id="run-source",
         snapshot_ref="artifact://snapshot",
     )
-    payload["resumeWorkspace"] = {
+    payload["recoveryWorkspace"] = {
         "branch": "feature",
         "commit": "abc123",
         "inlineCheckpointPayload": "x" * 4096,
     }
 
     with pytest.raises(ValidationError, match="inline checkpoint payload"):
-        ResumeCheckpointModel.model_validate(payload)
+        RecoveryCheckpointModel.model_validate(payload)
 
 
-def test_resume_checkpoint_model_allows_checkpoint_payload_ref_keys() -> None:
-    payload = _valid_resume_checkpoint_payload(
+def test_recovery_checkpoint_model_allows_checkpoint_payload_ref_keys() -> None:
+    payload = _valid_recovery_checkpoint_payload(
         workflow_id="mm:source",
         run_id="run-source",
         snapshot_ref="artifact://snapshot",
     )
-    payload["resumeWorkspace"] = {
+    payload["recoveryWorkspace"] = {
         "checkpoint_payload_ref": "artifact://checkpoint/payload",
         "inline_checkpoint_metadata": "artifact://checkpoint/metadata",
     }
 
-    checkpoint = ResumeCheckpointModel.model_validate(payload)
+    checkpoint = RecoveryCheckpointModel.model_validate(payload)
 
-    assert checkpoint.resume_workspace == {
+    assert checkpoint.recovery_workspace == {
         "checkpoint_payload_ref": "artifact://checkpoint/payload",
         "inline_checkpoint_metadata": "artifact://checkpoint/metadata",
     }
 
 
 @pytest.mark.asyncio
-async def test_failed_step_resume_creates_linked_execution_with_source_identity(
+async def test_failed_step_recovery_creates_linked_execution_with_source_identity(
     tmp_path, mock_client_adapter
 ):
     async with temporal_db(tmp_path) as session:
@@ -2339,14 +2339,14 @@ async def test_failed_step_resume_creates_linked_execution_with_source_identity(
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
             owner_id=uuid4(),
-            title="resume source",
+            title="recover source",
             input_artifact_ref="artifact://input/source",
             plan_artifact_ref="artifact://plan/source",
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
                 "taskRunId": "old-task-run",
-                "task": {"title": "Resume source", "instructions": "Original"},
+                "task": {"title": "recovery source", "instructions": "Original"},
             },
             idempotency_key=None,
         )
@@ -2355,15 +2355,15 @@ async def test_failed_step_resume_creates_linked_execution_with_source_identity(
         created.memo = {
             **created.memo,
             "task_input_snapshot_ref": "artifact://snapshot/source",
-            "resume_checkpoint_ref": "artifact://checkpoint/source",
+            "recovery_checkpoint_ref": "artifact://checkpoint/source",
         }
         await session.commit()
 
-        result = await service.create_failed_step_resume_execution(
+        result = await service.create_failed_step_recovery_execution(
             created,
-            resume_checkpoint_ref=None,
-            idempotency_key="resume-1",
-            checkpoint_payload=_valid_resume_checkpoint_payload(
+            recovery_checkpoint_ref=None,
+            idempotency_key="recover-1",
+            checkpoint_payload=_valid_recovery_checkpoint_payload(
                 workflow_id=created.workflow_id,
                 run_id=created.run_id,
                 snapshot_ref="artifact://snapshot/source",
@@ -2376,29 +2376,29 @@ async def test_failed_step_resume_creates_linked_execution_with_source_identity(
             "workflowId": created.workflow_id,
             "runId": created.run_id,
         }
-        assert resumed.parameters["resumeSource"]["sourceWorkflowId"] == created.workflow_id
-        assert resumed.parameters["resumeSource"]["sourceRunId"] == created.run_id
-        assert resumed.parameters["resumeSource"]["failedStepId"] == "implement"
-        assert resumed.parameters["resumeSource"]["resumeWorkspace"] == {
+        assert resumed.parameters["recoverySource"]["sourceWorkflowId"] == created.workflow_id
+        assert resumed.parameters["recoverySource"]["sourceRunId"] == created.run_id
+        assert resumed.parameters["recoverySource"]["failedStepId"] == "implement"
+        assert resumed.parameters["recoverySource"]["recoveryWorkspace"] == {
             "branch": "feature",
             "commit": "abc123",
         }
-        assert resumed.parameters["resumeSource"]["preservedSteps"][0][
+        assert resumed.parameters["recoverySource"]["preservedSteps"][0][
             "logicalStepId"
         ] == "plan"
         task_payload = resumed.parameters["task"]
         assert task_payload["recovery"] == {
-            "kind": "resume_from_failed_step",
+            "kind": "recover_from_failed_step",
             "sourceWorkflowId": created.workflow_id,
             "sourceRunId": created.run_id,
         }
-        assert task_payload["resume"] == {
-            "kind": "resume_from_failed_step",
+        assert task_payload["recover"] == {
+            "kind": "recover_from_failed_step",
             "sourceWorkflowId": created.workflow_id,
             "sourceRunId": created.run_id,
             "failedStepId": "implement",
-            "failedStepAttempt": 1,
-            "resumeCheckpointRef": "artifact://checkpoint/source",
+            "failedStepExecution": 1,
+            "recoveryCheckpointRef": "artifact://checkpoint/source",
             "taskInputSnapshotRef": "artifact://snapshot/source",
             "planRef": "artifact://plan/source",
             "planDigest": "sha256:plan",
@@ -2407,7 +2407,7 @@ async def test_failed_step_resume_creates_linked_execution_with_source_identity(
 
 
 @pytest.mark.asyncio
-async def test_failed_step_resume_requires_hydrated_checkpoint_payload(
+async def test_failed_step_recovery_requires_hydrated_checkpoint_payload(
     tmp_path, mock_client_adapter
 ):
     async with temporal_db(tmp_path) as session:
@@ -2417,7 +2417,7 @@ async def test_failed_step_resume_requires_hydrated_checkpoint_payload(
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
             owner_id=uuid4(),
-            title="resume source",
+            title="recover source",
             input_artifact_ref="artifact://input/source",
             plan_artifact_ref="artifact://plan/source",
             manifest_artifact_ref=None,
@@ -2430,21 +2430,21 @@ async def test_failed_step_resume_requires_hydrated_checkpoint_payload(
         created.memo = {
             **created.memo,
             "task_input_snapshot_ref": "artifact://snapshot/source",
-            "resume_checkpoint_ref": "artifact://checkpoint/source",
+            "recovery_checkpoint_ref": "artifact://checkpoint/source",
         }
         await session.commit()
 
-        with pytest.raises(TemporalExecutionResumeCheckpointError, match="payload"):
-            await service.create_failed_step_resume_execution(
+        with pytest.raises(TemporalExecutionRecoveryCheckpointError, match="payload"):
+            await service.create_failed_step_recovery_execution(
                 created,
-                resume_checkpoint_ref=None,
-                idempotency_key="resume-1",
+                recovery_checkpoint_ref=None,
+                idempotency_key="recover-1",
                 checkpoint_payload=None,
             )
 
 
 @pytest.mark.asyncio
-async def test_failed_step_resume_invalid_evidence_does_not_create_execution(
+async def test_failed_step_recovery_invalid_evidence_does_not_create_execution(
     tmp_path, mock_client_adapter, monkeypatch
 ):
     async with temporal_db(tmp_path) as session:
@@ -2454,7 +2454,7 @@ async def test_failed_step_resume_invalid_evidence_does_not_create_execution(
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
             owner_id=uuid4(),
-            title="resume source",
+            title="recover source",
             input_artifact_ref="artifact://input/source",
             plan_artifact_ref="artifact://plan/source",
             manifest_artifact_ref=None,
@@ -2467,11 +2467,11 @@ async def test_failed_step_resume_invalid_evidence_does_not_create_execution(
         created.memo = {
             **created.memo,
             "task_input_snapshot_ref": "artifact://snapshot/source",
-            "resume_checkpoint_ref": "artifact://checkpoint/source",
+            "recovery_checkpoint_ref": "artifact://checkpoint/source",
         }
         await session.commit()
 
-        invalid_payload = _valid_resume_checkpoint_payload(
+        invalid_payload = _valid_recovery_checkpoint_payload(
             workflow_id=created.workflow_id,
             run_id=created.run_id,
             snapshot_ref="artifact://snapshot/source",
@@ -2482,11 +2482,11 @@ async def test_failed_step_resume_invalid_evidence_does_not_create_execution(
         )
         monkeypatch.setattr(service, "create_execution", create_execution)
 
-        with pytest.raises(TemporalExecutionResumeCheckpointError, match="invalid"):
-            await service.create_failed_step_resume_execution(
+        with pytest.raises(TemporalExecutionRecoveryCheckpointError, match="invalid"):
+            await service.create_failed_step_recovery_execution(
                 created,
-                resume_checkpoint_ref=None,
-                idempotency_key="resume-1",
+                recovery_checkpoint_ref=None,
+                idempotency_key="recover-1",
                 checkpoint_payload=invalid_payload,
             )
 
@@ -2494,7 +2494,7 @@ async def test_failed_step_resume_invalid_evidence_does_not_create_execution(
 
 
 @pytest.mark.asyncio
-async def test_failed_step_resume_rejects_noncanonical_checkpoint_ref(
+async def test_failed_step_recovery_rejects_noncanonical_checkpoint_ref(
     tmp_path, mock_client_adapter
 ):
     async with temporal_db(tmp_path) as session:
@@ -2504,7 +2504,7 @@ async def test_failed_step_resume_rejects_noncanonical_checkpoint_ref(
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
             owner_id=uuid4(),
-            title="resume source",
+            title="recover source",
             input_artifact_ref="artifact://input/source",
             plan_artifact_ref="artifact://plan/source",
             manifest_artifact_ref=None,
@@ -2517,19 +2517,19 @@ async def test_failed_step_resume_rejects_noncanonical_checkpoint_ref(
         created.memo = {
             **created.memo,
             "task_input_snapshot_ref": "artifact://snapshot/source",
-            "resume_checkpoint_ref": "artifact://checkpoint/source",
+            "recovery_checkpoint_ref": "artifact://checkpoint/source",
         }
         await session.commit()
 
         with pytest.raises(
-            TemporalExecutionResumeCheckpointError,
+            TemporalExecutionRecoveryCheckpointError,
             match="does not match",
         ):
-            await service.create_failed_step_resume_execution(
+            await service.create_failed_step_recovery_execution(
                 created,
-                resume_checkpoint_ref="artifact://checkpoint/other",
-                idempotency_key="resume-1",
-                checkpoint_payload=_valid_resume_checkpoint_payload(
+                recovery_checkpoint_ref="artifact://checkpoint/other",
+                idempotency_key="recover-1",
+                checkpoint_payload=_valid_recovery_checkpoint_payload(
                     workflow_id=created.workflow_id,
                     run_id=created.run_id,
                     snapshot_ref="artifact://snapshot/source",
@@ -2538,7 +2538,7 @@ async def test_failed_step_resume_rejects_noncanonical_checkpoint_ref(
 
 
 @pytest.mark.asyncio
-async def test_failed_step_resume_rejects_checkpoint_run_mismatch(
+async def test_failed_step_recovery_rejects_checkpoint_run_mismatch(
     tmp_path, mock_client_adapter
 ):
     async with temporal_db(tmp_path) as session:
@@ -2547,7 +2547,7 @@ async def test_failed_step_resume_rejects_checkpoint_run_mismatch(
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
             owner_id=uuid4(),
-            title="resume source",
+            title="recover source",
             input_artifact_ref=None,
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
@@ -2560,16 +2560,16 @@ async def test_failed_step_resume_rejects_checkpoint_run_mismatch(
         created.memo = {
             **created.memo,
             "task_input_snapshot_ref": "artifact://snapshot/source",
-            "resume_checkpoint_ref": "artifact://checkpoint/source",
+            "recovery_checkpoint_ref": "artifact://checkpoint/source",
         }
         await session.commit()
 
         with pytest.raises(TemporalExecutionValidationError, match="runId"):
-            await service.create_failed_step_resume_execution(
+            await service.create_failed_step_recovery_execution(
                 created,
-                resume_checkpoint_ref=None,
-                idempotency_key="resume-1",
-                checkpoint_payload=_valid_resume_checkpoint_payload(
+                recovery_checkpoint_ref=None,
+                idempotency_key="recover-1",
+                checkpoint_payload=_valid_recovery_checkpoint_payload(
                     workflow_id=created.workflow_id,
                     run_id="stale-run-id",
                     snapshot_ref="artifact://snapshot/source",
@@ -2578,7 +2578,7 @@ async def test_failed_step_resume_rejects_checkpoint_run_mismatch(
 
 
 @pytest.mark.asyncio
-async def test_failed_step_resume_rejects_checkpoint_plan_mismatch(
+async def test_failed_step_recovery_rejects_checkpoint_plan_mismatch(
     tmp_path, mock_client_adapter
 ):
     async with temporal_db(tmp_path) as session:
@@ -2587,7 +2587,7 @@ async def test_failed_step_resume_rejects_checkpoint_plan_mismatch(
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
             owner_id=uuid4(),
-            title="resume source",
+            title="recover source",
             input_artifact_ref=None,
             plan_artifact_ref="artifact://plan/source",
             manifest_artifact_ref=None,
@@ -2600,28 +2600,28 @@ async def test_failed_step_resume_rejects_checkpoint_plan_mismatch(
         created.memo = {
             **created.memo,
             "task_input_snapshot_ref": "artifact://snapshot/source",
-            "resume_checkpoint_ref": "artifact://checkpoint/source",
+            "recovery_checkpoint_ref": "artifact://checkpoint/source",
         }
         await session.commit()
 
-        payload = _valid_resume_checkpoint_payload(
+        payload = _valid_recovery_checkpoint_payload(
             workflow_id=created.workflow_id,
             run_id=created.run_id,
             snapshot_ref="artifact://snapshot/source",
         )
         payload["planRef"] = "artifact://plan/stale"
 
-        with pytest.raises(TemporalExecutionResumeCheckpointError, match="plan"):
-            await service.create_failed_step_resume_execution(
+        with pytest.raises(TemporalExecutionRecoveryCheckpointError, match="plan"):
+            await service.create_failed_step_recovery_execution(
                 created,
-                resume_checkpoint_ref=None,
-                idempotency_key="resume-1",
+                recovery_checkpoint_ref=None,
+                idempotency_key="recover-1",
                 checkpoint_payload=payload,
             )
 
 
 @pytest.mark.asyncio
-async def test_failed_step_resume_rejects_checkpoint_plan_digest_mismatch(
+async def test_failed_step_recovery_rejects_checkpoint_plan_digest_mismatch(
     tmp_path, mock_client_adapter
 ):
     async with temporal_db(tmp_path) as session:
@@ -2630,7 +2630,7 @@ async def test_failed_step_resume_rejects_checkpoint_plan_digest_mismatch(
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
             owner_id=uuid4(),
-            title="resume source",
+            title="recover source",
             input_artifact_ref=None,
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
@@ -2643,20 +2643,20 @@ async def test_failed_step_resume_rejects_checkpoint_plan_digest_mismatch(
         created.memo = {
             **created.memo,
             "task_input_snapshot_ref": "artifact://snapshot/source",
-            "resume_checkpoint_ref": "artifact://checkpoint/source",
+            "recovery_checkpoint_ref": "artifact://checkpoint/source",
             "resume_plan_digest": "sha256:source-plan",
         }
         await session.commit()
 
         with pytest.raises(
-            TemporalExecutionResumeCheckpointError,
+            TemporalExecutionRecoveryCheckpointError,
             match="plan identity does not match",
         ):
-            await service.create_failed_step_resume_execution(
+            await service.create_failed_step_recovery_execution(
                 created,
-                resume_checkpoint_ref=None,
-                idempotency_key="resume-1",
-                checkpoint_payload=_valid_resume_checkpoint_payload(
+                recovery_checkpoint_ref=None,
+                idempotency_key="recover-1",
+                checkpoint_payload=_valid_recovery_checkpoint_payload(
                     workflow_id=created.workflow_id,
                     run_id=created.run_id,
                     snapshot_ref="artifact://snapshot/source",
@@ -2926,7 +2926,7 @@ async def test_update_execution_rejects_run_intervention_updates(
             )
 
 @pytest.mark.asyncio
-async def test_signal_pause_resume_and_external_event_transitions(
+async def test_signal_pause_recovery_and_external_event_transitions(
     tmp_path, mock_client_adapter
 ):
     async with temporal_db(tmp_path) as session:
@@ -3695,23 +3695,23 @@ async def test_update_inputs_major_reconfiguration_records_distinct_continue_as_
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "resumeSource": {"workflowId": "mm:source", "runId": "run-old"},
-                "resumeCheckpointRef": "artifact://checkpoint/old",
+                "recoverySource": {"workflowId": "mm:source", "runId": "run-old"},
+                "recoveryCheckpointRef": "artifact://checkpoint/old",
                 "preservedSteps": [{"id": "step-1"}],
                 "completedSteps": [{"id": "step-0"}],
                 "task": {
                     "instructions": "Original task",
                     "recovery": {
-                        "kind": "resume_from_failed_step",
+                        "kind": "recover_from_failed_step",
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-old",
                     },
-                    "resume": {
-                        "kind": "resume_from_failed_step",
+                    "recover": {
+                        "kind": "recover_from_failed_step",
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-old",
                         "failedStepId": "implement",
-                        "resumeCheckpointRef": "artifact://checkpoint/old",
+                        "recoveryCheckpointRef": "artifact://checkpoint/old",
                         "taskInputSnapshotRef": "artifact://snapshot/old",
                     },
                 },
@@ -3741,15 +3741,15 @@ async def test_update_inputs_major_reconfiguration_records_distinct_continue_as_
         assert refreshed.search_attributes["mm_continue_as_new_cause"] == (
             "major_reconfiguration"
         )
-        assert "resumeSource" not in refreshed.parameters
-        assert "resumeCheckpointRef" not in refreshed.parameters
+        assert "recoverySource" not in refreshed.parameters
+        assert "recoveryCheckpointRef" not in refreshed.parameters
         assert "preservedSteps" not in refreshed.parameters
         assert "completedSteps" not in refreshed.parameters
         assert refreshed.parameters["task"] == {"instructions": "Original task"}
 
 
 @pytest.mark.asyncio
-async def test_update_inputs_continue_as_new_preserves_resume_provenance_for_rollover_only(
+async def test_update_inputs_continue_as_new_preserves_recovery_provenance_for_rollover_only(
     tmp_path, mock_client_adapter
 ):
     async with temporal_db(tmp_path) as session:
@@ -3765,23 +3765,23 @@ async def test_update_inputs_continue_as_new_preserves_resume_provenance_for_rol
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "resumeSource": {"workflowId": "mm:source", "runId": "run-old"},
-                "resumeCheckpointRef": "artifact://checkpoint/old",
+                "recoverySource": {"workflowId": "mm:source", "runId": "run-old"},
+                "recoveryCheckpointRef": "artifact://checkpoint/old",
                 "preservedSteps": [{"id": "step-1"}],
                 "completedSteps": [{"id": "step-0"}],
                 "task": {
                     "instructions": "Original task",
                     "recovery": {
-                        "kind": "resume_from_failed_step",
+                        "kind": "recover_from_failed_step",
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-old",
                     },
-                    "resume": {
-                        "kind": "resume_from_failed_step",
+                    "recover": {
+                        "kind": "recover_from_failed_step",
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-old",
                         "failedStepId": "implement",
-                        "resumeCheckpointRef": "artifact://checkpoint/old",
+                        "recoveryCheckpointRef": "artifact://checkpoint/old",
                         "taskInputSnapshotRef": "artifact://snapshot/old",
                     },
                 },
@@ -3807,17 +3807,17 @@ async def test_update_inputs_continue_as_new_preserves_resume_provenance_for_rol
         assert response["accepted"] is True
         assert response["applied"] == "continue_as_new"
         assert response["continue_as_new_cause"] == "major_reconfiguration"
-        assert refreshed.parameters["resumeSource"] == {
+        assert refreshed.parameters["recoverySource"] == {
             "workflowId": "mm:source",
             "runId": "run-old",
         }
-        assert refreshed.parameters["resumeCheckpointRef"] == "artifact://checkpoint/old"
+        assert refreshed.parameters["recoveryCheckpointRef"] == "artifact://checkpoint/old"
         assert refreshed.parameters["preservedSteps"] == [{"id": "step-1"}]
         assert refreshed.parameters["completedSteps"] == [{"id": "step-0"}]
         assert refreshed.parameters["task"]["recovery"]["kind"] == (
-            "resume_from_failed_step"
+            "recover_from_failed_step"
         )
-        assert refreshed.parameters["task"]["resume"]["resumeCheckpointRef"] == (
+        assert refreshed.parameters["task"]["recover"]["recoveryCheckpointRef"] == (
             "artifact://checkpoint/old"
         )
 

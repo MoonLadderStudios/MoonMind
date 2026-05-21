@@ -6898,7 +6898,7 @@ class CodexWorker:
         artifacts_dir: Path,
         step_log_offsets: Mapping[str, object],
     ) -> None:
-        """Persist resume checkpoints for step-log offset boundaries."""
+        """Persist recovery checkpoints for step-log offset boundaries."""
 
         if not step_log_offsets:
             return
@@ -9411,7 +9411,7 @@ class CodexWorker:
             output_chunk_callback=output_chunk_callback,
         )
 
-    async def _run_codex_step_attempt(
+    async def _run_codex_step_execution(
         self,
         *,
         job_id: UUID,
@@ -9626,7 +9626,7 @@ class CodexWorker:
                 timeout_error,
                 timeout_reason,
                 attempt_duration_seconds,
-            ) = await self._run_codex_step_attempt(
+            ) = await self._run_codex_step_execution(
                 job_id=job_id,
                 canonical_payload=canonical_payload,
                 source_payload=source_payload,

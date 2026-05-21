@@ -6,10 +6,10 @@ import pytest
 from pydantic import ValidationError
 
 from moonmind.schemas.temporal_models import (
-    STEP_ATTEMPT_CHECKPOINT_CONTENT_TYPE,
+    STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
     StepCheckpointValidationRequestModel,
-    StepAttemptCheckpointModel,
-    StepAttemptIdentityModel,
+    StepExecutionCheckpointModel,
+    StepExecutionIdentityModel,
     WorkspaceCheckpointEvidenceModel,
 )
 from moonmind.workflows.temporal.step_checkpoints import (
@@ -21,13 +21,13 @@ from moonmind.workflows.temporal.step_checkpoints import (
 )
 
 
-def _identity() -> StepAttemptIdentityModel:
-    return StepAttemptIdentityModel.model_validate(
+def _identity() -> StepExecutionIdentityModel:
+    return StepExecutionIdentityModel.model_validate(
         {
             "workflowId": "workflow-1",
             "runId": "run-1",
             "logicalStepId": "implement-story",
-            "attempt": 2,
+            "executionOrdinal": 2,
         }
     )
 
@@ -48,7 +48,7 @@ def test_checkpoint_payload_uses_deterministic_boundary_identity() -> None:
 
     payload = build_step_checkpoint_payload(
         identity=identity,
-        boundary="before_attempt",
+        boundary="before_execution",
         task_input_snapshot_ref="artifact-input",
         plan_ref="artifact-plan",
         plan_digest="sha256:plan",
@@ -58,18 +58,18 @@ def test_checkpoint_payload_uses_deterministic_boundary_identity() -> None:
     )
 
     expected_id = (
-        "workflow-1:run-1:implement-story:attempt:2:checkpoint:before_attempt"
+        "workflow-1:run-1:implement-story:execution:2:checkpoint:before_execution"
     )
-    assert payload["contentType"] == STEP_ATTEMPT_CHECKPOINT_CONTENT_TYPE
+    assert payload["contentType"] == STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE
     assert payload["checkpointId"] == expected_id
-    assert build_step_checkpoint_id(identity, "before_attempt") == expected_id
-    assert build_step_checkpoint_idempotency_key(identity, "before_attempt") == (
+    assert build_step_checkpoint_id(identity, "before_execution") == expected_id
+    assert build_step_checkpoint_idempotency_key(identity, "before_execution") == (
         f"{expected_id}:write"
     )
 
     repeated = build_step_checkpoint_payload(
         identity=identity,
-        boundary="before_attempt",
+        boundary="before_execution",
         task_input_snapshot_ref="artifact-input",
         plan_ref="artifact-plan",
         plan_digest="sha256:plan",
@@ -85,7 +85,7 @@ def test_checkpoint_model_rejects_inline_large_or_raw_content() -> None:
     payload = {
         **build_step_checkpoint_payload(
             identity=identity,
-            boundary="after_attempt",
+            boundary="after_execution",
             task_input_snapshot_ref="artifact-input",
             plan_ref="artifact-plan",
             workspace=_workspace_patch(),
@@ -94,7 +94,7 @@ def test_checkpoint_model_rejects_inline_large_or_raw_content() -> None:
         "stepOutputs": {"logText": "x" * 2000},
     }
     with pytest.raises(ValidationError, match="compact refs"):
-        StepAttemptCheckpointModel.model_validate(payload)
+        StepExecutionCheckpointModel.model_validate(payload)
 
 
 def test_workspace_checkpoint_model_rejects_unexpected_fields() -> None:
@@ -126,18 +126,18 @@ def test_workspace_checkpoint_kinds_require_kind_specific_evidence(
 
 
 def test_workspace_policy_matrix_and_validation_failure_codes() -> None:
-    assert checkpoint_kinds_for_workspace_policy("apply_previous_diff_to_clean_baseline") == (
+    assert checkpoint_kinds_for_workspace_policy("apply_previous_execution_diff_to_clean_baseline") == (
         "git_patch",
     )
     assert "worktree_archive" in checkpoint_kinds_for_workspace_policy(
-        "restore_pre_attempt"
+        "restore_pre_execution"
     )
     assert checkpoint_kinds_for_workspace_policy("fresh_branch_from_source") == ()
 
-    checkpoint = StepAttemptCheckpointModel.model_validate(
+    checkpoint = StepExecutionCheckpointModel.model_validate(
         build_step_checkpoint_payload(
             identity=_identity(),
-            boundary="before_attempt",
+            boundary="before_execution",
             task_input_snapshot_ref="artifact-input",
             plan_digest="sha256:plan",
             workspace={
@@ -153,14 +153,14 @@ def test_workspace_policy_matrix_and_validation_failure_codes() -> None:
             expectedSource=_identity(),
             expectedTaskInputSnapshotRef="artifact-input",
             expectedPlanDigest="sha256:plan",
-            workspacePolicy="apply_previous_diff_to_clean_baseline",
+            workspacePolicy="apply_previous_execution_diff_to_clean_baseline",
             requiredArtifactRefs=["artifact-input"],
         )
     )
 
     assert result.valid is False
     assert result.failure_code == "policy_incompatible"
-    assert "apply_previous_diff_to_clean_baseline" in result.message
+    assert "apply_previous_execution_diff_to_clean_baseline" in result.message
 
     fresh_branch_mismatch = validate_step_checkpoint(
         StepCheckpointValidationRequestModel(
@@ -177,10 +177,10 @@ def test_workspace_policy_matrix_and_validation_failure_codes() -> None:
 
 
 def test_validation_reports_source_plan_and_artifact_failures() -> None:
-    checkpoint = StepAttemptCheckpointModel.model_validate(
+    checkpoint = StepExecutionCheckpointModel.model_validate(
         build_step_checkpoint_payload(
             identity=_identity(),
-            boundary="before_resume_restoration",
+            boundary="before_recovery_restoration",
             task_input_snapshot_ref="artifact-input",
             plan_digest="sha256:plan",
             workspace=_workspace_patch(),
@@ -254,10 +254,10 @@ def test_validation_reports_source_plan_and_artifact_failures() -> None:
 
 
 def test_validation_collects_artifact_refs_from_space_separated_keys() -> None:
-    checkpoint = StepAttemptCheckpointModel.model_validate(
+    checkpoint = StepExecutionCheckpointModel.model_validate(
         build_step_checkpoint_payload(
             identity=_identity(),
-            boundary="before_resume_restoration",
+            boundary="before_recovery_restoration",
             task_input_snapshot_ref="artifact-input",
             plan_digest="sha256:plan",
             workspace=_workspace_patch(),

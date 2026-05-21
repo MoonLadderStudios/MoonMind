@@ -34,7 +34,7 @@ async def _db(tmp_path: Path):
         await engine.dispose()
 
 
-async def test_exact_rerun_creates_fresh_execution_without_resume_progress(
+async def test_exact_rerun_creates_fresh_execution_without_recovery_progress(
     tmp_path: Path,
 ) -> None:
     async with _db(tmp_path) as maker:
@@ -51,8 +51,8 @@ async def test_exact_rerun_creates_fresh_execution_without_resume_progress(
                 initial_parameters={
                     "repository": "MoonLadderStudios/MoonMind",
                     "taskRunId": "old-task-run",
-                    "resumeSource": {"workflowId": "mm:failed", "runId": "run-old"},
-                    "resumeCheckpointRef": "artifact://checkpoint/old",
+                    "recoverySource": {"workflowId": "mm:failed", "runId": "run-old"},
+                    "recoveryCheckpointRef": "artifact://checkpoint/old",
                     "preservedSteps": [{"id": "step-1"}],
                     "completedSteps": [{"id": "step-0"}],
                 },
@@ -91,7 +91,7 @@ async def test_exact_rerun_creates_fresh_execution_without_resume_progress(
         "runId": source.run_id,
     }
     assert "taskRunId" not in rerun.parameters
-    assert "resumeSource" not in rerun.parameters
-    assert "resumeCheckpointRef" not in rerun.parameters
+    assert "recoverySource" not in rerun.parameters
+    assert "recoveryCheckpointRef" not in rerun.parameters
     assert "preservedSteps" not in rerun.parameters
     assert "completedSteps" not in rerun.parameters

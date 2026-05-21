@@ -777,7 +777,7 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
         self.assertEqual(request.runtime_command.command, "review")
         self.assertEqual(request.runtime_command.raw_command, "/review")
 
-    def test_build_agent_execution_request_includes_step_attempt_launch_policy(self) -> None:
+    def test_build_agent_execution_request_includes_step_execution_launch_policy(self) -> None:
         from unittest.mock import patch
 
         wf = MoonMindRunWorkflow()
@@ -802,31 +802,31 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
                 attempt_reason="runtime_recovered",
             )
 
-        self.assertIsNotNone(request.step_attempt)
-        step_attempt = request.step_attempt
-        assert step_attempt is not None
-        self.assertEqual(step_attempt.workflow_id, "test-wf-id")
-        self.assertEqual(step_attempt.run_id, "test-run-id")
-        self.assertEqual(step_attempt.logical_step_id, "node-runtime-attempt")
-        self.assertEqual(step_attempt.attempt, 1)
-        self.assertEqual(step_attempt.reason, "runtime_recovered")
+        self.assertIsNotNone(request.step_execution)
+        step_execution = request.step_execution
+        assert step_execution is not None
+        self.assertEqual(step_execution.workflow_id, "test-wf-id")
+        self.assertEqual(step_execution.run_id, "test-run-id")
+        self.assertEqual(step_execution.logical_step_id, "node-runtime-attempt")
+        self.assertEqual(step_execution.execution_ordinal, 1)
+        self.assertEqual(step_execution.reason, "runtime_recovered")
         self.assertEqual(
-            step_attempt.step_attempt_id,
-            "test-wf-id:test-run-id:node-runtime-attempt:attempt:1",
+            step_execution.step_execution_id,
+            "test-wf-id:test-run-id:node-runtime-attempt:execution:1",
         )
-        self.assertEqual(step_attempt.runtime_context_policy, "fresh_agent_run")
+        self.assertEqual(step_execution.runtime_context_policy, "fresh_agent_run")
         self.assertEqual(
-            step_attempt.context_bundle_ref,
-            request.parameters["metadata"]["moonmind"]["attemptContext"][
+            step_execution.context_bundle_ref,
+            request.parameters["metadata"]["moonmind"]["executionContext"][
                 "contextBundleRef"
             ],
         )
         self.assertEqual(
-            step_attempt.skill_source_policy["repoSkills"],
+            step_execution.skill_source_policy["repoSkills"],
             "resolver_policy_enforced",
         )
         self.assertEqual(
-            step_attempt.skill_source_policy["checkedInSkillMutation"],
+            step_execution.skill_source_policy["checkedInSkillMutation"],
             "prohibited",
         )
 

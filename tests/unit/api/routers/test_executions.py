@@ -24,7 +24,7 @@ from api_service.api.routers.executions import (
     _artifact_id_from_ref,
     _build_original_task_input_snapshot_payload,
     _merge_task_preserving_artifact_instructions,
-    _resume_not_available_reason,
+    _recovery_not_available_reason,
     _reuse_original_task_input_snapshot_from_source,
     _task_input_snapshot_descriptor_from_record,
     get_temporal_client,
@@ -6281,7 +6281,7 @@ def test_get_execution_steps_enriches_missing_agent_task_run_ids_once() -> None:
     )
 
 
-def _step_attempt_manifest_payload(
+def _step_execution_manifest_payload(
     *,
     artifact_ref: str,
     attempt: int,
@@ -6289,21 +6289,21 @@ def _step_attempt_manifest_payload(
 ) -> dict[str, object]:
     return {
         "schemaVersion": "v1",
-        "stepAttemptId": f"mm:wf-1:run-99:implement:attempt:{attempt}",
+        "stepExecutionId": f"mm:wf-1:run-99:implement:execution:{attempt}",
         "workflowId": "mm:wf-1",
         "runId": "run-99",
         "logicalStepId": "implement",
-        "attempt": attempt,
-        "attemptScope": "run",
+        "executionOrdinal": attempt,
+        "executionScope": "run",
         "lineage": {
             "sourceWorkflowId": "mm:source",
             "sourceRunId": "source-run",
             "sourceLogicalStepId": "implement",
-            "sourceAttempt": attempt,
-            "relationship": "resume_from_failed_step",
-            "lineageAttemptOrdinal": attempt + 1,
+            "sourceExecutionOrdinal": attempt,
+            "relationship": "recover_from_failed_step",
+            "lineageExecutionOrdinal": attempt + 1,
         },
-        "reason": "resume_from_failed_step" if attempt > 1 else "initial_execution",
+        "reason": "recover_from_failed_step" if attempt > 1 else "initial_execution",
         "status": status,
         "terminalDisposition": "accepted" if status == "succeeded" else "retryable",
         "startedAt": "2026-05-19T10:00:00Z",
@@ -6311,7 +6311,7 @@ def _step_attempt_manifest_payload(
         "input": {"preparedInputRef": f"art-input-{attempt}"},
         "context": {"contextBundleRef": f"art-context-{attempt}"},
         "workspace": {
-            "workspacePolicy": "continue_from_previous_attempt",
+            "workspacePolicy": "continue_from_previous_execution",
             "baselineRef": f"art-workspace-{attempt}",
             "gitDisposition": "candidate",
         },
@@ -6341,7 +6341,7 @@ def _step_attempt_manifest_payload(
     }
 
 
-def test_get_execution_step_attempts_returns_bounded_manifest_history() -> None:
+def test_get_execution_step_executions_returns_bounded_manifest_history() -> None:
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
@@ -6372,8 +6372,8 @@ def test_get_execution_step_attempts_returns_bounded_manifest_history() -> None:
                         "childWorkflowId": None,
                         "childRunId": None,
                         "taskRunId": None,
-                        "latestAttemptManifestRef": "art-attempt-2",
-                        "attemptManifestRefs": ["art-attempt-1", "art-attempt-2"],
+                        "latestStepExecutionManifestRef": "art-attempt-2",
+                        "stepExecutionManifestRefs": ["art-attempt-1", "art-attempt-2"],
                     },
                     "artifacts": {},
                     "lastError": None,
@@ -6385,7 +6385,7 @@ def test_get_execution_step_attempts_returns_bounded_manifest_history() -> None:
 
     async def _read_artifact(**kwargs):
         artifact_id = kwargs["artifact_id"]
-        payload = _step_attempt_manifest_payload(
+        payload = _step_execution_manifest_payload(
             artifact_ref=artifact_id,
             attempt=1 if artifact_id == "art-attempt-1" else 2,
         )
@@ -6408,7 +6408,7 @@ def test_get_execution_step_attempts_returns_bounded_manifest_history() -> None:
     assert payload["workflowId"] == "mm:wf-1"
     assert payload["runId"] == "run-99"
     assert payload["logicalStepId"] == "implement"
-    assert [item["attempt"] for item in payload["attempts"]] == [1, 2]
+    assert [item["executionOrdinal"] for item in payload["attempts"]] == [1, 2]
     assert payload["attempts"][1]["manifestRefs"] == {
         "manifestArtifactRef": "art-attempt-2"
     }
@@ -6418,7 +6418,7 @@ def test_get_execution_step_attempts_returns_bounded_manifest_history() -> None:
         "taskRunId": "task-run-2",
     }
     assert payload["attempts"][1]["workspacePolicy"] == (
-        "continue_from_previous_attempt"
+        "continue_from_previous_execution"
     )
     assert payload["attempts"][1]["gitDisposition"] == "candidate"
     assert payload["attempts"][1]["qualityGateVerdict"] == "passed"
@@ -6430,7 +6430,7 @@ def test_get_execution_step_attempts_returns_bounded_manifest_history() -> None:
     )
 
 
-def test_get_execution_step_attempt_returns_bounded_detail_refs() -> None:
+def test_get_execution_step_execution_returns_bounded_detail_refs() -> None:
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
@@ -6461,8 +6461,8 @@ def test_get_execution_step_attempt_returns_bounded_detail_refs() -> None:
                         "childWorkflowId": None,
                         "childRunId": None,
                         "taskRunId": None,
-                        "latestAttemptManifestRef": "art-attempt-2",
-                        "attemptManifestRefs": ["art-attempt-1", "art-attempt-2"],
+                        "latestStepExecutionManifestRef": "art-attempt-2",
+                        "stepExecutionManifestRefs": ["art-attempt-1", "art-attempt-2"],
                     },
                     "artifacts": {},
                     "lastError": None,
@@ -6471,7 +6471,7 @@ def test_get_execution_step_attempt_returns_bounded_detail_refs() -> None:
         },
     )
     _override_user_dependencies(app, is_superuser=True)
-    payload = _step_attempt_manifest_payload(
+    payload = _step_execution_manifest_payload(
         artifact_ref="art-attempt-2",
         attempt=2,
     )
@@ -6481,7 +6481,7 @@ def test_get_execution_step_attempt_returns_bounded_detail_refs() -> None:
                 (
                     SimpleNamespace(artifact_id="art-attempt-1"),
                     json.dumps(
-                        _step_attempt_manifest_payload(
+                        _step_execution_manifest_payload(
                             artifact_ref="art-attempt-1",
                             attempt=1,
                         )
@@ -6507,9 +6507,9 @@ def test_get_execution_step_attempt_returns_bounded_detail_refs() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["attempt"] == 2
-    assert body["sourceAttempt"] == 2
-    assert body["lineage"]["relationship"] == "resume_from_failed_step"
+    assert body["executionOrdinal"] == 2
+    assert body["sourceExecutionOrdinal"] == 2
+    assert body["lineage"]["relationship"] == "recover_from_failed_step"
     assert body["inputRefs"] == {"preparedInputRef": "art-input-2"}
     assert body["contextRefs"] == {"contextBundleRef": "art-context-2"}
     assert body["workspaceRefs"] == {
@@ -6528,7 +6528,7 @@ def test_get_execution_step_attempt_returns_bounded_detail_refs() -> None:
     assert "outputs" not in body
 
 
-def test_get_execution_step_attempts_preserves_artifact_authorization() -> None:
+def test_get_execution_step_executions_preserves_artifact_authorization() -> None:
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
@@ -6559,8 +6559,8 @@ def test_get_execution_step_attempts_preserves_artifact_authorization() -> None:
                         "childWorkflowId": None,
                         "childRunId": None,
                         "taskRunId": None,
-                        "latestAttemptManifestRef": "art-attempt-1",
-                        "attemptManifestRefs": ["art-attempt-1"],
+                        "latestStepExecutionManifestRef": "art-attempt-1",
+                        "stepExecutionManifestRefs": ["art-attempt-1"],
                     },
                     "artifacts": {},
                     "lastError": None,
@@ -6584,7 +6584,7 @@ def test_get_execution_step_attempts_preserves_artifact_authorization() -> None:
             )
 
     assert response.status_code == 403
-    assert response.json()["detail"]["code"] == "attempt_manifest_unauthorized"
+    assert response.json()["detail"]["code"] == "step_execution_manifest_unauthorized"
 
 def test_get_execution_steps_returns_503_for_temporal_rpc_errors() -> None:
     app = FastAPI()
@@ -7917,7 +7917,7 @@ def test_describe_execution_exposes_edit_for_rerun_for_failed_task(
     assert body["actions"]["canEditForRerun"] is True
     assert body["actions"]["canRerun"] is True
 
-def test_describe_execution_exposes_failed_step_resume_distinct_from_lifecycle_resume(
+def test_describe_execution_exposes_failed_step_recovery_distinct_from_lifecycle_resume(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -7926,10 +7926,10 @@ def test_describe_execution_exposes_failed_step_resume_distinct_from_lifecycle_r
     record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
     record.memo = {
         **record.memo,
-        "resume_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
+        "recovery_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
         "resume_failed_step_id": "implement",
         "resume_completed_step_refs": ["artifact://completed/plan"],
-        "resume_workspace_checkpoint_ref": "artifact://workspace/before-implement",
+        "recovery_workspace_checkpoint_ref": "artifact://workspace/before-implement",
         "resume_plan_digest": "sha256:resume-plan",
     }
     mock_service.describe_execution.return_value = record
@@ -8016,14 +8016,14 @@ def test_describe_execution_exposes_target_attachment_and_recovery_diagnostics(
             ],
             "degradedReason": "step_attachment_missing",
         },
-        "resumeSource": {
+        "recoverySource": {
             "sourceWorkflowId": "mm:source",
             "sourceRunId": "run-source",
             "preservedSteps": [
                 {
                     "logicalStepId": "prepare",
                     "title": "Prepare context",
-                    "sourceAttempt": 1,
+                    "sourceExecutionOrdinal": 1,
                     "sourceWorkflowId": "mm:source",
                     "sourceRunId": "run-source",
                 }
@@ -8032,9 +8032,9 @@ def test_describe_execution_exposes_target_attachment_and_recovery_diagnostics(
     }
     record.memo = {
         **record.memo,
-        "resume_checkpoint_ref": "artifact://resume/checkpoint",
+        "recovery_checkpoint_ref": "artifact://resume/checkpoint",
         "resume_failed_step_id": "inspect",
-        "resume_workspace_checkpoint_ref": "artifact://workspace/checkpoint",
+        "recovery_workspace_checkpoint_ref": "artifact://workspace/checkpoint",
         "resume_plan_digest": "sha256:plan",
         "resume_completed_step_refs": ["artifact://completed/prepare"],
     }
@@ -8234,7 +8234,7 @@ def test_describe_execution_preserves_target_semantics_for_alias_payloads(
     assert step["refs"][0]["artifactRef"] == "artifact://context/step"
 
 
-def test_describe_execution_surfaces_failed_step_execution_resume_phase(
+def test_describe_execution_surfaces_failed_step_execution_recovery_phase(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -8254,9 +8254,9 @@ def test_describe_execution_surfaces_failed_step_execution_resume_phase(
     }
     record.memo = {
         **record.memo,
-        "resume_checkpoint_ref": "artifact://resume/checkpoint",
+        "recovery_checkpoint_ref": "artifact://resume/checkpoint",
         "resume_failed_step_id": "inspect",
-        "resume_workspace_checkpoint_ref": "artifact://workspace/checkpoint",
+        "recovery_workspace_checkpoint_ref": "artifact://workspace/checkpoint",
         "resume_plan_digest": "sha256:plan",
         "resume_completed_step_refs": ["artifact://completed/prepare"],
     }
@@ -8299,7 +8299,7 @@ def test_describe_execution_prefers_diagnostics_failed_phase_over_disabled_reaso
         **record.memo,
         "resume_failed_step_id": "inspect",
         "resume_completed_step_refs": ["artifact://completed/prepare"],
-        "resume_workspace_checkpoint_ref": "artifact://workspace/checkpoint",
+        "recovery_workspace_checkpoint_ref": "artifact://workspace/checkpoint",
         "resume_plan_digest": "sha256:plan",
     }
     mock_service.describe_execution.return_value = record
@@ -8316,14 +8316,14 @@ def test_describe_execution_prefers_diagnostics_failed_phase_over_disabled_reaso
 
     assert response.status_code == 200
     body = response.json()
-    assert body["resume"]["disabledReason"] == "resume_checkpoint_missing"
+    assert body["resume"]["disabledReason"] == "recovery_checkpoint_missing"
     assert (
         body["targetDiagnostics"]["recovery"]["failedResumePhase"]
         == "failed_step_execution"
     )
 
 
-def test_describe_execution_omits_recovery_for_routine_resume_action_gating(
+def test_describe_execution_omits_recovery_for_routine_recovery_action_gating(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -8366,32 +8366,32 @@ def test_describe_execution_omits_recovery_for_routine_resume_action_gating(
             {
                 "resume_failed_step_id": "implement",
                 "resume_completed_step_refs": ["artifact://completed/plan"],
-                "resume_workspace_checkpoint_ref": "artifact://workspace/before-implement",
+                "recovery_workspace_checkpoint_ref": "artifact://workspace/before-implement",
                 "resume_plan_digest": "sha256:resume-plan",
             },
-            "resume_checkpoint_missing",
+            "recovery_checkpoint_missing",
         ),
         (
             {
-                "resume_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
+                "recovery_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
                 "resume_completed_step_refs": ["artifact://completed/plan"],
-                "resume_workspace_checkpoint_ref": "artifact://workspace/before-implement",
+                "recovery_workspace_checkpoint_ref": "artifact://workspace/before-implement",
                 "resume_plan_digest": "sha256:resume-plan",
             },
             "failed_step_identity_missing",
         ),
         (
             {
-                "resume_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
+                "recovery_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
                 "resume_failed_step_id": "implement",
-                "resume_workspace_checkpoint_ref": "artifact://workspace/before-implement",
+                "recovery_workspace_checkpoint_ref": "artifact://workspace/before-implement",
                 "resume_plan_digest": "sha256:resume-plan",
             },
             "completed_step_refs_missing",
         ),
         (
             {
-                "resume_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
+                "recovery_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
                 "resume_failed_step_id": "implement",
                 "resume_completed_step_refs": ["artifact://completed/plan"],
                 "resume_plan_digest": "sha256:resume-plan",
@@ -8400,16 +8400,16 @@ def test_describe_execution_omits_recovery_for_routine_resume_action_gating(
         ),
         (
             {
-                "resume_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
+                "recovery_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
                 "resume_failed_step_id": "implement",
                 "resume_completed_step_refs": ["artifact://completed/plan"],
-                "resume_workspace_checkpoint_ref": "artifact://workspace/before-implement",
+                "recovery_workspace_checkpoint_ref": "artifact://workspace/before-implement",
             },
             "plan_identity_missing",
         ),
     ],
 )
-def test_describe_execution_requires_complete_resume_evidence(
+def test_describe_execution_requires_complete_recovery_evidence(
     monkeypatch: pytest.MonkeyPatch,
     memo_updates: dict[str, object],
     expected_reason: str,
@@ -8436,7 +8436,7 @@ def test_describe_execution_requires_complete_resume_evidence(
     assert body["resume"]["disabledReason"] == expected_reason
 
 
-def test_describe_execution_rejects_stale_resume_evidence(
+def test_describe_execution_rejects_stale_recovery_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -8445,10 +8445,10 @@ def test_describe_execution_rejects_stale_resume_evidence(
     record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
     record.memo = {
         **record.memo,
-        "resume_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
+        "recovery_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
         "resume_failed_step_id": "implement",
         "resume_completed_step_refs": ["artifact://completed/plan"],
-        "resume_workspace_checkpoint_ref": "artifact://workspace/before-implement",
+        "recovery_workspace_checkpoint_ref": "artifact://workspace/before-implement",
         "resume_plan_digest": "sha256:resume-plan",
         "resume_evidence_stale": True,
     }
@@ -8465,12 +8465,12 @@ def test_describe_execution_rejects_stale_resume_evidence(
     assert response.status_code == 200
     body = response.json()
     assert body["actions"]["canRecoverFromFailedStep"] is False
-    assert body["actions"]["disabledReasons"]["canRecoverFromFailedStep"] == "stale_resume_evidence"
+    assert body["actions"]["disabledReasons"]["canRecoverFromFailedStep"] == "stale_recovery_evidence"
     assert body["resume"]["available"] is False
-    assert body["resume"]["disabledReason"] == "stale_resume_evidence"
+    assert body["resume"]["disabledReason"] == "stale_recovery_evidence"
 
 
-def test_failed_step_resume_submission_rejects_stale_resume_evidence(
+def test_failed_step_recovery_submission_rejects_stale_recovery_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -8479,7 +8479,7 @@ def test_failed_step_resume_submission_rejects_stale_resume_evidence(
     canonical = _build_execution_record(state=MoonMindWorkflowState.FAILED)
     canonical.memo = {
         **canonical.memo,
-        "resume_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
+        "recovery_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
         "resume_evidence_stale": True,
     }
     mock_service.describe_execution.return_value = canonical
@@ -8507,9 +8507,9 @@ def test_failed_step_resume_submission_rejects_stale_resume_evidence(
         )
 
     assert response.status_code == 409
-    assert response.json()["detail"]["reason"] == "stale_resume_evidence"
+    assert response.json()["detail"]["reason"] == "stale_recovery_evidence"
     artifact_service.read.assert_not_awaited()
-    mock_service.create_failed_step_resume_execution.assert_not_awaited()
+    mock_service.create_failed_step_recovery_execution.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -8571,7 +8571,7 @@ def test_failed_step_resume_submission_rejects_stale_resume_evidence(
         ),
     ],
 )
-def test_failed_step_resume_request_rejects_edited_task_payload_fields(
+def test_failed_step_recovery_request_rejects_edited_task_payload_fields(
     payload_fields: dict[str, object],
     expected_fields: list[str],
 ) -> None:
@@ -8600,7 +8600,7 @@ def test_failed_step_resume_request_rejects_edited_task_payload_fields(
     assert body["fields"] == expected_fields
 
 
-def test_failed_step_resume_hydrates_checkpoint_artifact(
+def test_failed_step_recovery_hydrates_checkpoint_artifact(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -8609,11 +8609,11 @@ def test_failed_step_resume_hydrates_checkpoint_artifact(
     canonical = _build_execution_record(state=MoonMindWorkflowState.FAILED)
     canonical.memo = {
         **canonical.memo,
-        "resume_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
+        "recovery_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
         "task_input_snapshot_ref": "artifact://snapshot/source",
     }
     mock_service.describe_execution.return_value = canonical
-    mock_service.create_failed_step_resume_execution.return_value = {
+    mock_service.create_failed_step_recovery_execution.return_value = {
         "accepted": True,
         "applied": "created_resumed_execution",
         "source": {"workflowId": canonical.workflow_id, "runId": canonical.run_id},
@@ -8622,8 +8622,8 @@ def test_failed_step_resume_hydrates_checkpoint_artifact(
             "runId": "run-resumed",
             "detailHref": "/workflows/mm:resumed",
         },
-        "relationship": "Resumed from failed step",
-        "resumeCheckpointRef": "artifact://resume-checkpoints/source/checkpoint-v1",
+        "relationship": "Recovered from failed step",
+        "recoveryCheckpointRef": "artifact://resume-checkpoints/source/checkpoint-v1",
     }
 
     checkpoint_payload = {
@@ -8642,12 +8642,12 @@ def test_failed_step_resume_hydrates_checkpoint_artifact(
                 "logicalStepId": "plan",
                 "order": 1,
                 "status": "succeeded",
-                "sourceAttempt": 1,
+                "sourceExecutionOrdinal": 1,
                 "artifacts": {"summary": "artifact://completed/plan"},
                 "stateCheckpointRef": "artifact://workspace/before-implement",
             }
         ],
-        "resumeWorkspace": {
+        "recoveryWorkspace": {
             "branch": "feature/resume",
             "commit": "abc123",
             "checkpointRef": "artifact://workspace/before-implement",
@@ -8682,12 +8682,12 @@ def test_failed_step_resume_hydrates_checkpoint_artifact(
 
     assert response.status_code == 201
     artifact_service.read.assert_awaited_once()
-    call_kwargs = mock_service.create_failed_step_resume_execution.await_args.kwargs
+    call_kwargs = mock_service.create_failed_step_recovery_execution.await_args.kwargs
     assert call_kwargs["checkpoint_payload"] == checkpoint_payload
-    assert call_kwargs["resume_checkpoint_ref"] is None
+    assert call_kwargs["recovery_checkpoint_ref"] is None
 
 
-def test_failed_step_resume_reports_checkpoint_authorization_error(
+def test_failed_step_recovery_reports_checkpoint_authorization_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -8696,7 +8696,7 @@ def test_failed_step_resume_reports_checkpoint_authorization_error(
     canonical = _build_execution_record(state=MoonMindWorkflowState.FAILED)
     canonical.memo = {
         **canonical.memo,
-        "resume_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
+        "recovery_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
         "task_input_snapshot_ref": "artifact://snapshot/source",
     }
     mock_service.describe_execution.return_value = canonical
@@ -8727,12 +8727,12 @@ def test_failed_step_resume_reports_checkpoint_authorization_error(
 
     assert response.status_code == 409
     assert response.json()["detail"]["reason"] == "checkpoint_unauthorized"
-    mock_service.create_failed_step_resume_execution.assert_not_awaited()
+    mock_service.create_failed_step_recovery_execution.assert_not_awaited()
 
 
-def test_resume_not_available_reason_prioritizes_mismatch_over_missing_plan() -> None:
-    reason = _resume_not_available_reason(
-        ValueError("Resume checkpoint plan identity does not match source execution.")
+def test_recovery_not_available_reason_prioritizes_mismatch_over_missing_plan() -> None:
+    reason = _recovery_not_available_reason(
+        ValueError("Recovery checkpoint plan identity does not match source execution.")
     )
 
     assert reason == "checkpoint_inconsistent"

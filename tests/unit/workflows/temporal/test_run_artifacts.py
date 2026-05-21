@@ -15,15 +15,15 @@ def _normalize_payload(payload: Any) -> dict[str, Any]:
     dump_method = getattr(payload, 'model_dump', getattr(payload, 'dict', None))
     return dump_method() if dump_method else payload
 
-def _step_attempt_artifact_create_result(
+def _step_execution_artifact_create_result(
     payload: Any,
     artifact_ids: count,
 ) -> tuple[dict[str, str], dict[str, str]] | None:
     normalized = _normalize_payload(payload)
-    if not str(normalized.get("name") or "").startswith("reports/step_attempts/"):
+    if not str(normalized.get("name") or "").startswith("reports/step_executions/"):
         return None
     return (
-        {"artifact_id": f"art_step_attempt_{next(artifact_ids)}"},
+        {"artifact_id": f"art_step_execution_{next(artifact_ids)}"},
         {"upload_url": "unused"},
     )
 
@@ -251,7 +251,7 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
     )
 
     # provider_profile.list calls (3) happen first, then artifact.read for plan,
-    # artifact.read for registry, then the step attempt manifest's artifact.create
+    # artifact.read for registry, then the step execution manifest's artifact.create
     # is recorded before the actual mm.skill.execute dispatch.
     assert captured[3][0] == "artifact.read"
     assert captured[3][1]["artifact_ref"] == "art_plan_1"
@@ -444,7 +444,7 @@ async def test_run_execution_stage_routes_mm_tool_execute_from_registry(
     )
 
     # provider_profile.list calls (3) happen first, then artifact.read for plan,
-    # artifact.read for registry, then the step attempt manifest's artifact.create
+    # artifact.read for registry, then the step execution manifest's artifact.create
     # is recorded before the actual mm.tool.execute dispatch.
     assert captured[5][0] == "artifact.create"
     assert captured[6][0] == "mm.tool.execute"
@@ -568,7 +568,7 @@ async def test_run_execution_stage_stops_plan_after_structured_blocked_outcome(
     workflow._repo = "MoonLadderStudios/MoonMind"
     workflow._integration = None
     child_calls: list[str] = []
-    step_attempt_artifact_ids = count(1)
+    step_execution_artifact_ids = count(1)
 
     async def fake_execute_activity(
         activity_type: str,
@@ -577,9 +577,9 @@ async def test_run_execution_stage_stops_plan_after_structured_blocked_outcome(
     ) -> Any:
         normalized = _normalize_payload(payload)
         if activity_type == "artifact.create":
-            artifact_create_result = _step_attempt_artifact_create_result(
+            artifact_create_result = _step_execution_artifact_create_result(
                 payload,
-                step_attempt_artifact_ids,
+                step_execution_artifact_ids,
             )
             if artifact_create_result is not None:
                 return artifact_create_result
@@ -733,7 +733,7 @@ async def test_run_execution_stage_rechecks_jira_blockers_in_dependency_wait(
     workflow._owner_id = "owner-1"
     workflow._repo = "MoonLadderStudios/MoonMind"
     skill_calls: list[tuple[str, str | None]] = []
-    step_attempt_artifact_ids = count(1)
+    step_execution_artifact_ids = count(1)
 
     registry_payload = {
         "skills": [
@@ -785,9 +785,9 @@ async def test_run_execution_stage_rechecks_jira_blockers_in_dependency_wait(
     ) -> Any:
         normalized = _normalize_payload(payload)
         if activity_type == "artifact.create":
-            artifact_create_result = _step_attempt_artifact_create_result(
+            artifact_create_result = _step_execution_artifact_create_result(
                 payload,
-                step_attempt_artifact_ids,
+                step_execution_artifact_ids,
             )
             if artifact_create_result is not None:
                 return artifact_create_result
@@ -932,7 +932,7 @@ async def test_run_execution_stage_rechecks_jira_blockers_in_dependency_wait(
         "repo.run_tests",
     ]
     assert skill_calls[1][1] == (
-        "wf-1:run-1:check-blockers:attempt:1:execute_jira_blocker_recheck_1"
+        "wf-1:run-1:check-blockers:execution:1:execute_jira_blocker_recheck_1"
     )
     assert workflow._plan_blocked_message is None
     assert workflow._jira_blocker_wait_active is False
@@ -2244,7 +2244,7 @@ async def test_run_execution_stage_fail_fast_raises_provider_failure_summary(
 
     workflow = MoonMindRunWorkflow()
     workflow._owner_id = "owner-1"
-    step_attempt_artifact_ids = count(1)
+    step_execution_artifact_ids = count(1)
 
     async def fake_execute_activity(
         activity_type: str,
@@ -2252,9 +2252,9 @@ async def test_run_execution_stage_fail_fast_raises_provider_failure_summary(
         **_kwargs: object,
     ) -> object:
         if activity_type == "artifact.create":
-            artifact_create_result = _step_attempt_artifact_create_result(
+            artifact_create_result = _step_execution_artifact_create_result(
                 payload,
-                step_attempt_artifact_ids,
+                step_execution_artifact_ids,
             )
             if artifact_create_result is not None:
                 return artifact_create_result
@@ -2418,7 +2418,7 @@ def test_blocked_outcome_message_detects_nested_json_code_fence() -> None:
 ```json
 {
   "decision": "blocked",
-  "details": {"source": "jira", "attempt": 1},
+  "details": {"source": "jira", "executionOrdinal": 1},
   "summary": "Nested structured blocker parsed."
 }
 ```

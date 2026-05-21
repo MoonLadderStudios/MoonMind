@@ -38,7 +38,7 @@ This is a focused lifecycle document. It does **not** redefine the broader Tempo
 - Workflow ID vs run identity for Temporal-managed executions
 - detail-page anchoring for task-oriented UI during migration
 - `RequestRerun` semantics and lifecycle expectations
-- failed-step Resume identity, checkpoint, and provenance expectations
+- failed-step recovery identity, checkpoint, and provenance expectations
 - automatic Continue-As-New triggers for history control
 - current projection/API behavior for “latest run” versus historical runs
 
@@ -57,7 +57,7 @@ Current implementation characteristics:
 
 - `TemporalExecutionRecord` is keyed by `workflow_id` and stores the current `run_id`, workflow type, state, memo, search attributes, counters, and lifecycle timestamps.
 - `RequestRerun` currently performs **Continue-As-New** semantics by preserving `workflow_id`, generating a new `run_id`, incrementing the current local Continue-As-New counter (`rerun_count`), resetting run-local counters/flags, and moving the execution back into an active state.
-- failed-step Resume is not yet part of the generic `RequestRerun` contract; it requires separate checkpoint and provenance semantics.
+- failed-step recovery is not yet part of the generic `RequestRerun` contract; it requires separate checkpoint and provenance semantics.
 - other Continue-As-New paths also exist today for lifecycle rollover and major reconfiguration, and they currently increment that same local counter
 - `/api/executions/{workflow_id}` returns the **current/latest** run view for that logical execution.
 - the current projection keeps `started_at` as the logical execution start timestamp; it does not create a second primary row or a separate current-run start field on Continue-As-New
@@ -225,7 +225,7 @@ Draft target rule:
 - if MoonMind wants “rerun closed execution” behavior for Temporal-backed tasks, it should implement that behavior **explicitly**, either by exempting `RequestRerun` from the generic terminal-state gate or by adding a distinct rerun/restart command surface
 - until that change is made, the safe assumption is: `RequestRerun` applies to non-terminal executions, while terminal executions require an explicit new-start or a future dedicated rerun path
 
-## 7A. Failed-step Resume semantics
+## 7A. Failed-step recovery semantics
 
 ### 7A.1 Meaning of Resume
 
@@ -237,7 +237,7 @@ Resume is a product recovery action, not a synonym for Continue-As-New and not a
 
 ### 7A.2 Required behavior
 
-For v1, failed-step Resume should use a distinct command surface such as:
+For v1, failed-step recovery should use a distinct command surface such as:
 
 ```http
 POST /api/executions/{workflow_id}/resume-from-failed-step
@@ -251,10 +251,10 @@ Behavior:
 - identify the last failed step from the source run's step ledger
 - require an authoritative source task input snapshot
 - require a source plan ref or digest when a plan exists
-- require a resume checkpoint that can restore completed prior work
+- require a recovery checkpoint that can restore completed prior work
 - create a linked follow-up execution with its own `workflowId` and `runId` unless a future in-place continuation model is explicitly introduced
 - leave the source execution unchanged
-- record a relation from the resumed execution to the source execution with relationship type `resume_from_failed_step`
+- record a relation from the resumed execution to the source execution with relationship type `recover_from_failed_step`
 
 ### 7A.3 Resume input changes
 
@@ -267,7 +267,7 @@ Rules:
 - the resume request may carry operator metadata and an idempotency key, but it must not carry an edited task payload
 - the resume request must pin the source `runId` so the restored progress cannot drift when the logical source execution later changes
 
-### 7A.4 Resume checkpoint requirements
+### 7A.4 Recovery checkpoint requirements
 
 Resume must be backed by a durable checkpoint artifact or equivalent durable read model.
 
@@ -298,7 +298,7 @@ Rules:
 
 - source detail shows the resumed execution in Related runs
 - resumed detail shows the source execution as the original failed run
-- relationship labels should use `Resumed from failed step`
+- relationship labels should use `Recovered from failed step`
 - preserved prior steps in the resumed detail view should be displayed as reused from the source run, not as freshly executed by the resumed run
 
 ## 8. Continue-As-New outside manual rerun
@@ -343,7 +343,7 @@ Rule of thumb:
 
 - **same logical task** → `RequestRerun` / Continue-As-New / same `workflowId`
 - **new logical task** → new workflow start / new `workflowId`
-- **failed-step Resume** → linked follow-up execution with pinned source `workflowId` and `runId`, unless a future in-place continuation model is explicitly designed
+- **failed-step recovery** → linked follow-up execution with pinned source `workflowId` and `runId`, unless a future in-place continuation model is explicitly designed
 
 ## 10. UI and API contract
 
@@ -402,7 +402,7 @@ For this document’s purposes:
 - `GET /api/executions/{workflow_id}` returns the latest/current materialized view of that execution
 - `POST /api/executions/{workflow_id}/update` with `updateName="RequestRerun"` should return `applied="continue_as_new"` when accepted
 - terminal executions currently return an update response indicating the workflow no longer accepts updates; callers should not assume rerun-from-terminal exists yet
-- failed-step Resume should use a dedicated command such as `POST /api/executions/{workflow_id}/resume-from-failed-step`, not `RequestRerun`
+- failed-step recovery should use a dedicated command such as `POST /api/executions/{workflow_id}/resume-from-failed-step`, not `RequestRerun`
 - callers should treat a changed `runId` as a normal outcome of rerun or lifecycle rollover
 
 ## 11. Projection and audit implications
@@ -412,7 +412,7 @@ Because MoonMind currently projects Temporal execution state as one row per `wor
 - the application database is a **latest-run projection**, not a full run-history store
 - historical run inspection belongs to Temporal history and any future dedicated run-history surface
 - immutable input/reconfiguration evidence should be preserved through artifacts and summaries, not by assuming the projection row itself is a per-run ledger
-- resume checkpoint evidence should be preserved through artifacts or a dedicated durable read model keyed by source `workflowId`, source `runId`, logical step ID, and attempt
+- recovery checkpoint evidence should be preserved through artifacts or a dedicated durable read model keyed by source `workflowId`, source `runId`, logical step ID, and attempt
 
 If MoonMind later needs immutable per-run read models, that should be introduced as a separate projection keyed by `workflowId` plus `runId`, not inferred from the current table.
 
@@ -433,6 +433,6 @@ That means:
 - the logical handle is `workflowId`
 - the default detail experience follows the latest run for that workflow
 - `RequestRerun` uses Continue-As-New in v1
-- failed-step Resume is separate from `RequestRerun` and requires durable progress checkpoints
+- failed-step recovery is separate from `RequestRerun` and requires durable progress checkpoints
 - automatic Continue-As-New rollover preserves the same logical execution but should not be conflated with a user-visible rerun
 - full per-run history is a future explicit feature, not an implied v1 guarantee

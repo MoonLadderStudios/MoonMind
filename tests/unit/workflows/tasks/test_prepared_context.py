@@ -7,9 +7,9 @@ from moonmind.workflows.tasks.prepared_context import (
     PreparedContextFailure,
     PreparedInputEntry,
     PreparedInputManifest,
-    build_attempt_context_bundle,
+    build_execution_context_bundle,
     build_memory_manifest,
-    build_resume_prepared_artifact_refs,
+    build_recovery_prepared_artifact_refs,
     build_prepared_input_manifest,
     build_retrieval_manifest,
     select_step_prepared_context,
@@ -328,50 +328,50 @@ def test_step_context_metadata_is_bounded_and_target_aware() -> None:
     assert "data:image" not in str(metadata)
 
 
-def test_attempt_context_bundle_digest_is_stable_and_attempt_scoped() -> None:
+def test_execution_context_bundle_digest_is_stable_and_execution_scoped() -> None:
     manifest = build_prepared_input_manifest(_task_payload())
     context = select_step_prepared_context(manifest, logical_step_id="collect-evidence")
 
-    first = build_attempt_context_bundle(
+    first = build_execution_context_bundle(
         workflow_id="workflow-1",
         run_id="run-1",
         logical_step_id="collect-evidence",
-        attempt=1,
+        execution_ordinal=1,
         prepared_context=context,
         runtime_selection={"runtimeId": "codex_cli"},
     )
-    duplicate = build_attempt_context_bundle(
+    duplicate = build_execution_context_bundle(
         workflow_id="workflow-1",
         run_id="run-1",
         logical_step_id="collect-evidence",
-        attempt=1,
+        execution_ordinal=1,
         prepared_context=context,
         runtime_selection={"runtimeId": "codex_cli"},
     )
-    changed_attempt = build_attempt_context_bundle(
+    changed_execution = build_execution_context_bundle(
         workflow_id="workflow-1",
         run_id="run-1",
         logical_step_id="collect-evidence",
-        attempt=2,
+        execution_ordinal=2,
         prepared_context=context,
         runtime_selection={"runtimeId": "codex_cli"},
     )
 
     assert first.context_bundle_digest == duplicate.context_bundle_digest
     assert first.context_bundle_ref == (
-        f"attempt-context-bundle://{first.context_bundle_digest}"
+        f"execution-context-bundle://{first.context_bundle_digest}"
     )
-    assert first.context_bundle_digest != changed_attempt.context_bundle_digest
-    assert first.builder_version == "attempt-context-builder-v1"
+    assert first.context_bundle_digest != changed_execution.context_bundle_digest
+    assert first.builder_version == "execution-context-builder-v1"
     projection = first.to_manifest_projection()
     assert projection["context"]["contextBundleDigest"] == first.context_bundle_digest
     assert "preparedInputRefs" not in projection["context"]
 
 
-def test_attempt_context_records_retrieval_and_memory_manifest_refs() -> None:
+def test_execution_context_records_retrieval_and_memory_manifest_refs() -> None:
     retrieval = build_retrieval_manifest(
         {
-            "query": "attempt context bundle",
+            "query": "execution context bundle",
             "indexVersion": "rag-index-1",
             "returnedRefs": ["artifact://doc-1"],
             "filters": {"source": "docs"},
@@ -383,7 +383,7 @@ def test_attempt_context_records_retrieval_and_memory_manifest_refs() -> None:
             {
                 "proposalRef": "memory://proposal-1",
                 "state": "proposed",
-                "summary": "Remember failed attempt evidence.",
+                "summary": "Remember failed execution evidence.",
             },
             {
                 "proposalRef": "memory://proposal-2",
@@ -392,13 +392,13 @@ def test_attempt_context_records_retrieval_and_memory_manifest_refs() -> None:
             },
         ]
     )
-    bundle = build_attempt_context_bundle(
+    bundle = build_execution_context_bundle(
         workflow_id="workflow-1",
         run_id="run-1",
         logical_step_id="collect-evidence",
-        attempt=1,
+        execution_ordinal=1,
         retrieval={
-            "query": "attempt context bundle",
+            "query": "execution context bundle",
             "indexVersion": "rag-index-1",
             "returnedRefs": ["artifact://doc-1"],
             "filters": {"source": "docs"},
@@ -408,7 +408,7 @@ def test_attempt_context_records_retrieval_and_memory_manifest_refs() -> None:
             {
                 "proposalRef": "memory://proposal-1",
                 "state": "proposed",
-                "summary": "Remember failed attempt evidence.",
+                "summary": "Remember failed execution evidence.",
             },
             {
                 "proposalRef": "memory://proposal-2",
@@ -418,7 +418,7 @@ def test_attempt_context_records_retrieval_and_memory_manifest_refs() -> None:
         ],
     )
 
-    assert retrieval.query == "attempt context bundle"
+    assert retrieval.query == "execution context bundle"
     assert retrieval.index_version == "rag-index-1"
     assert retrieval.returned_refs == ["artifact://doc-1"]
     assert retrieval.compact_summaries == ["Relevant source design section."]
@@ -456,7 +456,7 @@ def test_retrieval_manifest_allows_literal_assignment_search_terms() -> None:
     assert retrieval.query == "find `password=` assignments and token= examples"
 
 
-def test_attempt_context_rejects_secretish_values_and_unknown_memory_states() -> None:
+def test_execution_context_rejects_secretish_values_and_unknown_memory_states() -> None:
     with pytest.raises(ValueError, match="raw secret material"):
         build_prepared_input_manifest(
             {
@@ -469,7 +469,7 @@ def test_attempt_context_rejects_secretish_values_and_unknown_memory_states() ->
         )
 
     with pytest.raises(ValueError, match="raw secret material"):
-        build_attempt_context_bundle(
+        build_execution_context_bundle(
             workflow_id="workflow-1",
             run_id="run-1",
             logical_step_id="collect-evidence",
@@ -500,10 +500,10 @@ def test_attempt_context_rejects_secretish_values_and_unknown_memory_states() ->
         )
 
 
-def test_resume_prepared_artifact_refs_are_compact_and_deduped() -> None:
+def test_recovery_prepared_artifact_refs_are_compact_and_deduped() -> None:
     manifest = build_prepared_input_manifest(_task_payload())
 
-    refs = build_resume_prepared_artifact_refs(manifest)
+    refs = build_recovery_prepared_artifact_refs(manifest)
 
     assert refs == [
         "prepared-context://objective/artifact-objective",

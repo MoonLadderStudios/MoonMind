@@ -150,7 +150,7 @@ def test_surface_connection_updates_do_not_fail_session() -> None:
             updated_at=NOW,
         )
 
-def test_resume_on_different_surface_preserves_identity_without_handoff() -> None:
+def test_recovery_on_different_surface_preserves_identity_without_handoff() -> None:
     session = _session().with_surface_binding(
         surface_id="surface-terminal",
         surface_kind="terminal",

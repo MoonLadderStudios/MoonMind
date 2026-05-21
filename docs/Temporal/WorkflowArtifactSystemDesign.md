@@ -377,7 +377,7 @@ Optional explicit pinning beyond retention class.
 Representative rules:
 
 * for a given `(namespace, workflow_id, run_id, link_type)`, return max by `created_at`
-* for a given step attempt, group by `(namespace, workflow_id, run_id, metadata.step_id, metadata.attempt, link_type)`
+* for a given step execution, group by `(namespace, workflow_id, run_id, metadata.step_id, metadata.attempt, link_type)`
 * for a workflow across runs, define UI behavior explicitly:
 
  * latest by `created_at`, or
@@ -386,7 +386,7 @@ Representative rules:
 Client rule:
 
 * Mission Control must not derive latest step evidence locally by sorting execution-wide artifacts in the browser
-* server-side grouping determines the canonical latest artifact for a step attempt and link type
+* server-side grouping determines the canonical latest artifact for a step execution and link type
 
 Not all link types are intended as “outputs.”
 For example:

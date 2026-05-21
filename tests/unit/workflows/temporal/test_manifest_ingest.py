@@ -189,7 +189,7 @@ def test_set_concurrency_updates_execution_policy_immediately() -> None:
     assert response["applied"] == "immediate"
     assert record.parameters["executionPolicy"]["maxConcurrency"] == 9
 
-def test_pause_and_resume_toggle_paused_state_without_awaiting_external() -> None:
+def test_pause_and_recovery_toggle_paused_state_without_awaiting_external() -> None:
     record = _record()
 
     paused = apply_manifest_update(

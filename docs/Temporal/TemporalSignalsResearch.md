@@ -290,7 +290,7 @@ class RunWorkflow:
 
         if name in ("Resume", "resume"):
             self._paused = False
-            self._resume_requested = True
+            self._recovery_requested = True
             self._waiting_reason = None
             self._attention_required = False
             return

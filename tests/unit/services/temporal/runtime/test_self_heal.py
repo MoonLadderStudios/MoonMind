@@ -11,7 +11,7 @@ from moonmind.workflows.temporal.runtime.self_heal import (
     HardResetWorkspaceBuilder,
     SelfHealConfig,
     SelfHealController,
-    StepAttemptState,
+    StepExecutionState,
     build_failure_signature,
 )
 from moonmind.utils.logging import SecretRedactor
@@ -69,10 +69,10 @@ def test_build_failure_signature_scrubs_secrets() -> None:
     assert "[redacted]" in signature.value
     assert "token=token" not in signature.value
 
-def test_step_attempt_state_detects_no_progress() -> None:
+def test_step_execution_state_detects_no_progress() -> None:
     """No-progress should increment only when signature+diff repeat."""
 
-    state = StepAttemptState(step_id="step-1", step_index=0)
+    state = StepExecutionState(step_id="step-1", step_index=0)
     redactor = SecretRedactor(secrets=())
     first_sig = build_failure_signature(
         message="lint failure",

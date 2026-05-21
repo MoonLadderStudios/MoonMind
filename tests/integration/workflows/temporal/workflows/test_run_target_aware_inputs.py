@@ -58,9 +58,9 @@ def test_run_boundary_prepares_objective_and_current_step_context_only() -> None
     assert dumped["parameters"]["metadata"]["moonmind"]["preparedContext"][
         "targetCounts"
     ] == {"objective": 1, "step": 1}
-    attempt_context = dumped["parameters"]["metadata"]["moonmind"]["attemptContext"]
+    attempt_context = dumped["parameters"]["metadata"]["moonmind"]["executionContext"]
     projection = dumped["parameters"]["metadata"]["moonmind"][
-        "attemptManifestProjection"
+        "stepExecutionManifestProjection"
     ]
     assert attempt_context["workflowId"] == "run-target-aware-integration"
     assert attempt_context["logicalStepId"] == "first-step"

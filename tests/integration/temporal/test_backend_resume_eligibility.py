@@ -23,7 +23,7 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integrat
 
 @asynccontextmanager
 async def _db(tmp_path: Path):
-    url = f"sqlite+aiosqlite:///{tmp_path}/backend_resume_eligibility.db"
+    url = f"sqlite+aiosqlite:///{tmp_path}/backend_recovery_eligibility.db"
     engine = create_async_engine(url, future=True)
     maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with engine.begin() as conn:
@@ -51,13 +51,13 @@ def _checkpoint_payload(*, workflow_id: str, run_id: str) -> dict[str, object]:
                 "logicalStepId": "plan",
                 "order": 1,
                 "status": "succeeded",
-                "sourceAttempt": 1,
+                "sourceExecutionOrdinal": 1,
                 "artifacts": {"outputSummary": "artifact://summary"},
                 "stateCheckpointRef": "artifact://workspace/before-plan",
             }
         ],
         "preparedArtifactRefs": ["artifact://prepared"],
-        "resumeWorkspace": {"branch": "feature", "commit": "abc123"},
+        "recoveryWorkspace": {"branch": "feature", "commit": "abc123"},
     }
 
 
@@ -71,7 +71,7 @@ async def test_checkpoint_payload_stays_ref_only_and_contains_prepared_refs() ->
     assert "inlineCheckpointPayload" not in str(payload)
 
 
-async def test_accepted_resume_carries_canonical_recovery_and_resume_refs(
+async def test_accepted_recovery_carries_canonical_recovery_and_recovery_refs(
     tmp_path: Path,
 ) -> None:
     async with _db(tmp_path) as maker:
@@ -80,14 +80,14 @@ async def test_accepted_resume_carries_canonical_recovery_and_resume_refs(
             created = await service.create_execution(
                 workflow_type="MoonMind.Run",
                 owner_id=uuid4(),
-                title="Resume source",
+                title="Recovery source",
                 input_artifact_ref="artifact://input/source",
                 plan_artifact_ref="artifact://plan/source",
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={
                     "taskRunId": "old-task-run",
-                    "task": {"title": "Resume source", "instructions": "Original"},
+                    "task": {"title": "Recovery source", "instructions": "Original"},
                 },
                 idempotency_key=None,
             )
@@ -96,13 +96,13 @@ async def test_accepted_resume_carries_canonical_recovery_and_resume_refs(
             created.memo = {
                 **created.memo,
                 "task_input_snapshot_ref": "artifact://snapshot/source",
-                "resume_checkpoint_ref": "artifact://checkpoint/source",
+                "recovery_checkpoint_ref": "artifact://checkpoint/source",
             }
             await session.commit()
 
-            result = await service.create_failed_step_resume_execution(
+            result = await service.create_failed_step_recovery_execution(
                 created,
-                resume_checkpoint_ref=None,
+                recovery_checkpoint_ref=None,
                 idempotency_key="resume-mm-643",
                 checkpoint_payload=_checkpoint_payload(
                     workflow_id=created.workflow_id,
@@ -113,17 +113,17 @@ async def test_accepted_resume_carries_canonical_recovery_and_resume_refs(
 
     task_payload = resumed.parameters["task"]
     assert task_payload["recovery"] == {
-        "kind": "resume_from_failed_step",
+        "kind": "recover_from_failed_step",
         "sourceWorkflowId": created.workflow_id,
         "sourceRunId": created.run_id,
     }
     assert task_payload["resume"] == {
-        "kind": "resume_from_failed_step",
+        "kind": "recover_from_failed_step",
         "sourceWorkflowId": created.workflow_id,
         "sourceRunId": created.run_id,
         "failedStepId": "implement",
-        "failedStepAttempt": 1,
-        "resumeCheckpointRef": "artifact://checkpoint/source",
+        "failedStepExecution": 1,
+        "recoveryCheckpointRef": "artifact://checkpoint/source",
         "taskInputSnapshotRef": "artifact://snapshot/source",
         "planRef": "artifact://plan/source",
         "planDigest": "sha256:plan",
@@ -131,7 +131,7 @@ async def test_accepted_resume_carries_canonical_recovery_and_resume_refs(
     assert "taskRunId" not in resumed.parameters
 
 
-async def test_generic_rerun_does_not_carry_resume_reference_fields(
+async def test_generic_rerun_does_not_carry_recovery_reference_fields(
     tmp_path: Path,
 ) -> None:
     async with _db(tmp_path) as maker:
@@ -140,33 +140,33 @@ async def test_generic_rerun_does_not_carry_resume_reference_fields(
             created = await service.create_execution(
                 workflow_type="MoonMind.Run",
                 owner_id=uuid4(),
-                title="Resume source",
+                title="Recovery source",
                 input_artifact_ref="artifact://input/source",
                 plan_artifact_ref="artifact://plan/source",
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={
-                    "resumeSource": {
+                    "recoverySource": {
                         "sourceWorkflowId": "mm:old",
                         "sourceRunId": "run-old",
                     },
-                    "resumeCheckpointRef": "artifact://checkpoint/old",
+                    "recoveryCheckpointRef": "artifact://checkpoint/old",
                     "preservedSteps": [{"logicalStepId": "plan"}],
                     "completedSteps": [{"logicalStepId": "plan"}],
                     "task": {
-                        "title": "Resume source",
+                        "title": "Recovery source",
                         "instructions": "Original",
                         "recovery": {
-                            "kind": "resume_from_failed_step",
+                            "kind": "recover_from_failed_step",
                             "sourceWorkflowId": "mm:old",
                             "sourceRunId": "run-old",
                         },
                         "resume": {
-                            "kind": "resume_from_failed_step",
+                            "kind": "recover_from_failed_step",
                             "sourceWorkflowId": "mm:old",
                             "sourceRunId": "run-old",
                             "failedStepId": "implement",
-                            "resumeCheckpointRef": "artifact://checkpoint/old",
+                            "recoveryCheckpointRef": "artifact://checkpoint/old",
                             "taskInputSnapshotRef": "artifact://snapshot/old",
                         },
                     },
@@ -195,12 +195,12 @@ async def test_generic_rerun_does_not_carry_resume_reference_fields(
             rerun = await service.describe_execution(created.workflow_id)
 
     assert result["continue_as_new_cause"] == "manual_rerun"
-    assert "resumeSource" not in rerun.parameters
-    assert "resumeCheckpointRef" not in rerun.parameters
+    assert "recoverySource" not in rerun.parameters
+    assert "recoveryCheckpointRef" not in rerun.parameters
     assert "preservedSteps" not in rerun.parameters
     assert "completedSteps" not in rerun.parameters
     assert rerun.parameters["task"] == {
-        "title": "Resume source",
+        "title": "Recovery source",
         "instructions": "Original",
         "recovery": {
             "kind": "exact_full_rerun",
@@ -210,7 +210,7 @@ async def test_generic_rerun_does_not_carry_resume_reference_fields(
     }
 
 
-async def test_edited_full_retry_does_not_carry_resume_reference_fields(
+async def test_edited_full_retry_does_not_carry_recovery_reference_fields(
     tmp_path: Path,
 ) -> None:
     async with _db(tmp_path) as maker:
@@ -219,33 +219,33 @@ async def test_edited_full_retry_does_not_carry_resume_reference_fields(
             created = await service.create_execution(
                 workflow_type="MoonMind.Run",
                 owner_id=uuid4(),
-                title="Resume source",
+                title="Recovery source",
                 input_artifact_ref="artifact://input/source",
                 plan_artifact_ref="artifact://plan/source",
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={
-                    "resumeSource": {
+                    "recoverySource": {
                         "sourceWorkflowId": "mm:old",
                         "sourceRunId": "run-old",
                     },
-                    "resumeCheckpointRef": "artifact://checkpoint/old",
+                    "recoveryCheckpointRef": "artifact://checkpoint/old",
                     "preservedSteps": [{"logicalStepId": "plan"}],
                     "completedSteps": [{"logicalStepId": "plan"}],
                     "task": {
-                        "title": "Resume source",
+                        "title": "Recovery source",
                         "instructions": "Original",
                         "recovery": {
-                            "kind": "resume_from_failed_step",
+                            "kind": "recover_from_failed_step",
                             "sourceWorkflowId": "mm:old",
                             "sourceRunId": "run-old",
                         },
                         "resume": {
-                            "kind": "resume_from_failed_step",
+                            "kind": "recover_from_failed_step",
                             "sourceWorkflowId": "mm:old",
                             "sourceRunId": "run-old",
                             "failedStepId": "implement",
-                            "resumeCheckpointRef": "artifact://checkpoint/old",
+                            "recoveryCheckpointRef": "artifact://checkpoint/old",
                             "taskInputSnapshotRef": "artifact://snapshot/old",
                         },
                     },
@@ -269,11 +269,11 @@ async def test_edited_full_retry_does_not_carry_resume_reference_fields(
             edited_retry = await service.describe_execution(created.workflow_id)
 
     assert result["continue_as_new_cause"] == "major_reconfiguration"
-    assert "resumeSource" not in edited_retry.parameters
-    assert "resumeCheckpointRef" not in edited_retry.parameters
+    assert "recoverySource" not in edited_retry.parameters
+    assert "recoveryCheckpointRef" not in edited_retry.parameters
     assert "preservedSteps" not in edited_retry.parameters
     assert "completedSteps" not in edited_retry.parameters
     assert edited_retry.parameters["task"] == {
-        "title": "Resume source",
+        "title": "Recovery source",
         "instructions": "Original",
     }

@@ -105,7 +105,7 @@ def test_get_worker_pause_snapshot_returns_system_metrics_and_audit(
     }
 
 
-def test_post_pause_and_resume_return_snapshots_and_call_subsystem(
+def test_post_pause_and_recovery_return_snapshots_and_call_subsystem(
     system_operations_client: tuple[TestClient, FakeTemporalService],
 ) -> None:
     client, temporal = system_operations_client
@@ -235,7 +235,7 @@ def test_missing_confirmation_and_invalid_values_are_rejected(
             "idempotencyKey": "invalid-action",
         },
     )
-    forced_resume_without_confirmation = client.post(
+    forced_recovery_without_confirmation = client.post(
         "/api/system/worker-pause",
         json={
             "action": "resume",
@@ -250,8 +250,8 @@ def test_missing_confirmation_and_invalid_values_are_rejected(
         "worker_operation_confirmation_required"
     )
     assert invalid_action.status_code == 422
-    assert forced_resume_without_confirmation.status_code == 422
-    assert forced_resume_without_confirmation.json()["detail"]["code"] == (
+    assert forced_recovery_without_confirmation.status_code == 422
+    assert forced_recovery_without_confirmation.json()["detail"]["code"] == (
         "worker_operation_confirmation_required"
     )
     assert temporal.pause_calls == 0

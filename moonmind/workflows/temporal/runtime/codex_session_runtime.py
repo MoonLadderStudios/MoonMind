@@ -1950,13 +1950,13 @@ class CodexManagedSessionRuntime:
         return normalized if Path(normalized).is_file() else None
 
     @staticmethod
-    def _resume_failure_allows_fallback(message: str) -> bool:
+    def _recovery_failure_allows_fallback(message: str) -> bool:
         normalized = message.lower()
         if "no rollout found" in normalized or "thread not found" in normalized:
             return True
         return "rollout at " in normalized and " is empty" in normalized
 
-    def _resume_thread(
+    def _recovery_thread(
         self,
         *,
         client: CodexAppServerRpcClient,
@@ -1975,7 +1975,7 @@ class CodexManagedSessionRuntime:
             thread_payload = resumed.get("thread")
         except RuntimeError as exc:
             message = str(exc)
-            if not self._resume_failure_allows_fallback(message):
+            if not self._recovery_failure_allows_fallback(message):
                 raise
             if not allow_fallback_start:
                 raise
@@ -2102,7 +2102,7 @@ class CodexManagedSessionRuntime:
             )
         except RuntimeError as exc:
             try:
-                vendor_thread_id = self._resume_thread(
+                vendor_thread_id = self._recovery_thread(
                     client=client,
                     state=state,
                     allow_fallback_start=False,
@@ -2246,7 +2246,7 @@ class CodexManagedSessionRuntime:
         state = self._validate_locator(request)
         client = self._app_server_client()
         client.initialize()
-        vendor_thread_id = self._resume_thread(client=client, state=state)
+        vendor_thread_id = self._recovery_thread(client=client, state=state)
         rollout_mirror = self._new_rollout_live_mirror(state)
 
         started = client.request(
@@ -2408,7 +2408,7 @@ class CodexManagedSessionRuntime:
             )
         client = self._app_server_client()
         client.initialize()
-        vendor_thread_id = self._resume_thread(client=client, state=state)
+        vendor_thread_id = self._recovery_thread(client=client, state=state)
         steer_params: dict[str, Any] = {
             "threadId": vendor_thread_id,
             "turnId": request.turn_id,

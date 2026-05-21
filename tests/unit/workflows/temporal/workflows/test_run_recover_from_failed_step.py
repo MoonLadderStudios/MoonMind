@@ -20,8 +20,8 @@ from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     workflow_info = SimpleNamespace(
         namespace="default",
-        workflow_id="wf-resume",
-        run_id="run-resume",
+        workflow_id="wf-recover",
+        run_id="run-recover",
         task_queue="mm.workflow",
         search_attributes={"mm_owner_type": ["user"], "mm_owner_id": ["user-1"]},
     )
@@ -37,23 +37,23 @@ def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: False)
 
 
-def _resume_source(**overrides: object) -> dict[str, object]:
+def _recovery_source(**overrides: object) -> dict[str, object]:
     source: dict[str, object] = {
         "sourceWorkflowId": "mm:source",
         "sourceRunId": "run-source",
         "sourceTaskInputSnapshotRef": "artifact://snapshot/source",
         "sourcePlanDigest": "sha256:source-plan",
         "failedStepId": "implement",
-        "failedStepAttempt": 1,
-        "resumeCheckpointRef": "artifact://resume/checkpoint",
-        "resumeWorkspace": {
+        "failedStepExecution": 1,
+        "recoveryCheckpointRef": "artifact://recover/checkpoint",
+        "recoveryWorkspace": {
             "checkpointRef": "artifact://workspace/before-implement",
         },
         "preservedSteps": [
             {
                 "logicalStepId": "prepare",
                 "status": "succeeded",
-                "sourceAttempt": 1,
+                "sourceExecutionOrdinal": 1,
                 "artifacts": {
                     "outputSummary": "artifact://prepare-summary",
                     "outputPrimary": "artifact://prepare-output",
@@ -70,7 +70,7 @@ def _workflow_with_resume(
     source: dict[str, object] | None = None,
 ) -> MoonMindRunWorkflow:
     workflow = MoonMindRunWorkflow()
-    workflow._resume_source = source or _resume_source()
+    workflow._recovery_source = source or _recovery_source()
     return workflow
 
 
@@ -106,7 +106,7 @@ def test_materialize_preserved_steps_marks_source_provenance_without_new_attempt
                 "logicalStepId": "plan",
                 "order": 1,
                 "status": "succeeded",
-                "sourceAttempt": 2,
+                "sourceExecutionOrdinal": 2,
                 "artifacts": {"outputSummary": "artifact://summary"},
                 "stateCheckpointRef": "artifact://workspace/before-plan",
             }
@@ -116,13 +116,13 @@ def test_materialize_preserved_steps_marks_source_provenance_without_new_attempt
     refresh_ready_steps(rows, updated_at=now)
 
     assert rows[0]["status"] == "succeeded"
-    assert rows[0]["attempt"] == 0
+    assert rows[0]["executionOrdinal"] == 0
     assert rows[0]["summary"] == "Preserved from source run."
     assert rows[0]["preservedFrom"] == {
         "workflowId": "mm:source",
         "runId": "run-source",
         "logicalStepId": "plan",
-        "attempt": 2,
+        "executionOrdinal": 2,
     }
     assert rows[0]["artifacts"]["outputSummary"] == "artifact://summary"
     assert rows[0]["stateCheckpointRef"] == "artifact://workspace/before-plan"
@@ -150,7 +150,7 @@ def test_materialize_preserved_steps_keeps_outputs_for_downstream_steps() -> Non
                 "logicalStepId": "prepare",
                 "order": 1,
                 "status": "succeeded",
-                "sourceAttempt": 1,
+                "sourceExecutionOrdinal": 1,
                 "artifacts": {
                     "outputSummary": "artifact://prepare-summary",
                     "outputPrimary": "artifact://prepare-output",
@@ -162,12 +162,12 @@ def test_materialize_preserved_steps_keeps_outputs_for_downstream_steps() -> Non
     )
     refresh_ready_steps(rows, updated_at=now)
 
-    assert rows[0]["attempt"] == 0
+    assert rows[0]["executionOrdinal"] == 0
     assert rows[0]["preservedFrom"] == {
         "workflowId": "mm:source",
         "runId": "run-source",
         "logicalStepId": "prepare",
-        "attempt": 1,
+        "executionOrdinal": 1,
     }
     assert rows[0]["artifacts"]["outputSummary"] == "artifact://prepare-summary"
     assert rows[0]["artifacts"]["outputPrimary"] == "artifact://prepare-output"
@@ -205,20 +205,20 @@ def test_parent_owned_checkpoint_evidence_survives_child_runtime_projection() ->
         "childWorkflowId": "wf-child",
         "childRunId": "run-child",
         "taskRunId": None,
-        "latestAttemptManifestRef": None,
-        "attemptManifestRefs": [],
+        "latestStepExecutionManifestRef": None,
+        "stepExecutionManifestRefs": [],
     }
     assert rows[0]["stateCheckpointRef"] == "artifact://child-checkpoint"
-    assert rows[0]["resumePreservation"] == {
+    assert rows[0]["recoveryPreservation"] == {
         "eligible": True,
         "reason": "complete",
         "message": "Step has recoverable output refs and state checkpoint evidence.",
     }
 
-def test_empty_resume_source_is_treated_as_absent() -> None:
+def test_empty_recovery_source_is_treated_as_absent() -> None:
     now = datetime.now(UTC)
     workflow = MoonMindRunWorkflow()
-    workflow._resume_source = {}
+    workflow._recovery_source = {}
 
     workflow._initialize_step_ledger(
         ordered_nodes=_ordered_nodes(),
@@ -226,8 +226,8 @@ def test_empty_resume_source_is_treated_as_absent() -> None:
         updated_at=now,
     )
 
-    assert workflow._resume_failed_step_id is None
-    assert workflow._resume_workspace == {}
+    assert workflow._recovery_failed_step_id is None
+    assert workflow._recovery_workspace == {}
     assert workflow._step_ledger_rows[0]["status"] == "ready"
 
 
@@ -250,14 +250,14 @@ def test_step_ledger_row_lookup_uses_initialized_index() -> None:
         ("sourceRunId", "source run"),
         ("sourceTaskInputSnapshotRef", "task input snapshot"),
         ("failedStepId", "failed step"),
-        ("resumeCheckpointRef", "resume checkpoint"),
+        ("recoveryCheckpointRef", "recovery checkpoint"),
     ],
 )
-def test_resume_source_validation_requires_compact_identity_before_execution(
+def test_recovery_source_validation_requires_compact_identity_before_execution(
     field: str,
     message: str,
 ) -> None:
-    source = _resume_source(**{field: ""})
+    source = _recovery_source(**{field: ""})
     workflow = _workflow_with_resume(source)
 
     with pytest.raises(ValueError, match=message):
@@ -268,8 +268,8 @@ def test_resume_source_validation_requires_compact_identity_before_execution(
         )
 
 
-def test_resume_source_validation_requires_plan_identity_before_execution() -> None:
-    source = _resume_source(sourcePlanDigest="", sourcePlanRef="")
+def test_recovery_source_validation_requires_plan_identity_before_execution() -> None:
+    source = _recovery_source(sourcePlanDigest="", sourcePlanRef="")
     workflow = _workflow_with_resume(source)
 
     with pytest.raises(ValueError, match="plan"):
@@ -280,13 +280,13 @@ def test_resume_source_validation_requires_plan_identity_before_execution() -> N
         )
 
 
-def test_resume_source_rejects_preserved_step_without_recoverable_output_ref() -> None:
-    source = _resume_source(
+def test_recovery_source_rejects_preserved_step_without_recoverable_output_ref() -> None:
+    source = _recovery_source(
         preservedSteps=[
             {
                 "logicalStepId": "prepare",
                 "status": "succeeded",
-                "sourceAttempt": 1,
+                "sourceExecutionOrdinal": 1,
                 "artifacts": {},
                 "stateCheckpointRef": "artifact://workspace/prepare",
             }
@@ -302,7 +302,7 @@ def test_resume_source_rejects_preserved_step_without_recoverable_output_ref() -
         )
 
 
-def test_resume_source_restores_workspace_before_failed_step_execution() -> None:
+def test_recovery_source_restores_workspace_before_failed_step_execution() -> None:
     now = datetime.now(UTC)
     workflow = _workflow_with_resume()
     workflow._initialize_step_ledger(
@@ -311,15 +311,15 @@ def test_resume_source_restores_workspace_before_failed_step_execution() -> None
         updated_at=now,
     )
 
-    restored_ref = workflow._restore_resume_workspace_for_failed_step("implement")
+    restored_ref = workflow._restore_recovery_workspace_for_failed_step("implement")
 
     assert restored_ref == "artifact://workspace/before-implement"
-    assert workflow._resume_workspace_restored_ref == restored_ref
-    assert workflow._restore_resume_workspace_for_failed_step("verify") is None
+    assert workflow._recovery_workspace_restored_ref == restored_ref
+    assert workflow._restore_recovery_workspace_for_failed_step("verify") is None
 
 
 @pytest.mark.asyncio
-async def test_resume_attempt_manifest_preserves_source_lineage(
+async def test_recover_step_execution_manifest_preserves_source_lineage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
@@ -352,39 +352,39 @@ async def test_resume_attempt_manifest_preserves_source_lineage(
     )
 
     workflow._mark_step_running("implement", updated_at=now, summary="Resuming")
-    await workflow._record_step_attempt_manifest_start(
+    await workflow._record_step_execution_manifest_start(
         "implement",
         updated_at=now,
-        reason="resume_from_failed_step",
+        reason="recover_from_failed_step",
     )
 
     manifest = writes[0]["payload"]
-    assert manifest["workflowId"] == "wf-resume"
-    assert manifest["runId"] == "run-resume"
-    assert manifest["attempt"] == 1
+    assert manifest["workflowId"] == "wf-recover"
+    assert manifest["runId"] == "run-recover"
+    assert manifest["executionOrdinal"] == 1
     assert manifest["lineage"] == {
         "sourceWorkflowId": "mm:source",
         "sourceRunId": "run-source",
         "sourceLogicalStepId": "implement",
-        "sourceAttempt": 1,
-        "relationship": "resume_from_failed_step",
-        "lineageAttemptOrdinal": 2,
+        "sourceExecutionOrdinal": 1,
+        "relationship": "recover_from_failed_step",
+        "lineageExecutionOrdinal": 2,
     }
     assert manifest["workspace"]["policy"] == "start_from_last_passed_commit"
     assert manifest["workspace"]["checkpointRef"] == (
         "artifact://workspace/before-implement"
     )
     assert manifest["workspace"]["evidenceAccepted"] is True
-    assert manifest["workspace"]["sourceAttempt"] == {
+    assert manifest["workspace"]["sourceExecutionOrdinal"] == {
         "workflowId": "mm:source",
         "runId": "run-source",
         "logicalStepId": "implement",
-        "attempt": 1,
+        "executionOrdinal": 1,
     }
 
 
-def test_resume_source_rejects_missing_workspace_evidence() -> None:
-    source = _resume_source(resumeWorkspace={})
+def test_recovery_source_rejects_missing_workspace_evidence() -> None:
+    source = _recovery_source(recoveryWorkspace={})
     workflow = _workflow_with_resume(source)
 
     with pytest.raises(ValueError, match="workspace evidence"):
@@ -395,9 +395,9 @@ def test_resume_source_rejects_missing_workspace_evidence() -> None:
         )
 
 
-def test_resume_source_accepts_branch_commit_workspace_evidence() -> None:
+def test_recovery_source_accepts_branch_commit_workspace_evidence() -> None:
     now = datetime.now(UTC)
-    source = _resume_source(resumeWorkspace={"branch": "feature", "commit": "abc123"})
+    source = _recovery_source(recoveryWorkspace={"branch": "feature", "commit": "abc123"})
     workflow = _workflow_with_resume(source)
 
     workflow._initialize_step_ledger(
@@ -406,14 +406,14 @@ def test_resume_source_accepts_branch_commit_workspace_evidence() -> None:
         updated_at=now,
     )
 
-    assert workflow._resume_workspace == {"branch": "feature", "commit": "abc123"}
-    assert workflow._restore_resume_workspace_for_failed_step("implement") is None
+    assert workflow._recovery_workspace == {"branch": "feature", "commit": "abc123"}
+    assert workflow._restore_recovery_workspace_for_failed_step("implement") is None
 
 
-def test_resume_source_accepts_checkpoint_payload_ref_workspace_evidence() -> None:
+def test_recovery_source_accepts_checkpoint_payload_ref_workspace_evidence() -> None:
     now = datetime.now(UTC)
-    source = _resume_source(
-        resumeWorkspace={
+    source = _recovery_source(
+        recoveryWorkspace={
             "checkpoint_payload_ref": "artifact://checkpoint/payload",
             "inline_checkpoint_metadata": "artifact://checkpoint/metadata",
         }
@@ -426,10 +426,10 @@ def test_resume_source_accepts_checkpoint_payload_ref_workspace_evidence() -> No
         updated_at=now,
     )
 
-    restored_ref = workflow._restore_resume_workspace_for_failed_step("implement")
+    restored_ref = workflow._restore_recovery_workspace_for_failed_step("implement")
 
     assert restored_ref == "artifact://checkpoint/payload"
-    assert workflow._resume_workspace_restored_ref == restored_ref
+    assert workflow._recovery_workspace_restored_ref == restored_ref
 
 
 def test_preserved_outputs_are_available_to_failed_step_dependencies() -> None:
@@ -451,7 +451,7 @@ def test_preserved_outputs_are_available_to_failed_step_dependencies() -> None:
                 "workflowId": "mm:source",
                 "runId": "run-source",
                 "logicalStepId": "prepare",
-                "attempt": 1,
+                "executionOrdinal": 1,
             },
         }
     }

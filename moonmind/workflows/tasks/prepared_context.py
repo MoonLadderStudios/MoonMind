@@ -19,7 +19,7 @@ MemoryProposalState = Literal[
     "rejected",
     "superseded",
 ]
-ATTEMPT_CONTEXT_BUILDER_VERSION = "attempt-context-builder-v1"
+EXECUTION_CONTEXT_BUILDER_VERSION = "execution-context-builder-v1"
 
 _INLINE_ATTACHMENT_KEYS = {
     "base64",
@@ -183,8 +183,8 @@ class MemoryManifest(BaseModel):
     memory_manifest_ref: str = Field(alias="memoryManifestRef")
 
 
-class AttemptContextBundle(BaseModel):
-    """Digest-addressed context envelope for one runtime attempt."""
+class ExecutionContextBundle(BaseModel):
+    """Digest-addressed context envelope for one runtime Step Execution."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -192,7 +192,7 @@ class AttemptContextBundle(BaseModel):
     workflow_id: str = Field(alias="workflowId")
     run_id: str = Field(alias="runId")
     logical_step_id: str = Field(alias="logicalStepId")
-    attempt: int
+    execution_ordinal: int = Field(alias="executionOrdinal")
     reason: str = "initial_execution"
     prepared_input_refs: list[str] = Field(
         default_factory=list,
@@ -219,16 +219,16 @@ class AttemptContextBundle(BaseModel):
             raise ValueError("field must be a non-empty string")
         return candidate
 
-    @field_validator("attempt")
+    @field_validator("execution_ordinal")
     @classmethod
-    def _positive_attempt(cls, value: int) -> int:
+    def _positive_execution_ordinal(cls, value: int) -> int:
         if value <= 0:
-            raise ValueError("attempt must be positive")
+            raise ValueError("executionOrdinal must be positive")
         return value
 
     @model_validator(mode="after")
-    def _validate_safe_content(self) -> "AttemptContextBundle":
-        _reject_secretish_values(self.model_dump(by_alias=True), path="attemptContext")
+    def _validate_safe_content(self) -> "ExecutionContextBundle":
+        _reject_secretish_values(self.model_dump(by_alias=True), path="executionContext")
         return self
 
     def to_manifest_projection(self) -> dict[str, Any]:
@@ -333,20 +333,20 @@ def select_step_prepared_context(
     )
 
 
-def build_attempt_context_bundle(
+def build_execution_context_bundle(
     *,
     workflow_id: str,
     run_id: str,
     logical_step_id: str,
-    attempt: int | None = None,
+    execution_ordinal: int | None = None,
     reason: str = "initial_execution",
     prepared_context: StepPreparedContext | None = None,
     runtime_selection: Mapping[str, Any] | None = None,
     retrieval: Mapping[str, Any] | None = None,
     memory_proposals: Sequence[Mapping[str, Any]] | None = None,
-    builder_version: str = ATTEMPT_CONTEXT_BUILDER_VERSION,
-) -> AttemptContextBundle:
-    """Build a compact, digest-addressed attempt context bundle."""
+    builder_version: str = EXECUTION_CONTEXT_BUILDER_VERSION,
+) -> ExecutionContextBundle:
+    """Build a compact, digest-addressed execution context bundle."""
 
     prepared_input_refs = (
         prepared_context.input_refs if prepared_context is not None else []
@@ -367,7 +367,7 @@ def build_attempt_context_bundle(
         "workflowId": workflow_id,
         "runId": run_id,
         "logicalStepId": logical_step_id,
-        "attempt": attempt or 1,
+        "executionOrdinal": execution_ordinal or 1,
         "reason": reason,
         "preparedInputRefs": list(prepared_input_refs),
         "retrievalManifestRef": retrieval_manifest_ref,
@@ -378,10 +378,10 @@ def build_attempt_context_bundle(
     digest = _digest_payload(base_payload)
     payload = {
         **base_payload,
-        "contextBundleRef": f"attempt-context-bundle://{digest}",
+        "contextBundleRef": f"execution-context-bundle://{digest}",
         "contextBundleDigest": digest,
     }
-    return AttemptContextBundle.model_validate(payload)
+    return ExecutionContextBundle.model_validate(payload)
 
 
 def build_retrieval_manifest(retrieval: Mapping[str, Any]) -> RetrievalManifest:
@@ -462,10 +462,10 @@ def _clean_existing_refs(existing_refs: Sequence[Any] | None) -> list[str]:
     return refs
 
 
-def build_resume_prepared_artifact_refs(
+def build_recovery_prepared_artifact_refs(
     manifest: PreparedInputManifest | Mapping[str, Any] | None,
 ) -> list[str]:
-    """Return compact prepared refs suitable for Resume checkpoint evidence."""
+    """Return compact prepared refs suitable for Recovery checkpoint evidence."""
 
     if manifest is None:
         return []
