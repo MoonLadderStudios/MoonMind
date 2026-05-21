@@ -24,8 +24,7 @@ router = APIRouter(prefix="/retrieval", tags=["Retrieval"])
 REPOSITORY_SCOPE_FILTER_KEYS = ("repo", "repository")
 SESSION_SCOPE_FILTER_KEYS = frozenset(
     {
-        "repo",
-        "repository",
+        *REPOSITORY_SCOPE_FILTER_KEYS,
         "workspace",
         "workspace_id",
         "run",
@@ -39,6 +38,7 @@ SESSION_SCOPE_FILTER_KEYS = frozenset(
     }
 )
 SESSION_SCOPE_FILTER_KEYS_MESSAGE = ", ".join(sorted(SESSION_SCOPE_FILTER_KEYS))
+
 
 @dataclass(frozen=True, slots=True)
 class RetrievalAuthContext:
