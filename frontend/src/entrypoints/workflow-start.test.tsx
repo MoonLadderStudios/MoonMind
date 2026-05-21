@@ -25,15 +25,15 @@ import {
   preferredTemplate,
   resolveDefaultProviderProfileId,
   resolveObjectiveInstructions,
-  TaskCreatePage,
-} from "./task-create";
+  WorkflowStartPage,
+} from "./workflow-start";
 
 vi.mock("../lib/navigation", () => ({
   navigateTo: vi.fn(),
 }));
 
 const mockPayload: BootPayload = {
-  page: "task-create",
+  page: "workflow-start",
   apiBase: "/api",
   initialData: {
     dashboardConfig: {
@@ -473,9 +473,9 @@ describe.skip("Task Create Entrypoint", () => {
     window.history.pushState(
       {},
       "Task Edit",
-      `/tasks/new?editExecutionId=${encodeURIComponent(executionId)}`,
+      `/workflows/new?editExecutionId=${encodeURIComponent(executionId)}`,
     );
-    return renderWithClient(<TaskCreatePage payload={payload} />);
+    return renderWithClient(<WorkflowStartPage payload={payload} />);
   }
 
   function latestCreateRequest(): Record<string, unknown> {
@@ -516,7 +516,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   beforeEach(() => {
-    window.history.pushState({}, "Task Create", "/tasks/new");
+    window.history.pushState({}, "Task Create", "/workflows/new");
     window.sessionStorage.clear();
     window.localStorage.clear();
     vi.mocked(navigateTo).mockReset();
@@ -962,7 +962,7 @@ describe.skip("Task Create Entrypoint", () => {
                     {
                       id: "step-verify",
                       title: "Verify",
-                      instructions: "Run the focused task-create tests.",
+                      instructions: "Run the focused workflow-start tests.",
                     },
                   ],
                 },
@@ -1564,7 +1564,7 @@ describe.skip("Task Create Entrypoint", () => {
               workflowId: "mm:workflow-123",
               runId: "run-123",
               namespace: "moonmind",
-              redirectPath: "/tasks/mm:workflow-123?source=temporal",
+              redirectPath: "/workflows/mm:workflow-123?source=temporal",
             }),
           } as Response);
         }
@@ -2587,9 +2587,9 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("does not load an execution detail draft in create mode", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    expect(await screen.findByRole("heading", { name: "Create Task" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Start Workflow" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Create" })).toBeTruthy();
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -2607,7 +2607,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("renders the create submit action as an icon-only right-pointing arrow with a stable label", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const createButton = await screen.findByRole("button", { name: "Create" });
     const arrow = createButton.querySelector<HTMLElement>(
@@ -2630,7 +2630,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("shows the primary step requirement only after submit validation fails", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     expect(await screen.findByText("Step 1")).toBeTruthy();
     expect(
@@ -2653,7 +2653,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("keeps create page authoring controls available with the arrow submit action", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const createButton = await screen.findByRole("button", { name: "Create" });
     expect(createButton.querySelector("[data-submit-arrow='right']")).not.toBeNull();
@@ -3563,12 +3563,12 @@ describe.skip("Task Create Entrypoint", () => {
     window.history.pushState(
       {},
       "Task Edit",
-      "/tasks/new?editExecutionId=mm%3Aedit-123",
+      "/workflows/new?editExecutionId=mm%3Aedit-123",
     );
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    expect(await screen.findByRole("heading", { name: "Edit Task" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
     await waitFor(() => {
       expect(
         (screen.getByLabelText("Instructions") as HTMLTextAreaElement).value,
@@ -3605,7 +3605,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("loads every step when editing a multi-step Temporal execution", async () => {
     renderForEdit("mm:multi-step-edit");
 
-    expect(await screen.findByRole("heading", { name: "Edit Task" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
     await waitFor(() => {
       const instructions = screen.getAllByLabelText(
         "Instructions",
@@ -3613,7 +3613,7 @@ describe.skip("Task Create Entrypoint", () => {
       expect(instructions.map((item) => item.value)).toEqual([
         "Investigate why edit shows only step 1.",
         "Patch the edit reconstruction path.",
-        "Run the focused task-create tests.",
+        "Run the focused workflow-start tests.",
       ]);
       expect(screen.getByText("Step 1")).toBeTruthy();
       expect(screen.getByText("Step 2")).toBeTruthy();
@@ -3658,7 +3658,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("uses the target skill when the first reconstructed step is auto", async () => {
     renderForEdit("mm:auto-primary-skill");
 
-    expect(await screen.findByRole("heading", { name: "Edit Task" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
     await waitFor(() => {
       expect(
         (screen.getByLabelText(/Skill \(optional\)/) as HTMLInputElement).value,
@@ -3710,7 +3710,7 @@ describe.skip("Task Create Entrypoint", () => {
             {
               id: "step-verify",
               title: "Verify",
-              instructions: "Run the focused task-create tests.",
+              instructions: "Run the focused workflow-start tests.",
             },
           ],
         },
@@ -3722,12 +3722,12 @@ describe.skip("Task Create Entrypoint", () => {
     window.history.pushState(
       {},
       "Task Rerun",
-      "/tasks/new?rerunExecutionId=mm%3Arerun-123",
+      "/workflows/new?rerunExecutionId=mm%3Arerun-123",
     );
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    expect(await screen.findByRole("heading", { name: "Rerun Task" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Start New Run" })).toBeTruthy();
     await waitFor(() => {
       expect(
         (screen.getByLabelText("Instructions") as HTMLTextAreaElement).value,
@@ -3743,17 +3743,17 @@ describe.skip("Task Create Entrypoint", () => {
       }),
     );
     expect(screen.queryByText("Schedule (optional)")).toBeNull();
-    expect(screen.getByRole("button", { name: "Rerun Task" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Start New Run" })).toBeTruthy();
   });
 
   it("submits edited terminal rerun with task mutation fields", async () => {
     window.history.pushState(
       {},
       "Task Rerun",
-      "/tasks/new?rerunExecutionId=mm%3Arerun-123",
+      "/workflows/new?rerunExecutionId=mm%3Arerun-123",
     );
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const instructions = (await screen.findByLabelText(
       "Instructions",
@@ -3764,7 +3764,7 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(instructions, {
       target: { value: "Rerun with reviewed Temporal inputs." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Rerun Task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -3796,7 +3796,7 @@ describe.skip("Task Create Entrypoint", () => {
     ).toBe(false);
     await waitFor(() => {
       expect(navigateTo).toHaveBeenCalledWith(
-        "/tasks/mm%3Arerun-created?source=temporal",
+        "/workflows/mm%3Arerun-created?source=temporal",
       );
     });
     expect(
@@ -3808,10 +3808,10 @@ describe.skip("Task Create Entrypoint", () => {
     window.history.pushState(
       {},
       "Task Rerun",
-      "/tasks/new?rerunExecutionId=mm%3Arerun-123",
+      "/workflows/new?rerunExecutionId=mm%3Arerun-123",
     );
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const instructions = (await screen.findByLabelText(
       "Instructions",
@@ -3819,7 +3819,7 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(instructions.value).toBe("Rerun from artifact-backed instructions.");
     });
-    fireEvent.click(screen.getByRole("button", { name: "Rerun Task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -3872,12 +3872,12 @@ describe.skip("Task Create Entrypoint", () => {
     window.history.pushState(
       {},
       "Task Edit For Rerun",
-      "/tasks/new?rerunExecutionId=mm%3Acomplex-rerun&mode=edit",
+      "/workflows/new?rerunExecutionId=mm%3Acomplex-rerun&mode=edit",
     );
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    expect(await screen.findByRole("heading", { name: "Edit Task" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
     const instructions = screen.getAllByLabelText(
       "Instructions",
     )[0] as HTMLTextAreaElement;
@@ -3887,7 +3887,7 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(instructions, {
       target: { value: "MM-644 edited retry instructions." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Run edited task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run edited workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -3935,12 +3935,12 @@ describe.skip("Task Create Entrypoint", () => {
     window.history.pushState(
       {},
       "Task Rerun",
-      "/tasks/new?rerunExecutionId=mm%3Atarget-only-branch-rerun",
+      "/workflows/new?rerunExecutionId=mm%3Atarget-only-branch-rerun",
     );
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    expect(await screen.findByRole("heading", { name: "Rerun Task" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Start New Run" })).toBeTruthy();
     await waitFor(() => {
       expect(
         screen.getByText(
@@ -3949,7 +3949,7 @@ describe.skip("Task Create Entrypoint", () => {
       ).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Rerun Task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
 
     expect(
       await screen.findByText(
@@ -3970,12 +3970,12 @@ describe.skip("Task Create Entrypoint", () => {
     window.history.pushState(
       {},
       "Task Rerun",
-      "/tasks/new?rerunExecutionId=mm%3Acomplex-rerun",
+      "/workflows/new?rerunExecutionId=mm%3Acomplex-rerun",
     );
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    expect(await screen.findByRole("heading", { name: "Rerun Task" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Start New Run" })).toBeTruthy();
     await waitFor(() => {
       expect(
         fetchSpy.mock.calls.some(
@@ -3992,7 +3992,7 @@ describe.skip("Task Create Entrypoint", () => {
           .value,
       ).toBe("Break down the Grid UI overlay plan.");
     });
-    fireEvent.click(screen.getByRole("button", { name: "Rerun Task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -4077,12 +4077,12 @@ describe.skip("Task Create Entrypoint", () => {
     window.history.pushState(
       {},
       "Task Rerun",
-      "/tasks/new?rerunExecutionId=mm%3Avalid-skill-rerun",
+      "/workflows/new?rerunExecutionId=mm%3Avalid-skill-rerun",
     );
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    expect(await screen.findByRole("heading", { name: "Rerun Task" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Start New Run" })).toBeTruthy();
     await waitFor(() => {
       expect(
         (screen.getAllByLabelText("Instructions")[0] as HTMLTextAreaElement)
@@ -4110,10 +4110,10 @@ describe.skip("Task Create Entrypoint", () => {
     window.history.pushState(
       {},
       "Task Rerun",
-      "/tasks/new?rerunExecutionId=mm%3Astale-rerun",
+      "/workflows/new?rerunExecutionId=mm%3Astale-rerun",
     );
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const instructions = (await screen.findByLabelText(
       "Instructions",
@@ -4124,7 +4124,7 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(instructions, {
       target: { value: "Try to rerun after state changed." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Rerun Task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
 
     expect(
       await screen.findByText(
@@ -4138,7 +4138,7 @@ describe.skip("Task Create Entrypoint", () => {
     window.history.pushState(
       {},
       "Task Rerun",
-      "/tasks/new?rerunExecutionId=mm%3Acustom-endpoints",
+      "/workflows/new?rerunExecutionId=mm%3Acustom-endpoints",
     );
     const customPayload = JSON.parse(JSON.stringify(mockPayload)) as BootPayload;
     (
@@ -4162,9 +4162,9 @@ describe.skip("Task Create Entrypoint", () => {
       artifactDownload: "/gateway/api/artifacts/{artifactId}/raw",
     };
 
-    renderWithClient(<TaskCreatePage payload={customPayload} />);
+    renderWithClient(<WorkflowStartPage payload={customPayload} />);
 
-    expect(await screen.findByRole("heading", { name: "Rerun Task" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Start New Run" })).toBeTruthy();
     await waitFor(() => {
       expect(
         (screen.getByLabelText("Instructions") as HTMLTextAreaElement).value,
@@ -4300,16 +4300,16 @@ describe.skip("Task Create Entrypoint", () => {
     window.history.pushState(
       {},
       "Task Rerun",
-      "/tasks/new?rerunExecutionId=mm%3Ano-rerun",
+      "/workflows/new?rerunExecutionId=mm%3Ano-rerun",
     );
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     expect(
       await screen.findByText("This execution does not currently allow rerun."),
     ).toBeTruthy();
     expect(
-      (screen.getByRole("button", { name: "Rerun Task" }) as HTMLButtonElement)
+      (screen.getByRole("button", { name: "Start New Run" }) as HTMLButtonElement)
         .disabled,
     ).toBe(true);
   });
@@ -4318,10 +4318,10 @@ describe.skip("Task Create Entrypoint", () => {
     window.history.pushState(
       {},
       "Task Rerun",
-      "/tasks/new?rerunExecutionId=mm%3Amissing-artifact",
+      "/workflows/new?rerunExecutionId=mm%3Amissing-artifact",
     );
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     expect(
       await screen.findByText(
@@ -4329,7 +4329,7 @@ describe.skip("Task Create Entrypoint", () => {
       ),
     ).toBeTruthy();
     expect(
-      (screen.getByRole("button", { name: "Rerun Task" }) as HTMLButtonElement)
+      (screen.getByRole("button", { name: "Start New Run" }) as HTMLButtonElement)
         .disabled,
     ).toBe(true);
   });
@@ -4338,16 +4338,16 @@ describe.skip("Task Create Entrypoint", () => {
     window.history.pushState(
       {},
       "Task Rerun",
-      "/tasks/new?rerunExecutionId=mm%3Amalformed-artifact",
+      "/workflows/new?rerunExecutionId=mm%3Amalformed-artifact",
     );
 
-    const { unmount } = renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    const { unmount } = renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     expect(
       await screen.findByText("Task input artifact did not contain valid JSON."),
     ).toBeTruthy();
     expect(
-      (screen.getByRole("button", { name: "Rerun Task" }) as HTMLButtonElement)
+      (screen.getByRole("button", { name: "Start New Run" }) as HTMLButtonElement)
         .disabled,
     ).toBe(true);
 
@@ -4443,7 +4443,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(request.inputArtifactRef).toBeUndefined();
     await waitFor(() => {
       expect(navigateTo).toHaveBeenCalledWith(
-        "/tasks/mm%3Aedit-123?source=temporal",
+        "/workflows/mm%3Aedit-123?source=temporal",
       );
     });
     expect(
@@ -4522,7 +4522,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     await waitFor(() => {
       expect(navigateTo).toHaveBeenCalledWith(
-        "/tasks/mm%3Acontinue-edit-next?source=temporal",
+        "/workflows/mm%3Acontinue-edit-next?source=temporal",
       );
     });
     expect(
@@ -4577,7 +4577,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(request.inputArtifactRef).not.toBe("historical-input");
     await waitFor(() => {
       expect(navigateTo).toHaveBeenCalledWith(
-        "/tasks/mm%3Aartifact-edit?source=temporal",
+        "/workflows/mm%3Aartifact-edit?source=temporal",
       );
     });
     expect(
@@ -4900,11 +4900,11 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("submits the Temporal task payload and redirects on success", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     expect(
-      (await screen.findByRole("heading", { name: "Create Task" })).closest(
-        ".task-create-page",
+      (await screen.findByRole("heading", { name: "Start Workflow" })).closest(
+        ".workflow-start-page",
       ),
     ).not.toBeNull();
 
@@ -4975,13 +4975,13 @@ describe.skip("Task Create Entrypoint", () => {
     ]);
     await waitFor(() => {
       expect(navigateTo).toHaveBeenCalledWith(
-        "/tasks/mm:workflow-123?source=temporal",
+        "/workflows/mm:workflow-123?source=temporal",
       );
     });
   });
 
   it("offers repository options while preserving editable repository entry", async () => {
-    renderWithClient(<TaskCreatePage payload={withRepositoryOptions()} />);
+    renderWithClient(<WorkflowStartPage payload={withRepositoryOptions()} />);
 
     const repositoryInput = await screen.findByLabelText(/GitHub Repo/);
     expect(repositoryInput.getAttribute("list")).toBe("queue-repository-options");
@@ -5004,18 +5004,18 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("remembers the last selected repository option when it is still available", async () => {
     const { unmount } = renderWithClient(
-      <TaskCreatePage payload={withRepositoryOptions()} />,
+      <WorkflowStartPage payload={withRepositoryOptions()} />,
     );
 
     const repositoryInput = await screen.findByLabelText(/GitHub Repo/);
     fireEvent.change(repositoryInput, {
       target: { value: "Octo/Repo" },
     });
-    expect(window.localStorage.getItem("moonmind.task-create.last-repository-option"))
+    expect(window.localStorage.getItem("moonmind.workflow-start.last-repository-option"))
       .toBe("Octo/Repo");
 
     unmount();
-    renderWithClient(<TaskCreatePage payload={withRepositoryOptions()} />);
+    renderWithClient(<WorkflowStartPage payload={withRepositoryOptions()} />);
 
     expect((await screen.findByLabelText(/GitHub Repo/) as HTMLInputElement).value)
       .toBe("Octo/Repo");
@@ -5023,35 +5023,35 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("clears the remembered repository option for custom repository entries", async () => {
     window.localStorage.setItem(
-      "moonmind.task-create.last-repository-option",
+      "moonmind.workflow-start.last-repository-option",
       "Octo/Repo",
     );
 
-    renderWithClient(<TaskCreatePage payload={withRepositoryOptions()} />);
+    renderWithClient(<WorkflowStartPage payload={withRepositoryOptions()} />);
 
     const repositoryInput = await screen.findByLabelText(/GitHub Repo/);
     fireEvent.change(repositoryInput, {
       target: { value: "Custom/Repo" },
     });
 
-    expect(window.localStorage.getItem("moonmind.task-create.last-repository-option"))
+    expect(window.localStorage.getItem("moonmind.workflow-start.last-repository-option"))
       .toBeNull();
   });
 
   it("ignores remembered repository values that are not current options", async () => {
     window.localStorage.setItem(
-      "moonmind.task-create.last-repository-option",
+      "moonmind.workflow-start.last-repository-option",
       "Missing/Repo",
     );
 
-    renderWithClient(<TaskCreatePage payload={withRepositoryOptions()} />);
+    renderWithClient(<WorkflowStartPage payload={withRepositoryOptions()} />);
 
     expect((await screen.findByLabelText(/GitHub Repo/) as HTMLInputElement).value)
       .toBe("MoonLadderStudios/MoonMind");
   });
 
   it("submits a selected repository option without changing unrelated draft fields", async () => {
-    renderWithClient(<TaskCreatePage payload={withRepositoryOptions()} />);
+    renderWithClient(<WorkflowStartPage payload={withRepositoryOptions()} />);
 
     const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
@@ -5096,7 +5096,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("submits an authored MM-564 Skill step with agentic controls", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
@@ -5178,7 +5178,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("reveals per-step advanced skill options from the bottom toggle", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
@@ -5259,7 +5259,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("preserves and validates advanced skill fields after toggling advanced mode off and on", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
@@ -5336,7 +5336,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("does not submit hidden advanced step capabilities after toggling advanced mode off", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
@@ -5393,7 +5393,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("uploads a step attachment as a structured step input without rewriting instructions", async () => {
-    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Review the provided screenshot." },
@@ -5428,14 +5428,14 @@ describe.skip("Task Create Entrypoint", () => {
     const artifactCreateCall = fetchSpy.mock.calls.find(
       ([url, init]) =>
         String(url) === "/api/artifacts" &&
-        String(init?.body || "").includes("task-dashboard-step-attachment"),
+        String(init?.body || "").includes("workflow-console-step-attachment"),
     );
     expect(JSON.parse(String(artifactCreateCall?.[1]?.body))).toMatchObject({
       content_type: "image/png",
       size_bytes: file.size,
       metadata: {
         filename: "wireframe.png",
-        source: "task-dashboard-step-attachment",
+        source: "workflow-console-step-attachment",
         stepLabel: "Step 1",
       },
     });
@@ -5476,7 +5476,7 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("hides attachment entry points when policy is disabled and preserves text-only authoring", async () => {
     renderWithClient(
-      <TaskCreatePage payload={withDisabledAttachmentPolicy()} />,
+      <WorkflowStartPage payload={withDisabledAttachmentPolicy()} />,
     );
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
@@ -5500,7 +5500,7 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("uses image-specific labels when policy allows only image MIME types", async () => {
     renderWithClient(
-      <TaskCreatePage payload={withImageOnlyAttachmentPolicy()} />,
+      <WorkflowStartPage payload={withImageOnlyAttachmentPolicy()} />,
     );
 
     expect(await screen.findByText("Step 1 Images (optional)")).toBeTruthy();
@@ -5513,7 +5513,7 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("reports attachment validation failures at the affected target before upload", async () => {
     renderWithClient(
-      <TaskCreatePage payload={withImageOnlyAttachmentPolicy()} />,
+      <WorkflowStartPage payload={withImageOnlyAttachmentPolicy()} />,
     );
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
@@ -5540,7 +5540,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("shows attachment limits only as an error toast when adding too many files", async () => {
-    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
     const limitMessage =
       "Up to 4 files across all steps, 1.0 MB each, 2.0 MB total.";
@@ -5597,7 +5597,7 @@ describe.skip("Task Create Entrypoint", () => {
       return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
     });
 
-    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Upload a step attachment and handle failure." },
@@ -5634,7 +5634,7 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("renders a compact image add button for step attachments when policy is image-only", async () => {
     renderWithClient(
-      <TaskCreatePage payload={withImageOnlyAttachmentPolicy()} />,
+      <WorkflowStartPage payload={withImageOnlyAttachmentPolicy()} />,
     );
 
     const addButton = await screen.findByRole("button", {
@@ -5650,7 +5650,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("uses generic step attachment add copy when policy permits non-image files", async () => {
-    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
     expect(
       await screen.findByRole("button", {
@@ -5661,7 +5661,7 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("appends step attachments selected through repeated add actions", async () => {
     renderWithClient(
-      <TaskCreatePage payload={withImageOnlyAttachmentPolicy()} />,
+      <WorkflowStartPage payload={withImageOnlyAttachmentPolicy()} />,
     );
 
     const fileInput = await screen.findByLabelText("Step 1 image file picker");
@@ -5684,7 +5684,7 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("dedupes exact duplicate step attachments selected through add actions", async () => {
     renderWithClient(
-      <TaskCreatePage payload={withImageOnlyAttachmentPolicy()} />,
+      <WorkflowStartPage payload={withImageOnlyAttachmentPolicy()} />,
     );
 
     const fileInput = await screen.findByLabelText("Step 1 image file picker");
@@ -5708,7 +5708,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
     try {
       renderWithClient(
-        <TaskCreatePage payload={withImageOnlyAttachmentPolicy()} />,
+        <WorkflowStartPage payload={withImageOnlyAttachmentPolicy()} />,
       );
 
       const file = new File(["fake image"], "wireframe.png", {
@@ -5746,7 +5746,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("uploads an objective-scoped attachment only as a task input attachment", async () => {
-    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Review objective context." },
@@ -5781,14 +5781,14 @@ describe.skip("Task Create Entrypoint", () => {
     const artifactCreateCall = fetchSpy.mock.calls.find(
       ([url, init]) =>
         String(url) === "/api/artifacts" &&
-        String(init?.body || "").includes("task-dashboard-objective-attachment"),
+        String(init?.body || "").includes("workflow-console-objective-attachment"),
     );
     expect(JSON.parse(String(artifactCreateCall?.[1]?.body))).toMatchObject({
       content_type: "image/png",
       size_bytes: file.size,
       metadata: {
         filename: "objective.png",
-        source: "task-dashboard-objective-attachment",
+        source: "workflow-console-objective-attachment",
         target: "objective",
       },
     });
@@ -5818,7 +5818,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("keeps step attachments with their owning steps after reorder", async () => {
-    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Primary screenshot instructions." },
@@ -5893,7 +5893,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("keeps same-name step attachments scoped to different owning steps", async () => {
-    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Review the first same-name attachment." },
@@ -5968,7 +5968,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("does not upload step attachments when later client validation fails", async () => {
-    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Review the provided screenshot." },
@@ -6023,7 +6023,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("does not upload step attachments when schedule validation fails", async () => {
-    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Review the provided screenshot." },
@@ -6094,7 +6094,7 @@ describe.skip("Task Create Entrypoint", () => {
           },
         );
 
-        renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+        renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
         fireEvent.change(await screen.findByLabelText("Instructions"), {
           target: { value: "Review the provided screenshot." },
@@ -6132,7 +6132,7 @@ describe.skip("Task Create Entrypoint", () => {
   );
 
   it("submits selected task dependencies from the picker", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Run the dependent stage." },
@@ -6186,7 +6186,7 @@ describe.skip("Task Create Entrypoint", () => {
       },
     };
 
-    renderWithClient(<TaskCreatePage payload={payload} />);
+    renderWithClient(<WorkflowStartPage payload={payload} />);
 
     const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
@@ -6249,7 +6249,7 @@ describe.skip("Task Create Entrypoint", () => {
       },
     };
 
-    renderWithClient(<TaskCreatePage payload={payload} />);
+    renderWithClient(<WorkflowStartPage payload={payload} />);
 
     const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
@@ -6324,7 +6324,7 @@ describe.skip("Task Create Entrypoint", () => {
       return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
     });
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const presetSelect = await screen.findByLabelText("Preset");
     await waitFor(() => {
@@ -6388,7 +6388,7 @@ describe.skip("Task Create Entrypoint", () => {
       return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
     });
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const presetSelect = await screen.findByLabelText("Preset");
     await waitFor(() => {
@@ -6485,7 +6485,7 @@ describe.skip("Task Create Entrypoint", () => {
       return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
     });
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const presetSection = screen.getByLabelText("Task Presets");
     const presetSelect = await within(presetSection).findByLabelText("Preset");
@@ -6570,7 +6570,7 @@ describe.skip("Task Create Entrypoint", () => {
       return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
     });
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const presetSection = screen.getByLabelText("Task Presets");
     const presetSelect = await within(presetSection).findByLabelText("Preset");
@@ -6655,7 +6655,7 @@ describe.skip("Task Create Entrypoint", () => {
       return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
     });
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const presetSection = screen.getByLabelText("Task Presets");
     await within(presetSection).findByLabelText("Jira Issue Key");
@@ -6773,7 +6773,7 @@ describe.skip("Task Create Entrypoint", () => {
       return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
     });
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const presetSelect = await screen.findByLabelText("Preset");
     fireEvent.change(presetSelect, {
@@ -6883,7 +6883,7 @@ describe.skip("Task Create Entrypoint", () => {
       return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
     });
 
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const boardSelect = (await screen.findByLabelText(
       "Jira Board",
@@ -6991,7 +6991,7 @@ describe.skip("Task Create Entrypoint", () => {
       return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
     });
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const notesInput = (await screen.findByLabelText("Notes")) as HTMLInputElement;
     fireEvent.change(notesInput, { target: { value: "hello " } });
@@ -7127,7 +7127,7 @@ describe.skip("Task Create Entrypoint", () => {
       return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
     });
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const presetSelect = await screen.findByLabelText("Preset");
     await waitFor(() => {
@@ -7190,7 +7190,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     renderForEdit("mm:edit-123");
 
-    expect(await screen.findByRole("heading", { name: "Edit Task" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
     const presetSelect = await screen.findByLabelText("Preset");
     await waitFor(() => {
       expect((presetSelect as HTMLSelectElement).value).toBe(
@@ -7205,7 +7205,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("submits publish mode none when the selected primary skill is pr-resolver", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
@@ -7243,7 +7243,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("shows merge automation as a publish mode choice only for ordinary pr-publishing tasks", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const publishModeSelect = (await screen.findByLabelText(
       "Publish Mode",
@@ -7288,7 +7288,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("submits merge automation with the existing pr publish contracts", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Implement MM-412." },
@@ -7314,7 +7314,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("omits merge automation when publish mode is unavailable", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Implement without merge automation." },
@@ -7337,7 +7337,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("omits merge automation when a resolver skill is selected", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
@@ -7382,7 +7382,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("disables merge automation when the effective template skill is a resolver", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     fireEvent.change(await screen.findByLabelText("Publish Mode"), {
       target: { value: "pr_with_merge_automation" },
@@ -7438,7 +7438,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("submits deferred pr-resolver tasks with object-shaped skill selectors", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
@@ -7486,7 +7486,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("renders the restored legacy create-task controls", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     expect(await screen.findByPlaceholderText("owner/repo")).not.toBeNull();
     expect(await screen.findByLabelText("Provider profile")).not.toBeNull();
@@ -7501,7 +7501,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("right-aligns Task Presets actions with Apply last", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const presetsSection = await screen.findByLabelText("Task Presets");
     const saveButton = within(presetsSection).getByRole("button", {
@@ -7549,7 +7549,7 @@ describe.skip("Task Create Entrypoint", () => {
       }
     ).dashboardConfig.system.taskTemplateCatalog.templateSaveEnabled = false;
 
-    renderWithClient(<TaskCreatePage payload={disabledPayload} />);
+    renderWithClient(<WorkflowStartPage payload={disabledPayload} />);
 
     const presetsSection = await screen.findByLabelText("Task Presets");
     expect(
@@ -7563,7 +7563,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("disables preset deletion for global presets", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const presetsSection = await screen.findByLabelText("Task Presets");
     await within(presetsSection).findByRole("option", {
@@ -7594,7 +7594,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("deletes a preset entered via the delete preset dialog", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const presetsSection = await screen.findByLabelText("Preset Management");
     fireEvent.click(
@@ -7621,7 +7621,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("saves presets via the save preset dialog", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const presetsSection = await screen.findByLabelText("Preset Management");
     fireEvent.change(await screen.findByLabelText("Instructions"), {
@@ -7654,7 +7654,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("adds hover tooltips to Create page buttons", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     await screen.findByText("Step 1");
 
@@ -7668,7 +7668,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("adds hover tooltips to floating bar repository, branch, and publish controls", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const repoInput = await screen.findByLabelText("GitHub Repo");
     const branchInput = screen.getByLabelText("Branch");
@@ -7701,7 +7701,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("adds hover tooltips to Jira browser buttons", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -7734,7 +7734,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("exposes the canonical Create page section order in create mode", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     await screen.findByText("Step 1");
 
@@ -7752,7 +7752,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("uses the same Create page composition surface for edit and rerun modes", async () => {
     const { unmount } = renderForEdit("mm:artifact-edit");
 
-    await screen.findByRole("heading", { name: "Edit Task" });
+    await screen.findByRole("heading", { name: "Edit Workflow" });
     expect(canonicalCreateSections()).toEqual([
       "Header",
       "Steps",
@@ -7766,11 +7766,11 @@ describe.skip("Task Create Entrypoint", () => {
     window.history.pushState(
       {},
       "Task Rerun",
-      "/tasks/new?rerunExecutionId=mm%3Arerun-123",
+      "/workflows/new?rerunExecutionId=mm%3Arerun-123",
     );
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    await screen.findByRole("heading", { name: "Rerun Task" });
+    await screen.findByRole("heading", { name: "Start New Run" });
     expect(canonicalCreateSections()).toEqual([
       "Header",
       "Steps",
@@ -7782,7 +7782,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("offers one Step Type control with Tool Skill and Preset choices", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
@@ -7810,7 +7810,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("presents concise Step Type helper copy for Tool Skill and Preset", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
@@ -7840,7 +7840,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("switches Step Type configuration areas while preserving instructions", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
@@ -7872,7 +7872,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("keeps Preset selections scoped to each step", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Add Step" }));
     const primaryStep = (await screen.findByText("Step 1")).closest(
@@ -7976,7 +7976,7 @@ describe.skip("Task Create Entrypoint", () => {
       return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
     });
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const step = (await screen.findByText("Step 1")).closest(
       "section",
@@ -8016,7 +8016,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("expands a step preset by replacing the selected preset step with editable generated steps", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const step = (await screen.findByText("Step 1")).closest(
       "section",
@@ -8089,7 +8089,7 @@ describe.skip("Task Create Entrypoint", () => {
       return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
     });
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const step = (await screen.findByText("Step 1")).closest(
       "section",
@@ -8149,7 +8149,7 @@ describe.skip("Task Create Entrypoint", () => {
       return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
     });
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const step = (await screen.findByText("Step 1")).closest(
       "section",
@@ -8178,7 +8178,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("blocks submission while unresolved preset steps remain", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const step = (await screen.findByText("Step 1")).closest(
       "section",
@@ -8201,7 +8201,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("expands a step preset from the step editor without using Task Presets", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const presetManagementSection = await screen.findByLabelText(
       "Preset Management",
@@ -8235,7 +8235,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("visibly discards incompatible Skill fields after changing Step Type", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
@@ -8299,7 +8299,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("submits a manually authored Tool step with governed tool inputs", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const step = (await screen.findByText("Step 1")).closest(
       "section",
@@ -8346,7 +8346,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("blocks manually authored Tool steps with invalid input JSON", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const step = (await screen.findByText("Step 1")).closest(
       "section",
@@ -8375,7 +8375,7 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("keeps manual authoring available without optional presets Jira or image upload", async () => {
     renderWithClient(
-      <TaskCreatePage payload={withoutOptionalAuthoringIntegrations()} />,
+      <WorkflowStartPage payload={withoutOptionalAuthoringIntegrations()} />,
     );
 
     expect(await screen.findByText("Step 1")).not.toBeNull();
@@ -8388,7 +8388,7 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("does not let Jira import bypass repository validation", async () => {
     renderWithClient(
-      <TaskCreatePage payload={withJiraIntegration(withoutDefaultRepository())} />,
+      <WorkflowStartPage payload={withJiraIntegration(withoutDefaultRepository())} />,
     );
 
     const stepInstructions = await screen.findByLabelText("Instructions");
@@ -8420,7 +8420,7 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("does not let image upload bypass repository validation or upload artifacts first", async () => {
     renderWithClient(
-      <TaskCreatePage payload={withAttachmentPolicy(withoutDefaultRepository())} />,
+      <WorkflowStartPage payload={withAttachmentPolicy(withoutDefaultRepository())} />,
     );
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
@@ -8449,7 +8449,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("keeps resolver publish restrictions after Jira import", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -8491,7 +8491,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("renders the create page as matte step cards with one bottom launch rail", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const instructions = await screen.findByLabelText("Instructions");
     const stepsSection = document.querySelector<HTMLElement>(
@@ -8526,7 +8526,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("keeps create page instruction textareas matte and outside the glass rail", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const instructions = await screen.findByLabelText("Instructions");
     expect(instructions.closest(".queue-floating-bar")).toBeNull();
@@ -8540,7 +8540,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("keeps step authoring controls in Steps and branch controls in the Submit floating bar", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const primaryStepLabel = await screen.findByText("Step 1");
 
@@ -8647,7 +8647,7 @@ describe.skip("Task Create Entrypoint", () => {
     ).toBeTruthy();
     expect(
       screen
-        .getByRole("checkbox", { name: "Propose Tasks" })
+        .getByRole("checkbox", { name: "Propose follow-up work" })
         .compareDocumentPosition(reportToggle) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
@@ -8658,7 +8658,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("applies the liquid glass treatment to the bottom submission controls without changing accessible controls", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const createButton = await screen.findByRole("button", { name: "Create" });
     const floatingBar = createButton.closest<HTMLElement>(".queue-floating-bar");
@@ -8735,12 +8735,12 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("centers the constrained create page panel with equal side margins", async () => {
     expect(missionControlCss).toMatch(
-      /\.panel:has\(\.task-create-page\)\s*\{[^}]*margin-inline:\s*auto/s,
+      /\.panel:has\(\.workflow-start-page\)\s*\{[^}]*margin-inline:\s*auto/s,
     );
   });
 
   it("loads branches through MoonMind and submits one authored branch", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const branchInput = await screen.findByLabelText("Branch");
     expect(branchInput.getAttribute("list")).toBe("queue-branch-options");
@@ -8814,7 +8814,7 @@ describe.skip("Task Create Entrypoint", () => {
       return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
     });
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const branchInput = (await screen.findByLabelText(
       "Branch",
@@ -8867,7 +8867,7 @@ describe.skip("Task Create Entrypoint", () => {
       return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
     });
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const branchInput = (await screen.findByLabelText(
       "Branch",
@@ -8895,7 +8895,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("omits git branch when a user explicitly clears the branch field", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const branchInput = (await screen.findByLabelText(
       "Branch",
@@ -8937,7 +8937,7 @@ describe.skip("Task Create Entrypoint", () => {
       return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
     });
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const branchInput = (await screen.findByLabelText(
       "Branch",
@@ -8975,7 +8975,7 @@ describe.skip("Task Create Entrypoint", () => {
       return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
     });
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const branchInput = (await screen.findByLabelText(
       "Branch",
@@ -9010,7 +9010,7 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("loads branches for URL repository values accepted by submission", async () => {
     renderWithClient(
-      <TaskCreatePage
+      <WorkflowStartPage
         payload={withDefaultRepository(
           "https://github.com/MoonLadderStudios/MoonMind.git",
         )}
@@ -9044,7 +9044,7 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("uses only MoonMind REST endpoints while submitting a manually authored task", async () => {
     renderWithClient(
-      <TaskCreatePage payload={withoutOptionalAuthoringIntegrations()} />,
+      <WorkflowStartPage payload={withoutOptionalAuthoringIntegrations()} />,
     );
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
@@ -9079,7 +9079,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("updates provider-profile options when the selected runtime changes", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const providerSelect = await screen.findByLabelText("Provider profile");
     await waitFor(() => {
@@ -9111,7 +9111,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("uploads oversized task input as a JSON artifact before submitting the execution", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Large instructions ".repeat(1000) },
@@ -9206,7 +9206,7 @@ describe.skip("Task Create Entrypoint", () => {
               workflowId: "mm:workflow-123",
               runId: "run-123",
               namespace: "moonmind",
-              redirectPath: "/tasks/mm:workflow-123?source=temporal",
+              redirectPath: "/workflows/mm:workflow-123?source=temporal",
             }),
           } as Response);
         }
@@ -9264,7 +9264,7 @@ describe.skip("Task Create Entrypoint", () => {
       },
     );
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Large instructions ".repeat(1000) },
@@ -9398,7 +9398,7 @@ describe.skip("Task Create Entrypoint", () => {
                   workflowId: "mm:workflow-123",
                   runId: "run-123",
                   namespace: "moonmind",
-                  redirectPath: "/tasks/mm:workflow-123?source=temporal",
+                  redirectPath: "/workflows/mm:workflow-123?source=temporal",
                 }),
               } as Response);
             }
@@ -9411,7 +9411,7 @@ describe.skip("Task Create Entrypoint", () => {
           },
         );
 
-        renderWithClient(<TaskCreatePage payload={mockPayload} />);
+        renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
         fireEvent.change(await screen.findByLabelText("Instructions"), {
           target: { value: "Large instructions ".repeat(1000) },
@@ -9440,7 +9440,7 @@ describe.skip("Task Create Entrypoint", () => {
   );
 
   it("uploads oversized step instructions as a JSON artifact and strips inline step text", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Primary objective" },
@@ -9560,7 +9560,7 @@ describe.skip("Task Create Entrypoint", () => {
       return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
     });
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const presetSelect = await screen.findByLabelText("Preset");
     await waitFor(() => {
@@ -9727,7 +9727,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
 
     renderWithClient(
-      <TaskCreatePage payload={withoutDefaultRepository(mockPayload)} />,
+      <WorkflowStartPage payload={withoutDefaultRepository(mockPayload)} />,
     );
 
     const presetSelect = await screen.findByLabelText("Preset");
@@ -9774,7 +9774,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("does not mutate the draft when selecting a preset before apply", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Keep this authored step." },
@@ -9801,7 +9801,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("marks an applied preset dirty when preset objective text changes manually", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const presetSelect = await screen.findByLabelText("Preset");
     await waitFor(() => {
@@ -9845,7 +9845,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("marks an applied preset dirty when objective attachments change and submits them as task attachments", async () => {
-    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
     const presetSelect = await screen.findByLabelText("Preset");
     await waitFor(() => {
@@ -9900,7 +9900,7 @@ describe.skip("Task Create Entrypoint", () => {
       ([url, init]) =>
         String(url) === "/api/artifacts" &&
         String(init?.body || "").includes(
-          "task-dashboard-objective-attachment",
+          "workflow-console-objective-attachment",
         ),
     );
     expect(JSON.parse(String(artifactCreateCall?.[1]?.body))).toMatchObject({
@@ -9908,7 +9908,7 @@ describe.skip("Task Create Entrypoint", () => {
       size_bytes: objectiveFile.size,
       metadata: {
         filename: "objective.png",
-        source: "task-dashboard-objective-attachment",
+        source: "workflow-console-objective-attachment",
         target: "objective",
       },
     });
@@ -9929,7 +9929,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("detaches template step identity when a template-bound step attachment changes", async () => {
-    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
     const presetSelect = await screen.findByLabelText("Preset");
     await waitFor(() => {
@@ -10034,7 +10034,7 @@ describe.skip("Task Create Entrypoint", () => {
       return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
     });
 
-    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
     const presetSelect = await screen.findByLabelText("Preset");
     await waitFor(() => {
@@ -10089,13 +10089,13 @@ describe.skip("Task Create Entrypoint", () => {
           version: "2.0.0",
           appliedAt: "2026-04-03T00:00:00Z",
           inputs: {
-            request: "Restore the legacy Create Task objective handling.",
+            request: "Restore the legacy Start Workflow objective handling.",
           },
           stepIds: [],
           capabilities: [],
         },
       ]),
-    ).toBe("Restore the legacy Create Task objective handling.");
+    ).toBe("Restore the legacy Start Workflow objective handling.");
   });
 
   it("surfaces plain-text execution errors without reading the response body twice", async () => {
@@ -10107,7 +10107,7 @@ describe.skip("Task Create Entrypoint", () => {
       },
     });
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Run end-to-end regression flow." },
@@ -10125,7 +10125,7 @@ describe.skip("Task Create Entrypoint", () => {
       .mockImplementationOnce(() => "Saved preset title")
       .mockImplementationOnce(() => "Saved preset description");
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
@@ -10185,7 +10185,7 @@ describe.skip("Task Create Entrypoint", () => {
       .mockImplementationOnce(() => "Saved preset title")
       .mockImplementationOnce(() => "Saved preset description");
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
@@ -10261,7 +10261,7 @@ describe.skip("Task Create Entrypoint", () => {
   // -----------------------------------------------------------------------
 
   it("prevents adding the same dependency twice", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Dependent stage." },
@@ -10300,7 +10300,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("enforces the 10-item dependency limit", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Dependent stage." },
@@ -10363,7 +10363,7 @@ describe.skip("Task Create Entrypoint", () => {
       return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
     });
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     expect(
       await screen.findByText(
@@ -10394,7 +10394,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("shows validation message when adding dependency without selection", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Dependent stage." },
@@ -10411,7 +10411,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("hides Jira browser controls when the runtime config does not enable Jira", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     expect(await screen.findByText("Step 1")).toBeTruthy();
     expect(
@@ -10420,7 +10420,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("opens the Jira browser from the preset target", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -10436,7 +10436,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("opens the Jira browser from a step target", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -10451,7 +10451,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("loads board columns in order and switches visible Jira issues by column", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -10519,7 +10519,7 @@ describe.skip("Task Create Entrypoint", () => {
       }
       return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
     });
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -10585,7 +10585,7 @@ describe.skip("Task Create Entrypoint", () => {
       }
       return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
     });
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -10602,7 +10602,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("sends the selected Jira project scope with board and issue requests", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -10641,7 +10641,7 @@ describe.skip("Task Create Entrypoint", () => {
       }
       return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
     });
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const stepInstructions = await screen.findByLabelText("Instructions");
     fireEvent.click(
@@ -10678,7 +10678,7 @@ describe.skip("Task Create Entrypoint", () => {
       }
       return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
     });
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -10706,7 +10706,7 @@ describe.skip("Task Create Entrypoint", () => {
       }
       return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
     });
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -10748,7 +10748,7 @@ describe.skip("Task Create Entrypoint", () => {
       }
       return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
     });
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -10790,7 +10790,7 @@ describe.skip("Task Create Entrypoint", () => {
       }
       return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
     });
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -10813,7 +10813,7 @@ describe.skip("Task Create Entrypoint", () => {
       };
     };
     renderWithClient(
-      <TaskCreatePage
+      <WorkflowStartPage
         payload={{
           ...payload,
           initialData: {
@@ -10846,7 +10846,7 @@ describe.skip("Task Create Entrypoint", () => {
       };
     };
     renderWithClient(
-      <TaskCreatePage
+      <WorkflowStartPage
         payload={{
           ...payload,
           initialData: {
@@ -10883,7 +10883,7 @@ describe.skip("Task Create Entrypoint", () => {
       };
     };
     renderWithClient(
-      <TaskCreatePage
+      <WorkflowStartPage
         payload={{
           ...payload,
           initialData: {
@@ -10913,7 +10913,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("does not restore Jira project or board defaults after a manual clear", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -10947,7 +10947,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("appends Jira issue text immediately when an issue is selected", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const presetInstructions = await screen.findByLabelText(
       "Instructions",
@@ -10972,7 +10972,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("appends only to the selected target when selecting a Jira issue", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const stepInstructions = await screen.findByLabelText("Instructions");
     const presetInstructions = screen.getByLabelText(
@@ -11023,7 +11023,7 @@ describe.skip("Task Create Entrypoint", () => {
       }
       return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
     });
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const stepInstructions = await screen.findByLabelText("Instructions");
     const presetInstructions = screen.getByLabelText(
@@ -11121,7 +11121,7 @@ describe.skip("Task Create Entrypoint", () => {
       }
       return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
     });
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const presetInstructions = await screen.findByLabelText(
       "Instructions",
@@ -11167,7 +11167,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("appends preset instructions with selected Jira import text", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const stepInstructions = await screen.findByLabelText("Instructions");
     const presetInstructions = screen.getByLabelText(
@@ -11201,7 +11201,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("appends Jira import text to preset instructions", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const presetInstructions = await screen.findByLabelText(
       "Instructions",
@@ -11228,7 +11228,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("appends only the selected step instructions with Jira import text", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const primaryStep = await screen.findByLabelText("Instructions");
     const presetInstructions = screen.getByLabelText(
@@ -11277,7 +11277,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("switches the Jira import target inside the browser before importing", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const primaryStep = await screen.findByLabelText("Instructions");
     fireEvent.change(primaryStep, {
@@ -11315,7 +11315,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("replaces step text when Jira text import mode is replace", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const stepInstructions = await screen.findByLabelText("Instructions");
     fireEvent.change(stepInstructions, {
@@ -11342,7 +11342,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("uses execution brief text for step-target Jira imports", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const stepInstructions = await screen.findByLabelText("Instructions");
     fireEvent.click(
@@ -11387,7 +11387,7 @@ describe.skip("Task Create Entrypoint", () => {
       }
       return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
     });
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const stepInstructions = await screen.findByLabelText("Instructions");
     fireEvent.click(
@@ -11431,7 +11431,7 @@ describe.skip("Task Create Entrypoint", () => {
       }
       return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
     });
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const stepInstructions = await screen.findByLabelText("Instructions");
     const presetInstructions = screen.getByLabelText(
@@ -11473,7 +11473,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("imports selected Jira text in the standard preset format", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const presetInstructions = await screen.findByLabelText(
       "Instructions",
@@ -11496,7 +11496,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("marks preset instructions as needing reapply after Jira import changes an applied preset", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const presetSelect = await screen.findByLabelText("Preset");
     await waitFor(() => {
@@ -11557,7 +11557,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("marks preset instructions as needing reapply when Jira import appends to matching text", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const presetSelect = await screen.findByLabelText("Preset");
     await waitFor(() => {
@@ -11603,7 +11603,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("detaches template step identity when Jira import edits a template-bound step", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const presetSelect = await screen.findByLabelText("Preset");
     await waitFor(() => {
@@ -11667,7 +11667,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("warns before importing Jira text into a template-bound step", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const presetSelect = await screen.findByLabelText("Preset");
     await waitFor(() => {
@@ -11718,7 +11718,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("shows Jira provenance chips after importing into preset and step targets", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -11811,7 +11811,7 @@ describe.skip("Task Create Entrypoint", () => {
       return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
     });
     renderWithClient(
-      <TaskCreatePage payload={withAttachmentPolicy(withJiraIntegration())} />,
+      <WorkflowStartPage payload={withAttachmentPolicy(withJiraIntegration())} />,
     );
 
     fireEvent.click(
@@ -11895,7 +11895,7 @@ describe.skip("Task Create Entrypoint", () => {
       return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
     });
     renderWithClient(
-      <TaskCreatePage payload={withAttachmentPolicy(withJiraIntegration())} />,
+      <WorkflowStartPage payload={withAttachmentPolicy(withJiraIntegration())} />,
     );
 
     const presetInstructions = await screen.findByLabelText(
@@ -11966,7 +11966,7 @@ describe.skip("Task Create Entrypoint", () => {
       return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
     });
     renderWithClient(
-      <TaskCreatePage payload={withAttachmentPolicy(withJiraIntegration())} />,
+      <WorkflowStartPage payload={withAttachmentPolicy(withJiraIntegration())} />,
     );
 
     const stepInstructions = await screen.findByLabelText("Step 1 Instructions");
@@ -12034,7 +12034,7 @@ describe.skip("Task Create Entrypoint", () => {
       return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
     });
     renderWithClient(
-      <TaskCreatePage payload={withAttachmentPolicy(withJiraIntegration())} />,
+      <WorkflowStartPage payload={withAttachmentPolicy(withJiraIntegration())} />,
     );
 
     fireEvent.click(
@@ -12115,7 +12115,7 @@ describe.skip("Task Create Entrypoint", () => {
       return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
     });
     renderWithClient(
-      <TaskCreatePage payload={withAttachmentPolicy(withJiraIntegration())} />,
+      <WorkflowStartPage payload={withAttachmentPolicy(withJiraIntegration())} />,
     );
 
     const presetInstructions = await screen.findByLabelText(
@@ -12189,7 +12189,7 @@ describe.skip("Task Create Entrypoint", () => {
       return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
     });
     renderWithClient(
-      <TaskCreatePage payload={withAttachmentPolicy(withJiraIntegration())} />,
+      <WorkflowStartPage payload={withAttachmentPolicy(withJiraIntegration())} />,
     );
 
     const presetSelect = await screen.findByLabelText("Preset");
@@ -12254,7 +12254,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("reopens Jira from an imported field with the prior issue selected", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -12296,7 +12296,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("reopens Jira from an imported field with a hyphenated project key selected", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -12345,7 +12345,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("clears Jira provenance chips when imported text is manually edited", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const presetInstructions = await screen.findByLabelText(
       "Instructions",
@@ -12407,7 +12407,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("clears step Jira provenance when the imported step is removed", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -12456,7 +12456,7 @@ describe.skip("Task Create Entrypoint", () => {
       }
       return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
     });
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -12478,7 +12478,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("keeps Jira provenance out of the task submission payload", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -12536,7 +12536,7 @@ describe.skip("Task Create Entrypoint", () => {
       }
       return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
     });
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const stepInstructions = await screen.findByLabelText("Step 1 Instructions");
     const presetInstructions = screen.getByLabelText(
@@ -12584,15 +12584,15 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("restores the last selected Jira project and board from session storage", async () => {
     window.sessionStorage.setItem(
-      "moonmind.task-create.jira.last-project-key",
+      "moonmind.workflow-start.jira.last-project-key",
       "ENG",
     );
     window.sessionStorage.setItem(
-      "moonmind.task-create.jira.last-board-id",
+      "moonmind.workflow-start.jira.last-board-id",
       "7",
     );
 
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -12610,15 +12610,15 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("falls back when remembered Jira project and board selections are stale", async () => {
     window.sessionStorage.setItem(
-      "moonmind.task-create.jira.last-project-key",
+      "moonmind.workflow-start.jira.last-project-key",
       "OLD",
     );
     window.sessionStorage.setItem(
-      "moonmind.task-create.jira.last-board-id",
+      "moonmind.workflow-start.jira.last-board-id",
       "999",
     );
 
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -12633,24 +12633,24 @@ describe.skip("Task Create Entrypoint", () => {
       expect((boardSelect as HTMLSelectElement).value).toBe("42");
     });
     expect(
-      window.sessionStorage.getItem("moonmind.task-create.jira.last-project-key"),
+      window.sessionStorage.getItem("moonmind.workflow-start.jira.last-project-key"),
     ).toBeNull();
-    expect(window.sessionStorage.getItem("moonmind.task-create.jira.last-board-id"))
+    expect(window.sessionStorage.getItem("moonmind.workflow-start.jira.last-board-id"))
       .toBeNull();
   });
 
   it("does not write or restore Jira project and board session memory when disabled", async () => {
     window.sessionStorage.setItem(
-      "moonmind.task-create.jira.last-project-key",
+      "moonmind.workflow-start.jira.last-project-key",
       "ENG",
     );
     window.sessionStorage.setItem(
-      "moonmind.task-create.jira.last-board-id",
+      "moonmind.workflow-start.jira.last-board-id",
       "7",
     );
 
     renderWithClient(
-      <TaskCreatePage payload={withJiraSessionMemory(false)} />,
+      <WorkflowStartPage payload={withJiraSessionMemory(false)} />,
     );
 
     fireEvent.click(
@@ -12668,21 +12668,21 @@ describe.skip("Task Create Entrypoint", () => {
 
     window.sessionStorage.clear();
     fireEvent.change(boardSelect, { target: { value: "7" } });
-    expect(window.sessionStorage.getItem("moonmind.task-create.jira.last-board-id"))
+    expect(window.sessionStorage.getItem("moonmind.workflow-start.jira.last-board-id"))
       .toBeNull();
   });
 
   it("clears remembered Jira project and board when selections are manually cleared", async () => {
     window.sessionStorage.setItem(
-      "moonmind.task-create.jira.last-project-key",
+      "moonmind.workflow-start.jira.last-project-key",
       "ENG",
     );
     window.sessionStorage.setItem(
-      "moonmind.task-create.jira.last-board-id",
+      "moonmind.workflow-start.jira.last-board-id",
       "7",
     );
 
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -12698,18 +12698,18 @@ describe.skip("Task Create Entrypoint", () => {
     });
 
     fireEvent.change(projectSelect, { target: { value: "" } });
-    expect(window.sessionStorage.getItem("moonmind.task-create.jira.last-project-key"))
+    expect(window.sessionStorage.getItem("moonmind.workflow-start.jira.last-project-key"))
       .toBeNull();
-    expect(window.sessionStorage.getItem("moonmind.task-create.jira.last-board-id"))
+    expect(window.sessionStorage.getItem("moonmind.workflow-start.jira.last-board-id"))
       .toBeNull();
 
     fireEvent.change(projectSelect, { target: { value: "ENG" } });
     fireEvent.change(boardSelect, { target: { value: "7" } });
-    expect(window.sessionStorage.getItem("moonmind.task-create.jira.last-board-id"))
+    expect(window.sessionStorage.getItem("moonmind.workflow-start.jira.last-board-id"))
       .toBe("7");
 
     fireEvent.change(boardSelect, { target: { value: "" } });
-    expect(window.sessionStorage.getItem("moonmind.task-create.jira.last-board-id"))
+    expect(window.sessionStorage.getItem("moonmind.workflow-start.jira.last-board-id"))
       .toBeNull();
   });
 
@@ -12717,7 +12717,7 @@ describe.skip("Task Create Entrypoint", () => {
     const getItemSpy = vi
       .spyOn(Storage.prototype, "getItem")
       .mockImplementation((key: string) => {
-        if (key.startsWith("moonmind.task-create.jira.")) {
+        if (key.startsWith("moonmind.workflow-start.jira.")) {
           throw new Error("session storage unavailable");
         }
         return null;
@@ -12725,20 +12725,20 @@ describe.skip("Task Create Entrypoint", () => {
     const setItemSpy = vi
       .spyOn(Storage.prototype, "setItem")
       .mockImplementation((key: string) => {
-        if (key.startsWith("moonmind.task-create.jira.")) {
+        if (key.startsWith("moonmind.workflow-start.jira.")) {
           throw new Error("session storage unavailable");
         }
       });
     const removeItemSpy = vi
       .spyOn(Storage.prototype, "removeItem")
       .mockImplementation((key: string) => {
-        if (key.startsWith("moonmind.task-create.jira.")) {
+        if (key.startsWith("moonmind.workflow-start.jira.")) {
           throw new Error("session storage unavailable");
         }
       });
 
     try {
-      renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+      renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
       fireEvent.click(
         await screen.findByRole("button", {
@@ -12800,7 +12800,7 @@ describe.skip("Task Create Entrypoint", () => {
         } as Response);
       },
     );
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -12863,7 +12863,7 @@ describe.skip("Task Create Entrypoint", () => {
         } as Response);
       },
     );
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -12906,7 +12906,7 @@ describe("Task Create MM-641 authoring validation", () => {
   }
 
   beforeEach(() => {
-    window.history.pushState({}, "Task Create", "/tasks/new");
+    window.history.pushState({}, "Task Create", "/workflows/new");
     window.sessionStorage.clear();
     window.localStorage.clear();
     vi.mocked(navigateTo).mockReset();
@@ -13025,7 +13025,7 @@ describe("Task Create MM-641 authoring validation", () => {
   });
 
   it("renders repository branch and publish mode inside the floating Submit bar", async () => {
-    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
     const stepsSection = await waitFor(() => {
       const section = document.querySelector<HTMLElement>(
@@ -13077,7 +13077,7 @@ describe("Task Create MM-641 authoring validation", () => {
   });
 
   it("blocks invalid MM-641 authoring drafts before creating executions", async () => {
-    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Implement MM-641 validation." },
@@ -13103,7 +13103,7 @@ describe("Task Create MM-641 authoring validation", () => {
   });
 
   it("submits a combined valid MM-641 draft without targetBranch", async () => {
-    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
     const submitSection = document.querySelector<HTMLElement>(
       '[data-canonical-create-section="Submit"]',
@@ -13195,7 +13195,7 @@ describe("Task Create MM-641 authoring validation", () => {
       return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
     });
 
-    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
     const branchInput = (await screen.findByLabelText(
       "Branch",
@@ -13354,7 +13354,7 @@ describe("Task Create submit arrow animation", () => {
             } as Response);
         }
       });
-    const { unmount } = renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    const { unmount } = renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     try {
       fireEvent.change(await screen.findByLabelText("Instructions"), {
@@ -13404,7 +13404,7 @@ describe("Task Create submit arrow animation", () => {
             workflowId: "mm:workflow-123",
             runId: "run-123",
             namespace: "moonmind",
-            redirectPath: "/tasks/mm:workflow-123?source=temporal",
+            redirectPath: "/workflows/mm:workflow-123?source=temporal",
           }),
           {
             status: 201,
@@ -13417,7 +13417,7 @@ describe("Task Create submit arrow animation", () => {
 
       await waitFor(() => {
         expect(navigateTo).toHaveBeenCalledWith(
-          "/tasks/mm:workflow-123?source=temporal",
+          "/workflows/mm:workflow-123?source=temporal",
         );
         expect(
           createButton.classList.contains("queue-submit-primary--arrow-exit"),
@@ -13459,7 +13459,7 @@ describe("Task Create submit arrow animation", () => {
                   workflowId: "mm:workflow-123",
                   runId: "run-123",
                   namespace: "moonmind",
-                  redirectPath: "/tasks/mm:workflow-123?source=temporal",
+                  redirectPath: "/workflows/mm:workflow-123?source=temporal",
                 }),
                 {
                   status: 201,
@@ -13479,7 +13479,7 @@ describe("Task Create submit arrow animation", () => {
     vi.mocked(navigateTo).mockImplementation(() => {
       throw new Error("Navigation blocked.");
     });
-    const { unmount } = renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    const { unmount } = renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     try {
       fireEvent.change(await screen.findByLabelText("Instructions"), {
@@ -13491,7 +13491,7 @@ describe("Task Create submit arrow animation", () => {
 
       await waitFor(() => {
         expect(navigateTo).toHaveBeenCalledWith(
-          "/tasks/mm:workflow-123?source=temporal",
+          "/workflows/mm:workflow-123?source=temporal",
         );
         expect(createButton.getAttribute("aria-busy")).toBe("false");
         expect(
@@ -13765,7 +13765,7 @@ describe("Task Create MM-578 Preset expansion", () => {
   }
 
   beforeEach(() => {
-    window.history.pushState({}, "Task Create", "/tasks/new");
+    window.history.pushState({}, "Task Create", "/workflows/new");
     window.sessionStorage.clear();
     window.localStorage.clear();
     vi.mocked(navigateTo).mockReset();
@@ -13846,7 +13846,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       return mockMm578PresetFetch(input);
     });
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const step = (await screen.findByText("Step 1")).closest(
       "section",
@@ -13994,7 +13994,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       return mockMm578PresetFetch(input);
     });
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     const taskPublishSelect = () =>
       screen
         .getAllByLabelText("Publish Mode")
@@ -14139,7 +14139,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       return mockMm578PresetFetch(input);
     });
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     const taskPublishSelect = () =>
       screen
         .getAllByLabelText("Publish Mode")
@@ -14215,7 +14215,7 @@ describe("Task Create MM-578 Preset expansion", () => {
   });
 
   it("expands generated preset steps into editable executable steps", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const presetManagementSection = await screen.findByLabelText(
       "Preset Management",
@@ -14288,7 +14288,7 @@ describe("Task Create MM-578 Preset expansion", () => {
   });
 
   it("submits applied preset-generated Tool and Skill steps with executable binding and provenance", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const step = (await screen.findByText("Step 1")).closest(
       "section",
@@ -14385,7 +14385,7 @@ describe("Task Create MM-578 Preset expansion", () => {
   });
 
   it("auto-expands an unresolved Preset during Create submit without mutating the visible draft", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const step = (await screen.findByText("Step 1")).closest(
       "section",
@@ -14453,7 +14453,7 @@ describe("Task Create MM-578 Preset expansion", () => {
   });
 
   it("auto-expands multiple unresolved Presets in authored step order", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const firstStep = (await screen.findByText("Step 1")).closest(
       "section",
@@ -14528,7 +14528,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       }
       return mockMm578PresetFetch(input);
     });
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const firstStep = (await screen.findByText("Step 1")).closest(
       "section",
@@ -14566,7 +14566,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       }
       return mockMm578PresetFetch(input);
     });
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const step = (await screen.findByText("Step 1")).closest(
       "section",
@@ -14601,11 +14601,11 @@ describe("Task Create MM-578 Preset expansion", () => {
     window.history.pushState(
       {},
       "Task Edit",
-      "/tasks/new?editExecutionId=mm%3Aauto-preset-edit",
+      "/workflows/new?editExecutionId=mm%3Aauto-preset-edit",
     );
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    expect(await screen.findByRole("heading", { name: "Edit Task" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
     const step = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
@@ -14647,7 +14647,7 @@ describe("Task Create MM-578 Preset expansion", () => {
   });
 
   it("does not auto-expand or submit on non-submit Preset interactions", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const step = (await screen.findByText("Step 1")).closest(
       "section",
@@ -14695,7 +14695,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       }
       return mockMm578PresetFetch(input);
     });
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const step = (await screen.findByText("Step 1")).closest(
       "section",
@@ -14716,7 +14716,7 @@ describe("Task Create MM-578 Preset expansion", () => {
   });
 
   it("blocks ambiguous Preset-step attachment retargeting during submit-time expansion", async () => {
-    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
     const step = (await screen.findByText("Step 1")).closest(
       "section",
@@ -14755,7 +14755,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       }
       return mockMm578PresetFetch(input);
     });
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const step = (await screen.findByText("Step 1")).closest(
       "section",
@@ -14828,7 +14828,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       return mockMm578PresetFetch(input);
     });
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const step = (await screen.findByText("Step 1")).closest(
       "section",
@@ -15107,7 +15107,7 @@ describe("Task Create schema-driven capability inputs", () => {
   }
 
   beforeEach(() => {
-    window.history.pushState({}, "Task Create", "/tasks/new");
+    window.history.pushState({}, "Task Create", "/workflows/new");
     window.sessionStorage.clear();
     window.localStorage.clear();
     vi.mocked(navigateTo).mockReset();
@@ -15130,7 +15130,7 @@ describe("Task Create schema-driven capability inputs", () => {
   }
 
   it("renders jira.issue-picker from preset schema metadata and expands safe value", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
     const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
     selectStepType(step, "Preset");
     const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
@@ -15161,7 +15161,7 @@ describe("Task Create schema-driven capability inputs", () => {
   });
 
   it("blocks dependent preset actions with field-addressable required errors", async () => {
-    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
     const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
     selectStepType(step, "Preset");
     const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
@@ -15186,7 +15186,7 @@ describe("Task Create schema-driven capability inputs", () => {
   });
 
   it("renders a new schema preset without capability-id-specific code", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
     selectStepType(step, "Preset");
     const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
@@ -15212,7 +15212,7 @@ describe("Task Create schema-driven capability inputs", () => {
   });
 
   it("renders direct skill inputs through the same schema behavior", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
     selectStepType(step, "Skill");
     fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
@@ -15223,7 +15223,7 @@ describe("Task Create schema-driven capability inputs", () => {
   });
 
   it("submits direct skill schema inputs in the skill payload", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
     selectStepType(step, "Skill");
     fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
@@ -15258,7 +15258,7 @@ describe("Task Create schema-driven capability inputs", () => {
   });
 
   it("keeps cleared optional numeric schema inputs unset", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
     selectStepType(step, "Skill");
     fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
@@ -15300,7 +15300,7 @@ describe("Task Create governed Tool authoring", () => {
   }
 
   beforeEach(() => {
-    window.history.pushState({}, "Task Create", "/tasks/new");
+    window.history.pushState({}, "Task Create", "/workflows/new");
     window.sessionStorage.clear();
     window.localStorage.clear();
     vi.mocked(navigateTo).mockReset();
@@ -15430,7 +15430,7 @@ describe("Task Create governed Tool authoring", () => {
   });
 
   it("groups and filters trusted Tool choices", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const step = (await screen.findByText("Step 1")).closest(
       "section",
@@ -15457,7 +15457,7 @@ describe("Task Create governed Tool authoring", () => {
   });
 
   it("submits an authored MM-577 Skill step with agentic controls", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const step = (await screen.findByText("Step 1")).closest(
       "section",
@@ -15530,7 +15530,7 @@ describe("Task Create governed Tool authoring", () => {
   });
 
   it("submits auto skill step attachments without explicit skill type", async () => {
-    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
     const step = (await screen.findByText("Step 1")).closest(
       "section",
@@ -15573,7 +15573,7 @@ describe("Task Create governed Tool authoring", () => {
   });
 
   it("loads trusted Jira transition statuses into submitted Tool inputs", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const step = (await screen.findByText("Step 1")).closest(
       "section",
@@ -15639,7 +15639,7 @@ describe("Task Create governed Tool authoring", () => {
       text: async () => "Tool discovery unavailable",
     } as Response;
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const step = (await screen.findByText("Step 1")).closest(
       "section",
@@ -15663,7 +15663,7 @@ describe("Task Create runtime command previews", () => {
   let fetchSpy: MockInstance;
 
   beforeEach(() => {
-    window.history.pushState({}, "Task Create", "/tasks/new");
+    window.history.pushState({}, "Task Create", "/workflows/new");
     window.sessionStorage.clear();
     window.localStorage.clear();
     vi.mocked(navigateTo).mockReset();
@@ -15698,7 +15698,7 @@ describe("Task Create runtime command previews", () => {
               workflowId: "mm:workflow-123",
               runId: "run-123",
               namespace: "moonmind",
-              redirectPath: "/tasks/mm:workflow-123?source=temporal",
+              redirectPath: "/workflows/mm:workflow-123?source=temporal",
             }),
           } as Response);
         }
@@ -15716,7 +15716,7 @@ describe("Task Create runtime command previews", () => {
   });
 
   it("previews known runtime commands for objective and step instructions", async () => {
-    renderWithClient(<TaskCreatePage payload={withRuntimeCommandPreview()} />);
+    renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
 
     const primaryStep = await screen.findByText("Step 1");
     fireEvent.change(screen.getByLabelText("Instructions"), {
@@ -15743,7 +15743,7 @@ describe("Task Create runtime command previews", () => {
   });
 
   it("previews unknown valid slash commands as opaque pass-through", async () => {
-    renderWithClient(<TaskCreatePage payload={withRuntimeCommandPreview()} />);
+    renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "/foo\nUse provider behavior." },
@@ -15765,7 +15765,7 @@ describe("Task Create runtime command previews", () => {
   });
 
   it("recomputes unsupported runtime warnings without mutating instructions", async () => {
-    renderWithClient(<TaskCreatePage payload={withRuntimeCommandPreview()} />);
+    renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
 
     const instructions = await screen.findByLabelText("Instructions");
     fireEvent.change(instructions, {
@@ -15787,7 +15787,7 @@ describe("Task Create runtime command previews", () => {
   });
 
   it("previews escaped and malformed slash text as literal without command markup", async () => {
-    renderWithClient(<TaskCreatePage payload={withRuntimeCommandPreview()} />);
+    renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
 
     const instructions = await screen.findByLabelText("Instructions");
     fireEvent.change(instructions, {
@@ -15826,7 +15826,7 @@ describe("Task Create runtime command previews", () => {
   });
 
   it("submits authored slash instructions without preview-only runtime command metadata", async () => {
-    renderWithClient(<TaskCreatePage payload={withRuntimeCommandPreview()} />);
+    renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "/review\nCheck this branch." },

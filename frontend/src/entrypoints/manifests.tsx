@@ -84,7 +84,7 @@ function statusLabel(run: ManifestRun): string {
 
 function detailHref(run: ManifestRun): string {
   const direct = String(run.detailHref || run.link || '').trim();
-  return direct || `/tasks/${encodeURIComponent(runWorkflowId(run))}?source=temporal`;
+  return direct || `/workflows/${encodeURIComponent(runWorkflowId(run))}?source=temporal`;
 }
 
 function runWorkflowId(run: ManifestRun): string {
@@ -279,7 +279,7 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
         text: runId ? `Manifest run started: ${runId}` : 'Manifest run started.',
       };
       if (runLink || runId) {
-        successNotice.href = runLink || `/tasks/${encodeURIComponent(runId)}`;
+        successNotice.href = runLink || `/workflows/${encodeURIComponent(runId)}`;
       }
       setNotice({
         ...successNotice,

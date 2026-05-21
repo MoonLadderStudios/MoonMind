@@ -7,8 +7,8 @@ import {
   expandRouteTemplate,
   getSessionProjectionRefetchInterval,
   normalizeObservabilityEvent,
-  TaskDetailPage,
-} from './task-detail';
+  WorkflowDetailPage,
+} from './workflow-detail';
 import {
   taskEditForRerunHref,
   taskEditHref,
@@ -120,9 +120,9 @@ async function waitForEventSourceInstance() {
   );
 }
 
-describe('Task Detail Entrypoint', () => {
+describe('Workflow Detail Entrypoint', () => {
   const mockPayload: BootPayload = {
-    page: 'task-detail',
+    page: 'workflow-detail',
     apiBase: '/api',
   };
   const actionsPayload: BootPayload = {
@@ -138,7 +138,7 @@ describe('Task Detail Entrypoint', () => {
     },
   };
   const stepsPayload: BootPayload = {
-    page: 'task-detail',
+    page: 'workflow-detail',
     apiBase: '/api',
     initialData: {
       dashboardConfig: {
@@ -311,7 +311,7 @@ describe('Task Detail Entrypoint', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     virtuosoPropsSpy.mockClear();
-    window.history.pushState({}, 'Test', '/tasks/test-123?source=temporal');
+    window.history.pushState({}, 'Test', '/workflows/test-123?source=temporal');
     window.sessionStorage.clear();
     fetchSpy = vi.spyOn(window, 'fetch');
     fetchSpy.mockClear();
@@ -375,21 +375,21 @@ describe('Task Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={stepsPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Steps' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
       expect(screen.getByText('Plan work')).toBeTruthy();
       expect(screen.getByText('Apply patch')).toBeTruthy();
       expect(screen.getByText('Verify tests')).toBeTruthy();
       expect(screen.getByText('Merge Automation').closest('div')?.textContent).toContain('—');
-      expect(screen.getByText(/^Latest Run:?$/)).toBeTruthy();
+      expect(screen.getByText(/^Current Run ID:?$/)).toBeTruthy();
       expect(screen.getAllByText('02-run').length).toBeGreaterThan(0);
     });
 
-    const stepsHeading = screen.getByRole('heading', { name: 'Steps' });
+    const stepsHeading = screen.getByRole('heading', { name: 'Workflow Steps' });
     const timelineHeading = screen.getByRole('heading', { name: 'Timeline' });
-    const artifactsHeading = screen.getByRole('heading', { name: 'Artifacts' });
+    const artifactsHeading = screen.getByRole('heading', { name: 'Workflow Artifacts' });
 
     const positions: [number, number] = [
       stepsHeading.compareDocumentPosition(timelineHeading),
@@ -467,7 +467,7 @@ describe('Task Detail Entrypoint', () => {
           },
           promotionResult: {
             promotedExecutionId: 'mm-promoted-1',
-            promotedExecutionUrl: '/tasks/temporal/mm-promoted-1',
+            promotedExecutionUrl: '/workflows/temporal/mm-promoted-1',
           },
         },
         {
@@ -493,7 +493,7 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={stepsPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
     await waitFor(() => {
       const summaryCard = (label: string) => screen.getByText((_, element) => element?.textContent === `${label}:`).closest('.card');
@@ -515,7 +515,7 @@ describe('Task Detail Entrypoint', () => {
     });
   });
 
-  it('does not poll terminal task detail surfaces after the initial load', async () => {
+  it('does not poll terminal workflow detail surfaces after the initial load', async () => {
     const terminalExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -554,7 +554,7 @@ describe('Task Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={stepsPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
     const detailSurfaceCalls = () => fetchSpy.mock.calls
       .map(([input]) => String(input))
@@ -610,9 +610,9 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={stepsPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Show instructions' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Show Workflow Inputs' }));
 
     expect(
       screen.getAllByText((_, element) =>
@@ -671,7 +671,7 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={stepsPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
     expect(await screen.findByText('Runtime Command')).toBeTruthy();
     expect(screen.getByText('/review')).toBeTruthy();
@@ -725,7 +725,7 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={stepsPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
     expect(await screen.findByText('Runtime Command')).toBeTruthy();
     expect(screen.getByText('/review')).toBeTruthy();
@@ -776,7 +776,7 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await screen.findByText('Planning detail task');
     const toolbarStatus = document.querySelector<HTMLElement>('.toolbar-identity-row [data-effect="shimmer-sweep"]');
@@ -918,7 +918,7 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={stepsPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Show details for Run Unreal tests' }));
 
@@ -985,10 +985,10 @@ describe('Task Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={stepsPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Steps' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
     });
 
     await waitFor(() => {
@@ -1070,10 +1070,10 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={stepsPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Steps' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
     });
     expect(
       fetchSpy.mock.calls.some(([url]) => String(url).includes('/task-runs/task-run-step-1/observability-summary')),
@@ -1085,7 +1085,7 @@ describe('Task Detail Entrypoint', () => {
       expect(screen.getAllByRole('heading', { name: 'Summary' }).length).toBeGreaterThan(0);
       expect(screen.getByRole('heading', { name: 'Checks' })).toBeTruthy();
       expect(screen.getByRole('heading', { name: 'Logs & Diagnostics' })).toBeTruthy();
-      expect(screen.getAllByRole('heading', { name: 'Artifacts' }).length).toBeGreaterThan(0);
+      expect(screen.getAllByRole('heading', { name: 'Workflow Artifacts' }).length).toBeGreaterThan(0);
       expect(screen.getByRole('heading', { name: 'Metadata' })).toBeTruthy();
       expect(screen.getByText('Auto-approved')).toBeTruthy();
       expect(screen.getByText('art-step-summary')).toBeTruthy();
@@ -1173,10 +1173,10 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={stepsPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Steps' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
     });
     expect(
       fetchSpy.mock.calls.some(([url]) => String(url).includes('/task-runs/task-run-step-1/observability-summary')),
@@ -1248,10 +1248,10 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={stepsPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Steps' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
     });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Show details for Apply patch' }));
@@ -1277,7 +1277,7 @@ describe('Task Detail Entrypoint', () => {
       stepsHref: '/tenant/api/executions/test-123/steps',
       source: 'temporal',
       workflowType: 'MoonMind.Run',
-      title: 'Task behind apiBase',
+      title: 'Workflow behind apiBase',
       summary: 'Execution summary',
       status: 'running',
       state: 'executing',
@@ -1322,10 +1322,10 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={apiBasePayload} />);
+    renderWithClient(<WorkflowDetailPage payload={apiBasePayload} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Steps' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
     });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Show details for Apply patch' }));
@@ -1405,7 +1405,7 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={stepsPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
     await waitFor(() => {
       expect(screen.getByText('Steps: 403 (/api/executions/test-123/steps)')).toBeTruthy();
@@ -1466,10 +1466,10 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={logStreamingDisabledPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={logStreamingDisabledPayload} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Steps' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
     });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Show details for Apply patch' }));
@@ -1484,14 +1484,14 @@ describe('Task Detail Entrypoint', () => {
 
   it('renders loading state initially', () => {
     fetchSpy.mockImplementation(() => new Promise(() => {}));
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
     expect(screen.getByText(/Loading task/i)).toBeTruthy();
   });
 
   it('builds canonical Temporal task editing routes', () => {
-    expect(taskEditHref('mm:wf 1')).toBe('/tasks/new?editExecutionId=mm%3Awf%201');
+    expect(taskEditHref('mm:wf 1')).toBe('/workflows/new?editExecutionId=mm%3Awf%201');
     expect(taskEditForRerunHref('mm:wf 1')).toBe(
-      '/tasks/new?rerunExecutionId=mm%3Awf%201&mode=edit',
+      '/workflows/new?rerunExecutionId=mm%3Awf%201&mode=edit',
     );
   });
 
@@ -1545,13 +1545,13 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={actionPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Task Actions' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Workflow Actions' })).toBeTruthy();
     });
     expect(screen.getByRole('link', { name: 'Edit task' }).getAttribute('href')).toBe(
-      '/tasks/new?editExecutionId=test-123',
+      '/workflows/new?editExecutionId=test-123',
     );
     const editLink = screen.getByRole('link', { name: 'Edit task' });
     const rerunButton = screen.getByRole('button', { name: 'Rerun' });
@@ -1615,7 +1615,7 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     expect(await screen.findByText('Changes were saved to this execution.')).toBeTruthy();
     expect(screen.getByRole('status')).toBeTruthy();
@@ -1677,7 +1677,7 @@ describe('Task Detail Entrypoint', () => {
     });
     const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('Renamed task');
 
-    renderWithClient(<TaskDetailPage payload={actionPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Rerun' })).toBeTruthy();
@@ -1696,7 +1696,7 @@ describe('Task Detail Entrypoint', () => {
     promptSpy.mockRestore();
   });
 
-  it('shows failed task Edit task and Rerun entry points when capabilities allow them', async () => {
+  it('shows failed workflow Edit task and Rerun entry points when capabilities allow them', async () => {
     const actionPayload: BootPayload = {
       ...mockPayload,
       initialData: {
@@ -1718,7 +1718,7 @@ describe('Task Detail Entrypoint', () => {
       runId: '01-run',
       source: 'temporal',
       workflowType: 'MoonMind.Run',
-      title: 'Failed task',
+      title: 'Failed workflow',
       summary: 'Execution summary',
       status: 'failed',
       state: 'failed',
@@ -1739,11 +1739,11 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={actionPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
 
-    expect(await screen.findByRole('heading', { name: 'Task Actions' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Workflow Actions' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Edit task' }).getAttribute('href')).toBe(
-      '/tasks/new?rerunExecutionId=test-123&mode=edit',
+      '/workflows/new?rerunExecutionId=test-123&mode=edit',
     );
     expect(screen.getByRole('button', { name: 'Rerun' })).toBeTruthy();
     expect(screen.queryByRole('link', { name: 'Rerun' })).toBeNull();
@@ -1795,16 +1795,16 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={actionPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
 
-    expect(await screen.findByRole('heading', { name: 'Task Actions' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Workflow Actions' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Edit task' }).getAttribute('href')).toBe(
-      '/tasks/new?editExecutionId=test-123',
+      '/workflows/new?editExecutionId=test-123',
     );
-    expect(screen.queryByText(/Edit task unavailable:/)).toBeNull();
+    expect(screen.queryByText(/Edit workflow unavailable:/)).toBeNull();
   });
 
-  it('shows failed task edit-for-rerun disabled reasons without inferring from status', async () => {
+  it('shows failed workflow edit-for-rerun disabled reasons without inferring from status', async () => {
     const actionPayload: BootPayload = {
       ...mockPayload,
       initialData: {
@@ -1826,7 +1826,7 @@ describe('Task Detail Entrypoint', () => {
       runId: '01-run',
       source: 'temporal',
       workflowType: 'MoonMind.Run',
-      title: 'Failed task without snapshot',
+      title: 'Failed workflow without snapshot',
       summary: 'Execution summary',
       status: 'failed',
       state: 'failed',
@@ -1851,16 +1851,16 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={actionPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
 
-    expect(await screen.findByRole('heading', { name: 'Task Actions' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Workflow Actions' })).toBeTruthy();
     expect(screen.queryByRole('link', { name: 'Edit task' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Rerun' })).toBeNull();
     expect(
-      screen.getByText('Edit task unavailable: original task input snapshot missing'),
+      screen.getByText('Edit workflow unavailable: original task input snapshot missing'),
     ).toBeTruthy();
     expect(
-      screen.getByText('Rerun unavailable: original task input snapshot missing'),
+      screen.getByText('Start New Run unavailable: original task input snapshot missing'),
     ).toBeTruthy();
   });
 
@@ -1887,7 +1887,7 @@ describe('Task Detail Entrypoint', () => {
       runId: '01-run',
       source: 'temporal',
       workflowType: 'MoonMind.Run',
-      title: 'Failed task',
+      title: 'Failed workflow',
       summary: 'Execution summary',
       status: 'failed',
       state: 'failed',
@@ -1912,7 +1912,7 @@ describe('Task Detail Entrypoint', () => {
           runId: 'run-source',
           relationship: 'Resumed from failed step',
           status: 'failed',
-          href: '/tasks/mm:source',
+          href: '/workflows/mm:source',
         },
       ],
     };
@@ -1932,12 +1932,12 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={actionPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
 
     const resumeButton = await screen.findByRole('button', { name: 'Resume from failed step' });
     expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
     expect(screen.getByRole('link', { name: 'Resumed from failed step' }).getAttribute('href')).toBe(
-      '/tasks/mm:source',
+      '/workflows/mm:source',
     );
     fireEvent.click(resumeButton);
 
@@ -1994,17 +1994,17 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={actionPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
 
     await waitFor(() => {
       expect(screen.getByText('Flagged off task')).toBeTruthy();
     });
     expect(screen.queryByRole('link', { name: 'Edit task' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Rerun' })).toBeNull();
-    expect(screen.queryByRole('heading', { name: 'Task Actions' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Workflow Actions' })).toBeNull();
   });
 
-  it('renders task details on successful fetch', async () => {
+  it('renders workflow details on successful fetch', async () => {
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -2083,7 +2083,7 @@ describe('Task Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
       expect(screen.getByText('Example task')).toBeTruthy();
@@ -2114,8 +2114,8 @@ describe('Task Detail Entrypoint', () => {
     });
 
     expect(screen.queryByText('Inspect the repository.')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: /Show instructions/ }));
-    expect(screen.getByRole('button', { name: /Hide instructions/ }).getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: /Show Workflow Inputs/ }));
+    expect(screen.getByRole('button', { name: /Hide Workflow Inputs/ }).getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByText(/Inspect the repository\./)).toBeTruthy();
     expect(screen.getByText(/Then run the focused UI tests\./)).toBeTruthy();
 
@@ -2178,7 +2178,7 @@ describe('Task Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
       const modelFact = screen.getByText('Model').closest('div');
@@ -2228,7 +2228,7 @@ describe('Task Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
       expect(screen.getByText('No model task')).toBeTruthy();
@@ -2259,7 +2259,7 @@ describe('Task Detail Entrypoint', () => {
         targets: [
           {
             targetKind: 'objective',
-            label: 'Task objective',
+            label: 'Workflow objective',
             attachments: [
               {
                 artifactRef: 'artifact://input/objective',
@@ -2320,13 +2320,13 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
       expect(screen.getByText('Target diagnostic task')).toBeTruthy();
     });
     expect(screen.getByRole('heading', { name: 'Target Diagnostics' })).toBeTruthy();
-    expect(screen.getAllByText('Task objective').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Workflow objective').length).toBeGreaterThan(0);
     expect(screen.getByText('objective.png')).toBeTruthy();
     expect(screen.getByText('Inspect screenshot')).toBeTruthy();
     expect(screen.getByText('Attachment download failed before step execution.')).toBeTruthy();
@@ -2364,7 +2364,7 @@ describe('Task Detail Entrypoint', () => {
         targets: [
           {
             targetKind: 'objective',
-            label: 'Task objective',
+            label: 'Workflow objective',
             attachments: [
               {
                 artifactRef: 'artifact://input/objective',
@@ -2401,7 +2401,7 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
       expect(screen.getByText('Generated context diagnostic task')).toBeTruthy();
@@ -2463,7 +2463,7 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
       expect(screen.getByText('Failed Resume diagnostic task')).toBeTruthy();
@@ -2589,7 +2589,7 @@ describe('Task Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={actionsPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
 
     expect(await screen.findByRole('button', { name: 'Create remediation task' })).toBeTruthy();
     expect(await screen.findByRole('heading', { name: 'Remediation' })).toBeTruthy();
@@ -2683,7 +2683,7 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={actionsPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
 
     expect(await screen.findByText('Remediation create preview')).toBeTruthy();
     expect(screen.getByText(/Evidence preview: step ledger, diagnostics, and 2000 log lines/)).toBeTruthy();
@@ -2754,7 +2754,7 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={actionsPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
 
     await waitFor(() => {
       expect(screen.getByText('Completed target task')).toBeTruthy();
@@ -2832,7 +2832,7 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={actionsPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
 
     expect(await screen.findByText('mm:remediation-readonly')).toBeTruthy();
     expect(screen.getByText('session_interrupt')).toBeTruthy();
@@ -2900,7 +2900,7 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={actionsPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
 
     expect(await screen.findByRole('heading', { name: 'Remediation' })).toBeTruthy();
     expect(screen.getByText('No inbound remediation tasks linked yet.')).toBeTruthy();
@@ -2956,7 +2956,7 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={actionsPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
 
     expect(await screen.findByRole('heading', { name: 'Remediation Target' })).toBeTruthy();
     expect(screen.getByText('mm:target-rich')).toBeTruthy();
@@ -2986,7 +2986,7 @@ describe('Task Detail Entrypoint', () => {
     expect(missionControlCss).toMatch(/\.td-remediation-list\s+code\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
   });
 
-  it('renders task detail as separated matte evidence and action regions', async () => {
+  it('renders workflow detail as separated matte evidence and action regions', async () => {
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -3056,16 +3056,16 @@ describe('Task Detail Entrypoint', () => {
       },
     };
 
-    renderWithClient(<TaskDetailPage payload={mm428CompositionPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mm428CompositionPayload} />);
 
     await waitFor(() => {
       expect(screen.getByText('Example task')).toBeTruthy();
-      expect(screen.getByRole('heading', { name: 'Steps' })).toBeTruthy();
-      expect(screen.getByRole('heading', { name: 'Artifacts' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Workflow Artifacts' })).toBeTruthy();
       expect(screen.getByText('artifact-output')).toBeTruthy();
     });
 
-    const root = document.querySelector<HTMLElement>('.task-detail-page');
+    const root = document.querySelector<HTMLElement>('.workflow-detail-page');
     const summary = document.querySelector<HTMLElement>('.td-summary-block');
     const facts = document.querySelector<HTMLElement>('.td-facts-region');
     const steps = document.querySelector<HTMLElement>('.td-steps-region.td-evidence-region');
@@ -3127,7 +3127,7 @@ describe('Task Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
       expect(screen.getByText('Example task')).toBeTruthy();
@@ -3209,7 +3209,7 @@ describe('Task Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
       expect(screen.getByText('Explained task')).toBeTruthy();
@@ -3276,7 +3276,7 @@ describe('Task Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
       expect(screen.getByText('Unsafe task')).toBeTruthy();
@@ -3353,7 +3353,7 @@ describe('Task Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
       expect(screen.getAllByText('Merge Automation').length).toBeGreaterThan(0);
@@ -3429,7 +3429,7 @@ describe('Task Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
       expect(screen.getByText('Live merge visibility task')).toBeTruthy();
@@ -3490,7 +3490,7 @@ describe('Task Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
       expect(screen.getByText('Null merge artifact refs task')).toBeTruthy();
@@ -3562,7 +3562,7 @@ describe('Task Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Dependencies' })).toBeTruthy();
@@ -3634,8 +3634,8 @@ describe('Task Detail Entrypoint', () => {
       } as Response);
     });
 
-    window.history.pushState({}, 'Test', '/tasks/mm%3Adependent-1?source=temporal');
-    renderWithClient(<TaskDetailPage payload={actionsPayload} />);
+    window.history.pushState({}, 'Test', '/workflows/mm%3Adependent-1?source=temporal');
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Bypass Dependency Wait' }));
 
@@ -3693,7 +3693,7 @@ describe('Task Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
       expect(screen.getByText('Artifact task')).toBeTruthy();
@@ -3812,7 +3812,7 @@ describe('Task Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Report' })).toBeTruthy();
@@ -3822,7 +3822,7 @@ describe('Task Detail Entrypoint', () => {
     });
 
     const reportHeading = screen.getByRole('heading', { name: 'Report' });
-    const artifactsHeading = screen.getByRole('heading', { name: 'Artifacts' });
+    const artifactsHeading = screen.getByRole('heading', { name: 'Workflow Artifacts' });
     expect(
       reportHeading.compareDocumentPosition(artifactsHeading) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
@@ -3882,11 +3882,11 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
       expect(screen.getByText('Generic artifact task')).toBeTruthy();
-      expect(screen.getByRole('heading', { name: 'Artifacts' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Workflow Artifacts' })).toBeTruthy();
       expect(screen.getByText('art-generic-output')).toBeTruthy();
     });
     expect(screen.queryByRole('heading', { name: 'Report' })).toBeNull();
@@ -3900,7 +3900,7 @@ describe('Task Detail Entrypoint', () => {
       json: async () => ({}),
     } as Response);
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
       expect(screen.getByText(/Failed to fetch task: Not Found/i)).toBeTruthy();
@@ -3908,7 +3908,7 @@ describe('Task Detail Entrypoint', () => {
   });
 
   it('decodes encoded task ids from the route before fetching', async () => {
-    window.history.pushState({}, 'Encoded Test', '/tasks/mm%3Atest-123?source=temporal');
+    window.history.pushState({}, 'Encoded Test', '/workflows/mm%3Atest-123?source=temporal');
 
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -3941,11 +3941,11 @@ describe('Task Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
       expect(screen.getByText('Encoded task')).toBeTruthy();
-      expect(screen.getByText('Task mm:test-123')).toBeTruthy();
+      expect(screen.getByText('Workflow mm:test-123')).toBeTruthy();
     });
 
     expect(fetchSpy).toHaveBeenCalledWith('/api/executions/mm%3Atest-123?source=temporal');
@@ -3975,7 +3975,7 @@ describe('Task Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
       expect(
@@ -4028,7 +4028,7 @@ describe('Task Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
       expect(screen.getByText('Artifact task with download_url')).toBeTruthy();
@@ -4073,7 +4073,7 @@ describe('Task Detail Entrypoint', () => {
                 status: 'complete',
                 download_url: 'https://storage.example/objective.png',
                 metadata: {
-                  source: 'task-dashboard-objective-attachment',
+                  source: 'workflow-console-objective-attachment',
                   target: 'objective',
                   filename: 'objective.png',
                 },
@@ -4085,7 +4085,7 @@ describe('Task Detail Entrypoint', () => {
                 status: 'complete',
                 download_url: 'https://storage.example/step.webp',
                 metadata: {
-                  source: 'task-dashboard-step-attachment',
+                  source: 'workflow-console-step-attachment',
                   stepLabel: 'Step 2',
                   filename: 'step.webp',
                 },
@@ -4097,7 +4097,7 @@ describe('Task Detail Entrypoint', () => {
                 status: 'complete',
                 download_url: 'https://storage.example/step-second.jpg',
                 metadata: {
-                  source: 'task-dashboard-step-attachment',
+                  source: 'workflow-console-step-attachment',
                   stepLabel: 'Step 2',
                   filename: 'step-second.jpg',
                 },
@@ -4112,7 +4112,7 @@ describe('Task Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Input Images' })).toBeTruthy();
@@ -4200,7 +4200,7 @@ describe('Task Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={actionPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Intervention' })).toBeTruthy();
@@ -4263,7 +4263,7 @@ describe('Task Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={actionPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Pause' }));
 
@@ -4353,7 +4353,7 @@ describe('Task Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={actionPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
 
     fireEvent.change(await screen.findByLabelText('Operator message'), {
       target: { value: 'Please use Provider Profiles.' },
@@ -4438,7 +4438,7 @@ describe('Task Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={actionPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy();
@@ -4521,7 +4521,7 @@ describe('Task Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={codexPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={codexPayload} />);
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Session Continuity' })).toBeTruthy();
@@ -4627,7 +4627,7 @@ describe('Task Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={codexPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={codexPayload} />);
     fireEvent.click(await screen.findByText('Live Logs'));
 
     await waitFor(() => {
@@ -4716,7 +4716,7 @@ describe('Task Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={codexPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={codexPayload} />);
 
     fireEvent.change(await screen.findByLabelText('Follow-up message'), {
       target: { value: 'Continue with the existing session.' },
@@ -4826,7 +4826,7 @@ describe('Task Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={codexPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={codexPayload} />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Cancel Execution' }));
 
@@ -4855,13 +4855,13 @@ describe('Task Detail Entrypoint', () => {
 });
 
 // ---------------------------------------------------------------------------
-// LiveLogsPanel — full lifecycle tests via TaskDetailPage
+// LiveLogsPanel — full lifecycle tests via WorkflowDetailPage
 // ---------------------------------------------------------------------------
 
 describe('LiveLogsPanel', () => {
-  const mockPayload: BootPayload = { page: 'task-detail', apiBase: '/api' };
+  const mockPayload: BootPayload = { page: 'workflow-detail', apiBase: '/api' };
   const fastPollPayload: BootPayload = {
-    page: 'task-detail',
+    page: 'workflow-detail',
     apiBase: '/api',
     initialData: {
       dashboardConfig: {
@@ -4903,7 +4903,7 @@ describe('LiveLogsPanel', () => {
     targetRuntime: 'gemini_cli',
   };
   const sessionTimelinePayload: BootPayload = {
-    page: 'task-detail',
+    page: 'workflow-detail',
     apiBase: '/api',
     initialData: {
       dashboardConfig: {
@@ -4915,7 +4915,7 @@ describe('LiveLogsPanel', () => {
     },
   };
   const codexManagedRolloutPayload: BootPayload = {
-    page: 'task-detail',
+    page: 'workflow-detail',
     apiBase: '/api',
     initialData: {
       dashboardConfig: {
@@ -4928,7 +4928,7 @@ describe('LiveLogsPanel', () => {
     },
   };
   const allManagedRolloutPayload: BootPayload = {
-    page: 'task-detail',
+    page: 'workflow-detail',
     apiBase: '/api',
     initialData: {
       dashboardConfig: {
@@ -4941,7 +4941,7 @@ describe('LiveLogsPanel', () => {
     },
   };
   const rolloutOffPayload: BootPayload = {
-    page: 'task-detail',
+    page: 'workflow-detail',
     apiBase: '/api',
     initialData: {
       dashboardConfig: {
@@ -4954,7 +4954,7 @@ describe('LiveLogsPanel', () => {
     },
   };
   const legacyLiveLogsPayload: BootPayload = {
-    page: 'task-detail',
+    page: 'workflow-detail',
     apiBase: '/api',
     initialData: {
       dashboardConfig: {
@@ -4966,7 +4966,7 @@ describe('LiveLogsPanel', () => {
     },
   };
   const structuredHistoryDisabledPayload: BootPayload = {
-    page: 'task-detail',
+    page: 'workflow-detail',
     apiBase: '/api',
     initialData: {
       dashboardConfig: {
@@ -5010,7 +5010,7 @@ describe('LiveLogsPanel', () => {
   let originalScrollIntoViewDescriptor: PropertyDescriptor | undefined;
 
   beforeEach(() => {
-    window.history.pushState({}, 'Test', '/tasks/wf-1?source=temporal');
+    window.history.pushState({}, 'Test', '/workflows/wf-1?source=temporal');
     window.sessionStorage.clear();
     fetchSpy = vi.spyOn(window, 'fetch');
     MockEventSource.reset();
@@ -5140,7 +5140,7 @@ describe('LiveLogsPanel', () => {
 
   it('shows Loading then Connected status after artifact tail + SSE connect', async () => {
     mockFetchSequence(activeExecution, activeSummary, '');
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     fireEvent.click(await screen.findByText('Live Logs'));
 
@@ -5157,7 +5157,7 @@ describe('LiveLogsPanel', () => {
 
   it('shows artifact tail content before SSE connects', async () => {
     mockFetchSequence(activeExecution, activeSummary, 'artifact line 1\nartifact line 2\n');
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     fireEvent.click(await screen.findByText('Live Logs'));
 
@@ -5170,7 +5170,7 @@ describe('LiveLogsPanel', () => {
 
   it('appends log_chunk text from SSE after artifact tail is shown', async () => {
     mockFetchSequence(activeExecution, activeSummary, 'first from artifact\n');
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     fireEvent.click(await screen.findByText('Live Logs'));
 
@@ -5194,7 +5194,7 @@ describe('LiveLogsPanel', () => {
       .mockImplementation(() => {});
     try {
       mockFetchSequence(activeExecution, activeSummary, 'first from artifact\n');
-      renderWithClient(<TaskDetailPage payload={mockPayload} />);
+      renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
       fireEvent.click(await screen.findByText('Live Logs'));
 
@@ -5216,7 +5216,7 @@ describe('LiveLogsPanel', () => {
 
   it('does not create EventSource for ended runs', async () => {
     mockFetchSequence(terminalExecution, endedSummary, 'final output\n');
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     fireEvent.click(await screen.findByText('Live Logs'));
 
@@ -5226,7 +5226,7 @@ describe('LiveLogsPanel', () => {
 
   it('does not create EventSource when supportsLiveStreaming is false', async () => {
     mockFetchSequence(activeExecution, noStreamSummary, 'artifact-only content\n');
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     fireEvent.click(await screen.findByText('Live Logs'));
 
@@ -5259,7 +5259,7 @@ describe('LiveLogsPanel', () => {
       return Promise.resolve({ ok: true, json: async () => activeExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     fireEvent.click(await screen.findByText('Live Logs'));
 
@@ -5290,7 +5290,7 @@ describe('LiveLogsPanel', () => {
       return Promise.resolve({ ok: true, json: async () => currentExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
     fireEvent.click(await screen.findByText('Live Logs'));
 
     await waitForEventSourceInstance();
@@ -5306,7 +5306,7 @@ describe('LiveLogsPanel', () => {
 
   it('shows Disconnected and artifact backup when SSE onerror fires on non-terminal task', async () => {
     mockFetchSequence(activeExecution, activeSummary, 'artifact backup content\n');
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     fireEvent.click(await screen.findByText('Live Logs'));
 
@@ -5322,7 +5322,7 @@ describe('LiveLogsPanel', () => {
   it('defaults to collapsed and does not fetch observability data until expanded', async () => {
     fetchSpy.mockClear();
     mockFetchSequence(activeExecution, activeSummary, 'backup');
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     // Wait until the initial execute fetch finishes so task is loaded
     await waitFor(() => expect(screen.getByText('Active task')).toBeTruthy());
@@ -5340,7 +5340,7 @@ describe('LiveLogsPanel', () => {
 
   it('closes EventSource when the panel is collapsed', async () => {
     mockFetchSequence(activeExecution, activeSummary, 'backup');
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     // Open it
     fireEvent.click(await screen.findByText('Live Logs'));
@@ -5358,7 +5358,7 @@ describe('LiveLogsPanel', () => {
 
   it('closes EventSource when the page is hidden, reconnects when visible', async () => {
     mockFetchSequence(activeExecution, activeSummary, 'backup');
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     // Open it
     fireEvent.click(await screen.findByText('Live Logs'));
@@ -5389,7 +5389,7 @@ describe('LiveLogsPanel', () => {
 
   it('shows per-line stream provenance (stdout, stderr, system)', async () => {
     mockFetchSequence(activeExecution, activeSummary, '--- stdout ---\nline 1\n--- stderr ---\nline 2');
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     fireEvent.click(await screen.findByText('Live Logs'));
     
@@ -5481,7 +5481,7 @@ describe('LiveLogsPanel', () => {
       return Promise.resolve({ ok: true, json: async () => terminalExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
     fireEvent.click(await screen.findByText('Live Logs'));
 
     await waitFor(() => {
@@ -5548,7 +5548,7 @@ describe('LiveLogsPanel', () => {
       return Promise.resolve({ ok: true, json: async () => activeExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={sessionTimelinePayload} />);
+    renderWithClient(<WorkflowDetailPage payload={sessionTimelinePayload} />);
     fireEvent.click(await screen.findByText('Live Logs'));
 
     await waitFor(() => {
@@ -5609,7 +5609,7 @@ describe('LiveLogsPanel', () => {
       return Promise.resolve({ ok: true, json: async () => terminalExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={sessionTimelinePayload} />);
+    renderWithClient(<WorkflowDetailPage payload={sessionTimelinePayload} />);
     fireEvent.click(await screen.findByText('Live Logs'));
 
     await waitFor(() => {
@@ -5699,7 +5699,7 @@ describe('LiveLogsPanel', () => {
       return Promise.resolve({ ok: true, json: async () => terminalExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={sessionTimelinePayload} />);
+    renderWithClient(<WorkflowDetailPage payload={sessionTimelinePayload} />);
     fireEvent.click(await screen.findByText('Live Logs'));
 
     await waitFor(() => {
@@ -5719,7 +5719,7 @@ describe('LiveLogsPanel', () => {
 
   it('uses the legacy line viewer when the session timeline feature flag is disabled', async () => {
     mockFetchSequence(activeExecution, activeSummary, 'legacy fallback line\n');
-    renderWithClient(<TaskDetailPage payload={legacyLiveLogsPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={legacyLiveLogsPayload} />);
 
     fireEvent.click(await screen.findByText('Live Logs'));
 
@@ -5733,7 +5733,7 @@ describe('LiveLogsPanel', () => {
 
   it('uses the legacy line viewer when the session timeline feature flag is absent', async () => {
     mockFetchSequence(activeExecution, activeSummary, 'legacy fallback line\n');
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     fireEvent.click(await screen.findByText('Live Logs'));
 
@@ -5747,7 +5747,7 @@ describe('LiveLogsPanel', () => {
 
   it('enables the session timeline for codex managed runs when rollout is codex_managed', async () => {
     mockFetchSequence(codexExecution, activeSummary, 'codex rollout line\n');
-    renderWithClient(<TaskDetailPage payload={codexManagedRolloutPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={codexManagedRolloutPayload} />);
 
     fireEvent.click(await screen.findByText('Live Logs'));
 
@@ -5761,7 +5761,7 @@ describe('LiveLogsPanel', () => {
 
   it('keeps non-codex runs on the legacy viewer when rollout is codex_managed', async () => {
     mockFetchSequence(geminiExecution, activeSummary, 'gemini rollout line\n');
-    renderWithClient(<TaskDetailPage payload={codexManagedRolloutPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={codexManagedRolloutPayload} />);
 
     fireEvent.click(await screen.findByText('Live Logs'));
 
@@ -5775,7 +5775,7 @@ describe('LiveLogsPanel', () => {
 
   it('enables the session timeline for managed runs when rollout is all_managed', async () => {
     mockFetchSequence(geminiExecution, activeSummary, 'all managed line\n');
-    renderWithClient(<TaskDetailPage payload={allManagedRolloutPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={allManagedRolloutPayload} />);
 
     fireEvent.click(await screen.findByText('Live Logs'));
 
@@ -5789,7 +5789,7 @@ describe('LiveLogsPanel', () => {
 
   it('prefers the legacy viewer when rollout is off even if the boolean flag is true', async () => {
     mockFetchSequence(codexExecution, activeSummary, 'rollout off line\n');
-    renderWithClient(<TaskDetailPage payload={rolloutOffPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={rolloutOffPayload} />);
 
     fireEvent.click(await screen.findByText('Live Logs'));
 
@@ -5828,7 +5828,7 @@ describe('LiveLogsPanel', () => {
       return Promise.resolve({ ok: true, json: async () => terminalExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={sessionTimelinePayload} />);
+    renderWithClient(<WorkflowDetailPage payload={sessionTimelinePayload} />);
     fireEvent.click(await screen.findByText('Live Logs'));
 
     await waitFor(() => {
@@ -5860,7 +5860,7 @@ describe('LiveLogsPanel', () => {
       return Promise.resolve({ ok: true, json: async () => codexExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={structuredHistoryDisabledPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={structuredHistoryDisabledPayload} />);
     fireEvent.click(await screen.findByText('Live Logs'));
 
     await waitFor(() => {
@@ -5920,7 +5920,7 @@ describe('LiveLogsPanel', () => {
       return Promise.resolve({ ok: true, json: async () => codexExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={sessionTimelinePayload} />);
+    renderWithClient(<WorkflowDetailPage payload={sessionTimelinePayload} />);
     fireEvent.click(await screen.findByText('Live Logs'));
 
     await waitFor(() => {
@@ -5994,7 +5994,7 @@ describe('LiveLogsPanel', () => {
       return Promise.resolve({ ok: true, json: async () => terminalExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={sessionTimelinePayload} />);
+    renderWithClient(<WorkflowDetailPage payload={sessionTimelinePayload} />);
     fireEvent.click(await screen.findByText('Live Logs'));
 
     await waitFor(() => {
@@ -6042,7 +6042,7 @@ describe('LiveLogsPanel', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     // Trigger expanding the panels
     fireEvent.click(await screen.findByText('Stdout'));
@@ -6102,7 +6102,7 @@ describe('LiveLogsPanel', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     // Check Live Logs Panel
     fireEvent.click(await screen.findByText('Live Logs'));
@@ -6179,7 +6179,7 @@ describe('LiveLogsPanel', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     fireEvent.click(await screen.findByText('Live Logs'));
     fireEvent.click(await screen.findByText('Stdout'));
@@ -6248,7 +6248,7 @@ describe('LiveLogsPanel', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={fastPollPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={fastPollPayload} />);
 
     await waitFor(() => {
       expect(
@@ -6280,7 +6280,7 @@ describe('LiveLogsPanel', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
       expect(
@@ -6308,7 +6308,7 @@ describe('LiveLogsPanel', () => {
       } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
       expect(
@@ -6336,7 +6336,7 @@ describe('LiveLogsPanel', () => {
       return Promise.resolve({ ok: true, json: async () => activeExecution } as Response);
     });
 
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     fireEvent.click(await screen.findByText('Live Logs'));
 

@@ -1,4 +1,4 @@
-"""Routes that serve the MoonMind task dashboard UI shell."""
+"""Routes that serve the MoonMind workflow console UI shell."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.base import get_async_session
-from api_service.api.routers.task_dashboard_view_model import (
+from api_service.api.routers.workflow_console_view_model import (
     build_repository_branch_options,
     resolve_dashboard_runtime_config,
 )
@@ -58,23 +58,28 @@ from moonmind.workflows.temporal import (
     TemporalExecutionService,
 )
 
-router = APIRouter(prefix="", tags=["task-dashboard"])
+router = APIRouter(prefix="", tags=["workflow-console"])
 
 TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 _SAFE_DETAIL_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
-_SAFE_TASK_ID_SEGMENT = re.compile(
+_SAFE_WORKFLOW_UUID_SEGMENT = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
-_STATIC_PATHS = {
-    "list",
+_WORKFLOW_DETAIL_TABS = {"steps", "artifacts", "runs"}
+_RESERVED_WORKFLOW_ROUTE_SEGMENTS = {
+    "manifests",
     "new",
     "proposals",
-    "manifests",
+    "queue",
     "schedules",
+    "secrets",
     "settings",
     "skills",
+    "system",
+    "temporal",
+    "workers",
 }
 _MAX_SKILL_ZIP_BYTES = 50 * 1024 * 1024
 _MAX_SKILL_UNCOMPRESSED_BYTES = 200 * 1024 * 1024
@@ -82,23 +87,12 @@ _MAX_SKILL_FILE_BYTES = 25 * 1024 * 1024
 _MAX_SKILL_ZIP_ENTRIES = 500
 _IMPORTED_SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
-# Block legacy top-level segments (e.g. removed queue source, reserved "system" path).
-_BLOCKED_TOP_LEVEL_TASK_IDS: set[str] = {
-    "queue",
-    "temporal",
-    "system",
-    "workers",
-    "secrets",
-    "create",
-    "tasks-list",
-}
 _DASHBOARD_ROUTE_NOT_FOUND_DETAIL = {
     "code": "dashboard_route_not_found",
     "message": (
-        "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
-        "/tasks/new, "
-        "/tasks/proposals, /tasks/manifests, "
-        "/tasks/schedules, /tasks/skills, or /tasks/settings."
+        "Workflow console route was not found. Use /workflows, /workflows/new, "
+        "/workflows/{workflowId}, /workflows/{workflowId}/steps, "
+        "/workflows/{workflowId}/artifacts, or /workflows/{workflowId}/runs."
     ),
 }
 
@@ -163,21 +157,12 @@ class DashboardTaskSourceResponse(BaseModel):
     detail_path: str = Field(..., alias="detailPath")
 
 class TaskSourceResolutionResponse(BaseModel):
-    """Canonical source lookup for unified `/tasks/{taskId}` resolution."""
+    """Canonical source lookup for unified `/workflows/{workflowId}` resolution."""
 
     task_id: str = Field(..., alias="taskId")
     source: Literal["temporal"] = Field(..., alias="source")
     entry: str | None = Field(None, alias="entry")
     workflow_id: str | None = Field(None, alias="workflowId")
-
-def _is_dynamic_detail(path: str, source: str) -> bool:
-    parts = path.split("/")
-    return (
-        len(parts) == 2
-        and parts[0] == source
-        and _is_safe_detail_segment(parts[1])
-        and parts[1].lower() != "new"
-    )
 
 def _is_safe_detail_segment(segment: str) -> bool:
     text = segment.strip()
@@ -190,6 +175,27 @@ def _is_safe_detail_segment(segment: str) -> bool:
 def _is_temporal_task_id(path: str) -> bool:
     return path.startswith("mm:") and _is_safe_detail_segment(path)
 
+def _normalize_workflow_detail_path(workflow_path: str) -> str | None:
+    normalized = workflow_path.strip("/")
+    if not normalized:
+        return None
+    if normalized != workflow_path or "//" in workflow_path:
+        return None
+    parts = normalized.split("/")
+    if (
+        len(parts) == 1
+        and _is_safe_detail_segment(parts[0])
+        and parts[0].lower() not in _RESERVED_WORKFLOW_ROUTE_SEGMENTS
+    ):
+        return parts[0]
+    if (
+        len(parts) == 2
+        and _is_safe_detail_segment(parts[0])
+        and parts[1] in _WORKFLOW_DETAIL_TABS
+    ):
+        return f"{parts[0]}/{parts[1]}"
+    return None
+
 def _parse_task_uuid(task_id: str) -> UUID | None:
     try:
         return UUID(str(task_id))
@@ -200,26 +206,7 @@ def _is_execution_admin(user: User | None) -> bool:
     return bool(user and getattr(user, "is_superuser", False))
 
 def _is_allowed_path(path: str) -> bool:
-    if not path:
-        return False
-    if path in _BLOCKED_TOP_LEVEL_TASK_IDS:
-        return False
-    if _SAFE_TASK_ID_SEGMENT.fullmatch(path):
-        return True
-    if _is_temporal_task_id(path):
-        return True
-    if path in _STATIC_PATHS:
-        return True
-    if "/" not in path and _is_safe_detail_segment(path):
-        return True
-    return any(
-        _is_dynamic_detail(path, source)
-        for source in (
-            "proposals",
-            "manifests",
-            "schedules",
-        )
-    )
+    return _normalize_workflow_detail_path(path) is not None
 
 def _raise_dashboard_route_not_found() -> None:
     raise HTTPException(
@@ -613,24 +600,36 @@ async def _import_skill_zip(
     )
     return _build_skill_import_response(payload, validated)
 
-@router.get("/tasks/secrets")
+@router.get("/secrets")
 async def task_secrets_route(
     request: Request,
     _user: User = Depends(get_current_user()),
 ) -> RedirectResponse:
     """Redirect the legacy secrets page into unified settings."""
-    return RedirectResponse(url="/tasks/settings?section=providers-secrets", status_code=307)
+    return RedirectResponse(url="/settings?section=providers-secrets", status_code=307)
 
-@router.get("/tasks", name="task_dashboard_root")
-async def task_dashboard_root(
+@router.get("/workflows", name="workflow_console_root", response_class=HTMLResponse)
+async def workflow_console_root(
     request: Request,
+    session: AsyncSession = Depends(get_async_session),
     _user: User = Depends(get_current_user()),
-) -> RedirectResponse:
-    """Serve the dashboard root page."""
+) -> HTMLResponse:
+    """Serve the React-powered workflow list page."""
+    list_path = "/workflows"
+    dashboard_config = await resolve_dashboard_runtime_config(
+        list_path, session=session, user=_user
+    )
+    return await _render_react_page(
+        request,
+        "workflow-list",
+        list_path,
+        initial_data={"dashboardConfig": dashboard_config},
+        data_wide_panel=True,
+        session=session,
+        user=_user,
+    )
 
-    return RedirectResponse(url="/tasks/list")
-
-@router.get("/tasks/proposals", response_class=HTMLResponse)
+@router.get("/proposals", response_class=HTMLResponse)
 async def task_proposals_route(
     request: Request,
     session: AsyncSession = Depends(get_async_session),
@@ -640,13 +639,13 @@ async def task_proposals_route(
     return await _render_react_page(
         request,
         "proposals",
-        "/tasks/proposals",
+        "/proposals",
         data_wide_panel=True,
         session=session,
         user=_user,
     )
 
-@router.get("/tasks/schedules", response_class=HTMLResponse)
+@router.get("/schedules", response_class=HTMLResponse)
 async def task_schedules_route(
     request: Request,
     session: AsyncSession = Depends(get_async_session),
@@ -654,10 +653,10 @@ async def task_schedules_route(
 ) -> HTMLResponse:
     """Serve the React-powered schedules page."""
     return await _render_react_page(
-        request, "schedules", "/tasks/schedules", session=session, user=_user
+        request, "schedules", "/schedules", session=session, user=_user
     )
 
-@router.get("/tasks/manifests", response_class=HTMLResponse)
+@router.get("/manifests", response_class=HTMLResponse)
 async def task_manifests_route(
     request: Request,
     session: AsyncSession = Depends(get_async_session),
@@ -665,55 +664,26 @@ async def task_manifests_route(
 ) -> HTMLResponse:
     """Serve the React-powered manifests page."""
     return await _render_react_page(
-        request, "manifests", "/tasks/manifests", session=session, user=_user
+        request, "manifests", "/manifests", session=session, user=_user
     )
 
-@router.get("/tasks/manifests/new", status_code=307, response_class=RedirectResponse)
+@router.get("/manifests/new", status_code=307, response_class=RedirectResponse)
 async def task_manifest_submit_route(
     request: Request,
     _user: User = Depends(get_current_user()),
 ) -> RedirectResponse:
     """Redirect the legacy manifest submit route into the unified manifests page."""
-    return RedirectResponse(url="/tasks/manifests", status_code=307)
+    return RedirectResponse(url="/manifests", status_code=307)
 
-@router.get("/tasks/list", response_class=HTMLResponse)
-async def task_list_route(
-    request: Request,
-    session: AsyncSession = Depends(get_async_session),
-    _user: User = Depends(get_current_user()),
-) -> HTMLResponse:
-    """Serve the React-powered tasks list page."""
-    list_path = "/tasks/list"
-    dashboard_config = await resolve_dashboard_runtime_config(
-        list_path, session=session, user=_user
-    )
-    return await _render_react_page(
-        request,
-        "tasks-list",
-        list_path,
-        initial_data={"dashboardConfig": dashboard_config},
-        data_wide_panel=True,
-        session=session,
-        user=_user,
-    )
-
-@router.get("/tasks/tasks-list")
-async def task_tasks_list_route(
-    request: Request,
-    _user: User = Depends(get_current_user()),
-) -> RedirectResponse:
-    """Redirect the legacy tasks-list alias into the canonical list route."""
-    return RedirectResponse(url="/tasks/list", status_code=307)
-
-@router.get("/tasks/workers")
+@router.get("/workers")
 async def task_workers_route(
     request: Request,
     _user: User = Depends(get_current_user()),
 ) -> RedirectResponse:
     """Redirect the legacy workers page into unified settings."""
-    return RedirectResponse(url="/tasks/settings?section=operations", status_code=307)
+    return RedirectResponse(url="/settings?section=operations", status_code=307)
 
-@router.get("/tasks/settings", response_class=HTMLResponse)
+@router.get("/settings", response_class=HTMLResponse)
 async def task_settings_route(
     request: Request,
     session: AsyncSession = Depends(get_async_session),
@@ -721,7 +691,7 @@ async def task_settings_route(
 ) -> HTMLResponse:
     """Serve the React-powered settings page."""
     runtime_config = await resolve_dashboard_runtime_config(
-        "/tasks/settings", session=session, user=_user
+        "/settings", session=session, user=_user
     )
     initial_data = {
         "workerPause": {
@@ -734,7 +704,7 @@ async def task_settings_route(
     return await _render_react_page(
         request,
         "settings",
-        "/tasks/settings",
+        "/settings",
         initial_data=initial_data,
         session=session,
         user=_user,
@@ -759,35 +729,27 @@ async def oauth_terminal_route(
         user=_user,
     )
 
-@router.get("/tasks/new", response_class=HTMLResponse)
+@router.get("/workflows/new", response_class=HTMLResponse)
 async def task_create_route(
     request: Request,
     session: AsyncSession = Depends(get_async_session),
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
-    """Serve the React-powered task create page."""
-    current_path = "/tasks/new"
+    """Serve the React-powered workflow start page."""
+    current_path = "/workflows/new"
     dashboard_config = await resolve_dashboard_runtime_config(
         current_path, session=session, user=_user
     )
     return await _render_react_page(
         request,
-        "task-create",
+        "workflow-start",
         current_path,
         initial_data={"dashboardConfig": dashboard_config},
         session=session,
         user=_user,
     )
 
-@router.get("/tasks/create")
-async def task_create_alias_route(
-    request: Request,
-    _user: User = Depends(get_current_user()),
-) -> RedirectResponse:
-    """Redirect the legacy create alias into the canonical create route."""
-    return RedirectResponse(url="/tasks/new", status_code=307)
-
-@router.get("/tasks/skills", response_class=HTMLResponse)
+@router.get("/skills", response_class=HTMLResponse)
 async def task_skills_route(
     request: Request,
     session: AsyncSession = Depends(get_async_session),
@@ -795,29 +757,29 @@ async def task_skills_route(
 ) -> HTMLResponse:
     """Serve the React-powered skills page."""
     return await _render_react_page(
-        request, "skills", "/tasks/skills", session=session, user=_user
+        request, "skills", "/skills", session=session, user=_user
     )
 
-@router.get("/tasks/{dashboard_path:path}", response_class=HTMLResponse)
-async def task_dashboard_route(
+@router.get("/workflows/{workflow_path:path}", response_class=HTMLResponse)
+async def workflow_console_route(
     request: Request,
-    dashboard_path: str,
+    workflow_path: str,
     session: AsyncSession = Depends(get_async_session),
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve dashboard sub-routes from one HTML shell."""
 
-    normalized = dashboard_path.strip("/")
-    if not _is_allowed_path(normalized) or normalized in _STATIC_PATHS:
+    normalized = _normalize_workflow_detail_path(workflow_path)
+    if normalized is None:
         _raise_dashboard_route_not_found()
 
-    detail_path = f"/tasks/{normalized}"
+    detail_path = f"/workflows/{normalized}"
     dashboard_config = await resolve_dashboard_runtime_config(
         detail_path, session=session, user=_user
     )
     return await _render_react_page(
         request,
-        "task-detail",
+        "workflow-detail",
         detail_path,
         initial_data={"dashboardConfig": dashboard_config},
         session=session,

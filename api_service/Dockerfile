@@ -198,7 +198,7 @@ COPY api_service/templates/_navigation.html /build/api_service/templates/_naviga
 COPY tools/verify_vite_manifest.py /build/tools/verify_vite_manifest.py
 
 # Always rebuild dist from source; do not rely on committed chunks surviving partial copies.
-RUN rm -rf /build/api_service/static/task_dashboard/dist \
+RUN rm -rf /build/api_service/static/workflow_console/dist \
     && npm run ui:build \
     && python3 /build/tools/verify_vite_manifest.py
 
@@ -334,8 +334,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --disable-pip-version-check --no-deps .
 
 # Copy pre-built frontend assets from the frontend-builder stage
-COPY --from=frontend-builder /build/api_service/static/task_dashboard/ /app/api_service/static/task_dashboard/
-COPY --from=frontend-builder /build/api_service/static/task_dashboard/ /opt/moonmind_static/task_dashboard/
+COPY --from=frontend-builder /build/api_service/static/workflow_console/ /app/api_service/static/workflow_console/
+COPY --from=frontend-builder /build/api_service/static/workflow_console/ /opt/moonmind_static/workflow_console/
 
 RUN chmod +x /app/api_service/entrypoint.sh && \
     sed -i 's/\r$//' /app/api_service/entrypoint.sh

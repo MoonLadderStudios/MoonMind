@@ -13,7 +13,7 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
 from api_service.main import app
-from api_service.api.routers.task_dashboard import _resolve_user_dependency_overrides
+from api_service.api.routers.workflow_console import _resolve_user_dependency_overrides
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 

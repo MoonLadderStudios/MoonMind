@@ -558,7 +558,7 @@ class TaskProposalService:
             "attachments": [
                 {
                     "title": proposal.title,
-                    "title_link": f"/tasks/proposals/{proposal.id}",
+                    "title_link": f"/proposals/{proposal.id}",
                     "text": proposal.summary[:4000],
                     "fields": [
                         {

@@ -1,4 +1,4 @@
-"""Unit tests for task dashboard shell routes."""
+"""Unit tests for workflow console shell routes."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from api_service.api.routers.task_dashboard import (
+from api_service.api.routers.workflow_console import (
     _get_temporal_service,
     _is_allowed_path,
     _resolve_user_dependency_overrides,
@@ -138,16 +138,17 @@ def client() -> Iterator[TestClient]:
     with _client_with_mock_service() as (test_client, _mock_service):
         yield test_client
 
-def test_task_dashboard_api_routes_are_workflow_native() -> None:
+def test_workflow_console_api_routes_are_workflow_native() -> None:
     route_paths = {getattr(route, "path", "") for route in router.routes}
 
-    assert "/api/tasks" not in route_paths
-    assert not any(path.startswith("/api/tasks/") for path in route_paths)
+    assert not any(path == "/tasks" or path.startswith("/tasks/") for path in route_paths)
+    assert "/workflows" in route_paths
+    assert "/workflows/new" in route_paths
+    assert "/workflows/{workflow_path:path}" in route_paths
     assert "/api/workflows/skills" in route_paths
     assert "/api/workflows/skills/upload" in route_paths
 
 def test_allowed_path_helper_accepts_known_routes() -> None:
-    assert _is_allowed_path("list")
     assert not _is_allowed_path("system")
     assert not _is_allowed_path("queue")
     assert not _is_allowed_path("queue/new")
@@ -156,11 +157,14 @@ def test_allowed_path_helper_accepts_known_routes() -> None:
     assert _is_allowed_path("123e4567-e89b-12d3-a456-426614174000")
     assert _is_allowed_path("mm:123e4567-e89b-12d3-a456-426614174000")
     assert _is_allowed_path("mm:01JNX7SYH6A3K1V8Q2D7E9F4AB")
-    assert _is_allowed_path("new")
-    assert _is_allowed_path("manifests")
+    assert _is_allowed_path("mm:01JNX7SYH6A3K1V8Q2D7E9F4AB/steps")
+    assert _is_allowed_path("mm:01JNX7SYH6A3K1V8Q2D7E9F4AB/artifacts")
+    assert _is_allowed_path("mm:01JNX7SYH6A3K1V8Q2D7E9F4AB/runs")
+    assert not _is_allowed_path("new")
+    assert not _is_allowed_path("manifests")
     assert not _is_allowed_path("manifests/new")
-    assert _is_allowed_path("schedules")
-    assert _is_allowed_path("settings")
+    assert not _is_allowed_path("schedules")
+    assert not _is_allowed_path("settings")
     assert not _is_allowed_path("workers")
     assert not _is_allowed_path("secrets")
 
@@ -172,66 +176,69 @@ def test_allowed_path_helper_rejects_unknown_routes() -> None:
     assert not _is_allowed_path("queue/not allowed")
 
 def test_root_route_renders_dashboard_shell(client: TestClient) -> None:
-    response = client.get("/tasks", follow_redirects=False)
+    response = client.get("/workflows", follow_redirects=False)
 
-    assert response.status_code == 307
-    assert response.headers["location"] == "/tasks/list"
+    assert response.status_code == 200
+    assert "moonmind-ui-boot" in response.text
+    boot_payload = _extract_boot_payload(response.text)
+    assert boot_payload["page"] == "workflow-list"
+    assert boot_payload["initialData"]["dashboardConfig"]["initialPath"] == "/workflows"
 
 def test_static_sub_routes_render_react_shell(client: TestClient) -> None:
     for path in (
-        "/tasks/new",
-        "/tasks/skills",
+        "/workflows/new",
+        "/skills",
     ):
         response = client.get(path)
         assert response.status_code == 200
         assert "moonmind-ui-boot" in response.text
         assert 'type="module"' in response.text
-        assert "/static/task_dashboard/dist/assets/" in response.text
+        assert "/static/workflow_console/dist/assets/" in response.text
         assert 'class="dashboard-shell-full"' in response.text
         assert 'class="masthead-brand"' in response.text
-        assert 'src="/static/task_dashboard/moonmindlogo.webp"' in response.text
+        assert 'src="/static/workflow_console/moonmindlogo.webp"' in response.text
         assert "MOONMIND OPERATIONS" not in response.text
-        assert "task-dashboard-config" not in response.text
-        assert "/static/task_dashboard/dashboard.js" not in response.text
+        assert "workflow-console-config" not in response.text
+        assert "/static/workflow_console/dashboard.js" not in response.text
         assert 'id="mission-control-root"' in response.text
         assert 'id="dashboard-alerts-root"' not in response.text
         assert "marked.min.js" not in response.text
         assert "__moonmind_customElementsDefineGuard" not in response.text
 
     for path in (
-        "/tasks/list",
-        "/tasks/manifests",
-        "/tasks/schedules",
-        "/tasks/settings",
-        "/tasks/proposals",
+        "/workflows",
+        "/manifests",
+        "/schedules",
+        "/settings",
+        "/proposals",
     ):
         response = client.get(path)
         assert response.status_code == 200
         assert "moonmind-ui-boot" in response.text
         assert 'type="module"' in response.text
-        assert "/static/task_dashboard/dist/assets/" in response.text
+        assert "/static/workflow_console/dist/assets/" in response.text
         assert 'id="mission-control-root"' in response.text
         assert 'id="dashboard-alerts-root"' not in response.text
         assert "marked.min.js" not in response.text
         assert "__moonmind_customElementsDefineGuard" not in response.text
 
 def test_mission_control_logo_asset_exists() -> None:
-    asset_path = Path("api_service/static/task_dashboard/moonmindlogo.webp")
+    asset_path = Path("api_service/static/workflow_console/moonmindlogo.webp")
 
     assert asset_path.read_bytes().startswith(b"RIFF")
     assert asset_path.stat().st_size < 25_000
 
 def test_task_create_route_uses_canonical_boot_payload(client: TestClient) -> None:
-    """GET /tasks/new renders the task-create shell with server runtime config."""
-    response = client.get("/tasks/new")
+    """GET /workflows/new renders the workflow-start shell with server runtime config."""
+    response = client.get("/workflows/new")
 
     assert response.status_code == 200
     assert "moonmind-ui-boot" in response.text
     boot_payload = _extract_boot_payload(response.text)
 
-    assert boot_payload["page"] == "task-create"
+    assert boot_payload["page"] == "workflow-start"
     dashboard_config = boot_payload["initialData"]["dashboardConfig"]
-    assert dashboard_config["initialPath"] == "/tasks/new"
+    assert dashboard_config["initialPath"] == "/workflows/new"
     assert dashboard_config["sources"]["temporal"]["create"].startswith("/api/")
     assert dashboard_config["sources"]["temporal"]["artifactCreate"].startswith(
         "/api/"
@@ -248,23 +255,25 @@ def test_oauth_terminal_route_uses_terminal_boot_payload(client: TestClient) -> 
     assert boot_payload["initialData"]["dashboardConfig"]["initialPath"] == "/oauth-terminal"
     assert boot_payload["initialData"]["layout"]["dataWidePanel"] is True
 
-def test_alias_routes_redirect_to_canonical_paths(client: TestClient) -> None:
-    """GET /tasks/create and /tasks/tasks-list must return 307 redirects to canonical routes."""
-    create_resp = client.get("/tasks/create", follow_redirects=False)
-    assert create_resp.status_code == 307
-    assert create_resp.headers["location"] == "/tasks/new"
-
-    tasks_list_resp = client.get("/tasks/tasks-list", follow_redirects=False)
-    assert tasks_list_resp.status_code == 307
-    assert tasks_list_resp.headers["location"] == "/tasks/list"
+def test_removed_task_routes_do_not_redirect_or_render_console(client: TestClient) -> None:
+    for path in (
+        "/tasks/list",
+        "/tasks/new",
+        "/tasks/queue/new",
+        f"/tasks/{uuid4()}",
+    ):
+        response = client.get(path, follow_redirects=False)
+        assert response.status_code == 404
+        assert "moonmind-ui-boot" not in response.text
+        assert "location" not in response.headers
 
 def test_legacy_manifest_submit_route_redirects_to_unified_manifests_page(
     client: TestClient,
 ) -> None:
-    response = client.get("/tasks/manifests/new", follow_redirects=False)
+    response = client.get("/manifests/new", follow_redirects=False)
 
     assert response.status_code == 307
-    assert response.headers["location"] == "/tasks/manifests"
+    assert response.headers["location"] == "/manifests"
 
 def test_legacy_manifest_submit_route_openapi_documents_redirect(
     client: TestClient,
@@ -272,23 +281,23 @@ def test_legacy_manifest_submit_route_openapi_documents_redirect(
     response = client.get("/openapi.json")
 
     assert response.status_code == 200
-    route = response.json()["paths"]["/tasks/manifests/new"]["get"]
+    route = response.json()["paths"]["/manifests/new"]["get"]
     assert "307" in route["responses"]
     assert "200" not in route["responses"]
     assert "application/json" not in route["responses"]["307"].get("content", {})
 
 def test_navigation_exposes_single_manifest_destination(client: TestClient) -> None:
-    response = client.get("/tasks/manifests")
+    response = client.get("/manifests")
 
     assert response.status_code == 200
-    assert 'href="/tasks/manifests"' in response.text
+    assert 'href="/manifests"' in response.text
     assert "Manifest Submit" not in response.text
-    assert 'href="/tasks/manifests/new"' not in response.text
+    assert 'href="/manifests/new"' not in response.text
 
 def test_react_shell_wraps_navigation_in_centered_masthead_slot(
     client: TestClient,
 ) -> None:
-    response = client.get("/tasks/list")
+    response = client.get("/workflows")
 
     assert response.status_code == 200
     assert '<div class="masthead-nav">' in response.text
@@ -303,8 +312,8 @@ def test_react_shell_wraps_navigation_in_centered_masthead_slot(
         )
 
 def test_trailing_slash_alias_routes_return_404_not_detail_page(client: TestClient) -> None:
-    """Trailing-slash variants /tasks/create/ and /tasks/tasks-list/ must not render a detail shell."""
-    for path in ("/tasks/create/", "/tasks/tasks-list/"):
+    """Trailing-slash variants /workflows/new/ and /workflows/ must not render a detail shell."""
+    for path in ("/workflows/new/", "/workflows/"):
         response = client.get(path)
         assert response.status_code == 404
         assert response.json()["detail"]["code"] == "dashboard_route_not_found"
@@ -315,52 +324,53 @@ def test_react_shell_uses_vite_dev_server_assets_when_configured(
     monkeypatch.setenv("MOONMIND_UI_DEV_SERVER_URL", "http://127.0.0.1:5173")
 
     with _client_with_mock_service() as (client, _mock_service):
-        response = client.get("/tasks/list")
+        response = client.get("/workflows")
 
     assert response.status_code == 200
     assert response.text.count('src="http://127.0.0.1:5173/@vite/client"') == 1
     assert 'src="http://127.0.0.1:5173/entrypoints/mission-control.tsx"' in response.text
-    assert "/static/task_dashboard/dist/assets/" not in response.text
+    assert "/static/workflow_console/dist/assets/" not in response.text
 
 def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
     for path in (
-        f"/tasks/{uuid4()}",
-        f"/tasks/mm:{uuid4()}",
-        "/tasks/mm:01JNX7SYH6A3K1V8Q2D7E9F4AB",
-        "/tasks/mm:workflow-123",
-        f"/tasks/manifests/{uuid4()}",
-        f"/tasks/schedules/{uuid4()}",
+        f"/workflows/{uuid4()}",
+        f"/workflows/mm:{uuid4()}",
+        "/workflows/mm:01JNX7SYH6A3K1V8Q2D7E9F4AB",
+        "/workflows/mm:workflow-123",
+        "/workflows/mm:workflow-123/steps",
+        "/workflows/mm:workflow-123/artifacts",
+        "/workflows/mm:workflow-123/runs",
     ):
         response = client.get(path)
         assert response.status_code == 200
         assert "moonmind-ui-boot" in response.text
         assert 'type="module"' in response.text
-        assert "/static/task_dashboard/dist/assets/" in response.text
+        assert "/static/workflow_console/dist/assets/" in response.text
 
 def test_data_wide_panel_on_selected_react_routes(client: TestClient) -> None:
-    for path in ("/tasks/list", "/tasks/proposals"):
+    for path in ("/workflows", "/proposals"):
         response = client.get(path)
         assert response.status_code == 200
         assert '"dataWidePanel":true' in response.text
-    for path in ("/tasks/manifests", "/tasks/settings"):
+    for path in ("/manifests", "/settings"):
         response = client.get(path)
         assert response.status_code == 200
         assert '"dataWidePanel":false' in response.text
 
 def test_legacy_settings_subroutes_redirect_to_unified_settings(client: TestClient) -> None:
-    workers = client.get("/tasks/workers", follow_redirects=False)
+    workers = client.get("/workers", follow_redirects=False)
     assert workers.status_code == 307
-    assert workers.headers["location"] == "/tasks/settings?section=operations"
+    assert workers.headers["location"] == "/settings?section=operations"
 
-    secrets = client.get("/tasks/secrets", follow_redirects=False)
+    secrets = client.get("/secrets", follow_redirects=False)
     assert secrets.status_code == 307
-    assert secrets.headers["location"] == "/tasks/settings?section=providers-secrets"
+    assert secrets.headers["location"] == "/settings?section=providers-secrets"
 
 def test_react_tasks_list_and_detail_boot_include_dashboard_config(client: TestClient) -> None:
-    response = client.get("/tasks/list")
+    response = client.get("/workflows")
     assert response.status_code == 200
     assert "dashboardConfig" in response.text
-    detail = client.get(f"/tasks/{uuid4()}")
+    detail = client.get(f"/workflows/{uuid4()}")
     assert detail.status_code == 200
     assert "dashboardConfig" in detail.text
 
@@ -370,7 +380,7 @@ def test_react_shell_renders_build_metadata_with_accurate_labels(
     monkeypatch.setenv("MOONMIND_BUILD_ID", "20260408.1703")
 
     with _client_with_mock_service(monkeypatch) as (client, _mock_service):
-        response = client.get("/tasks/list")
+        response = client.get("/workflows")
 
     assert response.status_code == 200
     assert 'title="MoonMind image version"' in response.text
@@ -384,7 +394,7 @@ def test_react_shell_places_operator_metadata_in_title_row(
     monkeypatch.setenv("MOONMIND_BUILD_ID", "20260408.1703")
 
     with _client_with_mock_service(monkeypatch) as (client, _mock_service):
-        response = client.get("/tasks/list")
+        response = client.get("/workflows")
 
     assert response.status_code == 200
     assert 'class="masthead-title-meta"' in response.text
@@ -400,34 +410,34 @@ def test_react_shell_hides_title_row_metadata_when_build_id_is_not_configured(
     monkeypatch.setenv("MOONMIND_BUILD_ID_PATH", str(tmp_path / "missing-build-id"))
 
     with _client_with_mock_service(monkeypatch) as (client, _mock_service):
-        response = client.get("/tasks/list")
+        response = client.get("/workflows")
 
     assert response.status_code == 200
     assert 'class="masthead-title-meta"' not in response.text
 
 def test_legacy_system_dashboard_route_returns_404(client: TestClient) -> None:
-    response = client.get("/tasks/system")
+    response = client.get("/workflows/system")
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "dashboard_route_not_found"
 
 def test_removed_new_schedule_route_returns_404(client: TestClient) -> None:
-    response = client.get("/tasks/schedules/new")
+    response = client.get("/schedules/new")
 
     assert response.status_code == 404
-    assert response.json()["detail"]["code"] == "dashboard_route_not_found"
+    assert response.json()["detail"] == "Not Found"
 
 def test_invalid_multi_segment_routes_return_404(client: TestClient) -> None:
     for path in (
-        "/tasks/unknown/extra/segment",
-        "/tasks/queue/new/extra",
+        "/workflows/unknown/extra/segment",
+        "/workflows/queue/new/extra",
     ):
         response = client.get(path)
         assert response.status_code == 404
         assert response.json()["detail"]["code"] == "dashboard_route_not_found"
 
 def test_temporal_source_root_is_not_exposed(client: TestClient) -> None:
-    response = client.get("/tasks/temporal")
+    response = client.get("/workflows/temporal")
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "dashboard_route_not_found"
@@ -436,31 +446,30 @@ def test_temporal_source_subroutes_return_404_until_first_class_source_exists(
     client: TestClient,
 ) -> None:
     for path in (
-        "/tasks/temporal/new",
-        f"/tasks/temporal/{uuid4()}",
+        "/workflows/temporal/new",
+        f"/workflows/temporal/{uuid4()}",
     ):
         response = client.get(path)
         assert response.status_code == 404
         assert response.json()["detail"]["code"] == "dashboard_route_not_found"
 
 def test_invalid_dashboard_route_returns_404(client: TestClient) -> None:
-    response = client.get("/tasks/not-a-valid-dashboard-path/extra")
+    response = client.get("/workflows/not-a-valid-dashboard-path/extra")
 
     assert response.status_code == 404
     detail = response.json()["detail"]
     assert detail["code"] == "dashboard_route_not_found"
     assert detail["message"] == (
-        "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
-        "/tasks/new, "
-        "/tasks/proposals, /tasks/manifests, "
-        "/tasks/schedules, /tasks/skills, or /tasks/settings."
+        "Workflow console route was not found. Use /workflows, /workflows/new, "
+        "/workflows/{workflowId}, /workflows/{workflowId}/steps, "
+        "/workflows/{workflowId}/artifacts, or /workflows/{workflowId}/runs."
     )
 
 def test_skills_api_returns_available_skill_ids(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "api_service.api.routers.task_dashboard.list_available_skill_names",
+        "api_service.api.routers.workflow_console.list_available_skill_names",
         lambda: ("speckit", "speckit-orchestrate"),
     )
 
@@ -488,15 +497,15 @@ def test_skills_api_include_content_reads_legacy_skill_markdown(
     (skill_dir / "SKILL.md").write_text(skill_markdown, encoding="utf-8")
 
     monkeypatch.setattr(
-        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        "api_service.api.routers.workflow_console.settings.workflow.skills_local_mirror_root",
         str(local_root),
     )
     monkeypatch.setattr(
-        "api_service.api.routers.task_dashboard.settings.workflow.skills_legacy_mirror_root",
+        "api_service.api.routers.workflow_console.settings.workflow.skills_legacy_mirror_root",
         str(legacy_root),
     )
     monkeypatch.setattr(
-        "api_service.api.routers.task_dashboard.list_available_skill_names",
+        "api_service.api.routers.workflow_console.list_available_skill_names",
         lambda: ("speckit-orchestrate",),
     )
 
@@ -511,7 +520,7 @@ def test_create_dashboard_skill_success(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        "api_service.api.routers.workflow_console.settings.workflow.skills_local_mirror_root",
         str(tmp_path),
     )
 
@@ -542,7 +551,7 @@ def test_create_dashboard_skill_already_exists(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        "api_service.api.routers.workflow_console.settings.workflow.skills_local_mirror_root",
         str(tmp_path),
     )
 
@@ -578,7 +587,7 @@ def test_upload_dashboard_skill_zip_saves_valid_bundle(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        "api_service.api.routers.workflow_console.settings.workflow.skills_local_mirror_root",
         str(tmp_path),
     )
 
@@ -606,7 +615,7 @@ def test_skill_import_api_saves_valid_bundle_with_result_metadata(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        "api_service.api.routers.workflow_console.settings.workflow.skills_local_mirror_root",
         str(tmp_path),
     )
 
@@ -646,7 +655,7 @@ def test_skill_import_api_rejects_missing_frontmatter(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        "api_service.api.routers.workflow_console.settings.workflow.skills_local_mirror_root",
         str(tmp_path),
     )
 
@@ -673,7 +682,7 @@ def test_skill_import_api_rejects_malformed_frontmatter_opening_delimiter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        "api_service.api.routers.workflow_console.settings.workflow.skills_local_mirror_root",
         str(tmp_path),
     )
 
@@ -705,7 +714,7 @@ def test_skill_import_api_rejects_manifest_name_mismatch(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        "api_service.api.routers.workflow_console.settings.workflow.skills_local_mirror_root",
         str(tmp_path),
     )
 
@@ -737,7 +746,7 @@ def test_skill_import_api_rejects_existing_skill_by_default(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        "api_service.api.routers.workflow_console.settings.workflow.skills_local_mirror_root",
         str(tmp_path),
     )
     skill_dir = tmp_path / "zip-skill"
@@ -762,7 +771,7 @@ def test_skill_import_api_new_version_does_not_overwrite_without_versioned_stora
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        "api_service.api.routers.workflow_console.settings.workflow.skills_local_mirror_root",
         str(tmp_path),
     )
     skill_dir = tmp_path / "zip-skill"
@@ -795,7 +804,7 @@ def test_upload_dashboard_skill_zip_rejects_invalid_root_skill_filename(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        "api_service.api.routers.workflow_console.settings.workflow.skills_local_mirror_root",
         str(tmp_path),
     )
 
@@ -818,7 +827,7 @@ def test_upload_dashboard_skill_zip_rejects_invalid_top_level_directory(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        "api_service.api.routers.workflow_console.settings.workflow.skills_local_mirror_root",
         str(tmp_path),
     )
 
@@ -841,7 +850,7 @@ def test_upload_dashboard_skill_zip_rejects_missing_skill_markdown(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        "api_service.api.routers.workflow_console.settings.workflow.skills_local_mirror_root",
         str(tmp_path),
     )
 
@@ -864,7 +873,7 @@ def test_upload_dashboard_skill_zip_rejects_path_traversal(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        "api_service.api.routers.workflow_console.settings.workflow.skills_local_mirror_root",
         str(tmp_path),
     )
 

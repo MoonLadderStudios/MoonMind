@@ -1990,7 +1990,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/tasks/secrets": {
+    "/secrets": {
         parameters: {
             query?: never;
             header?: never;
@@ -2001,7 +2001,7 @@ export interface paths {
          * Task Secrets Route
          * @description Redirect the legacy secrets page into unified settings.
          */
-        get: operations["task_secrets_route_tasks_secrets_get"];
+        get: operations["task_secrets_route_secrets_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2010,7 +2010,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/tasks": {
+    "/workflows": {
         parameters: {
             query?: never;
             header?: never;
@@ -2018,10 +2018,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Task Dashboard Root
-         * @description Serve the dashboard root page.
+         * Workflow Console Root
+         * @description Serve the React-powered workflow list page.
          */
-        get: operations["task_dashboard_root_tasks_get"];
+        get: operations["workflow_console_root_workflows_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2030,7 +2030,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/tasks/proposals": {
+    "/proposals": {
         parameters: {
             query?: never;
             header?: never;
@@ -2041,7 +2041,7 @@ export interface paths {
          * Task Proposals Route
          * @description Serve the React-powered proposals page.
          */
-        get: operations["task_proposals_route_tasks_proposals_get"];
+        get: operations["task_proposals_route_proposals_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2050,7 +2050,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/tasks/schedules": {
+    "/schedules": {
         parameters: {
             query?: never;
             header?: never;
@@ -2061,7 +2061,7 @@ export interface paths {
          * Task Schedules Route
          * @description Serve the React-powered schedules page.
          */
-        get: operations["task_schedules_route_tasks_schedules_get"];
+        get: operations["task_schedules_route_schedules_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2070,7 +2070,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/tasks/manifests": {
+    "/manifests": {
         parameters: {
             query?: never;
             header?: never;
@@ -2081,7 +2081,7 @@ export interface paths {
          * Task Manifests Route
          * @description Serve the React-powered manifests page.
          */
-        get: operations["task_manifests_route_tasks_manifests_get"];
+        get: operations["task_manifests_route_manifests_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2090,7 +2090,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/tasks/manifests/new": {
+    "/manifests/new": {
         parameters: {
             query?: never;
             header?: never;
@@ -2101,7 +2101,7 @@ export interface paths {
          * Task Manifest Submit Route
          * @description Redirect the legacy manifest submit route into the unified manifests page.
          */
-        get: operations["task_manifest_submit_route_tasks_manifests_new_get"];
+        get: operations["task_manifest_submit_route_manifests_new_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2110,47 +2110,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/tasks/list": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Task List Route
-         * @description Serve the React-powered tasks list page.
-         */
-        get: operations["task_list_route_tasks_list_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/tasks/tasks-list": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Task Tasks List Route
-         * @description Redirect the legacy tasks-list alias into the canonical list route.
-         */
-        get: operations["task_tasks_list_route_tasks_tasks_list_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/tasks/workers": {
+    "/workers": {
         parameters: {
             query?: never;
             header?: never;
@@ -2161,7 +2121,7 @@ export interface paths {
          * Task Workers Route
          * @description Redirect the legacy workers page into unified settings.
          */
-        get: operations["task_workers_route_tasks_workers_get"];
+        get: operations["task_workers_route_workers_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2170,7 +2130,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/tasks/settings": {
+    "/settings": {
         parameters: {
             query?: never;
             header?: never;
@@ -2181,7 +2141,7 @@ export interface paths {
          * Task Settings Route
          * @description Serve the React-powered settings page.
          */
-        get: operations["task_settings_route_tasks_settings_get"];
+        get: operations["task_settings_route_settings_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2210,7 +2170,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/tasks/new": {
+    "/workflows/new": {
         parameters: {
             query?: never;
             header?: never;
@@ -2219,9 +2179,9 @@ export interface paths {
         };
         /**
          * Task Create Route
-         * @description Serve the React-powered task create page.
+         * @description Serve the React-powered workflow start page.
          */
-        get: operations["task_create_route_tasks_new_get"];
+        get: operations["task_create_route_workflows_new_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2230,27 +2190,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/tasks/create": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Task Create Alias Route
-         * @description Redirect the legacy create alias into the canonical create route.
-         */
-        get: operations["task_create_alias_route_tasks_create_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/tasks/skills": {
+    "/skills": {
         parameters: {
             query?: never;
             header?: never;
@@ -2261,7 +2201,7 @@ export interface paths {
          * Task Skills Route
          * @description Serve the React-powered skills page.
          */
-        get: operations["task_skills_route_tasks_skills_get"];
+        get: operations["task_skills_route_skills_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2270,7 +2210,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/tasks/{dashboard_path}": {
+    "/workflows/{workflow_path}": {
         parameters: {
             query?: never;
             header?: never;
@@ -2278,10 +2218,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Task Dashboard Route
+         * Workflow Console Route
          * @description Serve dashboard sub-routes from one HTML shell.
          */
-        get: operations["task_dashboard_route_tasks__dashboard_path__get"];
+        get: operations["workflow_console_route_workflows__workflow_path__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -12530,7 +12470,7 @@ export interface operations {
             };
         };
     };
-    task_secrets_route_tasks_secrets_get: {
+    task_secrets_route_secrets_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -12550,27 +12490,7 @@ export interface operations {
             };
         };
     };
-    task_dashboard_root_tasks_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
-    task_proposals_route_tasks_proposals_get: {
+    workflow_console_root_workflows_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -12590,7 +12510,7 @@ export interface operations {
             };
         };
     };
-    task_schedules_route_tasks_schedules_get: {
+    task_proposals_route_proposals_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -12610,7 +12530,7 @@ export interface operations {
             };
         };
     };
-    task_manifests_route_tasks_manifests_get: {
+    task_schedules_route_schedules_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -12630,7 +12550,27 @@ export interface operations {
             };
         };
     };
-    task_manifest_submit_route_tasks_manifests_new_get: {
+    task_manifests_route_manifests_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+        };
+    };
+    task_manifest_submit_route_manifests_new_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -12648,27 +12588,7 @@ export interface operations {
             };
         };
     };
-    task_list_route_tasks_list_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/html": string;
-                };
-            };
-        };
-    };
-    task_tasks_list_route_tasks_tasks_list_get: {
+    task_workers_route_workers_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -12688,27 +12608,7 @@ export interface operations {
             };
         };
     };
-    task_workers_route_tasks_workers_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
-    task_settings_route_tasks_settings_get: {
+    task_settings_route_settings_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -12759,7 +12659,7 @@ export interface operations {
             };
         };
     };
-    task_create_route_tasks_new_get: {
+    task_create_route_workflows_new_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -12779,27 +12679,7 @@ export interface operations {
             };
         };
     };
-    task_create_alias_route_tasks_create_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
-    task_skills_route_tasks_skills_get: {
+    task_skills_route_skills_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -12819,12 +12699,12 @@ export interface operations {
             };
         };
     };
-    task_dashboard_route_tasks__dashboard_path__get: {
+    workflow_console_route_workflows__workflow_path__get: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                dashboard_path: string;
+                workflow_path: string;
             };
             cookie?: never;
         };

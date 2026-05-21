@@ -162,7 +162,7 @@ def _recent_action_service(*, eligible: bool = True) -> DeploymentOperationsServ
                     reason="Routine release failed",
                     started_at="2026-04-25T18:00:00Z",
                     completed_at="2026-04-25T18:04:00Z",
-                    run_detail_url="/tasks/depupd_recent",
+                    run_detail_url="/workflows/depupd_recent",
                     logs_artifact_url="/api/artifacts/logs",
                     raw_command_log_url=None,
                     raw_command_log_permitted=False,
@@ -517,7 +517,7 @@ def test_deployment_state_projects_recent_actions_from_execution_history(
         "ghcr.io/moonladderstudios/moonmind:20260425.1234"
     )
     assert action["reason"] == "Routine release failed"
-    assert action["runDetailUrl"] == "/tasks/mm:workflow-history"
+    assert action["runDetailUrl"] == "/workflows/mm:workflow-history"
     assert action["rollbackEligibility"]["eligible"] is False
     assert action["rollbackEligibility"]["evidenceRef"] == "art_before"
 

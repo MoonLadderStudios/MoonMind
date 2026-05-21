@@ -3198,7 +3198,7 @@ def test_create_task_shaped_execution_preserves_steps_and_uses_step_title_defaul
                             "instructions": "Audit the regression and list the missing controls.",
                             "skill": {
                                 "id": "speckit-clarify",
-                                "args": {"feature": "task-create"},
+                                "args": {"feature": "workflow-start"},
                                 "requiredCapabilities": ["git", "github"],
                             },
                         },
@@ -3230,7 +3230,7 @@ def test_create_task_shaped_execution_preserves_steps_and_uses_step_title_defaul
             "instructions": "Audit the regression and list the missing controls.",
             "skill": {
                 "id": "speckit-clarify",
-                "args": {"feature": "task-create"},
+                "args": {"feature": "workflow-start"},
                 "requiredCapabilities": ["git", "github"],
             },
         },
@@ -5214,7 +5214,7 @@ def test_serialize_execution_surfaces_runtime_fields_from_task_runtime_payload()
 
 def test_serialize_execution_falls_back_to_resolved_model_alias() -> None:
     """When `params['model']` is missing, the resolvedModel alias should populate
-    both `model` and `resolvedModel` so the task detail UI displays consistently."""
+    both `model` and `resolvedModel` so the workflow detail UI displays consistently."""
     record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
     record.parameters = {
         "targetRuntime": "codex_cli",

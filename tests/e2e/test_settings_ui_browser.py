@@ -119,7 +119,7 @@ def _mock_queue_create_job(page, job_id=None, should_fail=False):
                 "workflowId": workflow_id,
                 "runId": "run-123",
                 "namespace": "moonmind",
-                "redirectPath": f"/tasks/{workflow_id}?source=temporal",
+                "redirectPath": f"/workflows/{workflow_id}?source=temporal",
             }
         )
         route.fulfill(
@@ -135,7 +135,7 @@ def test_submit_create_task_flow_successful_navigation(server):
         with _playwright_page(p) as page:
             _mock_queue_runtime_capabilities(page)
             _mock_queue_create_job(page, job_id=TEST_JOB_ID)
-            page.goto("http://127.0.0.1:8001/tasks/create")
+            page.goto("http://127.0.0.1:8001/workflows/new")
 
             submit_button = _fill_queue_task_create_form(page)
             expect(submit_button).to_have_text("Create")
@@ -148,16 +148,16 @@ def test_submit_create_task_flow_successful_navigation(server):
                 expect(submit_button).to_have_text("Submitting...")
             response = response_info.value
             assert response.ok
-            page.wait_for_url(f"**/tasks/mm:{TEST_JOB_ID}?source=temporal")
+            page.wait_for_url(f"**/workflows/mm:{TEST_JOB_ID}?source=temporal")
 
-            assert page.url.endswith(f"/tasks/mm:{TEST_JOB_ID}?source=temporal")
+            assert page.url.endswith(f"/workflows/mm:{TEST_JOB_ID}?source=temporal")
 
 def test_submit_create_task_flow_error_restores_label(server):
     with sync_playwright() as p:
         with _playwright_page(p) as page:
             _mock_queue_runtime_capabilities(page)
             _mock_queue_create_job(page, should_fail=True)
-            page.goto("http://127.0.0.1:8001/tasks/create")
+            page.goto("http://127.0.0.1:8001/workflows/new")
 
             submit_button = _fill_queue_task_create_form(page)
             original_label = submit_button.inner_text().strip()
@@ -174,4 +174,4 @@ def test_submit_create_task_flow_error_restores_label(server):
             expect(page.locator("#queue-submit-message")).to_contain_text(
                 "Failed to create queue task"
             )
-            assert page.url.endswith("/tasks/new")
+            assert page.url.endswith("/workflows/new")

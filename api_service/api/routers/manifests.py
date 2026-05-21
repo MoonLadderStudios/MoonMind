@@ -84,7 +84,7 @@ def _serialize_detail(record) -> ManifestDetailModel:
     last_run_workflow_id = getattr(record, "last_run_workflow_id", None)
     if record.last_run_job_id or record.last_run_status or last_run_workflow_id:
         task_id = last_run_workflow_id if last_run_source == "temporal" else None
-        link = f"/tasks/{task_id}?source=temporal" if task_id else None
+        link = f"/workflows/{task_id}?source=temporal" if task_id else None
         last_run = ManifestRunMetadataModel(
             source=last_run_source,
             job_id=getattr(record, "last_run_job_id", None),
@@ -250,7 +250,7 @@ async def create_manifest_run(
         workflow_type=job.workflow_type,
         temporal_status=job.temporal_status,
         manifest_artifact_ref=job.manifest_artifact_ref,
-        link=f"/tasks/{job.workflow_id}?source=temporal" if job.workflow_id else None,
+        link=f"/workflows/{job.workflow_id}?source=temporal" if job.workflow_id else None,
     )
     return ManifestRunResponse(
         source="temporal",
