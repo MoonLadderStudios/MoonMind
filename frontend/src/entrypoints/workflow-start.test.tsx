@@ -6564,6 +6564,20 @@ describe.skip("Task Create Entrypoint", () => {
                 default: "",
               },
             ],
+            inputSchema: {
+              type: "object",
+              required: ["feature_request"],
+              properties: {
+                feature_request: {
+                  type: "string",
+                  title: "Feature Request",
+                },
+                constraints: {
+                  type: "string",
+                  title: "Constraints",
+                },
+              },
+            },
           }),
         } as Response);
       }
