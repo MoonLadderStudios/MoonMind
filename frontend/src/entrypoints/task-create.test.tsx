@@ -528,7 +528,7 @@ describe.skip("Task Create Entrypoint", () => {
       .mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
         const path = url.split("?")[0];
-        if (url.startsWith("/api/tasks/skills")) {
+        if (url.startsWith("/api/workflows/skills")) {
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -2593,7 +2593,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(screen.getByRole("button", { name: "Create" })).toBeTruthy();
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
-        "/api/tasks/skills",
+        "/api/workflows/skills",
         expect.objectContaining({
           headers: { Accept: "application/json" },
         }),
@@ -12780,7 +12780,7 @@ describe.skip("Task Create Entrypoint", () => {
             text: async () => "Jira unavailable",
           } as Response);
         }
-        if (url.startsWith("/api/tasks/skills")) {
+        if (url.startsWith("/api/workflows/skills")) {
           return Promise.resolve({
             ok: true,
             json: async () => ({ items: { worker: [] } }),
@@ -12843,7 +12843,7 @@ describe.skip("Task Create Entrypoint", () => {
             json: async () => ({ workflowId: "mm:workflow-123" }),
           } as Response);
         }
-        if (url.startsWith("/api/tasks/skills")) {
+        if (url.startsWith("/api/workflows/skills")) {
           return Promise.resolve({
             ok: true,
             json: async () => ({ items: { worker: [] } }),
@@ -12914,7 +12914,7 @@ describe("Task Create MM-641 authoring validation", () => {
       .spyOn(window, "fetch")
       .mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
         const url = String(input);
-        if (url.startsWith("/api/tasks/skills")) {
+        if (url.startsWith("/api/workflows/skills")) {
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -13328,7 +13328,7 @@ describe("Task Create submit arrow animation", () => {
       .mockImplementation((input: RequestInfo | URL) => {
         const url = String(input);
         switch (true) {
-          case url.startsWith("/api/tasks/skills"):
+          case url.startsWith("/api/workflows/skills"):
             return Promise.resolve({
               ok: true,
               json: async () => ({ items: { worker: ["speckit-orchestrate"] } }),
@@ -13437,7 +13437,7 @@ describe("Task Create submit arrow animation", () => {
       .mockImplementation((input: RequestInfo | URL) => {
         const url = String(input);
         switch (true) {
-          case url.startsWith("/api/tasks/skills"):
+          case url.startsWith("/api/workflows/skills"):
             return Promise.resolve({
               ok: true,
               json: async () => ({ items: { worker: ["speckit-orchestrate"] } }),
@@ -13552,7 +13552,7 @@ describe("Task Create MM-578 Preset expansion", () => {
 
   function mockMm578PresetFetch(input: RequestInfo | URL): Promise<Response> {
     const url = String(input);
-    if (url.startsWith("/api/tasks/skills")) {
+    if (url.startsWith("/api/workflows/skills")) {
       return Promise.resolve({
         ok: true,
         json: async () => ({
@@ -14877,7 +14877,7 @@ describe("Task Create schema-driven capability inputs", () => {
 
   function mockSchemaCapabilityFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     const url = String(input);
-    if (url.startsWith("/api/tasks/skills")) {
+    if (url.startsWith("/api/workflows/skills")) {
       return Promise.resolve({
         ok: true,
         json: async () => ({
@@ -15353,7 +15353,7 @@ describe("Task Create governed Tool authoring", () => {
         if (url === "/mcp/tools/call") {
           return Promise.resolve(transitionResponse);
         }
-        if (url.startsWith("/api/tasks/skills")) {
+        if (url.startsWith("/api/workflows/skills")) {
           return Promise.resolve({
             ok: true,
             json: async () => ({ items: { worker: [] } }),
@@ -15671,7 +15671,7 @@ describe("Task Create runtime command previews", () => {
       .spyOn(window, "fetch")
       .mockImplementation((input: RequestInfo | URL) => {
         const url = String(input);
-        if (url.startsWith("/api/tasks/skills")) {
+        if (url.startsWith("/api/workflows/skills")) {
           return Promise.resolve({
             ok: true,
             json: async () => ({

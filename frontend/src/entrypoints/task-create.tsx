@@ -4279,7 +4279,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const skillsQuery = useQuery({
     queryKey: ["task-create", "skills"],
     queryFn: async (): Promise<SkillCatalogResult> => {
-      const response = await fetch("/api/tasks/skills", {
+      const response = await fetch("/api/workflows/skills", {
         headers: { Accept: "application/json" },
       });
       if (!response.ok) {

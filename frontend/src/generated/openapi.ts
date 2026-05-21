@@ -2290,7 +2290,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tasks/skills": {
+    "/api/workflows/skills": {
         parameters: {
             query?: never;
             header?: never;
@@ -2299,15 +2299,15 @@ export interface paths {
         };
         /**
          * List Dashboard Skills
-         * @description List currently available skills for task dashboard submission forms.
+         * @description List currently available skills for workflow submission forms.
          */
-        get: operations["list_dashboard_skills_api_tasks_skills_get"];
+        get: operations["list_dashboard_skills_api_workflows_skills_get"];
         put?: never;
         /**
          * Create Dashboard Skill
          * @description Create a new local skill from the dashboard.
          */
-        post: operations["create_dashboard_skill_api_tasks_skills_post"];
+        post: operations["create_dashboard_skill_api_workflows_skills_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2354,7 +2354,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tasks/skills/upload": {
+    "/api/workflows/skills/upload": {
         parameters: {
             query?: never;
             header?: never;
@@ -2367,7 +2367,7 @@ export interface paths {
          * Upload Dashboard Skill Zip
          * @description Create a new local skill from an uploaded zip bundle.
          */
-        post: operations["upload_dashboard_skill_zip_api_tasks_skills_upload_post"];
+        post: operations["upload_dashboard_skill_zip_api_workflows_skills_upload_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3212,8 +3212,8 @@ export interface components {
             /** Password */
             password: string;
         };
-        /** Body_upload_dashboard_skill_zip_api_tasks_skills_upload_post */
-        Body_upload_dashboard_skill_zip_api_tasks_skills_upload_post: {
+        /** Body_upload_dashboard_skill_zip_api_workflows_skills_upload_post */
+        Body_upload_dashboard_skill_zip_api_workflows_skills_upload_post: {
             /** File */
             file: string;
         };
@@ -12866,7 +12866,7 @@ export interface operations {
             };
         };
     };
-    list_dashboard_skills_api_tasks_skills_get: {
+    list_dashboard_skills_api_workflows_skills_get: {
         parameters: {
             query?: {
                 includeContent?: boolean;
@@ -12897,7 +12897,7 @@ export interface operations {
             };
         };
     };
-    create_dashboard_skill_api_tasks_skills_post: {
+    create_dashboard_skill_api_workflows_skills_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -12996,7 +12996,7 @@ export interface operations {
             };
         };
     };
-    upload_dashboard_skill_zip_api_tasks_skills_upload_post: {
+    upload_dashboard_skill_zip_api_workflows_skills_upload_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -13005,7 +13005,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "multipart/form-data": components["schemas"]["Body_upload_dashboard_skill_zip_api_tasks_skills_upload_post"];
+                "multipart/form-data": components["schemas"]["Body_upload_dashboard_skill_zip_api_workflows_skills_upload_post"];
             };
         };
         responses: {

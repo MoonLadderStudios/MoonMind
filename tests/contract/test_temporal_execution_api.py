@@ -74,6 +74,30 @@ def query_state():
     app.dependency_overrides[get_temporal_client] = lambda: _QueryClient(state)
     return state
 
+@pytest.mark.asyncio
+async def test_removed_task_api_routes_return_404_without_redirects() -> None:
+    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(
+        id=uuid4(), is_superuser=False
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        follow_redirects=False,
+    ) as client:
+        route_checks = (
+            ("GET", "/api/tasks"),
+            ("GET", "/api/tasks/skills"),
+            ("POST", "/api/tasks/skills"),
+            ("POST", "/api/tasks/skills/upload"),
+        )
+        for method, path in route_checks:
+            response = await client.request(method, path)
+
+            assert response.status_code == 404, (method, path, response.text)
+            assert "location" not in response.headers
+
 async def _create_uploaded_artifact(
     artifact_id: str,
     *,

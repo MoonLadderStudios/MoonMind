@@ -199,7 +199,7 @@ def _route_handlers(
     page.route(
         f"{base_url}/api/queue/workers/runtime-capabilities", _mock_runtime_capabilities
     )
-    page.route(f"{base_url}/api/tasks/skills", _mock_skills)
+    page.route(f"{base_url}/api/workflows/skills", _mock_skills)
     page.route(f"{base_url}/api/system/worker-pause", _mock_worker_pause)
     page.route(f"{base_url}/api/task-step-templates*", _mock_task_step_templates)
     page.route(f"{base_url}/api/v1/provider-profiles*", _mock_provider_profiles)
@@ -334,24 +334,6 @@ def test_temporal_detail_resolves_source_and_fetches_latest_run_artifacts(server
         ordered_calls = []
 
         page.route(
-            f"{base_url}/api/tasks/mm:workflow-123/source",
-            lambda route: (
-                ordered_calls.append("source"),
-                route.fulfill(
-                    status=200,
-                    content_type="application/json",
-                    body=json.dumps(
-                        {
-                            "taskId": "mm:workflow-123",
-                            "source": "temporal",
-                            "sourceLabel": "Temporal",
-                            "detailPath": "/tasks/mm:workflow-123?source=temporal",
-                        }
-                    ),
-                ),
-            )[1],
-        )
-        page.route(
             f"{base_url}/api/executions/mm:workflow-123",
             lambda route: (
                 ordered_calls.append("detail"),
@@ -403,7 +385,7 @@ def test_temporal_detail_resolves_source_and_fetches_latest_run_artifacts(server
         page.goto(f"{base_url}/tasks/mm:workflow-123")
         page.wait_for_selector("text=Task Detail")
         assert page.url.endswith("/tasks/mm:workflow-123")
-        assert ordered_calls[:3] == ["source", "detail", "artifacts"]
+        assert ordered_calls[:2] == ["detail", "artifacts"]
         browser.close()
 
 def test_temporal_detail_shows_edit_button_when_local_editing_enabled(server):
