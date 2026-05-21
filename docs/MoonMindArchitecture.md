@@ -46,7 +46,7 @@ flowchart LR
   end
 
   subgraph WorkflowPlane["Workflow Executions"]
-    RUN["MoonMind.Run<br/>root task workflow"]
+    RUN["MoonMind.Run<br/>root workflow implementation"]
     AR["MoonMind.AgentRun<br/>true agent step workflow"]
     AS["MoonMind.AgentSession<br/>Codex task-scoped session entity"]
     PPM["MoonMind.ProviderProfileManager<br/>per-runtime slot/cooldown entity"]
@@ -408,7 +408,7 @@ Long-lived entity workflows such as `MoonMind.AgentSession` and `MoonMind.Provid
 
 | Workflow | Purpose |
 |---|---|
-| `MoonMind.Run` | Root workflow for one task. Owns the task envelope, planning, step ordering, task-level cancellation, step ledger, and final task summary. |
+| `MoonMind.Run` | Current live root workflow implementation for a user Workflow Execution. Owns the workflow envelope, planning, Step ordering, workflow cancellation, Step ledger, and final workflow summary. |
 | `MoonMind.AgentRun` | Child workflow for one true agent execution step. Handles managed, session-backed, and external agents through canonical contracts. |
 | `MoonMind.AgentSession` | Codex-specific task-scoped session entity workflow. Owns compact session orchestration state, turn routing, session epochs, clear/reset metadata, reconciliation hooks, and teardown orchestration. It schedules activities for container and transport side effects. |
 | `MoonMind.ManagedSessionReconcile` | Bounded reconciliation workflow for Codex managed-session records and container state. |
@@ -1087,7 +1087,7 @@ MoonMind is:
 
 In the current architecture:
 
-- `MoonMind.Run` remains the root task workflow.
+- `MoonMind.Run` remains the current live root workflow implementation for user Workflow Executions.
 - `MoonMind.AgentRun` owns one true agent execution step for managed, session-backed, and external agents.
 - `ManagedRuntimeStrategy`, `ManagedRuntimeLauncher`, `ManagedAgentAdapter`, `ManagedRunSupervisor`, and `ManagedRunStore` are the concrete managed-run path for CLI runtimes such as Claude Code and Codex CLI.
 - `MoonMind.AgentSession` owns the current Codex task-scoped managed-session orchestration path while side effects remain in Agent Runtime activities.

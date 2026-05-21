@@ -2,7 +2,7 @@
 
 **Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
-MoonMind’s **Temporal-native** lifecycle contract for Temporal-managed executions. Task-shaped product surfaces may still use `task` labels; this document governs workflow types and execution semantics inside Temporal.
+MoonMind’s **Temporal-native** lifecycle contract for Temporal-managed Workflow Executions. MoonMind does not define a separate product entity named Task; this document governs workflow types and execution semantics inside Temporal.
 
 **Status:** Normative (Temporal application layer) 
 **Owner:** MoonMind Platform 
@@ -21,14 +21,14 @@ Define the **Workflow Types** that constitute MoonMind’s Temporal application 
 - lifecycle **invariants**, **timeouts**, **retry posture**, and **history management**
 - the minimal **Search Attribute** and **Memo** fields required for list, filtering, and totals
 
-This document defines the **Temporal-side contract**. Public MoonMind APIs and UI flows may still use `task` terminology where compatibility requires it; once work is represented inside Temporal, this document treats it as a **Workflow Execution**.
+This document defines the **Temporal-side contract**. Product-facing APIs and UI flows should use Workflow Execution identity; when Task appears, it must be explicitly qualified as Temporal/internal or external-system terminology. Once work is represented inside Temporal, this document treats it as a **Workflow Execution**.
 
 ---
 
 ## 2. Design principles
 
 1. **A Temporal-managed row is a Workflow Execution.** 
- Temporal-backed list/detail views should come from Temporal Visibility. Task-oriented compatibility surfaces may still remain multi-source during migration.
+ Temporal-backed list/detail views should come from Temporal Visibility. Product-facing docs and APIs should center Workflow Execution identity.
 
 2. **Workflow Types are the root orchestration categories.** 
  We do not introduce parallel top-level taxonomies for provider brand, runtime brand, or task-queue brand.
@@ -62,6 +62,7 @@ Namespace: `MoonMind.*`
 Current core workflow types:
 
 - `MoonMind.Run`
+- `MoonMind.UserWorkflow`
 - `MoonMind.ManifestIngest`
 - `MoonMind.ProviderProfileManager`
 - `MoonMind.AgentRun`
@@ -82,7 +83,7 @@ Workflow ID format should remain stable and opaque.
 
 Representative form:
 
-- `mm:<uuid>` for standard task executions
+- `mm:<uuid>` for user-submitted Workflow Executions
 - `[prefix]:<id>` for singleton/session workflows (e.g., `oauth-session:<session_id>`)
 
 Rules:
@@ -90,7 +91,7 @@ Rules:
 - Workflow ID is the canonical Temporal identifier for a Temporal-managed execution
 - do not encode sensitive information into it
 - Continue-As-New keeps the same Workflow ID
-- public task APIs may expose `taskId` alongside `workflowId` where compatibility requires it
+- product APIs should expose `workflowId` as the stable identity and route key
 
 ## 3.3 Run IDs
 
@@ -110,7 +111,8 @@ Rules:
 
 | Workflow Type | Primary responsibility | Typical inputs | Typical outputs | Expected duration |
 | --- | --- | --- | --- | --- |
-| `MoonMind.Run` | Execute a user-requested run: plan work, own step state/progress, orchestrate child agent runs, integrate results, produce artifacts | input refs, optional plan ref, parameters | output artifacts, summary, progress, step refs | seconds → hours |
+| `MoonMind.UserWorkflow` | User-submitted, Step-ledger-owning Workflow Execution: plan work, own Step state/progress, orchestrate child agent runs, integrate results, produce artifacts | input refs, optional plan ref, parameters | output artifacts, summary, progress, Step refs | seconds → hours |
+| `MoonMind.Run` | Current live implementation name for the user Workflow Execution path while the product model uses `MoonMind.UserWorkflow` terminology | input refs, optional plan ref, parameters | output artifacts, summary, progress, Step refs | seconds → hours |
 | `MoonMind.ManifestIngest` | Ingest a manifest artifact, validate, compile to a plan/graph, orchestrate execution, aggregate results | manifest artifact ref, policy params | aggregated outputs, per-node results | seconds → hours |
 | `MoonMind.ProviderProfileManager` | Coordinate provider-profile slot assignment, release, cooldowns, and reconciliation for managed runtimes | runtime/profile coordination inputs | slot assignment, lease state transitions | minutes → long-lived |
 | `MoonMind.AgentRun` | Own the durable lifecycle of one true managed or external agent execution | `AgentExecutionRequest`, refs, runtime metadata | canonical agent result, artifacts, lifecycle outcome | seconds → hours |
