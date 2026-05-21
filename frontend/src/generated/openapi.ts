@@ -1567,8 +1567,8 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Resume Execution From Failed Step */
-        post: operations["resume_execution_from_failed_step_api_executions__workflow_id__recover_from_failed_step_post"];
+        /** Recover Execution From Failed Step */
+        post: operations["recover_execution_from_failed_step_api_executions__workflow_id__recover_from_failed_step_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5957,6 +5957,34 @@ export interface components {
             updatedAt?: string | null;
         };
         /**
+         * RecoverFromFailedStepResponse
+         * @description Response from the failed-step recovery command.
+         */
+        RecoverFromFailedStepResponse: {
+            /**
+             * Accepted
+             * @default true
+             * @constant
+             */
+            accepted: true;
+            /**
+             * Applied
+             * @default created_resumed_execution
+             * @constant
+             */
+            applied: "created_resumed_execution";
+            source: components["schemas"]["ResumeExecutionRefModel"];
+            execution: components["schemas"]["ResumeExecutionRefModel"];
+            /**
+             * Relationship
+             * @default Resumed from failed step
+             * @constant
+             */
+            relationship: "Resumed from failed step";
+            /** Resumecheckpointref */
+            resumeCheckpointRef: string;
+        };
+        /**
          * RecurringTaskDefinitionListResponse
          * @description List response for recurring definitions.
          */
@@ -6255,34 +6283,6 @@ export interface components {
             runId: string;
             /** Detailhref */
             detailHref?: string | null;
-        };
-        /**
-         * ResumeFromFailedStepResponse
-         * @description Response from the failed-step Resume command.
-         */
-        ResumeFromFailedStepResponse: {
-            /**
-             * Accepted
-             * @default true
-             * @constant
-             */
-            accepted: true;
-            /**
-             * Applied
-             * @default created_resumed_execution
-             * @constant
-             */
-            applied: "created_resumed_execution";
-            source: components["schemas"]["ResumeExecutionRefModel"];
-            execution: components["schemas"]["ResumeExecutionRefModel"];
-            /**
-             * Relationship
-             * @default Resumed from failed step
-             * @constant
-             */
-            relationship: "Resumed from failed step";
-            /** Resumecheckpointref */
-            resumeCheckpointRef: string;
         };
         /** RetrievalQuery */
         RetrievalQuery: {
@@ -11532,7 +11532,7 @@ export interface operations {
             };
         };
     };
-    resume_execution_from_failed_step_api_executions__workflow_id__recover_from_failed_step_post: {
+    recover_execution_from_failed_step_api_executions__workflow_id__recover_from_failed_step_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -11555,7 +11555,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ResumeFromFailedStepResponse"];
+                    "application/json": components["schemas"]["RecoverFromFailedStepResponse"];
                 };
             };
             /** @description Validation Error */

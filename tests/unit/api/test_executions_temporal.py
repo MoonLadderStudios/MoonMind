@@ -170,7 +170,7 @@ def test_list_executions_source_temporal_defaults_to_task_scope(client) -> None:
 
         assert response.status_code == 200
         expected_query = (
-            'WorkflowType="MoonMind.Run" AND mm_entry="user_workflow" '
+            'WorkflowType="MoonMind.Run" AND (mm_entry="user_workflow" OR mm_entry="run") '
             'AND mm_owner_id="user-123"'
         )
         mock_client.count_workflows.assert_awaited_once_with(query=expected_query)
@@ -205,7 +205,7 @@ def test_list_executions_source_temporal_scope_all_fails_safe_to_task_query(
 
         assert response.status_code == 200
         expected_query = (
-            'WorkflowType="MoonMind.Run" AND mm_entry="user_workflow" '
+            'WorkflowType="MoonMind.Run" AND (mm_entry="user_workflow" OR mm_entry="run") '
             'AND mm_owner_id="user-123"'
         )
         mock_client.count_workflows.assert_awaited_once_with(query=expected_query)
@@ -244,7 +244,7 @@ def test_list_executions_source_temporal_ignores_workflow_kind_filters_for_task_
 
         assert response.status_code == 200
         expected_query = (
-            'WorkflowType="MoonMind.Run" AND mm_entry="user_workflow" '
+            'WorkflowType="MoonMind.Run" AND (mm_entry="user_workflow" OR mm_entry="run") '
             'AND mm_owner_id="user-123"'
         )
         mock_client.count_workflows.assert_awaited_once_with(query=expected_query)

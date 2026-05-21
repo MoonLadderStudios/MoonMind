@@ -977,8 +977,8 @@ class UpdateExecutionRequest(BaseModel):
     node_ids: list[str] = Field(default_factory=list, alias="nodeIds")
     idempotency_key: Optional[str] = Field(None, alias="idempotencyKey")
 
-class ResumeFromFailedStepRequest(BaseModel):
-    """Request payload for creating a failed-step Resume follow-up execution."""
+class RecoverFromFailedStepRequest(BaseModel):
+    """Request payload for creating a failed-step recovery follow-up execution."""
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
@@ -1164,8 +1164,8 @@ class ResumeExecutionRefModel(BaseModel):
     run_id: str = Field(..., alias="runId", min_length=1)
     detail_href: Optional[str] = Field(None, alias="detailHref")
 
-class ResumeFromFailedStepResponse(BaseModel):
-    """Response from the failed-step Resume command."""
+class RecoverFromFailedStepResponse(BaseModel):
+    """Response from the failed-step recovery command."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -1618,9 +1618,7 @@ class StepLedgerRefsModel(BaseModel):
 
     child_workflow_id: str | None = Field(None, alias="childWorkflowId")
     child_run_id: str | None = Field(None, alias="childRunId")
-    task_run_id: SkipJsonSchema[str | None] = Field(
-        None, alias="taskRunId", exclude=True
-    )
+    task_run_id: SkipJsonSchema[str | None] = Field(None, alias="taskRunId")
     latest_attempt_manifest_ref: str | None = Field(
         None, alias="latestAttemptManifestRef"
     )
@@ -1663,9 +1661,7 @@ class StepLedgerWorkloadModel(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
-    task_run_id: SkipJsonSchema[str | None] = Field(
-        None, alias="taskRunId", exclude=True
-    )
+    task_run_id: SkipJsonSchema[str | None] = Field(None, alias="taskRunId")
     step_id: str | None = Field(None, alias="stepId")
     attempt: int | None = Field(None, alias="attempt", ge=1)
     tool_name: str | None = Field(None, alias="toolName")

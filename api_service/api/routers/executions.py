@@ -72,8 +72,8 @@ from moonmind.schemas.temporal_models import (
     ExecutionSkillProvenanceModel,
     ExecutionSkillRuntimeModel,
     ExecutionSkillVersionSummaryModel,
-    ResumeFromFailedStepRequest,
-    ResumeFromFailedStepResponse,
+    RecoverFromFailedStepRequest,
+    RecoverFromFailedStepResponse,
     TaskInputSnapshotDescriptorModel,
     PollIntegrationRequest,
     RescheduleExecutionRequest,
@@ -137,7 +137,7 @@ _TEMPORAL_SOURCE = "temporal"
 _ALLOWED_OWNER_TYPES = {"user", "system", "service"}
 _TEMPORAL_LIST_SCOPES = {"tasks", "user", "system", "all"}
 _TEMPORAL_SCOPE_QUERIES = {
-    "tasks": 'WorkflowType="MoonMind.Run" AND mm_entry="user_workflow"',
+    "tasks": 'WorkflowType="MoonMind.Run" AND (mm_entry="user_workflow" OR mm_entry="run")',
     "user": '(WorkflowType="MoonMind.Run" OR WorkflowType="MoonMind.ManifestIngest")',
     "system": 'WorkflowType!="MoonMind.Run" AND WorkflowType!="MoonMind.ManifestIngest"',
     "all": "",
@@ -7782,18 +7782,18 @@ async def rerun_execution(
 
 @router.post(
     "/{workflow_id}/recover-from-failed-step",
-    response_model=ResumeFromFailedStepResponse,
+    response_model=RecoverFromFailedStepResponse,
     status_code=status.HTTP_201_CREATED,
     response_model_exclude_none=True,
 )
-async def resume_execution_from_failed_step(
+async def recover_execution_from_failed_step(
     workflow_id: str,
     payload: dict[str, Any] = Body(default_factory=dict),
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
     _submit_enabled: None = Depends(_ensure_submit_enabled),
-) -> ResumeFromFailedStepResponse:
+) -> RecoverFromFailedStepResponse:
     forbidden = sorted(
         key
         for key in payload
@@ -7831,7 +7831,7 @@ async def resume_execution_from_failed_step(
             },
         )
     try:
-        request = ResumeFromFailedStepRequest.model_validate(payload)
+        request = RecoverFromFailedStepRequest.model_validate(payload)
     except ValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -7894,6 +7894,6 @@ async def resume_execution_from_failed_step(
             },
         ) from exc
     await session.commit()
-    return ResumeFromFailedStepResponse.model_validate(result)
+    return RecoverFromFailedStepResponse.model_validate(result)
 
 __all__ = ["router"]

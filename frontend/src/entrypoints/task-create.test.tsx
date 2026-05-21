@@ -809,11 +809,11 @@ describe.skip("Task Create Entrypoint", () => {
             json: async () => items,
           } as Response);
         }
-        if (url.startsWith("/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.Run&entry=run")) {
+        if (url.startsWith("/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.Run&entry=user_workflow")) {
           const depItems = Array.from({ length: 12 }, (_, i) => ({
             taskId: `mm:dep-${i + 1}`,
             workflowType: "MoonMind.Run",
-            entry: "run",
+            entry: "user_workflow",
             title: i === 0 ? "Build shared schema" : `Dependency task ${i + 1}`,
             state: i % 3 === 0 ? "completed" : "executing",
           }));
@@ -9184,11 +9184,11 @@ describe.skip("Task Create Entrypoint", () => {
             json: async () => providerProfileItems,
           } as Response);
         }
-        if (url.startsWith("/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.Run&entry=run")) {
+        if (url.startsWith("/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.Run&entry=user_workflow")) {
           const depItems = Array.from({ length: 12 }, (_, i) => ({
             taskId: `mm:dep-${i + 1}`,
             workflowType: "MoonMind.Run",
-            entry: "run",
+            entry: "user_workflow",
             title: i === 0 ? "Build shared schema" : `Dependency task ${i + 1}`,
             state: i % 3 === 0 ? "completed" : "executing",
           }));
@@ -9376,11 +9376,11 @@ describe.skip("Task Create Entrypoint", () => {
                 json: async () => ({ artifact_id: "art-001" }),
               } as Response);
             }
-            if (url.startsWith("/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.Run&entry=run")) {
+            if (url.startsWith("/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.Run&entry=user_workflow")) {
               const depItems = Array.from({ length: 12 }, (_, i) => ({
                 taskId: `mm:dep-${i + 1}`,
                 workflowType: "MoonMind.Run",
-                entry: "run",
+                entry: "user_workflow",
                 title: i === 0 ? "Build shared schema" : `Dependency task ${i + 1}`,
                 state: i % 3 === 0 ? "completed" : "executing",
               }));
@@ -10346,7 +10346,7 @@ describe.skip("Task Create Entrypoint", () => {
       const url = String(input);
       if (
         url.startsWith(
-          "/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.Run&entry=run",
+          "/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.Run&entry=user_workflow",
         )
       ) {
         return Promise.resolve({
@@ -12959,7 +12959,7 @@ describe("Task Create MM-641 authoring validation", () => {
         }
         if (
           url.startsWith(
-            "/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.Run&entry=run",
+            "/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.Run&entry=user_workflow",
           )
         ) {
           return Promise.resolve({
@@ -12969,7 +12969,7 @@ describe("Task Create MM-641 authoring validation", () => {
                 {
                   taskId: "mm:dep-641",
                   workflowType: "MoonMind.Run",
-                  entry: "run",
+                  entry: "user_workflow",
                   title: "Prepare MM-641 source brief",
                   state: "completed",
                 },
