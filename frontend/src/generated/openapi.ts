@@ -1558,7 +1558,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/executions/{workflow_id}/resume-from-failed-step": {
+    "/api/executions/{workflow_id}/recover-from-failed-step": {
         parameters: {
             query?: never;
             header?: never;
@@ -1568,7 +1568,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** Resume Execution From Failed Step */
-        post: operations["resume_execution_from_failed_step_api_executions__workflow_id__resume_from_failed_step_post"];
+        post: operations["resume_execution_from_failed_step_api_executions__workflow_id__recover_from_failed_step_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3937,10 +3937,10 @@ export interface components {
              */
             canResume: boolean;
             /**
-             * Canresumefromfailedstep
+             * Canrecoverfromfailedstep
              * @default false
              */
-            canResumeFromFailedStep: boolean;
+            canRecoverFromFailedStep: boolean;
             /**
              * Cancancel
              * @default false
@@ -3978,10 +3978,8 @@ export interface components {
         ExecutionDebugFieldsModel: {
             /** Workflowid */
             workflowId: string;
-            /** Temporalrunid */
-            temporalRunId: string;
-            /** Legacyrunid */
-            legacyRunId?: string | null;
+            /** Runid */
+            runId: string;
             /** Namespace */
             namespace: string;
             /** Temporalstatus */
@@ -4212,8 +4210,6 @@ export interface components {
         ExecutionMergeAutomationResolverChildModel: {
             /** Workflowid */
             workflowId: string;
-            /** Taskrunid */
-            taskRunId?: string | null;
             /** Status */
             status?: string | null;
             /** Detailhref */
@@ -4230,10 +4226,6 @@ export interface components {
              * @constant
              */
             source: "temporal";
-            /** Taskid */
-            taskId: string;
-            /** Taskrunid */
-            taskRunId?: string | null;
             progress?: components["schemas"]["ExecutionProgressModel"] | null;
             /** Namespace */
             namespace: string;
@@ -4241,17 +4233,13 @@ export interface components {
             workflowId: string;
             /** Runid */
             runId: string;
-            /** Temporalrunid */
-            temporalRunId: string;
-            /** Legacyrunid */
-            legacyRunId?: string | null;
             /** Workflowtype */
             workflowType: string;
             /**
              * Entry
              * @enum {string}
              */
-            entry: "run" | "manifest";
+            entry: "user_workflow" | "manifest";
             /**
              * Ownertype
              * @enum {string}
@@ -6815,8 +6803,6 @@ export interface components {
             childWorkflowId?: string | null;
             /** Childrunid */
             childRunId?: string | null;
-            /** Taskrunid */
-            taskRunId?: string | null;
             /** Latestattemptmanifestref */
             latestAttemptManifestRef?: string | null;
             /** Attemptmanifestrefs */
@@ -6917,8 +6903,6 @@ export interface components {
          * @description Bounded Docker-backed workload metadata linked to a producing step.
          */
         StepLedgerWorkloadModel: {
-            /** Taskrunid */
-            taskRunId?: string | null;
             /** Stepid */
             stepId?: string | null;
             /** Attempt */
@@ -11548,7 +11532,7 @@ export interface operations {
             };
         };
     };
-    resume_execution_from_failed_step_api_executions__workflow_id__resume_from_failed_step_post: {
+    resume_execution_from_failed_step_api_executions__workflow_id__recover_from_failed_step_post: {
         parameters: {
             query?: never;
             header?: never;

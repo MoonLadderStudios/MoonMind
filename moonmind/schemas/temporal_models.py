@@ -13,6 +13,7 @@ from pydantic import (
     model_serializer,
     model_validator,
 )
+from pydantic.json_schema import SkipJsonSchema
 
 from moonmind.schemas.temporal_artifact_models import CompactArtifactRefModel
 from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
@@ -1526,7 +1527,9 @@ class ExecutionMergeAutomationResolverChildModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     workflow_id: str = Field(..., alias="workflowId")
-    task_run_id: str | None = Field(None, alias="taskRunId", exclude=True)
+    task_run_id: SkipJsonSchema[str | None] = Field(
+        None, alias="taskRunId", exclude=True
+    )
     status: str | None = Field(None, alias="status")
     detail_href: str | None = Field(None, alias="detailHref")
 
@@ -1615,7 +1618,9 @@ class StepLedgerRefsModel(BaseModel):
 
     child_workflow_id: str | None = Field(None, alias="childWorkflowId")
     child_run_id: str | None = Field(None, alias="childRunId")
-    task_run_id: str | None = Field(None, alias="taskRunId")
+    task_run_id: SkipJsonSchema[str | None] = Field(
+        None, alias="taskRunId", exclude=True
+    )
     latest_attempt_manifest_ref: str | None = Field(
         None, alias="latestAttemptManifestRef"
     )
@@ -1658,7 +1663,9 @@ class StepLedgerWorkloadModel(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
-    task_run_id: str | None = Field(None, alias="taskRunId")
+    task_run_id: SkipJsonSchema[str | None] = Field(
+        None, alias="taskRunId", exclude=True
+    )
     step_id: str | None = Field(None, alias="stepId")
     attempt: int | None = Field(None, alias="attempt", ge=1)
     tool_name: str | None = Field(None, alias="toolName")
@@ -1957,8 +1964,10 @@ class ExecutionModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     source: Literal["temporal"] = Field("temporal", alias="source")
-    task_id: str | None = Field(None, alias="taskId", exclude=True)
-    task_run_id: Optional[str] = Field(None, alias="taskRunId", exclude=True)
+    task_id: SkipJsonSchema[str | None] = Field(None, alias="taskId", exclude=True)
+    task_run_id: SkipJsonSchema[Optional[str]] = Field(
+        None, alias="taskRunId", exclude=True
+    )
     progress: ExecutionProgressModel | None = Field(None, alias="progress")
     namespace: str = Field(..., alias="namespace")
     workflow_id: str = Field(..., alias="workflowId")

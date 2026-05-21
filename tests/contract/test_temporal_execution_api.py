@@ -35,6 +35,84 @@ from moonmind.workflows.temporal import (
 from moonmind.workflows.temporal.service import TemporalExecutionService
 
 CURRENT_USER_DEP = get_current_user()
+BANNED_EXECUTION_SCHEMA_FIELDS = {
+    "taskId",
+    "taskRunId",
+    "taskStatus",
+    "taskSource",
+    "taskType",
+    "taskPayload",
+    "taskHref",
+}
+
+
+def _walk_openapi_schema(
+    node: object,
+    *,
+    components: dict[str, object],
+    path: str,
+    seen_refs: set[str],
+) -> list[tuple[str, str]]:
+    if isinstance(node, dict):
+        ref = node.get("$ref")
+        if isinstance(ref, str):
+            if ref in seen_refs:
+                return []
+            prefix = "#/components/schemas/"
+            if ref.startswith(prefix):
+                schema_name = ref.removeprefix(prefix)
+                resolved = components.get(schema_name)
+                if resolved is None:
+                    return []
+                return _walk_openapi_schema(
+                    resolved,
+                    components=components,
+                    path=f"{path}->{schema_name}",
+                    seen_refs={*seen_refs, ref},
+                )
+
+        findings: list[tuple[str, str]] = []
+        properties = node.get("properties")
+        if isinstance(properties, dict):
+            for field_name, field_schema in properties.items():
+                field_path = f"{path}.{field_name}"
+                if field_name in BANNED_EXECUTION_SCHEMA_FIELDS:
+                    findings.append((field_name, field_path))
+                findings.extend(
+                    _walk_openapi_schema(
+                        field_schema,
+                        components=components,
+                        path=field_path,
+                        seen_refs=seen_refs,
+                    )
+                )
+
+        for key in ("items", "anyOf", "oneOf", "allOf"):
+            value = node.get(key)
+            findings.extend(
+                _walk_openapi_schema(
+                    value,
+                    components=components,
+                    path=f"{path}.{key}",
+                    seen_refs=seen_refs,
+                )
+            )
+        return findings
+
+    if isinstance(node, list):
+        findings: list[tuple[str, str]] = []
+        for index, item in enumerate(node):
+            findings.extend(
+                _walk_openapi_schema(
+                    item,
+                    components=components,
+                    path=f"{path}[{index}]",
+                    seen_refs=seen_refs,
+                )
+            )
+        return findings
+
+    return []
 
 class _QueryHandle:
     def __init__(self, state: dict[str, dict[str, object]], workflow_id: str) -> None:
@@ -73,6 +151,37 @@ def query_state():
     state: dict[str, dict[str, object]] = {}
     app.dependency_overrides[get_temporal_client] = lambda: _QueryClient(state)
     return state
+
+
+def test_execution_openapi_response_schemas_are_workflow_native() -> None:
+    openapi_schema = app.openapi()
+    components = openapi_schema["components"]["schemas"]
+    findings: list[tuple[str, str]] = []
+
+    for route_path, route_schema in openapi_schema["paths"].items():
+        if not route_path.startswith("/api/executions"):
+            continue
+        for method_schema in route_schema.values():
+            if not isinstance(method_schema, dict):
+                continue
+            responses = method_schema.get("responses", {})
+            for status_code, response_schema in responses.items():
+                if not str(status_code).startswith("2"):
+                    continue
+                content = response_schema.get("content", {})
+                json_content = content.get("application/json", {})
+                schema_node = json_content.get("schema")
+                findings.extend(
+                    _walk_openapi_schema(
+                        schema_node,
+                        components=components,
+                        path=f"{route_path} {status_code}",
+                        seen_refs=set(),
+                    )
+                )
+
+    assert findings == []
+
 
 @pytest.mark.asyncio
 async def test_removed_task_api_routes_return_404_without_redirects() -> None:
