@@ -42,7 +42,7 @@ from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.schemas.agent_runtime_models import is_terminal_agent_run_state
 from moonmind.observability.transport import SpoolLogReader
 
-router = APIRouter(prefix="/task-runs", tags=["task_runs"])
+router = APIRouter(prefix="/agent-runs", tags=["agent_runs"])
 
 _HISTORICAL_EVENT_CHUNK_SIZE = 65536
 _OBSERVABILITY_TERMINAL_STATUSES = frozenset(
@@ -206,7 +206,7 @@ async def _resolve_projection_artifact(
     try:
         artifact, links, pinned, read_policy = await service.get_metadata(
             artifact_id=normalized,
-            principal="service:task_runs",
+            principal="service:agent_runs",
         )
     except (
         TemporalArtifactAuthorizationError,

@@ -1964,6 +1964,7 @@ class ExecutionModel(BaseModel):
     task_run_id: SkipJsonSchema[Optional[str]] = Field(
         None, alias="taskRunId", exclude=True
     )
+    agent_run_id: Optional[str] = Field(None, alias="agentRunId")
     progress: ExecutionProgressModel | None = Field(None, alias="progress")
     namespace: str = Field(..., alias="namespace")
     workflow_id: str = Field(..., alias="workflowId")

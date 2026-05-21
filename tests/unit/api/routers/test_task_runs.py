@@ -59,7 +59,7 @@ def _encoded_task_run_path_id(task_run_id: str) -> str:
     return quote(task_run_id, safe="")
 
 def _task_run_api_path(task_run_id: str) -> str:
-    return f"/api/task-runs/{_encoded_task_run_path_id(task_run_id)}"
+    return f"/api/agent-runs/{_encoded_task_run_path_id(task_run_id)}"
 
 @pytest.mark.parametrize(
     "suffix",
@@ -81,7 +81,7 @@ def test_task_run_observability_endpoints_reject_invalid_task_run_id(
         "api_service.api.routers.task_runs.ManagedRunStore.load",
         side_effect=ValueError("run_id resolves outside store root"),
     ) as load_record:
-        response = test_client.get(f"/api/task-runs/invalid-run-id{suffix}")
+        response = test_client.get(f"/api/agent-runs/invalid-run-id{suffix}")
 
     assert response.status_code == 422
     assert response.json()["detail"] == "Invalid task run id"
@@ -96,7 +96,7 @@ def test_get_observability_summary_returns_404_when_missing(
 ) -> None:
     test_client, _ = client
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=None):
-        response = test_client.get(f"/api/task-runs/{uuid4()}/observability-summary")
+        response = test_client.get(f"/api/agent-runs/{uuid4()}/observability-summary")
     assert response.status_code == 404
     assert "not found" in response.json()["detail"].lower()
 
@@ -108,7 +108,7 @@ def test_get_observability_summary_emits_latency_metric_for_404(
 
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=None):
         with patch("api_service.api.routers.task_runs.get_metrics_emitter", return_value=metrics):
-            response = test_client.get(f"/api/task-runs/{uuid4()}/observability-summary")
+            response = test_client.get(f"/api/agent-runs/{uuid4()}/observability-summary")
 
     assert response.status_code == 404
     assert metrics.observe.call_args.args[0] == "livelogs.summary.latency"
@@ -126,7 +126,7 @@ def test_get_observability_summary_returns_200(
     mock_record.live_stream_capable = True
 
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
-        response = test_client.get(f"/api/task-runs/{run_id}/observability-summary")
+        response = test_client.get(f"/api/agent-runs/{run_id}/observability-summary")
 
     assert response.status_code == 200
     body = response.json()["summary"]
@@ -189,7 +189,7 @@ def test_get_observability_summary_preserves_workload_artifact_refs_and_metadata
     mock_record.live_stream_capable = False
 
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
-        response = test_client.get(f"/api/task-runs/{run_id}/observability-summary")
+        response = test_client.get(f"/api/agent-runs/{run_id}/observability-summary")
 
     assert response.status_code == 200
     body = response.json()["summary"]
@@ -230,7 +230,7 @@ def test_get_observability_summary_returns_session_backed_artifact_refs(
     mock_record.live_stream_capable = False
 
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
-        response = test_client.get(f"/api/task-runs/{run_id}/observability-summary")
+        response = test_client.get(f"/api/agent-runs/{run_id}/observability-summary")
 
     assert response.status_code == 200
     body = response.json()["summary"]
@@ -252,7 +252,7 @@ def test_get_observability_summary_includes_live_stream_fields_for_active_run(
     mock_record.live_stream_capable = True
 
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
-        response = test_client.get(f"/api/task-runs/{uuid4()}/observability-summary")
+        response = test_client.get(f"/api/agent-runs/{uuid4()}/observability-summary")
 
     body = response.json()["summary"]
     assert body["supportsLiveStreaming"] is True
@@ -273,7 +273,7 @@ def test_get_observability_summary_includes_session_snapshot(
             "api_service.api.routers.task_runs._load_task_run_session_record",
             return_value=_build_session_record(),
         ):
-            response = test_client.get(f"/api/task-runs/{run_id}/observability-summary")
+            response = test_client.get(f"/api/agent-runs/{run_id}/observability-summary")
 
     assert response.status_code == 200
     snapshot = response.json()["summary"]["sessionSnapshot"]
@@ -294,7 +294,7 @@ def test_get_observability_summary_emits_latency_metric(
 
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
         with patch("api_service.api.routers.task_runs.get_metrics_emitter", return_value=metrics):
-            response = test_client.get(f"/api/task-runs/{run_id}/observability-summary")
+            response = test_client.get(f"/api/agent-runs/{run_id}/observability-summary")
 
     assert response.status_code == 200
     assert metrics.observe.call_args.args[0] == "livelogs.summary.latency"
@@ -315,7 +315,7 @@ def test_get_observability_summary_ignores_metrics_emitter_failures(
             "api_service.api.routers.task_runs.get_metrics_emitter",
             side_effect=ValueError("bad port"),
         ):
-            response = test_client.get(f"/api/task-runs/{run_id}/observability-summary")
+            response = test_client.get(f"/api/agent-runs/{run_id}/observability-summary")
 
     assert response.status_code == 200
     assert response.json()["summary"]["runId"] == str(run_id)
@@ -349,7 +349,7 @@ def test_get_observability_summary_uses_record_snapshot_when_session_record_miss
             "api_service.api.routers.task_runs._load_task_run_session_record",
             return_value=None,
         ):
-            response = test_client.get(f"/api/task-runs/{run_id}/observability-summary")
+            response = test_client.get(f"/api/agent-runs/{run_id}/observability-summary")
 
     assert response.status_code == 200
     body = response.json()["summary"]
@@ -387,7 +387,7 @@ def test_get_observability_summary_preserves_active_record_snapshot_and_events_r
             "api_service.api.routers.task_runs._load_task_run_session_record",
             return_value=None,
         ):
-            response = test_client.get(f"/api/task-runs/{run_id}/observability-summary")
+            response = test_client.get(f"/api/agent-runs/{run_id}/observability-summary")
 
     assert response.status_code == 200
     body = response.json()["summary"]
@@ -440,7 +440,7 @@ def test_get_observability_summary_prefers_fresh_session_record(
             "api_service.api.routers.task_runs._load_task_run_session_record",
             return_value=session_record,
         ):
-            response = test_client.get(f"/api/task-runs/{run_id}/observability-summary")
+            response = test_client.get(f"/api/agent-runs/{run_id}/observability-summary")
 
     assert response.status_code == 200
     body = response.json()["summary"]
@@ -464,7 +464,7 @@ def test_get_observability_summary_live_stream_ended_for_terminal_run(
         mock_record.live_stream_capable = True  # capable flag ignored for terminal runs
 
         with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
-            response = test_client.get(f"/api/task-runs/{uuid4()}/observability-summary")
+            response = test_client.get(f"/api/agent-runs/{uuid4()}/observability-summary")
 
         body = response.json()["summary"]
         assert body["supportsLiveStreaming"] is False, f"expected False for status={terminal_status}"
@@ -481,7 +481,7 @@ def test_get_observability_summary_live_stream_unavailable_when_not_capable(
     mock_record.live_stream_capable = False
 
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
-        response = test_client.get(f"/api/task-runs/{uuid4()}/observability-summary")
+        response = test_client.get(f"/api/agent-runs/{uuid4()}/observability-summary")
 
     body = response.json()["summary"]
     assert body["supportsLiveStreaming"] is False
@@ -513,7 +513,7 @@ def test_get_observability_summary_allows_owner_access() -> None:
                 new=AsyncMock(return_value=("user", str(owner_id))),
             ):
                 response = test_client.get(
-                    f"/api/task-runs/{uuid4()}/observability-summary"
+                    f"/api/agent-runs/{uuid4()}/observability-summary"
                 )
 
     assert response.status_code == 200
@@ -647,7 +647,7 @@ def test_get_observability_summary_forbids_cross_owner_access() -> None:
                 new=AsyncMock(return_value=("user", str(owner_id))),
             ):
                 response = test_client.get(
-                    f"/api/task-runs/{uuid4()}/observability-summary"
+                    f"/api/agent-runs/{uuid4()}/observability-summary"
                 )
 
     assert response.status_code == 403
@@ -660,7 +660,7 @@ def test_stream_task_run_log_returns_400_for_invalid_stream(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
     test_client, _ = client
-    response = test_client.get(f"/api/task-runs/{uuid4()}/logs/invalid_stream")
+    response = test_client.get(f"/api/agent-runs/{uuid4()}/logs/invalid_stream")
     assert response.status_code == 400
 
 def test_stream_task_run_log_returns_404_when_record_missing(
@@ -668,7 +668,7 @@ def test_stream_task_run_log_returns_404_when_record_missing(
 ) -> None:
     test_client, _ = client
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=None):
-        response = test_client.get(f"/api/task-runs/{uuid4()}/logs/stdout")
+        response = test_client.get(f"/api/agent-runs/{uuid4()}/logs/stdout")
     assert response.status_code == 404
 
 def test_stream_task_run_log_returns_404_when_artifact_ref_missing(
@@ -679,7 +679,7 @@ def test_stream_task_run_log_returns_404_when_artifact_ref_missing(
     mock_record.stdout_artifact_ref = None
 
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
-        response = test_client.get(f"/api/task-runs/{uuid4()}/logs/stdout")
+        response = test_client.get(f"/api/agent-runs/{uuid4()}/logs/stdout")
 
     assert response.status_code == 404
     assert "artifact not found" in response.json()["detail"].lower()
@@ -693,7 +693,7 @@ def test_stream_task_run_log_returns_404_when_file_missing(
 
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
         with patch("pathlib.Path.is_file", return_value=False):
-            response = test_client.get(f"/api/task-runs/{uuid4()}/logs/stdout")
+            response = test_client.get(f"/api/agent-runs/{uuid4()}/logs/stdout")
 
     assert response.status_code == 404
     assert "does not exist" in response.json()["detail"].lower()
@@ -711,7 +711,7 @@ def test_stream_task_run_log_returns_file_response(
                 with patch("api_service.api.routers.task_runs.FileResponse") as mock_file_response:
                     from fastapi.responses import Response
                     mock_file_response.return_value = Response(content=b"mock_log_data", media_type="text/plain")
-                    response = test_client.get(f"/api/task-runs/{uuid4()}/logs/stdout")
+                    response = test_client.get(f"/api/agent-runs/{uuid4()}/logs/stdout")
 
     assert mock_file_response.called
     assert mock_file_response.call_args[1]["media_type"] == "text/plain"
@@ -807,7 +807,7 @@ def test_stream_task_run_log_uses_supported_artifact_root_layouts(
     mock_record.stdout_artifact_ref = "run/stdout.log"
 
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
-        response = test_client.get(f"/api/task-runs/{uuid4()}/logs/stdout")
+        response = test_client.get(f"/api/agent-runs/{uuid4()}/logs/stdout")
 
     assert response.status_code == 200
     assert response.text == expected_content
@@ -844,7 +844,7 @@ def test_stream_task_run_log_merged_synthesized_from_spool(
     mock_record.workspace_path = str(workspace_path)
 
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
-        response = test_client.get(f"/api/task-runs/{uuid4()}/logs/merged")
+        response = test_client.get(f"/api/agent-runs/{uuid4()}/logs/merged")
 
     assert response.status_code == 200
     assert response.headers["x-merged-synthesized"] == "true"
@@ -919,7 +919,7 @@ def test_stream_task_run_log_merged_prefers_event_journal_before_prebuilt_artifa
             "api_service.api.routers.task_runs._get_agent_runtime_artifacts_root",
             return_value=str(artifacts_root),
         ):
-            response = test_client.get(f"/api/task-runs/{uuid4()}/logs/merged")
+            response = test_client.get(f"/api/agent-runs/{uuid4()}/logs/merged")
 
     assert response.status_code == 200
     assert response.headers["x-merged-synthesized"] == "true"
@@ -972,7 +972,7 @@ def test_stream_task_run_log_merged_falls_back_to_spool_when_event_journal_empty
             "api_service.api.routers.task_runs._get_agent_runtime_artifacts_root",
             return_value=str(artifacts_root),
         ):
-            response = test_client.get(f"/api/task-runs/{uuid4()}/logs/merged")
+            response = test_client.get(f"/api/agent-runs/{uuid4()}/logs/merged")
 
     assert response.status_code == 200
     assert response.headers["x-merged-order-source"] == "spool"
@@ -1021,7 +1021,7 @@ def test_stream_task_run_log_merged_skips_malformed_active_rows(
             "api_service.api.routers.task_runs._get_agent_runtime_artifacts_root",
             return_value=str(artifacts_root),
         ):
-            response = test_client.get(f"/api/task-runs/{uuid4()}/logs/merged")
+            response = test_client.get(f"/api/agent-runs/{uuid4()}/logs/merged")
 
     assert response.status_code == 200
     assert response.headers["x-merged-order-source"] == "journal"
@@ -1076,7 +1076,7 @@ def test_stream_task_run_log_merged_reads_event_journal_once_and_sorts_by_sequen
                 "api_service.api.routers.task_runs._iter_event_journal",
                 side_effect=fake_iter_event_journal,
             ):
-                response = test_client.get(f"/api/task-runs/{uuid4()}/logs/merged")
+                response = test_client.get(f"/api/agent-runs/{uuid4()}/logs/merged")
 
     assert response.status_code == 200
     assert calls == 1
@@ -1104,7 +1104,7 @@ def test_stream_task_run_log_merged_falls_back_when_spool_metadata_missing(
             "api_service.api.routers.task_runs._get_agent_runtime_artifacts_root",
             return_value=str(artifacts_root),
         ):
-            response = test_client.get(f"/api/task-runs/{uuid4()}/logs/merged")
+            response = test_client.get(f"/api/agent-runs/{uuid4()}/logs/merged")
 
     assert response.status_code == 200
     assert response.headers["x-merged-order-source"] == "artifact-fallback"
@@ -1152,7 +1152,7 @@ def test_stream_task_run_log_merged_fallback_includes_system_annotations(
             "api_service.api.routers.task_runs._get_agent_runtime_artifacts_root",
             return_value=str(artifacts_root),
         ):
-            response = test_client.get(f"/api/task-runs/{uuid4()}/logs/merged")
+            response = test_client.get(f"/api/agent-runs/{uuid4()}/logs/merged")
 
     assert response.status_code == 200
     assert response.headers["x-merged-order-source"] == "artifact-fallback"
@@ -1188,7 +1188,7 @@ def test_stream_task_run_log_merged_falls_back_to_legacy_log_artifact(
             "api_service.api.routers.task_runs._get_agent_runtime_artifacts_root",
             return_value=str(artifacts_root),
         ):
-            response = test_client.get(f"/api/task-runs/{uuid4()}/logs/merged")
+            response = test_client.get(f"/api/agent-runs/{uuid4()}/logs/merged")
 
     assert response.status_code == 200
     assert response.headers["x-merged-order-source"] == "legacy-log-artifact"
@@ -1206,7 +1206,7 @@ def test_stream_task_run_log_merged_returns_404_when_both_artifacts_absent(
     mock_record.log_artifact_ref = None
 
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
-        response = test_client.get(f"/api/task-runs/{uuid4()}/logs/merged")
+        response = test_client.get(f"/api/agent-runs/{uuid4()}/logs/merged")
 
     assert response.status_code == 404
     assert "no stdout/stderr or legacy log artifacts" in response.json()["detail"].lower()
@@ -1238,7 +1238,7 @@ def test_stream_task_run_log_merged_uses_spool_when_stdout_stderr_refs_are_absen
     mock_record.workspace_path = str(workspace_path)
 
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
-        response = test_client.get(f"/api/task-runs/{uuid4()}/logs/merged")
+        response = test_client.get(f"/api/agent-runs/{uuid4()}/logs/merged")
 
     assert response.status_code == 200
     assert response.headers["x-merged-order-source"] == "spool"
@@ -1295,7 +1295,7 @@ def test_stream_task_run_log_merged_filters_stale_spool_entries_from_previous_ru
         "api_service.api.routers.task_runs.ManagedRunStore.load",
         return_value=mock_record,
     ):
-        response = test_client.get(f"/api/task-runs/{uuid4()}/logs/merged")
+        response = test_client.get(f"/api/agent-runs/{uuid4()}/logs/merged")
 
     assert response.status_code == 200
     assert response.headers["x-merged-order-source"] == "spool"
@@ -1317,7 +1317,7 @@ def test_stream_task_run_log_merged_uses_prebuilt_artifact_when_available(
                 with patch("api_service.api.routers.task_runs.FileResponse") as mock_file_response:
                     from fastapi.responses import Response
                     mock_file_response.return_value = Response(content=b"merged content", media_type="text/plain")
-                    response = test_client.get(f"/api/task-runs/{uuid4()}/logs/merged")
+                    response = test_client.get(f"/api/agent-runs/{uuid4()}/logs/merged")
 
     assert mock_file_response.called
     assert response.status_code == 200
@@ -1334,7 +1334,7 @@ def test_get_task_run_diagnostics_returns_404_when_record_missing(
     """404 when the run record itself does not exist."""
     test_client, _ = client
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=None):
-        response = test_client.get(f"/api/task-runs/{uuid4()}/diagnostics")
+        response = test_client.get(f"/api/agent-runs/{uuid4()}/diagnostics")
     assert response.status_code == 404
     assert "artifact not found" in response.json()["detail"].lower()
 
@@ -1347,7 +1347,7 @@ def test_get_task_run_diagnostics_returns_404_when_diagnostics_ref_missing(
     mock_record.diagnostics_ref = None
 
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
-        response = test_client.get(f"/api/task-runs/{uuid4()}/diagnostics")
+        response = test_client.get(f"/api/agent-runs/{uuid4()}/diagnostics")
 
     assert response.status_code == 404
     assert "artifact not found" in response.json()["detail"].lower()
@@ -1361,7 +1361,7 @@ def test_get_task_run_diagnostics_returns_404_when_file_missing(
 
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
         with patch("pathlib.Path.is_file", return_value=False):
-            response = test_client.get(f"/api/task-runs/{uuid4()}/diagnostics")
+            response = test_client.get(f"/api/agent-runs/{uuid4()}/diagnostics")
 
     assert response.status_code == 404
     assert "does not exist" in response.json()["detail"].lower()
@@ -1379,7 +1379,7 @@ def test_get_task_run_diagnostics_returns_file_response(
                 with patch("api_service.api.routers.task_runs.FileResponse") as mock_file_response:
                     from fastapi.responses import Response
                     mock_file_response.return_value = Response(content=b'{"mock":"diag"}', media_type="application/json")
-                    response = test_client.get(f"/api/task-runs/{uuid4()}/diagnostics")
+                    response = test_client.get(f"/api/agent-runs/{uuid4()}/diagnostics")
 
     assert mock_file_response.called
     assert mock_file_response.call_args[1]["media_type"] == "application/json"
@@ -1413,7 +1413,7 @@ def test_get_task_run_diagnostics_uses_supported_artifact_root_layouts(
     mock_record.diagnostics_ref = "run/diagnostics.json"
 
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
-        response = test_client.get(f"/api/task-runs/{uuid4()}/diagnostics")
+        response = test_client.get(f"/api/agent-runs/{uuid4()}/diagnostics")
 
     assert response.status_code == 200
     assert response.text == expected_content
@@ -1465,7 +1465,7 @@ def test_get_task_run_observability_events_reads_structured_spool_history(
     mock_record.started_at = datetime(2026, 4, 8, 0, 0, tzinfo=UTC)
 
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
-        response = test_client.get(f"/api/task-runs/{uuid4()}/observability/events")
+        response = test_client.get(f"/api/agent-runs/{uuid4()}/observability/events")
 
     assert response.status_code == 200
     body = response.json()
@@ -1558,7 +1558,7 @@ def test_get_task_run_observability_events_filters_spool_fallback_rows(
 
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
         response = test_client.get(
-            f"/api/task-runs/{uuid4()}/observability/events?since=1&stream=session&kind=session_reset_boundary"
+            f"/api/agent-runs/{uuid4()}/observability/events?since=1&stream=session&kind=session_reset_boundary"
         )
 
     assert response.status_code == 200
@@ -1632,7 +1632,7 @@ def test_get_task_run_observability_events_prefers_persisted_event_artifact(
             "api_service.api.routers.task_runs._get_agent_runtime_artifacts_root",
             return_value=str(artifacts_root),
         ):
-            response = test_client.get(f"/api/task-runs/{uuid4()}/observability/events")
+            response = test_client.get(f"/api/agent-runs/{uuid4()}/observability/events")
 
     assert response.status_code == 200
     body = response.json()
@@ -1717,7 +1717,7 @@ def test_get_task_run_observability_events_applies_since_stream_and_kind_filters
             return_value=str(artifacts_root),
         ):
             response = test_client.get(
-                f"/api/task-runs/{uuid4()}/observability/events?since=5&stream=session&kind=session_reset_boundary&kind=summary_published&limit=5"
+                f"/api/agent-runs/{uuid4()}/observability/events?since=5&stream=session&kind=session_reset_boundary&kind=summary_published&limit=5"
             )
 
     assert response.status_code == 200
@@ -1796,7 +1796,7 @@ def test_get_task_run_observability_events_applies_session_epoch_and_thread_filt
             return_value=str(artifacts_root),
         ):
             response = test_client.get(
-                f"/api/task-runs/{uuid4()}/observability/events?sessionEpoch=2&threadId=thread-2"
+                f"/api/agent-runs/{uuid4()}/observability/events?sessionEpoch=2&threadId=thread-2"
             )
 
     assert response.status_code == 200
@@ -1811,7 +1811,7 @@ def test_get_task_run_observability_events_rejects_invalid_session_epoch_filter(
     test_client, _ = client
 
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load") as load_record:
-        response = test_client.get(f"/api/task-runs/{uuid4()}/observability/events?sessionEpoch=0")
+        response = test_client.get(f"/api/agent-runs/{uuid4()}/observability/events?sessionEpoch=0")
 
     assert response.status_code == 422
     load_record.assert_not_called()
@@ -1822,7 +1822,7 @@ def test_get_task_run_observability_events_rejects_blank_thread_id_filter(
     test_client, _ = client
 
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load") as load_record:
-        response = test_client.get(f"/api/task-runs/{uuid4()}/observability/events?threadId=%20%20%20")
+        response = test_client.get(f"/api/agent-runs/{uuid4()}/observability/events?threadId=%20%20%20")
 
     assert response.status_code == 422
     assert response.json()["detail"] == "threadId must not contain blank values"
@@ -1893,7 +1893,7 @@ def test_get_task_run_observability_events_limits_to_oldest_matching_rows_after_
             return_value=str(artifacts_root),
         ):
             response = test_client.get(
-                f"/api/task-runs/{uuid4()}/observability/events?since=5&limit=2"
+                f"/api/agent-runs/{uuid4()}/observability/events?since=5&limit=2"
             )
 
     assert response.status_code == 200
@@ -1925,7 +1925,7 @@ def test_get_task_run_observability_events_keeps_artifact_fallback_rows_when_sin
             return_value=str(artifacts_root),
         ):
             response = test_client.get(
-                f"/api/task-runs/{uuid4()}/observability/events?since=5"
+                f"/api/agent-runs/{uuid4()}/observability/events?since=5"
             )
 
     assert response.status_code == 200
@@ -1979,7 +1979,7 @@ def test_get_task_run_observability_events_uses_record_snapshot_when_session_rec
                 "api_service.api.routers.task_runs._load_task_run_session_record",
                 return_value=None,
             ):
-                response = test_client.get(f"/api/task-runs/{uuid4()}/observability/events")
+                response = test_client.get(f"/api/agent-runs/{uuid4()}/observability/events")
 
     assert response.status_code == 200
     body = response.json()
@@ -2024,7 +2024,7 @@ def test_get_task_run_observability_events_emits_history_metrics_for_journal(
             return_value=str(artifacts_root),
         ):
             with patch("api_service.api.routers.task_runs.get_metrics_emitter", return_value=metrics):
-                response = test_client.get(f"/api/task-runs/{uuid4()}/observability/events")
+                response = test_client.get(f"/api/agent-runs/{uuid4()}/observability/events")
 
     assert response.status_code == 200
     observe_calls = [
@@ -2054,7 +2054,7 @@ def test_get_task_run_observability_events_emits_error_metric_on_history_failure
         ):
             with patch("api_service.api.routers.task_runs.get_metrics_emitter", return_value=metrics):
                 with pytest.raises(RuntimeError, match="boom"):
-                    test_client.get(f"/api/task-runs/{uuid4()}/observability/events")
+                    test_client.get(f"/api/agent-runs/{uuid4()}/observability/events")
 
     assert any(
         call.args[0] == "livelogs.history.error"
@@ -2078,7 +2078,7 @@ def test_get_task_run_observability_events_emits_error_metric_when_session_recor
         ):
             with patch("api_service.api.routers.task_runs.get_metrics_emitter", return_value=metrics):
                 with pytest.raises(RuntimeError, match="session boom"):
-                    test_client.get(f"/api/task-runs/{uuid4()}/observability/events")
+                    test_client.get(f"/api/agent-runs/{uuid4()}/observability/events")
 
     assert any(
         call.args[0] == "livelogs.history.error"
@@ -2123,7 +2123,7 @@ def test_get_task_run_observability_events_ignores_metrics_emitter_failures(
                 "api_service.api.routers.task_runs.get_metrics_emitter",
                 side_effect=ValueError("bad port"),
             ):
-                response = test_client.get(f"/api/task-runs/{uuid4()}/observability/events")
+                response = test_client.get(f"/api/agent-runs/{uuid4()}/observability/events")
 
     assert response.status_code == 200
     assert [event["sequence"] for event in response.json()["events"]] == [5]
@@ -2155,7 +2155,7 @@ def test_stream_task_run_live_logs_serializes_canonical_event_aliases(
 
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
         with patch("api_service.api.routers.task_runs.SpoolLogReader.follow", new=_follow):
-            response = test_client.get(f"/api/task-runs/{uuid4()}/logs/stream?since=10")
+            response = test_client.get(f"/api/agent-runs/{uuid4()}/logs/stream?since=10")
 
     assert response.status_code == 200
     assert '"sessionId":"sess-1"' in response.text
@@ -2173,7 +2173,7 @@ def test_stream_task_run_live_logs_rejects_non_live_capable_active_run(
     mock_record.workspace_path = "/tmp/workspace"
 
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
-        response = test_client.get(f"/api/task-runs/{uuid4()}/logs/stream")
+        response = test_client.get(f"/api/agent-runs/{uuid4()}/logs/stream")
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Live streaming is not supported for this run."
@@ -2209,7 +2209,7 @@ def test_stream_task_run_live_logs_returns_gone_for_terminal_run(
     mock_record.workspace_path = "/tmp/workspace"
 
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
-        response = test_client.get(f"/api/task-runs/{uuid4()}/logs/stream")
+        response = test_client.get(f"/api/agent-runs/{uuid4()}/logs/stream")
 
     assert response.status_code == 410
     assert response.json()["detail"] == "Run is no longer active. Use artifact retrieval APIs."
@@ -2240,7 +2240,7 @@ def test_stream_task_run_live_logs_ignores_metrics_emitter_failures(
             side_effect=ValueError("bad port"),
         ):
             with patch("api_service.api.routers.task_runs.SpoolLogReader.follow", new=_follow):
-                response = test_client.get(f"/api/task-runs/{uuid4()}/logs/stream?since=10")
+                response = test_client.get(f"/api/agent-runs/{uuid4()}/logs/stream?since=10")
 
     assert response.status_code == 200
     assert '"text":"hello\\n"' in response.text
@@ -2284,7 +2284,7 @@ def test_get_task_run_observability_events_allows_owner_access() -> None:
                             return_value=([], "artifacts"),
                         ):
                             response = test_client.get(
-                                f"/api/task-runs/{uuid4()}/observability/events"
+                                f"/api/agent-runs/{uuid4()}/observability/events"
                             )
 
     assert response.status_code == 200
@@ -2325,7 +2325,7 @@ def test_get_task_run_observability_events_forbids_cross_owner_access_without_su
                     return_value=metrics,
                 ):
                     response = test_client.get(
-                        f"/api/task-runs/{uuid4()}/observability/events"
+                        f"/api/agent-runs/{uuid4()}/observability/events"
                     )
 
     assert response.status_code == 403
@@ -2682,14 +2682,14 @@ def test_get_task_run_artifact_session_projection_returns_grouped_projection(
     }
 
     async def _get_metadata(*, artifact_id: str, principal: str):
-        assert principal == "service:task_runs"
+        assert principal == "service:agent_runs"
         return artifact_payloads[artifact_id]
 
     artifact_service.get_metadata.side_effect = _get_metadata
 
     with patch("api_service.api.routers.task_runs.ManagedSessionStore.load", return_value=record):
         response = test_client.get(
-            "/api/task-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli"
+            "/api/agent-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli"
         )
 
     assert response.status_code == 200
@@ -2732,14 +2732,14 @@ def test_get_task_run_artifact_session_projection_reads_durable_state_only(
     }
 
     async def _get_metadata(*, artifact_id: str, principal: str):
-        assert principal == "service:task_runs"
+        assert principal == "service:agent_runs"
         return artifact_payloads[artifact_id]
 
     artifact_service.get_metadata.side_effect = _get_metadata
 
     with patch("api_service.api.routers.task_runs.ManagedSessionStore.load", return_value=record):
         response = test_client.get(
-            "/api/task-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli"
+            "/api/agent-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli"
         )
 
     assert response.status_code == 200
@@ -2752,7 +2752,7 @@ def test_get_task_run_artifact_session_projection_returns_404_when_missing(
 
     with patch("api_service.api.routers.task_runs.ManagedSessionStore.load", return_value=None):
         response = test_client.get(
-            "/api/task-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli"
+            "/api/agent-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli"
         )
 
     assert response.status_code == 404
@@ -2767,7 +2767,7 @@ def test_get_task_run_artifact_session_projection_returns_404_for_invalid_sessio
         "api_service.api.routers.task_runs.ManagedSessionStore.load",
         side_effect=ValueError("session_id resolves outside store root"),
     ):
-        response = test_client.get("/api/task-runs/wf-task-1/artifact-sessions/%2E%2E")
+        response = test_client.get("/api/agent-runs/wf-task-1/artifact-sessions/%2E%2E")
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "session_projection_not_found"
@@ -2780,7 +2780,7 @@ def test_get_task_run_artifact_session_projection_returns_404_for_task_mismatch(
 
     with patch("api_service.api.routers.task_runs.ManagedSessionStore.load", return_value=record):
         response = test_client.get(
-            "/api/task-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli"
+            "/api/agent-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli"
         )
 
     assert response.status_code == 404
@@ -2809,7 +2809,7 @@ def test_get_task_run_artifact_session_projection_allows_owner_access() -> None:
     }
 
     async def _get_metadata(*, artifact_id: str, principal: str):
-        assert principal == "service:task_runs"
+        assert principal == "service:agent_runs"
         return artifact_payloads[artifact_id]
 
     artifact_service.get_metadata.side_effect = _get_metadata
@@ -2824,7 +2824,7 @@ def test_get_task_run_artifact_session_projection_allows_owner_access() -> None:
                 new=AsyncMock(return_value=("user", str(owner_id))),
             ):
                 response = test_client.get(
-                    "/api/task-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli"
+                    "/api/agent-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli"
                 )
 
     assert response.status_code == 200
@@ -2852,7 +2852,7 @@ def test_get_task_run_artifact_session_projection_forbids_cross_owner_access() -
                 new=AsyncMock(return_value=("user", str(owner_id))),
             ):
                 response = test_client.get(
-                    "/api/task-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli"
+                    "/api/agent-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli"
                 )
 
     assert response.status_code == 403
@@ -2878,7 +2878,7 @@ def test_post_task_run_artifact_session_control_routes_send_follow_up_and_return
     }
 
     async def _get_metadata(*, artifact_id: str, principal: str):
-        assert principal == "service:task_runs"
+        assert principal == "service:agent_runs"
         return artifact_payloads[artifact_id]
 
     artifact_service.get_metadata.side_effect = _get_metadata
@@ -2888,7 +2888,7 @@ def test_post_task_run_artifact_session_control_routes_send_follow_up_and_return
     with patch("api_service.api.routers.task_runs.ManagedSessionStore.load", return_value=record):
         with patch("api_service.api.routers.task_runs.get_temporal_client_adapter", return_value=client_adapter):
             response = test_client.post(
-                "/api/task-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli/control",
+                "/api/agent-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli/control",
                 json={
                     "action": "send_follow_up",
                     "message": "Continue reusing the current session.",
@@ -2935,7 +2935,7 @@ def test_post_task_run_artifact_session_control_routes_clear_session_and_returns
     }
 
     async def _get_metadata(*, artifact_id: str, principal: str):
-        assert principal == "service:task_runs"
+        assert principal == "service:agent_runs"
         return artifact_payloads[artifact_id]
 
     artifact_service.get_metadata.side_effect = _get_metadata
@@ -2945,7 +2945,7 @@ def test_post_task_run_artifact_session_control_routes_clear_session_and_returns
     with patch("api_service.api.routers.task_runs.ManagedSessionStore.load", return_value=record):
         with patch("api_service.api.routers.task_runs.get_temporal_client_adapter", return_value=client_adapter):
             response = test_client.post(
-                "/api/task-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli/control",
+                "/api/agent-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli/control",
                 json={
                     "action": "clear_session",
                     "reason": "Reset stale context",
@@ -2972,7 +2972,7 @@ def test_post_task_run_artifact_session_control_rejects_blank_follow_up_message(
     test_client, _artifact_service = client
 
     response = test_client.post(
-        "/api/task-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli/control",
+        "/api/agent-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli/control",
         json={
             "action": "send_follow_up",
             "message": "   ",
