@@ -463,13 +463,13 @@ async def test_long_running_launch_is_visible_through_observability_routes(
             await asyncio.sleep(poll_interval)
 
         with TestClient(app) as client:
-            summary = client.get(f"/api/task-runs/{run_id}/observability-summary")
+            summary = client.get(f"/api/agent-runs/{run_id}/observability-summary")
             assert summary.status_code == 200
             summary_body = summary.json()["summary"]
             assert summary_body["supportsLiveStreaming"] is True
             assert summary_body["liveStreamStatus"] == "available"
 
-            merged = client.get(f"/api/task-runs/{run_id}/logs/merged")
+            merged = client.get(f"/api/agent-runs/{run_id}/logs/merged")
             assert merged.status_code == 200
             assert merged.headers["x-merged-order-source"] == "spool"
             assert "alpha" in merged.text
@@ -479,12 +479,12 @@ async def test_long_running_launch_is_visible_through_observability_routes(
         assert store.find_latest_for_workflow("mm:wf-live-1") is not None
 
         with TestClient(app) as client:
-            stdout_response = client.get(f"/api/task-runs/{run_id}/logs/stdout")
+            stdout_response = client.get(f"/api/agent-runs/{run_id}/logs/stdout")
             assert stdout_response.status_code == 200
             assert "alpha" in stdout_response.text
             assert "omega" in stdout_response.text
 
-            diagnostics_response = client.get(f"/api/task-runs/{run_id}/diagnostics")
+            diagnostics_response = client.get(f"/api/agent-runs/{run_id}/diagnostics")
             assert diagnostics_response.status_code == 200
             assert '"stdout"' in diagnostics_response.text
     finally:

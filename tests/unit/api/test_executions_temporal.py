@@ -170,12 +170,40 @@ def test_list_executions_source_temporal_defaults_to_task_scope(client) -> None:
 
         assert response.status_code == 200
         expected_query = (
-            'WorkflowType="MoonMind.Run" AND (mm_entry="user_workflow" OR mm_entry="run") '
+            'WorkflowType="MoonMind.Run" AND mm_entry="user_workflow" '
             'AND mm_owner_id="user-123"'
         )
         mock_client.count_workflows.assert_awaited_once_with(query=expected_query)
         mock_client.list_workflows.assert_called_once()
         assert mock_client.list_workflows.call_args.kwargs["query"] == expected_query
+
+
+def test_list_executions_source_temporal_default_scope_excludes_legacy_run_entry(
+    client,
+) -> None:
+    test_client, _service, _user, _mock_session = client
+
+    executions_module.get_temporal_client_adapter.cache_clear()
+
+    with patch(
+        "api_service.api.routers.executions.TemporalClientAdapter"
+    ) as mock_adapter_cls:
+        mock_adapter = mock_adapter_cls.return_value
+        mock_client = AsyncMock()
+        mock_adapter.get_client = AsyncMock(return_value=mock_client)
+
+        mock_iterator = AsyncMock()
+        mock_iterator.current_page = []
+        mock_iterator.next_page_token = None
+        mock_client.list_workflows = MagicMock(return_value=mock_iterator)
+        mock_client.count_workflows = AsyncMock(return_value=SimpleNamespace(count=0))
+
+        response = test_client.get("/api/executions", params={"source": "temporal"})
+
+        assert response.status_code == 200
+        query = mock_client.count_workflows.await_args.kwargs["query"]
+        assert 'mm_entry="user_workflow"' in query
+        assert 'mm_entry="run"' not in query
 
 
 def test_list_executions_source_temporal_scope_all_fails_safe_to_task_query(
@@ -205,7 +233,7 @@ def test_list_executions_source_temporal_scope_all_fails_safe_to_task_query(
 
         assert response.status_code == 200
         expected_query = (
-            'WorkflowType="MoonMind.Run" AND (mm_entry="user_workflow" OR mm_entry="run") '
+            'WorkflowType="MoonMind.Run" AND mm_entry="user_workflow" '
             'AND mm_owner_id="user-123"'
         )
         mock_client.count_workflows.assert_awaited_once_with(query=expected_query)
@@ -244,7 +272,7 @@ def test_list_executions_source_temporal_ignores_workflow_kind_filters_for_task_
 
         assert response.status_code == 200
         expected_query = (
-            'WorkflowType="MoonMind.Run" AND (mm_entry="user_workflow" OR mm_entry="run") '
+            'WorkflowType="MoonMind.Run" AND mm_entry="user_workflow" '
             'AND mm_owner_id="user-123"'
         )
         mock_client.count_workflows.assert_awaited_once_with(query=expected_query)

@@ -910,7 +910,7 @@ def test_list_executions_temporal_query_supports_sort_and_text_filters() -> None
                 "source": "temporal",
                 "scope": "tasks",
                 "repoContains": "Moon",
-                "taskIdContains": "wf-",
+                "workflowIdContains": "wf-",
                 "titleContains": "release",
                 "sort": "createdAt",
                 "sortDir": "asc",
@@ -925,6 +925,51 @@ def test_list_executions_temporal_query_supports_sort_and_text_filters() -> None
     assert 'mm_title LIKE "%release%"' in count_query
     assert "ORDER BY" not in count_query
     assert list_query.endswith("ORDER BY StartTime ASC")
+
+
+def test_list_executions_temporal_query_uses_workflow_id_text_filter() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_user_dependencies(app, is_superuser=True)
+
+    class _WorkflowIterator:
+        current_page: list[object] = []
+        next_page_token: bytes | None = None
+
+        async def fetch_next_page(self) -> None:
+            return None
+
+    temporal_client = SimpleNamespace(
+        count_workflows=AsyncMock(return_value=SimpleNamespace(count=0)),
+        list_workflows=Mock(return_value=_WorkflowIterator()),
+    )
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params={
+                "source": "temporal",
+                "scope": "tasks",
+                "workflowIdContains": "wf-",
+                "sort": "workflowId",
+            },
+        )
+
+    assert response.status_code == 200
+    count_query = temporal_client.count_workflows.await_args.kwargs["query"]
+    list_query = temporal_client.list_workflows.call_args.kwargs["query"]
+    assert 'WorkflowId LIKE "%wf-%"' in count_query
+    assert list_query.endswith("ORDER BY WorkflowId DESC")
+
+
+def test_execution_sort_fields_do_not_expose_task_id_alias() -> None:
+    from api_service.api.routers import executions as executions_module
+
+    assert "workflowId" in executions_module._EXECUTION_SORT_FIELDS
+    assert "taskId" not in executions_module._EXECUTION_SORT_FIELDS
 
 def test_list_executions_temporal_query_rejects_invalid_filter_bounds() -> None:
     app = FastAPI()
@@ -5544,8 +5589,10 @@ def test_serialize_execution_surfaces_task_run_id_from_memo() -> None:
     payload = _serialize_execution(record)
 
     assert payload.task_run_id == "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"
+    assert payload.agent_run_id == "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"
     dumped = payload.model_dump(by_alias=True)
     assert "taskRunId" not in dumped
+    assert dumped["agentRunId"] == "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"
 
 def test_serialize_execution_surfaces_dependency_metadata() -> None:
     record = SimpleNamespace(
@@ -7057,6 +7104,7 @@ def test_describe_execution_falls_back_to_managed_run_store_task_run_id(
 
     assert response.status_code == 200
     assert "taskRunId" not in response.json()
+    assert response.json()["agentRunId"] == "550e8400-e29b-41d4-a716-446655440000"
     assert len(to_thread_calls) == 1
     assert to_thread_calls[0][1] == (("mm:wf-1",),)
 

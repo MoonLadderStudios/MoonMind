@@ -193,7 +193,7 @@ describe('Workflows Entrypoint', () => {
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-        '/api/executions?source=temporal&pageSize=50&scope=tasks&taskIdContains=task-123&stateIn=completed&repoExact=owner%2Frepo&targetRuntimeIn=codex_cloud&titleContains=Example',
+        '/api/executions?source=temporal&pageSize=50&scope=tasks&workflowIdContains=task-123&stateIn=completed&repoExact=owner%2Frepo&targetRuntimeIn=codex_cloud&titleContains=Example',
       );
     });
   });

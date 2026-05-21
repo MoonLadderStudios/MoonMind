@@ -137,7 +137,7 @@ _TEMPORAL_SOURCE = "temporal"
 _ALLOWED_OWNER_TYPES = {"user", "system", "service"}
 _TEMPORAL_LIST_SCOPES = {"tasks", "user", "system", "all"}
 _TEMPORAL_SCOPE_QUERIES = {
-    "tasks": 'WorkflowType="MoonMind.Run" AND (mm_entry="user_workflow" OR mm_entry="run")',
+    "tasks": 'WorkflowType="MoonMind.Run" AND mm_entry="user_workflow"',
     "user": '(WorkflowType="MoonMind.Run" OR WorkflowType="MoonMind.ManifestIngest")',
     "system": 'WorkflowType!="MoonMind.Run" AND WorkflowType!="MoonMind.ManifestIngest"',
     "all": "",
@@ -172,7 +172,7 @@ _EXECUTION_FILTER_VALUE_MAX_LENGTH = 200
 _EXECUTION_TEXT_FILTER_MAX_LENGTH = 200
 _EXECUTION_FACET_PAGE_SIZE_LIMIT = 200
 _EXECUTION_SORT_FIELDS = {
-    "taskId": "WorkflowId",
+    "workflowId": "WorkflowId",
     "targetRuntime": "mm_target_runtime",
     "targetSkill": "mm_target_skill",
     "repository": "mm_repo",
@@ -800,18 +800,18 @@ def _build_temporal_execution_query(
         include=target_skill_in_values,
         exclude=target_skill_not_in_values,
     )
-    if not excluded("taskId"):
+    if not excluded("workflowId"):
         _append_exact_or_multi_temporal_filter(
             query_parts,
             "WorkflowId",
-            exact=request.query_params.get("taskId"),
+            exact=request.query_params.get("workflowId"),
         )
-    if not excluded("taskIdContains"):
+    if not excluded("workflowIdContains"):
         _append_contains_temporal_filter(
             query_parts,
             "WorkflowId",
-            request.query_params.get("taskIdContains"),
-            alias="taskIdContains",
+            request.query_params.get("workflowIdContains"),
+            alias="workflowIdContains",
         )
     if not excluded("titleContains"):
         _append_contains_temporal_filter(
@@ -1935,6 +1935,7 @@ def _serialize_execution(
     return ExecutionModel(
         task_id=None,
         task_run_id=task_run_id,
+        agent_run_id=task_run_id,
         progress=None,
         namespace=record.namespace,
         source=_TEMPORAL_SOURCE,
@@ -7254,14 +7255,16 @@ async def describe_execution(
         session=session,
         user=user,
     )
-    if not execution.task_run_id:
+    if not execution.agent_run_id:
         task_run_ids = await asyncio.to_thread(
             _resolve_task_run_ids_from_managed_store,
             (execution.workflow_id,),
         )
         task_run_id = task_run_ids.get(execution.workflow_id)
         if task_run_id:
-            execution = execution.model_copy(update={"task_run_id": task_run_id})
+            execution = execution.model_copy(
+                update={"task_run_id": task_run_id, "agent_run_id": task_run_id}
+            )
     return execution
 
 @router.post(
