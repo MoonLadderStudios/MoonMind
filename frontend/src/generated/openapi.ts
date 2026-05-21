@@ -1856,7 +1856,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/task-runs/{id}/observability-summary": {
+    "/api/agent-runs/{id}/observability-summary": {
         parameters: {
             query?: never;
             header?: never;
@@ -1867,7 +1867,7 @@ export interface paths {
          * Get Observability Summary
          * @description Fetch the observability summary for a task run from the shared agent jobs volume.
          */
-        get: operations["get_observability_summary_api_task_runs__id__observability_summary_get"];
+        get: operations["get_observability_summary_api_agent_runs__id__observability_summary_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1876,7 +1876,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/task-runs/{task_run_id}/artifact-sessions/{session_id}": {
+    "/api/agent-runs/{task_run_id}/artifact-sessions/{session_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -1884,7 +1884,7 @@ export interface paths {
             cookie?: never;
         };
         /** Get Task Run Artifact Session */
-        get: operations["get_task_run_artifact_session_api_task_runs__task_run_id__artifact_sessions__session_id__get"];
+        get: operations["get_task_run_artifact_session_api_agent_runs__task_run_id__artifact_sessions__session_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1893,7 +1893,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/task-runs/{task_run_id}/artifact-sessions/{session_id}/control": {
+    "/api/agent-runs/{task_run_id}/artifact-sessions/{session_id}/control": {
         parameters: {
             query?: never;
             header?: never;
@@ -1903,14 +1903,14 @@ export interface paths {
         get?: never;
         put?: never;
         /** Control Task Run Artifact Session */
-        post: operations["control_task_run_artifact_session_api_task_runs__task_run_id__artifact_sessions__session_id__control_post"];
+        post: operations["control_task_run_artifact_session_api_agent_runs__task_run_id__artifact_sessions__session_id__control_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/task-runs/{id}/observability/events": {
+    "/api/agent-runs/{id}/observability/events": {
         parameters: {
             query?: never;
             header?: never;
@@ -1921,7 +1921,7 @@ export interface paths {
          * Get Task Run Observability Events
          * @description Return structured observability history for one task run.
          */
-        get: operations["get_task_run_observability_events_api_task_runs__id__observability_events_get"];
+        get: operations["get_task_run_observability_events_api_agent_runs__id__observability_events_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1930,7 +1930,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/task-runs/{id}/logs/stream": {
+    "/api/agent-runs/{id}/logs/stream": {
         parameters: {
             query?: never;
             header?: never;
@@ -1941,7 +1941,7 @@ export interface paths {
          * Stream Task Run Live Logs
          * @description Serve SSE real-time stream for active runs.
          */
-        get: operations["stream_task_run_live_logs_api_task_runs__id__logs_stream_get"];
+        get: operations["stream_task_run_live_logs_api_agent_runs__id__logs_stream_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1950,7 +1950,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/task-runs/{id}/logs/{stream_name}": {
+    "/api/agent-runs/{id}/logs/{stream_name}": {
         parameters: {
             query?: never;
             header?: never;
@@ -1961,7 +1961,7 @@ export interface paths {
          * Stream Task Run Log
          * @description Serve stdout, stderr, or merged logs directly from the shared volume.
          */
-        get: operations["stream_task_run_log_api_task_runs__id__logs__stream_name__get"];
+        get: operations["stream_task_run_log_api_agent_runs__id__logs__stream_name__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1970,7 +1970,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/task-runs/{id}/diagnostics": {
+    "/api/agent-runs/{id}/diagnostics": {
         parameters: {
             query?: never;
             header?: never;
@@ -1981,7 +1981,7 @@ export interface paths {
          * Get Task Run Diagnostics
          * @description Return the diagnostics.json payload for a task run.
          */
-        get: operations["get_task_run_diagnostics_api_task_runs__id__diagnostics_get"];
+        get: operations["get_task_run_diagnostics_api_agent_runs__id__diagnostics_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4226,6 +4226,8 @@ export interface components {
              * @constant
              */
             source: "temporal";
+            /** Agentrunid */
+            agentRunId?: string | null;
             progress?: components["schemas"]["ExecutionProgressModel"] | null;
             /** Namespace */
             namespace: string;
@@ -12201,7 +12203,7 @@ export interface operations {
             };
         };
     };
-    get_observability_summary_api_task_runs__id__observability_summary_get: {
+    get_observability_summary_api_agent_runs__id__observability_summary_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -12241,7 +12243,7 @@ export interface operations {
             };
         };
     };
-    get_task_run_artifact_session_api_task_runs__task_run_id__artifact_sessions__session_id__get: {
+    get_task_run_artifact_session_api_agent_runs__task_run_id__artifact_sessions__session_id__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -12287,7 +12289,7 @@ export interface operations {
             };
         };
     };
-    control_task_run_artifact_session_api_task_runs__task_run_id__artifact_sessions__session_id__control_post: {
+    control_task_run_artifact_session_api_agent_runs__task_run_id__artifact_sessions__session_id__control_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -12344,7 +12346,7 @@ export interface operations {
             };
         };
     };
-    get_task_run_observability_events_api_task_runs__id__observability_events_get: {
+    get_task_run_observability_events_api_agent_runs__id__observability_events_get: {
         parameters: {
             query?: {
                 since?: number | null;
@@ -12391,7 +12393,7 @@ export interface operations {
             };
         };
     };
-    stream_task_run_live_logs_api_task_runs__id__logs_stream_get: {
+    stream_task_run_live_logs_api_agent_runs__id__logs_stream_get: {
         parameters: {
             query?: {
                 /** @description Resume from sequence number */
@@ -12446,7 +12448,7 @@ export interface operations {
             };
         };
     };
-    stream_task_run_log_api_task_runs__id__logs__stream_name__get: {
+    stream_task_run_log_api_agent_runs__id__logs__stream_name__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -12492,7 +12494,7 @@ export interface operations {
             };
         };
     };
-    get_task_run_diagnostics_api_task_runs__id__diagnostics_get: {
+    get_task_run_diagnostics_api_agent_runs__id__diagnostics_get: {
         parameters: {
             query?: never;
             header?: never;
