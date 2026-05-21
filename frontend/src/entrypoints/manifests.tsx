@@ -7,7 +7,8 @@ import { useMemo, useState, type FormEvent } from 'react';
 
 const ManifestRunSchema = z
   .object({
-    taskId: z.string(),
+    taskId: z.string().optional(),
+    workflowId: z.string().optional(),
     source: z.string(),
     sourceLabel: z.string().optional(),
     title: z.string().nullable().optional(),
@@ -60,7 +61,7 @@ function displayValue(value: string | null | undefined): string {
 }
 
 function manifestLabel(run: ManifestRun): string {
-  return displayValue(run.manifestName || run.sourceLabel || run.title || run.source || run.taskId);
+  return displayValue(run.manifestName || run.sourceLabel || run.title || run.source || runWorkflowId(run));
 }
 
 function runAction(run: ManifestRun): string {
@@ -83,7 +84,11 @@ function statusLabel(run: ManifestRun): string {
 
 function detailHref(run: ManifestRun): string {
   const direct = String(run.detailHref || run.link || '').trim();
-  return direct || `/tasks/${encodeURIComponent(run.taskId)}?source=temporal`;
+  return direct || `/tasks/${encodeURIComponent(runWorkflowId(run))}?source=temporal`;
+}
+
+function runWorkflowId(run: ManifestRun): string {
+  return run.workflowId || run.taskId || '';
 }
 
 function formatWhen(value: string | null | undefined): string {
@@ -159,7 +164,7 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
         return false;
       }
       return matchesText(
-        [run.taskId, manifestLabel(run), runAction(run), statusLabel(run), runStage(run)],
+        [runWorkflowId(run), manifestLabel(run), runAction(run), statusLabel(run), runStage(run)],
         searchFilter,
       );
     });
@@ -445,8 +450,8 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
                   key: 'taskId',
                   header: 'Run ID',
                   render: (item: ManifestRun) => (
-                    <a href={detailHref(item)} aria-label={`Open run ${item.taskId}`}>
-                      <code>{item.taskId}</code>
+                    <a href={detailHref(item)} aria-label={`Open run ${runWorkflowId(item)}`}>
+                      <code>{runWorkflowId(item)}</code>
                     </a>
                   ),
                 },
@@ -467,14 +472,14 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
                   key: 'actions',
                   header: 'Actions',
                   render: (item: ManifestRun) => (
-                    <a href={detailHref(item)} aria-label={`View details for ${item.taskId}`}>
+                    <a href={detailHref(item)} aria-label={`View details for ${runWorkflowId(item)}`}>
                       View details
                     </a>
                   ),
                 },
               ]}
               emptyMessage="No manifest runs exist yet. Run a registry manifest or submit inline YAML above."
-              getRowKey={(item) => item.taskId}
+              getRowKey={(item) => runWorkflowId(item)}
             />
           </>
         )}

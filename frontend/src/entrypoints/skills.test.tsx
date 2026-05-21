@@ -31,7 +31,7 @@ describe('Skills Entrypoint', () => {
           }),
         } as Response);
       }
-      if (url.startsWith('/api/tasks/skills') && !url.includes('includeContent=true')) {
+      if (url.startsWith('/api/workflows/skills') && !url.includes('includeContent=true')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -40,7 +40,7 @@ describe('Skills Entrypoint', () => {
           }),
         } as Response);
       }
-      if (url.startsWith('/api/tasks/skills?includeContent=true')) {
+      if (url.startsWith('/api/workflows/skills?includeContent=true')) {
         listCallCount += 1;
         return Promise.resolve({
           ok: true,
@@ -65,7 +65,7 @@ describe('Skills Entrypoint', () => {
           }),
         } as Response);
       }
-      if (url === '/api/tasks/skills') {
+      if (url === '/api/workflows/skills') {
         return Promise.resolve({
           ok: true,
           json: async () => ({ status: 'success' }),
@@ -99,7 +99,7 @@ describe('Skills Entrypoint', () => {
   it('renders inline markdown inside list items and preserves code language classes', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.startsWith('/api/tasks/skills?includeContent=true')) {
+      if (url.startsWith('/api/workflows/skills?includeContent=true')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -113,7 +113,7 @@ describe('Skills Entrypoint', () => {
           }),
         } as Response);
       }
-      if (url.startsWith('/api/tasks/skills')) {
+      if (url.startsWith('/api/workflows/skills')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -157,7 +157,7 @@ describe('Skills Entrypoint', () => {
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
-        '/api/tasks/skills',
+        '/api/workflows/skills',
         expect.objectContaining({
           method: 'POST',
         }),
@@ -165,7 +165,7 @@ describe('Skills Entrypoint', () => {
     });
 
     const createCall = fetchSpy.mock.calls.find(
-      ([url, init]) => String(url) === '/api/tasks/skills' && init?.method === 'POST',
+      ([url, init]) => String(url) === '/api/workflows/skills' && init?.method === 'POST',
     );
     expect(createCall).toBeTruthy();
     expect(JSON.parse(String(createCall![1]?.body))).toEqual({
@@ -209,7 +209,7 @@ describe('Skills Entrypoint', () => {
   it('renders markdown without unsafe HTML or links', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.startsWith('/api/tasks/skills?includeContent=true')) {
+      if (url.startsWith('/api/workflows/skills?includeContent=true')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -223,7 +223,7 @@ describe('Skills Entrypoint', () => {
           }),
         } as Response);
       }
-      if (url.startsWith('/api/tasks/skills')) {
+      if (url.startsWith('/api/workflows/skills')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({

@@ -35,6 +35,84 @@ from moonmind.workflows.temporal import (
 from moonmind.workflows.temporal.service import TemporalExecutionService
 
 CURRENT_USER_DEP = get_current_user()
+BANNED_EXECUTION_SCHEMA_FIELDS = {
+    "taskId",
+    "taskRunId",
+    "taskStatus",
+    "taskSource",
+    "taskType",
+    "taskPayload",
+    "taskHref",
+}
+
+
+def _walk_openapi_schema(
+    node: object,
+    *,
+    components: dict[str, object],
+    path: str,
+    seen_refs: set[str],
+) -> list[tuple[str, str]]:
+    if isinstance(node, dict):
+        ref = node.get("$ref")
+        if isinstance(ref, str):
+            if ref in seen_refs:
+                return []
+            prefix = "#/components/schemas/"
+            if ref.startswith(prefix):
+                schema_name = ref.removeprefix(prefix)
+                resolved = components.get(schema_name)
+                if resolved is None:
+                    return []
+                return _walk_openapi_schema(
+                    resolved,
+                    components=components,
+                    path=f"{path}->{schema_name}",
+                    seen_refs={*seen_refs, ref},
+                )
+
+        findings: list[tuple[str, str]] = []
+        properties = node.get("properties")
+        if isinstance(properties, dict):
+            for field_name, field_schema in properties.items():
+                field_path = f"{path}.{field_name}"
+                if field_name in BANNED_EXECUTION_SCHEMA_FIELDS:
+                    findings.append((field_name, field_path))
+                findings.extend(
+                    _walk_openapi_schema(
+                        field_schema,
+                        components=components,
+                        path=field_path,
+                        seen_refs=seen_refs,
+                    )
+                )
+
+        for key in ("items", "anyOf", "oneOf", "allOf"):
+            value = node.get(key)
+            findings.extend(
+                _walk_openapi_schema(
+                    value,
+                    components=components,
+                    path=f"{path}.{key}",
+                    seen_refs=seen_refs,
+                )
+            )
+        return findings
+
+    if isinstance(node, list):
+        findings: list[tuple[str, str]] = []
+        for index, item in enumerate(node):
+            findings.extend(
+                _walk_openapi_schema(
+                    item,
+                    components=components,
+                    path=f"{path}[{index}]",
+                    seen_refs=seen_refs,
+                )
+            )
+        return findings
+
+    return []
 
 class _QueryHandle:
     def __init__(self, state: dict[str, dict[str, object]], workflow_id: str) -> None:
@@ -73,6 +151,61 @@ def query_state():
     state: dict[str, dict[str, object]] = {}
     app.dependency_overrides[get_temporal_client] = lambda: _QueryClient(state)
     return state
+
+
+def test_execution_openapi_response_schemas_are_workflow_native() -> None:
+    openapi_schema = app.openapi()
+    components = openapi_schema["components"]["schemas"]
+    findings: list[tuple[str, str]] = []
+
+    for route_path, route_schema in openapi_schema["paths"].items():
+        if not route_path.startswith("/api/executions"):
+            continue
+        for method_schema in route_schema.values():
+            if not isinstance(method_schema, dict):
+                continue
+            responses = method_schema.get("responses", {})
+            for status_code, response_schema in responses.items():
+                if not str(status_code).startswith("2"):
+                    continue
+                content = response_schema.get("content", {})
+                json_content = content.get("application/json", {})
+                schema_node = json_content.get("schema")
+                findings.extend(
+                    _walk_openapi_schema(
+                        schema_node,
+                        components=components,
+                        path=f"{route_path} {status_code}",
+                        seen_refs=set(),
+                    )
+                )
+
+    assert findings == []
+
+
+@pytest.mark.asyncio
+async def test_removed_task_api_routes_return_404_without_redirects() -> None:
+    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(
+        id=uuid4(), is_superuser=False
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        follow_redirects=False,
+    ) as client:
+        route_checks = (
+            ("GET", "/api/tasks"),
+            ("GET", "/api/tasks/skills"),
+            ("POST", "/api/tasks/skills"),
+            ("POST", "/api/tasks/skills/upload"),
+        )
+        for method, path in route_checks:
+            response = await client.request(method, path)
+
+            assert response.status_code == 404, (method, path, response.text)
+            assert "location" not in response.headers
 
 async def _create_uploaded_artifact(
     artifact_id: str,
@@ -147,24 +280,24 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path, query_state, mon
             assert create_response.status_code == 201
             execution = create_response.json()
             workflow_id = execution["workflowId"]
-            assert execution["taskId"] == workflow_id
+            assert "taskId" not in execution
             assert execution["source"] == "temporal"
             assert execution["ownerType"] == "user"
-            assert execution["entry"] == "run"
+            assert execution["entry"] == "user_workflow"
             assert execution["status"] == "queued"
             assert execution["rawState"] == "initializing"
             assert execution["runId"]
-            assert execution["temporalRunId"] == execution["runId"]
+            assert "temporalRunId" not in execution
             assert execution["createdAt"]
             assert execution["startedAt"] in (execution["createdAt"], None)
-            assert execution["detailHref"] == f"/tasks/{workflow_id}"
+            assert execution["detailHref"] == f"/workflows/{workflow_id}"
 
             describe_response = await client.get(f"/api/executions/{workflow_id}")
             assert describe_response.status_code == 200
             describe_body = describe_response.json()
-            assert describe_body["taskId"] == workflow_id
+            assert "taskId" not in describe_body
             assert describe_body["workflowId"] == workflow_id
-            assert describe_body["entry"] == "run"
+            assert describe_body["entry"] == "user_workflow"
             assert describe_body["ownerType"] == "user"
             assert describe_body["ownerId"] == str(shared_user_id)
             assert describe_body["title"] == "Contract run"
@@ -328,12 +461,12 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path, query_state, mon
             assert describe_response.status_code == 200
             describe_body = describe_response.json()
             assert describe_body["runId"] == "run-query-latest"
-            assert describe_body["temporalRunId"] == "run-query-latest"
+            assert "temporalRunId" not in describe_body
             assert describe_body["progress"]["running"] == 1
             assert describe_body["progress"]["currentStepTitle"] == "Run tests"
             assert "runId" not in describe_body["progress"]
             assert describe_body["stepsHref"] == f"/api/executions/{workflow_id}/steps"
-            original_temporal_run_id = describe_response.json()["temporalRunId"]
+            original_run_id = describe_response.json()["runId"]
 
             steps_response = await client.get(f"/api/executions/{workflow_id}/steps")
             assert steps_response.status_code == 200
@@ -341,7 +474,7 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path, query_state, mon
             assert steps_body["workflowId"] == workflow_id
             assert steps_body["runId"] == "run-query-latest"
             assert steps_body["runScope"] == "latest"
-            assert steps_body["steps"][0]["refs"]["taskRunId"] == "task-run-123"
+            assert "taskRunId" not in steps_body["steps"][0]["refs"]
 
             configure_integration = await client.post(
                 f"/api/executions/{workflow_id}/integration",
@@ -378,7 +511,7 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path, query_state, mon
                 == workflow_id
             )
             assert update_body["accepted"] is True
-            assert update_body["execution"]["taskId"] == workflow_id
+            assert "taskId" not in update_body["execution"]
             assert update_body["execution"]["workflowId"] == workflow_id
             assert update_body["execution"]["uiQueryModel"] == "compatibility_adapter"
             assert update_body["refresh"] == {
@@ -406,11 +539,11 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path, query_state, mon
             rerun_detail = await client.get(f"/api/executions/{workflow_id}")
             assert rerun_detail.status_code == 200
             rerun_execution = rerun_detail.json()
-            assert rerun_execution["taskId"] == workflow_id
+            assert "taskId" not in rerun_execution
             assert rerun_execution["workflowId"] == workflow_id
-            assert rerun_execution["detailHref"] == f"/tasks/{workflow_id}"
-            assert rerun_execution["temporalRunId"] != original_temporal_run_id
-            assert rerun_execution["temporalRunId"] == latest_rerun_run_id
+            assert rerun_execution["detailHref"] == f"/workflows/{workflow_id}"
+            assert rerun_execution["runId"] != original_run_id
+            assert rerun_execution["runId"] == latest_rerun_run_id
 
             pause_response = await client.post(
                 f"/api/executions/{workflow_id}/signal",
@@ -545,10 +678,7 @@ async def test_request_rerun_keeps_workflow_id_and_rotates_run_id(tmp_path, quer
             assert rerun_body["continueAsNewCause"] == "manual_rerun"
             assert rerun_body["execution"]["workflowId"] == created["workflowId"]
             assert rerun_body["execution"]["runId"] != created["runId"]
-            assert (
-                rerun_body["execution"]["temporalRunId"]
-                == rerun_body["execution"]["runId"]
-            )
+            assert "temporalRunId" not in rerun_body["execution"]
             assert rerun_body["execution"]["continueAsNewCause"] == "manual_rerun"
             assert rerun_body["refresh"] == {
                 "uiQueryModel": "compatibility_adapter",
@@ -564,9 +694,9 @@ async def test_request_rerun_keeps_workflow_id_and_rotates_run_id(tmp_path, quer
             assert describe_response.status_code == 200
             described = describe_response.json()
             assert described["workflowId"] == created["workflowId"]
-            assert described["taskId"] == created["workflowId"]
+            assert "taskId" not in described
             assert described["runId"] != created["runId"]
-            assert described["temporalRunId"] == described["runId"]
+            assert "temporalRunId" not in described
             assert described["latestRunView"] is True
             assert described["continueAsNewCause"] == "manual_rerun"
             if created["startedAt"] is not None:
@@ -636,7 +766,7 @@ async def test_execution_list_pagination_and_state_filter(tmp_path, query_state)
                 params={
                     "workflowType": "MoonMind.Run",
                     "ownerType": "user",
-                    "entry": "run",
+                    "entry": "user_workflow",
                     "pageSize": 2,
                 },
             )
@@ -651,11 +781,11 @@ async def test_execution_list_pagination_and_state_filter(tmp_path, query_state)
             assert first_body["nextPageToken"]
             for item in first_body["items"]:
                 assert item["workflowId"]
-                assert item["taskId"] == item["workflowId"]
-                assert item["temporalRunId"] == item["runId"]
+                assert "taskId" not in item
+                assert "temporalRunId" not in item
                 assert item["latestRunView"] is True
                 assert item["ownerType"] == "user"
-                assert item["entry"] == "run"
+                assert item["entry"] == "user_workflow"
                 assert item["artifactRefs"] == []
 
             second_page = await client.get(
@@ -663,7 +793,7 @@ async def test_execution_list_pagination_and_state_filter(tmp_path, query_state)
                 params={
                     "workflowType": "MoonMind.Run",
                     "ownerType": "user",
-                    "entry": "run",
+                    "entry": "user_workflow",
                     "pageSize": 2,
                     "nextPageToken": first_body["nextPageToken"],
                 },
@@ -671,17 +801,14 @@ async def test_execution_list_pagination_and_state_filter(tmp_path, query_state)
             assert second_page.status_code == 200
             second_body = second_page.json()
             assert len(second_body["items"]) == 1
-            assert (
-                second_body["items"][0]["taskId"]
-                == second_body["items"][0]["workflowId"]
-            )
+            assert "taskId" not in second_body["items"][0]
 
             canceled_only = await client.get(
                 "/api/executions",
                 params={
                     "workflowType": "MoonMind.Run",
                     "ownerType": "user",
-                    "entry": "run",
+                    "entry": "user_workflow",
                     "state": "canceled",
                 },
             )
@@ -690,17 +817,14 @@ async def test_execution_list_pagination_and_state_filter(tmp_path, query_state)
             assert canceled_body["count"] == 1
             assert canceled_body["items"][0]["state"] == "canceled"
             assert canceled_body["items"][0]["dashboardStatus"] == "canceled"
-            assert (
-                canceled_body["items"][0]["taskId"]
-                == canceled_body["items"][0]["workflowId"]
-            )
+            assert "taskId" not in canceled_body["items"][0]
 
             stale_token = await client.get(
                 "/api/executions",
                 params={
                     "workflowType": "MoonMind.Run",
                     "ownerType": "user",
-                    "entry": "run",
+                    "entry": "user_workflow",
                     "state": "canceled",
                     "pageSize": 2,
                     "nextPageToken": first_body["nextPageToken"],
@@ -716,12 +840,12 @@ async def test_execution_list_pagination_and_state_filter(tmp_path, query_state)
             assert forbidden.status_code == 403
             run_only = await client.get(
                 "/api/executions",
-                params={"entry": "run", "ownerType": "user"},
+                params={"entry": "user_workflow", "ownerType": "user"},
             )
             assert run_only.status_code == 200
             run_only_body = run_only.json()
             assert run_only_body["count"] == 3
-            assert all(item["entry"] == "run" for item in run_only_body["items"])
+            assert all(item["entry"] == "user_workflow" for item in run_only_body["items"])
 
             manifest_only = await client.get(
                 "/api/executions",
@@ -907,10 +1031,10 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(
             assert create_response.status_code == 201
             body = create_response.json()
             assert body["source"] == "temporal"
-            assert body["taskId"] == body["workflowId"]
-            assert body["temporalRunId"] == body["runId"]
-            assert body["legacyRunId"] is None
-            assert body["redirectPath"] == f"/tasks/{body['taskId']}?source=temporal"
+            assert "taskId" not in body
+            assert "temporalRunId" not in body
+            assert "legacyRunId" not in body
+            assert body["redirectPath"] == f"/workflows/{body['workflowId']}?source=temporal"
             assert body["searchAttributes"]["mm_repo"] == "MoonLadderStudios/MoonMind"
             assert body["memo"]["input_ref"] == input_artifact_ref
             snapshot = body["taskInputSnapshot"]
@@ -1310,9 +1434,9 @@ async def test_manifest_execution_status_and_node_page_contract(tmp_path):
         db_base.async_session_maker = original_session_maker
 
 
-def test_resume_from_failed_step_route_contract_is_registered() -> None:
+def test_recover_from_failed_step_route_contract_is_registered() -> None:
     schema = app.openapi()
-    route = schema["paths"]["/api/executions/{workflow_id}/resume-from-failed-step"]["post"]
+    route = schema["paths"]["/api/executions/{workflow_id}/recover-from-failed-step"]["post"]
     assert route["responses"]["201"]["description"]
     request_schema = route["requestBody"]["content"]["application/json"]["schema"]
     assert request_schema["type"] == "object"

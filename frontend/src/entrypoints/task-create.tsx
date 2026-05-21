@@ -465,7 +465,8 @@ interface SkillsResponse {
 }
 
 interface DependencyPickerExecution {
-  taskId: string;
+  taskId?: string;
+  workflowId?: string;
   workflowType?: string | null;
   entry?: string | null;
   title: string;
@@ -474,6 +475,10 @@ interface DependencyPickerExecution {
 
 interface DependencyPickerListResponse {
   items?: DependencyPickerExecution[];
+}
+
+function dependencyWorkflowId(item: DependencyPickerExecution): string {
+  return item.workflowId || item.taskId || "";
 }
 
 interface ExecutionCreateResponse {
@@ -4253,7 +4258,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           source: "temporal",
           pageSize: "50",
           workflowType: "MoonMind.Run",
-          entry: "run",
+          entry: "user_workflow",
         }),
         {
           headers: { Accept: "application/json" },
@@ -4271,7 +4276,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       return (data.items || []).filter(
         (item) =>
           String(item.workflowType || "MoonMind.Run") === "MoonMind.Run" &&
-          String(item.entry || "run") === "run",
+          String(item.entry || "user_workflow") === "user_workflow",
       );
     },
   });
@@ -4279,7 +4284,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const skillsQuery = useQuery({
     queryKey: ["task-create", "skills"],
     queryFn: async (): Promise<SkillCatalogResult> => {
-      const response = await fetch("/api/tasks/skills", {
+      const response = await fetch("/api/workflows/skills", {
         headers: { Accept: "application/json" },
       });
       if (!response.ok) {
@@ -4709,7 +4714,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const availableDependencyOptions = useMemo(
     () =>
       (dependencyOptionsQuery.data || []).filter(
-        (item) => !selectedDependencies.includes(item.taskId),
+        (item) => !selectedDependencies.includes(dependencyWorkflowId(item)),
       ),
     [dependencyOptionsQuery.data, selectedDependencies],
   );
@@ -9738,8 +9743,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               >
                 <option value="">Select prerequisite...</option>
                 {availableDependencyOptions.map((item) => (
-                  <option key={item.taskId} value={item.taskId}>
-                    {`${item.title} (${item.taskId})`}
+                  <option key={dependencyWorkflowId(item)} value={dependencyWorkflowId(item)}>
+                    {`${item.title} (${dependencyWorkflowId(item)})`}
                   </option>
                 ))}
               </select>
@@ -9759,7 +9764,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             <ul className="list" id="queue-dependency-list">
               {selectedDependencies.map((workflowId) => {
                 const match = (dependencyOptionsQuery.data || []).find(
-                  (item) => item.taskId === workflowId,
+                  (item) => dependencyWorkflowId(item) === workflowId,
                 );
                 return (
                   <li key={workflowId}>

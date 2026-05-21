@@ -13,6 +13,7 @@ from pydantic import (
     model_serializer,
     model_validator,
 )
+from pydantic.json_schema import SkipJsonSchema
 
 from moonmind.schemas.temporal_artifact_models import CompactArtifactRefModel
 from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
@@ -976,8 +977,8 @@ class UpdateExecutionRequest(BaseModel):
     node_ids: list[str] = Field(default_factory=list, alias="nodeIds")
     idempotency_key: Optional[str] = Field(None, alias="idempotencyKey")
 
-class ResumeFromFailedStepRequest(BaseModel):
-    """Request payload for creating a failed-step Resume follow-up execution."""
+class RecoverFromFailedStepRequest(BaseModel):
+    """Request payload for creating a failed-step recovery follow-up execution."""
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
@@ -1163,8 +1164,8 @@ class ResumeExecutionRefModel(BaseModel):
     run_id: str = Field(..., alias="runId", min_length=1)
     detail_href: Optional[str] = Field(None, alias="detailHref")
 
-class ResumeFromFailedStepResponse(BaseModel):
-    """Response from the failed-step Resume command."""
+class RecoverFromFailedStepResponse(BaseModel):
+    """Response from the failed-step recovery command."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -1348,7 +1349,7 @@ class ExecutionActionCapabilityModel(BaseModel):
     can_pause: bool = Field(False, alias="canPause")
     can_resume: bool = Field(False, alias="canResume")
     can_resume_from_failed_step: bool = Field(
-        False, alias="canResumeFromFailedStep"
+        False, alias="canRecoverFromFailedStep"
     )
     can_cancel: bool = Field(False, alias="canCancel")
     can_reject: bool = Field(False, alias="canReject")
@@ -1376,8 +1377,9 @@ class ExecutionDebugFieldsModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     workflow_id: str = Field(..., alias="workflowId")
-    temporal_run_id: str = Field(..., alias="temporalRunId")
-    legacy_run_id: Optional[str] = Field(None, alias="legacyRunId")
+    run_id: str = Field(..., alias="runId")
+    temporal_run_id: str | None = Field(None, alias="temporalRunId", exclude=True)
+    legacy_run_id: Optional[str] = Field(None, alias="legacyRunId", exclude=True)
     namespace: str = Field(..., alias="namespace")
     temporal_status: str = Field(..., alias="temporalStatus")
     raw_state: str = Field(..., alias="rawState")
@@ -1525,7 +1527,9 @@ class ExecutionMergeAutomationResolverChildModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     workflow_id: str = Field(..., alias="workflowId")
-    task_run_id: str | None = Field(None, alias="taskRunId")
+    task_run_id: SkipJsonSchema[str | None] = Field(
+        None, alias="taskRunId", exclude=True
+    )
     status: str | None = Field(None, alias="status")
     detail_href: str | None = Field(None, alias="detailHref")
 
@@ -1614,7 +1618,7 @@ class StepLedgerRefsModel(BaseModel):
 
     child_workflow_id: str | None = Field(None, alias="childWorkflowId")
     child_run_id: str | None = Field(None, alias="childRunId")
-    task_run_id: str | None = Field(None, alias="taskRunId")
+    task_run_id: SkipJsonSchema[str | None] = Field(None, alias="taskRunId")
     latest_attempt_manifest_ref: str | None = Field(
         None, alias="latestAttemptManifestRef"
     )
@@ -1657,7 +1661,7 @@ class StepLedgerWorkloadModel(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
-    task_run_id: str | None = Field(None, alias="taskRunId")
+    task_run_id: SkipJsonSchema[str | None] = Field(None, alias="taskRunId")
     step_id: str | None = Field(None, alias="stepId")
     attempt: int | None = Field(None, alias="attempt", ge=1)
     tool_name: str | None = Field(None, alias="toolName")
@@ -1956,16 +1960,18 @@ class ExecutionModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     source: Literal["temporal"] = Field("temporal", alias="source")
-    task_id: str = Field(..., alias="taskId")
-    task_run_id: Optional[str] = Field(None, alias="taskRunId")
+    task_id: SkipJsonSchema[str | None] = Field(None, alias="taskId", exclude=True)
+    task_run_id: SkipJsonSchema[Optional[str]] = Field(
+        None, alias="taskRunId", exclude=True
+    )
     progress: ExecutionProgressModel | None = Field(None, alias="progress")
     namespace: str = Field(..., alias="namespace")
     workflow_id: str = Field(..., alias="workflowId")
     run_id: str = Field(..., alias="runId")
-    temporal_run_id: str = Field(..., alias="temporalRunId")
-    legacy_run_id: Optional[str] = Field(None, alias="legacyRunId")
+    temporal_run_id: str | None = Field(None, alias="temporalRunId", exclude=True)
+    legacy_run_id: Optional[str] = Field(None, alias="legacyRunId", exclude=True)
     workflow_type: str = Field(..., alias="workflowType")
-    entry: Literal["run", "manifest"] = Field(..., alias="entry")
+    entry: Literal["user_workflow", "manifest"] = Field(..., alias="entry")
     owner_type: Literal["user", "system", "service"] = Field(..., alias="ownerType")
     owner_id: str = Field(..., alias="ownerId")
     title: str = Field(..., alias="title")

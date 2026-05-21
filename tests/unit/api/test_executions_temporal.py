@@ -14,6 +14,28 @@ import api_service.api.routers.executions as executions_module
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 
+BANNED_EXECUTION_RESPONSE_KEYS = {
+    "taskId",
+    "taskRunId",
+    "taskStatus",
+    "taskSource",
+    "taskType",
+    "taskPayload",
+    "taskHref",
+}
+
+
+def _assert_no_banned_execution_keys(value) -> None:
+    if isinstance(value, dict):
+        banned = BANNED_EXECUTION_RESPONSE_KEYS.intersection(value)
+        assert not banned, f"banned execution response keys present: {sorted(banned)}"
+        for child in value.values():
+            _assert_no_banned_execution_keys(child)
+    elif isinstance(value, list):
+        for child in value:
+            _assert_no_banned_execution_keys(child)
+
+
 def _override_user_dependencies(app: FastAPI, *, is_superuser: bool) -> MagicMock:
     # Plain MagicMock: AsyncMock user objects can trigger "never awaited" warnings
     # when routes or FastAPI touch attributes during teardown.
@@ -88,7 +110,7 @@ def test_list_executions_source_temporal_bypasses_db_and_queries_temporal(
         mock_wf.memo = _memo
         mock_wf.search_attributes = {
             "mm_state": b'"awaiting_external"',
-            "mm_entry": b'["run"]',
+            "mm_entry": b'["user_workflow"]',
         }
         mock_wf.start_time = datetime.now(UTC)
         mock_wf.execution_time = None
@@ -116,9 +138,14 @@ def test_list_executions_source_temporal_bypasses_db_and_queries_temporal(
         assert data["count"] == 1
         item = data["items"][0]
         assert item["workflowId"] == "mm:wf-1"
+        assert item["runId"] == "run-1"
+        assert item["workflowType"] == "MoonMind.Run"
         assert item["state"] == "awaiting_external"
-        assert item["entry"] == "run"
+        assert item["entry"] == "user_workflow"
         assert item["waitingReason"] == "external_completion"
+        assert item["detailHref"] == "/workflows/mm:wf-1"
+        assert item["redirectPath"] == "/workflows/mm:wf-1?source=temporal"
+        _assert_no_banned_execution_keys(item)
 
 
 def test_list_executions_source_temporal_defaults_to_task_scope(client) -> None:
@@ -143,7 +170,7 @@ def test_list_executions_source_temporal_defaults_to_task_scope(client) -> None:
 
         assert response.status_code == 200
         expected_query = (
-            'WorkflowType="MoonMind.Run" AND mm_entry="run" '
+            'WorkflowType="MoonMind.Run" AND (mm_entry="user_workflow" OR mm_entry="run") '
             'AND mm_owner_id="user-123"'
         )
         mock_client.count_workflows.assert_awaited_once_with(query=expected_query)
@@ -178,7 +205,7 @@ def test_list_executions_source_temporal_scope_all_fails_safe_to_task_query(
 
         assert response.status_code == 200
         expected_query = (
-            'WorkflowType="MoonMind.Run" AND mm_entry="run" '
+            'WorkflowType="MoonMind.Run" AND (mm_entry="user_workflow" OR mm_entry="run") '
             'AND mm_owner_id="user-123"'
         )
         mock_client.count_workflows.assert_awaited_once_with(query=expected_query)
@@ -217,7 +244,7 @@ def test_list_executions_source_temporal_ignores_workflow_kind_filters_for_task_
 
         assert response.status_code == 200
         expected_query = (
-            'WorkflowType="MoonMind.Run" AND mm_entry="run" '
+            'WorkflowType="MoonMind.Run" AND (mm_entry="user_workflow" OR mm_entry="run") '
             'AND mm_owner_id="user-123"'
         )
         mock_client.count_workflows.assert_awaited_once_with(query=expected_query)
@@ -234,6 +261,17 @@ def test_list_executions_source_temporal_rejects_unknown_scope(client) -> None:
 
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "invalid_temporal_list_scope"
+
+
+def test_execution_router_exposes_recover_route_without_resume_alias() -> None:
+    app = FastAPI()
+    app.include_router(executions_module.router)
+
+    route_paths = {getattr(route, "path", "") for route in app.routes}
+
+    assert "/api/executions/{workflow_id}/recover-from-failed-step" in route_paths
+    assert "/api/executions/{workflow_id}/resume-from-failed-step" not in route_paths
+    assert "/api/tasks" not in route_paths
 
 
 def test_task_detail_instructions_include_task_and_step_text() -> None:
@@ -299,7 +337,7 @@ def test_list_executions_source_temporal_merges_canonical_parameters(
         mock_wf.memo = _memo
         mock_wf.search_attributes = {
             "mm_state": b'"awaiting_external"',
-            "mm_entry": b'["run"]',
+            "mm_entry": b'["user_workflow"]',
         }
         mock_wf.start_time = datetime.now(UTC)
         mock_wf.execution_time = None
@@ -353,7 +391,7 @@ def test_list_executions_source_temporal_uses_memo_runtime_and_skill_for_child_r
 
         async def _memo():
             return {
-                "entry": "run",
+                "entry": "user_workflow",
                 "title": "Resolve PR #1633",
                 "summary": "Resolver child workflow for merge automation.",
                 "targetRuntime": "codex_cli",
@@ -368,7 +406,7 @@ def test_list_executions_source_temporal_uses_memo_runtime_and_skill_for_child_r
         mock_wf.status = 2  # COMPLETED
         mock_wf.memo = _memo
         mock_wf.search_attributes = {
-            "mm_entry": b'["run"]',
+            "mm_entry": b'["user_workflow"]',
             "mm_owner_type": b'["user"]',
             "mm_owner_id": b'["user-123"]',
             "mm_repo": b'["MoonLadderStudios/Tactics"]',
@@ -439,7 +477,7 @@ def test_list_executions_source_temporal_orders_scheduled_runs_by_latest_schedul
             memo=_memo,
             search_attributes={
                 "mm_state": b'"scheduled"',
-                "mm_entry": b'["run"]',
+                "mm_entry": b'["user_workflow"]',
                 "mm_scheduled_for": _datetime_bytes(scheduled_for),
             },
             start_time=datetime(2026, 4, 15, 1, 0, tzinfo=UTC),
@@ -514,7 +552,7 @@ def test_list_executions_source_temporal_orders_immediate_runs_by_updated_at(
             memo=_memo,
             search_attributes={
                 "mm_state": b'"executing"',
-                "mm_entry": b'["run"]',
+                "mm_entry": b'["user_workflow"]',
                 "mm_updated_at": _datetime_bytes(updated_at),
             },
             start_time=created_at,
@@ -599,7 +637,7 @@ def test_describe_execution_source_temporal_syncs_projection(client) -> None:
         record.search_attributes = {}
         record.memo = {}
         record.artifact_refs = []
-        record.entry = "run"
+        record.entry = "user_workflow"
         record.created_at = datetime.now(UTC)
         record.started_at = datetime.now(UTC)
         record.updated_at = datetime.now(UTC)
@@ -657,10 +695,10 @@ def test_describe_execution_source_temporal_keeps_updated_at_stable_while_refres
             record.close_status = None
             record.owner_id = "user-123"
             record.owner_type = SimpleNamespace(value="user")
-            record.search_attributes = {"mm_state": "executing", "mm_entry": "run"}
+            record.search_attributes = {"mm_state": "executing", "mm_entry": "user_workflow"}
             record.memo = {"title": "Task", "summary": "Running"}
             record.artifact_refs = []
-            record.entry = "run"
+            record.entry = "user_workflow"
             record.created_at = semantic_updated_at
             record.started_at = semantic_updated_at
             record.updated_at = semantic_updated_at
@@ -716,7 +754,7 @@ def test_describe_execution_canonicalizes_mm_prefix(client) -> None:
     record.search_attributes = {}
     record.memo = {}
     record.artifact_refs = []
-    record.entry = "run"
+    record.entry = "user_workflow"
     record.created_at = datetime.now(UTC)
     record.started_at = datetime.now(UTC)
     record.updated_at = datetime.now(UTC)

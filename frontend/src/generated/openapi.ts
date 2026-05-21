@@ -1558,7 +1558,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/executions/{workflow_id}/resume-from-failed-step": {
+    "/api/executions/{workflow_id}/recover-from-failed-step": {
         parameters: {
             query?: never;
             header?: never;
@@ -1567,8 +1567,8 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Resume Execution From Failed Step */
-        post: operations["resume_execution_from_failed_step_api_executions__workflow_id__resume_from_failed_step_post"];
+        /** Recover Execution From Failed Step */
+        post: operations["recover_execution_from_failed_step_api_executions__workflow_id__recover_from_failed_step_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2290,7 +2290,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tasks/skills": {
+    "/api/workflows/skills": {
         parameters: {
             query?: never;
             header?: never;
@@ -2299,15 +2299,15 @@ export interface paths {
         };
         /**
          * List Dashboard Skills
-         * @description List currently available skills for task dashboard submission forms.
+         * @description List currently available skills for workflow submission forms.
          */
-        get: operations["list_dashboard_skills_api_tasks_skills_get"];
+        get: operations["list_dashboard_skills_api_workflows_skills_get"];
         put?: never;
         /**
          * Create Dashboard Skill
          * @description Create a new local skill from the dashboard.
          */
-        post: operations["create_dashboard_skill_api_tasks_skills_post"];
+        post: operations["create_dashboard_skill_api_workflows_skills_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2354,7 +2354,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tasks/skills/upload": {
+    "/api/workflows/skills/upload": {
         parameters: {
             query?: never;
             header?: never;
@@ -2367,7 +2367,7 @@ export interface paths {
          * Upload Dashboard Skill Zip
          * @description Create a new local skill from an uploaded zip bundle.
          */
-        post: operations["upload_dashboard_skill_zip_api_tasks_skills_upload_post"];
+        post: operations["upload_dashboard_skill_zip_api_workflows_skills_upload_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3212,8 +3212,8 @@ export interface components {
             /** Password */
             password: string;
         };
-        /** Body_upload_dashboard_skill_zip_api_tasks_skills_upload_post */
-        Body_upload_dashboard_skill_zip_api_tasks_skills_upload_post: {
+        /** Body_upload_dashboard_skill_zip_api_workflows_skills_upload_post */
+        Body_upload_dashboard_skill_zip_api_workflows_skills_upload_post: {
             /** File */
             file: string;
         };
@@ -3937,10 +3937,10 @@ export interface components {
              */
             canResume: boolean;
             /**
-             * Canresumefromfailedstep
+             * Canrecoverfromfailedstep
              * @default false
              */
-            canResumeFromFailedStep: boolean;
+            canRecoverFromFailedStep: boolean;
             /**
              * Cancancel
              * @default false
@@ -3978,10 +3978,8 @@ export interface components {
         ExecutionDebugFieldsModel: {
             /** Workflowid */
             workflowId: string;
-            /** Temporalrunid */
-            temporalRunId: string;
-            /** Legacyrunid */
-            legacyRunId?: string | null;
+            /** Runid */
+            runId: string;
             /** Namespace */
             namespace: string;
             /** Temporalstatus */
@@ -4212,8 +4210,6 @@ export interface components {
         ExecutionMergeAutomationResolverChildModel: {
             /** Workflowid */
             workflowId: string;
-            /** Taskrunid */
-            taskRunId?: string | null;
             /** Status */
             status?: string | null;
             /** Detailhref */
@@ -4230,10 +4226,6 @@ export interface components {
              * @constant
              */
             source: "temporal";
-            /** Taskid */
-            taskId: string;
-            /** Taskrunid */
-            taskRunId?: string | null;
             progress?: components["schemas"]["ExecutionProgressModel"] | null;
             /** Namespace */
             namespace: string;
@@ -4241,17 +4233,13 @@ export interface components {
             workflowId: string;
             /** Runid */
             runId: string;
-            /** Temporalrunid */
-            temporalRunId: string;
-            /** Legacyrunid */
-            legacyRunId?: string | null;
             /** Workflowtype */
             workflowType: string;
             /**
              * Entry
              * @enum {string}
              */
-            entry: "run" | "manifest";
+            entry: "user_workflow" | "manifest";
             /**
              * Ownertype
              * @enum {string}
@@ -5969,6 +5957,34 @@ export interface components {
             updatedAt?: string | null;
         };
         /**
+         * RecoverFromFailedStepResponse
+         * @description Response from the failed-step recovery command.
+         */
+        RecoverFromFailedStepResponse: {
+            /**
+             * Accepted
+             * @default true
+             * @constant
+             */
+            accepted: true;
+            /**
+             * Applied
+             * @default created_resumed_execution
+             * @constant
+             */
+            applied: "created_resumed_execution";
+            source: components["schemas"]["ResumeExecutionRefModel"];
+            execution: components["schemas"]["ResumeExecutionRefModel"];
+            /**
+             * Relationship
+             * @default Resumed from failed step
+             * @constant
+             */
+            relationship: "Resumed from failed step";
+            /** Resumecheckpointref */
+            resumeCheckpointRef: string;
+        };
+        /**
          * RecurringTaskDefinitionListResponse
          * @description List response for recurring definitions.
          */
@@ -6267,34 +6283,6 @@ export interface components {
             runId: string;
             /** Detailhref */
             detailHref?: string | null;
-        };
-        /**
-         * ResumeFromFailedStepResponse
-         * @description Response from the failed-step Resume command.
-         */
-        ResumeFromFailedStepResponse: {
-            /**
-             * Accepted
-             * @default true
-             * @constant
-             */
-            accepted: true;
-            /**
-             * Applied
-             * @default created_resumed_execution
-             * @constant
-             */
-            applied: "created_resumed_execution";
-            source: components["schemas"]["ResumeExecutionRefModel"];
-            execution: components["schemas"]["ResumeExecutionRefModel"];
-            /**
-             * Relationship
-             * @default Resumed from failed step
-             * @constant
-             */
-            relationship: "Resumed from failed step";
-            /** Resumecheckpointref */
-            resumeCheckpointRef: string;
         };
         /** RetrievalQuery */
         RetrievalQuery: {
@@ -6815,8 +6803,6 @@ export interface components {
             childWorkflowId?: string | null;
             /** Childrunid */
             childRunId?: string | null;
-            /** Taskrunid */
-            taskRunId?: string | null;
             /** Latestattemptmanifestref */
             latestAttemptManifestRef?: string | null;
             /** Attemptmanifestrefs */
@@ -6917,8 +6903,6 @@ export interface components {
          * @description Bounded Docker-backed workload metadata linked to a producing step.
          */
         StepLedgerWorkloadModel: {
-            /** Taskrunid */
-            taskRunId?: string | null;
             /** Stepid */
             stepId?: string | null;
             /** Attempt */
@@ -11548,7 +11532,7 @@ export interface operations {
             };
         };
     };
-    resume_execution_from_failed_step_api_executions__workflow_id__resume_from_failed_step_post: {
+    recover_execution_from_failed_step_api_executions__workflow_id__recover_from_failed_step_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -11571,7 +11555,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ResumeFromFailedStepResponse"];
+                    "application/json": components["schemas"]["RecoverFromFailedStepResponse"];
                 };
             };
             /** @description Validation Error */
@@ -12866,7 +12850,7 @@ export interface operations {
             };
         };
     };
-    list_dashboard_skills_api_tasks_skills_get: {
+    list_dashboard_skills_api_workflows_skills_get: {
         parameters: {
             query?: {
                 includeContent?: boolean;
@@ -12897,7 +12881,7 @@ export interface operations {
             };
         };
     };
-    create_dashboard_skill_api_tasks_skills_post: {
+    create_dashboard_skill_api_workflows_skills_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -12996,7 +12980,7 @@ export interface operations {
             };
         };
     };
-    upload_dashboard_skill_zip_api_tasks_skills_upload_post: {
+    upload_dashboard_skill_zip_api_workflows_skills_upload_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -13005,7 +12989,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "multipart/form-data": components["schemas"]["Body_upload_dashboard_skill_zip_api_tasks_skills_upload_post"];
+                "multipart/form-data": components["schemas"]["Body_upload_dashboard_skill_zip_api_workflows_skills_upload_post"];
             };
         };
         responses: {

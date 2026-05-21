@@ -2407,13 +2407,19 @@ def _first_present_snapshot_list(
 
 def _detect_jira_issue_key(task_payload: Mapping[str, Any]) -> str | None:
     pattern = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
-    stack: list[object] = [
+    primary_values: list[object] = [
         task_payload.get("title"),
         task_payload.get("instructions"),
         task_payload.get("description"),
         task_payload.get("objective"),
-        task_payload.get("steps"),
     ]
+    for value in primary_values:
+        if isinstance(value, str):
+            match = pattern.search(value)
+            if match:
+                return match.group(0)
+
+    stack: list[object] = [task_payload.get("steps")]
     while stack:
         value = stack.pop()
         if isinstance(value, str):
