@@ -80,10 +80,10 @@ from moonmind.schemas.temporal_models import (
     ScheduleCreatedResponse,
     ScheduleParameters,
     SignalExecutionRequest,
-    StepAttemptDetailModel,
-    StepAttemptListModel,
-    StepAttemptManifestModel,
-    StepAttemptProjectionModel,
+    StepExecutionDetailModel,
+    StepExecutionListModel,
+    StepExecutionManifestModel,
+    StepExecutionProjectionModel,
     StepLedgerSnapshotModel,
     UpdateExecutionRequest,
     UpdateExecutionResponse,
@@ -2288,7 +2288,7 @@ def _build_resume_summary(
     if _enum_value(getattr(record, "workflow_type", None)) != "MoonMind.Run":
         return None
     return ExecutionResumeSummaryModel(
-        available=actions.can_resume_from_failed_step,
+        available=actions.can_recover_from_failed_step,
         checkpointRef=_resume_checkpoint_ref_from_record(record),
         failedStepId=_resume_failed_step_id_from_record(record),
         sourceRunId=str(getattr(record, "run_id", "") or "").strip() or None,
@@ -2550,7 +2550,7 @@ def _preserved_steps_from_resume_source(
         ).strip()
         if not logical_step_id:
             continue
-        source_attempt = item.get("sourceAttempt", item.get("attempt"))
+        source_attempt = item.get("sourceExecutionOrdinal", item.get("attempt"))
         try:
             normalized_attempt = (
                 int(source_attempt) if source_attempt is not None else None
@@ -2561,7 +2561,7 @@ def _preserved_steps_from_resume_source(
             {
                 "logicalStepId": logical_step_id,
                 "title": str(item.get("title") or "").strip() or None,
-                "sourceAttempt": normalized_attempt,
+                "sourceExecutionOrdinal": normalized_attempt,
                 "sourceWorkflowId": str(
                     item.get("sourceWorkflowId")
                     or item.get("source_workflow_id")
@@ -3328,7 +3328,7 @@ def _fallback_step_ledger_from_record(record: Any) -> StepLedgerSnapshotModel | 
             if row.get("order") != current_order:
                 continue
             row["status"] = "awaiting_external" if waiting_reason else "running"
-            row["attempt"] = max(int(row.get("attempt") or 0), 1)
+            row["executionOrdinal"] = max(int(row.get("executionOrdinal") or 0), 1)
             row["startedAt"] = row.get("startedAt") or updated_at.isoformat()
             row["updatedAt"] = updated_at.isoformat()
             row["waitingReason"] = waiting_reason or None
@@ -3469,17 +3469,17 @@ async def _load_execution_step_ledger(
         ) from exc
 
 
-def _step_attempt_manifest_refs(row: Any) -> list[str]:
+def _step_execution_manifest_refs(row: Any) -> list[str]:
     refs: list[str] = []
     for source in (getattr(row, "refs", None), getattr(row, "artifacts", None)):
         if source is None:
             continue
-        raw_refs = getattr(source, "attempt_manifest_refs", None)
+        raw_refs = getattr(source, "execution_manifest_refs", None)
         if isinstance(raw_refs, list):
             refs.extend(str(ref).strip() for ref in raw_refs if str(ref).strip())
         latest_ref = (
-            getattr(source, "latest_attempt_manifest_ref", None)
-            or getattr(source, "attempt_manifest_ref", None)
+            getattr(source, "latest_execution_manifest_ref", None)
+            or getattr(source, "execution_manifest_ref", None)
         )
         if latest_ref:
             refs.append(str(latest_ref).strip())
@@ -3592,8 +3592,8 @@ def _runtime_child_refs(execution: Any) -> dict[str, Any]:
     return refs
 
 
-def _step_attempt_projection_payload(
-    manifest: StepAttemptManifestModel,
+def _step_execution_projection_payload(
+    manifest: StepExecutionManifestModel,
     *,
     manifest_artifact_ref: str,
 ) -> dict[str, Any]:
@@ -3603,8 +3603,8 @@ def _step_attempt_projection_payload(
     outputs = manifest.outputs
     checks = manifest.checks
     runtime_child_refs = _runtime_child_refs(execution)
-    source_attempt = (
-        manifest.lineage.source_attempt if manifest.lineage is not None else None
+    source_execution_ordinal = (
+        manifest.lineage.source_execution_ordinal if manifest.lineage is not None else None
     )
     summary = _first_text(
         _field_value(outputs, "summary"),
@@ -3612,12 +3612,12 @@ def _step_attempt_projection_payload(
     )
     return {
         "manifestArtifactRef": manifest_artifact_ref,
-        "stepAttemptId": manifest.step_attempt_id,
+        "stepExecutionId": manifest.step_execution_id,
         "workflowId": manifest.workflow_id,
         "runId": manifest.run_id,
         "logicalStepId": manifest.logical_step_id,
-        "attempt": manifest.attempt,
-        "sourceAttempt": source_attempt,
+        "executionOrdinal": manifest.execution_ordinal,
+        "sourceExecutionOrdinal": source_execution_ordinal,
         "lineage": manifest.lineage,
         "reason": manifest.reason,
         "status": manifest.status,
@@ -3640,12 +3640,12 @@ def _step_attempt_projection_payload(
     }
 
 
-def _step_attempt_detail_payload(
-    manifest: StepAttemptManifestModel,
+def _step_execution_detail_payload(
+    manifest: StepExecutionManifestModel,
     *,
     manifest_artifact_ref: str,
 ) -> dict[str, Any]:
-    payload = _step_attempt_projection_payload(
+    payload = _step_execution_projection_payload(
         manifest,
         manifest_artifact_ref=manifest_artifact_ref,
     )
@@ -3665,19 +3665,19 @@ def _step_attempt_detail_payload(
     return payload
 
 
-async def _read_step_attempt_manifest(
+async def _read_step_execution_manifest(
     *,
     artifact_service: Any,
     artifact_ref: str,
     principal: str,
-) -> StepAttemptManifestModel:
+) -> StepExecutionManifestModel:
     artifact_id = _artifact_id_from_ref(artifact_ref)
     if not artifact_id:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
-                "code": "invalid_attempt_manifest_ref",
-                "message": "Step Attempt manifest ref is invalid.",
+                "code": "invalid_execution_manifest_ref",
+                "message": "Step Execution manifest ref is invalid.",
             },
         )
     try:
@@ -3687,21 +3687,21 @@ async def _read_step_attempt_manifest(
             allow_restricted_raw=True,
         )
         payload = json.loads(body.decode("utf-8"))
-        return StepAttemptManifestModel.model_validate(payload)
+        return StepExecutionManifestModel.model_validate(payload)
     except (PermissionError, TemporalArtifactAuthorizationError) as exc:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
-                "code": "attempt_manifest_unauthorized",
-                "message": "Not authorized to read Step Attempt manifest evidence.",
+                "code": "execution_manifest_unauthorized",
+                "message": "Not authorized to read Step Execution manifest evidence.",
             },
         ) from exc
     except (json.JSONDecodeError, UnicodeDecodeError, ValidationError) as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={
-                "code": "invalid_attempt_manifest",
-                "message": "Step Attempt manifest artifact is invalid.",
+                "code": "invalid_execution_manifest",
+                "message": "Step Execution manifest artifact is invalid.",
             },
         ) from exc
 
@@ -3788,7 +3788,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         and has_task_input_snapshot
         and resume_evidence_disabled_reason is None
     ):
-        enabled = enabled | {"can_resume_from_failed_step"}
+        enabled = enabled | {"can_recover_from_failed_step"}
     capability_values = {
         "can_set_title": "canSetTitle",
         "can_update_inputs": "canUpdateInputs",
@@ -3797,7 +3797,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         "can_approve": "canApprove",
         "can_pause": "canPause",
         "can_resume": "canResume",
-        "can_resume_from_failed_step": "canRecoverFromFailedStep",
+        "can_recover_from_failed_step": "canRecoverFromFailedStep",
         "can_cancel": "canCancel",
         "can_reject": "canReject",
         "can_send_message": "canSendMessage",
@@ -3811,7 +3811,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
             "can_update_inputs",
             "can_edit_for_rerun",
             "can_rerun",
-            "can_resume_from_failed_step",
+            "can_recover_from_failed_step",
         }:
             if workflow_type_value != "MoonMind.Run":
                 disabled_reasons[alias] = "unsupported_workflow_type"
@@ -3819,7 +3819,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
             if not temporal_task_editing_enabled:
                 disabled_reasons[alias] = "temporal_task_editing_disabled"
                 continue
-            if field_name == "can_resume_from_failed_step":
+            if field_name == "can_recover_from_failed_step":
                 if raw_state != "failed":
                     disabled_reasons[alias] = "state_not_eligible"
                     continue
@@ -3845,7 +3845,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         can_approve="can_approve" in enabled,
         can_pause="can_pause" in enabled,
         can_resume="can_resume" in enabled,
-        can_resume_from_failed_step="can_resume_from_failed_step" in enabled,
+        can_recover_from_failed_step="can_recover_from_failed_step" in enabled,
         can_cancel="can_cancel" in enabled,
         can_reject="can_reject" in enabled,
         can_send_message="can_send_message" in enabled,
@@ -6964,10 +6964,10 @@ async def list_execution_facets(
         ) from exc
 
 @router.get(
-    "/{workflow_id}/steps/{logical_step_id}/attempts",
-    response_model=StepAttemptListModel,
+    "/{workflow_id}/steps/{logical_step_id}/executions",
+    response_model=StepExecutionListModel,
 )
-async def describe_execution_step_attempts(
+async def describe_execution_step_executions(
     workflow_id: str,
     logical_step_id: str,
     response: Response,
@@ -6975,7 +6975,7 @@ async def describe_execution_step_attempts(
     user: User = Depends(get_current_user()),
     session: AsyncSession = Depends(get_async_session),
     temporal_client: Client = Depends(get_temporal_client),
-) -> StepAttemptListModel:
+) -> StepExecutionListModel:
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
     record = await _get_owned_execution(
         service=service,
@@ -6989,7 +6989,7 @@ async def describe_execution_step_attempts(
             detail={
                 "code": "invalid_execution_query",
                 "message": (
-                    "Step Attempt reads are only supported for MoonMind.Run "
+                    "Step Execution reads are only supported for MoonMind.Run "
                     "executions."
                 ),
             },
@@ -7008,10 +7008,10 @@ async def describe_execution_step_attempts(
     row = _find_step_ledger_row(ledger, logical_step_id)
     artifact_service = get_temporal_artifact_service(session)
     principal = str(getattr(user, "id", "") or "system")
-    manifest_refs = _step_attempt_manifest_refs(row)
+    manifest_refs = _step_execution_manifest_refs(row)
     manifests = await asyncio.gather(
         *(
-            _read_step_attempt_manifest(
+            _read_step_execution_manifest(
                 artifact_service=artifact_service,
                 artifact_ref=manifest_ref,
                 principal=principal,
@@ -7019,45 +7019,45 @@ async def describe_execution_step_attempts(
             for manifest_ref in manifest_refs
         )
     )
-    attempts = [
-        StepAttemptProjectionModel.model_validate(
-            _step_attempt_projection_payload(
+    executions = [
+        StepExecutionProjectionModel.model_validate(
+            _step_execution_projection_payload(
                 manifest,
                 manifest_artifact_ref=manifest_ref,
             )
         )
         for manifest, manifest_ref in zip(manifests, manifest_refs, strict=True)
     ]
-    attempts.sort(key=lambda item: item.attempt)
-    return StepAttemptListModel(
+    executions.sort(key=lambda item: item.execution_ordinal)
+    return StepExecutionListModel(
         workflowId=ledger.workflow_id,
         runId=ledger.run_id,
         runScope=ledger.run_scope,
         logicalStepId=logical_step_id,
-        attempts=attempts,
+        executions=executions,
     )
 
 
 @router.get(
-    "/{workflow_id}/steps/{logical_step_id}/attempts/{attempt}",
-    response_model=StepAttemptDetailModel,
+    "/{workflow_id}/steps/{logical_step_id}/executions/{execution_ordinal}",
+    response_model=StepExecutionDetailModel,
 )
-async def describe_execution_step_attempt(
+async def describe_execution_step_execution(
     workflow_id: str,
     logical_step_id: str,
-    attempt: int,
+    execution_ordinal: int,
     response: Response,
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
     session: AsyncSession = Depends(get_async_session),
     temporal_client: Client = Depends(get_temporal_client),
-) -> StepAttemptDetailModel:
-    if attempt < 1:
+) -> StepExecutionDetailModel:
+    if execution_ordinal < 1:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
-                "code": "invalid_step_attempt",
-                "message": "Step Attempt number must be greater than zero.",
+                "code": "invalid_step_execution",
+                "message": "Step Execution number must be greater than zero.",
             },
         )
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
@@ -7073,7 +7073,7 @@ async def describe_execution_step_attempt(
             detail={
                 "code": "invalid_execution_query",
                 "message": (
-                    "Step Attempt reads are only supported for MoonMind.Run "
+                    "Step Execution reads are only supported for MoonMind.Run "
                     "executions."
                 ),
             },
@@ -7092,10 +7092,10 @@ async def describe_execution_step_attempt(
     row = _find_step_ledger_row(ledger, logical_step_id)
     artifact_service = get_temporal_artifact_service(session)
     principal = str(getattr(user, "id", "") or "system")
-    manifest_refs = _step_attempt_manifest_refs(row)
+    manifest_refs = _step_execution_manifest_refs(row)
     manifests = await asyncio.gather(
         *(
-            _read_step_attempt_manifest(
+            _read_step_execution_manifest(
                 artifact_service=artifact_service,
                 artifact_ref=manifest_ref,
                 principal=principal,
@@ -7104,10 +7104,10 @@ async def describe_execution_step_attempt(
         )
     )
     for manifest, manifest_ref in zip(manifests, manifest_refs, strict=True):
-        if manifest.attempt != attempt:
+        if manifest.execution_ordinal != execution_ordinal:
             continue
-        return StepAttemptDetailModel.model_validate(
-            _step_attempt_detail_payload(
+        return StepExecutionDetailModel.model_validate(
+            _step_execution_detail_payload(
                 manifest,
                 manifest_artifact_ref=manifest_ref,
             )
@@ -7115,8 +7115,8 @@ async def describe_execution_step_attempt(
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
         detail={
-            "code": "step_attempt_not_found",
-            "message": "Step Attempt was not found in the latest execution ledger.",
+            "code": "step_execution_not_found",
+            "message": "Step Execution was not found in the latest execution ledger.",
         },
     )
 

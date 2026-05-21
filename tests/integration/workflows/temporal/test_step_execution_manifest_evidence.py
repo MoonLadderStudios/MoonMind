@@ -32,7 +32,7 @@ def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: False)
 
 
-async def test_step_attempt_manifest_refs_are_append_only_for_reexecution(
+async def test_step_execution_manifest_refs_are_append_only_for_reexecution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
@@ -71,7 +71,7 @@ async def test_step_attempt_manifest_refs_are_append_only_for_reexecution(
     )
 
     workflow._mark_step_running("implement", updated_at=now, summary="Initial")
-    await workflow._record_step_attempt_manifest_start(
+    await workflow._record_step_execution_manifest_start(
         "implement",
         updated_at=now,
         reason="initial_execution",
@@ -83,21 +83,21 @@ async def test_step_attempt_manifest_refs_are_append_only_for_reexecution(
         summary="Failed gate",
     )
     workflow._mark_step_running("implement", updated_at=now, summary="Retry")
-    await workflow._record_step_attempt_manifest_start(
+    await workflow._record_step_execution_manifest_start(
         "implement",
         updated_at=now,
         reason="quality_gate_failed",
     )
 
     step = workflow.get_step_ledger()["steps"][0]
-    assert step["refs"]["latestAttemptManifestRef"] == "artifact-attempt-2"
-    assert step["refs"]["attemptManifestRefs"] == [
+    assert step["refs"]["latestExecutionManifestRef"] == "artifact-attempt-2"
+    assert step["refs"]["executionManifestRefs"] == [
         "artifact-attempt-1",
         "artifact-attempt-2",
     ]
     assert writes[0]["payload"]["workspace"]["policy"] == "fresh_branch_from_source"
     assert writes[0]["payload"]["workspace"]["evidenceAccepted"] is True
-    assert writes[1]["payload"]["workspace"]["policy"] == "continue_from_previous_attempt"
+    assert writes[1]["payload"]["workspace"]["policy"] == "continue_from_previous_execution"
     assert writes[1]["payload"]["workspace"]["evidenceAccepted"] is False
     assert writes[1]["payload"]["workspace"]["rejectionReason"] == (
         "missing_required_checkpoint_evidence"
@@ -107,17 +107,17 @@ async def test_step_attempt_manifest_refs_are_append_only_for_reexecution(
     assert writes[1]["payload"]["outputs"]["summary"] == (
         "Workspace policy rejected before launch."
     )
-    assert writes[1]["payload"]["workspace"]["sourceAttempt"] == {
+    assert writes[1]["payload"]["workspace"]["sourceExecutionOrdinal"] == {
         "workflowId": "wf-boundary",
         "runId": "run-boundary",
         "logicalStepId": "implement",
-        "attempt": 1,
+        "executionOrdinal": 1,
     }
     assert step["status"] == "failed"
     assert step["lastError"] == "missing_required_checkpoint_evidence"
 
 
-async def test_resume_attempt_manifest_carries_lineage_without_large_payloads(
+async def test_resume_execution_manifest_carries_lineage_without_large_payloads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
@@ -128,7 +128,7 @@ async def test_resume_attempt_manifest_carries_lineage_without_large_payloads(
         "sourceTaskInputSnapshotRef": "artifact://snapshot/source",
         "sourcePlanDigest": "sha256:source-plan",
         "failedStepId": "implement",
-        "failedStepAttempt": 2,
+        "failedStepExecutionOrdinal": 2,
         "resumeCheckpointRef": "artifact://resume/checkpoint",
         "resumeWorkspace": {
             "checkpointRef": "artifact://workspace/before-implement",
@@ -163,17 +163,17 @@ async def test_resume_attempt_manifest_carries_lineage_without_large_payloads(
     )
 
     workflow._mark_step_running("implement", updated_at=now, summary="Resume")
-    await workflow._record_step_attempt_manifest_start(
+    await workflow._record_step_execution_manifest_start(
         "implement",
         updated_at=now,
-        reason="resume_from_failed_step",
+        reason="recover_from_failed_step",
     )
 
     manifest = writes[0]["payload"]
     assert manifest["lineage"]["sourceWorkflowId"] == "wf-source"
     assert manifest["lineage"]["sourceRunId"] == "run-source"
-    assert manifest["lineage"]["sourceAttempt"] == 2
-    assert manifest["lineage"]["lineageAttemptOrdinal"] == 3
+    assert manifest["lineage"]["sourceExecutionOrdinal"] == 2
+    assert manifest["lineage"]["lineageExecutionOrdinal"] == 3
     assert manifest["workspace"]["policy"] == "start_from_last_passed_commit"
     assert manifest["workspace"]["checkpointRef"] == (
         "artifact://workspace/before-implement"

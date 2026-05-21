@@ -1214,7 +1214,7 @@ def test_step_ledger_contract_models_serialize_using_public_aliases() -> None:
                     "status": "succeeded",
                     "waitingReason": None,
                     "attentionRequired": False,
-                    "attempt": 1,
+                    "executionOrdinal": 1,
                     "startedAt": "2026-04-07T12:00:00Z",
                     "updatedAt": "2026-04-07T12:00:00Z",
                     "summary": "Workspace prepared",
@@ -5800,7 +5800,7 @@ def test_describe_execution_includes_live_merge_automation_summary() -> None:
                     "tool": {"type": "agent_runtime", "name": "codex_cli"},
                     "dependsOn": [],
                     "status": "running",
-                    "attempt": 1,
+                    "executionOrdinal": 1,
                     "updatedAt": "2026-04-08T12:00:00Z",
                     "refs": {"taskRunId": "resolver-task-run"},
                     "artifacts": {},
@@ -6108,7 +6108,7 @@ def test_get_execution_steps_returns_latest_run_ledger() -> None:
                     "status": "running",
                     "waitingReason": None,
                     "attentionRequired": False,
-                    "attempt": 2,
+                    "executionOrdinal": 2,
                     "startedAt": "2026-04-08T12:00:00Z",
                     "updatedAt": "2026-04-08T12:01:00Z",
                     "summary": "Running pytest",
@@ -6130,7 +6130,7 @@ def test_get_execution_steps_returns_latest_run_ledger() -> None:
                     "workload": {
                         "taskRunId": "task-run-1",
                         "stepId": "run-tests",
-                        "attempt": 2,
+                        "executionOrdinal": 2,
                         "toolName": "container.run_workload",
                         "profileId": "local-python",
                         "imageRef": "python:3.12-slim",
@@ -6157,7 +6157,7 @@ def test_get_execution_steps_returns_latest_run_ledger() -> None:
     assert payload["workflowId"] == "mm:wf-1"
     assert payload["runId"] == "run-99"
     assert payload["runScope"] == "latest"
-    assert payload["steps"][0]["attempt"] == 2
+    assert payload["steps"][0]["executionOrdinal"] == 2
     assert "taskRunId" not in payload["steps"][0]["refs"]
     assert "taskRunId" not in payload["steps"][0]["workload"]
     assert payload["steps"][0]["workload"]["profileId"] == "local-python"
@@ -6198,7 +6198,7 @@ def test_get_execution_steps_enriches_missing_agent_task_run_ids_once() -> None:
             "status": "awaiting_external",
             "waitingReason": "Awaiting child workflow progress",
             "attentionRequired": False,
-            "attempt": 1,
+            "executionOrdinal": 1,
             "startedAt": "2026-04-08T12:00:00Z",
             "updatedAt": "2026-04-08T12:01:00Z",
             "summary": "Awaiting child workflow",
@@ -6281,7 +6281,7 @@ def test_get_execution_steps_enriches_missing_agent_task_run_ids_once() -> None:
     )
 
 
-def _step_attempt_manifest_payload(
+def _step_execution_manifest_payload(
     *,
     artifact_ref: str,
     attempt: int,
@@ -6289,21 +6289,21 @@ def _step_attempt_manifest_payload(
 ) -> dict[str, object]:
     return {
         "schemaVersion": "v1",
-        "stepAttemptId": f"mm:wf-1:run-99:implement:attempt:{attempt}",
+        "stepExecutionId": f"mm:wf-1:run-99:implement:execution:{attempt}",
         "workflowId": "mm:wf-1",
         "runId": "run-99",
         "logicalStepId": "implement",
-        "attempt": attempt,
-        "attemptScope": "run",
+        "executionOrdinal": attempt,
+        "executionScope": "run",
         "lineage": {
             "sourceWorkflowId": "mm:source",
             "sourceRunId": "source-run",
             "sourceLogicalStepId": "implement",
-            "sourceAttempt": attempt,
-            "relationship": "resume_from_failed_step",
-            "lineageAttemptOrdinal": attempt + 1,
+            "sourceExecutionOrdinal": attempt,
+            "relationship": "recover_from_failed_step",
+            "lineageExecutionOrdinal": attempt + 1,
         },
-        "reason": "resume_from_failed_step" if attempt > 1 else "initial_execution",
+        "reason": "recover_from_failed_step" if attempt > 1 else "initial_execution",
         "status": status,
         "terminalDisposition": "accepted" if status == "succeeded" else "retryable",
         "startedAt": "2026-05-19T10:00:00Z",
@@ -6311,7 +6311,7 @@ def _step_attempt_manifest_payload(
         "input": {"preparedInputRef": f"art-input-{attempt}"},
         "context": {"contextBundleRef": f"art-context-{attempt}"},
         "workspace": {
-            "workspacePolicy": "continue_from_previous_attempt",
+            "workspacePolicy": "continue_from_previous_execution",
             "baselineRef": f"art-workspace-{attempt}",
             "gitDisposition": "candidate",
         },
@@ -6341,7 +6341,7 @@ def _step_attempt_manifest_payload(
     }
 
 
-def test_get_execution_step_attempts_returns_bounded_manifest_history() -> None:
+def test_get_execution_step_executions_returns_bounded_manifest_history() -> None:
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
@@ -6363,7 +6363,7 @@ def test_get_execution_step_attempts_returns_bounded_manifest_history() -> None:
                     "status": "succeeded",
                     "waitingReason": None,
                     "attentionRequired": False,
-                    "attempt": 2,
+                    "executionOrdinal": 2,
                     "startedAt": "2026-05-19T10:00:00Z",
                     "updatedAt": "2026-05-19T10:01:00Z",
                     "summary": "Done",
@@ -6372,8 +6372,8 @@ def test_get_execution_step_attempts_returns_bounded_manifest_history() -> None:
                         "childWorkflowId": None,
                         "childRunId": None,
                         "taskRunId": None,
-                        "latestAttemptManifestRef": "art-attempt-2",
-                        "attemptManifestRefs": ["art-attempt-1", "art-attempt-2"],
+                        "latestExecutionManifestRef": "art-attempt-2",
+                        "executionManifestRefs": ["art-attempt-1", "art-attempt-2"],
                     },
                     "artifacts": {},
                     "lastError": None,
@@ -6385,7 +6385,7 @@ def test_get_execution_step_attempts_returns_bounded_manifest_history() -> None:
 
     async def _read_artifact(**kwargs):
         artifact_id = kwargs["artifact_id"]
-        payload = _step_attempt_manifest_payload(
+        payload = _step_execution_manifest_payload(
             artifact_ref=artifact_id,
             attempt=1 if artifact_id == "art-attempt-1" else 2,
         )
@@ -6400,7 +6400,7 @@ def test_get_execution_step_attempts_returns_bounded_manifest_history() -> None:
     ):
         with TestClient(app) as test_client:
             response = test_client.get(
-                "/api/executions/mm:wf-1/steps/implement/attempts"
+                "/api/executions/mm:wf-1/steps/implement/executions"
             )
 
     assert response.status_code == 200
@@ -6408,21 +6408,21 @@ def test_get_execution_step_attempts_returns_bounded_manifest_history() -> None:
     assert payload["workflowId"] == "mm:wf-1"
     assert payload["runId"] == "run-99"
     assert payload["logicalStepId"] == "implement"
-    assert [item["attempt"] for item in payload["attempts"]] == [1, 2]
-    assert payload["attempts"][1]["manifestRefs"] == {
+    assert [item["executionOrdinal"] for item in payload["executions"]] == [1, 2]
+    assert payload["executions"][1]["manifestRefs"] == {
         "manifestArtifactRef": "art-attempt-2"
     }
-    assert payload["attempts"][1]["runtimeChildRefs"] == {
+    assert payload["executions"][1]["runtimeChildRefs"] == {
         "childWorkflowId": "child-2",
         "childRunId": "child-run-2",
         "taskRunId": "task-run-2",
     }
-    assert payload["attempts"][1]["workspacePolicy"] == (
-        "continue_from_previous_attempt"
+    assert payload["executions"][1]["workspacePolicy"] == (
+        "continue_from_previous_execution"
     )
-    assert payload["attempts"][1]["gitDisposition"] == "candidate"
-    assert payload["attempts"][1]["qualityGateVerdict"] == "passed"
-    assert "summary" not in payload["attempts"][1]["outputRefs"]
+    assert payload["executions"][1]["gitDisposition"] == "candidate"
+    assert payload["executions"][1]["qualityGateVerdict"] == "passed"
+    assert "summary" not in payload["executions"][1]["outputRefs"]
     assert artifact_service.read.await_args_list[0] == call(
         artifact_id="art-attempt-1",
         principal=str(user.id),
@@ -6430,7 +6430,7 @@ def test_get_execution_step_attempts_returns_bounded_manifest_history() -> None:
     )
 
 
-def test_get_execution_step_attempt_returns_bounded_detail_refs() -> None:
+def test_get_execution_step_execution_returns_bounded_detail_refs() -> None:
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
@@ -6452,7 +6452,7 @@ def test_get_execution_step_attempt_returns_bounded_detail_refs() -> None:
                     "status": "succeeded",
                     "waitingReason": None,
                     "attentionRequired": False,
-                    "attempt": 2,
+                    "executionOrdinal": 2,
                     "startedAt": "2026-05-19T10:00:00Z",
                     "updatedAt": "2026-05-19T10:01:00Z",
                     "summary": "Done",
@@ -6461,8 +6461,8 @@ def test_get_execution_step_attempt_returns_bounded_detail_refs() -> None:
                         "childWorkflowId": None,
                         "childRunId": None,
                         "taskRunId": None,
-                        "latestAttemptManifestRef": "art-attempt-2",
-                        "attemptManifestRefs": ["art-attempt-1", "art-attempt-2"],
+                        "latestExecutionManifestRef": "art-attempt-2",
+                        "executionManifestRefs": ["art-attempt-1", "art-attempt-2"],
                     },
                     "artifacts": {},
                     "lastError": None,
@@ -6471,7 +6471,7 @@ def test_get_execution_step_attempt_returns_bounded_detail_refs() -> None:
         },
     )
     _override_user_dependencies(app, is_superuser=True)
-    payload = _step_attempt_manifest_payload(
+    payload = _step_execution_manifest_payload(
         artifact_ref="art-attempt-2",
         attempt=2,
     )
@@ -6481,7 +6481,7 @@ def test_get_execution_step_attempt_returns_bounded_detail_refs() -> None:
                 (
                     SimpleNamespace(artifact_id="art-attempt-1"),
                     json.dumps(
-                        _step_attempt_manifest_payload(
+                        _step_execution_manifest_payload(
                             artifact_ref="art-attempt-1",
                             attempt=1,
                         )
@@ -6502,14 +6502,14 @@ def test_get_execution_step_attempt_returns_bounded_detail_refs() -> None:
     ):
         with TestClient(app) as test_client:
             response = test_client.get(
-                "/api/executions/mm:wf-1/steps/implement/attempts/2"
+                "/api/executions/mm:wf-1/steps/implement/executions/2"
             )
 
     assert response.status_code == 200
     body = response.json()
-    assert body["attempt"] == 2
-    assert body["sourceAttempt"] == 2
-    assert body["lineage"]["relationship"] == "resume_from_failed_step"
+    assert body["executionOrdinal"] == 2
+    assert body["sourceExecutionOrdinal"] == 2
+    assert body["lineage"]["relationship"] == "recover_from_failed_step"
     assert body["inputRefs"] == {"preparedInputRef": "art-input-2"}
     assert body["contextRefs"] == {"contextBundleRef": "art-context-2"}
     assert body["workspaceRefs"] == {
@@ -6528,7 +6528,7 @@ def test_get_execution_step_attempt_returns_bounded_detail_refs() -> None:
     assert "outputs" not in body
 
 
-def test_get_execution_step_attempts_preserves_artifact_authorization() -> None:
+def test_get_execution_step_executions_preserves_artifact_authorization() -> None:
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
@@ -6550,7 +6550,7 @@ def test_get_execution_step_attempts_preserves_artifact_authorization() -> None:
                     "status": "failed",
                     "waitingReason": None,
                     "attentionRequired": False,
-                    "attempt": 1,
+                    "executionOrdinal": 1,
                     "startedAt": "2026-05-19T10:00:00Z",
                     "updatedAt": "2026-05-19T10:01:00Z",
                     "summary": None,
@@ -6559,8 +6559,8 @@ def test_get_execution_step_attempts_preserves_artifact_authorization() -> None:
                         "childWorkflowId": None,
                         "childRunId": None,
                         "taskRunId": None,
-                        "latestAttemptManifestRef": "art-attempt-1",
-                        "attemptManifestRefs": ["art-attempt-1"],
+                        "latestExecutionManifestRef": "art-attempt-1",
+                        "executionManifestRefs": ["art-attempt-1"],
                     },
                     "artifacts": {},
                     "lastError": None,
@@ -6580,11 +6580,11 @@ def test_get_execution_step_attempts_preserves_artifact_authorization() -> None:
     ):
         with TestClient(app) as test_client:
             response = test_client.get(
-                "/api/executions/mm:wf-1/steps/implement/attempts"
+                "/api/executions/mm:wf-1/steps/implement/executions"
             )
 
     assert response.status_code == 403
-    assert response.json()["detail"]["code"] == "attempt_manifest_unauthorized"
+    assert response.json()["detail"]["code"] == "execution_manifest_unauthorized"
 
 def test_get_execution_steps_returns_503_for_temporal_rpc_errors() -> None:
     app = FastAPI()
@@ -6696,7 +6696,7 @@ def test_get_execution_steps_falls_back_to_stored_task_steps_when_temporal_query
     assert payload["steps"][1]["tool"]["name"] == "moonspec-implement"
     assert payload["steps"][1]["dependsOn"] == ["fetch-issue"]
     assert payload["steps"][1]["status"] == "running"
-    assert payload["steps"][1]["attempt"] == 1
+    assert payload["steps"][1]["executionOrdinal"] == 1
 
 def test_get_execution_steps_fallback_prefers_structured_step_order(
     monkeypatch: pytest.MonkeyPatch,
@@ -7537,7 +7537,7 @@ def test_missing_legacy_attachment_ref_snapshot_descriptor_is_degraded() -> None
     )
 
 
-def test_task_editing_update_route_emits_attempt_and_result_metrics() -> None:
+def test_task_editing_update_route_emits_execution_and_result_metrics() -> None:
     metrics = Mock()
     for test_client, service in _client_with_service():
         service.describe_execution.return_value = _build_execution_record()
@@ -8023,7 +8023,7 @@ def test_describe_execution_exposes_target_attachment_and_recovery_diagnostics(
                 {
                     "logicalStepId": "prepare",
                     "title": "Prepare context",
-                    "sourceAttempt": 1,
+                    "sourceExecutionOrdinal": 1,
                     "sourceWorkflowId": "mm:source",
                     "sourceRunId": "run-source",
                 }
@@ -8635,14 +8635,14 @@ def test_failed_step_resume_hydrates_checkpoint_artifact(
         "failedStep": {
             "logicalStepId": "implement",
             "order": 2,
-            "attempt": 1,
+            "executionOrdinal": 1,
         },
         "preservedSteps": [
             {
                 "logicalStepId": "plan",
                 "order": 1,
                 "status": "succeeded",
-                "sourceAttempt": 1,
+                "sourceExecutionOrdinal": 1,
                 "artifacts": {"summary": "artifact://completed/plan"},
                 "stateCheckpointRef": "artifact://workspace/before-implement",
             }

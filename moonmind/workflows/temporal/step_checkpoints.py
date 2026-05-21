@@ -1,4 +1,4 @@
-"""Pure helpers for Step Attempt checkpoint identity and validation."""
+"""Pure helpers for Step Execution checkpoint identity and validation."""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ from datetime import datetime
 from typing import Any
 
 from moonmind.schemas.temporal_models import (
-    STEP_ATTEMPT_CHECKPOINT_CONTENT_TYPE,
-    StepAttemptCheckpointBoundary,
-    StepAttemptCheckpointModel,
-    StepAttemptIdentityModel,
+    STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
+    StepExecutionCheckpointBoundary,
+    StepExecutionCheckpointModel,
+    StepExecutionIdentityModel,
     StepCheckpointValidationRequestModel,
     StepCheckpointValidationResultModel,
     WorkspaceCheckpointKind,
@@ -18,40 +18,40 @@ from moonmind.schemas.temporal_models import (
 )
 
 _POLICY_CHECKPOINT_KINDS: dict[WorkspacePolicy, tuple[WorkspaceCheckpointKind, ...]] = {
-    "restore_pre_attempt": (
+    "restore_pre_execution": (
         "git_commit",
         "worktree_archive",
         "ephemeral_workspace_ref",
     ),
-    "continue_from_previous_attempt": (
+    "continue_from_previous_execution": (
         "ephemeral_workspace_ref",
         "git_patch",
         "worktree_archive",
         "git_commit",
         "external_state_ref",
     ),
-    "apply_previous_diff_to_clean_baseline": ("git_patch",),
+    "apply_previous_execution_diff_to_clean_baseline": ("git_patch",),
     "start_from_last_passed_commit": ("git_commit",),
     "fresh_branch_from_source": (),
 }
 
 
 def build_step_checkpoint_id(
-    identity: StepAttemptIdentityModel,
-    boundary: StepAttemptCheckpointBoundary,
+    identity: StepExecutionIdentityModel,
+    boundary: StepExecutionCheckpointBoundary,
 ) -> str:
-    """Build the deterministic identifier for one Step Attempt checkpoint."""
+    """Build the deterministic identifier for one Step Execution checkpoint."""
 
     return (
         f"{identity.workflow_id}:{identity.run_id}:"
-        f"{identity.logical_step_id}:attempt:{identity.attempt}:"
+        f"{identity.logical_step_id}:execution:{identity.execution_ordinal}:"
         f"checkpoint:{boundary}"
     )
 
 
 def build_step_checkpoint_idempotency_key(
-    identity: StepAttemptIdentityModel,
-    boundary: StepAttemptCheckpointBoundary,
+    identity: StepExecutionIdentityModel,
+    boundary: StepExecutionCheckpointBoundary,
     operation: str = "write",
 ) -> str:
     """Build a deterministic idempotency key for checkpoint activity writes."""
@@ -64,8 +64,8 @@ def build_step_checkpoint_idempotency_key(
 
 def build_step_checkpoint_payload(
     *,
-    identity: StepAttemptIdentityModel,
-    boundary: StepAttemptCheckpointBoundary,
+    identity: StepExecutionIdentityModel,
+    boundary: StepExecutionCheckpointBoundary,
     task_input_snapshot_ref: str,
     workspace: Mapping[str, Any],
     created_at: datetime,
@@ -76,9 +76,9 @@ def build_step_checkpoint_payload(
 ) -> dict[str, Any]:
     """Build a JSON-serializable checkpoint artifact payload."""
 
-    checkpoint = StepAttemptCheckpointModel(
+    checkpoint = StepExecutionCheckpointModel(
         schemaVersion="v1",
-        contentType=STEP_ATTEMPT_CHECKPOINT_CONTENT_TYPE,
+        contentType=STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
         checkpointId=build_step_checkpoint_id(identity, boundary),
         checkpointKind="step_boundary",
         boundary=boundary,
@@ -105,7 +105,7 @@ def checkpoint_kinds_for_workspace_policy(
 def validate_step_checkpoint(
     request: StepCheckpointValidationRequestModel,
 ) -> StepCheckpointValidationResultModel:
-    """Validate checkpoint evidence before launching attempt or Resume work."""
+    """Validate checkpoint evidence before launching execution or recovery work."""
 
     checkpoint = request.checkpoint
     source = checkpoint.source
@@ -114,8 +114,12 @@ def validate_step_checkpoint(
         return _invalid(request, "source_mismatch", "checkpoint source workflow/run mismatch")
     if source.logical_step_id != expected.logical_step_id:
         return _invalid(request, "step_mismatch", "checkpoint logical step mismatch")
-    if source.attempt != expected.attempt:
-        return _invalid(request, "attempt_mismatch", "checkpoint attempt mismatch")
+    if source.execution_ordinal != expected.execution_ordinal:
+        return _invalid(
+            request,
+            "attempt_mismatch",
+            "checkpoint execution ordinal mismatch",
+        )
     if checkpoint.task_input_snapshot_ref != request.expected_task_input_snapshot_ref:
         return _invalid(
             request,
@@ -195,7 +199,7 @@ def _invalid(
 
 
 def _checkpoint_artifact_refs(
-    checkpoint: StepAttemptCheckpointModel,
+    checkpoint: StepExecutionCheckpointModel,
     request: StepCheckpointValidationRequestModel,
 ) -> set[str]:
     refs: set[str] = {

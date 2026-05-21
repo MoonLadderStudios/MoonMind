@@ -9411,7 +9411,7 @@ class CodexWorker:
             output_chunk_callback=output_chunk_callback,
         )
 
-    async def _run_codex_step_attempt(
+    async def _run_codex_step_execution(
         self,
         *,
         job_id: UUID,
@@ -9626,7 +9626,7 @@ class CodexWorker:
                 timeout_error,
                 timeout_reason,
                 attempt_duration_seconds,
-            ) = await self._run_codex_step_attempt(
+            ) = await self._run_codex_step_execution(
                 job_id=job_id,
                 canonical_payload=canonical_payload,
                 source_payload=source_payload,

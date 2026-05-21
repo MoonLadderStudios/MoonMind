@@ -522,7 +522,7 @@ These workload containers do not own `session_id`, `session_epoch`, `thread_id`,
 
 All activity invocation should go through the canonical activity catalog. The route defines task queue, worker fleet, capability class, start-to-close timeout, schedule-to-close timeout, heartbeat timeout where required, retry policy, and non-retryable error types.
 
-Broad Workflow Retry Policies should not be the default for `MoonMind.Run`, `MoonMind.AgentRun`, or `MoonMind.AgentSession`, especially when a step may mutate a repository or external system. Retries should be explicit at the Activity or step-attempt level and must be workspace-safe and idempotent.
+Broad Workflow Retry Policies should not be the default for `MoonMind.Run`, `MoonMind.AgentRun`, or `MoonMind.AgentSession`, especially when a step may mutate a repository or external system. Retries should be explicit at the Activity or step-execution level and must be workspace-safe and idempotent.
 
 Automatic recovery from activity timeout is different from recovery from
 workflow-task nondeterminism. Activity failures may be retried according to the

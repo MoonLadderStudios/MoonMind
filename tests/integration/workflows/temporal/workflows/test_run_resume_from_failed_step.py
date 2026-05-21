@@ -24,7 +24,7 @@ def _resume_source(**overrides: object) -> dict[str, object]:
         "sourceTaskInputSnapshotRef": "artifact://snapshot/source",
         "sourcePlanDigest": "sha256:source-plan",
         "failedStepId": "implement",
-        "failedStepAttempt": 1,
+        "failedStepExecutionOrdinal": 1,
         "resumeCheckpointRef": "artifact://resume/checkpoint",
         "resumeWorkspace": {
             "checkpointRef": "artifact://workspace/before-implement",
@@ -33,7 +33,7 @@ def _resume_source(**overrides: object) -> dict[str, object]:
             {
                 "logicalStepId": "prepare",
                 "status": "succeeded",
-                "sourceAttempt": 1,
+                "sourceExecutionOrdinal": 1,
                 "artifacts": {
                     "outputSummary": "artifact://prepare-summary",
                     "outputPrimary": "artifact://prepare-output",
@@ -90,7 +90,7 @@ def test_failed_step_resume_preserves_prior_steps_and_unblocks_failed_step() -> 
             {
                 "logicalStepId": "prepare",
                 "status": "succeeded",
-                "sourceAttempt": 1,
+                "sourceExecutionOrdinal": 1,
                 "artifacts": {"outputSummary": "artifact://prepare-summary"},
                 "stateCheckpointRef": "artifact://workspace/prepare",
             }
@@ -128,7 +128,7 @@ def test_failed_step_resume_preserves_only_prior_steps_before_downstream_work() 
             {
                 "logicalStepId": "prepare",
                 "status": "succeeded",
-                "sourceAttempt": 1,
+                "sourceExecutionOrdinal": 1,
                 "artifacts": {"outputSummary": "artifact://prepare-summary"},
                 "stateCheckpointRef": "artifact://workspace/prepare",
             }
@@ -137,12 +137,12 @@ def test_failed_step_resume_preserves_only_prior_steps_before_downstream_work() 
     )
     refresh_ready_steps(rows, updated_at=now)
 
-    assert rows[0]["attempt"] == 0
+    assert rows[0]["executionOrdinal"] == 0
     assert rows[0]["preservedFrom"] == {
         "workflowId": "mm:source",
         "runId": "run-source",
         "logicalStepId": "prepare",
-        "attempt": 1,
+        "executionOrdinal": 1,
     }
     assert rows[1]["logicalStepId"] == "implement"
     assert rows[1]["status"] == "ready"
@@ -173,7 +173,7 @@ def test_failed_step_resume_rejects_preserved_step_without_state_checkpoint() ->
                 {
                     "logicalStepId": "prepare",
                     "status": "succeeded",
-                    "sourceAttempt": 1,
+                    "sourceExecutionOrdinal": 1,
                     "artifacts": {"outputSummary": "artifact://prepare-summary"},
                 }
             ],
@@ -241,7 +241,7 @@ def test_resume_initialization_validates_source_identity_before_execution() -> N
         "workflowId": "mm:source",
         "runId": "run-source",
         "logicalStepId": "prepare",
-        "attempt": 1,
+        "executionOrdinal": 1,
     }
     assert workflow._step_ledger_rows[1]["status"] == "ready"
 
@@ -266,11 +266,11 @@ def test_resume_preserved_outputs_are_injected_for_failed_step_continuation() ->
 
     assert outputs["prepare"]["outputSummary"] == "artifact://prepare-summary"
     assert outputs["prepare"]["outputPrimary"] == "artifact://prepare-output"
-    assert outputs["prepare"]["producingAttempt"] == {
+    assert outputs["prepare"]["producingExecution"] == {
         "workflowId": "mm:source",
         "runId": "run-source",
         "logicalStepId": "prepare",
-        "attempt": 1,
+        "executionOrdinal": 1,
     }
 
 
@@ -328,7 +328,7 @@ def test_dependency_inputs_pin_specific_producing_attempt_outputs() -> None:
             {
                 "logicalStepId": "prepare",
                 "status": "succeeded",
-                "sourceAttempt": 2,
+                "sourceExecutionOrdinal": 2,
                 "artifacts": {
                     "outputSummary": "artifact://prepare-summary",
                     "outputPrimary": "artifact://prepare-output",
@@ -348,11 +348,11 @@ def test_dependency_inputs_pin_specific_producing_attempt_outputs() -> None:
     )
 
     assert signatures["prepare"] == {
-        "producingAttempt": {
+        "producingExecution": {
             "workflowId": "mm:source",
             "runId": "run-source",
             "logicalStepId": "prepare",
-            "attempt": 2,
+            "executionOrdinal": 2,
         },
         "outputRefs": {
             "outputSummary": "artifact://prepare-summary",
@@ -441,16 +441,16 @@ def test_changed_upstream_output_clears_preserved_downstream_revalidation_marker
             {
                 "logicalStepId": "verify",
                 "status": "succeeded",
-                "sourceAttempt": 1,
+                "sourceExecutionOrdinal": 1,
                 "artifacts": {"outputPrimary": "artifact://verify-output-old"},
                 "stateCheckpointRef": "artifact://workspace/verify-old",
                 "dependencyInputs": {
                     "implement": {
-                        "producingAttempt": {
+                        "producingExecution": {
                             "workflowId": "mm:resume",
                             "runId": "run-resume",
                             "logicalStepId": "implement",
-                            "attempt": 1,
+                            "executionOrdinal": 1,
                         },
                         "outputRefs": {
                             "outputPrimary": "artifact://implement-output-old"
@@ -506,23 +506,23 @@ def test_preserved_downstream_reuse_requires_matching_dependency_gate() -> None:
             {
                 "logicalStepId": "implement",
                 "status": "succeeded",
-                "sourceAttempt": 2,
+                "sourceExecutionOrdinal": 2,
                 "artifacts": {"outputPrimary": "artifact://implement-output-new"},
                 "stateCheckpointRef": "artifact://workspace/implement-new",
             },
             {
                 "logicalStepId": "verify",
                 "status": "succeeded",
-                "sourceAttempt": 1,
+                "sourceExecutionOrdinal": 1,
                 "artifacts": {"outputPrimary": "artifact://verify-output-old"},
                 "stateCheckpointRef": "artifact://workspace/verify-old",
                 "dependencyInputs": {
                     "implement": {
-                        "producingAttempt": {
+                        "producingExecution": {
                             "workflowId": "mm:source",
                             "runId": "run-source",
                             "logicalStepId": "implement",
-                            "attempt": 1,
+                            "executionOrdinal": 1,
                         },
                         "outputRefs": {
                             "outputPrimary": "artifact://implement-output-old"

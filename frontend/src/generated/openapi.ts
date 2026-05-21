@@ -1331,15 +1331,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/executions/{workflow_id}/steps/{logical_step_id}/attempts": {
+    "/api/executions/{workflow_id}/steps/{logical_step_id}/executions": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Describe Execution Step Attempts */
-        get: operations["describe_execution_step_attempts_api_executions__workflow_id__steps__logical_step_id__attempts_get"];
+        /** Describe Execution Step Executions */
+        get: operations["describe_execution_step_executions_api_executions__workflow_id__steps__logical_step_id__executions_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1348,15 +1348,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/executions/{workflow_id}/steps/{logical_step_id}/attempts/{attempt}": {
+    "/api/executions/{workflow_id}/steps/{logical_step_id}/executions/{execution_ordinal}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Describe Execution Step Attempt */
-        get: operations["describe_execution_step_attempt_api_executions__workflow_id__steps__logical_step_id__attempts__attempt__get"];
+        /** Describe Execution Step Execution */
+        get: operations["describe_execution_step_execution_api_executions__workflow_id__steps__logical_step_id__executions__execution_ordinal__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3090,8 +3090,8 @@ export interface components {
         AutomationPhaseState: {
             phase: components["schemas"]["AutomationPhase"];
             status: components["schemas"]["AutomationTaskStatus"];
-            /** Attempt */
-            attempt: number;
+            /** Executionordinal */
+            executionOrdinal: number;
             /** Started At */
             started_at?: string | null;
             /** Completed At */
@@ -4780,8 +4780,8 @@ export interface components {
             logicalStepId: string;
             /** Title */
             title?: string | null;
-            /** Sourceattempt */
-            sourceAttempt?: number | null;
+            /** Sourceexecutionordinal */
+            sourceExecutionOrdinal?: number | null;
             /** Sourceworkflowid */
             sourceWorkflowId?: string | null;
             /** Sourcerunid */
@@ -5627,8 +5627,8 @@ export interface components {
             runId: string;
             /** Logicalstepid */
             logicalStepId: string;
-            /** Attempt */
-            attempt: number;
+            /** Executionordinal */
+            executionOrdinal: number;
         };
         /**
          * PresignDownloadResponse
@@ -6574,30 +6574,30 @@ export interface components {
             }[];
         };
         /**
-         * StepAttemptDetailModel
-         * @description Bounded Step Attempt detail projection with section refs only.
+         * StepExecutionDetailModel
+         * @description Bounded Step Execution detail projection with section refs only.
          */
-        StepAttemptDetailModel: {
+        StepExecutionDetailModel: {
             /** Manifestartifactref */
             manifestArtifactRef: string;
-            /** Stepattemptid */
-            stepAttemptId: string;
+            /** Stepexecutionid */
+            stepExecutionId: string;
             /** Workflowid */
             workflowId: string;
             /** Runid */
             runId: string;
             /** Logicalstepid */
             logicalStepId: string;
-            /** Attempt */
-            attempt: number;
-            /** Sourceattempt */
-            sourceAttempt?: number | null;
-            lineage?: components["schemas"]["StepAttemptLineageModel"] | null;
+            /** Executionordinal */
+            executionOrdinal: number;
+            /** Sourceexecutionordinal */
+            sourceExecutionOrdinal?: number | null;
+            lineage?: components["schemas"]["StepExecutionLineageModel"] | null;
             /**
              * Reason
              * @enum {string}
              */
-            reason: "initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "resume_from_failed_step" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation";
+            reason: "initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation";
             /**
              * Status
              * @enum {string}
@@ -6659,28 +6659,28 @@ export interface components {
             };
         };
         /**
-         * StepAttemptLineageModel
-         * @description Optional cross-run provenance for resumed or related attempts.
+         * StepExecutionLineageModel
+         * @description Optional cross-run provenance for resumed or related executions.
          */
-        StepAttemptLineageModel: {
+        StepExecutionLineageModel: {
             /** Sourceworkflowid */
             sourceWorkflowId: string;
             /** Sourcerunid */
             sourceRunId: string;
             /** Sourcelogicalstepid */
             sourceLogicalStepId: string;
-            /** Sourceattempt */
-            sourceAttempt: number;
+            /** Sourceexecutionordinal */
+            sourceExecutionOrdinal: number;
             /** Relationship */
             relationship?: string | null;
-            /** Lineageattemptordinal */
-            lineageAttemptOrdinal?: number | null;
+            /** Lineageexecutionordinal */
+            lineageExecutionOrdinal?: number | null;
         };
         /**
-         * StepAttemptListModel
-         * @description Bounded attempt history for one logical step.
+         * StepExecutionListModel
+         * @description Bounded execution history for one logical step.
          */
-        StepAttemptListModel: {
+        StepExecutionListModel: {
             /** Workflowid */
             workflowId: string;
             /** Runid */
@@ -6693,34 +6693,34 @@ export interface components {
             runScope: "latest";
             /** Logicalstepid */
             logicalStepId: string;
-            /** Attempts */
-            attempts?: components["schemas"]["StepAttemptProjectionModel"][];
+            /** Executions */
+            executions?: components["schemas"]["StepExecutionProjectionModel"][];
         };
         /**
-         * StepAttemptProjectionModel
-         * @description Bounded Step Attempt projection derived from manifest refs.
+         * StepExecutionProjectionModel
+         * @description Bounded Step Execution projection derived from manifest refs.
          */
-        StepAttemptProjectionModel: {
+        StepExecutionProjectionModel: {
             /** Manifestartifactref */
             manifestArtifactRef: string;
-            /** Stepattemptid */
-            stepAttemptId: string;
+            /** Stepexecutionid */
+            stepExecutionId: string;
             /** Workflowid */
             workflowId: string;
             /** Runid */
             runId: string;
             /** Logicalstepid */
             logicalStepId: string;
-            /** Attempt */
-            attempt: number;
-            /** Sourceattempt */
-            sourceAttempt?: number | null;
-            lineage?: components["schemas"]["StepAttemptLineageModel"] | null;
+            /** Executionordinal */
+            executionOrdinal: number;
+            /** Sourceexecutionordinal */
+            sourceExecutionOrdinal?: number | null;
+            lineage?: components["schemas"]["StepExecutionLineageModel"] | null;
             /**
              * Reason
              * @enum {string}
              */
-            reason: "initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "resume_from_failed_step" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation";
+            reason: "initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation";
             /**
              * Status
              * @enum {string}
@@ -6773,9 +6773,9 @@ export interface components {
             /** Providersnapshot */
             providerSnapshot?: string | null;
             /** Attemptmanifestref */
-            attemptManifestRef?: string | null;
+            executionManifestRef?: string | null;
             /** Attemptmanifestrefs */
-            attemptManifestRefs?: string[];
+            executionManifestRefs?: string[];
         };
         /**
          * StepLedgerCheckModel
@@ -6806,9 +6806,9 @@ export interface components {
             /** Childrunid */
             childRunId?: string | null;
             /** Latestattemptmanifestref */
-            latestAttemptManifestRef?: string | null;
+            latestExecutionManifestRef?: string | null;
             /** Attemptmanifestrefs */
-            attemptManifestRefs?: string[];
+            executionManifestRefs?: string[];
         };
         /**
          * StepLedgerResumePreservationModel
@@ -6827,7 +6827,7 @@ export interface components {
         };
         /**
          * StepLedgerRowModel
-         * @description Current/latest attempt state for one logical step in the active run.
+         * @description Current/latest execution state for one logical step in the active run.
          */
         StepLedgerRowModel: {
             /** Logicalstepid */
@@ -6858,7 +6858,7 @@ export interface components {
              * Attempt
              * @default 0
              */
-            attempt: number;
+            executionOrdinal: number;
             /** Startedat */
             startedAt?: string | null;
             /**
@@ -6907,7 +6907,7 @@ export interface components {
         StepLedgerWorkloadModel: {
             /** Stepid */
             stepId?: string | null;
-            /** Attempt */
+            /** Executionordinal */
             attempt?: number | null;
             /** Toolname */
             toolName?: string | null;
@@ -8264,8 +8264,8 @@ export interface components {
             /** Taskname */
             taskName: string;
             status: components["schemas"]["WorkflowTaskStatus"];
-            /** Attempt */
-            attempt: number;
+            /** Executionordinal */
+            executionOrdinal: number;
             /** Payload */
             payload?: {
                 [key: string]: unknown;
@@ -8297,8 +8297,8 @@ export interface components {
             /** Taskname */
             taskName: string;
             status: components["schemas"]["WorkflowTaskStatus"];
-            /** Attempt */
-            attempt: number;
+            /** Executionordinal */
+            executionOrdinal: number;
             /** Startedat */
             startedAt?: string | null;
             /** Finishedat */
@@ -11098,7 +11098,7 @@ export interface operations {
             };
         };
     };
-    describe_execution_step_attempts_api_executions__workflow_id__steps__logical_step_id__attempts_get: {
+    describe_execution_step_executions_api_executions__workflow_id__steps__logical_step_id__executions_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -11116,7 +11116,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["StepAttemptListModel"];
+                    "application/json": components["schemas"]["StepExecutionListModel"];
                 };
             };
             /** @description Validation Error */
@@ -11130,14 +11130,14 @@ export interface operations {
             };
         };
     };
-    describe_execution_step_attempt_api_executions__workflow_id__steps__logical_step_id__attempts__attempt__get: {
+    describe_execution_step_execution_api_executions__workflow_id__steps__logical_step_id__executions__execution_ordinal__get: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 workflow_id: string;
                 logical_step_id: string;
-                attempt: number;
+                executionOrdinal: number;
             };
             cookie?: never;
         };
@@ -11149,7 +11149,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["StepAttemptDetailModel"];
+                    "application/json": components["schemas"]["StepExecutionDetailModel"];
                 };
             };
             /** @description Validation Error */

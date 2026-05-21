@@ -2,13 +2,13 @@
 
 from .payload import compile_task_payload_templates
 from .prepared_context import (
-    AttemptContextBundle,
+    ExecutionContextBundle,
     PreparedContextFailure,
     PreparedInputEntry,
     PreparedInputManifest,
     RetrievalManifest,
     StepPreparedContext,
-    build_attempt_context_bundle,
+    build_execution_context_bundle,
     build_memory_manifest,
     build_prepared_input_manifest,
     build_retrieval_manifest,
@@ -20,13 +20,13 @@ from .prepared_context import (
 )
 
 __all__ = [
-    "AttemptContextBundle",
+    "ExecutionContextBundle",
     "PreparedContextFailure",
     "PreparedInputEntry",
     "PreparedInputManifest",
     "RetrievalManifest",
     "StepPreparedContext",
-    "build_attempt_context_bundle",
+    "build_execution_context_bundle",
     "build_memory_manifest",
     "build_prepared_input_manifest",
     "build_retrieval_manifest",

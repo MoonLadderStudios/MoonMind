@@ -2352,7 +2352,7 @@ describe('Workflow Detail Entrypoint', () => {
             {
               logicalStepId: 'prepare',
               title: 'Prepare context',
-              sourceAttempt: 1,
+              sourceExecutionOrdinal: 1,
               sourceWorkflowId: 'mm:source',
               sourceRunId: 'run-source',
             },
@@ -2498,7 +2498,7 @@ describe('Workflow Detail Entrypoint', () => {
             {
               logicalStepId: 'prepare',
               title: 'Prepare context',
-              sourceAttempt: 1,
+              sourceExecutionOrdinal: 1,
               sourceWorkflowId: 'mm:source',
               sourceRunId: 'run-source',
             },

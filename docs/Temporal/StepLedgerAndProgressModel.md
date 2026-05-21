@@ -291,7 +291,7 @@ When a failed task is resumed from the failed step, completed prior steps are re
 Rules:
 
 - preserved rows keep the logical step ID and display order from the source plan
-- preserved rows carry `preservedFrom.workflowId`, `preservedFrom.runId`, `preservedFrom.logicalStepId`, and `preservedFrom.attempt`
+- preserved rows carry `preservedFrom.workflowId`, `preservedFrom.runId`, `preservedFrom.logicalStepId`, and `preservedFrom.executionOrdinal`
 - preserved rows reuse semantic artifact refs from the source attempt rather than producing fresh step output artifacts
 - preserved rows do not increment the resumed run's execution attempt count for that step
 - the failed step that is retried in the resumed execution receives a normal fresh attempt in the resumed run
@@ -379,7 +379,7 @@ Representative shape:
       "logicalStepId": "apply-patch",
       "order": 3,
       "status": "succeeded",
-      "sourceAttempt": 1,
+      "sourceExecutionOrdinal": 1,
       "artifacts": {
         "outputSummary": "art_summary",
         "outputPrimary": "art_output"
