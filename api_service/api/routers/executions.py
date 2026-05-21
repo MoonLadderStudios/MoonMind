@@ -377,7 +377,7 @@ def _normalize_temporal_list_scope(
 ) -> Literal["tasks", "user", "system", "all"]:
     """Return the product-facing Temporal list scope.
 
-    The default task dashboard view is intentionally not a raw Temporal
+    The default workflow console view is intentionally not a raw Temporal
     namespace browser. Recognized broad workflow scopes are accepted for old
     URLs but fail safe to task-run visibility on this ordinary list boundary.
     """
@@ -752,7 +752,7 @@ def _build_temporal_execution_query(
         query_parts.append(scope_query)
     if workflow_type and not _is_task_list_workflow_type(workflow_type):
         logger.info(
-            "Ignoring workflowType=%s for ordinary task-list temporal query",
+            "Ignoring workflowType=%s for ordinary workflow-list temporal query",
             workflow_type,
         )
     elif workflow_type and not scope_query:
@@ -767,7 +767,7 @@ def _build_temporal_execution_query(
         exclude=state_not_in_values,
     )
     if entry and not _is_task_list_entry(entry):
-        logger.info("Ignoring entry=%s for ordinary task-list temporal query", entry)
+        logger.info("Ignoring entry=%s for ordinary workflow-list temporal query", entry)
     elif entry and not scope_query:
         query_parts.append(f'mm_entry="{_escape_temporal_value(entry)}"')
     if owner_type:
@@ -1762,7 +1762,7 @@ def _serialize_execution(
             or _coerce_temporal_scalar(task_runtime_payload.get("requested_model"))
         ) or None
     # Ensure model and resolved_model are populated whenever any model
-    # signal is available so the Mission Control task detail page
+    # signal is available so the Mission Control workflow detail page
     # consistently surfaces a Model fact instead of intermittently
     # hiding it for executions whose params omit one of the aliases.
     effective_model = param_model or param_resolved_model or param_requested_model
@@ -6054,7 +6054,7 @@ async def _handle_recurring_schedule(
         cron=definition.cron,
         timezone=definition.timezone,
         nextRunAt=definition.next_run_at,
-        redirectPath=f"/tasks/schedules/{definition.id}",
+        redirectPath=f"/schedules/{definition.id}",
     )
 
 class _ScheduleRouteResult:

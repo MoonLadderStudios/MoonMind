@@ -263,7 +263,7 @@ export function recordTemporalTaskEditingClientEvent(
 }
 
 export function taskCreateHref(): string {
-  return '/tasks/new';
+  return '/workflows/new';
 }
 
 export function taskEditHref(workflowId: string): string {

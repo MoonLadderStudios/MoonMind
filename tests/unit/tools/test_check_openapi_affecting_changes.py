@@ -23,14 +23,14 @@ def test_matches_backend_api_descendants_from_args() -> None:
 
 def test_matches_backend_schema_descendants_from_stdin() -> None:
     result = _run_script(
-        stdin="frontend/src/entrypoints/task-detail.tsx\nmoonmind/schemas/temporal_artifact_models.py\n"
+        stdin="frontend/src/entrypoints/workflow-detail.tsx\nmoonmind/schemas/temporal_artifact_models.py\n"
     )
 
     assert result.returncode == 0
 
 def test_ignores_unrelated_paths() -> None:
     result = _run_script(
-        "frontend/src/entrypoints/task-detail.tsx",
+        "frontend/src/entrypoints/workflow-detail.tsx",
         "docs/UI/MissionControlArchitecture.md",
     )
 

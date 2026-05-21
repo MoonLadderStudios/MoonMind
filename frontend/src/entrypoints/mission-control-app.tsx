@@ -11,10 +11,10 @@ const PAGE_COMPONENTS = {
   schedules: lazy(() => import('./schedules')),
   settings: lazy(() => import('./settings')),
   skills: lazy(() => import('./skills')),
-  'task-create': lazy(() => import('./task-create')),
-  'task-detail': lazy(() => import('./task-detail')),
-  'tasks-home': lazy(() => import('./tasks-home')),
-  'tasks-list': lazy(() => import('./tasks-list')),
+  'workflow-start': lazy(() => import('./workflow-start')),
+  'workflow-detail': lazy(() => import('./workflow-detail')),
+  'workflows-home': lazy(() => import('./workflows-home')),
+  'workflow-list': lazy(() => import('./workflow-list')),
 } satisfies Record<string, PageComponent>;
 
 type SupportedPage = keyof typeof PAGE_COMPONENTS;

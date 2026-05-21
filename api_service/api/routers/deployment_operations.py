@@ -356,7 +356,7 @@ def _recent_action_from_execution_record(
         reason=str(inputs.get("reason") or "").strip() or None,
         started_at=_iso_text(getattr(record, "started_at", None)),
         completed_at=_iso_text(getattr(record, "closed_at", None)),
-        run_detail_url=f"/tasks/{getattr(record, 'workflow_id', '')}",
+        run_detail_url=f"/workflows/{getattr(record, 'workflow_id', '')}",
         logs_artifact_url=_artifact_url(evidence_ref),
         raw_command_log_url=None,
         raw_command_log_permitted=False,

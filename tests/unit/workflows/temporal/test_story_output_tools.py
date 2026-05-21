@@ -207,7 +207,7 @@ async def test_create_jira_issues_narrows_partially_implemented_story_to_remaini
                         "summary": "Complete report bundle download UX",
                         "description": "Add the missing Mission Control link.",
                         "acceptanceCriteria": ["Bundle download link is visible."],
-                        "requirements": ["Expose bundle URL in the task details UI."],
+                        "requirements": ["Expose bundle URL in the workflow details UI."],
                     },
                     "jiraCreation": {
                         "action": "create_remaining_work_issue",

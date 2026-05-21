@@ -1,3 +1,3 @@
 export function missionControlViteBase(command: string): string {
-  return command === "build" ? "/static/task_dashboard/dist/" : "/";
+  return command === "build" ? "/static/workflow_console/dist/" : "/";
 }

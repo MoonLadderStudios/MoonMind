@@ -1,6 +1,6 @@
 import { BootPayload } from '../boot/parseBootPayload';
 
-export function TasksHomePage({ payload }: { payload: BootPayload }) {
+export function WorkflowsHomePage({ payload }: { payload: BootPayload }) {
   return (
     <div className="p-4 border rounded shadow-sm bg-white">
       <h1 className="text-xl font-bold mb-2">Hello from Tasks Home!</h1>
@@ -9,4 +9,4 @@ export function TasksHomePage({ payload }: { payload: BootPayload }) {
     </div>
   );
 }
-export default TasksHomePage;
+export default WorkflowsHomePage;

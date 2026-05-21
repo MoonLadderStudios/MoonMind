@@ -11,14 +11,14 @@ import {
 
 import type { BootPayload } from "../boot/parseBootPayload";
 import { renderWithClient } from "../utils/test-utils";
-import { TaskCreatePage } from "./task-create";
+import { WorkflowStartPage } from "./workflow-start";
 
 vi.mock("../lib/navigation", () => ({
   navigateTo: vi.fn(),
 }));
 
 const mockPayload: BootPayload = {
-  page: "task-create",
+  page: "workflow-start",
   apiBase: "/api",
   initialData: {
     dashboardConfig: {
@@ -80,7 +80,7 @@ describe("Task Create Step Type authoring", () => {
   let fetchSpy: MockInstance;
 
   beforeEach(() => {
-    window.history.pushState({}, "Task Create", "/tasks/new");
+    window.history.pushState({}, "Task Create", "/workflows/new");
     window.sessionStorage.clear();
     window.localStorage.clear();
     fetchSpy = vi
@@ -188,7 +188,7 @@ describe("Task Create Step Type authoring", () => {
   });
 
   it("shows one Step Type selector and visibly discards incompatible Skill state", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
@@ -239,7 +239,7 @@ describe("Task Create Step Type authoring", () => {
   });
 
   it("clears Preset configuration after changing Step Type without showing the discard warning", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
@@ -283,7 +283,7 @@ describe("Task Create Step Type authoring", () => {
   });
 
   it("expands a preset step in place and pushes following steps down", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Add Step" }));
     fireEvent.click(screen.getByRole("button", { name: "Add Step" }));
@@ -360,7 +360,7 @@ describe("Task Create Step Type authoring", () => {
   });
 
   it("expands a preset using the latest preset instructions", async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const step = (await screen.findByText("Step 1")).closest(
       "section",
@@ -412,7 +412,7 @@ describe("Task Create Step Type authoring", () => {
       return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
     });
 
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const step = (await screen.findByText("Step 1")).closest(
       "section",

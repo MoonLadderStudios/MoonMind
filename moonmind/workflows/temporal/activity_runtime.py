@@ -2985,7 +2985,7 @@ class TemporalProposalActivities:
             proposal_idea, instructions
         )
 
-        # Reconstruct a task-create request envelope from the original
+        # Reconstruct a workflow-start request envelope from the original
         # execution context so that the proposal can be promoted to a
         # queued task with one click.
         runtime_node = task.get("runtime")

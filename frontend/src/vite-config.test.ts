@@ -11,7 +11,7 @@ const tailwindConfig = require("../../tailwind.config.cjs") as {
 
 describe("vite.config", () => {
   it("serves built Mission Control chunks from the mounted static dist root", () => {
-    expect(missionControlViteBase("build")).toBe("/static/task_dashboard/dist/");
+    expect(missionControlViteBase("build")).toBe("/static/workflow_console/dist/");
   });
 
   it("keeps dev-server asset URLs at the Vite root during local HMR", () => {
@@ -27,7 +27,7 @@ describe("vite.config", () => {
       ]),
     );
     expect(tailwindConfig.content ?? []).not.toContain(
-      "./api_service/static/task_dashboard/dist/**/*",
+      "./api_service/static/workflow_console/dist/**/*",
     );
   });
 
@@ -38,7 +38,7 @@ describe("vite.config", () => {
     );
     const generatedDistRoot = resolve(
       process.cwd(),
-      "api_service/static/task_dashboard/dist",
+      "api_service/static/workflow_console/dist",
     );
     const canonicalStyleSourcePath = canonicalStyleSource.replace(/\\/g, "/");
     const generatedDistRootPath = generatedDistRoot.replace(/\\/g, "/");
@@ -47,7 +47,7 @@ describe("vite.config", () => {
       /frontend\/src\/styles\/mission-control\.css$/,
     );
     expect(generatedDistRootPath).toMatch(
-      /api_service\/static\/task_dashboard\/dist$/,
+      /api_service\/static\/workflow_console\/dist$/,
     );
     expect(canonicalStyleSource.startsWith(generatedDistRoot)).toBe(false);
   });

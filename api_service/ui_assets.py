@@ -24,13 +24,13 @@ class InvalidDevServerUrlError(MissionControlUIAssetsError):
     pass
 
 def local_ui_dist_root() -> Path:
-    return Path(__file__).resolve().parent / "static" / "task_dashboard" / "dist"
+    return Path(__file__).resolve().parent / "static" / "workflow_console" / "dist"
 
 def bundled_ui_dist_root() -> Path:
     return Path(
         os.environ.get(
             "MOONMIND_BUNDLED_UI_DIST_ROOT",
-            "/opt/moonmind_static/task_dashboard/dist",
+            "/opt/moonmind_static/workflow_console/dist",
         )
     )
 
@@ -334,11 +334,11 @@ def ui_assets(entrypoint: str) -> str:
 
     tags: list[str] = []
     tags.append(
-        f'<script type="module" crossorigin src="/static/task_dashboard/dist/{js_file}"></script>'
+        f'<script type="module" crossorigin src="/static/workflow_console/dist/{js_file}"></script>'
     )
     for css_file in css_files:
         tags.append(
-            f'<link rel="stylesheet" crossorigin href="/static/task_dashboard/dist/{css_file}">'
+            f'<link rel="stylesheet" crossorigin href="/static/workflow_console/dist/{css_file}">'
         )
 
     return "\n".join(tags)

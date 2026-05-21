@@ -1010,7 +1010,7 @@ async def test_write_complete_rejects_invalid_task_image_signature(
             artifact, _upload = await service.create(
                 principal="user-1",
                 content_type="image/png",
-                metadata_json={"source": "task-dashboard-step-attachment"},
+                metadata_json={"source": "workflow-console-step-attachment"},
             )
 
             with pytest.raises(

@@ -8,7 +8,7 @@ export default defineConfig(({ command }) => ({
   plugins: [react()],
   root: resolve(__dirname, 'src'),
   build: {
-    outDir: resolve(__dirname, '../api_service/static/task_dashboard/dist'),
+    outDir: resolve(__dirname, '../api_service/static/workflow_console/dist'),
     emptyOutDir: true,
     manifest: true,
     rollupOptions: {

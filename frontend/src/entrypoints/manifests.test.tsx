@@ -18,7 +18,7 @@ describe('Manifests Entrypoint', () => {
   let fetchSpy: MockInstance;
 
   beforeEach(() => {
-    window.history.pushState({}, 'Manifests', '/tasks/manifests');
+    window.history.pushState({}, 'Manifests', '/manifests');
     fetchSpy = vi.spyOn(window, 'fetch').mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url === '/api/executions?entry=manifest&limit=200') {
@@ -36,7 +36,7 @@ describe('Manifests Entrypoint', () => {
                 status: 'completed',
                 startedAt: '2026-04-21T12:00:00Z',
                 durationSeconds: 42,
-                detailHref: '/tasks/mm:existing-manifest?source=temporal',
+                detailHref: '/workflows/mm:existing-manifest?source=temporal',
               },
               {
                 taskId: 'mm:running-manifest',
@@ -48,7 +48,7 @@ describe('Manifests Entrypoint', () => {
                 status: 'running',
                 phase: 'fetch',
                 startedAt: '2026-04-21T12:05:00Z',
-                detailHref: '/tasks/mm:running-manifest?source=temporal',
+                detailHref: '/workflows/mm:running-manifest?source=temporal',
               },
             ],
           }),
@@ -69,7 +69,7 @@ describe('Manifests Entrypoint', () => {
             source: 'temporal',
             execution: {
               workflowId: 'mm:manifest-123',
-              link: '/tasks/mm:manifest-123?source=temporal',
+              link: '/workflows/mm:manifest-123?source=temporal',
             },
           }),
         } as Response);
@@ -201,7 +201,7 @@ describe('Manifests Entrypoint', () => {
     await waitFor(() => {
       expect(screen.getByText('Manifest run started: mm:manifest-123')).toBeTruthy();
     });
-    expect(screen.getByRole('link', { name: 'Open run' }).getAttribute('href')).toBe('/tasks/mm:manifest-123?source=temporal');
+    expect(screen.getByRole('link', { name: 'Open run' }).getAttribute('href')).toBe('/workflows/mm:manifest-123?source=temporal');
     expect(fetchSpy.mock.calls.filter(([url]) => url === '/api/executions?entry=manifest&limit=200').length).toBeGreaterThanOrEqual(2);
   });
 
@@ -221,7 +221,7 @@ describe('Manifests Entrypoint', () => {
             source: 'temporal',
             execution: {
               workflowId: 'mm:manifest-123',
-              link: '/tasks/mm:manifest-123?source=temporal',
+              link: '/workflows/mm:manifest-123?source=temporal',
             },
           }),
         } as Response);

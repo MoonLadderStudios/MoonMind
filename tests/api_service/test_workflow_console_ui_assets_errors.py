@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 import api_service.ui_assets as ui_assets_module
-from tests.unit.api.routers.test_task_dashboard import _client_with_mock_service
+from tests.unit.api.routers.test_workflow_console import _client_with_mock_service
 
 def test_tasks_list_returns_503_when_manifest_entry_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -19,13 +19,13 @@ def test_tasks_list_returns_503_when_manifest_entry_missing(
     monkeypatch.delenv("MOONMIND_LENIENT_UI_ASSETS", raising=False)
 
     with _client_with_mock_service() as (client, _mock):
-        response = client.get("/tasks/list")
+        response = client.get("/workflows")
 
     assert response.status_code == 503
     assert "Mission Control UI unavailable" in response.text
     assert "shared Mission Control entrypoint" in response.text
     assert "mission-control" in response.text
-    assert "tasks-list" in response.text
+    assert "workflow-list" in response.text
 
 def test_tasks_list_uses_bundled_manifest_fallback_when_repo_dist_is_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -59,10 +59,10 @@ def test_tasks_list_uses_bundled_manifest_fallback_when_repo_dist_is_missing(
     )
 
     with _client_with_mock_service() as (client, _mock):
-        response = client.get("/tasks/list")
+        response = client.get("/workflows")
 
     assert response.status_code == 200
-    assert "/static/task_dashboard/dist/assets/mission-control.js" in response.text
+    assert "/static/workflow_console/dist/assets/mission-control.js" in response.text
 
 def test_tasks_list_uses_bundled_manifest_fallback_when_repo_dist_is_stale(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -75,14 +75,14 @@ def test_tasks_list_uses_bundled_manifest_fallback_when_repo_dist_is_stale(
     (local_manifest_dir / "manifest.json").write_text(
         json.dumps(
             {
-                "entrypoints/tasks-list.tsx": {
-                    "file": "assets/tasks-list.js",
+                "entrypoints/workflow-list.tsx": {
+                    "file": "assets/workflow-list.js",
                 },
             }
         ),
         encoding="utf-8",
     )
-    (local_assets_dir / "tasks-list.js").write_text(
+    (local_assets_dir / "workflow-list.js").write_text(
         "console.log('stale local dist');", encoding="utf-8"
     )
 
@@ -111,7 +111,7 @@ def test_tasks_list_uses_bundled_manifest_fallback_when_repo_dist_is_stale(
     monkeypatch.setattr(ui_assets_module, "local_ui_dist_root", lambda: local_dist_root)
 
     with _client_with_mock_service() as (client, _mock):
-        response = client.get("/tasks/list")
+        response = client.get("/workflows")
 
     assert response.status_code == 200
-    assert "/static/task_dashboard/dist/assets/mission-control.js" in response.text
+    assert "/static/workflow_console/dist/assets/mission-control.js" in response.text

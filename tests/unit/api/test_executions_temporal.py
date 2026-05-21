@@ -271,7 +271,7 @@ def test_execution_router_exposes_recover_route_without_resume_alias() -> None:
 
     assert "/api/executions/{workflow_id}/recover-from-failed-step" in route_paths
     assert "/api/executions/{workflow_id}/resume-from-failed-step" not in route_paths
-    assert "/api/tasks" not in route_paths
+    assert "/api/workflows" not in route_paths
 
 
 def test_task_detail_instructions_include_task_and_step_text() -> None:

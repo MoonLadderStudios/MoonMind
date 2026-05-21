@@ -196,10 +196,10 @@ async def test_removed_task_api_routes_return_404_without_redirects() -> None:
         follow_redirects=False,
     ) as client:
         route_checks = (
-            ("GET", "/api/tasks"),
-            ("GET", "/api/tasks/skills"),
-            ("POST", "/api/tasks/skills"),
-            ("POST", "/api/tasks/skills/upload"),
+            ("GET", "/api/workflows"),
+            ("GET", "/api/skills"),
+            ("POST", "/api/skills"),
+            ("POST", "/api/skills/upload"),
         )
         for method, path in route_checks:
             response = await client.request(method, path)
@@ -485,7 +485,7 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path, query_state, mon
                     "providerStatus": "queued",
                     "callbackSupported": True,
                     "recommendedPollSeconds": 30,
-                    "externalUrl": "https://jules.example.test/tasks/task-123",
+                    "externalUrl": "https://jules.example.test/workflows/task-123",
                 },
             )
             assert configure_integration.status_code == 202
@@ -1261,13 +1261,13 @@ async def test_task_shaped_create_preserves_image_input_attachments(tmp_path, mo
                 "art_01TESTIMAGEOBJECTIVE000000",
                 content_type="image/png",
                 size_bytes=8,
-                metadata_json={"source": "task-dashboard-step-attachment"},
+                metadata_json={"source": "workflow-console-step-attachment"},
             )
             step_artifact = await _create_uploaded_artifact(
                 "art_01TESTIMAGESTEP0000000000",
                 content_type="image/webp",
                 size_bytes=12,
-                metadata_json={"source": "task-dashboard-step-attachment"},
+                metadata_json={"source": "workflow-console-step-attachment"},
             )
 
             create_response = await client.post(

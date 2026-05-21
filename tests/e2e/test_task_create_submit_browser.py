@@ -9,7 +9,7 @@ from contextlib import closing
 import pytest
 import uvicorn
 
-from api_service.api.routers.task_dashboard import _resolve_user_dependency_overrides
+from api_service.api.routers.workflow_console import _resolve_user_dependency_overrides
 from api_service.db.base import get_async_session
 from api_service.db.models import User, Base
 from api_service.main import app as main_app

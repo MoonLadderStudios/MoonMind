@@ -53,7 +53,7 @@ _ENABLE_TEST_UI_ROUTE = os.environ.get("MOONMIND_ENABLE_TEST_UI_ROUTE", "").lowe
 if _ENABLE_TEST_UI_ROUTE:
     from api_service.test_ui_route import router as test_ui_router
 
-from api_service.api.routers.task_dashboard import router as task_dashboard_router
+from api_service.api.routers.workflow_console import router as workflow_console_router
 from api_service.api.routers.task_runs import router as task_runs_router
 from api_service.api.routers.task_proposals import router as task_proposals_router
 from api_service.api.routers.task_step_templates import (
@@ -384,9 +384,9 @@ templates = Jinja2Templates(directory=TEMPLATES_DIR)
 # /app/api_service do not hide the image-baked fallback bundle.
 if MISSION_CONTROL_STATIC_DIST_DIR.is_dir():
     app.mount(
-        "/static/task_dashboard/dist",
+        "/static/workflow_console/dist",
         StaticFiles(directory=str(MISSION_CONTROL_STATIC_DIST_DIR)),
-        name="task-dashboard-dist",
+        name="workflow-console-dist",
     )
 
 # Mount static files directory (optional, if you have CSS/JS files). Create the
@@ -456,7 +456,7 @@ app.include_router(automation_router)
 app.include_router(task_proposals_router)
 app.include_router(recurring_tasks_router)
 app.include_router(task_runs_router, prefix="/api")
-app.include_router(task_dashboard_router)
+app.include_router(workflow_console_router)
 app.include_router(task_step_templates_router)
 app.include_router(temporal_artifacts_router)
 app.include_router(websockets_router, prefix="/ws/v1", tags=["WebSockets"])

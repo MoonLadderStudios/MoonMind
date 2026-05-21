@@ -148,7 +148,7 @@ async def test_inject_context_uses_local_fallback_when_retrieval_fails(
     mock_retrieve.side_effect = RuntimeError("qdrant unavailable")
     mock_popen.return_value = FakePopen(
         [
-            f"{tmp_path / 'docs' / 'TaskDetails.md'}:12:Task details view shows workflow metadata\n",
+            f"{tmp_path / 'docs' / 'WorkflowDetails.md'}:12:Task details view shows workflow metadata\n",
             f"frontend/TaskView.tsx:8:providerProfile is rendered in the details panel\n",
         ]
     )
@@ -161,7 +161,7 @@ async def test_inject_context_uses_local_fallback_when_retrieval_fails(
     assert result.items_count == 2
     assert "BEGIN_RETRIEVED_CONTEXT" in result.instruction
     assert "Retrieved context mode: degraded local fallback" in result.instruction
-    assert "docs/TaskDetails.md" in result.instruction
+    assert "docs/WorkflowDetails.md" in result.instruction
     assert str(tmp_path) not in result.instruction
     assert "providerProfile is rendered in the details panel" in result.instruction
     assert mock_request.instruction_ref == result.instruction

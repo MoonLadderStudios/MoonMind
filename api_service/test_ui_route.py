@@ -5,9 +5,9 @@ from api_service.ui_assets import ui_assets
 
 router = APIRouter()
 
-@router.get("/test-tasks-home", response_class=HTMLResponse)
+@router.get("/test-workflows-home", response_class=HTMLResponse)
 def test_tasks_home():
-    boot_payload = generate_boot_payload("tasks-home")
+    boot_payload = generate_boot_payload("workflows-home")
     assets_html = ui_assets("mission-control")
 
     html = f"""
