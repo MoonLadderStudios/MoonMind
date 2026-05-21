@@ -38,7 +38,7 @@ def test_ui_assets_uses_vite_dev_server_when_configured(monkeypatch: pytest.Monk
 
     assert 'src="http://127.0.0.1:5173/@vite/client"' in html
     assert 'src="http://127.0.0.1:5173/entrypoints/mission-control.tsx"' in html
-    assert "/static/task_dashboard/dist/" not in html
+    assert "/static/workflow_console/dist/" not in html
 
 def test_ui_assets_rejects_invalid_vite_dev_server_url(
     monkeypatch: pytest.MonkeyPatch,
@@ -46,7 +46,7 @@ def test_ui_assets_rejects_invalid_vite_dev_server_url(
     monkeypatch.setenv("MOONMIND_UI_DEV_SERVER_URL", "vite.local:5173")
 
     with pytest.raises(InvalidDevServerUrlError):
-        ui_assets("tasks-list")
+        ui_assets("workflow-list")
 
 def test_generate_boot_payload():
     payload = generate_boot_payload(page="test_page")

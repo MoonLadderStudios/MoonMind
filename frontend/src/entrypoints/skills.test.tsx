@@ -14,7 +14,7 @@ describe('Skills Entrypoint', () => {
   let fetchSpy: MockInstance;
 
   beforeEach(() => {
-    window.history.pushState({}, 'Skills', '/tasks/skills');
+    window.history.pushState({}, 'Skills', '/skills');
     let listCallCount = 0;
     fetchSpy = vi.spyOn(window, 'fetch').mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);

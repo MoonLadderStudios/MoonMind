@@ -488,12 +488,12 @@ h1 {
   box-shadow: none;
 }
 
-.panel:has(.task-create-page) {
+.panel:has(.workflow-start-page) {
   max-width: min(72rem, calc(100vw - 2rem));
   margin-inline: auto;
 }
 
-.panel:has(.task-list-control-deck) {
+.panel:has(.workflow-list-control-deck) {
   border: 0;
   background: transparent;
   box-shadow: none;
@@ -606,11 +606,11 @@ h1 {
   box-shadow: var(--mm-control-focus-ring);
 }
 
-.task-list-compound-header-cell {
+.workflow-list-compound-header-cell {
   position: relative;
 }
 
-.task-list-compound-header {
+.workflow-list-compound-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -618,7 +618,7 @@ h1 {
   min-width: 0;
 }
 
-.task-list-column-filter-button {
+.workflow-list-column-filter-button {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -636,9 +636,9 @@ h1 {
   box-shadow: none;
 }
 
-.task-list-column-filter-button:hover,
-.task-list-column-filter-button:focus-visible,
-.task-list-column-filter-button.is-active {
+.workflow-list-column-filter-button:hover,
+.workflow-list-column-filter-button:focus-visible,
+.workflow-list-column-filter-button.is-active {
   border-color: var(--mm-control-border);
   background: var(--mm-control-shell);
   color: rgb(var(--mm-accent));
@@ -647,14 +647,14 @@ h1 {
   filter: none;
 }
 
-.task-list-column-filter-icon {
+.workflow-list-column-filter-icon {
   display: block;
   width: 0.85rem;
   height: 0.85rem;
   fill: currentColor;
 }
 
-.task-list-header-filter-popover {
+.workflow-list-header-filter-popover {
   position: absolute;
   top: calc(100% + 0.35rem);
   left: 0;
@@ -667,11 +667,11 @@ h1 {
   box-shadow: 0 18px 42px -28px rgb(var(--mm-ink) / 0.7);
 }
 
-.task-list-header-filter-control {
+.workflow-list-header-filter-control {
   width: 100%;
 }
 
-.task-list-header-filter-popover .task-list-header-filter-control {
+.workflow-list-header-filter-popover .workflow-list-header-filter-control {
   display: grid;
   gap: 0.75rem;
   align-items: stretch;
@@ -683,26 +683,26 @@ h1 {
   transform: none;
 }
 
-.task-list-header-filter-popover .task-list-header-filter-control:hover,
-.task-list-header-filter-popover .task-list-header-filter-control:focus-within {
+.workflow-list-header-filter-popover .workflow-list-header-filter-control:hover,
+.workflow-list-header-filter-popover .workflow-list-header-filter-control:focus-within {
   border: 0;
   background: transparent;
   box-shadow: none;
   transform: none;
 }
 
-.task-list-header-filter-popover .task-list-header-filter-control label {
+.workflow-list-header-filter-popover .workflow-list-header-filter-control label {
   gap: 0.55rem;
   font-size: 0.82rem;
   line-height: 1.35;
 }
 
-.task-list-header-filter-control select,
-.task-list-header-filter-control input {
+.workflow-list-header-filter-control select,
+.workflow-list-header-filter-control input {
   width: 100%;
 }
 
-.task-list-filter-checkbox {
+.workflow-list-filter-checkbox {
   display: flex;
   align-items: center;
   gap: 0.55rem;
@@ -711,11 +711,11 @@ h1 {
   line-height: 1.35;
 }
 
-.task-list-filter-checkbox input {
+.workflow-list-filter-checkbox input {
   width: auto;
 }
 
-.task-list-filter-actions {
+.workflow-list-filter-actions {
   display: flex;
   justify-content: flex-end;
   gap: 0.45rem;
@@ -724,13 +724,13 @@ h1 {
   border-top: 1px solid rgb(var(--mm-border) / 0.7);
 }
 
-.task-list-pill-multiselect {
+.workflow-list-pill-multiselect {
   display: grid;
   gap: 0.45rem;
   width: 100%;
 }
 
-.task-list-pill-list {
+.workflow-list-pill-list {
   list-style: none;
   margin: 0;
   padding: 0.35rem;
@@ -743,18 +743,18 @@ h1 {
   background: rgb(var(--mm-panel) / 0.6);
 }
 
-.task-list-pill-list.is-empty {
+.workflow-list-pill-list.is-empty {
   align-items: center;
   border-style: dashed;
 }
 
-.task-list-pill-empty {
+.workflow-list-pill-empty {
   margin: 0;
   padding: 0 0.35rem;
   opacity: 0.7;
 }
 
-.task-list-pill {
+.workflow-list-pill {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
@@ -767,14 +767,14 @@ h1 {
   color: rgb(var(--mm-ink));
 }
 
-.task-list-pill-label {
+.workflow-list-pill-label {
   white-space: nowrap;
   max-width: 14rem;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.task-list-pill-remove {
+.workflow-list-pill-remove {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -790,12 +790,12 @@ h1 {
   line-height: 1;
 }
 
-.task-list-pill-remove:hover:not(:disabled),
-.task-list-pill-remove:focus-visible {
+.workflow-list-pill-remove:hover:not(:disabled),
+.workflow-list-pill-remove:focus-visible {
   background: rgb(var(--mm-accent) / 0.35);
 }
 
-.task-list-pill-remove:disabled {
+.workflow-list-pill-remove:disabled {
   cursor: not-allowed;
   opacity: 0.6;
 }
@@ -914,13 +914,13 @@ h1 {
   }
 }
 
-.task-list-control-deck {
+.workflow-list-control-deck {
   display: grid;
   gap: 0.85rem;
   padding: 0;
 }
 
-.task-list-control-grid {
+.workflow-list-control-grid {
   display: grid;
   width: 100%;
   max-width: none;
@@ -948,11 +948,11 @@ h1 {
   grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
 }
 
-.task-list-utility-cluster {
+.workflow-list-utility-cluster {
   justify-content: flex-end;
 }
 
-.task-list-filter-row {
+.workflow-list-filter-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -960,7 +960,7 @@ h1 {
   flex-wrap: wrap;
 }
 
-.task-list-filter-chips {
+.workflow-list-filter-chips {
   display: flex;
   align-items: center;
   gap: 0.45rem;
@@ -968,7 +968,7 @@ h1 {
   min-width: 0;
 }
 
-.task-list-filter-chip {
+.workflow-list-filter-chip {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
@@ -982,8 +982,8 @@ h1 {
   box-shadow: inset 0 1px 0 var(--mm-glass-edge);
 }
 
-.task-list-filter-chip-open,
-.task-list-filter-chip-remove {
+.workflow-list-filter-chip-open,
+.workflow-list-filter-chip-remove {
   cursor: pointer;
   font-family: inherit;
   line-height: 1.2;
@@ -994,14 +994,14 @@ h1 {
   padding: 0;
 }
 
-.task-list-filter-chip-open {
+.workflow-list-filter-chip-open {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
   min-width: 0;
 }
 
-.task-list-filter-chip-remove {
+.workflow-list-filter-chip-remove {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1011,10 +1011,10 @@ h1 {
   font-weight: 700;
 }
 
-.task-list-filter-chip:has(.task-list-filter-chip-open:hover),
-.task-list-filter-chip:has(.task-list-filter-chip-open:focus-visible),
-.task-list-filter-chip:has(.task-list-filter-chip-remove:hover),
-.task-list-filter-chip:has(.task-list-filter-chip-remove:focus-visible) {
+.workflow-list-filter-chip:has(.workflow-list-filter-chip-open:hover),
+.workflow-list-filter-chip:has(.workflow-list-filter-chip-open:focus-visible),
+.workflow-list-filter-chip:has(.workflow-list-filter-chip-remove:hover),
+.workflow-list-filter-chip:has(.workflow-list-filter-chip-remove:focus-visible) {
   border-color: rgb(var(--mm-accent) / 0.7);
   color: rgb(var(--mm-accent));
   transform: none;
@@ -1022,23 +1022,23 @@ h1 {
   box-shadow: var(--mm-control-focus-ring);
 }
 
-.task-list-filter-chip strong {
+.workflow-list-filter-chip strong {
   min-width: 0;
   overflow-wrap: anywhere;
   font-weight: 600;
 }
 
-.task-list-clear-filters {
+.workflow-list-clear-filters {
   flex: 0 0 auto;
 }
 
-.task-list-mobile-filter-disclosure {
+.workflow-list-mobile-filter-disclosure {
   display: none;
   flex-direction: column;
   gap: 0.7rem;
 }
 
-.task-list-mobile-filter-toggle {
+.workflow-list-mobile-filter-toggle {
   align-self: stretch;
   display: inline-flex;
   align-items: center;
@@ -1055,14 +1055,14 @@ h1 {
   box-shadow: inset 0 1px 0 var(--mm-glass-edge);
 }
 
-.task-list-mobile-filter-toggle:hover,
-.task-list-mobile-filter-toggle:focus-visible {
+.workflow-list-mobile-filter-toggle:hover,
+.workflow-list-mobile-filter-toggle:focus-visible {
   border-color: rgb(var(--mm-accent) / 0.7);
   color: rgb(var(--mm-accent));
   box-shadow: var(--mm-control-focus-ring);
 }
 
-.task-list-mobile-filter-controls {
+.workflow-list-mobile-filter-controls {
   display: none;
   gap: 0.7rem;
   grid-template-columns: minmax(0, 1fr);
@@ -1127,7 +1127,7 @@ tbody tr:hover {
   width: 100%;
 }
 
-.task-list-data-slab {
+.workflow-list-data-slab {
   gap: 0;
   overflow: visible;
   padding: 0;
@@ -1143,12 +1143,12 @@ tbody tr:hover {
   flex-wrap: wrap;
 }
 
-.task-list-data-slab .queue-results-toolbar {
+.workflow-list-data-slab .queue-results-toolbar {
   padding: 0.85rem 1rem;
   border-bottom: 1px solid rgb(var(--mm-border) / 0.28);
 }
 
-.task-list-results-header {
+.workflow-list-results-header {
   display: flex;
   align-items: center;
   gap: 0.6rem;
@@ -1157,26 +1157,26 @@ tbody tr:hover {
   background: rgb(var(--mm-panel) / 0.85);
 }
 
-.task-list-results-header .page-title {
+.workflow-list-results-header .page-title {
   margin: 0;
   font-size: 1rem;
   letter-spacing: 0.01em;
 }
 
-.task-list-empty-message {
+.workflow-list-empty-message {
   margin: 0;
   padding: 1rem;
 }
 
-.task-list-data-slab .task-list-results-footer {
+.workflow-list-data-slab .workflow-list-results-footer {
   position: relative;
   z-index: 1;
   border-top: 1px solid rgb(var(--mm-border) / 0.28);
   border-bottom: 0;
 }
 
-.task-list-footer-live,
-.task-list-footer-page-summary {
+.workflow-list-footer-live,
+.workflow-list-footer-page-summary {
   display: inline-flex;
   align-items: center;
   gap: 0.65rem;
@@ -1184,20 +1184,20 @@ tbody tr:hover {
   min-width: 0;
 }
 
-.task-list-footer-live {
+.workflow-list-footer-live {
   justify-content: flex-start;
 }
 
-.task-list-footer-live-toggle {
+.workflow-list-footer-live-toggle {
   flex: 0 0 auto;
 }
 
-.task-list-footer-page-summary {
+.workflow-list-footer-page-summary {
   justify-content: flex-end;
   text-align: right;
 }
 
-.task-list-footer-pagination {
+.workflow-list-footer-pagination {
   justify-content: flex-end;
   flex-wrap: wrap;
 }
@@ -1229,7 +1229,7 @@ tbody tr:hover {
   background: rgb(var(--mm-panel) / 0.92);
 }
 
-.task-list-data-slab .queue-table-wrapper {
+.workflow-list-data-slab .queue-table-wrapper {
   position: relative;
   z-index: 5;
   border: 0;
@@ -1263,7 +1263,7 @@ tbody tr:hover {
   box-shadow: 0 1px 0 rgb(var(--mm-border) / 0.72);
 }
 
-.queue-table-wrapper .task-list-compound-header-cell.is-filter-open {
+.queue-table-wrapper .workflow-list-compound-header-cell.is-filter-open {
   z-index: 12;
 }
 
@@ -1600,31 +1600,31 @@ tr[data-proposal-id].proposal-consuming td {
 }
 
 @media (min-width: 768px) and (max-width: 1080px) {
-  .task-list-control-grid {
+  .workflow-list-control-grid {
     grid-template-columns: repeat(2, minmax(14rem, 1fr));
   }
 }
 
 @media (max-width: 767px) {
-  .task-list-control-grid {
+  .workflow-list-control-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .task-list-utility-cluster,
-  .task-list-filter-row {
+  .workflow-list-utility-cluster,
+  .workflow-list-filter-row {
     align-items: stretch;
     width: 100%;
   }
 
-  .task-list-clear-filters {
+  .workflow-list-clear-filters {
     width: 100%;
   }
 
-  .task-list-mobile-filter-disclosure {
+  .workflow-list-mobile-filter-disclosure {
     display: flex;
   }
 
-  .task-list-mobile-filter-controls.is-open {
+  .workflow-list-mobile-filter-controls.is-open {
     display: grid;
   }
 
@@ -1635,7 +1635,7 @@ tr[data-proposal-id].proposal-consuming td {
     width: 100%;
   }
 
-  .task-list-footer-live {
+  .workflow-list-footer-live {
     width: 100%;
   }
 
@@ -1643,11 +1643,11 @@ tr[data-proposal-id].proposal-consuming td {
     justify-content: space-between;
   }
 
-  .task-list-footer-pagination {
+  .workflow-list-footer-pagination {
     justify-content: flex-end;
   }
 
-  .task-list-footer-page-summary {
+  .workflow-list-footer-page-summary {
     justify-content: flex-end;
     text-align: right;
   }
@@ -2392,23 +2392,23 @@ button.secondary:hover {
   transform: scale(var(--mm-control-hover-scale));
 }
 
-button.task-list-column-filter-button,
-button.task-list-filter-chip-open,
-button.task-list-filter-chip-remove {
+button.workflow-list-column-filter-button,
+button.workflow-list-filter-chip-open,
+button.workflow-list-filter-chip-remove {
   transform: none;
   filter: none;
 }
 
-button.task-list-column-filter-button {
+button.workflow-list-column-filter-button {
   border-color: transparent;
   background: transparent;
   color: rgb(var(--mm-muted));
   box-shadow: none;
 }
 
-button.task-list-column-filter-button:hover,
-button.task-list-column-filter-button:focus-visible,
-button.task-list-column-filter-button.is-active {
+button.workflow-list-column-filter-button:hover,
+button.workflow-list-column-filter-button:focus-visible,
+button.workflow-list-column-filter-button.is-active {
   border-color: var(--mm-control-border);
   background: var(--mm-control-shell);
   color: rgb(var(--mm-accent));
@@ -4547,7 +4547,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 /* Task detail: grouped flat facts */
 
-.task-detail-page {
+.workflow-detail-page {
   min-width: 0;
 }
 

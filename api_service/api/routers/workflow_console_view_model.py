@@ -1,4 +1,4 @@
-"""Shared view-model helpers for the task dashboard UI."""
+"""Shared view-model helpers for the workflow console UI."""
 
 from __future__ import annotations
 
@@ -325,7 +325,7 @@ def _get_cached_github_branch_options(
 
 def _is_create_page_path(initial_path: str) -> bool:
     normalized_path = urlparse(initial_path or "").path.rstrip("/")
-    return normalized_path in {"/tasks/new", "/tasks/create"}
+    return normalized_path == "/workflows/new"
 
 def _build_repository_options(
     *,

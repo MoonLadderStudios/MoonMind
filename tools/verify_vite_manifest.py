@@ -3,7 +3,7 @@
 
 Asserts frontend/vite.config.ts defines exactly one shared ``mission-control``
 entrypoint and that its manifest-recorded files exist under
-api_service/static/task_dashboard/dist/.
+api_service/static/workflow_console/dist/.
 """
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ def main() -> int:
         ROOT
         / "api_service"
         / "static"
-        / "task_dashboard"
+        / "workflow_console"
         / "dist"
         / ".vite"
         / "manifest.json"

@@ -1,4 +1,4 @@
-"""Integration coverage for the OAuth terminal Mission Control shell."""
+"""Hermetic route-contract coverage for the workflow console shell."""
 
 from __future__ import annotations
 
@@ -12,10 +12,12 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from api_service.main import app
 from api_service.api.routers.workflow_console import _resolve_user_dependency_overrides
+from api_service.db.base import get_async_session
+from api_service.main import app
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
+
 
 class _BootPayloadParser(HTMLParser):
     def __init__(self) -> None:
@@ -40,11 +42,13 @@ class _BootPayloadParser(HTMLParser):
         if tag == "script":
             self._capturing = False
 
+
 def _extract_boot_payload(response_text: str) -> dict[str, object]:
     parser = _BootPayloadParser()
     parser.feed(response_text)
     assert parser.payload_parts
     return json.loads("".join(parser.payload_parts))
+
 
 def _write_dashboard_test_manifest(root: Path) -> Path:
     dist_root = root / "dist"
@@ -58,11 +62,11 @@ def _write_dashboard_test_manifest(root: Path) -> Path:
         shared_key: {
             "file": "assets/mountPage.js",
             "css": ["assets/mountPage.css"],
-        }
-    }
-    manifest["entrypoints/mission-control.tsx"] = {
-        "file": "assets/mission-control.js",
-        "imports": [shared_key],
+        },
+        "entrypoints/mission-control.tsx": {
+            "file": "assets/mission-control.js",
+            "imports": [shared_key],
+        },
     }
     (assets_dir / "mission-control.js").write_text(
         "console.log('mission-control');",
@@ -75,6 +79,7 @@ def _write_dashboard_test_manifest(root: Path) -> Path:
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     return manifest_path
 
+
 @pytest_asyncio.fixture
 async def async_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncClient:
     monkeypatch.delenv("MOONMIND_UI_DEV_SERVER_URL", raising=False)
@@ -82,9 +87,10 @@ async def async_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Async
         "VITE_MANIFEST_PATH", str(_write_dashboard_test_manifest(tmp_path))
     )
 
-    mock_user = SimpleNamespace(id=uuid4(), email="integration@example.com")
+    mock_user = SimpleNamespace(id=uuid4(), email="workflow-routes@example.com")
     for dependency in _resolve_user_dependency_overrides():
         app.dependency_overrides[dependency] = lambda mock_user=mock_user: mock_user
+    app.dependency_overrides[get_async_session] = lambda: None
 
     transport = ASGITransport(app=app)
     async with AsyncClient(
@@ -95,19 +101,50 @@ async def async_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Async
 
     app.dependency_overrides.clear()
 
-async def test_oauth_terminal_shell_route_renders_boot_payload(
+
+@pytest.mark.parametrize(
+    ("path", "expected_page"),
+    (
+        ("/workflows", "workflow-list"),
+        ("/workflows/new", "workflow-start"),
+        ("/workflows/mm:workflow-123", "workflow-detail"),
+        ("/workflows/mm:workflow-123/steps", "workflow-detail"),
+        ("/workflows/mm:workflow-123/artifacts", "workflow-detail"),
+        ("/workflows/mm:workflow-123/runs", "workflow-detail"),
+    ),
+)
+async def test_supported_workflow_routes_render_console_shell(
     async_client: AsyncClient,
+    path: str,
+    expected_page: str,
 ) -> None:
-    response = await async_client.get("/oauth-terminal?session_id=oas_integration_shell")
+    response = await async_client.get(path, follow_redirects=False)
 
     assert response.status_code == 200
     assert "moonmind-ui-boot" in response.text
+    assert "/static/workflow_console/dist/assets/" in response.text
 
     boot_payload = _extract_boot_payload(response.text)
-    assert boot_payload["page"] == "oauth-terminal"
-    assert boot_payload["initialData"]["sessionId"] == "oas_integration_shell"
-    assert boot_payload["initialData"]["layout"]["dataWidePanel"] is True
-    assert (
-        boot_payload["initialData"]["dashboardConfig"]["initialPath"]
-        == "/oauth-terminal"
-    )
+    assert boot_payload["page"] == expected_page
+    assert boot_payload["initialData"]["dashboardConfig"]["initialPath"] == path
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        "/tasks/list",
+        "/tasks/new",
+        "/tasks/queue/new",
+        "/tasks/mm:workflow-123",
+    ),
+)
+async def test_removed_task_routes_do_not_redirect_or_render_console(
+    async_client: AsyncClient,
+    path: str,
+) -> None:
+    response = await async_client.get(path, follow_redirects=False)
+
+    assert response.status_code == 404
+    assert "location" not in response.headers
+    assert "moonmind-ui-boot" not in response.text
+    assert "/static/workflow_console/dist/assets/" not in response.text

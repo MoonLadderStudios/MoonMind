@@ -1271,7 +1271,7 @@ function formatDependencyResolution(value: string | null | undefined): string {
 }
 
 function dependencyHref(workflowId: string): string {
-  return `/tasks/${encodeURIComponent(workflowId)}?source=temporal`;
+  return `/workflows/${encodeURIComponent(workflowId)}?source=temporal`;
 }
 
 function MergeAutomationPanel({
@@ -1402,10 +1402,10 @@ function buildDebugFieldEntries(execution: z.infer<typeof ExecutionDetailSchema>
   const debugFields = execution.debugFields || {};
   const primaryEntries: Array<[string, unknown]> = [
     ['Workflow ID', debugFields.workflowId || execution.workflowId || execution.taskId],
-    ['Temporal Run ID', debugFields.temporalRunId || execution.temporalRunId || execution.runId],
+    ['Current Run ID', debugFields.temporalRunId || execution.temporalRunId || execution.runId],
     ['Namespace', debugFields.namespace || execution.namespace],
     ['Temporal Status', debugFields.temporalStatus || execution.temporalStatus],
-    ['Raw State', debugFields.rawState || execution.rawState || execution.state],
+    ['Workflow State', debugFields.rawState || execution.rawState || execution.state],
     ['Close Status', debugFields.closeStatus ?? execution.closeStatus],
     ['Waiting Reason', debugFields.waitingReason ?? execution.waitingReason],
     ['Attention Required', debugFields.attentionRequired ?? execution.attentionRequired],
@@ -2020,8 +2020,8 @@ function inputImageArtifactFrom(artifact: z.infer<typeof ArtifactSummarySchema>)
   const metadata = artifact.metadata || {};
   const source = metadataString(metadata, 'source');
   if (
-    source !== 'task-dashboard-objective-attachment' &&
-    source !== 'task-dashboard-step-attachment'
+    source !== 'workflow-console-objective-attachment' &&
+    source !== 'workflow-console-step-attachment'
   ) {
     return null;
   }
@@ -2036,7 +2036,7 @@ function inputImageArtifactFrom(artifact: z.infer<typeof ArtifactSummarySchema>)
     };
   }
 
-  if (source === 'task-dashboard-step-attachment') {
+  if (source === 'workflow-console-step-attachment') {
     const stepLabel = metadataString(metadata, 'stepLabel', 'step_label');
     if (!stepLabel) {
       return null;
@@ -2447,7 +2447,7 @@ function StepMetadataList({
       <li><strong>Depends on:</strong> {row.dependsOn.length > 0 ? row.dependsOn.join(', ') : 'None'}</li>
       <li><strong>Child workflow:</strong> {row.refs.childWorkflowId ? <code className="text-xs break-all">{row.refs.childWorkflowId}</code> : '—'}</li>
       <li><strong>Child run:</strong> {row.refs.childRunId ? <code className="text-xs break-all">{row.refs.childRunId}</code> : '—'}</li>
-      <li><strong>Task run:</strong> {row.refs.taskRunId ? <code className="text-xs break-all">{row.refs.taskRunId}</code> : '—'}</li>
+      <li><strong>Workflow run:</strong> {row.refs.taskRunId ? <code className="text-xs break-all">{row.refs.taskRunId}</code> : '—'}</li>
       <li><strong>Started:</strong> {formatWhen(row.startedAt)}</li>
       <li><strong>Updated:</strong> {formatWhen(row.updatedAt)}</li>
     </ul>
@@ -2482,7 +2482,7 @@ function StepWorkloadDetails({
         <li><strong>Duration:</strong> {formatOptionalValue(workload.durationSeconds)}s</li>
         <li><strong>Tool:</strong> <code className="text-xs break-all">{formatOptionalValue(workload.toolName)}</code></li>
         <li><strong>Step:</strong> <code className="text-xs break-all">{formatOptionalValue(workload.stepId)}</code></li>
-        <li><strong>Task run:</strong> <code className="text-xs break-all">{formatOptionalValue(workload.taskRunId)}</code></li>
+        <li><strong>Workflow run:</strong> <code className="text-xs break-all">{formatOptionalValue(workload.taskRunId)}</code></li>
         {workload.timeoutReason ? <li><strong>Timeout reason:</strong> {workload.timeoutReason}</li> : null}
         {workload.cancelReason ? <li><strong>Cancel reason:</strong> {workload.cancelReason}</li> : null}
         {workload.artifactPublication?.status === 'failed' ? (
@@ -3005,7 +3005,7 @@ function LiveLogsPanel({
           </div>
         ) : null}
         <p className="small">
-          Task run <code className="text-xs">{taskRunId}</code> — {statusLabel}
+          Workflow run <code className="text-xs">{taskRunId}</code> — {statusLabel}
         </p>
         {sessionTimelineEnabled ? (
           <p className="small">
@@ -3371,7 +3371,7 @@ function TargetDiagnosticsPanel({
             >
               <h4>{target.label}</h4>
               <p className="small">
-                {target.targetKind === 'objective' ? 'Task objective' : `Step ${formatOptionalValue(target.stepId)}`}
+                {target.targetKind === 'objective' ? 'Workflow objective' : `Step ${formatOptionalValue(target.stepId)}`}
               </p>
               {target.attachments.length > 0 ? (
                 <ul className="step-detail-list">
@@ -3472,7 +3472,7 @@ function SessionContinuityPanel({
   targetRuntime,
   isTerminal,
   onCancel,
-  invalidateTaskDetail,
+  invalidateWorkflowDetail,
   cancelBusy,
   routes,
 }: {
@@ -3481,7 +3481,7 @@ function SessionContinuityPanel({
   targetRuntime: string | null | undefined;
   isTerminal: boolean;
   onCancel: () => void;
-  invalidateTaskDetail: () => void;
+  invalidateWorkflowDetail: () => void;
   cancelBusy: boolean;
   routes: TaskRunRouteTemplates;
 }) {
@@ -3518,7 +3518,7 @@ function SessionContinuityPanel({
         ['task-run-session-projection', taskRunId, sessionId],
         result.projection,
       );
-      invalidateTaskDetail();
+      invalidateWorkflowDetail();
       if (result.action === 'send_follow_up') {
         setFollowUpMessage('');
       }
@@ -3808,7 +3808,7 @@ function RemediationRelationshipsPanel({
       </div>
       {inboundError || outboundError ? (
         <div className="notice error">
-          Remediation relationship data is degraded. Existing task detail remains available.
+          Remediation relationship data is degraded. Existing workflow detail remains available.
         </div>
       ) : null}
       {inboundItems.length > 0 ? (
@@ -3995,7 +3995,7 @@ function RemediationEvidencePanel({
   );
 }
 
-export function TaskDetailPage({ payload }: { payload: BootPayload }) {
+export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const queryClient = useQueryClient();
   const cfg = readDashboardConfig(payload);
   const taskRunRoutes = readTaskRunRouteTemplates(cfg);
@@ -4006,10 +4006,10 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const logStreamingEnabled = cfg?.features?.logStreamingEnabled !== false;
   const structuredHistoryEnabled = shouldUseStructuredHistory(cfg);
 
-  const taskIdMatch = window.location.pathname.match(
-    /^\/tasks\/(?:temporal\/|proposals\/|schedules\/|manifests\/)?([^/]+)$/,
+  const workflowIdMatch = window.location.pathname.match(
+    /^\/workflows\/([^/]+)(?:\/(?:steps|artifacts|runs))?$/,
   );
-  const taskId = decodeTaskPathSegment(taskIdMatch ? taskIdMatch[1] : null);
+  const taskId = decodeTaskPathSegment(workflowIdMatch ? workflowIdMatch[1] : null);
   const encodedTaskId = taskId ? encodeURIComponent(taskId) : null;
   const search = useMemo(() => new URLSearchParams(window.location.search), []);
   const sourceTemporal = search.get('source') === 'temporal';
@@ -4036,9 +4036,9 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const [remediationActionPolicy, setRemediationActionPolicy] = useState('admin_healer_default');
 
   const detailQuery = useQuery({
-    queryKey: ['task-detail', encodedTaskId, sourceTemporal],
+    queryKey: ['workflow-detail', encodedTaskId, sourceTemporal],
     queryFn: async () => {
-      if (!encodedTaskId) throw new Error('Task ID is required.');
+      if (!encodedTaskId) throw new Error('Workflow ID is required.');
       const suffix = sourceTemporal ? '?source=temporal' : '';
       const response = await fetch(`${payload.apiBase}/executions/${encodedTaskId}${suffix}`);
       if (!response.ok) {
@@ -4095,7 +4095,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const missingTaskRunState = execution && !resolvedTaskRunId ? inferMissingTaskRunState(execution) : null;
 
   const stepsQuery = useQuery({
-    queryKey: ['task-detail-steps', workflowId, execution?.stepsHref],
+    queryKey: ['workflow-detail-steps', workflowId, execution?.stepsHref],
     queryFn: () => fetchStepLedger(String(execution?.stepsHref || '')),
     enabled: Boolean(execution?.stepsHref),
     refetchInterval: liveUpdates && execution?.stepsHref && !isTerminalExecution ? detailPoll : false,
@@ -4103,7 +4103,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const latestRunId = stepsQuery.data?.runId || runId;
 
   const artifactsQuery = useQuery({
-    queryKey: ['task-detail-artifacts', namespace, workflowId, latestRunId],
+    queryKey: ['workflow-detail-artifacts', namespace, workflowId, latestRunId],
     queryFn: async () => {
       const path = `${payload.apiBase}/executions/${encodeURIComponent(namespace)}/${encodeURIComponent(workflowId)}/${encodeURIComponent(latestRunId)}/artifacts`;
       const response = await fetch(path);
@@ -4121,7 +4121,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   });
 
   const latestReportQuery = useQuery({
-    queryKey: ['task-detail-latest-report', namespace, workflowId, latestRunId],
+    queryKey: ['workflow-detail-latest-report', namespace, workflowId, latestRunId],
     queryFn: async () => {
       const path = `${payload.apiBase}/executions/${encodeURIComponent(namespace)}/${encodeURIComponent(workflowId)}/${encodeURIComponent(latestRunId)}/artifacts?link_type=report.primary&latest_only=true`;
       const response = await fetch(path);
@@ -4139,13 +4139,13 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   });
 
   const runSummaryQuery = useQuery({
-    queryKey: ['task-detail-run-summary', summaryArtifactRef],
+    queryKey: ['workflow-detail-run-summary', summaryArtifactRef],
     queryFn: () => fetchRunSummaryArtifact(payload.apiBase, summaryArtifactRef),
     enabled: Boolean(summaryArtifactRef),
     refetchInterval: liveUpdates && summaryArtifactRef && !isTerminalExecution ? detailPoll : false,
   });
   const inboundRemediationsQuery = useQuery({
-    queryKey: ['task-detail-remediations', workflowId, 'inbound'],
+    queryKey: ['workflow-detail-remediations', workflowId, 'inbound'],
     queryFn: async () => {
       const response = await fetch(
         `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/remediations?direction=inbound`,
@@ -4156,7 +4156,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
     enabled: shouldFetchRemediationLinks,
   });
   const outboundRemediationsQuery = useQuery({
-    queryKey: ['task-detail-remediations', workflowId, 'outbound'],
+    queryKey: ['workflow-detail-remediations', workflowId, 'outbound'],
     queryFn: async () => {
       const response = await fetch(
         `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/remediations?direction=outbound`,
@@ -4208,12 +4208,12 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
     !hasStepsEndpoint || (!stepsQuery.isLoading && (stepsQuery.isError || !stepsQuery.data));
 
   const invalidate = () => {
-    void queryClient.invalidateQueries({ queryKey: ['task-detail', encodedTaskId] });
-    void queryClient.invalidateQueries({ queryKey: ['task-detail-steps', workflowId] });
-    void queryClient.invalidateQueries({ queryKey: ['task-detail-artifacts', namespace, workflowId, latestRunId] });
-    void queryClient.invalidateQueries({ queryKey: ['task-detail-latest-report', namespace, workflowId, latestRunId] });
-    void queryClient.invalidateQueries({ queryKey: ['task-detail-run-summary', summaryArtifactRef] });
-    void queryClient.invalidateQueries({ queryKey: ['task-detail-remediations', workflowId] });
+    void queryClient.invalidateQueries({ queryKey: ['workflow-detail', encodedTaskId] });
+    void queryClient.invalidateQueries({ queryKey: ['workflow-detail-steps', workflowId] });
+    void queryClient.invalidateQueries({ queryKey: ['workflow-detail-artifacts', namespace, workflowId, latestRunId] });
+    void queryClient.invalidateQueries({ queryKey: ['workflow-detail-latest-report', namespace, workflowId, latestRunId] });
+    void queryClient.invalidateQueries({ queryKey: ['workflow-detail-run-summary', summaryArtifactRef] });
+    void queryClient.invalidateQueries({ queryKey: ['workflow-detail-remediations', workflowId] });
   };
 
   const updateMutation = useMutation({
@@ -4300,7 +4300,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             ...(execution?.resume?.checkpointRef
               ? { resumeCheckpointRef: execution.resume.checkpointRef }
               : {}),
-            operatorMetadata: { requestedFrom: 'task-detail' },
+            operatorMetadata: { requestedFrom: 'workflow-detail' },
           }),
         },
       );
@@ -4498,22 +4498,22 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
           } catch {
             // Navigation should not depend on session storage availability.
           }
-          navigateTo(`/tasks/${encodeURIComponent(redirectWorkflowId)}?source=temporal`);
+          navigateTo(`/workflows/${encodeURIComponent(redirectWorkflowId)}?source=temporal`);
         },
       },
     );
   };
   const canCreateRemediation = Boolean(execution && isRemediationEligibleTarget(execution));
-  const canShowEditTask = Boolean(actions?.canUpdateInputs || actions?.canEditForRerun);
+  const canShowEditWorkflow = Boolean(actions?.canUpdateInputs || actions?.canEditForRerun);
   const canFailedStepResume = Boolean(actions?.canResumeFromFailedStep);
-  const editTaskUnavailableReason = canShowEditTask
+  const editTaskUnavailableReason = canShowEditWorkflow
     ? null
     : actions?.disabledReasons?.canEditForRerun ||
       actions?.disabledReasons?.canUpdateInputs ||
       null;
   const rerunUnavailableReason = actions?.disabledReasons?.canRerun || null;
   const hasTaskEditingActions = taskEditingOn && Boolean(
-    canShowEditTask ||
+    canShowEditWorkflow ||
       actions?.canRerun ||
       canFailedStepResume ||
       editTaskUnavailableReason ||
@@ -4550,12 +4550,12 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const relatedReports = relatedReportArtifacts(artifactsQuery.data?.artifacts || []);
 
   return (
-    <div className="stack task-detail-page">
+    <div className="stack workflow-detail-page">
       <div className="toolbar">
         <div>
-          <h2 className="page-title">Task Detail</h2>
+          <h2 className="page-title">Workflow Detail</h2>
           <div className="toolbar-identity-row">
-            <p className="page-meta">Task {taskId || '—'}</p>
+            <p className="page-meta">Workflow {taskId || '—'}</p>
             {execution ? (
               <ExecutionStatusPill status={execution.rawState || execution.state || execution.status} />
             ) : null}
@@ -4622,18 +4622,18 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                 type="button"
                 className="td-instructions-toggle"
                 aria-expanded={instructionsExpanded}
-                aria-controls="task-instructions-panel"
+                aria-controls="workflow-inputs-panel"
                 onClick={() => setInstructionsExpanded((current) => !current)}
               >
-                {instructionsExpanded ? 'Hide instructions' : 'Show instructions'}
+                {instructionsExpanded ? 'Hide Workflow Inputs' : 'Show Workflow Inputs'}
               </button>
             </div>
             {instructionsExpanded ? (
-              <div id="task-instructions-panel" className="td-instructions-panel">
+              <div id="workflow-inputs-panel" className="td-instructions-panel">
                 {hasTaskInstructions ? (
                   <pre>{taskInstructions}</pre>
                 ) : (
-                  <p className="small">Full instructions are not available for this task.</p>
+                  <p className="small">Full workflow inputs are not available for this workflow.</p>
                 )}
               </div>
             ) : null}
@@ -4716,16 +4716,16 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
 
             <FactGroup title="Temporal">
               <Fact label="Temporal Status">{formatStatusLabel(execution.temporalStatus)}</Fact>
-              <Fact label="Current State">{formatStatusLabel(execution.rawState || execution.state)}</Fact>
+              <Fact label="Workflow State">{formatStatusLabel(execution.rawState || execution.state)}</Fact>
               {execution.closeStatus ? <Fact label="Close Status">{formatStatusLabel(execution.closeStatus)}</Fact> : null}
               <Fact label="Source">Temporal</Fact>
               <Fact label="Workflow Type">{execution.workflowType || '—'}</Fact>
               <Fact label="Entry">{execution.entry || '—'}</Fact>
-              <Fact label="Latest Run">
+              <Fact label="Current Run ID">
                 <code className="text-xs break-all">{latestRunId || '—'}</code>
               </Fact>
               {resolvedTaskRunId ? (
-                <Fact label="Task Run">
+                <Fact label="Workflow Run">
                   <code className="text-xs break-all">{resolvedTaskRunId}</code>
                 </Fact>
               ) : null}
@@ -4875,7 +4875,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
           {hasStepsEndpoint ? (
             <section className="stack td-steps-region td-evidence-region">
               <div className="step-tl-section-header">
-                <h3>Steps</h3>
+                <h3>Workflow Steps</h3>
                 <span className="step-tl-header-meta">
                   <code className="text-xs">{latestRunId || '—'}</code>
                   {stepsQuery.data ? (
@@ -5045,7 +5045,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
           {actionsOn && actions && hasTaskActions ? (
             <section className="stack td-actions-region">
               <div>
-                <h3>Task Actions</h3>
+                <h3>Workflow Actions</h3>
                 <p className="small">Workflow editing actions stay separate from intervention controls.</p>
               </div>
               <div className="actions">
@@ -5105,7 +5105,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                     Rename
                   </button>
                 ) : null}
-                {taskEditingOn && canShowEditTask && editHref ? (
+                {taskEditingOn && canShowEditWorkflow && editHref ? (
                   <a
                     className="button secondary"
                     href={editHref}
@@ -5138,12 +5138,12 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
               </div>
               {editTaskUnavailableReason ? (
                 <p className="small">
-                  Edit task unavailable: {formatStatusLabel(editTaskUnavailableReason)}
+                  Edit workflow unavailable: {formatStatusLabel(editTaskUnavailableReason)}
                 </p>
               ) : null}
               {rerunUnavailableReason ? (
                 <p className="small">
-                  Rerun unavailable: {formatStatusLabel(rerunUnavailableReason)}
+                  Start New Run unavailable: {formatStatusLabel(rerunUnavailableReason)}
                 </p>
               ) : null}
               {actions.disabledReasons?.canResumeFromFailedStep ? (
@@ -5190,7 +5190,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
               targetRuntime={execution.targetRuntime}
               isTerminal={isTerminalExecution}
               onCancel={onCancel}
-              invalidateTaskDetail={invalidate}
+              invalidateWorkflowDetail={invalidate}
               cancelBusy={cancelMutation.isPending}
               routes={taskRunRoutes}
             />
@@ -5258,7 +5258,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
           </section>
 
           <section className="stack td-artifacts-region td-evidence-region">
-            <h3>Artifacts</h3>
+            <h3>Workflow Artifacts</h3>
             {artifactsQuery.isLoading ? (
               <p className="loading">Loading artifacts...</p>
             ) : artifactsQuery.isError ? (
@@ -5349,7 +5349,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                 ) : (
                   <>
                     <h3>Live Logs</h3>
-                    <p className="small">{missingTaskRunState ? renderMissingTaskRunCopy(missingTaskRunState) : 'Waiting for task details...'}</p>
+                    <p className="small">{missingTaskRunState ? renderMissingTaskRunCopy(missingTaskRunState) : 'Waiting for workflow details...'}</p>
                   </>
                 )
               ) : (
@@ -5375,9 +5375,9 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
           ) : null}
         </>
       ) : (
-        <p>No task details.</p>
+        <p>No workflow details.</p>
       )}
     </div>
   );
 }
-export default TaskDetailPage;
+export default WorkflowDetailPage;

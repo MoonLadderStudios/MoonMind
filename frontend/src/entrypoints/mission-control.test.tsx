@@ -148,7 +148,7 @@ describe('Mission Control shared entry', () => {
 
   it('renders dashboard alerts and lazy-loads the requested page component', async () => {
     const payload: BootPayload = {
-      page: 'tasks-home',
+      page: 'workflows-home',
       apiBase: '/api',
       initialData: {
         layout: {
@@ -168,7 +168,7 @@ describe('Mission Control shared entry', () => {
   });
 
   it('uses the constrained shell by default for non-table pages', async () => {
-    renderWithClient(<MissionControlApp payload={{ page: 'tasks-home', apiBase: '/api' }} />);
+    renderWithClient(<MissionControlApp payload={{ page: 'workflows-home', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Hello from Tasks Home!')).toBeTruthy();
     expect(document.querySelector('.panel--data-wide')).toBeNull();
@@ -297,7 +297,7 @@ describe('Mission Control shared entry', () => {
     expect(cssRuleBlock(missionControlCss, 'input::placeholder,\ntextarea::placeholder')).toContain(
       'color: rgb(var(--mm-muted))',
     );
-    expect(cssRuleBlock(missionControlCss, '.task-list-filter-chip')).toContain(
+    expect(cssRuleBlock(missionControlCss, '.workflow-list-filter-chip')).toContain(
       'color: rgb(var(--mm-ink))',
     );
     const primaryButtonBlock = cssRuleBlockMatching(missionControlCss, (rule) => {
@@ -713,12 +713,12 @@ describe('Mission Control shared entry', () => {
     expect(pageSizeSelectorBlock).toContain('box-shadow: none');
     expect(pageSizeSelectorBlock).toContain('transition: var(--mm-control-transition)');
 
-    const filterChipBlock = cssRuleBlock(missionControlCss, '.task-list-filter-chip {');
+    const filterChipBlock = cssRuleBlock(missionControlCss, '.workflow-list-filter-chip {');
     expect(filterChipBlock).toContain('background: var(--mm-control-shell)');
     expect(filterChipBlock).toContain('border: 1px solid var(--mm-control-border)');
     const popoverFilterBlock = cssRuleBlock(
       missionControlCss,
-      '.task-list-header-filter-popover .task-list-header-filter-control',
+      '.workflow-list-header-filter-popover .workflow-list-header-filter-control',
     );
     expect(popoverFilterBlock).toContain('display: grid');
     expect(popoverFilterBlock).toContain('gap: 0.75rem');
@@ -728,10 +728,10 @@ describe('Mission Control shared entry', () => {
     expect(
       cssRuleBlock(
         missionControlCss,
-        '.task-list-header-filter-popover .task-list-header-filter-control label',
+        '.workflow-list-header-filter-popover .workflow-list-header-filter-control label',
       ),
     ).toContain('gap: 0.55rem');
-    expect(cssRuleBlock(missionControlCss, '.task-list-filter-actions')).toContain(
+    expect(cssRuleBlock(missionControlCss, '.workflow-list-filter-actions')).toContain(
       'border-top: 1px solid rgb(var(--mm-border) / 0.7)',
     );
     expect(cssRuleBlock(missionControlCss, '.queue-inline-filter:focus-within')).toContain(

@@ -27,7 +27,7 @@ def test_verify_vite_manifest_script_succeeds_on_synthetic_repo(
 ) -> None:
     repo_root = tmp_path / "repo"
     frontend_dir = repo_root / "frontend"
-    assets_dir = repo_root / "api_service" / "static" / "task_dashboard" / "dist" / "assets"
+    assets_dir = repo_root / "api_service" / "static" / "workflow_console" / "dist" / "assets"
     manifest_dir = assets_dir.parent / ".vite"
 
     frontend_dir.mkdir(parents=True)

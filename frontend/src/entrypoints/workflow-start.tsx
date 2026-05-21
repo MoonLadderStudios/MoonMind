@@ -50,13 +50,13 @@ const HIDDEN_PRESET_INPUT_KEYS: Record<string, Set<string>> = {
   [JIRA_IMPLEMENT_PRESET_SLUG]: new Set(["constraints", "jira_issue_key"]),
   [MOONSPEC_ORCHESTRATE_PRESET_SLUG]: new Set(["orchestrationmode"]),
 };
-const PROPOSE_TASKS_PREFERENCE_KEY = "moonmind.task-create.propose-tasks";
+const PROPOSE_TASKS_PREFERENCE_KEY = "moonmind.workflow-start.propose-tasks";
 const LAST_REPOSITORY_OPTION_PREFERENCE_KEY =
-  "moonmind.task-create.last-repository-option";
+  "moonmind.workflow-start.last-repository-option";
 const JIRA_LAST_PROJECT_SESSION_KEY =
-  "moonmind.task-create.jira.last-project-key";
+  "moonmind.workflow-start.jira.last-project-key";
 const JIRA_LAST_BOARD_SESSION_KEY =
-  "moonmind.task-create.jira.last-board-id";
+  "moonmind.workflow-start.jira.last-board-id";
 const JIRA_MANUAL_CONTINUATION_MESSAGE =
   "You can continue creating the task manually.";
 const DEPENDENCY_LIMIT = 10;
@@ -3066,14 +3066,14 @@ async function createInputArtifact(
         metadata: {
           label: "Submitted Task Input",
           repository: repository || null,
-          source: "task-dashboard-submit",
+          source: "workflow-console-submit",
           ...(sourceWorkflowId ? { sourceWorkflowId } : {}),
         },
       }),
     });
   } catch (error) {
     if (error instanceof TypeError && error.message === "Failed to fetch") {
-      console.error("[TaskCreate] Network failure during artifact creation.", {
+      console.error("[WorkflowStart] Network failure during artifact creation.", {
         endpoint: createEndpoint,
         possibleCauses:
           "API service unreachable, CORS block, or network issue.",
@@ -3139,7 +3139,7 @@ async function createInputArtifact(
   } catch (error) {
     if (error instanceof TypeError && error.message === "Failed to fetch") {
       console.error(
-        "[TaskCreate] Network failure during artifact content upload.",
+        "[WorkflowStart] Network failure during artifact content upload.",
         {
           uploadUrl,
           possibleCauses:
@@ -3194,7 +3194,7 @@ async function completeArtifactUpload(
     } catch (error) {
       if (error instanceof TypeError && error.message === "Failed to fetch") {
         console.error(
-          "[TaskCreate] Network failure during artifact completion.",
+          "[WorkflowStart] Network failure during artifact completion.",
           {
             endpoint: completeUrl,
             artifactId,
@@ -3262,8 +3262,8 @@ async function createInputAttachmentArtifact(
           filename,
           repository: repository || null,
           source: isObjective
-            ? "task-dashboard-objective-attachment"
-            : "task-dashboard-step-attachment",
+            ? "workflow-console-objective-attachment"
+            : "workflow-console-step-attachment",
           ...(isObjective
             ? { target: "objective" }
             : { stepLabel: context.stepLabel }),
@@ -3470,7 +3470,7 @@ async function linkInputArtifact(
     });
   } catch (error) {
     if (error instanceof TypeError && error.message === "Failed to fetch") {
-      console.error("[TaskCreate] Network failure during artifact linking.", {
+      console.error("[WorkflowStart] Network failure during artifact linking.", {
         endpoint: linkEndpoint,
         artifactId,
         possibleCauses:
@@ -3640,7 +3640,7 @@ export const LIQUID_GL_OPTIONS = {
   magnify: 1,
 } as const;
 
-export function TaskCreatePage({ payload }: { payload: BootPayload }) {
+export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   useLiquidGL({ options: LIQUID_GL_OPTIONS });
   const dashboardConfig = readDashboardConfig(payload);
   const pageMode = useMemo(
@@ -3916,7 +3916,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   const temporalDraftQuery = useQuery({
     queryKey: [
-      "task-create",
+      "workflow-start",
       "temporal-editing-draft",
       pageMode.mode,
       pageMode.executionId,
@@ -4038,7 +4038,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   });
 
   const providerProfilesQuery = useQuery({
-    queryKey: ["task-create", "provider-profiles", runtime],
+    queryKey: ["workflow-start", "provider-profiles", runtime],
     queryFn: async (): Promise<ProviderProfile[]> => {
       const separator = providerProfilesEndpoint.includes("?") ? "&" : "?";
       const response = await fetch(
@@ -4251,7 +4251,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   ]);
 
   const dependencyOptionsQuery = useQuery({
-    queryKey: ["task-create", "dependency-options", temporalListEndpoint],
+    queryKey: ["workflow-start", "dependency-options", temporalListEndpoint],
     queryFn: async (): Promise<DependencyPickerExecution[]> => {
       const response = await fetch(
         withQueryParams(temporalListEndpoint, {
@@ -4282,7 +4282,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   });
 
   const skillsQuery = useQuery({
-    queryKey: ["task-create", "skills"],
+    queryKey: ["workflow-start", "skills"],
     queryFn: async (): Promise<SkillCatalogResult> => {
       const response = await fetch("/api/workflows/skills", {
         headers: { Accept: "application/json" },
@@ -4315,7 +4315,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   const hasToolStep = steps.some((step) => step.stepType === "tool");
   const trustedToolsQuery = useQuery({
-    queryKey: ["task-create", "trusted-tools"],
+    queryKey: ["workflow-start", "trusted-tools"],
     enabled: hasToolStep,
     retry: false,
     queryFn: async (): Promise<TrustedToolDefinition[]> => {
@@ -4351,7 +4351,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   const templateOptionsQuery = useQuery({
     queryKey: [
-      "task-create",
+      "workflow-start",
       "task-template-catalog",
       taskTemplateListEndpoint,
     ],
@@ -4395,7 +4395,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   });
 
   const jiraProjectsQuery = useQuery({
-    queryKey: ["task-create", "jira", "projects", jiraIntegration?.endpoints.projects],
+    queryKey: ["workflow-start", "jira", "projects", jiraIntegration?.endpoints.projects],
     enabled: Boolean(jiraIntegration?.enabled && jiraBrowserOpen),
     queryFn: async (): Promise<JiraProject[]> => {
       const endpoint = jiraIntegration?.endpoints.projects || "";
@@ -4413,7 +4413,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   const jiraBoardsQuery = useQuery({
     queryKey: [
-      "task-create",
+      "workflow-start",
       "jira",
       "boards",
       jiraIntegration?.endpoints.boards,
@@ -4441,7 +4441,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   const jiraColumnsQuery = useQuery({
     queryKey: [
-      "task-create",
+      "workflow-start",
       "jira",
       "columns",
       jiraIntegration?.endpoints.columns,
@@ -4473,7 +4473,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   const jiraIssuesQuery = useQuery({
     queryKey: [
-      "task-create",
+      "workflow-start",
       "jira",
       "issues",
       jiraIntegration?.endpoints.issues,
@@ -4511,7 +4511,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   const jiraIssueDetailQuery = useQuery({
     queryKey: [
-      "task-create",
+      "workflow-start",
       "jira",
       "issue",
       jiraIntegration?.endpoints.issue,
@@ -5451,7 +5451,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     ? selectedRepositoryForBranchLookup.trim()
     : "";
   const branchOptionsQuery = useQuery({
-    queryKey: ["task-create", "github-branches", branchLookupRepository],
+    queryKey: ["workflow-start", "github-branches", branchLookupRepository],
     enabled: Boolean(branchLookupEndpoint && branchLookupRepository),
     queryFn: async () =>
       readBranchOptions(branchLookupEndpoint || "", branchLookupRepository),
@@ -6671,7 +6671,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const redirectWorkflowId =
         String(result.execution?.workflowId || "").trim() || workflowId;
       navigateTo(
-        `/tasks/${encodeURIComponent(redirectWorkflowId)}?source=temporal`,
+        `/workflows/${encodeURIComponent(redirectWorkflowId)}?source=temporal`,
       );
     } catch (error) {
       recordTemporalTaskEditingClientEvent({
@@ -7951,9 +7951,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const redirectPath =
         String(created.redirectPath || "").trim() ||
         (created.definitionId
-          ? `/tasks/schedules/${encodeURIComponent(created.definitionId)}`
+          ? `/schedules/${encodeURIComponent(created.definitionId)}`
           : created.workflowId
-            ? `/tasks/${encodeURIComponent(created.workflowId)}?source=temporal`
+            ? `/workflows/${encodeURIComponent(created.workflowId)}?source=temporal`
             : "");
       if (!redirectPath) {
         throw new Error("Task was created but no redirect path was returned.");
@@ -7970,7 +7970,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         failure.message === "Failed to fetch"
       ) {
         console.error(
-          "[TaskCreate] Network-level fetch failure during task creation.",
+          "[WorkflowStart] Network-level fetch failure during task creation.",
           {
             endpoint: temporalCreateEndpoint,
             errorName: failure.name,
@@ -7984,7 +7984,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           },
         );
         setSubmitMessage(
-          "Failed to reach the task creation API. " +
+          "Failed to reach the workflow start API. " +
             `Endpoint: ${temporalCreateEndpoint}. ` +
             "This usually means the API service is unreachable, a CORS policy is blocking the request, " +
             "or there is a network connectivity issue. Check the browser console for more details.",
@@ -8001,22 +8001,22 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   const pageTitle =
     pageMode.intent === "edit" || pageMode.intent === "edit-for-rerun"
-      ? "Edit Task"
+      ? "Edit Workflow"
       : pageMode.mode === "rerun"
-        ? "Rerun Task"
-        : "Create Task";
+        ? "Start New Run"
+        : "Start Workflow";
   const primaryCta =
     pageMode.intent === "edit"
       ? "Save Changes"
       : pageMode.intent === "edit-for-rerun"
-        ? "Run edited task"
+        ? "Run edited workflow"
       : pageMode.mode === "rerun"
-        ? "Rerun Task"
+        ? "Start New Run"
         : "Create";
   const showPrimaryCtaArrow = true;
   const primaryCtaTooltip =
     pageMode.intent === "edit"
-      ? "Save changes to this task draft"
+      ? "Save changes to this workflow draft"
       : pageMode.intent === "edit-for-rerun"
         ? "Start a new run from this edited task draft"
       : pageMode.mode === "rerun"
@@ -8092,7 +8092,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   }
 
   return (
-    <div className="stack task-create-page">
+    <div className="stack workflow-start-page">
       <section data-canonical-create-section="Header" aria-label="Header">
         <h2 className="page-title">{pageTitle}</h2>
       </section>
@@ -9353,7 +9353,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             checked={proposeTasks}
             onChange={(event) => setProposeTasks(event.target.checked)}
           />
-          Propose Tasks
+          Propose follow-up work
         </label>
         <label className="checkbox">
           <input
@@ -9879,4 +9879,4 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     </div>
   );
 }
-export default TaskCreatePage;
+export default WorkflowStartPage;

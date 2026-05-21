@@ -92,7 +92,7 @@ const stackState = {
       reason: 'Routine release',
       startedAt: '2026-04-25T18:00:00Z',
       completedAt: '2026-04-25T18:04:00Z',
-      runDetailUrl: '/tasks/depupd_recent',
+      runDetailUrl: '/workflows/depupd_recent',
       logsArtifactUrl: '/api/artifacts/logs',
       rawCommandLogUrl: null,
       beforeSummary: 'stable',
@@ -111,7 +111,7 @@ const stackStateWithRollback = {
       reason: 'Routine release failed',
       startedAt: '2026-04-25T18:00:00Z',
       completedAt: '2026-04-25T18:04:00Z',
-      runDetailUrl: '/tasks/depupd_recent',
+      runDetailUrl: '/workflows/depupd_recent',
       logsArtifactUrl: '/api/artifacts/logs',
       beforeSummary: 'ghcr.io/moonladderstudios/moonmind:stable',
       afterSummary: 'verification failed',
@@ -391,7 +391,7 @@ describe('OperationsSettingsSection deployment update card', () => {
     expect(within(card).getByText(/Routine release/i)).toBeTruthy();
     expect(within(card).getByText(/admin@example.com/i)).toBeTruthy();
     expect(within(card).getByRole('link', { name: /run detail/i }).getAttribute('href')).toBe(
-      '/tasks/depupd_recent',
+      '/workflows/depupd_recent',
     );
     expect(within(card).getByRole('link', { name: /logs artifact/i }).getAttribute('href')).toBe(
       '/api/artifacts/logs',

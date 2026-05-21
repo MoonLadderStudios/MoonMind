@@ -95,7 +95,7 @@ export function DashboardAlerts() {
          )}
       </ul>
       <div style={{ marginTop: '12px' }}>
-         <a href="/tasks/settings?section=providers-secrets" className="btn btn-sm btn-outline">Open Settings</a>
+         <a href="/settings?section=providers-secrets" className="btn btn-sm btn-outline">Open Settings</a>
       </div>
     </div>
   );

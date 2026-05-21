@@ -38,7 +38,7 @@ _STREAM_CHUNK_BYTES = 64 * 1024
 _SINGLE_PUT_READ_RETRY_DELAYS_SECONDS = (0.1, 0.2, 0.4, 0.8, 1.6)
 _SINGLE_PUT_READ_RETRYABLE_S3_ERROR_CODES = {"404", "NoSuchKey", "NotFound"}
 _TASK_INPUT_ATTACHMENT_SOURCES = frozenset(
-    {"task-dashboard-step-attachment", "task-create"}
+    {"workflow-start-step-attachment", "workflow-start"}
 )
 _RESERVED_INPUT_ATTACHMENT_PREFIXES = (
     "inputs/",

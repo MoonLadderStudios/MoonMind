@@ -475,20 +475,20 @@ function FilterPillMultiSelect({
   const available = options.filter((option) => !values.includes(option));
   const noneSelected = values.length === 0;
   return (
-    <div className="task-list-pill-multiselect">
+    <div className="workflow-list-pill-multiselect">
       <ul
-        className={`task-list-pill-list${noneSelected ? ' is-empty' : ''}`}
+        className={`workflow-list-pill-list${noneSelected ? ' is-empty' : ''}`}
         aria-label={ariaLabelSelected}
       >
         {noneSelected ? (
-          <li className="task-list-pill-empty small">{emptyMessage}</li>
+          <li className="workflow-list-pill-empty small">{emptyMessage}</li>
         ) : (
           values.map((value) => (
-            <li key={value} className="task-list-pill">
-              <span className="task-list-pill-label">{fmt(value)}</span>
+            <li key={value} className="workflow-list-pill">
+              <span className="workflow-list-pill-label">{fmt(value)}</span>
               <button
                 type="button"
-                className="task-list-pill-remove"
+                className="workflow-list-pill-remove"
                 disabled={disabled}
                 aria-label={`Remove ${fmt(value)}`}
                 onClick={() => onChange(values.filter((entry) => entry !== value))}
@@ -563,7 +563,7 @@ function filterSummary(field: FilterField, filters: ColumnFilters): string {
   return parts.join(', ');
 }
 
-export function TasksListPage({ payload }: { payload: BootPayload }) {
+export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const dashboardCfg = useMemo(() => readListDashboardConfig(payload), [payload.initialData]);
   const listPollMs = useMemo(() => {
     const candidate = dashboardCfg?.pollIntervalsMs?.list;
@@ -627,7 +627,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   }, [syncUrl]);
 
   const queryKey = [
-    'tasks-list',
+    'workflow-list',
     'temporal',
     pageSize,
     filters,
@@ -659,7 +659,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     isError: isFacetError,
     isFetching: isFacetFetching,
   } = useQuery({
-    queryKey: ['tasks-list-facet', openFacet, filters] as const,
+    queryKey: ['workflow-list-facet', openFacet, filters] as const,
     enabled: listEnabled && filterValidationErrors.length === 0 && Boolean(openFacet),
     queryFn: async () => {
       const params = new URLSearchParams();
@@ -686,7 +686,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   const closeFilter = useCallback((nextDraftFilters = filters, fieldToFocus = openFilter) => {
     const fallback = fieldToFocus
       ? document.querySelector<HTMLButtonElement>(
-          `.task-list-column-filter-button[data-filter-field="${fieldToFocus}"]`,
+          `.workflow-list-column-filter-button[data-filter-field="${fieldToFocus}"]`,
         )
       : null;
     if (fieldToFocus) {
@@ -700,7 +700,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   useEffect(() => {
     if (openFilter || !pendingFocusField) return;
     const fallback = document.querySelector<HTMLButtonElement>(
-      `.task-list-column-filter-button[data-filter-field="${pendingFocusField}"]`,
+      `.workflow-list-column-filter-button[data-filter-field="${pendingFocusField}"]`,
     );
     (filterTriggerRef.current?.isConnected ? filterTriggerRef.current : fallback)?.focus();
     setPendingFocusField(null);
@@ -722,7 +722,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
       const target = event.target as Node | null;
       const targetElement = event.target as Element | null;
       if (target && popoverRef.current?.contains(target)) return;
-      if (targetElement?.closest('.task-list-column-filter-button, .task-list-filter-chip-open')) return;
+      if (targetElement?.closest('.workflow-list-column-filter-button, .workflow-list-filter-chip-open')) return;
       closeFilter(filters, openFilter);
     };
     document.addEventListener('mousedown', onPointerDown);
@@ -794,9 +794,9 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   const pageRangeSummary = sortedItems.length > 0 ? `${pageStart} - ${pageEnd}` : '0 - 0';
   const totalEntriesSummary = countSummary ? `${countSummary} total entries` : '';
   const resultsFooter = (
-    <div className="queue-results-toolbar task-list-results-footer">
-      <div className="task-list-footer-live">
-        <label className="queue-inline-toggle toolbar-live-toggle task-list-footer-live-toggle">
+    <div className="queue-results-toolbar workflow-list-results-footer">
+      <div className="workflow-list-footer-live">
+        <label className="queue-inline-toggle toolbar-live-toggle workflow-list-footer-live-toggle">
           <input
             type="checkbox"
             checked={liveUpdates}
@@ -811,7 +811,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
             : 'Updates paused to keep selections stable.'}
         </span>
       </div>
-      <div className="queue-pagination task-list-footer-pagination">
+      <div className="queue-pagination workflow-list-footer-pagination">
         <PageSizeSelector
           pageSize={pageSize}
           disabled={!listEnabled}
@@ -820,7 +820,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
             resetToFirstPage();
           }}
         />
-        <div className="task-list-footer-page-summary" aria-label="Pagination summary">
+        <div className="workflow-list-footer-page-summary" aria-label="Pagination summary">
           <span className="small">{pageRangeSummary}</span>
           {totalEntriesSummary ? <span className="small">{totalEntriesSummary}</span> : null}
         </div>
@@ -998,16 +998,16 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     if (facetForFilterField(field) !== openFacet) return null;
     if (isFacetError) {
       return (
-        <p className="small task-list-facet-notice" role="status">
+        <p className="small workflow-list-facet-notice" role="status">
           Facet values unavailable. Showing current page values only.
         </p>
       );
     }
     if (isFacetFetching) {
-      return <p className="small task-list-facet-notice">Loading facet values...</p>;
+      return <p className="small workflow-list-facet-notice">Loading facet values...</p>;
     }
     if (facetData?.truncated) {
-      return <p className="small task-list-facet-notice">Facet values truncated by the server.</p>;
+      return <p className="small workflow-list-facet-notice">Facet values truncated by the server.</p>;
     }
     return null;
   };
@@ -1018,14 +1018,14 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
       const label = field === 'taskId' ? 'ID' : 'Title';
       const draft = isMobile ? filters[field] : draftFilters[field];
       return (
-        <div className="queue-inline-filter task-list-header-filter-control">
+        <div className="queue-inline-filter workflow-list-header-filter-control">
           <label>
             {labelPrefix}{label} filter value
             <input
               type="text"
               value={draft.contains || ''}
               disabled={!listEnabled}
-              placeholder={field === 'taskId' ? 'task id' : 'title text'}
+              placeholder={field === 'taskId' ? 'workflow id' : 'title text'}
               onChange={(event) => {
               if (isMobile) applyFilters({ ...filters, [field]: { contains: event.target.value } }, null);
                 else updateDraftText(field, event.target.value);
@@ -1039,7 +1039,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     if (field === 'status') {
       const draft = isMobile ? filters.status : draftFilters.status;
       return (
-        <div className="queue-inline-filter task-list-header-filter-control">
+        <div className="queue-inline-filter workflow-list-header-filter-control">
           <label>
             {labelPrefix}Status filter mode
             <select
@@ -1080,7 +1080,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
 
     if (field === 'repository') {
       return (
-        <div className="queue-inline-filter task-list-header-filter-control">
+        <div className="queue-inline-filter workflow-list-header-filter-control">
           <label>
             {labelPrefix}Repository filter value
             <input
@@ -1131,7 +1131,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
       const runtimeOptions = valueOptionsForField('targetRuntime');
       const draft = isMobile ? filters.targetRuntime : draftFilters.targetRuntime;
       return (
-        <div className="queue-inline-filter task-list-header-filter-control">
+        <div className="queue-inline-filter workflow-list-header-filter-control">
           <label>
             {labelPrefix}Runtime filter mode
             <select
@@ -1170,7 +1170,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
       const skillOptions = valueOptionsForField('targetSkill');
       const draft = isMobile ? filters.targetSkill : draftFilters.targetSkill;
       return (
-        <div className="queue-inline-filter task-list-header-filter-control">
+        <div className="queue-inline-filter workflow-list-header-filter-control">
           <label>
             {labelPrefix}Skill filter mode
             <select
@@ -1208,7 +1208,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
       const label = field === 'scheduledFor' ? 'Scheduled' : field === 'createdAt' ? 'Created' : 'Finished';
       const draft = isMobile ? filters[field] : draftFilters[field];
       return (
-        <div className="queue-inline-filter task-list-header-filter-control">
+        <div className="queue-inline-filter workflow-list-header-filter-control">
           <label>
             {labelPrefix}{label} from
             <input
@@ -1267,7 +1267,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
 
     return (
       <div
-        className="task-list-header-filter-popover"
+        className="workflow-list-header-filter-popover"
         role="dialog"
         aria-label={`${label} filter`}
         ref={popoverRef}
@@ -1286,7 +1286,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
       >
         {control}
         {isFilterField(field) ? (
-          <div className="task-list-filter-actions">
+          <div className="workflow-list-filter-actions">
             <button
               type="button"
               className="secondary"
@@ -1328,13 +1328,13 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
 
   return (
     <div className="stack">
-      <section className="task-list-control-deck" aria-label="Task list filters">
+      <section className="workflow-list-control-deck" aria-label="Workflow list filters">
         {!listEnabled ? (
-          <div className="notice error">Temporal task list is disabled in server configuration.</div>
+          <div className="notice error">Temporal workflow list is disabled in server configuration.</div>
         ) : null}
         {ignoredWorkflowScopeState ? (
           <div className="notice warning">
-            Workflow scope filters are not available on Tasks List. Showing task runs only.
+            Workflow scope filters are not available on Workflows. Showing workflow runs only.
           </div>
         ) : null}
         {filterValidationErrors.length > 0 ? (
@@ -1346,13 +1346,13 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
         ) : null}
 
         {hasActiveFilters ? (
-          <div className="task-list-filter-row" aria-live="polite">
-            <div className="task-list-filter-chips" aria-label="Active filters">
+          <div className="workflow-list-filter-row" aria-live="polite">
+            <div className="workflow-list-filter-chips" aria-label="Active filters">
               {activeFilters.map(({ field, label, value }) => (
-                <span className="task-list-filter-chip" key={`${label}:${value}`}>
+                <span className="workflow-list-filter-chip" key={`${label}:${value}`}>
                   <button
                     type="button"
-                    className="task-list-filter-chip-open"
+                    className="workflow-list-filter-chip-open"
                     data-filter-field={field}
                     onMouseDown={(event) => event.stopPropagation()}
                     onClick={(event) => {
@@ -1367,7 +1367,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                   </button>
                   <button
                     type="button"
-                    className="task-list-filter-chip-remove"
+                    className="workflow-list-filter-chip-remove"
                     onClick={() => {
                       const next = { ...filters };
                       if (field === 'taskId' || field === 'title') next[field] = {};
@@ -1385,20 +1385,20 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
             </div>
           </div>
         ) : null}
-        <div className="task-list-mobile-filter-disclosure">
+        <div className="workflow-list-mobile-filter-disclosure">
           <button
             type="button"
-            className="task-list-mobile-filter-toggle"
+            className="workflow-list-mobile-filter-toggle"
             aria-expanded={mobileFiltersOpen}
-            aria-controls="task-list-mobile-filter-panel"
+            aria-controls="workflow-list-mobile-filter-panel"
             onClick={() => setMobileFiltersOpen((open) => !open)}
           >
             {mobileFiltersOpen ? 'Hide filters' : 'Show filters'}
             {hasActiveFilters ? ` (${activeFilters.length})` : ''}
           </button>
           <div
-            id="task-list-mobile-filter-panel"
-            className={`task-list-mobile-filter-controls${mobileFiltersOpen ? ' is-open' : ''}`}
+            id="workflow-list-mobile-filter-panel"
+            className={`workflow-list-mobile-filter-controls${mobileFiltersOpen ? ' is-open' : ''}`}
             aria-label="Mobile task filters"
           >
             {TABLE_COLUMNS.map(([field]) =>
@@ -1409,25 +1409,25 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
       </section>
 
       <section
-        className="queue-layouts panel--data task-list-data-slab"
-        aria-labelledby="task-list-title"
+        className="queue-layouts panel--data workflow-list-data-slab"
+        aria-labelledby="workflow-list-title"
       >
-        <header className="task-list-results-header">
-          <h2 className="page-title" id="task-list-title">Tasks List</h2>
+        <header className="workflow-list-results-header">
+          <h2 className="page-title" id="workflow-list-title">Workflows</h2>
         </header>
         {isLoading ? (
-          <p className="loading task-list-empty-message">Loading tasks...</p>
+          <p className="loading workflow-list-empty-message">Loading workflows...</p>
         ) : isError ? (
           <>
-            <div className="notice error task-list-empty-message">{(error as Error).message}</div>
+            <div className="notice error workflow-list-empty-message">{(error as Error).message}</div>
             {resultsFooter}
           </>
         ) : sortedItems.length === 0 ? (
           <>
             {!hasPaginationContext ? (
-              <p className="small task-list-empty-message">No tasks found for the current filters.</p>
+              <p className="small workflow-list-empty-message">No workflows found for the current filters.</p>
             ) : (
-              <div className="card small task-list-empty-message">No tasks found for the current filters.</div>
+              <div className="card small workflow-list-empty-message">No workflows found for the current filters.</div>
             )}
             {resultsFooter}
           </>
@@ -1455,9 +1455,9 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                           <th
                             key={field}
                             aria-sort={ariaSort}
-                            className={`task-list-compound-header-cell${filterField && openFilter === filterField ? " is-filter-open" : ""}`}
+                            className={`workflow-list-compound-header-cell${filterField && openFilter === filterField ? " is-filter-open" : ""}`}
                           >
-                            <div className="task-list-compound-header">
+                            <div className="workflow-list-compound-header">
                               <button
                                 type="button"
                                 className="table-sort-button"
@@ -1470,7 +1470,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                               </button>
                               <button
                                 type="button"
-                                className={`task-list-column-filter-button${
+                                className={`workflow-list-column-filter-button${
                                   filterValueForField(field) ? ' is-active' : ''
                                 }`}
                                 data-filter-field={field}
@@ -1492,7 +1492,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                               >
                                 <svg
                                   aria-hidden="true"
-                                  className="task-list-column-filter-icon"
+                                  className="workflow-list-column-filter-icon"
                                   viewBox="0 0 16 16"
                                   focusable="false"
                                 >
@@ -1512,7 +1512,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                       return (
                         <tr key={rowWorkflowId(row)}>
                           <td className="queue-table-cell-id">
-                            <a href={`/tasks/${encodeURIComponent(rowWorkflowId(row))}?source=temporal`}>
+                            <a href={`/workflows/${encodeURIComponent(rowWorkflowId(row))}?source=temporal`}>
                               <code>{rowWorkflowId(row)}</code>
                             </a>
                           </td>
@@ -1547,7 +1547,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                     <div className="queue-card-header">
                       <div>
                         <a
-                          href={`/tasks/${encodeURIComponent(rowWorkflowId(row))}?source=temporal`}
+                          href={`/workflows/${encodeURIComponent(rowWorkflowId(row))}?source=temporal`}
                           className="queue-card-title"
                         >
                           {row.title}
@@ -1557,7 +1557,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                           {` · ${
                             [summarizeRuntime(row.targetRuntime), row.targetSkill, row.workflowType]
                               .filter(Boolean)
-                              .join(' · ') || 'Temporal task'
+                              .join(' · ') || 'Temporal workflow'
                           }`}
                         </p>
                       </div>
@@ -1605,7 +1605,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                     </dl>
                     <div className="queue-card-actions">
                       <a
-                        href={`/tasks/${encodeURIComponent(rowWorkflowId(row))}?source=temporal`}
+                        href={`/workflows/${encodeURIComponent(rowWorkflowId(row))}?source=temporal`}
                         className="button secondary queue-card-details-action"
                         role="button"
                       >
@@ -1623,4 +1623,4 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     </div>
   );
 }
-export default TasksListPage;
+export default WorkflowListPage;

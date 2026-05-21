@@ -201,7 +201,7 @@ def test_list_proposals_serializes_delivery_record_fields(
     proposal.external_url = "https://jira.example/browse/MM-901"
     proposal.delivered_at = datetime(2026, 5, 7, 12, 30, tzinfo=UTC)
     proposal.last_synced_at = datetime(2026, 5, 7, 12, 45, tzinfo=UTC)
-    proposal.task_snapshot_ref = "artifact://tasks/proposals/MM-901.json"
+    proposal.task_snapshot_ref = "artifact://proposals/MM-901.json"
     proposal.provider_metadata = {"jira": {"project_key": "MM", "labels": ["moonmind"]}}
     proposal.resolved_policy = {"provider": "jira", "target": "project"}
     service.list_proposals.return_value = ([proposal], None)
@@ -213,7 +213,7 @@ def test_list_proposals_serializes_delivery_record_fields(
     assert item["provider"] == "jira"
     assert item["externalKey"] == "MM-901"
     assert item["externalUrl"] == "https://jira.example/browse/MM-901"
-    assert item["taskSnapshotRef"] == "artifact://tasks/proposals/MM-901.json"
+    assert item["taskSnapshotRef"] == "artifact://proposals/MM-901.json"
     assert item["providerMetadata"] == {
         "jira": {"project_key": "MM", "labels": ["moonmind"]}
     }
@@ -232,7 +232,7 @@ def test_list_proposals_serializes_review_delivery_state(
     proposal.external_url = "https://github.example/Moon/Repo/issues/42"
     proposal.delivered_at = datetime(2026, 5, 7, 12, 30, tzinfo=UTC)
     proposal.last_synced_at = datetime(2026, 5, 7, 12, 45, tzinfo=UTC)
-    proposal.task_snapshot_ref = "artifact://tasks/proposals/42.json"
+    proposal.task_snapshot_ref = "artifact://proposals/42.json"
     proposal.provider_metadata = {
         "delivery": {
             "status": "delivered",
@@ -254,7 +254,7 @@ def test_list_proposals_serializes_review_delivery_state(
         "externalUrl": "https://github.example/Moon/Repo/issues/42",
         "deliveredAt": "2026-05-07T12:30:00Z",
         "lastSyncedAt": "2026-05-07T12:45:00Z",
-        "taskSnapshotRef": "artifact://tasks/proposals/42.json",
+        "taskSnapshotRef": "artifact://proposals/42.json",
         "storedSnapshotNotice": True,
         "created": True,
     }
@@ -446,7 +446,7 @@ def test_get_proposal_preview_includes_operator_outcome_fields(
     proposal.external_url = "https://jira.example/browse/MM-901"
     proposal.delivered_at = datetime(2026, 5, 7, 12, 30, tzinfo=UTC)
     proposal.last_synced_at = datetime(2026, 5, 7, 12, 45, tzinfo=UTC)
-    proposal.task_snapshot_ref = "artifact://tasks/proposals/MM-901.json"
+    proposal.task_snapshot_ref = "artifact://proposals/MM-901.json"
     proposal.provider_metadata = {
         "delivery": {
             "status": "updated",
@@ -496,7 +496,7 @@ def test_get_proposal_preview_includes_operator_outcome_fields(
     assert payload["taskPreview"]["taskSkills"] == ["moonspec-implement"]
     assert payload["promotionResult"] == {
         "promotedExecutionId": "wf-promoted-1",
-        "promotedExecutionUrl": "/tasks/temporal/wf-promoted-1",
+        "promotedExecutionUrl": "/workflows/wf-promoted-1?source=temporal",
         "providerEventId": "evt-promote",
         "resultingExternalState": "promoted",
     }

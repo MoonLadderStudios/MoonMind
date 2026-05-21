@@ -4,19 +4,19 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient } from '../utils/test-utils';
 import { EXECUTING_STATUS_PILL_TRACEABILITY } from '../utils/executionStatusPillClasses';
-import { TasksListPage } from './tasks-list';
+import { WorkflowListPage } from './workflow-list';
 import '../styles/mission-control.css';
 
-describe('Tasks List Entrypoint', () => {
+describe('Workflows Entrypoint', () => {
   const mockPayload: BootPayload = {
-    page: 'tasks-list',
+    page: 'workflow-list',
     apiBase: '/api',
   };
 
   let fetchSpy: MockInstance;
 
   beforeEach(() => {
-    window.history.pushState({}, 'Test', '/tasks');
+    window.history.pushState({}, 'Test', '/workflows');
     fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -44,9 +44,9 @@ describe('Tasks List Entrypoint', () => {
   it('shows the loading state while the task list request is pending', () => {
     fetchSpy.mockReturnValue(new Promise(() => {}) as Promise<Response>);
 
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
-    expect(screen.getByText('Loading tasks...')).toBeTruthy();
+    expect(screen.getByText('Loading workflows...')).toBeTruthy();
   });
 
   it('shows structured API validation detail when the task list request fails', async () => {
@@ -61,7 +61,7 @@ describe('Tasks List Entrypoint', () => {
       }),
     } as Response);
 
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     expect(await screen.findByText('Cannot combine stateIn and stateNotIn.')).toBeTruthy();
     expect(screen.getByLabelText('Live updates')).toBeTruthy();
@@ -94,7 +94,7 @@ describe('Tasks List Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
     fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
@@ -103,14 +103,14 @@ describe('Tasks List Entrypoint', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Apply Status filter' }));
 
-    expect(await screen.findByText('No tasks found for the current filters.')).toBeTruthy();
+    expect(await screen.findByText('No workflows found for the current filters.')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Status filter: completed' })).toBeTruthy();
     expect(screen.getByLabelText('Live updates')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Clear filters' })).toBeNull();
   });
 
   it('announces the current sort state on table headers', async () => {
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
     expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
@@ -138,7 +138,7 @@ describe('Tasks List Entrypoint', () => {
   });
 
   it('separates desktop header sorting from filter popovers', async () => {
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
 
@@ -164,7 +164,7 @@ describe('Tasks List Entrypoint', () => {
   });
 
   it('keeps task filters available outside the desktop-only table layout', async () => {
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
 
@@ -218,7 +218,7 @@ describe('Tasks List Entrypoint', () => {
       }),
     } as Response);
 
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
     fireEvent.click(screen.getByRole('button', { name: /Filter Runtime\. No filter applied\./i }));
@@ -246,7 +246,7 @@ describe('Tasks List Entrypoint', () => {
   }, 10_000);
 
   it('offers every supported runtime identifier in the runtime filter', async () => {
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
     fireEvent.click(screen.getByRole('button', { name: /Filter Runtime\. No filter applied\./i }));
@@ -270,7 +270,7 @@ describe('Tasks List Entrypoint', () => {
   });
 
   it('keeps workflow-kind browsing controls out of the normal task list', async () => {
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
 
@@ -286,17 +286,17 @@ describe('Tasks List Entrypoint', () => {
     window.history.pushState(
       {},
       'Legacy',
-      '/tasks/list?scope=all&workflowType=MoonMind.ProviderProfileManager&entry=manifest&state=completed&repo=moon%2Fdemo&nextPageToken=stale-token',
+      '/workflows?scope=all&workflowType=MoonMind.ProviderProfileManager&entry=manifest&state=completed&repo=moon%2Fdemo&nextPageToken=stale-token',
     );
 
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
 
     expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
       '/api/executions?source=temporal&pageSize=50&scope=tasks&stateIn=completed&repoExact=moon%2Fdemo',
     );
-    expect(screen.getByText(/Workflow scope filters are not available on Tasks List/i)).toBeTruthy();
+    expect(screen.getByText(/Workflow scope filters are not available on Workflows/i)).toBeTruthy();
     expect(window.location.search).toBe('?stateIn=completed&repoExact=moon%2Fdemo&limit=50');
     expect(screen.queryByText('MoonMind.ProviderProfileManager')).toBeNull();
     expect(screen.queryByText('manifest')).toBeNull();
@@ -306,10 +306,10 @@ describe('Tasks List Entrypoint', () => {
     window.history.pushState(
       {},
       'Repeated canonical filters',
-      '/tasks/list?targetRuntimeIn=codex_cli&targetRuntimeIn=claude_code&targetRuntimeIn=&limit=50',
+      '/workflows?targetRuntimeIn=codex_cli&targetRuntimeIn=claude_code&targetRuntimeIn=&limit=50',
     );
 
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
 
@@ -325,10 +325,10 @@ describe('Tasks List Entrypoint', () => {
     window.history.pushState(
       {},
       'Contradictory filters',
-      '/tasks/list?stateIn=completed&stateNotIn=canceled&targetRuntimeIn=codex_cli&targetRuntimeNotIn=jules',
+      '/workflows?stateIn=completed&stateNotIn=canceled&targetRuntimeIn=codex_cli&targetRuntimeNotIn=jules',
     );
 
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     expect(await screen.findByText('Cannot combine stateIn and stateNotIn.')).toBeTruthy();
     expect(screen.getByText('Cannot combine targetRuntimeIn and targetRuntimeNotIn.')).toBeTruthy();
@@ -340,17 +340,17 @@ describe('Tasks List Entrypoint', () => {
     window.history.pushState(
       {},
       'Recover contradictory filters',
-      '/tasks/list?stateIn=completed&stateNotIn=canceled',
+      '/workflows?stateIn=completed&stateNotIn=canceled',
     );
 
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     expect(await screen.findByText('Cannot combine stateIn and stateNotIn.')).toBeTruthy();
     expect(executionListCalls().length).toBe(baselineCalls);
     expect(screen.queryByRole('button', { name: 'Clear filters' })).toBeNull();
   });
 
-  it('renders active task-list pills with the shared shimmer selector contract while keeping inactive pills plain', async () => {
+  it('renders active workflow-list pills with the shared shimmer selector contract while keeping inactive pills plain', async () => {
     fetchSpy.mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -404,7 +404,7 @@ describe('Tasks List Entrypoint', () => {
       }),
     } as Response);
 
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await waitFor(() => {
       expect(
@@ -465,7 +465,7 @@ describe('Tasks List Entrypoint', () => {
   });
 
   it('keeps started time out of the task list presentation', async () => {
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
 
@@ -504,7 +504,7 @@ describe('Tasks List Entrypoint', () => {
       }),
     } as Response);
 
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     const earlyLink = await screen.findByRole('link', { name: 'Early scheduled task' });
     const lateLink = await screen.findByRole('link', { name: 'Late scheduled task' });
@@ -515,7 +515,7 @@ describe('Tasks List Entrypoint', () => {
   });
 
   it('reuses the trimmed repository column filter for both the request and the query key', async () => {
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
     const baselineCalls = executionListCalls().length;
@@ -549,7 +549,7 @@ describe('Tasks List Entrypoint', () => {
   }, 10_000);
 
   it('labels the lifecycle column filter as status and exposes canonical status options', async () => {
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
 
@@ -609,7 +609,7 @@ describe('Tasks List Entrypoint', () => {
   });
 
   it('builds status filters as removable pills', async () => {
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
 
@@ -637,7 +637,7 @@ describe('Tasks List Entrypoint', () => {
   });
 
   it('stages status changes until Apply and discards them on cancel, Escape, or outside click', async () => {
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
     const baselineCalls = executionListCalls().length;
@@ -663,7 +663,7 @@ describe('Tasks List Entrypoint', () => {
   });
 
   it('moves focus into column filter dialogs and applies staged text filters with Enter', async () => {
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
     const titleFilterButton = screen.getByRole('button', {
@@ -692,7 +692,7 @@ describe('Tasks List Entrypoint', () => {
   });
 
   it('does not apply staged filters when Enter is pressed on popover action buttons', async () => {
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
     const baselineCalls = executionListCalls().length;
@@ -710,7 +710,7 @@ describe('Tasks List Entrypoint', () => {
   });
 
   it('keeps mobile filter focus from jumping to a stale desktop trigger', async () => {
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
     const desktopStatusFilter = screen.getByRole('button', {
@@ -727,8 +727,8 @@ describe('Tasks List Entrypoint', () => {
   });
 
   it('applies status exclude semantics and removes only the selected chip', async () => {
-    window.history.pushState({}, 'Paged', '/tasks/list?nextPageToken=stale-token');
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    window.history.pushState({}, 'Paged', '/workflows?nextPageToken=stale-token');
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
     fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
@@ -754,7 +754,7 @@ describe('Tasks List Entrypoint', () => {
   });
 
   it('selects multiple status values and submits them through stateIn', async () => {
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
     fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
@@ -780,7 +780,7 @@ describe('Tasks List Entrypoint', () => {
   });
 
   it('summarizes multi-value excluded status filters unambiguously with a bounded label', async () => {
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
     fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
@@ -802,8 +802,8 @@ describe('Tasks List Entrypoint', () => {
   });
 
   it('clears stale cursor state when the page size changes', async () => {
-    window.history.pushState({}, 'Paged', '/tasks/list?nextPageToken=stale-token&limit=50');
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    window.history.pushState({}, 'Paged', '/workflows?nextPageToken=stale-token&limit=50');
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
@@ -843,7 +843,7 @@ describe('Tasks List Entrypoint', () => {
       }),
     } as Response);
 
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
     fireEvent.click(screen.getByRole('button', { name: /Filter Skill\. No filter applied\./i }));
@@ -897,7 +897,7 @@ describe('Tasks List Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
     fireEvent.click(screen.getByRole('button', { name: /Filter Repository\. No filter applied\./i }));
@@ -929,14 +929,14 @@ describe('Tasks List Entrypoint', () => {
       }),
     } as Response);
 
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     expect(await screen.findByText('1 - 1')).toBeTruthy();
     expect(screen.getByText('21 total entries')).toBeTruthy();
-    const footer = document.querySelector('.task-list-results-footer');
-    const liveBlock = footer?.querySelector('.task-list-footer-live');
-    const paginationBlock = footer?.querySelector('.task-list-footer-pagination');
-    const paginationSummary = footer?.querySelector('.task-list-footer-page-summary');
+    const footer = document.querySelector('.workflow-list-results-footer');
+    const liveBlock = footer?.querySelector('.workflow-list-footer-live');
+    const paginationBlock = footer?.querySelector('.workflow-list-footer-pagination');
+    const paginationSummary = footer?.querySelector('.workflow-list-footer-page-summary');
     expect(liveBlock?.contains(screen.getByLabelText('Live updates'))).toBe(true);
     expect(liveBlock?.textContent).toContain('Polling every 5s');
     expect(paginationBlock?.contains(screen.getByLabelText('Show'))).toBe(true);
@@ -979,7 +979,7 @@ describe('Tasks List Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findByText('1 - 1');
     fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
@@ -989,31 +989,31 @@ describe('Tasks List Entrypoint', () => {
   });
 
   it('uses the Mission Control control deck and data slab composition', async () => {
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
 
-    const controlDeck = document.querySelector<HTMLElement>('.task-list-control-deck');
-    const dataSlab = document.querySelector<HTMLElement>('.task-list-data-slab.panel--data');
+    const controlDeck = document.querySelector<HTMLElement>('.workflow-list-control-deck');
+    const dataSlab = document.querySelector<HTMLElement>('.workflow-list-data-slab.panel--data');
     const tableWrapper = dataSlab?.querySelector<HTMLElement>('.queue-table-wrapper[data-layout="table"]');
     const table = tableWrapper?.querySelector<HTMLElement>('table');
     const tableHead = tableWrapper?.querySelector<HTMLElement>('thead');
     const firstHeader = tableWrapper?.querySelector<HTMLElement>('th');
 
     expect(controlDeck).toBeTruthy();
-    expect(controlDeck?.querySelector('form.task-list-control-grid')).toBeNull();
+    expect(controlDeck?.querySelector('form.workflow-list-control-grid')).toBeNull();
     expect(screen.queryByRole('button', { name: /^Kind\./i })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Workflow Type\./i })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Entry\./i })).toBeNull();
 
     expect(controlDeck?.classList.contains('panel--controls')).toBe(false);
-    expect(controlDeck?.querySelector('.task-list-utility-cluster')).toBeNull();
-    expect(dataSlab?.querySelector('.task-list-results-footer')?.contains(screen.getByLabelText('Live updates'))).toBe(
+    expect(controlDeck?.querySelector('.workflow-list-utility-cluster')).toBeNull();
+    expect(dataSlab?.querySelector('.workflow-list-results-footer')?.contains(screen.getByLabelText('Live updates'))).toBe(
       true,
     );
     expect(screen.queryByText('Showing all task executions.')).toBeNull();
     expect(dataSlab).toBeTruthy();
-    expect(dataSlab?.querySelector('.task-list-results-footer')).toBeTruthy();
+    expect(dataSlab?.querySelector('.workflow-list-results-footer')).toBeTruthy();
     const pageSizeSelect = screen.getByLabelText('Show');
     const pageSizeLabel = pageSizeSelect.closest('label');
     expect(pageSizeLabel?.classList.contains('queue-page-size-selector')).toBe(true);
@@ -1037,22 +1037,22 @@ describe('Tasks List Entrypoint', () => {
   it('keeps the task list surfaces to one control deck and one data slab', async () => {
     renderWithClient(
       <section className="panel" aria-live="polite">
-        <TasksListPage payload={mockPayload} />
+        <WorkflowListPage payload={mockPayload} />
       </section>,
     );
 
     await screen.findAllByText('Example task');
 
     const shellPanel = document.querySelector<HTMLElement>('.panel');
-    const controlDecks = document.querySelectorAll<HTMLElement>('.task-list-control-deck');
-    const dataSlabs = document.querySelectorAll<HTMLElement>('.task-list-data-slab.panel--data');
+    const controlDecks = document.querySelectorAll<HTMLElement>('.workflow-list-control-deck');
+    const dataSlabs = document.querySelectorAll<HTMLElement>('.workflow-list-data-slab.panel--data');
 
     expect(controlDecks).toHaveLength(1);
     expect(dataSlabs).toHaveLength(1);
 
     const controlDeck = controlDecks[0] as HTMLElement;
     const dataSlab = dataSlabs[0] as HTMLElement;
-    const controlGrid = controlDeck.querySelector<HTMLElement>('.task-list-control-grid');
+    const controlGrid = controlDeck.querySelector<HTMLElement>('.workflow-list-control-grid');
     const tableWrapper = dataSlab.querySelector<HTMLElement>('.queue-table-wrapper[data-layout="table"]');
 
     expect(controlGrid).toBeNull();
@@ -1081,7 +1081,7 @@ describe('Tasks List Entrypoint', () => {
   });
 
   it('shows clickable active column filter chips and removes individual filters from the chip row', async () => {
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
     fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
@@ -1097,7 +1097,7 @@ describe('Tasks List Entrypoint', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Apply Runtime filter' }));
 
     await waitFor(() => {
-      const activeFilterText = document.querySelector('.task-list-filter-chips')?.textContent || '';
+      const activeFilterText = document.querySelector('.workflow-list-filter-chips')?.textContent || '';
       expect(activeFilterText).toContain('completed');
       expect(activeFilterText).toContain('owner/repo');
       expect(activeFilterText).toContain('Codex CLI');
@@ -1120,7 +1120,7 @@ describe('Tasks List Entrypoint', () => {
   });
 
   it('marks mobile card details links as the only full-width card action', async () => {
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     const detailsLink = await screen.findByRole('button', { name: 'View details' });
 
@@ -1129,7 +1129,7 @@ describe('Tasks List Entrypoint', () => {
   });
 
   it('keeps mobile task cards constrained to the viewport width', async () => {
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     const detailsLink = await screen.findByRole('button', { name: 'View details' });
     const card = detailsLink.closest<HTMLElement>('.queue-card');
@@ -1182,13 +1182,13 @@ describe('Tasks List Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     const nextButton = await screen.findByRole('button', { name: 'Next page' });
     fireEvent.click(nextButton);
 
     await waitFor(() => {
-      expect(screen.getByText('No tasks found for the current filters.')).toBeTruthy();
+      expect(screen.getByText('No workflows found for the current filters.')).toBeTruthy();
     });
 
     expect(screen.getByRole('button', { name: 'Previous page' }).getAttribute('disabled')).toBeNull();
@@ -1214,7 +1214,7 @@ describe('Tasks List Entrypoint', () => {
       }),
     } as Response);
 
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     expect((await screen.findAllByText('Blocked by 2 prerequisites'))[0]).toBeTruthy();
   });
@@ -1238,7 +1238,7 @@ describe('Tasks List Entrypoint', () => {
       }),
     } as Response);
 
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     expect((await screen.findAllByText('Readable runtime task'))[0]).toBeTruthy();
     expect((await screen.findAllByText('Codex CLI'))[0]).toBeTruthy();
@@ -1267,7 +1267,7 @@ describe('Tasks List Entrypoint', () => {
       }),
     } as Response);
 
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     const titleMatches = await screen.findAllByText('Long child workflow id task');
     const table = titleMatches

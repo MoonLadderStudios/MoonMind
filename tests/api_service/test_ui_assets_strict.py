@@ -95,8 +95,8 @@ def test_ui_assets_includes_css_from_imported_chunks(
 
     html = ui_assets("mission-control")
 
-    assert 'src="/static/task_dashboard/dist/assets/mission-control.js"' in html
-    assert 'href="/static/task_dashboard/dist/assets/mountPage.css"' in html
+    assert 'src="/static/workflow_console/dist/assets/mission-control.js"' in html
+    assert 'href="/static/workflow_console/dist/assets/mountPage.css"' in html
 
 def test_ui_assets_falls_back_to_bundled_dist_when_local_manifest_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -133,7 +133,7 @@ def test_ui_assets_falls_back_to_bundled_dist_when_local_manifest_missing(
 
     html = ui_assets("mission-control")
 
-    assert 'src="/static/task_dashboard/dist/assets/mission-control.js"' in html
+    assert 'src="/static/workflow_console/dist/assets/mission-control.js"' in html
     assert resolve_mission_control_dist_root() == dist_root
 
 def test_ui_assets_falls_back_to_bundled_dist_when_local_manifest_is_stale(
@@ -147,14 +147,14 @@ def test_ui_assets_falls_back_to_bundled_dist_when_local_manifest_is_stale(
     (local_manifest_dir / "manifest.json").write_text(
         json.dumps(
             {
-                "entrypoints/tasks-list.tsx": {
-                    "file": "assets/tasks-list.js",
+                "entrypoints/workflow-list.tsx": {
+                    "file": "assets/workflow-list.js",
                 }
             }
         ),
         encoding="utf-8",
     )
-    (local_assets_dir / "tasks-list.js").write_text(
+    (local_assets_dir / "workflow-list.js").write_text(
         "console.log('stale local dist');", encoding="utf-8"
     )
 
@@ -184,7 +184,7 @@ def test_ui_assets_falls_back_to_bundled_dist_when_local_manifest_is_stale(
 
     html = ui_assets("mission-control")
 
-    assert 'src="/static/task_dashboard/dist/assets/mission-control.js"' in html
+    assert 'src="/static/workflow_console/dist/assets/mission-control.js"' in html
     assert resolve_mission_control_dist_root() == bundled_dist_root
 
 def test_ui_assets_prefers_newer_usable_bundled_dist_over_older_local_dist(
@@ -250,8 +250,8 @@ def test_ui_assets_prefers_newer_usable_bundled_dist_over_older_local_dist(
 
     html = ui_assets("mission-control")
 
-    assert 'src="/static/task_dashboard/dist/assets/mission-control.js"' in html
-    assert 'href="/static/task_dashboard/dist/assets/mission-control.css"' in html
+    assert 'src="/static/workflow_console/dist/assets/mission-control.js"' in html
+    assert 'href="/static/workflow_console/dist/assets/mission-control.css"' in html
     assert resolve_mission_control_dist_root() == bundled_dist_root
 
 def test_resolve_mission_control_dist_root_returns_after_newest_usable_candidate(
@@ -325,14 +325,14 @@ def test_bundled_dist_root_can_serve_static_assets_when_repo_dist_is_missing(
     empty_static = tmp_path / "empty-static"
     empty_static.mkdir()
     app.mount(
-        "/static/task_dashboard/dist",
+        "/static/workflow_console/dist",
         StaticFiles(directory=str(resolve_mission_control_dist_root())),
-        name="task-dashboard-dist",
+        name="workflow-console-dist",
     )
     app.mount("/static", StaticFiles(directory=str(empty_static)), name="static")
 
     with TestClient(app) as client:
-        response = client.get("/static/task_dashboard/dist/assets/mission-control.js")
+        response = client.get("/static/workflow_console/dist/assets/mission-control.js")
 
     assert response.status_code == 200
     assert "bundled" in response.text

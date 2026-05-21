@@ -59,9 +59,9 @@ def server():
 @pytest.mark.parametrize(
     "path,expected_text",
     [
-        ("/tasks/list", "Tasks List"),
-        ("/tasks/settings?section=operations", "Operations"),
-        ("/tasks/settings?section=providers-secrets", "Provider Profiles"),
+        ("/workflows", "Workflows"),
+        ("/settings?section=operations", "Operations"),
+        ("/settings?section=providers-secrets", "Provider Profiles"),
     ],
 )
 def test_react_page_shows_app_content(server, path: str, expected_text: str) -> None:
