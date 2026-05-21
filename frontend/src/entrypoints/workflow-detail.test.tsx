@@ -409,6 +409,63 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
+  it('renders the required workflow execution identity and section labels', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      namespace: 'default',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Workflow detail labels',
+      summary: 'Execution summary',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => latestStepsSnapshot,
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    await waitFor(() => {
+      for (const label of [
+        'Workflow ID',
+        'Current Run ID',
+        'Workflow Type',
+        'Workflow State',
+      ]) {
+        expect(screen.getByText(new RegExp(`^${label}:?$`))).toBeTruthy();
+      }
+      expect(screen.getByRole('button', { name: 'Show Workflow Inputs' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Workflow Artifacts' })).toBeTruthy();
+    });
+  });
+
   it('renders compact proposal delivery diagnostics from execution detail outcomes', async () => {
     const mockExecution = {
       taskId: 'test-123',
