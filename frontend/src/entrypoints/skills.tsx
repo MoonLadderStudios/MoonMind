@@ -169,7 +169,7 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
   const skillsQuery = useQuery({
     queryKey: ['skills', 'detail'],
     queryFn: async (): Promise<SkillItem[]> => {
-      const response = await fetch('/api/tasks/skills?includeContent=true', {
+      const response = await fetch('/api/workflows/skills?includeContent=true', {
         headers: {
           Accept: 'application/json',
         },
@@ -190,7 +190,7 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      const response = await fetch('/api/tasks/skills', {
+      const response = await fetch('/api/workflows/skills', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

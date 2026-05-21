@@ -438,7 +438,7 @@ async def test_merge_automation_resolver_child_uses_try_cancel(
     assert search_attributes["mm_owner_id"] == ["wf-parent"]
     assert search_attributes["mm_repo"] == ["MoonLadderStudios/MoonMind"]
     assert child_kwargs["memo"] == {
-        "entry": "run",
+        "entry": "user_workflow",
         "title": "Resolve PR #350",
         "summary": "Resolver child workflow for merge automation.",
         "targetRuntime": "codex",

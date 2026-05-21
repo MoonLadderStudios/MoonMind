@@ -3540,7 +3540,7 @@ class MoonMindRunWorkflow:
             raise ValueError(f"workflowType must be {WORKFLOW_NAME}")
 
         self._workflow_type = workflow_type
-        self._entry = "run"
+        self._entry = "user_workflow"
         self._title = workflow.memo().get("title") or self._optional_string(
             input_payload,
             "title",
@@ -9114,7 +9114,7 @@ class MoonMindRunWorkflow:
             ),
             SearchAttributePair(
                 SearchAttributeKey.for_keyword("mm_entry"),
-                self._entry or "run",
+                self._entry or "user_workflow",
             ),
             SearchAttributePair(
                 SearchAttributeKey.for_datetime("mm_updated_at"),

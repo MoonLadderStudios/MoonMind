@@ -28,7 +28,7 @@ def test_execution_detail_payload_keeps_proposal_review_off_primary_queue() -> N
     payload = _serialize_execution(record).model_dump(by_alias=True)
     serialized = repr(payload).lower()
 
-    assert payload["detailHref"] == "/tasks/mm:proposal-contract"
+    assert payload["detailHref"] == "/workflows/mm:proposal-contract"
     assert "/tasks/proposals" not in serialized
     assert "/api/proposals" not in serialized
     assert "/promote" not in serialized

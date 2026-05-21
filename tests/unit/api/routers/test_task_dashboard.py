@@ -138,6 +138,14 @@ def client() -> Iterator[TestClient]:
     with _client_with_mock_service() as (test_client, _mock_service):
         yield test_client
 
+def test_task_dashboard_api_routes_are_workflow_native() -> None:
+    route_paths = {getattr(route, "path", "") for route in router.routes}
+
+    assert "/api/tasks" not in route_paths
+    assert not any(path.startswith("/api/tasks/") for path in route_paths)
+    assert "/api/workflows/skills" in route_paths
+    assert "/api/workflows/skills/upload" in route_paths
+
 def test_allowed_path_helper_accepts_known_routes() -> None:
     assert _is_allowed_path("list")
     assert not _is_allowed_path("system")
@@ -456,7 +464,7 @@ def test_skills_api_returns_available_skill_ids(
         lambda: ("speckit", "speckit-orchestrate"),
     )
 
-    response = client.get("/api/tasks/skills")
+    response = client.get("/api/workflows/skills")
 
     assert response.status_code == 200
     assert response.json() == {
@@ -492,7 +500,7 @@ def test_skills_api_include_content_reads_legacy_skill_markdown(
         lambda: ("speckit-orchestrate",),
     )
 
-    response = client.get("/api/tasks/skills?includeContent=true")
+    response = client.get("/api/workflows/skills?includeContent=true")
 
     assert response.status_code == 200
     assert response.json()["legacyItems"] == [
@@ -511,7 +519,7 @@ def test_create_dashboard_skill_success(
         "name": "MyNewSkill",
         "markdown": "# My New Skill\n\nThis is the skill content...",
     }
-    response = client.post("/api/tasks/skills", json=payload)
+    response = client.post("/api/workflows/skills", json=payload)
 
     assert response.status_code == 201
     assert response.json() == {"status": "success"}
@@ -525,7 +533,7 @@ def test_create_dashboard_skill_invalid_name(client: TestClient) -> None:
         "name": "../MyNewSkill",
         "markdown": "# My New Skill\n\nThis is the skill content...",
     }
-    response = client.post("/api/tasks/skills", json=payload)
+    response = client.post("/api/workflows/skills", json=payload)
 
     assert response.status_code == 400
     assert "Invalid skill name" in response.json()["detail"]
@@ -545,7 +553,7 @@ def test_create_dashboard_skill_already_exists(
         "name": "ExistingSkill",
         "markdown": "# Existing Skill\n\nContent...",
     }
-    response = client.post("/api/tasks/skills", json=payload)
+    response = client.post("/api/workflows/skills", json=payload)
 
     assert response.status_code == 409
     assert "already exists locally" in response.json()["detail"]
@@ -583,7 +591,7 @@ def test_upload_dashboard_skill_zip_saves_valid_bundle(
     )
 
     response = client.post(
-        "/api/tasks/skills/upload",
+        "/api/workflows/skills/upload",
         files={"file": ("zip-skill.zip", payload, "application/zip")},
     )
 
@@ -792,7 +800,7 @@ def test_upload_dashboard_skill_zip_rejects_invalid_root_skill_filename(
     )
 
     response = client.post(
-        "/api/tasks/skills/upload",
+        "/api/workflows/skills/upload",
         files={
             "file": (
                 "my skill.zip",
@@ -815,7 +823,7 @@ def test_upload_dashboard_skill_zip_rejects_invalid_top_level_directory(
     )
 
     response = client.post(
-        "/api/tasks/skills/upload",
+        "/api/workflows/skills/upload",
         files={
             "file": (
                 "bundle.zip",
@@ -838,7 +846,7 @@ def test_upload_dashboard_skill_zip_rejects_missing_skill_markdown(
     )
 
     response = client.post(
-        "/api/tasks/skills/upload",
+        "/api/workflows/skills/upload",
         files={
             "file": (
                 "broken.zip",
@@ -861,7 +869,7 @@ def test_upload_dashboard_skill_zip_rejects_path_traversal(
     )
 
     response = client.post(
-        "/api/tasks/skills/upload",
+        "/api/workflows/skills/upload",
         files={
             "file": (
                 "unsafe.zip",

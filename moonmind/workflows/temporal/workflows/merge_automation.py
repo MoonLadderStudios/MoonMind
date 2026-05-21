@@ -139,7 +139,7 @@ class MoonMindMergeAutomationWorkflow:
         attributes = {
             "mm_owner_type": [self._resolver_owner_type()],
             "mm_owner_id": [self._principal()],
-            "mm_entry": ["run"],
+            "mm_entry": ["user_workflow"],
         }
         if self._input is not None:
             attributes["mm_repo"] = [self._input.pull_request.repo]
@@ -183,7 +183,7 @@ class MoonMindMergeAutomationWorkflow:
             or None
         )
         memo: dict[str, Any] = {
-            "entry": "run",
+            "entry": "user_workflow",
             "title": str(resolver_request.get("title") or "Resolve PR").strip()
             or "Resolve PR",
             "summary": "Resolver child workflow for merge automation.",

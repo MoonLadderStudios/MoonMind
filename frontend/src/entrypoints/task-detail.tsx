@@ -455,7 +455,7 @@ const TargetDiagnosticsSchema = z
 
 const ExecutionDetailSchema = z
   .object({
-    taskId: z.string(),
+    taskId: z.string().optional(),
     workflowId: z.string().optional(),
     namespace: z.string(),
     temporalRunId: z.string().optional(),
@@ -4291,7 +4291,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const failedStepResumeMutation = useMutation({
     mutationFn: async () => {
       const response = await fetch(
-        `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/resume-from-failed-step`,
+        `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/recover-from-failed-step`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },

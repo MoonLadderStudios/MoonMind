@@ -87,7 +87,7 @@ describe("Task Create Step Type authoring", () => {
       .spyOn(window, "fetch")
       .mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
-        if (url.startsWith("/api/tasks/skills")) {
+        if (url.startsWith("/api/workflows/skills")) {
           return Promise.resolve({
             ok: true,
             json: async () => ({ items: { worker: ["moonspec-orchestrate"] } }),

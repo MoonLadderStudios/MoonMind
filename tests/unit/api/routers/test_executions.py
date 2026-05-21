@@ -471,7 +471,7 @@ def test_list_executions_temporal_query_includes_target_runtime_filter() -> None
     assert response.status_code == 200
     query = temporal_client.count_workflows.await_args.kwargs["query"]
     assert 'WorkflowType="MoonMind.Run"' in query
-    assert 'mm_entry="run"' in query
+    assert 'mm_entry="user_workflow"' in query
     assert 'mm_target_runtime="codex_cli"' in query
     temporal_client.list_workflows.assert_called_once()
     assert (
@@ -512,7 +512,7 @@ def test_list_executions_temporal_query_includes_canonical_state_filters() -> No
     assert response.status_code == 200
     query = temporal_client.count_workflows.await_args.kwargs["query"]
     assert 'WorkflowType="MoonMind.Run"' in query
-    assert 'mm_entry="run"' in query
+    assert 'mm_entry="user_workflow"' in query
     # ``completed`` and ``failed`` are terminal states; the executions list
     # filter resolves them to the Temporal ``ExecutionStatus`` so closed
     # workflows whose ``mm_state`` search attribute was never updated still
@@ -1012,7 +1012,7 @@ def test_execution_facets_exclude_requested_facet_filter_and_keep_task_scope() -
     assert response.status_code == 200
     base_query = temporal_client.list_workflows.call_args.kwargs["query"]
     assert 'WorkflowType="MoonMind.Run"' in base_query
-    assert 'mm_entry="run"' in base_query
+    assert 'mm_entry="user_workflow"' in base_query
     assert "mm_owner_id=" in base_query
     assert 'mm_state="executing"' in base_query
     assert "mm_target_runtime" not in base_query
@@ -1048,7 +1048,7 @@ def test_execution_status_facet_counts_static_status_values_with_task_scope() ->
     ]
     first_count_query = temporal_client.count_workflows.await_args_list[0].kwargs["query"]
     assert 'WorkflowType="MoonMind.Run"' in first_count_query
-    assert 'mm_entry="run"' in first_count_query
+    assert 'mm_entry="user_workflow"' in first_count_query
     assert "mm_owner_id=" in first_count_query
     assert body["truncated"] is True
 
@@ -5545,7 +5545,7 @@ def test_serialize_execution_surfaces_task_run_id_from_memo() -> None:
 
     assert payload.task_run_id == "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"
     dumped = payload.model_dump(by_alias=True)
-    assert dumped["taskRunId"] == "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"
+    assert "taskRunId" not in dumped
 
 def test_serialize_execution_surfaces_dependency_metadata() -> None:
     record = SimpleNamespace(
@@ -5623,7 +5623,7 @@ def test_serialize_execution_repository_ignores_mapping_values_and_uses_first_sc
     dumped = payload.model_dump(by_alias=True)
     assert dumped["repository"] == "Moon/Mind"
 
-def test_describe_execution_exposes_task_and_temporal_run_identity() -> None:
+def test_describe_execution_exposes_workflow_and_run_identity() -> None:
     for test_client, service in _client_with_service():
         service.describe_execution.return_value = _build_execution_record()
 
@@ -5632,9 +5632,9 @@ def test_describe_execution_exposes_task_and_temporal_run_identity() -> None:
         assert response.status_code == 200
         payload = response.json()
         assert payload["workflowId"] == "mm:wf-1"
-        assert payload["taskId"] == "mm:wf-1"
+        assert "taskId" not in payload
         assert payload["runId"] == "run-2"
-        assert payload["temporalRunId"] == "run-2"
+        assert "temporalRunId" not in payload
         assert payload["latestRunView"] is True
         assert payload["continueAsNewCause"] == "manual_rerun"
         assert payload["stepsHref"] == "/api/executions/mm:wf-1/steps"
@@ -5777,10 +5777,9 @@ def test_describe_execution_includes_live_merge_automation_summary() -> None:
     assert merge_automation["resolverChildren"] == [
         {
             "workflowId": "resolver:mm:wf-1:pr:1614:head:abc123:1",
-            "taskRunId": "resolver-task-run",
             "status": "running",
             "detailHref": (
-                "/tasks/resolver%3Amm%3Awf-1%3Apr%3A1614%3Ahead%3Aabc123%3A1"
+                "/workflows/resolver%3Amm%3Awf-1%3Apr%3A1614%3Ahead%3Aabc123%3A1"
                 "?source=temporal"
             ),
         }
@@ -5835,7 +5834,7 @@ def test_describe_execution_queries_resolver_children_concurrently() -> None:
         return ExecutionMergeAutomationResolverChildModel(
             workflow_id=workflow_id,
             status="running",
-            detail_href=f"/tasks/{workflow_id}",
+            detail_href=f"/workflows/{workflow_id}",
         )
 
     with patch(
@@ -5884,7 +5883,7 @@ def test_describe_execution_prefers_progress_query_run_id_when_newer_latest_run(
     assert response.status_code == 200
     payload = response.json()
     assert payload["runId"] == "run-99"
-    assert payload["temporalRunId"] == "run-99"
+    assert "temporalRunId" not in payload
     assert payload["progress"] == {
         "total": 3,
         "pending": 0,
@@ -6112,7 +6111,8 @@ def test_get_execution_steps_returns_latest_run_ledger() -> None:
     assert payload["runId"] == "run-99"
     assert payload["runScope"] == "latest"
     assert payload["steps"][0]["attempt"] == 2
-    assert payload["steps"][0]["refs"]["taskRunId"] == "task-run-1"
+    assert "taskRunId" not in payload["steps"][0]["refs"]
+    assert "taskRunId" not in payload["steps"][0]["workload"]
     assert payload["steps"][0]["workload"]["profileId"] == "local-python"
     assert payload["steps"][0]["workload"]["imageRef"] == "python:3.12-slim"
     assert payload["steps"][0]["workload"]["sessionContext"] == {
@@ -6222,9 +6222,9 @@ def test_get_execution_steps_enriches_missing_agent_task_run_ids_once() -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["steps"][0]["refs"]["taskRunId"] == "task-run-1"
-    assert payload["steps"][1]["refs"]["taskRunId"] == "task-run-2"
-    assert payload["steps"][2]["refs"]["taskRunId"] is None
+    assert "taskRunId" not in payload["steps"][0]["refs"]
+    assert "taskRunId" not in payload["steps"][1]["refs"]
+    assert "taskRunId" not in payload["steps"][2]["refs"]
     assert len(to_thread_calls) == 1
     assert to_thread_calls[0][1] == (
         (
@@ -7056,9 +7056,7 @@ def test_describe_execution_falls_back_to_managed_run_store_task_run_id(
         response = test_client.get("/api/executions/mm:wf-1")
 
     assert response.status_code == 200
-    assert (
-        response.json()["taskRunId"] == "550e8400-e29b-41d4-a716-446655440000"
-    )
+    assert "taskRunId" not in response.json()
     assert len(to_thread_calls) == 1
     assert to_thread_calls[0][1] == (("mm:wf-1",),)
 
@@ -7114,7 +7112,7 @@ def test_request_rerun_update_redirects_response_to_created_rerun_execution() ->
         body = response.json()
         assert body["execution"]["workflowId"] == "mm:rerun-created"
         assert body["execution"]["redirectPath"] == (
-            "/tasks/mm:rerun-created?source=temporal"
+            "/workflows/mm:rerun-created?source=temporal"
         )
         assert service.describe_execution.await_args_list[-1].args == (
             "mm:rerun-created",
@@ -7213,7 +7211,7 @@ async def test_request_rerun_update_flushes_snapshot_reuse_before_serializing_re
         assert response.accepted is True
         assert response.execution.workflow_id != source_workflow_id
         assert response.execution.redirect_path == (
-            f"/tasks/{response.execution.workflow_id}?source=temporal"
+            f"/workflows/{response.execution.workflow_id}?source=temporal"
         )
     finally:
         await engine.dispose()
@@ -7586,9 +7584,9 @@ def test_list_executions_preserves_logical_identity_fields() -> None:
         assert payload["nextPageToken"] == "cursor-1"
         item = payload["items"][0]
         assert item["workflowId"] == "mm:wf-1"
-        assert item["taskId"] == "mm:wf-1"
+        assert "taskId" not in item
         assert item["runId"] == "run-2"
-        assert item["temporalRunId"] == "run-2"
+        assert "temporalRunId" not in item
         assert item["latestRunView"] is True
         assert item["continueAsNewCause"] == "manual_rerun"
 
@@ -7788,7 +7786,7 @@ def test_describe_execution_includes_actions_and_debug_fields(
     assert body["actions"]["canBypassDependencies"] is False
     assert body["actions"]["canUpdateInputs"] is False
     assert body["debugFields"]["workflowId"] == "mm:wf-1"
-    assert body["redirectPath"] == "/tasks/mm:wf-1?source=temporal"
+    assert body["redirectPath"] == "/workflows/mm:wf-1?source=temporal"
 
 def test_describe_execution_exposes_dependency_bypass_action(
     monkeypatch: pytest.MonkeyPatch,
@@ -7899,7 +7897,7 @@ def test_describe_execution_exposes_failed_step_resume_distinct_from_lifecycle_r
     assert response.status_code == 200
     body = response.json()
     assert body["actions"]["canResume"] is False
-    assert body["actions"]["canResumeFromFailedStep"] is True
+    assert body["actions"]["canRecoverFromFailedStep"] is True
     assert body["resume"]["available"] is True
     assert (
         body["resume"]["checkpointRef"]
@@ -8385,7 +8383,7 @@ def test_describe_execution_requires_complete_resume_evidence(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["actions"]["canResumeFromFailedStep"] is False
+    assert body["actions"]["canRecoverFromFailedStep"] is False
     assert body["resume"]["available"] is False
     assert body["resume"]["disabledReason"] == expected_reason
 
@@ -8418,8 +8416,8 @@ def test_describe_execution_rejects_stale_resume_evidence(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["actions"]["canResumeFromFailedStep"] is False
-    assert body["actions"]["disabledReasons"]["canResumeFromFailedStep"] == "stale_resume_evidence"
+    assert body["actions"]["canRecoverFromFailedStep"] is False
+    assert body["actions"]["disabledReasons"]["canRecoverFromFailedStep"] == "stale_resume_evidence"
     assert body["resume"]["available"] is False
     assert body["resume"]["disabledReason"] == "stale_resume_evidence"
 
@@ -8456,7 +8454,7 @@ def test_failed_step_resume_submission_rejects_stale_resume_evidence(
 
     with TestClient(app) as test_client:
         response = test_client.post(
-            "/api/executions/mm:wf-1/resume-from-failed-step",
+            "/api/executions/mm:wf-1/recover-from-failed-step",
             json={"idempotencyKey": "resume-1"},
         )
 
@@ -8541,7 +8539,7 @@ def test_failed_step_resume_request_rejects_edited_task_payload_fields(
 
     with TestClient(app) as test_client:
         response = test_client.post(
-            "/api/executions/mm:wf-1/resume-from-failed-step",
+            "/api/executions/mm:wf-1/recover-from-failed-step",
             json={
                 "idempotencyKey": "resume-1",
                 **payload_fields,
@@ -8550,7 +8548,7 @@ def test_failed_step_resume_request_rejects_edited_task_payload_fields(
 
     assert response.status_code == 400
     body = response.json()["detail"]
-    assert body["code"] == "resume_payload_not_allowed"
+    assert body["code"] == "recovery_payload_not_allowed"
     assert body["fields"] == expected_fields
 
 
@@ -8574,7 +8572,7 @@ def test_failed_step_resume_hydrates_checkpoint_artifact(
         "execution": {
             "workflowId": "mm:resumed",
             "runId": "run-resumed",
-            "detailHref": "/tasks/mm:resumed",
+            "detailHref": "/workflows/mm:resumed",
         },
         "relationship": "Resumed from failed step",
         "resumeCheckpointRef": "artifact://resume-checkpoints/source/checkpoint-v1",
@@ -8630,7 +8628,7 @@ def test_failed_step_resume_hydrates_checkpoint_artifact(
 
     with TestClient(app) as test_client:
         response = test_client.post(
-            "/api/executions/mm:wf-1/resume-from-failed-step",
+            "/api/executions/mm:wf-1/recover-from-failed-step",
             json={"idempotencyKey": "resume-1"},
         )
 
@@ -8675,7 +8673,7 @@ def test_failed_step_resume_reports_checkpoint_authorization_error(
 
     with TestClient(app) as test_client:
         response = test_client.post(
-            "/api/executions/mm:wf-1/resume-from-failed-step",
+            "/api/executions/mm:wf-1/recover-from-failed-step",
             json={"idempotencyKey": "resume-1"},
         )
 

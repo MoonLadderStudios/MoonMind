@@ -169,7 +169,7 @@ TERMINAL_STATE_TO_CLOSE_STATUS: dict[
 }
 
 WORKFLOW_ENTRY_BY_TYPE: dict[TemporalWorkflowType, str] = {
-    TemporalWorkflowType.RUN: "run",
+    TemporalWorkflowType.RUN: "user_workflow",
     TemporalWorkflowType.MANIFEST_INGEST: "manifest",
     TemporalWorkflowType.PROVIDER_PROFILE_MANAGER: "provider_profile",
 }
@@ -2897,7 +2897,7 @@ class TemporalExecutionService:
             "execution": {
                 "workflowId": created.workflow_id,
                 "runId": created.run_id,
-                "detailHref": f"/tasks/{created.workflow_id}",
+                "detailHref": f"/workflows/{created.workflow_id}",
             },
             "relationship": "Resumed from failed step",
             "resumeCheckpointRef": checkpoint_ref,

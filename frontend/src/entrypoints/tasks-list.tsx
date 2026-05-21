@@ -42,7 +42,7 @@ const RUNTIME_FILTER_OPTIONS = [
   'codex_cloud',
 ] as const;
 const TASK_WORKFLOW_TYPE = 'MoonMind.Run';
-const TASK_ENTRY = 'run';
+const TASK_ENTRY = 'user_workflow';
 
 const TIMESTAMP_SORT_FIELDS = new Set(['scheduledFor', 'createdAt', 'closedAt']);
 const TABLE_COLUMNS = [
@@ -100,7 +100,8 @@ type ColumnFilters = {
 
 const ExecutionRowSchema = z
   .object({
-    taskId: z.string(),
+    taskId: z.string().optional(),
+    workflowId: z.string().optional(),
     source: z.string(),
     workflowType: z.string().optional(),
     repository: z.string().nullable().optional(),
@@ -130,6 +131,10 @@ const ExecutionListResponseSchema = z.object({
 });
 
 type ExecutionRow = z.infer<typeof ExecutionRowSchema>;
+
+function rowWorkflowId(row: ExecutionRow): string {
+  return row.workflowId || row.taskId || '';
+}
 
 const ExecutionFacetResponseSchema = z.object({
   facet: z.enum(['status', 'targetRuntime', 'targetSkill', 'repository', 'integration']),
@@ -225,7 +230,7 @@ function sortRows(rows: ExecutionRow[], field: string, direction: 'asc' | 'desc'
       const compare = leftVal.localeCompare(rightVal);
       if (compare !== 0) return dir * compare;
     }
-    return right.taskId.localeCompare(left.taskId);
+    return rowWorkflowId(right).localeCompare(rowWorkflowId(left));
   });
   return copy;
 }
@@ -1505,10 +1510,10 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                     {sortedItems.map((row) => {
                       const depsSummary = dependencyListSummary(row);
                       return (
-                        <tr key={row.taskId}>
+                        <tr key={rowWorkflowId(row)}>
                           <td className="queue-table-cell-id">
-                            <a href={`/tasks/${encodeURIComponent(row.taskId)}?source=temporal`}>
-                              <code>{row.taskId}</code>
+                            <a href={`/tasks/${encodeURIComponent(rowWorkflowId(row))}?source=temporal`}>
+                              <code>{rowWorkflowId(row)}</code>
                             </a>
                           </td>
                           <td className="queue-table-cell-compact">{formatRuntimeLabel(row.targetRuntime)}</td>
@@ -1538,17 +1543,17 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                 {sortedItems.map((row) => {
                       const depsSummary = dependencyListSummary(row);
                       return (
-                  <li key={row.taskId} className="queue-card">
+                  <li key={rowWorkflowId(row)} className="queue-card">
                     <div className="queue-card-header">
                       <div>
                         <a
-                          href={`/tasks/${encodeURIComponent(row.taskId)}?source=temporal`}
+                          href={`/tasks/${encodeURIComponent(rowWorkflowId(row))}?source=temporal`}
                           className="queue-card-title"
                         >
                           {row.title}
                         </a>
                         <p className="queue-card-meta">
-                          <code>{row.taskId}</code>
+                          <code>{rowWorkflowId(row)}</code>
                           {` · ${
                             [summarizeRuntime(row.targetRuntime), row.targetSkill, row.workflowType]
                               .filter(Boolean)
@@ -1564,7 +1569,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                       <div>
                         <dt>ID</dt>
                         <dd>
-                          <code>{row.taskId}</code>
+                          <code>{rowWorkflowId(row)}</code>
                         </dd>
                       </div>
                       <div>
@@ -1600,7 +1605,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                     </dl>
                     <div className="queue-card-actions">
                       <a
-                        href={`/tasks/${encodeURIComponent(row.taskId)}?source=temporal`}
+                        href={`/tasks/${encodeURIComponent(rowWorkflowId(row))}?source=temporal`}
                         className="button secondary queue-card-details-action"
                         role="button"
                       >

@@ -20,7 +20,7 @@ def _base_execution_payload() -> dict[str, object]:
         "runId": "run-1",
         "temporalRunId": "run-1",
         "workflowType": "MoonMind.Run",
-        "entry": "run",
+        "entry": "user_workflow",
         "ownerType": "user",
         "ownerId": "user-1",
         "title": "Target diagnostics",
@@ -32,7 +32,7 @@ def _base_execution_payload() -> dict[str, object]:
         "temporalStatus": "failed",
         "createdAt": now,
         "updatedAt": now,
-        "detailHref": "/tasks/mm:wf-1",
+        "detailHref": "/workflows/mm:wf-1",
     }
 
 

@@ -824,12 +824,12 @@ async def task_dashboard_route(
         user=_user,
     )
 
-@router.get("/api/tasks/skills", response_model=DashboardSkillListResponse)
+@router.get("/api/workflows/skills", response_model=DashboardSkillListResponse)
 async def list_dashboard_skills(
     include_content: bool = Query(False, alias="includeContent"),
     _user: User = Depends(get_current_user()),
 ) -> DashboardSkillListResponse:
-    """List currently available skills for task dashboard submission forms."""
+    """List currently available skills for workflow submission forms."""
 
     worker_skills = list(list_available_skill_names())
     legacy_sorted = sorted(set(worker_skills), key=str)
@@ -864,7 +864,7 @@ async def list_dashboard_github_branches(
     return DashboardBranchListResponse(**payload)
 
 @router.post(
-    "/api/tasks/skills",
+    "/api/workflows/skills",
     status_code=201,
 )
 async def create_dashboard_skill(
@@ -908,7 +908,7 @@ async def create_skill_import(
     return await _import_skill_zip(file, collision_policy)
 
 @router.post(
-    "/api/tasks/skills/upload",
+    "/api/workflows/skills/upload",
     status_code=201,
 )
 async def upload_dashboard_skill_zip(
