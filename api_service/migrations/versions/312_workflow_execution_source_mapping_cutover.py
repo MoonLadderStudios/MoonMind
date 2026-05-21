@@ -25,10 +25,8 @@ _LEGACY_TABLE = "task_source_mappings"
 _WORKFLOW_TABLE = "workflow_execution_source_mappings"
 
 
-def _workflow_source_mapping_table(metadata: sa.MetaData) -> sa.Table:
-    table = sa.Table(
-        _WORKFLOW_TABLE,
-        metadata,
+def _workflow_source_mapping_columns() -> list[sa.Column[Any]]:
+    return [
         sa.Column("workflow_id", sa.String(length=128), nullable=False),
         sa.Column("source", sa.String(length=32), nullable=False),
         sa.Column("entry", sa.String(length=32), nullable=True),
@@ -37,6 +35,14 @@ def _workflow_source_mapping_table(metadata: sa.MetaData) -> sa.Table:
         sa.Column("owner_id", sa.String(length=128), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+    ]
+
+
+def _workflow_source_mapping_table(metadata: sa.MetaData) -> sa.Table:
+    table = sa.Table(
+        _WORKFLOW_TABLE,
+        metadata,
+        *_workflow_source_mapping_columns(),
         sa.PrimaryKeyConstraint("workflow_id"),
     )
     sa.Index(
@@ -123,86 +129,124 @@ def _table_names(connection: sa.Connection) -> set[str]:
 def _ensure_workflow_source_mapping_table(connection: sa.Connection) -> None:
     if _WORKFLOW_TABLE in _table_names(connection):
         return
+    op.create_table(
+        _WORKFLOW_TABLE,
+        *_workflow_source_mapping_columns(),
+        sa.PrimaryKeyConstraint("workflow_id"),
+    )
+    op.create_index(
+        "ix_workflow_execution_source_mappings_source_entry",
+        _WORKFLOW_TABLE,
+        ["source", "entry"],
+    )
+    op.create_index(
+        "ix_workflow_execution_source_mappings_source_record_id",
+        _WORKFLOW_TABLE,
+        ["source", "source_record_id"],
+    )
+
+
+def _ensure_workflow_source_mapping_table_for_connection(connection: sa.Connection) -> None:
+    if _WORKFLOW_TABLE in _table_names(connection):
+        return
     metadata = sa.MetaData()
-    _workflow_source_mapping_table(metadata)
-    metadata.create_all(bind=connection)
+    table = _workflow_source_mapping_table(metadata)
+    table.create(bind=connection)
 
 
-def _assert_no_conflicting_current_rows(
-    connection: sa.Connection,
-    rows: Iterable[Mapping[str, Any]],
-) -> None:
-    for row in rows:
-        existing = connection.execute(
-            sa.text(
-                "SELECT workflow_id, source, entry, source_record_id, owner_type, owner_id "
-                f"FROM {_WORKFLOW_TABLE} WHERE workflow_id = :workflow_id"
-            ),
-            {"workflow_id": row["workflow_id"]},
-        ).mappings().first()
-        if existing is None:
-            continue
-        comparable = {
-            "workflow_id": existing["workflow_id"],
-            "source": existing["source"],
-            "entry": existing["entry"],
-            "source_record_id": existing["source_record_id"],
-            "owner_type": existing["owner_type"],
-            "owner_id": existing["owner_id"],
-        }
-        expected = {
-            "workflow_id": row["workflow_id"],
-            "source": row["source"],
-            "entry": row["entry"],
-            "source_record_id": row["source_record_id"],
-            "owner_type": row["owner_type"],
-            "owner_id": row["owner_id"],
-        }
-        if comparable != expected:
-            raise RuntimeError(
-                f"task_source_mappings row for workflow_id {row['workflow_id']!r} "
-                "conflicts with an existing workflow_execution_source_mappings row; "
-                "cleanup required before cutover"
-            )
+def _assert_legacy_task_source_mappings_valid(connection: sa.Connection) -> None:
+    blank_row = connection.execute(
+        sa.text(
+            f"SELECT COUNT(*) AS row_count FROM {_LEGACY_TABLE} "
+            "WHERE TRIM(COALESCE(task_id, '')) = '' "
+            "OR TRIM(COALESCE(source, '')) = '' "
+            "OR TRIM(COALESCE(source_record_id, '')) = ''"
+        )
+    ).mappings().one()
+    if int(blank_row["row_count"] or 0) > 0:
+        raise RuntimeError(
+            "task_source_mappings contains blank task_id, source, or source_record_id values; "
+            "cleanup required before workflow execution source mapping cutover"
+        )
+
+    duplicate = connection.execute(
+        sa.text(
+            f"SELECT TRIM(task_id) AS workflow_id, COUNT(*) AS row_count FROM {_LEGACY_TABLE} "
+            "GROUP BY TRIM(task_id) HAVING COUNT(*) > 1 LIMIT 1"
+        )
+    ).mappings().first()
+    if duplicate is not None:
+        raise RuntimeError(
+            f"task_source_mappings contains duplicate workflow_id {duplicate['workflow_id']!r}; "
+            "cleanup required before workflow execution source mapping cutover"
+        )
+
+
+def _assert_no_conflicting_current_rows(connection: sa.Connection) -> None:
+    conflict = connection.execute(
+        sa.text(
+            f"SELECT TRIM(legacy.task_id) AS workflow_id FROM {_LEGACY_TABLE} legacy "
+            f"JOIN {_WORKFLOW_TABLE} current "
+            "ON current.workflow_id = TRIM(legacy.task_id) "
+            "WHERE current.source != TRIM(legacy.source) "
+            "OR COALESCE(current.entry, '') != COALESCE(NULLIF(TRIM(legacy.entry), ''), '') "
+            "OR current.source_record_id != TRIM(legacy.source_record_id) "
+            "OR COALESCE(current.owner_type, '') != COALESCE(NULLIF(TRIM(legacy.owner_type), ''), '') "
+            "OR COALESCE(current.owner_id, '') != COALESCE(NULLIF(TRIM(legacy.owner_id), ''), '') "
+            "LIMIT 1"
+        )
+    ).mappings().first()
+    if conflict is not None:
+        raise RuntimeError(
+            f"task_source_mappings row for workflow_id {conflict['workflow_id']!r} "
+            "conflicts with an existing workflow_execution_source_mappings row; "
+            "cleanup required before cutover"
+        )
 
 
 def _insert_workflow_source_mapping_rows(
     connection: sa.Connection,
-    rows: Iterable[Mapping[str, Any]],
 ) -> None:
-    for row in rows:
-        connection.execute(
-            sa.text(
-                f"INSERT INTO {_WORKFLOW_TABLE} "
-                "(workflow_id, source, entry, source_record_id, owner_type, owner_id, created_at, updated_at) "
-                "SELECT :workflow_id, :source, :entry, :source_record_id, :owner_type, :owner_id, "
-                "COALESCE(:created_at, CURRENT_TIMESTAMP), COALESCE(:updated_at, CURRENT_TIMESTAMP) "
-                f"WHERE NOT EXISTS (SELECT 1 FROM {_WORKFLOW_TABLE} WHERE workflow_id = :workflow_id)"
-            ),
-            dict(row),
+    connection.execute(
+        sa.text(
+            f"INSERT INTO {_WORKFLOW_TABLE} "
+            "(workflow_id, source, entry, source_record_id, owner_type, owner_id, created_at, updated_at) "
+            "SELECT "
+            "TRIM(legacy.task_id), "
+            "TRIM(legacy.source), "
+            "NULLIF(TRIM(legacy.entry), ''), "
+            "TRIM(legacy.source_record_id), "
+            "NULLIF(TRIM(legacy.owner_type), ''), "
+            "NULLIF(TRIM(legacy.owner_id), ''), "
+            "COALESCE(legacy.created_at, CURRENT_TIMESTAMP), "
+            "COALESCE(legacy.updated_at, CURRENT_TIMESTAMP) "
+            f"FROM {_LEGACY_TABLE} legacy "
+            f"WHERE NOT EXISTS ("
+            f"SELECT 1 FROM {_WORKFLOW_TABLE} current "
+            "WHERE current.workflow_id = TRIM(legacy.task_id)"
+            ")"
         )
+    )
 
 
-def _migrate_legacy_task_source_mappings(connection: sa.Connection) -> None:
+def _migrate_legacy_task_source_mappings(
+    connection: sa.Connection, *, use_alembic_ops: bool = False
+) -> None:
     if _LEGACY_TABLE not in _table_names(connection):
         return
 
-    legacy_rows = connection.execute(
-        sa.text(
-            "SELECT task_id, source, entry, source_record_id, owner_type, owner_id, created_at, updated_at "
-            f"FROM {_LEGACY_TABLE} ORDER BY task_id"
-        )
-    ).mappings().all()
-    prepared_rows = _prepare_legacy_source_mapping_rows(legacy_rows)
-
-    _ensure_workflow_source_mapping_table(connection)
-    _assert_no_conflicting_current_rows(connection, prepared_rows)
-    _insert_workflow_source_mapping_rows(connection, prepared_rows)
+    if use_alembic_ops:
+        _ensure_workflow_source_mapping_table(connection)
+    else:
+        _ensure_workflow_source_mapping_table_for_connection(connection)
+    _assert_legacy_task_source_mappings_valid(connection)
+    _assert_no_conflicting_current_rows(connection)
+    _insert_workflow_source_mapping_rows(connection)
     connection.execute(sa.text(f"DROP TABLE {_LEGACY_TABLE}"))
 
 
 def upgrade() -> None:
-    _migrate_legacy_task_source_mappings(op.get_bind())
+    _migrate_legacy_task_source_mappings(op.get_bind(), use_alembic_ops=True)
 
 
 def downgrade() -> None:

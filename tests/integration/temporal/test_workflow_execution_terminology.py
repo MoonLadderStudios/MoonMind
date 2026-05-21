@@ -24,7 +24,11 @@ pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 def test_temporal_user_workflow_query_excludes_legacy_run_entry() -> None:
     app = FastAPI()
     app.include_router(router)
-    app.dependency_overrides[_get_service] = lambda: AsyncMock()
+
+    def _get_service_override() -> AsyncMock:
+        return AsyncMock()
+
+    app.dependency_overrides[_get_service] = _get_service_override
     _override_user_dependencies(app, is_superuser=True)
 
     class _WorkflowIterator:

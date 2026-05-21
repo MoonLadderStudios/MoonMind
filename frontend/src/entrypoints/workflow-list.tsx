@@ -46,7 +46,7 @@ const TASK_ENTRY = 'user_workflow';
 
 const TIMESTAMP_SORT_FIELDS = new Set(['scheduledFor', 'createdAt', 'closedAt']);
 const TABLE_COLUMNS = [
-  ['taskId', 'ID'],
+  ['workflowId', 'ID'],
   ['targetRuntime', 'Runtime'],
   ['targetSkill', 'Skill'],
   ['repository', 'Repository'],
@@ -58,7 +58,7 @@ const TABLE_COLUMNS = [
 ] as const;
 type TableColumn = (typeof TABLE_COLUMNS)[number];
 type FilterField =
-  | 'taskId'
+  | 'workflowId'
   | 'status'
   | 'repository'
   | 'targetRuntime'
@@ -69,7 +69,7 @@ type FilterField =
   | 'closedAt';
 const VALID_TABLE_SORT_FIELDS = new Set<string>([...TABLE_COLUMNS.map((column) => column[0]), 'integration']);
 const ACTIVE_FILTER_FIELDS = new Set<FilterField>([
-  'taskId',
+  'workflowId',
   'status',
   'repository',
   'targetRuntime',
@@ -87,7 +87,7 @@ type RepositoryFilter = ValueFilter & { exactText?: string };
 type TextFilter = { contains?: string };
 type DateFilter = { from?: string; to?: string; blank?: 'include' | 'exclude' | '' };
 type ColumnFilters = {
-  taskId: TextFilter;
+  workflowId: TextFilter;
   status: ValueFilter;
   repository: RepositoryFilter;
   targetRuntime: ValueFilter;
@@ -290,7 +290,7 @@ function emptyValueFilter(): ValueFilter {
 
 function emptyFilters(): ColumnFilters {
   return {
-    taskId: {},
+    workflowId: {},
     status: emptyValueFilter(),
     repository: { ...emptyValueFilter(), exactText: '' },
     targetRuntime: emptyValueFilter(),
@@ -355,7 +355,7 @@ function parseInitialFilters(params: URLSearchParams): ColumnFilters {
   } else {
     filters.repository = { mode: 'include', values: repoIn, exactText: repoExact, blank: '' };
   }
-  filters.taskId = { contains: params.get('taskIdContains') || params.get('taskId') || '' };
+  filters.workflowId = { contains: params.get('workflowIdContains') || params.get('workflowId') || '' };
   filters.title = { contains: params.get('titleContains') || '' };
 
   const runtimeIn = splitParam(params, 'targetRuntimeIn');
@@ -424,7 +424,7 @@ function appendDateParams(
 }
 
 function appendFilterParams(params: URLSearchParams, filters: ColumnFilters) {
-  if (filters.taskId.contains?.trim()) params.set('taskIdContains', filters.taskId.contains.trim());
+  if (filters.workflowId.contains?.trim()) params.set('workflowIdContains', filters.workflowId.contains.trim());
   appendValueParams(params, filters.status, 'stateIn', 'stateNotIn');
   if (filters.repository.exactText?.trim()) {
     params.set('repoExact', filters.repository.exactText.trim());
@@ -543,7 +543,7 @@ function summarizeValues(
 }
 
 function filterSummary(field: FilterField, filters: ColumnFilters): string {
-  if (field === 'taskId') return filters.taskId.contains?.trim() || '';
+  if (field === 'workflowId') return filters.workflowId.contains?.trim() || '';
   if (field === 'status') return summarizeValues(filters.status, formatStatusLabel, { maxVisibleValues: 3 });
   if (field === 'targetRuntime') return summarizeValues(filters.targetRuntime, formatRuntimeLabel);
   if (field === 'targetSkill') return summarizeValues(filters.targetSkill);
@@ -881,7 +881,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     [closeFilter, openFilter, resetToFirstPage],
   );
 
-  const updateDraftText = (field: 'taskId' | 'title', value: string) => {
+  const updateDraftText = (field: 'workflowId' | 'title', value: string) => {
     setDraftFilters((current) => ({
       ...current,
       [field]: { contains: value },
@@ -1014,8 +1014,8 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
 
   const renderFilterControl = (field: FilterField, labelPrefix = '') => {
     const isMobile = Boolean(labelPrefix);
-    if (field === 'taskId' || field === 'title') {
-      const label = field === 'taskId' ? 'ID' : 'Title';
+    if (field === 'workflowId' || field === 'title') {
+      const label = field === 'workflowId' ? 'ID' : 'Title';
       const draft = isMobile ? filters[field] : draftFilters[field];
       return (
         <div className="queue-inline-filter workflow-list-header-filter-control">
@@ -1025,7 +1025,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               type="text"
               value={draft.contains || ''}
               disabled={!listEnabled}
-              placeholder={field === 'taskId' ? 'workflow id' : 'title text'}
+              placeholder={field === 'workflowId' ? 'workflow id' : 'title text'}
               onChange={(event) => {
               if (isMobile) applyFilters({ ...filters, [field]: { contains: event.target.value } }, null);
                 else updateDraftText(field, event.target.value);
@@ -1292,7 +1292,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               className="secondary"
               onClick={() => {
                 const next = { ...draftFilters };
-                if (field === 'taskId' || field === 'title') next[field] = {};
+                if (field === 'workflowId' || field === 'title') next[field] = {};
                 else if (field === 'repository') next.repository = { ...emptyValueFilter(), exactText: '' };
                 else if (field === 'scheduledFor' || field === 'createdAt' || field === 'closedAt') next[field] = {};
                 else next[field] = emptyValueFilter();
@@ -1370,7 +1370,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                     className="workflow-list-filter-chip-remove"
                     onClick={() => {
                       const next = { ...filters };
-                      if (field === 'taskId' || field === 'title') next[field] = {};
+                      if (field === 'workflowId' || field === 'title') next[field] = {};
                       else if (field === 'repository') next.repository = { ...emptyValueFilter(), exactText: '' };
                       else if (field === 'scheduledFor' || field === 'createdAt' || field === 'closedAt') next[field] = {};
                       else next[field] = emptyValueFilter();
