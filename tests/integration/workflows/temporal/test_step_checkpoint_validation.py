@@ -18,7 +18,7 @@ def _identity() -> StepExecutionIdentityModel:
         workflowId="workflow-1",
         runId="run-1",
         logicalStepId="implement-story",
-        attempt=2,
+        executionOrdinal=2,
     )
 
 

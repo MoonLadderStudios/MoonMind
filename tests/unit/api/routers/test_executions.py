@@ -6284,60 +6284,62 @@ def test_get_execution_steps_enriches_missing_agent_task_run_ids_once() -> None:
 def _step_execution_manifest_payload(
     *,
     artifact_ref: str,
-    attempt: int,
+    execution_ordinal: int,
     status: str = "succeeded",
 ) -> dict[str, object]:
     return {
         "schemaVersion": "v1",
-        "stepExecutionId": f"mm:wf-1:run-99:implement:execution:{attempt}",
+        "stepExecutionId": f"mm:wf-1:run-99:implement:execution:{execution_ordinal}",
         "workflowId": "mm:wf-1",
         "runId": "run-99",
         "logicalStepId": "implement",
-        "executionOrdinal": attempt,
+        "executionOrdinal": execution_ordinal,
         "executionScope": "run",
         "lineage": {
             "sourceWorkflowId": "mm:source",
             "sourceRunId": "source-run",
             "sourceLogicalStepId": "implement",
-            "sourceExecutionOrdinal": attempt,
+            "sourceExecutionOrdinal": execution_ordinal,
             "relationship": "recover_from_failed_step",
-            "lineageExecutionOrdinal": attempt + 1,
+            "lineageExecutionOrdinal": execution_ordinal + 1,
         },
-        "reason": "recover_from_failed_step" if attempt > 1 else "initial_execution",
+        "reason": "recover_from_failed_step"
+        if execution_ordinal > 1
+        else "initial_execution",
         "status": status,
         "terminalDisposition": "accepted" if status == "succeeded" else "retryable",
         "startedAt": "2026-05-19T10:00:00Z",
         "updatedAt": "2026-05-19T10:01:00Z",
-        "input": {"preparedInputRef": f"art-input-{attempt}"},
-        "context": {"contextBundleRef": f"art-context-{attempt}"},
+        "input": {"preparedInputRef": f"art-input-{execution_ordinal}"},
+        "context": {"contextBundleRef": f"art-context-{execution_ordinal}"},
         "workspace": {
             "workspacePolicy": "continue_from_previous_execution",
-            "baselineRef": f"art-workspace-{attempt}",
+            "baselineRef": f"art-workspace-{execution_ordinal}",
             "gitDisposition": "candidate",
         },
         "execution": {
-            "childWorkflowId": f"child-{attempt}",
-            "childRunId": f"child-run-{attempt}",
-            "taskRunId": f"task-run-{attempt}",
+            "childWorkflowId": f"child-{execution_ordinal}",
+            "childRunId": f"child-run-{execution_ordinal}",
+            "taskRunId": f"task-run-{execution_ordinal}",
         },
         "outputs": {
-            "summary": f"Attempt {attempt} summary",
-            "outputSummaryRef": f"art-summary-{attempt}",
-            "outputPrimaryRef": f"art-output-{attempt}",
+            "summary": f"Execution {execution_ordinal} summary",
+            "outputSummaryRef": f"art-summary-{execution_ordinal}",
+            "outputPrimaryRef": f"art-output-{execution_ordinal}",
         },
         "checks": [
             {
                 "kind": "quality_gate",
                 "status": "passed" if status == "succeeded" else "failed",
-                "artifactRef": f"art-check-{attempt}",
+                "artifactRef": f"art-check-{execution_ordinal}",
             }
         ],
         "sideEffects": {
             "gitDisposition": "candidate",
-            "publicationRef": f"art-publish-{attempt}",
+            "publicationRef": f"art-publish-{execution_ordinal}",
         },
         "dependencyEffects": {"invalidatedStepRefs": [artifact_ref]},
-        "budget": {"budgetRef": f"art-budget-{attempt}"},
+        "budget": {"budgetRef": f"art-budget-{execution_ordinal}"},
     }
 
 
@@ -6372,8 +6374,8 @@ def test_get_execution_step_executions_returns_bounded_manifest_history() -> Non
                         "childWorkflowId": None,
                         "childRunId": None,
                         "taskRunId": None,
-                        "latestExecutionManifestRef": "art-attempt-2",
-                        "executionManifestRefs": ["art-attempt-1", "art-attempt-2"],
+                        "latestExecutionManifestRef": "art-execution-2",
+                        "executionManifestRefs": ["art-execution-1", "art-execution-2"],
                     },
                     "artifacts": {},
                     "lastError": None,
@@ -6387,7 +6389,7 @@ def test_get_execution_step_executions_returns_bounded_manifest_history() -> Non
         artifact_id = kwargs["artifact_id"]
         payload = _step_execution_manifest_payload(
             artifact_ref=artifact_id,
-            attempt=1 if artifact_id == "art-attempt-1" else 2,
+            execution_ordinal=1 if artifact_id == "art-execution-1" else 2,
         )
         return SimpleNamespace(artifact_id=artifact_id), json.dumps(payload).encode()
 
@@ -6410,7 +6412,7 @@ def test_get_execution_step_executions_returns_bounded_manifest_history() -> Non
     assert payload["logicalStepId"] == "implement"
     assert [item["executionOrdinal"] for item in payload["executions"]] == [1, 2]
     assert payload["executions"][1]["manifestRefs"] == {
-        "manifestArtifactRef": "art-attempt-2"
+        "manifestArtifactRef": "art-execution-2"
     }
     assert payload["executions"][1]["runtimeChildRefs"] == {
         "childWorkflowId": "child-2",
@@ -6424,7 +6426,7 @@ def test_get_execution_step_executions_returns_bounded_manifest_history() -> Non
     assert payload["executions"][1]["qualityGateVerdict"] == "passed"
     assert "summary" not in payload["executions"][1]["outputRefs"]
     assert artifact_service.read.await_args_list[0] == call(
-        artifact_id="art-attempt-1",
+        artifact_id="art-execution-1",
         principal=str(user.id),
         allow_restricted_raw=True,
     )
@@ -6461,8 +6463,8 @@ def test_get_execution_step_execution_returns_bounded_detail_refs() -> None:
                         "childWorkflowId": None,
                         "childRunId": None,
                         "taskRunId": None,
-                        "latestExecutionManifestRef": "art-attempt-2",
-                        "executionManifestRefs": ["art-attempt-1", "art-attempt-2"],
+                        "latestExecutionManifestRef": "art-execution-2",
+                        "executionManifestRefs": ["art-execution-1", "art-execution-2"],
                     },
                     "artifacts": {},
                     "lastError": None,
@@ -6472,23 +6474,23 @@ def test_get_execution_step_execution_returns_bounded_detail_refs() -> None:
     )
     _override_user_dependencies(app, is_superuser=True)
     payload = _step_execution_manifest_payload(
-        artifact_ref="art-attempt-2",
-        attempt=2,
+        artifact_ref="art-execution-2",
+        execution_ordinal=2,
     )
     artifact_service = SimpleNamespace(
         read=AsyncMock(
             side_effect=[
                 (
-                    SimpleNamespace(artifact_id="art-attempt-1"),
+                    SimpleNamespace(artifact_id="art-execution-1"),
                     json.dumps(
                         _step_execution_manifest_payload(
-                            artifact_ref="art-attempt-1",
-                            attempt=1,
+                            artifact_ref="art-execution-1",
+                            execution_ordinal=1,
                         )
                     ).encode(),
                 ),
                 (
-                    SimpleNamespace(artifact_id="art-attempt-2"),
+                    SimpleNamespace(artifact_id="art-execution-2"),
                     json.dumps(payload).encode(),
                 ),
             ]
@@ -6523,7 +6525,7 @@ def test_get_execution_step_execution_returns_bounded_detail_refs() -> None:
     assert body["checkRefs"] == [{"artifactRef": "art-check-2"}]
     assert body["sideEffectRefs"] == {"publicationRef": "art-publish-2"}
     assert body["dependencyEffectRefs"] == {
-        "invalidatedStepRefs": ["art-attempt-2"]
+        "invalidatedStepRefs": ["art-execution-2"]
     }
     assert "outputs" not in body
 
@@ -6559,8 +6561,8 @@ def test_get_execution_step_executions_preserves_artifact_authorization() -> Non
                         "childWorkflowId": None,
                         "childRunId": None,
                         "taskRunId": None,
-                        "latestExecutionManifestRef": "art-attempt-1",
-                        "executionManifestRefs": ["art-attempt-1"],
+                        "latestExecutionManifestRef": "art-execution-1",
+                        "executionManifestRefs": ["art-execution-1"],
                     },
                     "artifacts": {},
                     "lastError": None,
