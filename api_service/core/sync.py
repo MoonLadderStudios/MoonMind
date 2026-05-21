@@ -23,7 +23,7 @@ from api_service.db.models import (
 logger = logging.getLogger(__name__)
 
 WORKFLOW_ENTRY_BY_TYPE = {
-    TemporalWorkflowType.RUN: "run",
+    TemporalWorkflowType.RUN: "user_workflow",
     TemporalWorkflowType.MANIFEST_INGEST: "manifest",
     TemporalWorkflowType.PROVIDER_PROFILE_MANAGER: "provider_profile",
 }
@@ -211,7 +211,7 @@ async def map_temporal_state_to_projection(
         workflow_type = TemporalWorkflowType.RUN
 
     entry = str(
-        memo.get("entry") or WORKFLOW_ENTRY_BY_TYPE.get(workflow_type, "run")
+        memo.get("entry") or WORKFLOW_ENTRY_BY_TYPE.get(workflow_type, "user_workflow")
     ).strip()
     search_attributes: dict[str, Any] = {}
     try:

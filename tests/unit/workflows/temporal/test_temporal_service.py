@@ -115,7 +115,7 @@ async def test_create_execution_initializes_lifecycle_search_attributes(tmp_path
         assert record.search_attributes["mm_owner_id"] == str(owner_id)
         assert record.search_attributes["mm_owner_type"] == "user"
         assert record.search_attributes["mm_state"] == "initializing"
-        assert record.search_attributes["mm_entry"] == "run"
+        assert record.search_attributes["mm_entry"] == "user_workflow"
         assert record.memo["title"] == "My run"
         assert record.memo["input_ref"] == "artifact://input/1"
         assert record.sync_state is TemporalExecutionProjectionSyncState.FRESH
@@ -1561,7 +1561,7 @@ async def test_dependency_status_snapshot_repairs_stale_terminal_prerequisite(
 
         async def memo() -> dict[str, object]:
             return {
-                "entry": "run",
+                "entry": "user_workflow",
                 "title": "Prerequisite",
                 "summary": "Workflow completed successfully",
             }
@@ -3341,13 +3341,13 @@ async def test_cancel_execution_accepts_projection_only_child_workflow(
             owner_type=TemporalExecutionOwnerType.USER,
             state=MoonMindWorkflowState.AWAITING_SLOT,
             close_status=None,
-            entry="run",
+            entry="user_workflow",
             search_attributes={
                 "mm_owner_type": "user",
                 "mm_owner_id": owner_id,
                 "mm_state": "awaiting_slot",
                 "mm_updated_at": now.isoformat(),
-                "mm_entry": "run",
+                "mm_entry": "user_workflow",
             },
             memo={"title": "Resolve PR #1634", "summary": "Waiting for slot."},
             artifact_refs=[],
@@ -3402,13 +3402,13 @@ async def test_cancel_execution_rejects_orphaned_projection_only_workflow(
             owner_type=TemporalExecutionOwnerType.USER,
             state=MoonMindWorkflowState.AWAITING_SLOT,
             close_status=None,
-            entry="run",
+            entry="user_workflow",
             search_attributes={
                 "mm_owner_type": "user",
                 "mm_owner_id": owner_id,
                 "mm_state": "awaiting_slot",
                 "mm_updated_at": now.isoformat(),
-                "mm_entry": "run",
+                "mm_entry": "user_workflow",
             },
             memo={"title": "Resolve PR #1634", "summary": "Waiting for slot."},
             artifact_refs=[],
@@ -4242,7 +4242,7 @@ async def test_orphaned_projection_rows_are_repaired_from_canonical_lists(tmp_pa
             owner_type="user",
             state=None,
             owner_id=owner_id,
-            entry="run",
+            entry="user_workflow",
             page_size=10,
             next_page_token=None,
         )
@@ -4317,13 +4317,13 @@ async def test_ghost_projection_rows_without_canonical_source_are_hidden(tmp_pat
             owner_type=TemporalExecutionOwnerType.USER,
             state=MoonMindWorkflowState.EXECUTING,
             close_status=None,
-            entry="run",
+            entry="user_workflow",
             search_attributes={
                 "mm_owner_type": "user",
                 "mm_owner_id": owner_id,
                 "mm_state": "executing",
                 "mm_updated_at": "2026-03-06T00:00:00+00:00",
-                "mm_entry": "run",
+                "mm_entry": "user_workflow",
             },
             memo={"title": "ghost", "summary": "Ghost row"},
             artifact_refs=[],
@@ -4345,7 +4345,7 @@ async def test_ghost_projection_rows_without_canonical_source_are_hidden(tmp_pat
             owner_type="user",
             state=None,
             owner_id=owner_id,
-            entry="run",
+            entry="user_workflow",
             page_size=10,
             next_page_token=None,
         )
@@ -4434,7 +4434,7 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
         first_page = await service.list_executions(
             workflow_type="MoonMind.Run",
             state=None,
-            entry="run",
+            entry="user_workflow",
             owner_type="user",
             owner_id=owner_a,
             repo=None,
@@ -4449,7 +4449,7 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
         second_page = await service.list_executions(
             workflow_type="MoonMind.Run",
             state=None,
-            entry="run",
+            entry="user_workflow",
             owner_type="user",
             owner_id=owner_a,
             repo=None,
@@ -4548,7 +4548,7 @@ async def test_list_executions_orders_by_updated_at_then_workflow_id(tmp_path):
         listed = await service.list_executions(
             workflow_type="MoonMind.Run",
             state=None,
-            entry="run",
+            entry="user_workflow",
             owner_type="user",
             owner_id=owner_id,
             repo=None,
@@ -4628,7 +4628,7 @@ async def test_list_executions_orders_scheduled_rows_by_latest_scheduled_for(tmp
         listed = await service.list_executions(
             workflow_type="MoonMind.Run",
             state=None,
-            entry="run",
+            entry="user_workflow",
             owner_type="user",
             owner_id=owner_id,
             repo=None,
@@ -4690,7 +4690,7 @@ async def test_list_executions_filters_entry_repo_and_integration(tmp_path):
         result = await service.list_executions(
             workflow_type=None,
             state=None,
-            entry="run",
+            entry="user_workflow",
             owner_type="user",
             owner_id=owner_id,
             repo="Moon/Mind",

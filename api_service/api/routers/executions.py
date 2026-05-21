@@ -137,7 +137,7 @@ _TEMPORAL_SOURCE = "temporal"
 _ALLOWED_OWNER_TYPES = {"user", "system", "service"}
 _TEMPORAL_LIST_SCOPES = {"tasks", "user", "system", "all"}
 _TEMPORAL_SCOPE_QUERIES = {
-    "tasks": 'WorkflowType="MoonMind.Run" AND mm_entry="run"',
+    "tasks": 'WorkflowType="MoonMind.Run" AND mm_entry="user_workflow"',
     "user": '(WorkflowType="MoonMind.Run" OR WorkflowType="MoonMind.ManifestIngest")',
     "system": 'WorkflowType!="MoonMind.Run" AND WorkflowType!="MoonMind.ManifestIngest"',
     "all": "",
@@ -403,7 +403,7 @@ def _is_task_list_workflow_type(workflow_type: str | None) -> bool:
 
 
 def _is_task_list_entry(entry: str | None) -> bool:
-    return str(entry or "").strip().lower() == "run"
+    return str(entry or "").strip().lower() == "user_workflow"
 
 
 def _escape_temporal_value(value: str) -> str:
@@ -1390,7 +1390,11 @@ def _normalize_entry_value(value: object | None) -> str | None:
     candidate = _coerce_temporal_scalar(value).lower()
     if not candidate:
         return None
-    if candidate in {"run", "manifest"}:
+    if candidate == "user_workflow":
+        return candidate
+    if candidate == "run":
+        return "user_workflow"
+    if candidate == "manifest":
         return candidate
 
     # Some Temporal payloads surface keyword attributes as arrays; if those are
@@ -1399,7 +1403,11 @@ def _normalize_entry_value(value: object | None) -> str | None:
         inner = candidate[1:-1].strip()
         if inner:
             first = inner.split(",", 1)[0].strip().strip("'\"")
-            if first in {"run", "manifest"}:
+            if first == "user_workflow":
+                return first
+            if first == "run":
+                return "user_workflow"
+            if first == "manifest":
                 return first
     return None
 
@@ -1449,7 +1457,7 @@ def _resolve_execution_entry(record, search_attributes: dict[str, object]) -> st
     ).lower()
     if workflow_type.endswith("manifestingest"):
         return "manifest"
-    return "run"
+    return "user_workflow"
 
 async def _get_service(
     session: AsyncSession = Depends(get_async_session),
@@ -1925,7 +1933,7 @@ def _serialize_execution(
     scheduled_for = getattr(record, "scheduled_for", None)
 
     return ExecutionModel(
-        task_id=record.workflow_id,
+        task_id=None,
         task_run_id=task_run_id,
         progress=None,
         namespace=record.namespace,
@@ -2009,7 +2017,7 @@ def _serialize_execution(
         proposal_summary=proposal_summary,
         proposal_outcomes=proposal_outcomes,
         debug_fields=debug_fields,
-        redirect_path=f"/tasks/{record.workflow_id}?source=temporal",
+        redirect_path=f"/workflows/{record.workflow_id}?source=temporal",
         integration=(
             dict(integration_state) if isinstance(integration_state, dict) else None
         ),
@@ -2026,7 +2034,7 @@ def _serialize_execution(
         started_at=started_at,
         updated_at=record.updated_at,
         closed_at=record.closed_at,
-        detail_href=f"/tasks/{record.workflow_id}",
+        detail_href=f"/workflows/{record.workflow_id}",
         ui_query_model="compatibility_adapter",
         stale_state=False,
         refreshed_at=_compatibility_refreshed_at(record),
@@ -2283,7 +2291,7 @@ def _build_resume_summary(
         checkpointRef=_resume_checkpoint_ref_from_record(record),
         failedStepId=_resume_failed_step_id_from_record(record),
         sourceRunId=str(getattr(record, "run_id", "") or "").strip() or None,
-        disabledReason=actions.disabled_reasons.get("canResumeFromFailedStep"),
+        disabledReason=actions.disabled_reasons.get("canRecoverFromFailedStep"),
     )
 
 def _build_resume_related_runs(
@@ -2312,7 +2320,7 @@ def _build_resume_related_runs(
             runId=source_run_id,
             relationship="Resumed from failed step",
             status="failed",
-            href=f"/tasks/{source_workflow_id}",
+            href=f"/workflows/{source_workflow_id}",
         )
     ]
 
@@ -2756,7 +2764,7 @@ async def _enrich_execution_dependencies(
     *,
     service: TemporalExecutionService,
 ) -> ExecutionModel:
-    if execution.entry != "run":
+    if execution.entry != "user_workflow":
         return execution
 
     prerequisite_ids = list(execution.depends_on)
@@ -2841,7 +2849,7 @@ async def _resolver_child_observability(
         workflowId=workflow_id,
         taskRunId=task_run_id,
         status=child_status,
-        detailHref=f"/tasks/{quote(workflow_id, safe='')}?source=temporal",
+        detailHref=f"/workflows/{quote(workflow_id, safe='')}?source=temporal",
     )
 
 
@@ -2934,7 +2942,7 @@ async def _hydrate_execution_report_projection(
     session: AsyncSession | None,
     user: User,
 ) -> ExecutionModel:
-    if session is None or execution.entry != "run" or not execution.run_id:
+    if session is None or execution.entry != "user_workflow" or not execution.run_id:
         return execution
 
     principal = str(getattr(user, "id", "") or "system")
@@ -3712,7 +3720,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
                     "approve",
                     "pause",
                     "resume",
-                    "canResumeFromFailedStep",
+                    "canRecoverFromFailedStep",
                     "cancel",
                     "reject",
                     "sendMessage",
@@ -3788,7 +3796,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         "can_approve": "canApprove",
         "can_pause": "canPause",
         "can_resume": "canResume",
-        "can_resume_from_failed_step": "canResumeFromFailedStep",
+        "can_resume_from_failed_step": "canRecoverFromFailedStep",
         "can_cancel": "canCancel",
         "can_reject": "canReject",
         "can_send_message": "canSendMessage",
@@ -3856,6 +3864,7 @@ def _build_debug_fields(
         return None
     return ExecutionDebugFieldsModel(
         workflow_id=record.workflow_id,
+        run_id=record.run_id,
         temporal_run_id=record.run_id,
         legacy_run_id=None,
         namespace=record.namespace,
@@ -7111,7 +7120,13 @@ async def describe_execution_step_attempt(
     )
 
 
-@router.get("/{workflow_id}/steps", response_model=StepLedgerSnapshotModel)
+@router.get(
+    "/{workflow_id}/steps",
+    response_model=StepLedgerSnapshotModel,
+    response_model_exclude={
+        "steps": {"__all__": {"refs": {"task_run_id"}, "workload": {"task_run_id"}}}
+    },
+)
 async def describe_execution_steps(
     workflow_id: str,
     response: Response,
@@ -7766,7 +7781,7 @@ async def rerun_execution(
     return execution
 
 @router.post(
-    "/{workflow_id}/resume-from-failed-step",
+    "/{workflow_id}/recover-from-failed-step",
     response_model=ResumeFromFailedStepResponse,
     status_code=status.HTTP_201_CREATED,
     response_model_exclude_none=True,
@@ -7810,8 +7825,8 @@ async def resume_execution_from_failed_step(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
-                "code": "resume_payload_not_allowed",
-                "message": "Resume does not accept edited task payload fields. Use Edit task for changes.",
+                "code": "recovery_payload_not_allowed",
+                "message": "Recover from failed step does not accept edited workflow payload fields. Use an execution update for changes.",
                 "fields": forbidden,
             },
         )
@@ -7844,7 +7859,7 @@ async def resume_execution_from_failed_step(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "code": "resume_not_available",
-                "message": "Failed-step Resume is not available for this execution.",
+                "message": "Failed-step recovery is not available for this execution.",
                 "reason": "stale_resume_evidence",
             },
         )
@@ -7865,7 +7880,7 @@ async def resume_execution_from_failed_step(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "code": "resume_not_available",
-                "message": "Failed-step Resume is not available for this execution.",
+                "message": "Failed-step recovery is not available for this execution.",
                 "reason": _resume_not_available_reason(exc),
             },
         ) from exc
@@ -7874,7 +7889,7 @@ async def resume_execution_from_failed_step(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "code": "resume_not_available",
-                "message": "Failed-step Resume is not available for this execution.",
+                "message": "Failed-step recovery is not available for this execution.",
                 "reason": "state_not_eligible",
             },
         ) from exc
