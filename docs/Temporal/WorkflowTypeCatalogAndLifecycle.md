@@ -111,8 +111,8 @@ Rules:
 
 | Workflow Type | Primary responsibility | Typical inputs | Typical outputs | Expected duration |
 | --- | --- | --- | --- | --- |
-| `MoonMind.UserWorkflow` | user-submitted, Step-ledger-owning Workflow Execution: plan work, own step state/progress, orchestrate child agent runs, integrate results, produce artifacts | input refs, optional plan ref, parameters | output artifacts, summary, progress, step refs | seconds -> hours |
-| `MoonMind.Run` | Current live implementation name for the user Workflow Execution path while the product model uses `MoonMind.UserWorkflow` terminology | input refs, optional plan ref, parameters | output artifacts, summary, progress, step refs | seconds -> hours |
+| `MoonMind.UserWorkflow` | User-submitted, Step-ledger-owning Workflow Execution: plan work, own Step state/progress, orchestrate child agent runs, integrate results, produce artifacts | input refs, optional plan ref, parameters | output artifacts, summary, progress, Step refs | seconds → hours |
+| `MoonMind.Run` | Current live implementation name for the user Workflow Execution path while the product model uses `MoonMind.UserWorkflow` terminology | input refs, optional plan ref, parameters | output artifacts, summary, progress, Step refs | seconds → hours |
 | `MoonMind.ManifestIngest` | Ingest a manifest artifact, validate, compile to a plan/graph, orchestrate execution, aggregate results | manifest artifact ref, policy params | aggregated outputs, per-node results | seconds → hours |
 | `MoonMind.ProviderProfileManager` | Coordinate provider-profile slot assignment, release, cooldowns, and reconciliation for managed runtimes | runtime/profile coordination inputs | slot assignment, lease state transitions | minutes → long-lived |
 | `MoonMind.AgentRun` | Own the durable lifecycle of one true managed or external agent execution | `AgentExecutionRequest`, refs, runtime metadata | canonical agent result, artifacts, lifecycle outcome | seconds → hours |

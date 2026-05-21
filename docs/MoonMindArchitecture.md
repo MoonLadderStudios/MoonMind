@@ -408,7 +408,7 @@ Long-lived entity workflows such as `MoonMind.AgentSession` and `MoonMind.Provid
 
 | Workflow | Purpose |
 |---|---|
-| `MoonMind.Run` | Current live root workflow implementation for a user Workflow Execution. Owns the workflow envelope, planning, step ordering, workflow cancellation, step ledger, and final workflow summary. |
+| `MoonMind.Run` | Current live root workflow implementation for a user Workflow Execution. Owns the workflow envelope, planning, Step ordering, workflow cancellation, Step ledger, and final workflow summary. |
 | `MoonMind.AgentRun` | Child workflow for one true agent execution step. Handles managed, session-backed, and external agents through canonical contracts. |
 | `MoonMind.AgentSession` | Codex-specific task-scoped session entity workflow. Owns compact session orchestration state, turn routing, session epochs, clear/reset metadata, reconciliation hooks, and teardown orchestration. It schedules activities for container and transport side effects. |
 | `MoonMind.ManagedSessionReconcile` | Bounded reconciliation workflow for Codex managed-session records and container state. |

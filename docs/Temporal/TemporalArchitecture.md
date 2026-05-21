@@ -355,7 +355,7 @@ The live repo-aligned workflow catalog is:
 
 | Workflow Type | Role | Product visibility |
 | --- | --- | --- |
-| `MoonMind.Run` | Current live root workflow implementation for user/service Workflow Executions; plans work, owns step ledger, starts child agent runs, integrates outputs | Primary Workflow Execution surface |
+| `MoonMind.Run` | Current live root workflow implementation for user/service Workflow Executions; plans work, owns Step ledger, starts child agent runs, integrates outputs | Primary Workflow Execution surface |
 | `MoonMind.ManifestIngest` | Ingests, validates, compiles, and orchestrates manifest-backed work | User/system execution surface |
 | `MoonMind.AgentRun` | Durable lifecycle wrapper for one true managed or external agent execution | Child/internal, surfaced through parent details |
 | `MoonMind.AgentSession` | Task-scoped managed-session workflow; currently Codex-backed in the live session plane | Internal/operator/detail support |

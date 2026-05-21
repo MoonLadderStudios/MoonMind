@@ -70,7 +70,7 @@ MoonMind explicitly separates long-lived, stateful agent execution from plain on
 
 Parent/child ownership rule:
 
-- the root user workflow owns Workflow Execution orchestration, step ordering, compact step status, checks, and refs
+- the root user workflow owns Workflow Execution orchestration, Step ordering, compact Step status, checks, and refs
 - `MoonMind.AgentRun` owns the true runtime/provider lifecycle, detailed observability, and runtime result artifacts
 
 ```text

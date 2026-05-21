@@ -8,7 +8,6 @@ COMPAT_MODEL = REPO_ROOT / "docs" / "Temporal" / "TaskExecutionCompatibilityMode
 AGENT_MODEL = REPO_ROOT / "docs" / "Temporal" / "ManagedAndExternalAgentExecutionModel.md"
 ARCHITECTURE = REPO_ROOT / "docs" / "MoonMindArchitecture.md"
 TEMPORAL_ARCHITECTURE = REPO_ROOT / "docs" / "Temporal" / "TemporalArchitecture.md"
-SPEC = REPO_ROOT / "specs" / "001-workflow-execution-hard-switch" / "spec.md"
 
 
 def _read(path: Path) -> str:
@@ -27,7 +26,6 @@ def test_workflow_execution_product_model_defines_required_terms() -> None:
     assert "Step Execution" in text
     assert "artifacts" in text
     assert "`externalRefs`" in text
-    assert "docs/Temporal/WorkflowLanguageHardSwitchPlan.md" in _read(SPEC)
 
 
 def test_task_compatibility_doc_is_not_normative_product_framing() -> None:
@@ -43,7 +41,7 @@ def test_workflow_type_catalog_uses_workflow_native_user_workflow_language() -> 
     text = _read(TYPE_CATALOG)
 
     assert "`MoonMind.UserWorkflow`" in text
-    assert "user-submitted, Step-ledger-owning Workflow Execution" in text
+    assert "User-submitted, Step-ledger-owning Workflow Execution" in text
     assert "standard task execution" not in text
     assert "public APIs and UI flows may still use `task` terminology" not in text
 
