@@ -66,15 +66,15 @@ MoonMind explicitly separates long-lived, stateful agent execution from plain on
 
 ## 2. Core design: `MoonMind.AgentRun`
 
-`MoonMind.Run` remains the root workflow. It represents a **task**: the top-level unit of work. Each task contains a **plan** consisting of one or more ordered **steps**. When a step requires a true agent runtime, `MoonMind.Run` starts a dedicated child workflow: `MoonMind.AgentRun`.
+`MoonMind.UserWorkflow` is the product name for the root user Workflow Execution. The current live implementation may still appear as `MoonMind.Run` in code and workflow registration. It represents a Workflow Execution: the top-level unit of work. Each Workflow Execution contains a plan consisting of one or more ordered Steps. When a Step requires a true agent runtime, the root user workflow starts a dedicated child workflow: `MoonMind.AgentRun`.
 
 Parent/child ownership rule:
 
-- `MoonMind.Run` owns task-level orchestration, step ordering, compact step status, checks, and refs
+- the root user workflow owns Workflow Execution orchestration, step ordering, compact step status, checks, and refs
 - `MoonMind.AgentRun` owns the true runtime/provider lifecycle, detailed observability, and runtime result artifacts
 
 ```text
-Task (MoonMind.Run workflow)
+Workflow Execution (root user workflow)
  └─ Plan (generated or provided)
  ├─ Step 1: sandbox.run_command (activity)
  ├─ Step 2: MoonMind.AgentRun (child workflow) → e.g. Gemini CLI
@@ -82,14 +82,14 @@ Task (MoonMind.Run workflow)
  └─ Step 4: sandbox.run_tests (activity)
 ````
 
-This hierarchy allows a single task to mix:
+This hierarchy allows a single Workflow Execution to mix:
 
 * ordinary activities
 * managed agent steps
 * external delegated agent steps
 * post-run validation or publishing work
 
-`MoonMind.Run` owns the task-level envelope: planning, execution ordering, task state, dashboard visibility, cancellation propagation, and post-run task handling.
+The root user workflow owns the Workflow Execution envelope: planning, execution ordering, workflow state, dashboard visibility, cancellation propagation, and post-run handling.
 
 `MoonMind.AgentRun` owns exactly one true agent execution lifecycle.
 
@@ -893,7 +893,7 @@ MoonMind treats true agent execution as a first-class orchestration concept dist
 
 The unifying model is:
 
-* `MoonMind.Run` remains the root task workflow
+* `MoonMind.Run` remains the current live root workflow implementation for user Workflow Executions
 * `MoonMind.AgentRun` is the child workflow for one true agent execution
 * `AgentAdapter` defines the shared lifecycle interface
 * `ExternalAgentAdapter` handles delegated external agents
