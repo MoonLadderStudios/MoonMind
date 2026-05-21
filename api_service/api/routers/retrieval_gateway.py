@@ -21,6 +21,25 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/retrieval", tags=["Retrieval"])
 
+REPOSITORY_SCOPE_FILTER_KEYS = ("repo", "repository")
+SESSION_SCOPE_FILTER_KEYS = frozenset(
+    {
+        "repo",
+        "repository",
+        "workspace",
+        "workspace_id",
+        "run",
+        "run_id",
+        "job",
+        "job_id",
+        "tenant",
+        "tenant_id",
+        "task_run_id",
+        "taskRunId",
+    }
+)
+SESSION_SCOPE_FILTER_KEYS_MESSAGE = ", ".join(sorted(SESSION_SCOPE_FILTER_KEYS))
+
 @dataclass(frozen=True, slots=True)
 class RetrievalAuthContext:
     auth_source: str
@@ -44,21 +63,23 @@ class RetrievalQuery(BaseModel):
                 f"Unsupported retrieval budget keys: {joined}. Allowed keys: latency_ms, tokens."
             )
 
-        allowed_filters = {"repo", "repository"}
-        unsupported_filters = sorted(set(self.filters) - allowed_filters)
+        unsupported_filters = sorted(set(self.filters) - SESSION_SCOPE_FILTER_KEYS)
         if unsupported_filters:
             joined = ", ".join(unsupported_filters)
             raise ValueError(
-                f"Unsupported retrieval filter keys: {joined}. Allowed keys: repo, repository."
+                "Unsupported retrieval filter keys: "
+                f"{joined}. Allowed keys: {SESSION_SCOPE_FILTER_KEYS_MESSAGE}."
             )
 
         has_scope_filter = any(
-            str(self.filters.get(key, "")).strip() for key in allowed_filters
+            str(self.filters.get(key, "")).strip()
+            for key in SESSION_SCOPE_FILTER_KEYS
         )
         if not has_scope_filter:
             raise ValueError(
-                "Session-issued retrieval requires a repo or repository "
-                "filter to bound corpus scope."
+                "Session-issued retrieval requires at least one supported "
+                "scope filter to bound corpus scope. Allowed keys: "
+                f"{SESSION_SCOPE_FILTER_KEYS_MESSAGE}."
             )
         return self
 
@@ -169,7 +190,7 @@ async def authorize_retrieval_request(
     )
 
 def _requested_repo(payload: RetrievalQuery) -> str:
-    for key in ("repo", "repository"):
+    for key in REPOSITORY_SCOPE_FILTER_KEYS:
         value = str(payload.filters.get(key, "")).strip()
         if value:
             return value
@@ -181,6 +202,14 @@ def _enforce_repo_scope(payload: RetrievalQuery, auth: RetrievalAuthContext) -> 
         return
     repo = _requested_repo(payload)
     allowed = set(auth.allowed_repositories)
+    if not repo:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Repository scope is required for retrieval tokens with a "
+                "configured repository allowlist."
+            ),
+        )
     if repo and repo not in allowed:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

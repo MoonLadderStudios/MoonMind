@@ -145,6 +145,47 @@ def test_context_accepts_scoped_retrieval_token_and_preserves_request_knobs(
     ]
 
 
+@pytest.mark.parametrize(
+    "filters",
+    [
+        {"workspace": "workspace-a"},
+        {"workspace_id": "workspace-1"},
+        {"run": "run-a"},
+        {"run_id": "run-1"},
+        {"job": "job-a"},
+        {"job_id": "job-1"},
+        {"tenant": "tenant-a"},
+        {"tenant_id": "tenant-1"},
+        {"task_run_id": "task-run-1"},
+        {"taskRunId": "task-run-2"},
+        {
+            "repo": "moonmind",
+            "workspace_id": "workspace-1",
+            "run_id": "run-1",
+            "job_id": "job-1",
+            "tenant_id": "tenant-1",
+        },
+    ],
+)
+def test_context_accepts_supported_session_scope_filters(
+    filters: dict[str, str],
+) -> None:
+    app = _build_app()
+    app.dependency_overrides[authorize_retrieval_request] = _oidc_auth
+    service = StubService()
+    app.dependency_overrides[get_retrieval_service] = lambda: service
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/retrieval/context",
+            json={"query": "q", "filters": filters},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["filters"] == filters
+    assert service.calls[0]["filters"] == filters
+
+
 def test_context_fails_fast_when_retrieval_unavailable_for_session() -> None:
     app = _build_app()
     app.dependency_overrides[authorize_retrieval_request] = _oidc_auth
@@ -187,6 +228,23 @@ def test_context_retrieval_token_enforces_allowed_repository_scope(
     assert response.status_code == 403
 
 
+def test_context_retrieval_token_allowlist_requires_repository_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MOONMIND_RETRIEVAL_TOKEN", "scoped-token")
+    monkeypatch.setenv("MOONMIND_RETRIEVAL_ALLOWED_REPOSITORIES", "moonmind")
+    app = _build_app()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/retrieval/context",
+            json={"query": "q", "filters": {"job_id": "job-1"}},
+            headers={"X-MoonMind-Retrieval-Token": "scoped-token"},
+        )
+
+    assert response.status_code == 403
+    assert "Repository scope is required" in response.json()["detail"]
+
 
 def test_context_rejects_missing_repository_scope_for_authorized_request() -> None:
     app = _build_app()
@@ -203,7 +261,7 @@ def test_context_rejects_missing_repository_scope_for_authorized_request() -> No
 
     assert response.status_code == 422
     detail = response.json()["detail"]
-    assert "repo" in str(detail)
+    assert "scope filter" in str(detail)
 
 
 def test_context_rejects_unsupported_filter_keys_for_authorized_request() -> None:
@@ -222,6 +280,7 @@ def test_context_rejects_unsupported_filter_keys_for_authorized_request() -> Non
     assert response.status_code == 422
     detail = response.json()["detail"]
     assert "branch" in str(detail)
+    assert "workspace_id" in str(detail)
 
 def test_context_rejects_unsupported_budget_keys_for_authorized_request() -> None:
     app = _build_app()
