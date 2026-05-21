@@ -31,7 +31,6 @@ type DashboardConfig = {
   sources?: {
     temporal?: Record<string, string>;
     agentRuns?: Record<string, string>;
-    taskRuns?: Record<string, string>;
   };
 };
 
@@ -2332,7 +2331,7 @@ type TaskRunRouteTemplates = {
 };
 
 function readTaskRunRouteTemplates(config: DashboardConfig | undefined): TaskRunRouteTemplates {
-  const sourceRoutes = config?.sources?.agentRuns ?? config?.sources?.taskRuns;
+  const sourceRoutes = config?.sources?.agentRuns;
   return {
     observabilitySummary: sourceRoutes?.observabilitySummary,
     observabilityEvents: sourceRoutes?.observabilityEvents,

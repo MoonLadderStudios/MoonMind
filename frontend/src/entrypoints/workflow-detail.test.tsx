@@ -144,16 +144,16 @@ describe('Workflow Detail Entrypoint', () => {
       dashboardConfig: {
         pollIntervalsMs: { detail: 1 },
         sources: {
-          taskRuns: {
-            observabilitySummary: '/api/task-runs/{taskRunId}/observability-summary',
-            observabilityEvents: '/api/task-runs/{taskRunId}/observability/events',
-            logsStream: '/api/task-runs/{taskRunId}/logs/stream',
-            logsStdout: '/api/task-runs/{taskRunId}/logs/stdout',
-            logsStderr: '/api/task-runs/{taskRunId}/logs/stderr',
-            logsMerged: '/api/task-runs/{taskRunId}/logs/merged',
-            diagnostics: '/api/task-runs/{taskRunId}/diagnostics',
-            artifactSession: '/api/task-runs/{taskRunId}/artifact-sessions/{sessionId}',
-            artifactSessionControl: '/api/task-runs/{taskRunId}/artifact-sessions/{sessionId}/control',
+          agentRuns: {
+            observabilitySummary: '/api/agent-runs/{agentRunId}/observability-summary',
+            observabilityEvents: '/api/agent-runs/{agentRunId}/observability/events',
+            logsStream: '/api/agent-runs/{agentRunId}/logs/stream',
+            logsStdout: '/api/agent-runs/{agentRunId}/logs/stdout',
+            logsStderr: '/api/agent-runs/{agentRunId}/logs/stderr',
+            logsMerged: '/api/agent-runs/{agentRunId}/logs/merged',
+            diagnostics: '/api/agent-runs/{agentRunId}/diagnostics',
+            artifactSession: '/api/agent-runs/{agentRunId}/artifact-sessions/{sessionId}',
+            artifactSessionControl: '/api/agent-runs/{agentRunId}/artifact-sessions/{sessionId}/control',
           },
         },
       },
@@ -320,13 +320,13 @@ describe('Workflow Detail Entrypoint', () => {
 
   it('returns null for route templates with missing parameters', () => {
     expect(
-      expandRouteTemplate('/api/task-runs/{taskRunId}/artifact-sessions/{sessionId}', {
+      expandRouteTemplate('/api/agent-runs/{agentRunId}/artifact-sessions/{sessionId}', {
         taskRunId: 'task-run-1',
         sessionId: null,
       }),
     ).toBeNull();
     expect(
-      expandRouteTemplate('/api/task-runs/{taskRunId}/artifact-sessions/{sessionId}', {
+      expandRouteTemplate('/api/agent-runs/{agentRunId}/artifact-sessions/{sessionId}', {
         taskRunId: 'task-run-1',
       }),
     ).toBeNull();
@@ -938,7 +938,7 @@ describe('Workflow Detail Entrypoint', () => {
           json: async () => workloadStepsSnapshot,
         } as Response);
       }
-      if (url.includes('/task-runs/task-run-workload/observability-summary')) {
+      if (url.includes('/agent-runs/task-run-workload/observability-summary')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -951,19 +951,19 @@ describe('Workflow Detail Entrypoint', () => {
           }),
         } as Response);
       }
-      if (url.includes('/task-runs/task-run-workload/observability/events')) {
+      if (url.includes('/agent-runs/task-run-workload/observability/events')) {
         return Promise.resolve({ ok: true, json: async () => ({ events: [], truncated: false }) } as Response);
       }
-      if (url.includes('/task-runs/task-run-workload/logs/merged')) {
+      if (url.includes('/agent-runs/task-run-workload/logs/merged')) {
         return Promise.resolve({ ok: true, text: async () => 'workload stdout tail\n' } as unknown as Response);
       }
-      if (url.includes('/task-runs/task-run-workload/logs/stdout')) {
+      if (url.includes('/agent-runs/task-run-workload/logs/stdout')) {
         return Promise.resolve({ ok: true, text: async () => 'workload stdout\n' } as unknown as Response);
       }
-      if (url.includes('/task-runs/task-run-workload/logs/stderr')) {
+      if (url.includes('/agent-runs/task-run-workload/logs/stderr')) {
         return Promise.resolve({ ok: true, text: async () => 'workload stderr\n' } as unknown as Response);
       }
-      if (url.includes('/task-runs/task-run-workload/diagnostics')) {
+      if (url.includes('/agent-runs/task-run-workload/diagnostics')) {
         return Promise.resolve({ ok: true, text: async () => '{"status":"failed"}\n' } as unknown as Response);
       }
       if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
@@ -1087,7 +1087,7 @@ describe('Workflow Detail Entrypoint', () => {
       if (url.includes('/executions/test-123/steps')) {
         return Promise.resolve({ ok: true, json: async () => latestStepsSnapshot } as Response);
       }
-      if (url.includes('/task-runs/task-run-step-1/observability-summary')) {
+      if (url.includes('/agent-runs/task-run-step-1/observability-summary')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -1099,7 +1099,7 @@ describe('Workflow Detail Entrypoint', () => {
           }),
         } as Response);
       }
-      if (url.includes('/task-runs/task-run-step-1/observability/events')) {
+      if (url.includes('/agent-runs/task-run-step-1/observability/events')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -1115,7 +1115,7 @@ describe('Workflow Detail Entrypoint', () => {
           }),
         } as Response);
       }
-      if (url.includes('/task-runs/task-run-step-1/logs/merged')) {
+      if (url.includes('/agent-runs/task-run-step-1/logs/merged')) {
         return Promise.resolve({ ok: true, text: async () => 'step scoped log line\n' } as unknown as Response);
       }
       if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
@@ -1133,7 +1133,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
     });
     expect(
-      fetchSpy.mock.calls.some(([url]) => String(url).includes('/task-runs/task-run-step-1/observability-summary')),
+      fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/task-run-step-1/observability-summary')),
     ).toBe(false);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Show details for Apply patch' }));
@@ -1153,7 +1153,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getAllByText('approval policy: passed')[0]?.className).toContain('check-passed');
 
     expect(
-      fetchSpy.mock.calls.some(([url]) => String(url).includes('/task-runs/task-run-step-1/observability-summary')),
+      fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/task-run-step-1/observability-summary')),
     ).toBe(true);
   });
 
@@ -1203,7 +1203,7 @@ describe('Workflow Detail Entrypoint', () => {
               : latestStepsSnapshot,
         } as Response);
       }
-      if (url.includes('/task-runs/task-run-step-1/observability-summary')) {
+      if (url.includes('/agent-runs/task-run-step-1/observability-summary')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -1215,10 +1215,10 @@ describe('Workflow Detail Entrypoint', () => {
           }),
         } as Response);
       }
-      if (url.includes('/task-runs/task-run-step-1/observability/events')) {
+      if (url.includes('/agent-runs/task-run-step-1/observability/events')) {
         return Promise.resolve({ ok: false, status: 404 } as Response);
       }
-      if (url.includes('/task-runs/task-run-step-1/logs/merged')) {
+      if (url.includes('/agent-runs/task-run-step-1/logs/merged')) {
         return Promise.resolve({ ok: true, text: async () => 'attached after refresh\n' } as unknown as Response);
       }
       if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
@@ -1236,7 +1236,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
     });
     expect(
-      fetchSpy.mock.calls.some(([url]) => String(url).includes('/task-runs/task-run-step-1/observability-summary')),
+      fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/task-run-step-1/observability-summary')),
     ).toBe(false);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Show details for Apply patch' }));
@@ -1245,7 +1245,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByText('attached after refresh')).toBeTruthy();
     });
     expect(
-      fetchSpy.mock.calls.some(([url]) => String(url).includes('/task-runs/task-run-step-1/observability-summary')),
+      fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/task-run-step-1/observability-summary')),
     ).toBe(true);
   });
 
@@ -1349,7 +1349,7 @@ describe('Workflow Detail Entrypoint', () => {
       if (url.includes('/tenant/api/executions/test-123/steps')) {
         return Promise.resolve({ ok: true, json: async () => latestStepsSnapshot } as Response);
       }
-      if (url.includes('/tenant/api/task-runs/task-run-step-1/observability-summary')) {
+      if (url.includes('/tenant/api/agent-runs/task-run-step-1/observability-summary')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -1361,13 +1361,13 @@ describe('Workflow Detail Entrypoint', () => {
           }),
         } as Response);
       }
-      if (url.includes('/tenant/api/task-runs/task-run-step-1/observability/events')) {
+      if (url.includes('/tenant/api/agent-runs/task-run-step-1/observability/events')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({ events: [], truncated: false }),
         } as Response);
       }
-      if (url.includes('/tenant/api/task-runs/task-run-step-1/logs/merged')) {
+      if (url.includes('/tenant/api/agent-runs/task-run-step-1/logs/merged')) {
         return Promise.resolve({ ok: true, text: async () => '' } as unknown as Response);
       }
       if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
@@ -1390,7 +1390,7 @@ describe('Workflow Detail Entrypoint', () => {
     await waitFor(() => {
       expect(
         fetchSpy.mock.calls.some(([url]) =>
-          String(url).includes('/tenant/api/task-runs/task-run-step-1/observability-summary'),
+          String(url).includes('/tenant/api/agent-runs/task-run-step-1/observability-summary'),
         ),
       ).toBe(true);
     });
@@ -1422,7 +1422,7 @@ describe('Workflow Detail Entrypoint', () => {
       if (url.includes('/executions/test-123/steps')) {
         return Promise.resolve({ ok: false, status: 403, statusText: '' } as Response);
       }
-      if (url.includes('/task-runs/task-run-root/observability-summary')) {
+      if (url.includes('/agent-runs/task-run-root/observability-summary')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -1434,7 +1434,7 @@ describe('Workflow Detail Entrypoint', () => {
           }),
         } as Response);
       }
-      if (url.includes('/task-runs/task-run-root/observability/events')) {
+      if (url.includes('/agent-runs/task-run-root/observability/events')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -1450,7 +1450,7 @@ describe('Workflow Detail Entrypoint', () => {
           }),
         } as Response);
       }
-      if (url.includes('/task-runs/task-run-root/logs/merged')) {
+      if (url.includes('/agent-runs/task-run-root/logs/merged')) {
         return Promise.resolve({ ok: true, text: async () => 'root observation log\n' } as unknown as Response);
       }
       if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
@@ -1473,7 +1473,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(
-        fetchSpy.mock.calls.some(([url]) => String(url).includes('/task-runs/task-run-root/observability-summary')),
+        fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/task-run-root/observability-summary')),
       ).toBe(true);
     });
   });
@@ -1535,7 +1535,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByText(/live log streaming is disabled in the server dashboard config/i)).toBeTruthy();
     });
     expect(
-      fetchSpy.mock.calls.some(([url]) => String(url).includes('/task-runs/task-run-step-1/observability-summary')),
+      fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/task-run-step-1/observability-summary')),
     ).toBe(false);
   });
 
