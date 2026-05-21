@@ -355,7 +355,7 @@ The live repo-aligned workflow catalog is:
 
 | Workflow Type | Role | Product visibility |
 | --- | --- | --- |
-| `MoonMind.Run` | Root user/service execution workflow; plans work, owns step ledger, starts child agent runs, integrates outputs | Primary task/execution surface |
+| `MoonMind.Run` | Current live root workflow implementation for user/service Workflow Executions; plans work, owns Step ledger, starts child agent runs, integrates outputs | Primary Workflow Execution surface |
 | `MoonMind.ManifestIngest` | Ingests, validates, compiles, and orchestrates manifest-backed work | User/system execution surface |
 | `MoonMind.AgentRun` | Durable lifecycle wrapper for one true managed or external agent execution | Child/internal, surfaced through parent details |
 | `MoonMind.AgentSession` | Task-scoped managed-session workflow; currently Codex-backed in the live session plane | Internal/operator/detail support |
@@ -370,7 +370,7 @@ Rules:
 - Add new Workflow Types only when lifecycle behavior is materially distinct.
 - Do not model provider brands as root workflow types.
 - Do not model worker fleets or task queues as product taxonomies.
-- Product `task` vocabulary maps primarily to `MoonMind.Run`.
+- Product Workflow Execution vocabulary maps primarily to `MoonMind.UserWorkflow`; `MoonMind.Run` remains the current live implementation name where code and workflow registration still use it.
 - If docs and code disagree about the live catalog, code registration and `WorkflowTypeCatalogAndLifecycle.md` must be reconciled immediately.
 
 ---
