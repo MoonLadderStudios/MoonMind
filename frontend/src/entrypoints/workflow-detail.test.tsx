@@ -4782,7 +4782,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
-        '/api/task-runs/wf-task-1/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control',
+        '/api/agent-runs/wf-task-1/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control',
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({
@@ -4802,7 +4802,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
-        '/api/task-runs/wf-task-1/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control',
+        '/api/agent-runs/wf-task-1/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control',
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({
@@ -6178,7 +6178,7 @@ describe('LiveLogsPanel', () => {
 
     // Check download link
     const downloadLink = screen.getAllByText('Download')[0] as HTMLAnchorElement;
-    expect(downloadLink.href).toMatch(/\/task-runs\/mock-uuid-1\/logs\/merged$/);
+    expect(downloadLink.href).toMatch(/\/agent-runs\/mock-uuid-1\/logs\/merged$/);
   });
 
   it('keeps panels expanded when operators use their controls', async () => {

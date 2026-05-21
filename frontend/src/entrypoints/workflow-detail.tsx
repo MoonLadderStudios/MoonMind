@@ -30,6 +30,7 @@ type DashboardConfig = {
   };
   sources?: {
     temporal?: Record<string, string>;
+    agentRuns?: Record<string, string>;
     taskRuns?: Record<string, string>;
   };
 };
@@ -1084,6 +1085,10 @@ function taskRunRoute(
   return joinApiBasePath(apiBase, fallback);
 }
 
+function agentRunRouteParams(taskRunId: string, extra: Record<string, string | null | undefined> = {}) {
+  return { taskRunId, agentRunId: taskRunId, ...extra };
+}
+
 function formatWhen(iso: string | null | undefined): string {
   if (!iso) return '—';
   const date = new Date(iso);
@@ -1453,9 +1458,12 @@ async function fetchMergedTail(
   routeTemplate?: string | null,
 ): Promise<string> {
   const resp = await fetch(
-    taskRunRoute(apiBase, routeTemplate, `/task-runs/${encodeURIComponent(taskRunId)}/logs/merged`, {
-      taskRunId,
-    }),
+    taskRunRoute(
+      apiBase,
+      routeTemplate,
+      `/agent-runs/${encodeURIComponent(taskRunId)}/logs/merged`,
+      agentRunRouteParams(taskRunId),
+    ),
     { credentials: 'include' },
   );
   if (!resp.ok) {
@@ -1475,8 +1483,8 @@ async function fetchStream(
     taskRunRoute(
       apiBase,
       routeTemplate,
-      `/task-runs/${encodeURIComponent(taskRunId)}/logs/${stream}`,
-      { taskRunId },
+      `/agent-runs/${encodeURIComponent(taskRunId)}/logs/${stream}`,
+      agentRunRouteParams(taskRunId),
     ),
     { credentials: 'include' },
   );
@@ -1496,8 +1504,8 @@ async function fetchDiagnostics(
     taskRunRoute(
       apiBase,
       routeTemplate,
-      `/task-runs/${encodeURIComponent(taskRunId)}/diagnostics`,
-      { taskRunId },
+      `/agent-runs/${encodeURIComponent(taskRunId)}/diagnostics`,
+      agentRunRouteParams(taskRunId),
     ),
     { credentials: 'include' },
   );
@@ -1546,8 +1554,8 @@ async function fetchArtifactSessionProjection(
     taskRunRoute(
       apiBase,
       routeTemplate,
-      `/task-runs/${encodeURIComponent(taskRunId)}/artifact-sessions/${encodeURIComponent(sessionId)}`,
-      { taskRunId, sessionId },
+      `/agent-runs/${encodeURIComponent(taskRunId)}/artifact-sessions/${encodeURIComponent(sessionId)}`,
+      agentRunRouteParams(taskRunId, { sessionId }),
     ),
     { credentials: 'include' },
   );
@@ -1569,8 +1577,8 @@ async function controlArtifactSession(
     taskRunRoute(
       apiBase,
       routeTemplate,
-      `/task-runs/${encodeURIComponent(taskRunId)}/artifact-sessions/${encodeURIComponent(sessionId)}/control`,
-      { taskRunId, sessionId },
+      `/agent-runs/${encodeURIComponent(taskRunId)}/artifact-sessions/${encodeURIComponent(sessionId)}/control`,
+      agentRunRouteParams(taskRunId, { sessionId }),
     ),
     {
       method: 'POST',
@@ -1595,8 +1603,8 @@ async function fetchObservabilitySummary(
     taskRunRoute(
       apiBase,
       routeTemplate,
-      `/task-runs/${encodeURIComponent(taskRunId)}/observability-summary`,
-      { taskRunId },
+      `/agent-runs/${encodeURIComponent(taskRunId)}/observability-summary`,
+      agentRunRouteParams(taskRunId),
     ),
     { credentials: 'include' },
   );
@@ -1617,8 +1625,8 @@ async function fetchObservabilityEvents(
     taskRunRoute(
       apiBase,
       routeTemplate,
-      `/task-runs/${encodeURIComponent(taskRunId)}/observability/events`,
-      { taskRunId },
+      `/agent-runs/${encodeURIComponent(taskRunId)}/observability/events`,
+      agentRunRouteParams(taskRunId),
     ),
     { credentials: 'include' },
   );
@@ -2324,16 +2332,17 @@ type TaskRunRouteTemplates = {
 };
 
 function readTaskRunRouteTemplates(config: DashboardConfig | undefined): TaskRunRouteTemplates {
+  const sourceRoutes = config?.sources?.agentRuns ?? config?.sources?.taskRuns;
   return {
-    observabilitySummary: config?.sources?.taskRuns?.observabilitySummary,
-    observabilityEvents: config?.sources?.taskRuns?.observabilityEvents,
-    logsStream: config?.sources?.taskRuns?.logsStream,
-    logsStdout: config?.sources?.taskRuns?.logsStdout,
-    logsStderr: config?.sources?.taskRuns?.logsStderr,
-    logsMerged: config?.sources?.taskRuns?.logsMerged,
-    diagnostics: config?.sources?.taskRuns?.diagnostics,
-    artifactSession: config?.sources?.taskRuns?.artifactSession,
-    artifactSessionControl: config?.sources?.taskRuns?.artifactSessionControl,
+    observabilitySummary: sourceRoutes?.observabilitySummary,
+    observabilityEvents: sourceRoutes?.observabilityEvents,
+    logsStream: sourceRoutes?.logsStream,
+    logsStdout: sourceRoutes?.logsStdout,
+    logsStderr: sourceRoutes?.logsStderr,
+    logsMerged: sourceRoutes?.logsMerged,
+    diagnostics: sourceRoutes?.diagnostics,
+    artifactSession: sourceRoutes?.artifactSession,
+    artifactSessionControl: sourceRoutes?.artifactSessionControl,
   };
 }
 
@@ -2869,8 +2878,8 @@ function LiveLogsPanel({
     const streamUrl = taskRunRoute(
       apiBase,
       routes.logsStream,
-      `/task-runs/${encodeURIComponent(taskRunId)}/logs/stream`,
-      { taskRunId },
+      `/agent-runs/${encodeURIComponent(taskRunId)}/logs/stream`,
+      agentRunRouteParams(taskRunId),
     );
     const url = `${streamUrl}${since}`;
     const es = new EventSource(url, { withCredentials: true });
@@ -2959,8 +2968,8 @@ function LiveLogsPanel({
   const downloadUrl = taskRunRoute(
     apiBase,
     routes.logsMerged,
-    `/task-runs/${encodeURIComponent(taskRunId)}/logs/merged`,
-    { taskRunId },
+    `/agent-runs/${encodeURIComponent(taskRunId)}/logs/merged`,
+    agentRunRouteParams(taskRunId),
   );
   const summaryErrorMessage = summaryQuery.isError ? (summaryQuery.error as Error).message : null;
   const liveStatusValue =
@@ -3222,8 +3231,8 @@ function StaticLogPanel({
   const downloadUrl = taskRunRoute(
     apiBase,
     stream === 'stdout' ? routes.logsStdout : routes.logsStderr,
-    `/task-runs/${encodeURIComponent(taskRunId)}/logs/${stream}`,
-    { taskRunId },
+    `/agent-runs/${encodeURIComponent(taskRunId)}/logs/${stream}`,
+    agentRunRouteParams(taskRunId),
   );
 
   return (
@@ -3297,8 +3306,8 @@ function DiagnosticsPanel({
   const downloadUrl = taskRunRoute(
     apiBase,
     routes.diagnostics,
-    `/task-runs/${encodeURIComponent(taskRunId)}/diagnostics`,
-    { taskRunId },
+    `/agent-runs/${encodeURIComponent(taskRunId)}/diagnostics`,
+    agentRunRouteParams(taskRunId),
   );
 
   return (

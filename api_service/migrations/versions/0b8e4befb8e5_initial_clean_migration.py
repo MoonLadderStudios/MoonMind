@@ -185,20 +185,19 @@ def upgrade() -> None:
     op.create_index('ix_task_run_live_sessions_status_expires_at', 'task_run_live_sessions', ['status', 'expires_at'], unique=False)
     op.create_index(op.f('ix_task_run_live_sessions_task_run_id'), 'task_run_live_sessions', ['task_run_id'], unique=True)
     op.create_index(op.f('ix_task_run_live_sessions_worker_id'), 'task_run_live_sessions', ['worker_id'], unique=False)
-    op.create_table('task_source_mappings',
-    sa.Column('task_id', sa.String(length=128), nullable=False),
+    op.create_table('workflow_execution_source_mappings',
+    sa.Column('workflow_id', sa.String(length=128), nullable=False),
     sa.Column('source', sa.String(length=32), nullable=False),
     sa.Column('entry', sa.String(length=32), nullable=True),
     sa.Column('source_record_id', sa.String(length=128), nullable=False),
-    sa.Column('workflow_id', sa.String(length=128), nullable=True),
     sa.Column('owner_type', sa.String(length=32), nullable=True),
     sa.Column('owner_id', sa.String(length=128), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-    sa.PrimaryKeyConstraint('task_id')
+    sa.PrimaryKeyConstraint('workflow_id')
     )
-    op.create_index('ix_task_source_mappings_source_entry', 'task_source_mappings', ['source', 'entry'], unique=False)
-    op.create_index('ix_task_source_mappings_source_record_id', 'task_source_mappings', ['source', 'source_record_id'], unique=False)
+    op.create_index('ix_workflow_execution_source_mappings_source_entry', 'workflow_execution_source_mappings', ['source', 'entry'], unique=False)
+    op.create_index('ix_workflow_execution_source_mappings_source_record_id', 'workflow_execution_source_mappings', ['source', 'source_record_id'], unique=False)
     op.create_table('temporal_artifacts',
     sa.Column('artifact_id', sa.String(length=64), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
@@ -761,9 +760,9 @@ def downgrade() -> None:
     op.drop_index('ix_temporal_artifacts_deleted_at', table_name='temporal_artifacts')
     op.drop_index('ix_temporal_artifacts_created_at', table_name='temporal_artifacts')
     op.drop_table('temporal_artifacts')
-    op.drop_index('ix_task_source_mappings_source_record_id', table_name='task_source_mappings')
-    op.drop_index('ix_task_source_mappings_source_entry', table_name='task_source_mappings')
-    op.drop_table('task_source_mappings')
+    op.drop_index('ix_workflow_execution_source_mappings_source_record_id', table_name='workflow_execution_source_mappings')
+    op.drop_index('ix_workflow_execution_source_mappings_source_entry', table_name='workflow_execution_source_mappings')
+    op.drop_table('workflow_execution_source_mappings')
     op.drop_index(op.f('ix_task_run_live_sessions_worker_id'), table_name='task_run_live_sessions')
     op.drop_index(op.f('ix_task_run_live_sessions_task_run_id'), table_name='task_run_live_sessions')
     op.drop_index('ix_task_run_live_sessions_status_expires_at', table_name='task_run_live_sessions')
