@@ -477,6 +477,34 @@ class ManagedRuntimeLauncher:
             f"Command failed with exit code {returncode}: {rendered_cmd}; {detail}"
         )
 
+    @staticmethod
+    def _workspace_key_for_request(
+        *,
+        run_id: str,
+        request: AgentExecutionRequest,
+    ) -> str:
+        """Return the stable workspace key for repository-backed launches.
+
+        A MoonMind.Run can execute several managed-agent child runs in sequence.
+        Those child runs have distinct run IDs, but they must see the same
+        repository checkout so files produced by one step are available to the
+        next step.  The parent workflow correlation ID is stable across those
+        children, while the child run ID remains the fallback for standalone
+        launches.
+        """
+
+        correlation_id = str(getattr(request, "correlation_id", "") or "").strip()
+        raw_key = (
+            correlation_id
+            if correlation_id.startswith(("mm:", "resolver:"))
+            else run_id
+        )
+        safe_key = re.sub(r"[^A-Za-z0-9_.:-]+", "-", raw_key).strip(".-")
+        if safe_key:
+            return safe_key[:120]
+        digest = hashlib.sha256(raw_key.encode("utf-8", errors="replace")).hexdigest()
+        return digest[:24]
+
     async def _prepare_workspace_path(
         self,
         *,
@@ -504,7 +532,10 @@ class ManagedRuntimeLauncher:
         if not repository:
             return None
 
-        workspace_root = (self._store.store_root.parent / "workspaces" / run_id).resolve()
+        workspace_key = self._workspace_key_for_request(run_id=run_id, request=request)
+        workspace_root = (
+            self._store.store_root.parent / "workspaces" / workspace_key
+        ).resolve()
         repo_path = (workspace_root / "repo").resolve()
         workspace_root.mkdir(parents=True, exist_ok=True)
         if repo_path.exists():
