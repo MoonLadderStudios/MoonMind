@@ -2667,13 +2667,9 @@ function resolveSchemaCapabilityValues(
     const instructionFeatureRequest = String(featureRequestOverride || "").trim();
     const rawExplicit = explicitValues[name];
     const explicit =
-      isFeatureRequestInputKey(name) && String(rawExplicit ?? "").trim() === "" && instructionFeatureRequest
+      isFeatureRequestInputKey(name) && instructionFeatureRequest
         ? instructionFeatureRequest
-        : rawExplicit !== undefined
-          ? rawExplicit
-        : isFeatureRequestInputKey(name) && instructionFeatureRequest
-          ? instructionFeatureRequest
-          : undefined;
+        : rawExplicit;
     const fallback = safeCapabilityDefault(detail.defaults, name);
     if (explicit !== undefined) {
       if (
