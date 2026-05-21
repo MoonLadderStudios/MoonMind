@@ -8,6 +8,17 @@ COMPOSE_FILE="$COMPOSE_PROJECT_DIR/docker-compose.test.yaml"
 TEMP_COMPOSE_PROJECT_DIR=""
 NETWORK_NAME="${MOONMIND_DOCKER_NETWORK:-local-network}"
 
+hash_repo_path() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$1" | sha256sum | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$1" | shasum -a 256 | cut -d' ' -f1
+  else
+    echo "Error: neither sha256sum nor shasum is available." >&2
+    exit 127
+  fi
+}
+
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
   COMPOSE_CMD=(docker compose)
 elif command -v docker-compose >/dev/null 2>&1; then
@@ -28,7 +39,7 @@ if [[ ! -f "$REPO_ROOT/.env" ]]; then
 fi
 
 if [[ "$REPO_ROOT" == *:* ]]; then
-  TEMP_COMPOSE_PROJECT_DIR="/work/agent_jobs/moonmind-integration-repo-$(printf '%s' "$REPO_ROOT" | sha256sum | cut -d' ' -f1 | cut -c1-12)-$$"
+  TEMP_COMPOSE_PROJECT_DIR="/work/agent_jobs/moonmind-integration-repo-$(hash_repo_path "$REPO_ROOT" | cut -c1-12)-$$"
   mkdir -p "$TEMP_COMPOSE_PROJECT_DIR"
   tar -C "$REPO_ROOT" \
     --exclude='./.git' \

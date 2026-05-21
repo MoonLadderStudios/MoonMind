@@ -64,9 +64,6 @@ TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 _SAFE_DETAIL_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
-_SAFE_WORKFLOW_UUID_SEGMENT = re.compile(
-    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
-)
 _WORKFLOW_DETAIL_TABS = {"steps", "artifacts", "runs"}
 _RESERVED_WORKFLOW_ROUTE_SEGMENTS = {
     "manifests",
@@ -191,6 +188,7 @@ def _normalize_workflow_detail_path(workflow_path: str) -> str | None:
     if (
         len(parts) == 2
         and _is_safe_detail_segment(parts[0])
+        and parts[0].lower() not in _RESERVED_WORKFLOW_ROUTE_SEGMENTS
         and parts[1] in _WORKFLOW_DETAIL_TABS
     ):
         return f"{parts[0]}/{parts[1]}"
@@ -645,6 +643,25 @@ async def task_proposals_route(
         user=_user,
     )
 
+@router.get("/proposals/{proposal_id}", response_class=HTMLResponse)
+async def task_proposal_detail_route(
+    request: Request,
+    proposal_id: str,
+    session: AsyncSession = Depends(get_async_session),
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the proposals shell for proposal deep links."""
+    if not _is_safe_detail_segment(proposal_id):
+        _raise_dashboard_route_not_found()
+    return await _render_react_page(
+        request,
+        "proposals",
+        f"/proposals/{proposal_id}",
+        data_wide_panel=True,
+        session=session,
+        user=_user,
+    )
+
 @router.get("/schedules", response_class=HTMLResponse)
 async def task_schedules_route(
     request: Request,
@@ -654,6 +671,24 @@ async def task_schedules_route(
     """Serve the React-powered schedules page."""
     return await _render_react_page(
         request, "schedules", "/schedules", session=session, user=_user
+    )
+
+@router.get("/schedules/{schedule_id}", response_class=HTMLResponse)
+async def task_schedule_detail_route(
+    request: Request,
+    schedule_id: str,
+    session: AsyncSession = Depends(get_async_session),
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the schedules shell for schedule deep links."""
+    if not _is_safe_detail_segment(schedule_id) or schedule_id.lower() == "new":
+        raise HTTPException(status_code=404, detail="Not Found")
+    return await _render_react_page(
+        request,
+        "schedules",
+        f"/schedules/{schedule_id}",
+        session=session,
+        user=_user,
     )
 
 @router.get("/manifests", response_class=HTMLResponse)
@@ -674,6 +709,24 @@ async def task_manifest_submit_route(
 ) -> RedirectResponse:
     """Redirect the legacy manifest submit route into the unified manifests page."""
     return RedirectResponse(url="/manifests", status_code=307)
+
+@router.get("/manifests/{manifest_name}", response_class=HTMLResponse)
+async def task_manifest_detail_route(
+    request: Request,
+    manifest_name: str,
+    session: AsyncSession = Depends(get_async_session),
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the manifests shell for manifest deep links."""
+    if not _is_safe_detail_segment(manifest_name):
+        _raise_dashboard_route_not_found()
+    return await _render_react_page(
+        request,
+        "manifests",
+        f"/manifests/{manifest_name}",
+        session=session,
+        user=_user,
+    )
 
 @router.get("/workers")
 async def task_workers_route(

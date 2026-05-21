@@ -72,7 +72,7 @@ RUN npm config set fund false \
     && npm config set update-notifier false
 
 COPY package.json package-lock.json postcss.config.cjs tailwind.config.cjs /build/
-RUN npm ci --no-fund --no-audit
+RUN --mount=type=cache,target=/root/.npm npm ci --no-fund --no-audit
 
 # Copy only the source files needed for the frontend build after dependencies
 # are installed so source-only edits do not invalidate npm ci.
@@ -92,7 +92,7 @@ FROM python:3.12-slim-bookworm AS python-requirements
 SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 WORKDIR /deps
 
-RUN pip install --disable-pip-version-check \
+RUN --mount=type=cache,target=/root/.cache/pip pip install --disable-pip-version-check \
         poetry==2.2.1 \
         poetry-plugin-export==1.10.0
 

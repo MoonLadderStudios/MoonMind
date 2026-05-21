@@ -226,7 +226,7 @@ def _serialize_promotion_result(proposal: TaskProposal) -> dict[str, object] | N
             continue
         result: dict[str, object] = {
             "promotedExecutionId": promoted_execution_id,
-            "promotedExecutionUrl": f"/workflows/temporal/{promoted_execution_id}",
+            "promotedExecutionUrl": f"/workflows/{promoted_execution_id}?source=temporal",
         }
         for source_key, target_key in (
             ("providerEventId", "providerEventId"),

@@ -524,7 +524,7 @@ describe('Workflow Detail Entrypoint', () => {
           },
           promotionResult: {
             promotedExecutionId: 'mm-promoted-1',
-            promotedExecutionUrl: '/workflows/temporal/mm-promoted-1',
+            promotedExecutionUrl: '/workflows/mm-promoted-1?source=temporal',
           },
         },
         {

@@ -496,7 +496,7 @@ def test_get_proposal_preview_includes_operator_outcome_fields(
     assert payload["taskPreview"]["taskSkills"] == ["moonspec-implement"]
     assert payload["promotionResult"] == {
         "promotedExecutionId": "wf-promoted-1",
-        "promotedExecutionUrl": "/workflows/temporal/wf-promoted-1",
+        "promotedExecutionUrl": "/workflows/wf-promoted-1?source=temporal",
         "providerEventId": "evt-promote",
         "resultingExternalState": "promoted",
     }

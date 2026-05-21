@@ -2050,6 +2050,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/proposals/{proposal_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Task Proposal Detail Route
+         * @description Serve the proposals shell for proposal deep links.
+         */
+        get: operations["task_proposal_detail_route_proposals__proposal_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/schedules": {
         parameters: {
             query?: never;
@@ -2062,6 +2082,26 @@ export interface paths {
          * @description Serve the React-powered schedules page.
          */
         get: operations["task_schedules_route_schedules_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/schedules/{schedule_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Task Schedule Detail Route
+         * @description Serve the schedules shell for schedule deep links.
+         */
+        get: operations["task_schedule_detail_route_schedules__schedule_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2102,6 +2142,26 @@ export interface paths {
          * @description Redirect the legacy manifest submit route into the unified manifests page.
          */
         get: operations["task_manifest_submit_route_manifests_new_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/manifests/{manifest_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Task Manifest Detail Route
+         * @description Serve the manifests shell for manifest deep links.
+         */
+        get: operations["task_manifest_detail_route_manifests__manifest_name__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -12530,6 +12590,37 @@ export interface operations {
             };
         };
     };
+    task_proposal_detail_route_proposals__proposal_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     task_schedules_route_schedules_get: {
         parameters: {
             query?: never;
@@ -12546,6 +12637,37 @@ export interface operations {
                 };
                 content: {
                     "text/html": string;
+                };
+            };
+        };
+    };
+    task_schedule_detail_route_schedules__schedule_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                schedule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -12585,6 +12707,37 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    task_manifest_detail_route_manifests__manifest_name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                manifest_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };

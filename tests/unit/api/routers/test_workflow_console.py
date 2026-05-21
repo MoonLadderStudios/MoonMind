@@ -161,12 +161,15 @@ def test_allowed_path_helper_accepts_known_routes() -> None:
     assert _is_allowed_path("mm:01JNX7SYH6A3K1V8Q2D7E9F4AB/artifacts")
     assert _is_allowed_path("mm:01JNX7SYH6A3K1V8Q2D7E9F4AB/runs")
     assert not _is_allowed_path("new")
+    assert not _is_allowed_path("new/steps")
     assert not _is_allowed_path("manifests")
     assert not _is_allowed_path("manifests/new")
+    assert not _is_allowed_path("manifests/steps")
     assert not _is_allowed_path("schedules")
     assert not _is_allowed_path("settings")
     assert not _is_allowed_path("workers")
     assert not _is_allowed_path("secrets")
+    assert not _is_allowed_path("temporal/runs")
 
 def test_allowed_path_helper_rejects_unknown_routes() -> None:
     assert not _is_allowed_path("")
@@ -357,6 +360,18 @@ def test_data_wide_panel_on_selected_react_routes(client: TestClient) -> None:
         assert response.status_code == 200
         assert '"dataWidePanel":false' in response.text
 
+def test_top_level_detail_deep_links_render_react_shell(client: TestClient) -> None:
+    for path, entrypoint in (
+        ("/proposals/123e4567-e89b-12d3-a456-426614174000", "proposals"),
+        ("/manifests/nightly-docs", "manifests"),
+        ("/schedules/123e4567-e89b-12d3-a456-426614174000", "schedules"),
+    ):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert "moonmind-ui-boot" in response.text
+        payload = _extract_boot_payload(response.text)
+        assert payload["page"] == entrypoint
+
 def test_legacy_settings_subroutes_redirect_to_unified_settings(client: TestClient) -> None:
     workers = client.get("/workers", follow_redirects=False)
     assert workers.status_code == 307
@@ -448,6 +463,8 @@ def test_temporal_source_subroutes_return_404_until_first_class_source_exists(
     for path in (
         "/workflows/temporal/new",
         f"/workflows/temporal/{uuid4()}",
+        "/workflows/temporal/runs",
+        "/workflows/new/steps",
     ):
         response = client.get(path)
         assert response.status_code == 404
