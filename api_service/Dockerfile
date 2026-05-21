@@ -45,126 +45,11 @@ ARG GITHUB_TOKEN
 ARG NPM_TOKEN
 
 # Install Codex, Gemini, and Claude CLIs globally so binaries can be copied to the
-# runtime image without shipping npm tooling alongside the Python stack.
-# If the packages are unavailable (for example, when the registry is private or
-# the tag is missing), fall back to lightweight stub binaries so downstream
-# builds can continue to function in CI environments that only need the
-# Python stack. Run the installer inside an explicit bash heredoc so the
-# command never falls back to `/bin/sh` even if the Dockerfile shell is
-# changed later.
-RUN /bin/bash -euo pipefail <<'BASH'
-case "${CODEX_CLI_VERSION}" in
-    (""|*[!0-9A-Za-z._-]*) echo "Invalid CODEX_CLI_VERSION: ${CODEX_CLI_VERSION}" >&2; exit 1;;
-esac
-case "${GEMINI_CLI_VERSION}" in
-    (""|*[!0-9A-Za-z._-]*) echo "Invalid GEMINI_CLI_VERSION: ${GEMINI_CLI_VERSION}" >&2; exit 1;;
-esac
-case "${CLAUDE_CLI_VERSION}" in
-    (""|*[!0-9A-Za-z._-]*) echo "Invalid CLAUDE_CLI_VERSION: ${CLAUDE_CLI_VERSION}" >&2; exit 1;;
-esac
-stub_codex() {
-    mkdir -p /usr/local/lib/node_modules/@openai/codex
-    printf 'codex stub installed during fallback.\n' > /usr/local/lib/node_modules/@openai/codex/LICENSE
-    printf '%s\n' "#!/usr/bin/env bash" \
-                   "echo \"codex stub: package unavailable during image build\" >&2" \
-                   "exit 0" > /usr/local/bin/codex
-    chmod +x /usr/local/bin/codex
-}
-stub_gemini() {
-    mkdir -p /usr/local/lib/node_modules/@google/gemini-cli
-    printf 'gemini-cli stub installed during fallback; no upstream package available.\n' > /usr/local/lib/node_modules/@google/gemini-cli/LICENSE
-    printf '%s\n' "#!/usr/bin/env bash" \
-                   "echo \"gemini-cli stub: package unavailable during image build\" >&2" \
-                   "exit 0" > /usr/local/bin/gemini
-    chmod +x /usr/local/bin/gemini
-}
-stub_claude() {
-    mkdir -p /usr/local/lib/node_modules/@anthropic-ai/claude-code
-    printf 'claude-code stub installed during fallback; package unavailable.\n' > /usr/local/lib/node_modules/@anthropic-ai/claude-code/LICENSE
-    printf '%s\n' "#!/usr/bin/env bash" \
-                   "echo \"claude-code stub: package unavailable during image build\" >&2" \
-                   "exit 0" > /usr/local/bin/claude
-    chmod +x /usr/local/bin/claude
-}
-
-if [ "${INSTALL_CODEX_CLI}" != "true" ]; then
-    echo "INSTALL_CODEX_CLI=${INSTALL_CODEX_CLI}; skipping Codex install and using stubs" >&2
-    stub_codex
-    npm cache clean --force || true
-else
-    # Try installing Codex from public registry (OpenAI)
-    if ! npm install -g @openai/codex@"${CODEX_CLI_VERSION}"; then
-        echo "Warning: Failed to install @openai/codex; installing stub" >&2
-        stub_codex
-    else
-        # Keep the launcher anchored in node_modules after the multi-stage COPY.
-        # The upstream package already installs the platform-specific optional
-        # dependency, so do not duplicate its vendor payload elsewhere.
-        # Resolve the symlink target created by npm install -g so we can replace it
-        # with a durable wrapper script. Docker COPY can dereference symlinks
-        # across stages, which would move this launcher away from node_modules and
-        # break Codex's optional dependency resolution.
-        CODEX_LINK_TARGET=$(readlink -f /usr/local/bin/codex)
-        echo "Resolving codex symlink target: $CODEX_LINK_TARGET"
-        rm /usr/local/bin/codex
-        cat <<EOF > /usr/local/bin/codex
-#!/bin/sh
-exec node "$CODEX_LINK_TARGET" "\$@"
-EOF
-        chmod +x /usr/local/bin/codex
-    fi
-
-fi
-
-if [ "${INSTALL_GEMINI_CLI}" != "true" ]; then
-    echo "INSTALL_GEMINI_CLI=${INSTALL_GEMINI_CLI}; skipping Gemini CLI install and using stub" >&2
-    stub_gemini
-elif ! npm install -g @google/gemini-cli@"${GEMINI_CLI_VERSION}"; then
-    INSTALL_STATUS=$?
-    echo "Warning: Failed to install Gemini CLI (exit ${INSTALL_STATUS}); installing stub binary" >&2
-    stub_gemini
-else
-    # Resolve the symlink target created by npm install -g so we can replace it with a
-    # robust wrapper script. This is necessary because Docker COPY dereferences symlinks,
-    # breaking relative imports in the target file (e.g., imports from ../src/).
-    # By creating a wrapper that points to the absolute path in node_modules, we ensure
-    # the CLI works even after being copied to the runtime image.
-    GEMINI_LINK_TARGET=$(readlink -f /usr/local/bin/gemini)
-    echo "Resolving gemini symlink target: $GEMINI_LINK_TARGET"
-    rm /usr/local/bin/gemini
-    cat <<EOF > /usr/local/bin/gemini
-#!/bin/sh
-exec node "$GEMINI_LINK_TARGET" "\$@"
-EOF
-    chmod +x /usr/local/bin/gemini
-fi
-
-if [ "${INSTALL_CLAUDE_CLI}" != "true" ]; then
-    echo "INSTALL_CLAUDE_CLI=${INSTALL_CLAUDE_CLI}; skipping Claude CLI install and using stub" >&2
-    stub_claude
-elif ! npm install -g @anthropic-ai/claude-code@"${CLAUDE_CLI_VERSION}"; then
-    INSTALL_STATUS=$?
-    echo "Warning: Failed to install Claude CLI (exit ${INSTALL_STATUS}); installing stub binary" >&2
-    stub_claude
-fi
-
-# Ensure LICENSE files exist so COPY instructions in the next stage do not fail.
-# Some npm packages might not include a LICENSE file, or it might be named differently.
-if [ ! -f /usr/local/lib/node_modules/@openai/codex/LICENSE ]; then
-    mkdir -p /usr/local/lib/node_modules/@openai/codex
-    touch /usr/local/lib/node_modules/@openai/codex/LICENSE
-fi
-if [ ! -f /usr/local/lib/node_modules/@google/gemini-cli/LICENSE ]; then
-    mkdir -p /usr/local/lib/node_modules/@google/gemini-cli
-    touch /usr/local/lib/node_modules/@google/gemini-cli/LICENSE
-fi
-if [ ! -f /usr/local/lib/node_modules/@anthropic-ai/claude-code/LICENSE ]; then
-    mkdir -p /usr/local/lib/node_modules/@anthropic-ai/claude-code
-    touch /usr/local/lib/node_modules/@anthropic-ai/claude-code/LICENSE
-fi
-
-npm cache clean --force || true
-BASH
+# runtime image without shipping npm tooling alongside the Python stack. Keep the
+# installer in a normal script file instead of a Dockerfile heredoc so legacy
+# Docker builders without buildx execute it consistently.
+COPY api_service/docker/install_cli_tooling.sh /tmp/install_cli_tooling.sh
+RUN /bin/bash /tmp/install_cli_tooling.sh && rm -f /tmp/install_cli_tooling.sh
 
 # Fail the build early if the bundled CLIs are missing or broken. Pre-create
 # ~/.gemini so `gemini --version` can persist registry state.
@@ -187,7 +72,7 @@ RUN npm config set fund false \
     && npm config set update-notifier false
 
 COPY package.json package-lock.json postcss.config.cjs tailwind.config.cjs /build/
-RUN --mount=type=cache,target=/root/.npm npm ci --no-fund --no-audit
+RUN npm ci --no-fund --no-audit
 
 # Copy only the source files needed for the frontend build after dependencies
 # are installed so source-only edits do not invalidate npm ci.
@@ -207,8 +92,7 @@ FROM python:3.12-slim-bookworm AS python-requirements
 SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 WORKDIR /deps
 
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --disable-pip-version-check \
+RUN pip install --disable-pip-version-check \
         poetry==2.2.1 \
         poetry-plugin-export==1.10.0
 
@@ -244,14 +128,14 @@ COPY --from=tooling-builder /usr/local/lib/node_modules /usr/local/lib/node_modu
 # Docker COPY dereferences the npm/npx symlinks from the Node image. Install
 # stable wrappers that keep npm's relative module resolution anchored in the
 # copied /usr/local/lib/node_modules tree.
-RUN cat <<'EOF' >/usr/local/bin/npm
-#!/bin/sh
-exec /usr/local/bin/node /usr/local/lib/node_modules/npm/bin/npm-cli.js "$@"
-EOF
-RUN cat <<'EOF' >/usr/local/bin/npx
-#!/bin/sh
-exec /usr/local/bin/node /usr/local/lib/node_modules/npm/bin/npx-cli.js "$@"
-EOF
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    'exec /usr/local/bin/node /usr/local/lib/node_modules/npm/bin/npm-cli.js "$@"' \
+    >/usr/local/bin/npm
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    'exec /usr/local/bin/node /usr/local/lib/node_modules/npm/bin/npx-cli.js "$@"' \
+    >/usr/local/bin/npx
 RUN chmod 0755 /usr/local/bin/npm /usr/local/bin/npx
 
 RUN mkdir -p /usr/share/licenses/codex-cli /usr/share/licenses/gemini-cli /usr/share/licenses/claude-cli
@@ -310,19 +194,18 @@ RUN runuser -u app -- env -u NODE_OPTIONS -u npm_config_node_options \
 # approvals and managed sandbox defaults. The template is merged into the
 # worker's home directory at runtime.
 RUN install -d -o root -g app -m 0750 /etc/codex
-COPY --chown=root:app --chmod=0640 api_service/config.template.toml /etc/codex/config.toml
+COPY api_service/config.template.toml /etc/codex/config.toml
+RUN chown root:app /etc/codex/config.toml && chmod 0640 /etc/codex/config.toml
 
 COPY --from=python-requirements /deps/requirements-main.txt /tmp/requirements-main.txt
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --disable-pip-version-check -r /tmp/requirements-main.txt \
+RUN pip install --disable-pip-version-check -r /tmp/requirements-main.txt \
     && rm -f /tmp/requirements-main.txt
 
 COPY pyproject.toml /app/pyproject.toml
 COPY poetry.lock /app/poetry.lock
 COPY README.md /app/README.md
 
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --disable-pip-version-check readmeai~=0.6.3 --no-deps
+RUN pip install --disable-pip-version-check readmeai~=0.6.3 --no-deps
 
 # Copy source code AFTER installing locked dependencies so code changes only
 # invalidate the lightweight project install.
@@ -330,8 +213,7 @@ COPY moonmind /app/moonmind/
 COPY api_service /app/api_service/
 COPY config /app/config/
 COPY .agents /app/.agents/
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --disable-pip-version-check --no-deps .
+RUN pip install --disable-pip-version-check --no-deps .
 
 # Copy pre-built frontend assets from the frontend-builder stage
 COPY --from=frontend-builder /build/api_service/static/workflow_console/ /app/api_service/static/workflow_console/
@@ -343,8 +225,7 @@ RUN chmod +x /app/api_service/entrypoint.sh && \
 FROM runtime-base AS test-runtime
 ARG INSTALL_TEST_DEPS=true
 COPY --from=python-requirements /deps/requirements-tests.txt /tmp/requirements-tests.txt
-RUN --mount=type=cache,target=/root/.cache/pip \
-    if [ "${INSTALL_TEST_DEPS}" = "true" ]; then \
+RUN if [ "${INSTALL_TEST_DEPS}" = "true" ]; then \
         pip install --disable-pip-version-check -r /tmp/requirements-tests.txt; \
     fi && \
     rm -f /tmp/requirements-tests.txt
