@@ -144,6 +144,16 @@ describe("Task Create Step Type authoring", () => {
                   required: true,
                 },
               ],
+              inputSchema: {
+                type: "object",
+                required: ["feature_request"],
+                properties: {
+                  feature_request: {
+                    type: "string",
+                    title: "Feature Request",
+                  },
+                },
+              },
             }),
           } as Response);
         }

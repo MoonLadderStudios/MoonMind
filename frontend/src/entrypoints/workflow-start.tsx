@@ -2460,13 +2460,20 @@ function isVisiblePresetInput(
   presetSlug: string | undefined,
   definition: TaskTemplateInputDefinition,
 ): boolean {
-  if (isFeatureRequestInputKey(definition.name)) {
+  return isVisiblePresetInputName(presetSlug, definition.name);
+}
+
+function isVisiblePresetInputName(
+  presetSlug: string | undefined,
+  rawName: string,
+): boolean {
+  if (isFeatureRequestInputKey(rawName)) {
     return false;
   }
   const hiddenKeys = presetSlug
     ? HIDDEN_PRESET_INPUT_KEYS[presetSlug]
     : undefined;
-  if (hiddenKeys?.has(normalizeTemplateInputKey(definition.name))) {
+  if (hiddenKeys?.has(normalizeTemplateInputKey(rawName))) {
     return false;
   }
   return true;
@@ -2651,12 +2658,22 @@ function schemaContractHasFields(detail: Pick<TaskTemplateDetail, "inputSchema">
 function resolveSchemaCapabilityValues(
   detail: Pick<TaskTemplateDetail, "inputSchema" | "defaults">,
   explicitValues: Record<string, unknown>,
+  featureRequestOverride?: string,
 ): Record<string, unknown> {
   const values: Record<string, unknown> = {};
   const required = schemaRequired(detail.inputSchema);
   for (const [name, rawSchema] of Object.entries(schemaProperties(detail.inputSchema))) {
     const fieldSchema = recordValue(rawSchema);
-    const explicit = explicitValues[name];
+    const instructionFeatureRequest = String(featureRequestOverride || "").trim();
+    const rawExplicit = explicitValues[name];
+    const explicit =
+      isFeatureRequestInputKey(name) && String(rawExplicit ?? "").trim() === "" && instructionFeatureRequest
+        ? instructionFeatureRequest
+        : rawExplicit !== undefined
+          ? rawExplicit
+        : isFeatureRequestInputKey(name) && instructionFeatureRequest
+          ? instructionFeatureRequest
+          : undefined;
     const fallback = safeCapabilityDefault(detail.defaults, name);
     if (explicit !== undefined) {
       if (
@@ -2677,9 +2694,10 @@ function resolveSchemaCapabilityValues(
 function resolvedPresetInputValues(
   detail: Pick<TaskTemplateDetail, "inputSchema" | "defaults">,
   explicitValues: Record<string, unknown>,
+  featureRequestOverride?: string,
 ): Record<string, unknown> {
   return schemaContractHasFields(detail)
-    ? resolveSchemaCapabilityValues(detail, explicitValues)
+    ? resolveSchemaCapabilityValues(detail, explicitValues, featureRequestOverride)
     : explicitValues;
 }
 
@@ -6116,7 +6134,11 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     const schemaDriven = schemaContractHasFields(detail);
     const { values: inputs, assumptions } = schemaDriven
       ? {
-          values: resolveSchemaCapabilityValues(detail, inputValues),
+          values: resolveSchemaCapabilityValues(
+            detail,
+            inputValues,
+            featureRequestOverride,
+          ),
           assumptions: [] as string[],
         }
       : resolveTemplateInputs(
@@ -6327,7 +6349,11 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       if (schemaContractHasFields(detail)) {
         const validationErrors = validateSchemaCapabilityValues(
           detail,
-          resolveSchemaCapabilityValues(detail, step.presetInputValues),
+          resolveSchemaCapabilityValues(
+            detail,
+            step.presetInputValues,
+            step.instructions,
+          ),
         );
         if (Object.keys(validationErrors).length > 0) {
           updateStepPresetIfCurrent(localId, preset.key, {
@@ -6340,7 +6366,11 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       const expansion = await expandPresetForDraft({
         preset,
         detail,
-        inputValues: resolvedPresetInputValues(detail, step.presetInputValues),
+        inputValues: resolvedPresetInputValues(
+          detail,
+          step.presetInputValues,
+          step.instructions,
+        ),
         featureRequestOverride: step.instructions,
       });
       if (
@@ -6766,7 +6796,11 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         if (schemaContractHasFields(detail)) {
           const validationErrors = validateSchemaCapabilityValues(
             detail,
-            resolveSchemaCapabilityValues(detail, step.presetInputValues),
+            resolveSchemaCapabilityValues(
+              detail,
+              step.presetInputValues,
+              step.instructions,
+            ),
           );
           if (Object.keys(validationErrors).length > 0) {
             const message =
@@ -6786,7 +6820,11 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         const expansion = await expandPresetForDraft({
           preset,
           detail,
-          inputValues: resolvedPresetInputValues(detail, step.presetInputValues),
+          inputValues: resolvedPresetInputValues(
+            detail,
+            step.presetInputValues,
+            step.instructions,
+          ),
           featureRequestOverride: step.instructions,
           submitIntent,
         });
@@ -8401,7 +8439,11 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
               const visiblePresetSchemaFields = schemaContractHasFields(
                 step.presetDetail,
               )
-                ? Object.entries(schemaProperties(step.presetDetail?.inputSchema))
+                ? Object.entries(
+                    schemaProperties(step.presetDetail?.inputSchema),
+                  ).filter(([name]) =>
+                    isVisiblePresetInputName(step.presetDetail?.slug, name),
+                  )
                 : [];
               const selectedSkillDetail =
                 skillsQuery.data?.detailsById[step.skillId.trim()] || null;
