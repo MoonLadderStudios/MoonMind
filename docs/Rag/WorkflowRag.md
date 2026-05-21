@@ -394,6 +394,16 @@ Workflow RAG should expose simple, high-value levers for retrieval amount and sc
 - **filters**
   - repo/workspace/run/job/tenant metadata used to constrain the search space.
 
+  Session-issued RetrievalGateway requests accept the following exact scope filter
+  keys and forward them unchanged into retrieval execution:
+  `repo`, `repository`, `workspace`, `workspace_id`, `run`, `run_id`, `job`,
+  `job_id`, `tenant`, `tenant_id`, `task_run_id`, and `taskRunId`.
+  At least one supported scope filter is required. Unsupported filter keys fail
+  validation before retrieval runs. Automatic retrieval currently supplies
+  available `job_id`, `run_id`, `repo`, and `repository` metadata; workspace and
+  tenant-equivalent filters are applied when supplied by the session or by
+  deployment-specific indexed metadata.
+
 ### 11.2 Budget knobs
 
 - **token budget**
