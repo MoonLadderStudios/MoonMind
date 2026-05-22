@@ -362,6 +362,106 @@ async def test_launch_seeds_github_git_auth_before_initial_clone(
     assert "$GITHUB_TOKEN" in clone_env["GIT_CONFIG_VALUE_1"]
     assert token not in clone_env["GIT_CONFIG_VALUE_1"]
 
+
+@pytest.mark.asyncio
+async def test_repository_workspace_is_stable_across_child_run_ids(
+    tmp_path, monkeypatch
+):
+    store_root = tmp_path / "store"
+
+    class _FakeProcess:
+        pid = 780
+        returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def _fake_create_subprocess_exec(*_args, **_kwargs):
+        return _FakeProcess()
+
+    clone_commands: list[tuple[object, ...]] = []
+
+    async def _fake_run_checked_command(self, *cmd, **kwargs):
+        if cmd[:2] == ("git", "clone"):
+            clone_commands.append(cmd)
+            repo_path = Path(cmd[-1])
+            (repo_path / ".git").mkdir(parents=True)
+            (repo_path / "specs").mkdir()
+            (repo_path / "specs" / "from-first-step.txt").write_text(
+                "created by specify",
+                encoding="utf-8",
+            )
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.ManagedRuntimeLauncher._run_checked_command",
+        _fake_run_checked_command,
+    )
+
+    store = ManagedRunStore(store_root)
+    launcher = ManagedRuntimeLauncher(store)
+    profile = _make_profile(command_template=["echo", "hello"])
+    request = _make_request(
+        correlation_id="mm:6641526e-f65b-45a4-bfd9-5b8c14530206",
+        workspace_spec={
+            "repository": "MoonLadderStudios/Tactics",
+            "startingBranch": "main",
+        },
+    )
+
+    _record1, process1, _cleanup1, _deferred_cleanup1 = await launcher.launch(
+        run_id="child-run-specify",
+        request=request,
+        profile=profile,
+    )
+    await process1.wait()
+    _record2, process2, _cleanup2, _deferred_cleanup2 = await launcher.launch(
+        run_id="child-run-plan",
+        request=request,
+        profile=profile,
+    )
+    await process2.wait()
+
+    expected_repo = (
+        store_root.parent
+        / "workspaces"
+        / "mm:6641526e-f65b-45a4-bfd9-5b8c14530206"
+        / "repo"
+    )
+    assert len(clone_commands) == 1
+    assert Path(clone_commands[0][-1]) == expected_repo
+    assert (expected_repo / "specs" / "from-first-step.txt").read_text(
+        encoding="utf-8"
+    ) == "created by specify"
+
+
+def test_repository_workspace_ownership_root_uses_shared_workspace_key(
+    tmp_path,
+) -> None:
+    store = ManagedRunStore(tmp_path / "store")
+    launcher = ManagedRuntimeLauncher(store)
+    repo_path = (
+        tmp_path
+        / "workspaces"
+        / "mm:6641526e-f65b-45a4-bfd9-5b8c14530206"
+        / "repo"
+    )
+    repo_path.mkdir(parents=True)
+
+    ownership_root = launcher._resolve_workspace_ownership_root(
+        resolved_workspace_path=str(repo_path),
+        run_id="child-run-plan",
+    )
+
+    assert ownership_root == str(repo_path.parent.resolve())
+
+
 def test_source_uses_github_https_includes_www_variant() -> None:
     assert ManagedRuntimeLauncher._source_uses_github_https(
         "https://www.github.com/MoonLadderStudios/Tactics.git"
