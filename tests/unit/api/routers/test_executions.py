@@ -8248,7 +8248,7 @@ def test_describe_execution_surfaces_failed_step_execution_recovery_phase(
                 "resumed": True,
                 "sourceWorkflowId": "mm:source",
                 "sourceRunId": "run-source",
-                "failedResumePhase": "failed_step_execution",
+                "failedRecoveryPhase": "failed_step_execution",
             }
         },
     }
@@ -8274,7 +8274,7 @@ def test_describe_execution_surfaces_failed_step_execution_recovery_phase(
     recovery = response.json()["targetDiagnostics"]["recovery"]
     assert recovery["sourceWorkflowId"] == "mm:source"
     assert recovery["sourceRunId"] == "run-source"
-    assert recovery["failedResumePhase"] == "failed_step_execution"
+    assert recovery["failedRecoveryPhase"] == "failed_step_execution"
 
 
 def test_describe_execution_prefers_diagnostics_failed_phase_over_disabled_reason(
@@ -8291,7 +8291,7 @@ def test_describe_execution_prefers_diagnostics_failed_phase_over_disabled_reaso
                 "resumed": True,
                 "sourceWorkflowId": "mm:source",
                 "sourceRunId": "run-source",
-                "failedResumePhase": "failed_step_execution",
+                "failedRecoveryPhase": "failed_step_execution",
             }
         },
     }
@@ -8318,7 +8318,7 @@ def test_describe_execution_prefers_diagnostics_failed_phase_over_disabled_reaso
     body = response.json()
     assert body["resume"]["disabledReason"] == "recovery_checkpoint_missing"
     assert (
-        body["targetDiagnostics"]["recovery"]["failedResumePhase"]
+        body["targetDiagnostics"]["recovery"]["failedRecoveryPhase"]
         == "failed_step_execution"
     )
 

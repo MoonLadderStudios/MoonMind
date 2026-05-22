@@ -4805,8 +4805,8 @@ export interface components {
             checkpointRef?: string | null;
             /** Preservedsteps */
             preservedSteps?: components["schemas"]["ExecutionTargetDiagnosticsPreservedStepModel"][];
-            /** Failedresumephase */
-            failedResumePhase?: ("checkpoint_validation" | "workspace_restoration" | "preserved_output_injection" | "failed_step_execution") | null;
+            /** Failedrecoveryphase */
+            failedRecoveryPhase?: ("checkpoint_validation" | "workspace_restoration" | "preserved_output_injection" | "failed_step_execution") | null;
         };
         /**
          * GitHubCredentialStatus

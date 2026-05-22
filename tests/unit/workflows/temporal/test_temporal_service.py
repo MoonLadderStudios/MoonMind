@@ -1911,7 +1911,7 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-old",
                     },
-                    "recover": {
+                    "resume": {
                         "kind": "recover_from_failed_step",
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-old",
@@ -2001,7 +2001,7 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-old",
                     },
-                    "recover": {
+                    "resume": {
                         "kind": "recover_from_failed_step",
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-old",
@@ -2392,7 +2392,7 @@ async def test_failed_step_recovery_creates_linked_execution_with_source_identit
             "sourceWorkflowId": created.workflow_id,
             "sourceRunId": created.run_id,
         }
-        assert task_payload["recover"] == {
+        assert task_payload["resume"] == {
             "kind": "recover_from_failed_step",
             "sourceWorkflowId": created.workflow_id,
             "sourceRunId": created.run_id,
@@ -2404,6 +2404,55 @@ async def test_failed_step_recovery_creates_linked_execution_with_source_identit
             "planDigest": "sha256:plan",
         }
         assert "taskRunId" not in resumed.parameters
+
+
+@pytest.mark.asyncio
+async def test_failed_step_recovery_accepts_legacy_checkpoint_memo_key(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="recover source",
+            input_artifact_ref="artifact://input/source",
+            plan_artifact_ref="artifact://plan/source",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "task": {"title": "recovery source", "instructions": "Original"},
+            },
+            idempotency_key=None,
+        )
+        created.state = MoonMindWorkflowState.FAILED
+        created.close_status = TemporalExecutionCloseStatus.FAILED
+        created.memo = {
+            **created.memo,
+            "task_input_snapshot_ref": "artifact://snapshot/source",
+            "resume_checkpoint_ref": "artifact://checkpoint/source",
+        }
+        await session.commit()
+
+        result = await service.create_failed_step_recovery_execution(
+            created,
+            recovery_checkpoint_ref=None,
+            idempotency_key="recover-legacy-key",
+            checkpoint_payload=_valid_recovery_checkpoint_payload(
+                workflow_id=created.workflow_id,
+                run_id=created.run_id,
+                snapshot_ref="artifact://snapshot/source",
+            ),
+        )
+
+        resumed = await service.describe_execution(result["execution"]["workflowId"])
+        assert result["applied"] == "created_resumed_execution"
+        assert (
+            resumed.parameters["task"]["resume"]["recoveryCheckpointRef"]
+            == "artifact://checkpoint/source"
+        )
 
 
 @pytest.mark.asyncio
@@ -3706,7 +3755,7 @@ async def test_update_inputs_major_reconfiguration_records_distinct_continue_as_
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-old",
                     },
-                    "recover": {
+                    "resume": {
                         "kind": "recover_from_failed_step",
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-old",
@@ -3776,7 +3825,7 @@ async def test_update_inputs_continue_as_new_preserves_recovery_provenance_for_r
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-old",
                     },
-                    "recover": {
+                    "resume": {
                         "kind": "recover_from_failed_step",
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-old",
@@ -3817,7 +3866,7 @@ async def test_update_inputs_continue_as_new_preserves_recovery_provenance_for_r
         assert refreshed.parameters["task"]["recovery"]["kind"] == (
             "recover_from_failed_step"
         )
-        assert refreshed.parameters["task"]["recover"]["recoveryCheckpointRef"] == (
+        assert refreshed.parameters["task"]["resume"]["recoveryCheckpointRef"] == (
             "artifact://checkpoint/old"
         )
 

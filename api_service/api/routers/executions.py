@@ -2106,17 +2106,17 @@ def _recovery_checkpoint_ref_from_record(record) -> str | None:
     memo = dict(getattr(record, "memo", None) or {})
     search_attributes = dict(getattr(record, "search_attributes", None) or {})
     params = dict(getattr(record, "parameters", None) or {})
-    resume_block = params.get("recoverySource")
-    if not isinstance(resume_block, Mapping):
-        resume_block = params.get("recovery_source")
-    if not isinstance(resume_block, Mapping):
-        resume_block = {}
+    recovery_block = params.get("recoverySource")
+    if not isinstance(recovery_block, Mapping):
+        recovery_block = params.get("recovery_source")
+    if not isinstance(recovery_block, Mapping):
+        recovery_block = {}
     for value in (
         memo.get("recovery_checkpoint_ref"),
         memo.get("recoveryCheckpointRef"),
         search_attributes.get("mm_recovery_checkpoint_ref"),
-        resume_block.get("recoveryCheckpointRef"),
-        resume_block.get("recovery_checkpoint_ref"),
+        recovery_block.get("recoveryCheckpointRef"),
+        recovery_block.get("recovery_checkpoint_ref"),
     ):
         candidate = str(value or "").strip()
         if candidate:
@@ -2126,16 +2126,16 @@ def _recovery_checkpoint_ref_from_record(record) -> str | None:
 def _recovery_failed_step_id_from_record(record) -> str | None:
     memo = dict(getattr(record, "memo", None) or {})
     params = dict(getattr(record, "parameters", None) or {})
-    resume_block = params.get("recoverySource")
-    if not isinstance(resume_block, Mapping):
-        resume_block = params.get("recovery_source")
-    if not isinstance(resume_block, Mapping):
-        resume_block = {}
+    recovery_block = params.get("recoverySource")
+    if not isinstance(recovery_block, Mapping):
+        recovery_block = params.get("recovery_source")
+    if not isinstance(recovery_block, Mapping):
+        recovery_block = {}
     for value in (
         memo.get("resume_failed_step_id"),
         memo.get("resumeFailedStepId"),
-        resume_block.get("failedStepId"),
-        resume_block.get("failed_step_id"),
+        recovery_block.get("failedStepId"),
+        recovery_block.get("failed_step_id"),
     ):
         candidate = str(value or "").strip()
         if candidate:
@@ -2144,12 +2144,12 @@ def _recovery_failed_step_id_from_record(record) -> str | None:
 
 def _recovery_source_block_from_record(record) -> Mapping[str, Any]:
     params = dict(getattr(record, "parameters", None) or {})
-    resume_block = params.get("recoverySource")
-    if not isinstance(resume_block, Mapping):
-        resume_block = params.get("recovery_source")
-    if not isinstance(resume_block, Mapping):
+    recovery_block = params.get("recoverySource")
+    if not isinstance(recovery_block, Mapping):
+        recovery_block = params.get("recovery_source")
+    if not isinstance(recovery_block, Mapping):
         return {}
-    return resume_block
+    return recovery_block
 
 def _first_nonempty_text(*values: Any) -> str | None:
     for value in values:
@@ -2161,15 +2161,15 @@ def _first_nonempty_text(*values: Any) -> str | None:
 def _recovery_completed_step_refs_from_record(record) -> list[str]:
     memo = dict(getattr(record, "memo", None) or {})
     search_attributes = dict(getattr(record, "search_attributes", None) or {})
-    resume_block = _recovery_source_block_from_record(record)
+    recovery_block = _recovery_source_block_from_record(record)
     candidates = (
         memo.get("resume_completed_step_refs"),
         memo.get("resumeCompletedStepRefs"),
         memo.get("resume_preserved_step_refs"),
         memo.get("resumePreservedStepRefs"),
         search_attributes.get("mm_recovery_completed_step_refs"),
-        resume_block.get("completedStepRefs"),
-        resume_block.get("completed_step_refs"),
+        recovery_block.get("completedStepRefs"),
+        recovery_block.get("completed_step_refs"),
     )
     refs: list[str] = []
     for value in candidates:
@@ -2182,7 +2182,7 @@ def _recovery_completed_step_refs_from_record(record) -> list[str]:
         refs.extend(part for part in parts if part)
     if refs:
         return refs
-    preserved_steps = resume_block.get("preservedSteps") or resume_block.get(
+    preserved_steps = recovery_block.get("preservedSteps") or recovery_block.get(
         "preserved_steps"
     )
     if not isinstance(preserved_steps, list):
@@ -2202,8 +2202,8 @@ def _recovery_completed_step_refs_from_record(record) -> list[str]:
 def _recovery_workspace_checkpoint_ref_from_record(record) -> str | None:
     memo = dict(getattr(record, "memo", None) or {})
     search_attributes = dict(getattr(record, "search_attributes", None) or {})
-    resume_block = _recovery_source_block_from_record(record)
-    workspace = resume_block.get("recoveryWorkspace") or resume_block.get(
+    recovery_block = _recovery_source_block_from_record(record)
+    workspace = recovery_block.get("recoveryWorkspace") or recovery_block.get(
         "recovery_workspace"
     )
     if not isinstance(workspace, Mapping):
@@ -2215,8 +2215,8 @@ def _recovery_workspace_checkpoint_ref_from_record(record) -> str | None:
         memo.get("recoveryWorkspaceRef"),
         search_attributes.get("mm_recovery_workspace_checkpoint_ref"),
         search_attributes.get("mm_recovery_workspace_ref"),
-        resume_block.get("recoveryWorkspaceCheckpointRef"),
-        resume_block.get("recovery_workspace_checkpoint_ref"),
+        recovery_block.get("recoveryWorkspaceCheckpointRef"),
+        recovery_block.get("recovery_workspace_checkpoint_ref"),
         workspace.get("checkpointRef"),
         workspace.get("checkpoint_ref"),
         workspace.get("ref"),
@@ -2225,7 +2225,7 @@ def _recovery_workspace_checkpoint_ref_from_record(record) -> str | None:
 def _recovery_plan_identity_from_record(record) -> str | None:
     memo = dict(getattr(record, "memo", None) or {})
     search_attributes = dict(getattr(record, "search_attributes", None) or {})
-    resume_block = _recovery_source_block_from_record(record)
+    recovery_block = _recovery_source_block_from_record(record)
     return _first_nonempty_text(
         getattr(record, "plan_ref", None),
         memo.get("resume_plan_ref"),
@@ -2236,23 +2236,23 @@ def _recovery_plan_identity_from_record(record) -> str | None:
         memo.get("plan_digest"),
         search_attributes.get("mm_recovery_plan_ref"),
         search_attributes.get("mm_recovery_plan_digest"),
-        resume_block.get("sourcePlanRef"),
-        resume_block.get("source_plan_ref"),
-        resume_block.get("sourcePlanDigest"),
-        resume_block.get("source_plan_digest"),
+        recovery_block.get("sourcePlanRef"),
+        recovery_block.get("source_plan_ref"),
+        recovery_block.get("sourcePlanDigest"),
+        recovery_block.get("source_plan_digest"),
     )
 
 
 def _recovery_evidence_marked_stale(record) -> bool:
     memo = dict(getattr(record, "memo", None) or {})
     search_attributes = dict(getattr(record, "search_attributes", None) or {})
-    resume_block = dict(_recovery_source_block_from_record(record) or {})
+    recovery_block = dict(_recovery_source_block_from_record(record) or {})
     for value in (
         memo.get("resume_evidence_stale"),
         memo.get("resumeEvidenceStale"),
         search_attributes.get("mm_recovery_evidence_stale"),
-        resume_block.get("resumeEvidenceStale"),
-        resume_block.get("resume_evidence_stale"),
+        recovery_block.get("resumeEvidenceStale"),
+        recovery_block.get("resume_evidence_stale"),
     ):
         if isinstance(value, bool):
             if value:
@@ -2707,7 +2707,7 @@ def _build_target_diagnostics(
     ) or _mapping_str_value(diagnostics_recovery, "sourceRunId", "source_run_id")
     failed_recovery_phase = _normalize_failed_recovery_phase(
         _mapping_str_value(
-            diagnostics_recovery, "failedResumePhase", "failed_recovery_phase"
+            diagnostics_recovery, "failedRecoveryPhase", "failed_recovery_phase"
         )
     ) or _failed_recovery_phase(
         resume_summary.disabled_reason if resume_summary else None
@@ -2743,7 +2743,7 @@ def _build_target_diagnostics(
             "sourceRunId": source_run_id,
             "checkpointRef": checkpoint_ref,
             "preservedSteps": preserved_steps,
-            "failedResumePhase": failed_recovery_phase,
+            "failedRecoveryPhase": failed_recovery_phase,
         }
 
     degraded_reason = str(

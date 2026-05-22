@@ -2639,7 +2639,7 @@ class TemporalExecutionService:
         if isinstance(task_payload, Mapping):
             task_params = dict(task_payload)
             task_params.pop("recovery", None)
-            task_params.pop("recover", None)
+            task_params.pop("resume", None)
             if task_params:
                 params["task"] = task_params
             else:
@@ -2759,6 +2759,8 @@ class TemporalExecutionService:
         canonical_checkpoint_ref = (
             str(memo.get("recovery_checkpoint_ref") or "").strip()
             or str(memo.get("recoveryCheckpointRef") or "").strip()
+            or str(memo.get("resume_checkpoint_ref") or "").strip()
+            or str(memo.get("resumeCheckpointRef") or "").strip()
         )
         if not canonical_checkpoint_ref:
             raise TemporalExecutionRecoveryCheckpointError(
@@ -2861,7 +2863,7 @@ class TemporalExecutionService:
             recover_ref["planRef"] = plan_ref
         if checkpoint.plan_digest:
             recover_ref["planDigest"] = checkpoint.plan_digest
-        task_params["recover"] = recover_ref
+        task_params["resume"] = recover_ref
         params["task"] = task_params
         title = (
             str(task_params.get("title") or "").strip()

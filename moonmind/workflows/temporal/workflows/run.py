@@ -270,7 +270,8 @@ RUN_TERMINAL_STATE_ACTIVITY_PATCH = "run-terminal-state-activity-v1"
 RUN_PAUSE_SAFE_BOUNDARIES_PATCH = "run-pause-safe-boundaries-v1"
 # Replay-stable patch id for stamping mm_started_at when real work begins.
 RUN_REAL_STARTED_AT_PATCH = "run-real-started-at-v1"
-RUN_STEP_EXECUTION_MANIFEST_PATCH = "run-step-execution-manifest-v1"
+RUN_STEP_EXECUTION_MANIFEST_PATCH = "run-step-attempt-manifest-v1"
+RUN_STEP_EXECUTION_NAMING_PATCH = "run-step-execution-naming-v1"
 RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH = (
     "run-already-implemented-jira-completion-v1"
 )
@@ -4053,8 +4054,11 @@ class MoonMindRunWorkflow:
                                 current_step_execution > 1
                                 and workflow.patched(RUN_STEP_EXECUTION_MANIFEST_PATCH)
                             ):
+                                step_execution_label = "attempt"
+                                if workflow.patched(RUN_STEP_EXECUTION_NAMING_PATCH):
+                                    step_execution_label = "execution"
                                 child_workflow_id = (
-                                    f"{child_workflow_id}:attempt{current_step_execution}"
+                                    f"{child_workflow_id}:{step_execution_label}{current_step_execution}"
                                 )
                             if system_retries > 0:
                                 child_workflow_id = (
@@ -7750,11 +7754,15 @@ class MoonMindRunWorkflow:
                 if isinstance(metadata_payload.get("moonmind"), dict)
                 else {}
             )
-            moonmind_payload["stepLedger"] = {
+            step_ledger_payload = {
                 "logicalStepId": node_id,
-                "attempt": step_execution,
                 "scope": "step",
             }
+            if workflow.patched(RUN_STEP_EXECUTION_NAMING_PATCH):
+                step_ledger_payload["executionOrdinal"] = step_execution
+            else:
+                step_ledger_payload["attempt"] = step_execution
+            moonmind_payload["stepLedger"] = step_ledger_payload
             metadata_payload["moonmind"] = moonmind_payload
             parameters["metadata"] = metadata_payload
 

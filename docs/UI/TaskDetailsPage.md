@@ -375,7 +375,7 @@ Destructive actions are visually separated and require confirmation.
 
 The page follows this desired action matrix.
 
-| Task status | Remediate | Edit task | Rerun | Recovery failed step | Cancel | Pause | Lifecycle resume |
+| Task status | Remediate | Edit task | Rerun | Failed step recovery | Cancel | Pause | Lifecycle resume |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | Pending | No | Yes, if inputs can be updated | No | No | Yes | No | No |
 | Scheduled | No | Yes, if inputs can be updated | No | No | Yes | No | No |

@@ -724,7 +724,7 @@ Suggested Activity families for implementation:
 
 | Activity | Role | Typical queue |
 | --- | --- | --- |
-| `step_execution.create_manifest` | Create an step execution manifest artifact shell or deterministic ref. | `mm.activity.artifacts` |
+| `step_execution.create_manifest` | Create a step execution manifest artifact shell or deterministic ref. | `mm.activity.artifacts` |
 | `step_execution.write_manifest` | Write/update immutable or append-only attempt evidence. | `mm.activity.artifacts` |
 | `step_execution.record_evidence` | Link runtime outputs, checks, and side-effect refs to attempt evidence. | `mm.activity.artifacts` |
 | `step_checkpoint.create` | Create checkpoint evidence at a boundary. | `mm.activity.sandbox` or `mm.activity.artifacts` depending on content |

@@ -105,7 +105,7 @@ def test_get_worker_pause_snapshot_returns_system_metrics_and_audit(
     }
 
 
-def test_post_pause_and_recovery_return_snapshots_and_call_subsystem(
+def test_post_pause_and_resume_return_snapshots_and_call_subsystem(
     system_operations_client: tuple[TestClient, FakeTemporalService],
 ) -> None:
     client, temporal = system_operations_client

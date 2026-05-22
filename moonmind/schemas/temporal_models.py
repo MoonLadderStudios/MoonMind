@@ -1937,7 +1937,7 @@ class ExecutionTargetDiagnosticsRecoveryModel(BaseModel):
         "workspace_restoration",
         "preserved_output_injection",
         "failed_step_execution",
-    ] | None = Field(None, alias="failedResumePhase")
+    ] | None = Field(None, alias="failedRecoveryPhase")
 
 class ExecutionTargetDiagnosticsModel(BaseModel):
     """Target-aware task diagnostics surfaced on execution detail."""
