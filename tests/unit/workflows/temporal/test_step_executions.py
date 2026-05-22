@@ -2,77 +2,77 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from moonmind.schemas.step_attempt_models import STEP_ATTEMPT_CONTENT_TYPE
-from moonmind.workflows.temporal.step_attempts import (
-    build_step_attempt_manifest_payload,
+from moonmind.schemas.step_execution_models import STEP_EXECUTION_CONTENT_TYPE
+from moonmind.workflows.temporal.step_executions import (
+    build_step_execution_manifest_payload,
     git_effect_metadata,
     logical_step_success_allowed,
     side_effect_record,
-    step_attempt_id,
-    step_attempt_operation_idempotency_key,
+    step_execution_id,
+    step_execution_operation_idempotency_key,
     validate_workspace_policy_launch,
     workspace_policy_metadata,
 )
 
 
-def test_step_attempt_id_uses_run_scoped_identity() -> None:
+def test_step_execution_id_uses_run_scoped_identity() -> None:
     assert (
-        step_attempt_id(
+        step_execution_id(
             workflow_id="wf-1",
             run_id="run-1",
             logical_step_id="implement",
-            attempt=2,
+            execution_ordinal=2,
         )
-        == "wf-1:run-1:implement:attempt:2"
+        == "wf-1:run-1:implement:execution:2"
     )
 
 
-def test_operation_idempotency_key_includes_attempt_and_operation() -> None:
-    key = step_attempt_operation_idempotency_key(
+def test_operation_idempotency_key_includes_execution_ordinal_and_operation() -> None:
+    key = step_execution_operation_idempotency_key(
         workflow_id="wf-1",
         run_id="run-1",
         logical_step_id="implement",
-        attempt=2,
+        execution_ordinal=2,
         operation="execute",
     )
 
-    assert key == "wf-1:run-1:implement:attempt:2:execute"
-    assert key != step_attempt_operation_idempotency_key(
+    assert key == "wf-1:run-1:implement:execution:2:execute"
+    assert key != step_execution_operation_idempotency_key(
         workflow_id="wf-1",
         run_id="run-1",
         logical_step_id="implement",
-        attempt=3,
+        execution_ordinal=3,
         operation="execute",
     )
-    assert key != step_attempt_operation_idempotency_key(
+    assert key != step_execution_operation_idempotency_key(
         workflow_id="wf-1",
         run_id="run-1",
         logical_step_id="implement",
-        attempt=2,
+        execution_ordinal=2,
         operation="manifest_write",
     )
 
 
 def test_manifest_payload_is_compact_boundary_contract() -> None:
     now = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
-    payload = build_step_attempt_manifest_payload(
+    payload = build_step_execution_manifest_payload(
         workflow_id="wf-1",
         run_id="run-1",
         logical_step_id="implement",
-        attempt=1,
+        execution_ordinal=1,
         reason="initial_execution",
         status="running",
         updated_at=now,
         summary="Executing plan step",
         execution={
             "kind": "skill",
-            "idempotencyKey": "wf-1:run-1:implement:attempt:1:execute",
+            "idempotencyKey": "wf-1:run-1:implement:execution:1:execute",
         },
         input_refs=["artifact://input"],
     )
 
-    assert payload["contentType"] == STEP_ATTEMPT_CONTENT_TYPE
-    assert payload["stepAttemptId"] == "wf-1:run-1:implement:attempt:1"
+    assert payload["contentType"] == STEP_EXECUTION_CONTENT_TYPE
+    assert payload["stepExecutionId"] == "wf-1:run-1:implement:execution:1"
     assert payload["input"] == {"preparedInputRefs": ["artifact://input"]}
     assert payload["execution"]["kind"] == "skill"
     assert payload["outputs"] == {"summary": "Executing plan step"}
@@ -80,12 +80,12 @@ def test_manifest_payload_is_compact_boundary_contract() -> None:
 
 def test_workspace_policy_metadata_rejects_missing_required_checkpoint() -> None:
     decision = validate_workspace_policy_launch(
-        policy="apply_previous_diff_to_clean_baseline",
+        policy="apply_previous_execution_diff_to_clean_baseline",
     )
 
     assert decision["allowed"] is False
     assert decision["reason"] == "missing_required_checkpoint_evidence"
-    assert decision["workspace"]["policy"] == "apply_previous_diff_to_clean_baseline"
+    assert decision["workspace"]["policy"] == "apply_previous_execution_diff_to_clean_baseline"
     assert decision["workspace"]["requiredCheckpointKinds"] == ["git_patch"]
     assert decision["workspace"]["evidenceAccepted"] is False
 
@@ -149,15 +149,15 @@ def test_side_effect_records_gate_external_effects() -> None:
         effect_class="external_idempotent",
         operation="jira.add_comment",
         target="MM-717",
-        idempotency_key="wf:run:step:attempt:comment",
+        idempotency_key="wf:run:step:execution:comment",
     )
-    assert idempotent["idempotencyKey"] == "wf:run:step:attempt:comment"
+    assert idempotent["idempotencyKey"] == "wf:run:step:execution:comment"
 
     jira_transition = side_effect_record(
         effect_class="external_idempotent",
         operation="jira.transition_issue",
         target="MM-717",
-        idempotency_key="wf:run:step:attempt:jira-transition",
+        idempotency_key="wf:run:step:execution:jira-transition",
         workflow_state_accepted=False,
     )
     assert jira_transition["disposition"] == "blocked"
@@ -167,7 +167,7 @@ def test_side_effect_records_gate_external_effects() -> None:
         effect_kind="cleanup",
         operation="deployment.cleanup",
         target="deploy-1",
-        idempotency_key="wf:run:step:attempt:cleanup",
+        idempotency_key="wf:run:step:execution:cleanup",
         workflow_state_accepted=True,
     )
     assert cleanup["kind"] == "cleanup"
@@ -203,16 +203,16 @@ def test_side_effect_records_sanitize_diagnostics_and_gate_workspace_writes() ->
 
 def test_manifest_payload_embeds_policy_git_effect_and_side_effect_records() -> None:
     now = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
-    payload = build_step_attempt_manifest_payload(
+    payload = build_step_execution_manifest_payload(
         workflow_id="wf-1",
         run_id="run-1",
         logical_step_id="implement",
-        attempt=2,
+        execution_ordinal=2,
         reason="tests_failed",
         status="failed",
         updated_at=now,
         workspace=workspace_policy_metadata(
-            policy="continue_from_previous_attempt",
+            policy="continue_from_previous_execution",
             checkpoint_ref="artifact://checkpoint",
             checkpoint_valid=True,
         ),
@@ -231,6 +231,6 @@ def test_manifest_payload_embeds_policy_git_effect_and_side_effect_records() -> 
         ],
     )
 
-    assert payload["workspace"]["policy"] == "continue_from_previous_attempt"
+    assert payload["workspace"]["policy"] == "continue_from_previous_execution"
     assert payload["workspace"]["gitEffect"]["disposition"] == "candidate"
     assert payload["sideEffects"]["records"][0]["disposition"] == "blocked"

@@ -45,10 +45,10 @@ class SelfHealStrategy(str, Enum):
     OPERATOR_REQUEST = "operator_request"
 
 class StepTimeoutExceeded(SelfHealError):
-    """Raised when a step attempt exceeds the configured wall-clock timeout."""
+    """Raised when a step execution exceeds the configured wall-clock timeout."""
 
 class StepIdleTimeoutExceeded(SelfHealError):
-    """Raised when a step attempt emits no output for the configured idle window."""
+    """Raised when a step execution emits no output for the configured idle window."""
 
 class NoProgressThresholdExceeded(SelfHealError):
     """Raised when repeated attempts yield the same outcome and diff hash."""
@@ -148,7 +148,7 @@ def build_failure_signature(
     return FailureSignature(scrubbed)
 
 @dataclass(slots=True)
-class StepAttemptState:
+class StepExecutionState:
     """Mutable bookkeeping for one step's attempts."""
 
     step_id: str
@@ -198,7 +198,7 @@ class StepAttemptState:
         self.last_diff_hash = None
 
 @dataclass(slots=True)
-class StepAttemptSnapshot:
+class StepExecutionSnapshot:
     """Snapshot persisted for artifacts and telemetry events."""
 
     step_id: str
@@ -239,7 +239,7 @@ class SelfHealController:
     ) -> None:
         self._config = config
         self._job_state = SelfHealJobState()
-        self._active_step: StepAttemptState | None = None
+        self._active_step: StepExecutionState | None = None
         self._secret_redactor = secret_redactor or SecretRedactor.from_environ(
             placeholder="[REDACTED]"
         )
@@ -249,7 +249,7 @@ class SelfHealController:
         return self._config
 
     @property
-    def active_step(self) -> StepAttemptState | None:
+    def active_step(self) -> StepExecutionState | None:
         return self._active_step
 
     def can_hard_reset(self) -> bool:
@@ -260,9 +260,9 @@ class SelfHealController:
     def begin_step(self, *, step_id: str, step_index: int) -> None:
         """Start tracking a new step."""
 
-        self._active_step = StepAttemptState(step_id=step_id, step_index=step_index)
+        self._active_step = StepExecutionState(step_id=step_id, step_index=step_index)
 
-    def new_attempt(self) -> StepAttemptSnapshot:
+    def new_attempt(self) -> StepExecutionSnapshot:
         """Reserve a new attempt for the active step."""
 
         if self._active_step is None:
@@ -270,7 +270,7 @@ class SelfHealController:
         attempt_number = self._active_step.next_attempt(
             max_attempts=self._config.step_max_attempts
         )
-        return StepAttemptSnapshot(
+        return StepExecutionSnapshot(
             step_id=self._active_step.step_id,
             step_index=self._active_step.step_index,
             attempt=attempt_number,

@@ -43,7 +43,7 @@ def _checkpoint_payload(*, workflow_id: str, run_id: str) -> dict[str, object]:
         "failedStep": {
             "logicalStepId": "implement",
             "order": 2,
-            "attempt": 1,
+            "executionOrdinal": 1,
             "title": "Implement",
         },
         "preservedSteps": [
@@ -51,7 +51,7 @@ def _checkpoint_payload(*, workflow_id: str, run_id: str) -> dict[str, object]:
                 "logicalStepId": "plan",
                 "order": 1,
                 "status": "succeeded",
-                "sourceAttempt": 1,
+                "sourceExecutionOrdinal": 1,
                 "artifacts": {"outputSummary": "artifact://summary"},
                 "stateCheckpointRef": "artifact://workspace/before-plan",
             }
@@ -113,16 +113,16 @@ async def test_accepted_resume_carries_canonical_recovery_and_resume_refs(
 
     task_payload = resumed.parameters["task"]
     assert task_payload["recovery"] == {
-        "kind": "resume_from_failed_step",
+        "kind": "recover_from_failed_step",
         "sourceWorkflowId": created.workflow_id,
         "sourceRunId": created.run_id,
     }
     assert task_payload["resume"] == {
-        "kind": "resume_from_failed_step",
+        "kind": "recover_from_failed_step",
         "sourceWorkflowId": created.workflow_id,
         "sourceRunId": created.run_id,
         "failedStepId": "implement",
-        "failedStepAttempt": 1,
+        "failedStepExecutionOrdinal": 1,
         "resumeCheckpointRef": "artifact://checkpoint/source",
         "taskInputSnapshotRef": "artifact://snapshot/source",
         "planRef": "artifact://plan/source",
@@ -157,12 +157,12 @@ async def test_generic_rerun_does_not_carry_resume_reference_fields(
                         "title": "Resume source",
                         "instructions": "Original",
                         "recovery": {
-                            "kind": "resume_from_failed_step",
+                            "kind": "recover_from_failed_step",
                             "sourceWorkflowId": "mm:old",
                             "sourceRunId": "run-old",
                         },
                         "resume": {
-                            "kind": "resume_from_failed_step",
+                            "kind": "recover_from_failed_step",
                             "sourceWorkflowId": "mm:old",
                             "sourceRunId": "run-old",
                             "failedStepId": "implement",
@@ -236,12 +236,12 @@ async def test_edited_full_retry_does_not_carry_resume_reference_fields(
                         "title": "Resume source",
                         "instructions": "Original",
                         "recovery": {
-                            "kind": "resume_from_failed_step",
+                            "kind": "recover_from_failed_step",
                             "sourceWorkflowId": "mm:old",
                             "sourceRunId": "run-old",
                         },
                         "resume": {
-                            "kind": "resume_from_failed_step",
+                            "kind": "recover_from_failed_step",
                             "sourceWorkflowId": "mm:old",
                             "sourceRunId": "run-old",
                             "failedStepId": "implement",

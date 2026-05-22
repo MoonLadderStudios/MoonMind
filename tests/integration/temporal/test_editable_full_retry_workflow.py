@@ -58,12 +58,12 @@ async def test_changed_edited_full_retry_creates_fresh_execution_with_provenance
                         "title": "Original failed task",
                         "instructions": "Original instructions.",
                         "recovery": {
-                            "kind": "resume_from_failed_step",
+                            "kind": "recover_from_failed_step",
                             "sourceWorkflowId": "mm:old",
                             "sourceRunId": "run-old",
                         },
                         "resume": {
-                            "kind": "resume_from_failed_step",
+                            "kind": "recover_from_failed_step",
                             "sourceWorkflowId": "mm:old",
                             "sourceRunId": "run-old",
                             "failedStepId": "implement",

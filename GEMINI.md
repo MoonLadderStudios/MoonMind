@@ -262,6 +262,8 @@ Key diagnostics:
 - Existing `settings_overrides`, `settings_audit_events`, `managed_secrets`, `managed_agent_provider_profiles` schemas. No new persistent storage. (359-mm713-settings-guardrail-suite)
 - Python 3.12; TypeScript/React + FastAPI, Jinja2 templates, React, TanStack Query, Vite (001-workflow-console-routes)
 - Existing execution/artifact stores only; no new persistence (001-workflow-console-routes)
+- Python 3.12; TypeScript/React for Mission Control visible copy + Pydantic v2, FastAPI, Temporal Python SDK, pytest, React, Vitest (001-step-execution-contracts)
+- Existing Temporal artifact store and workflow history; no new persistent storage (001-step-execution-contracts)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers

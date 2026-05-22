@@ -429,7 +429,7 @@ const TargetDiagnosticsSchema = z
               .object({
                 logicalStepId: z.string(),
                 title: z.string().nullable().optional(),
-                sourceAttempt: z.number().nullable().optional(),
+                sourceExecutionOrdinal: z.number().nullable().optional(),
                 sourceWorkflowId: z.string().nullable().optional(),
                 sourceRunId: z.string().nullable().optional(),
               })
@@ -916,7 +916,7 @@ const StepLedgerWorkloadSchema = z
   .object({
     taskRunId: z.string().nullable().optional(),
     stepId: z.string().nullable().optional(),
-    attempt: z.number().nullable().optional(),
+    executionOrdinal: z.number().nullable().optional(),
     toolName: z.string().nullable().optional(),
     profileId: z.string().nullable().optional(),
     imageRef: z.string().nullable().optional(),
@@ -947,7 +947,7 @@ const StepLedgerRowSchema = z
     status: z.string(),
     waitingReason: z.string().nullable().optional(),
     attentionRequired: z.boolean().optional(),
-    attempt: z.number().default(0),
+    executionOrdinal: z.number().default(0),
     startedAt: z.string().nullable().optional(),
     updatedAt: z.string().nullable().optional(),
     summary: z.string().nullable().optional(),
@@ -959,7 +959,7 @@ const StepLedgerRowSchema = z
         workflowId: z.string(),
         runId: z.string(),
         logicalStepId: z.string(),
-        attempt: z.number(),
+        executionOrdinal: z.number(),
       })
       .passthrough()
       .nullable()
@@ -2451,7 +2451,7 @@ function StepMetadataList({
       <li><strong>Logical step id:</strong> <code className="text-xs break-all">{row.logicalStepId}</code></li>
       <li><strong>Run id:</strong> <code className="text-xs break-all">{runId}</code></li>
       <li><strong>Tool:</strong> <code className="text-xs break-all">{formatStepToolLabel(row.tool)}</code></li>
-      <li><strong>Attempt:</strong> {row.attempt}</li>
+      <li><strong>Execution ordinal:</strong> {row.executionOrdinal}</li>
       <li><strong>Depends on:</strong> {row.dependsOn.length > 0 ? row.dependsOn.join(', ') : 'None'}</li>
       <li><strong>Child workflow:</strong> {row.refs.childWorkflowId ? <code className="text-xs break-all">{row.refs.childWorkflowId}</code> : '—'}</li>
       <li><strong>Child run:</strong> {row.refs.childRunId ? <code className="text-xs break-all">{row.refs.childRunId}</code> : '—'}</li>
@@ -2631,7 +2631,7 @@ function StepLedgerRowCard({
             <span className="step-tl-right">
               <code className="step-tl-tool">{formatStepToolLabel(row.tool)}</code>
               <span {...executionStatusPillProps(row.status)}>{formatStatusLabel(row.status)}</span>
-              {row.attempt > 1 ? <span className="step-attempt-pill">Attempt {row.attempt}</span> : null}
+              {row.executionOrdinal > 1 ? <span className="step-execution-pill">Execution {row.executionOrdinal}</span> : null}
               <span className={`step-tl-chevron${expanded ? ' step-tl-chevron-open' : ''}`} aria-hidden="true">›</span>
             </span>
           </div>
@@ -2655,7 +2655,7 @@ function StepLedgerRowCard({
               {row.preservedFrom ? (
                 <p className="small">
                   Preserved from source run <code>{row.preservedFrom.workflowId}</code> run{' '}
-                  <code>{row.preservedFrom.runId}</code> attempt {row.preservedFrom.attempt}.
+                  <code>{row.preservedFrom.runId}</code> execution {row.preservedFrom.executionOrdinal}.
                 </p>
               ) : null}
               {lastError ? <p className="small step-tl-error">Last error: {lastError}</p> : null}
@@ -3462,7 +3462,7 @@ function TargetDiagnosticsPanel({
                 {recovery.preservedSteps.map((step) => (
                   <li key={`${step.logicalStepId}-${step.sourceRunId || ''}`}>
                     <strong>{step.title || step.logicalStepId}</strong>
-                    {step.sourceAttempt ? <span className="small"> attempt {step.sourceAttempt}</span> : null}
+                    {step.sourceExecutionOrdinal ? <span className="small"> execution {step.sourceExecutionOrdinal}</span> : null}
                   </li>
                 ))}
               </ul>

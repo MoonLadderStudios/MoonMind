@@ -361,7 +361,7 @@ All spans and logs that relate to execution should carry, when available:
 - `temporal.workflow_id`
 - `temporal.run_id`
 - `moonmind.logical_step_id` when the event is step-scoped
-- `moonmind.step_attempt` when the event is step-scoped
+- `moonmind.step_execution` when the event is step-scoped
 
 ### 10.2 Required activity attributes
 

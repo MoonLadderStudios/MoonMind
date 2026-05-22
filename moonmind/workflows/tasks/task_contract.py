@@ -1493,7 +1493,7 @@ class TaskStepSpec(BaseModel):
 
 # --- MM-638: Recovery / Resume contract types ---
 
-TaskRecoveryKind = Literal["exact_full_rerun", "edited_full_retry", "resume_from_failed_step"]
+TaskRecoveryKind = Literal["exact_full_rerun", "edited_full_retry", "recover_from_failed_step"]
 
 
 class TaskRecoveryProvenance(BaseModel):
@@ -1528,13 +1528,15 @@ class ResumeFromFailedStepRef(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
-    kind: Literal["resume_from_failed_step"] = Field(
-        "resume_from_failed_step", alias="kind"
+    kind: Literal["recover_from_failed_step"] = Field(
+        "recover_from_failed_step", alias="kind"
     )
     source_workflow_id: str = Field(..., alias="sourceWorkflowId")
     source_run_id: str = Field(..., alias="sourceRunId")
     failed_step_id: str = Field(..., alias="failedStepId")
-    failed_step_attempt: int | None = Field(None, alias="failedStepAttempt")
+    failed_step_execution_ordinal: int | None = Field(
+        None, alias="failedStepExecutionOrdinal"
+    )
     resume_checkpoint_ref: str = Field(..., alias="resumeCheckpointRef")
     task_input_snapshot_ref: str = Field(..., alias="taskInputSnapshotRef")
     plan_ref: str | None = Field(None, alias="planRef")
@@ -1677,22 +1679,22 @@ class TaskExecutionSpec(BaseModel):
         recovery = self.recovery
         resume = self.resume
 
-        if recovery is not None and recovery.kind == "resume_from_failed_step":
+        if recovery is not None and recovery.kind == "recover_from_failed_step":
             if resume is None:
                 raise TaskContractError(
-                    "task.resume is required when task.recovery.kind is 'resume_from_failed_step'"
+                    "task.resume is required when task.recovery.kind is 'recover_from_failed_step'"
                 )
 
         if resume is not None:
             if recovery is None:
                 raise TaskContractError(
-                    "task.recovery must be present with kind 'resume_from_failed_step' "
+                    "task.recovery must be present with kind 'recover_from_failed_step' "
                     "when task.resume is provided"
                 )
-            if recovery.kind != "resume_from_failed_step":
+            if recovery.kind != "recover_from_failed_step":
                 raise TaskContractError(
                     "task.resume is only valid when task.recovery.kind is "
-                    f"'resume_from_failed_step'; got {recovery.kind!r}"
+                    f"'recover_from_failed_step'; got {recovery.kind!r}"
                 )
             if recovery.source_workflow_id != resume.source_workflow_id:
                 raise TaskContractError(

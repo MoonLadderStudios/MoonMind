@@ -1907,12 +1907,12 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(
                 "task": {
                     "instructions": "Original task",
                     "recovery": {
-                        "kind": "resume_from_failed_step",
+                        "kind": "recover_from_failed_step",
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-old",
                     },
                     "resume": {
-                        "kind": "resume_from_failed_step",
+                        "kind": "recover_from_failed_step",
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-old",
                         "failedStepId": "implement",
@@ -1997,12 +1997,12 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
                 "task": {
                     "instructions": "Original task",
                     "recovery": {
-                        "kind": "resume_from_failed_step",
+                        "kind": "recover_from_failed_step",
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-old",
                     },
                     "resume": {
-                        "kind": "resume_from_failed_step",
+                        "kind": "recover_from_failed_step",
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-old",
                         "failedStepId": "implement",
@@ -2194,7 +2194,7 @@ def _valid_resume_checkpoint_payload(
         "failedStep": {
             "logicalStepId": "implement",
             "order": 2,
-            "attempt": 1,
+            "executionOrdinal": 1,
             "title": "Implement",
         },
         "preservedSteps": [
@@ -2202,7 +2202,7 @@ def _valid_resume_checkpoint_payload(
                 "logicalStepId": "plan",
                 "order": 1,
                 "status": "succeeded",
-                "sourceAttempt": 1,
+                "sourceExecutionOrdinal": 1,
                 "artifacts": {"outputSummary": "artifact://summary"},
                 "stateCheckpointRef": "artifact://workspace/before-plan",
             }
@@ -2221,7 +2221,7 @@ def test_resume_checkpoint_model_requires_plan_identity() -> None:
                 "failedStep": {
                     "logicalStepId": "implement",
                     "order": 2,
-                    "attempt": 1,
+                    "executionOrdinal": 1,
                 },
                 "resumeWorkspace": {"branch": "feature", "commit": "abc123"},
             }
@@ -2239,7 +2239,7 @@ def test_resume_checkpoint_model_requires_workspace_checkpoint() -> None:
                 "failedStep": {
                     "logicalStepId": "implement",
                     "order": 2,
-                    "attempt": 1,
+                    "executionOrdinal": 1,
                 },
             }
         )
@@ -2256,14 +2256,14 @@ def test_resume_checkpoint_model_requires_preserved_step_state_checkpoint() -> N
                 "failedStep": {
                     "logicalStepId": "implement",
                     "order": 2,
-                    "attempt": 1,
+                    "executionOrdinal": 1,
                 },
                 "preservedSteps": [
                     {
                         "logicalStepId": "plan",
                         "order": 1,
                         "status": "succeeded",
-                        "sourceAttempt": 1,
+                        "sourceExecutionOrdinal": 1,
                         "artifacts": {"outputSummary": "artifact://summary"},
                     }
                 ],
@@ -2282,7 +2282,7 @@ def test_resume_checkpoint_model_accepts_complete_evidence() -> None:
             "failedStep": {
                 "logicalStepId": "implement",
                 "order": 2,
-                "attempt": 1,
+                "executionOrdinal": 1,
             },
             "resumeWorkspace": {"branch": "feature", "commit": "abc123"},
         }
@@ -2388,16 +2388,16 @@ async def test_failed_step_resume_creates_linked_execution_with_source_identity(
         ] == "plan"
         task_payload = resumed.parameters["task"]
         assert task_payload["recovery"] == {
-            "kind": "resume_from_failed_step",
+            "kind": "recover_from_failed_step",
             "sourceWorkflowId": created.workflow_id,
             "sourceRunId": created.run_id,
         }
         assert task_payload["resume"] == {
-            "kind": "resume_from_failed_step",
+            "kind": "recover_from_failed_step",
             "sourceWorkflowId": created.workflow_id,
             "sourceRunId": created.run_id,
             "failedStepId": "implement",
-            "failedStepAttempt": 1,
+            "failedStepExecutionOrdinal": 1,
             "resumeCheckpointRef": "artifact://checkpoint/source",
             "taskInputSnapshotRef": "artifact://snapshot/source",
             "planRef": "artifact://plan/source",
@@ -3702,12 +3702,12 @@ async def test_update_inputs_major_reconfiguration_records_distinct_continue_as_
                 "task": {
                     "instructions": "Original task",
                     "recovery": {
-                        "kind": "resume_from_failed_step",
+                        "kind": "recover_from_failed_step",
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-old",
                     },
                     "resume": {
-                        "kind": "resume_from_failed_step",
+                        "kind": "recover_from_failed_step",
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-old",
                         "failedStepId": "implement",
@@ -3772,12 +3772,12 @@ async def test_update_inputs_continue_as_new_preserves_resume_provenance_for_rol
                 "task": {
                     "instructions": "Original task",
                     "recovery": {
-                        "kind": "resume_from_failed_step",
+                        "kind": "recover_from_failed_step",
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-old",
                     },
                     "resume": {
-                        "kind": "resume_from_failed_step",
+                        "kind": "recover_from_failed_step",
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-old",
                         "failedStepId": "implement",
@@ -3815,7 +3815,7 @@ async def test_update_inputs_continue_as_new_preserves_resume_provenance_for_rol
         assert refreshed.parameters["preservedSteps"] == [{"id": "step-1"}]
         assert refreshed.parameters["completedSteps"] == [{"id": "step-0"}]
         assert refreshed.parameters["task"]["recovery"]["kind"] == (
-            "resume_from_failed_step"
+            "recover_from_failed_step"
         )
         assert refreshed.parameters["task"]["resume"]["resumeCheckpointRef"] == (
             "artifact://checkpoint/old"

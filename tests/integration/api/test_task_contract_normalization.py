@@ -5,8 +5,8 @@ compose networking required) and verify the executions API normalization path
 for canonical task-typed submissions.
 
 Acceptance scenarios covered:
-  SC-001  Well-formed resume_from_failed_step payload accepted; fields preserved
-  SC-002  resume_from_failed_step without resume block → TaskContractError
+  SC-001  Well-formed recover_from_failed_step payload accepted; fields preserved
+  SC-002  recover_from_failed_step without resume block → TaskContractError
   SC-003  resume block with wrong recovery.kind → TaskContractError
   SC-006  task.git.targetBranch stripped as active authored branch input
 """
@@ -28,7 +28,7 @@ from tests.helpers.step_type_payloads import (
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
 _VALID_RESUME_BLOCK = {
-    "kind": "resume_from_failed_step",
+    "kind": "recover_from_failed_step",
     "sourceWorkflowId": "mm:abc123",
     "sourceRunId": "run-1",
     "failedStepId": "step-3",
@@ -47,15 +47,15 @@ def _task_payload(task_overrides: dict) -> dict:
 
 
 # T017 — SC-001
-def test_sc001_well_formed_resume_from_failed_step_accepted() -> None:
-    """MM-638 SC-001: Complete resume_from_failed_step payload is accepted;
+def test_sc001_well_formed_recover_from_failed_step_accepted() -> None:
+    """MM-638 SC-001: Complete recover_from_failed_step payload is accepted;
     all recovery and resume fields are preserved in the normalized output."""
     result = build_canonical_task_view(
         job_type="task",
         payload=_task_payload(
             {
                 "recovery": {
-                    "kind": "resume_from_failed_step",
+                    "kind": "recover_from_failed_step",
                     "sourceWorkflowId": "mm:abc123",
                     "sourceRunId": "run-1",
                 },
@@ -65,7 +65,7 @@ def test_sc001_well_formed_resume_from_failed_step_accepted() -> None:
     )
 
     task = result["task"]
-    assert task["recovery"]["kind"] == "resume_from_failed_step"
+    assert task["recovery"]["kind"] == "recover_from_failed_step"
     assert task["recovery"]["sourceWorkflowId"] == "mm:abc123"
     assert task["recovery"]["sourceRunId"] == "run-1"
     assert task["resume"]["failedStepId"] == "step-3"
@@ -74,8 +74,8 @@ def test_sc001_well_formed_resume_from_failed_step_accepted() -> None:
 
 
 # T018 — SC-002
-def test_sc002_resume_from_failed_step_without_resume_block_raises() -> None:
-    """MM-638 SC-002: resume_from_failed_step without a resume block raises
+def test_sc002_recover_from_failed_step_without_resume_block_raises() -> None:
+    """MM-638 SC-002: recover_from_failed_step without a resume block raises
     TaskContractError with an operator-readable message identifying the missing field."""
     with pytest.raises(TaskContractError, match="task.resume is required"):
         build_canonical_task_view(
@@ -83,7 +83,7 @@ def test_sc002_resume_from_failed_step_without_resume_block_raises() -> None:
             payload=_task_payload(
                 {
                     "recovery": {
-                        "kind": "resume_from_failed_step",
+                        "kind": "recover_from_failed_step",
                         "sourceWorkflowId": "mm:abc123",
                         "sourceRunId": "run-1",
                     },
@@ -94,9 +94,9 @@ def test_sc002_resume_from_failed_step_without_resume_block_raises() -> None:
 
 # T019 — SC-003
 def test_sc003_resume_block_with_wrong_recovery_kind_raises() -> None:
-    """MM-638 SC-003: resume block paired with recovery.kind != resume_from_failed_step
+    """MM-638 SC-003: resume block paired with recovery.kind != recover_from_failed_step
     raises TaskContractError preventing ambiguous recovery inference."""
-    with pytest.raises(TaskContractError, match="resume_from_failed_step"):
+    with pytest.raises(TaskContractError, match="recover_from_failed_step"):
         build_canonical_task_view(
             job_type="task",
             payload=_task_payload(

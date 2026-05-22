@@ -44,7 +44,7 @@ def _resume_source(**overrides: object) -> dict[str, object]:
         "sourceTaskInputSnapshotRef": "artifact://snapshot/source",
         "sourcePlanDigest": "sha256:source-plan",
         "failedStepId": "implement",
-        "failedStepAttempt": 1,
+        "failedStepExecutionOrdinal": 1,
         "resumeCheckpointRef": "artifact://resume/checkpoint",
         "resumeWorkspace": {
             "checkpointRef": "artifact://workspace/before-implement",
@@ -53,7 +53,7 @@ def _resume_source(**overrides: object) -> dict[str, object]:
             {
                 "logicalStepId": "prepare",
                 "status": "succeeded",
-                "sourceAttempt": 1,
+                "sourceExecutionOrdinal": 1,
                 "artifacts": {
                     "outputSummary": "artifact://prepare-summary",
                     "outputPrimary": "artifact://prepare-output",
@@ -106,7 +106,7 @@ def test_materialize_preserved_steps_marks_source_provenance_without_new_attempt
                 "logicalStepId": "plan",
                 "order": 1,
                 "status": "succeeded",
-                "sourceAttempt": 2,
+                "sourceExecutionOrdinal": 2,
                 "artifacts": {"outputSummary": "artifact://summary"},
                 "stateCheckpointRef": "artifact://workspace/before-plan",
             }
@@ -116,13 +116,13 @@ def test_materialize_preserved_steps_marks_source_provenance_without_new_attempt
     refresh_ready_steps(rows, updated_at=now)
 
     assert rows[0]["status"] == "succeeded"
-    assert rows[0]["attempt"] == 0
+    assert rows[0]["executionOrdinal"] == 0
     assert rows[0]["summary"] == "Preserved from source run."
     assert rows[0]["preservedFrom"] == {
         "workflowId": "mm:source",
         "runId": "run-source",
         "logicalStepId": "plan",
-        "attempt": 2,
+        "executionOrdinal": 2,
     }
     assert rows[0]["artifacts"]["outputSummary"] == "artifact://summary"
     assert rows[0]["stateCheckpointRef"] == "artifact://workspace/before-plan"
@@ -150,7 +150,7 @@ def test_materialize_preserved_steps_keeps_outputs_for_downstream_steps() -> Non
                 "logicalStepId": "prepare",
                 "order": 1,
                 "status": "succeeded",
-                "sourceAttempt": 1,
+                "sourceExecutionOrdinal": 1,
                 "artifacts": {
                     "outputSummary": "artifact://prepare-summary",
                     "outputPrimary": "artifact://prepare-output",
@@ -162,12 +162,12 @@ def test_materialize_preserved_steps_keeps_outputs_for_downstream_steps() -> Non
     )
     refresh_ready_steps(rows, updated_at=now)
 
-    assert rows[0]["attempt"] == 0
+    assert rows[0]["executionOrdinal"] == 0
     assert rows[0]["preservedFrom"] == {
         "workflowId": "mm:source",
         "runId": "run-source",
         "logicalStepId": "prepare",
-        "attempt": 1,
+        "executionOrdinal": 1,
     }
     assert rows[0]["artifacts"]["outputSummary"] == "artifact://prepare-summary"
     assert rows[0]["artifacts"]["outputPrimary"] == "artifact://prepare-output"
@@ -205,8 +205,8 @@ def test_parent_owned_checkpoint_evidence_survives_child_runtime_projection() ->
         "childWorkflowId": "wf-child",
         "childRunId": "run-child",
         "taskRunId": None,
-        "latestAttemptManifestRef": None,
-        "attemptManifestRefs": [],
+        "latestExecutionManifestRef": None,
+        "executionManifestRefs": [],
     }
     assert rows[0]["stateCheckpointRef"] == "artifact://child-checkpoint"
     assert rows[0]["resumePreservation"] == {
@@ -286,7 +286,7 @@ def test_resume_source_rejects_preserved_step_without_recoverable_output_ref() -
             {
                 "logicalStepId": "prepare",
                 "status": "succeeded",
-                "sourceAttempt": 1,
+                "sourceExecutionOrdinal": 1,
                 "artifacts": {},
                 "stateCheckpointRef": "artifact://workspace/prepare",
             }
@@ -352,34 +352,34 @@ async def test_resume_attempt_manifest_preserves_source_lineage(
     )
 
     workflow._mark_step_running("implement", updated_at=now, summary="Resuming")
-    await workflow._record_step_attempt_manifest_start(
+    await workflow._record_step_execution_manifest_start(
         "implement",
         updated_at=now,
-        reason="resume_from_failed_step",
+        reason="recover_from_failed_step",
     )
 
     manifest = writes[0]["payload"]
     assert manifest["workflowId"] == "wf-resume"
     assert manifest["runId"] == "run-resume"
-    assert manifest["attempt"] == 1
+    assert manifest["executionOrdinal"] == 1
     assert manifest["lineage"] == {
         "sourceWorkflowId": "mm:source",
         "sourceRunId": "run-source",
         "sourceLogicalStepId": "implement",
-        "sourceAttempt": 1,
-        "relationship": "resume_from_failed_step",
-        "lineageAttemptOrdinal": 2,
+        "sourceExecutionOrdinal": 1,
+        "relationship": "recover_from_failed_step",
+        "lineageExecutionOrdinal": 2,
     }
     assert manifest["workspace"]["policy"] == "start_from_last_passed_commit"
     assert manifest["workspace"]["checkpointRef"] == (
         "artifact://workspace/before-implement"
     )
     assert manifest["workspace"]["evidenceAccepted"] is True
-    assert manifest["workspace"]["sourceAttempt"] == {
+    assert manifest["workspace"]["sourceExecutionOrdinal"] == {
         "workflowId": "mm:source",
         "runId": "run-source",
         "logicalStepId": "implement",
-        "attempt": 1,
+        "executionOrdinal": 1,
     }
 
 
@@ -447,11 +447,11 @@ def test_preserved_outputs_are_available_to_failed_step_dependencies() -> None:
         "prepare": {
             "outputSummary": "artifact://prepare-summary",
             "outputPrimary": "artifact://prepare-output",
-            "producingAttempt": {
+            "producingExecution": {
                 "workflowId": "mm:source",
                 "runId": "run-source",
                 "logicalStepId": "prepare",
-                "attempt": 1,
+                "executionOrdinal": 1,
             },
         }
     }

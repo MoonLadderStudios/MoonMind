@@ -293,7 +293,7 @@ interface TaskPayload {
   dependsOn?: string[];
 }
 
-type TaskRecoveryKind = "exact_full_rerun" | "edited_full_retry" | "resume_from_failed_step";
+type TaskRecoveryKind = "exact_full_rerun" | "edited_full_retry" | "recover_from_failed_step";
 
 interface TaskRecoveryProvenance {
   kind: TaskRecoveryKind;
@@ -304,11 +304,11 @@ interface TaskRecoveryProvenance {
 }
 
 interface ResumeFromFailedStepRef {
-  kind: "resume_from_failed_step";
+  kind: "recover_from_failed_step";
   sourceWorkflowId: string;
   sourceRunId: string;
   failedStepId: string;
-  failedStepAttempt?: number;
+  failedStepExecutionOrdinal?: number;
   resumeCheckpointRef: string;
   taskInputSnapshotRef: string;
   planRef?: string;
@@ -336,7 +336,7 @@ Rules:
 - `Publish Mode` remains part of task submission semantics; only its Create page placement changes
 - the execution-facing payload is resolved before workers consume it; `authoredPresets` and `source` metadata are for reconstruction, audit, diagnostics, and safe rerun semantics
 - `task.recovery.kind === "edited_full_retry"` or `"exact_full_rerun"` means the new execution starts from the beginning
-- `task.resume.kind === "resume_from_failed_step"` means the new execution must restore completed progress from `resumeCheckpointRef` and start at `failedStepId`
+- `task.resume.kind === "recover_from_failed_step"` means the new execution must restore completed progress from `resumeCheckpointRef` and start at `failedStepId`
 - resume provenance must include both `sourceWorkflowId` and `sourceRunId` so a resume is pinned to the exact source run and cannot drift when the logical execution later changes
 - resume checkpoint refs are execution-state refs, not editable authoring fields
 
@@ -433,7 +433,7 @@ Representative resume checkpoint artifact:
       "logicalStepId": "apply-patch",
       "order": 3,
       "status": "succeeded",
-      "sourceAttempt": 1,
+      "sourceExecutionOrdinal": 1,
       "outputRefs": {
         "outputSummary": "art_step_summary",
         "outputPrimary": "art_step_output"
@@ -514,7 +514,7 @@ Rules:
 
 ### 8.6 Resume execution responsibilities
 
-When a new execution starts with `task.resume.kind === "resume_from_failed_step"`, `MoonMind.Run` owns:
+When a new execution starts with `task.resume.kind === "recover_from_failed_step"`, `MoonMind.Run` owns:
 
 - loading and validating the resume checkpoint
 - verifying the checkpoint source `workflowId`, `runId`, task snapshot, and plan identity

@@ -2818,7 +2818,7 @@ class TemporalExecutionService:
                     "Resume checkpoint plan identity does not match source execution."
                 )
         failed_step_id = checkpoint.failed_step.logical_step_id
-        failed_step_attempt = checkpoint.failed_step.attempt
+        failed_step_execution_ordinal = checkpoint.failed_step.execution_ordinal
         if not failed_step_id:
             raise TemporalExecutionResumeCheckpointError(
                 "Resume failed step id is required."
@@ -2834,7 +2834,7 @@ class TemporalExecutionService:
             sourcePlanRef=checkpoint.plan_ref or source_plan_ref,
             sourcePlanDigest=checkpoint.plan_digest,
             failedStepId=failed_step_id,
-            failedStepAttempt=failed_step_attempt,
+            failedStepExecutionOrdinal=failed_step_execution_ordinal,
             resumeCheckpointRef=checkpoint_ref,
             resumeWorkspace=checkpoint.resume_workspace,
             preservedSteps=checkpoint.preserved_steps,
@@ -2843,16 +2843,16 @@ class TemporalExecutionService:
         task_payload = params.get("task")
         task_params = dict(task_payload) if isinstance(task_payload, Mapping) else {}
         task_params["recovery"] = {
-            "kind": "resume_from_failed_step",
+            "kind": "recover_from_failed_step",
             "sourceWorkflowId": record.workflow_id,
             "sourceRunId": source_run_id,
         }
         resume_ref = {
-            "kind": "resume_from_failed_step",
+            "kind": "recover_from_failed_step",
             "sourceWorkflowId": record.workflow_id,
             "sourceRunId": source_run_id,
             "failedStepId": failed_step_id,
-            "failedStepAttempt": failed_step_attempt,
+            "failedStepExecutionOrdinal": failed_step_execution_ordinal,
             "resumeCheckpointRef": checkpoint_ref,
             "taskInputSnapshotRef": source_snapshot_ref,
         }
