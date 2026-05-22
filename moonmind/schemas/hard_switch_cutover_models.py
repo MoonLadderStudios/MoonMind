@@ -151,6 +151,7 @@ class HardSwitchCutoverRecord(BaseModel):
 
     release_name: str = Field(..., alias="releaseName", min_length=1)
     coordinated_release: bool = Field(..., alias="coordinatedRelease")
+    environments: list[str] = Field(default_factory=list)
     affected_contracts: AffectedContracts = Field(..., alias="affectedContracts")
     worker_routing: WorkerRoutingBoundary = Field(..., alias="workerRouting")
     environment_decisions: list[CutoverEnvironmentDecision] = Field(
@@ -165,6 +166,11 @@ class HardSwitchCutoverRecord(BaseModel):
     @classmethod
     def _strip_release_name(cls, value: str) -> str:
         return value.strip()
+
+    @field_validator("environments")
+    @classmethod
+    def _strip_environments(cls, value: list[str]) -> list[str]:
+        return [environment.strip() for environment in value if environment.strip()]
 
 
 class CutoverValidationFinding(BaseModel):

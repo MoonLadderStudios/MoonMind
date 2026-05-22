@@ -101,6 +101,14 @@ def _validate_environment_decisions(
             source="DESIGN-REQ-021",
         )
 
+    if not record.environments:
+        yield _finding(
+            code="CUTOVER_ENVIRONMENT_SET_MISSING",
+            subject="environments",
+            message="The hard switch must declare the environments being cut over.",
+            source="DESIGN-REQ-021",
+        )
+
     if not record.environment_decisions:
         yield _finding(
             code="CUTOVER_ENVIRONMENT_DECISION_MISSING",
@@ -109,6 +117,21 @@ def _validate_environment_decisions(
             source="DESIGN-REQ-021",
         )
         return
+
+    decision_by_environment = {
+        decision.environment: decision for decision in record.environment_decisions
+    }
+    for environment in record.environments:
+        if environment not in decision_by_environment:
+            yield _finding(
+                code="CUTOVER_ENVIRONMENT_DECISION_MISSING",
+                subject=f"environmentDecisions.{environment}",
+                message=(
+                    "Each named environment must include a matching cutover "
+                    "decision."
+                ),
+                source="DESIGN-REQ-021",
+            )
 
     for decision in record.environment_decisions:
         if not (decision.record_ref or "").strip():

@@ -12,6 +12,7 @@ def _valid_payload() -> dict[str, object]:
     return {
         "releaseName": "workflow-language-hard-switch",
         "coordinatedRelease": True,
+        "environments": ["production", "staging"],
         "affectedContracts": {
             "workflows": [
                 {"name": "MoonMind.UserWorkflow", "strategy": "new_workflow_type"}
@@ -117,3 +118,30 @@ def test_incomplete_mm730_cutover_record_reports_all_release_blockers() -> None:
         "CUTOVER_HIDDEN_COMPATIBILITY_LAYER",
         "CUTOVER_NOT_COORDINATED_RELEASE",
     }.issubset(codes)
+
+
+def test_mm730_cutover_record_fails_when_named_environment_decision_is_omitted() -> None:
+    payload = _valid_payload()
+    payload["environmentDecisions"] = [
+        {
+            "environment": "production",
+            "decision": "drain",
+            "recordRef": "release://workflow-language-hard-switch/prod",
+        }
+    ]
+
+    result = validate_hard_switch_cutover(
+        HardSwitchCutoverRecord.model_validate(payload)
+    )
+
+    assert result.ready is False
+    assert {
+        (finding.code, finding.subject, finding.source)
+        for finding in result.findings
+    } == {
+        (
+            "CUTOVER_ENVIRONMENT_DECISION_MISSING",
+            "environmentDecisions.staging",
+            "DESIGN-REQ-021",
+        )
+    }

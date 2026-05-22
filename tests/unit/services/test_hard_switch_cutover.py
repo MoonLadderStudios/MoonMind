@@ -8,6 +8,7 @@ def _valid_payload() -> dict[str, object]:
     return {
         "releaseName": "workflow-language-hard-switch",
         "coordinatedRelease": True,
+        "environments": ["production", "staging"],
         "affectedContracts": {
             "workflows": [
                 {"name": "MoonMind.UserWorkflow", "strategy": "new_workflow_type"}
@@ -130,6 +131,40 @@ def test_environment_decisions_and_coordinated_release_are_required() -> None:
 
     assert "CUTOVER_NOT_COORDINATED_RELEASE" in codes
     assert "CUTOVER_ENVIRONMENT_DECISION_RECORD_MISSING" in codes
+
+
+def test_named_environments_must_have_matching_decisions() -> None:
+    payload = _valid_payload()
+    payload["environmentDecisions"] = [
+        {
+            "environment": "production",
+            "decision": "drain",
+            "recordRef": "release://workflow-language-hard-switch/prod",
+        }
+    ]
+
+    result = validate_hard_switch_cutover(_record(payload))
+
+    assert result.ready is False
+    assert [finding.code for finding in result.findings] == [
+        "CUTOVER_ENVIRONMENT_DECISION_MISSING"
+    ]
+    assert result.findings[0].subject == "environmentDecisions.staging"
+    assert result.findings[0].source == "DESIGN-REQ-021"
+
+
+def test_named_environment_set_is_required() -> None:
+    payload = _valid_payload()
+    payload["environments"] = []
+
+    result = validate_hard_switch_cutover(_record(payload))
+
+    assert result.ready is False
+    assert [finding.code for finding in result.findings] == [
+        "CUTOVER_ENVIRONMENT_SET_MISSING"
+    ]
+    assert result.findings[0].subject == "environments"
+    assert result.findings[0].source == "DESIGN-REQ-021"
 
 
 def test_release_notes_must_state_task_removal_and_no_aliases() -> None:

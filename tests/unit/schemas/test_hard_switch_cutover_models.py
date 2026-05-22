@@ -12,6 +12,7 @@ def _valid_payload() -> dict[str, object]:
     return {
         "releaseName": "workflow-language-hard-switch",
         "coordinatedRelease": True,
+        "environments": ["production", "staging"],
         "affectedContracts": {
             "workflows": [
                 {"name": "MoonMind.UserWorkflow", "strategy": "new_workflow_type"}
@@ -61,6 +62,7 @@ def test_hard_switch_cutover_record_parses_aliases_and_enums() -> None:
 
     assert record.release_name == "workflow-language-hard-switch"
     assert record.coordinated_release is True
+    assert record.environments == ["production", "staging"]
     assert (
         record.affected_contracts.activity_payloads[0].category
         == CutoverContractCategory.ACTIVITY_PAYLOAD
@@ -81,6 +83,7 @@ def test_hard_switch_cutover_record_serializes_camel_case_boundary() -> None:
     payload = record.model_dump(by_alias=True)
 
     assert payload["releaseName"] == "workflow-language-hard-switch"
+    assert payload["environments"] == ["production", "staging"]
     assert "activityPayloads" in payload["affectedContracts"]
     assert payload["workerRouting"]["newStartsBoundary"] == "renamed_contract_worker"
     assert payload["environmentDecisions"][0]["recordRef"].startswith("release://")
