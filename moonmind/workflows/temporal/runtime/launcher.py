@@ -294,11 +294,7 @@ class ManagedRuntimeLauncher:
         resolved_path = Path(resolved_workspace_path).resolve()
         run_root = resolved_path.parent
 
-        if (
-            resolved_path.name == "repo"
-            and run_root.name == run_id
-            and run_root.parent.name == "workspaces"
-        ):
+        if resolved_path.name == "repo" and run_root.parent.name == "workspaces":
             return str(run_root)
         if resolved_path.name == run_id and resolved_path.parent.name == "workspaces":
             return str(resolved_path)
@@ -493,7 +489,7 @@ class ManagedRuntimeLauncher:
         launches.
         """
 
-        correlation_id = str(getattr(request, "correlation_id", "") or "").strip()
+        correlation_id = request.correlation_id.strip()
         raw_key = (
             correlation_id
             if correlation_id.startswith(("mm:", "resolver:"))

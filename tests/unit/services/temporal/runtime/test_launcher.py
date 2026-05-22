@@ -440,6 +440,28 @@ async def test_repository_workspace_is_stable_across_child_run_ids(
         encoding="utf-8"
     ) == "created by specify"
 
+
+def test_repository_workspace_ownership_root_uses_shared_workspace_key(
+    tmp_path,
+) -> None:
+    store = ManagedRunStore(tmp_path / "store")
+    launcher = ManagedRuntimeLauncher(store)
+    repo_path = (
+        tmp_path
+        / "workspaces"
+        / "mm:6641526e-f65b-45a4-bfd9-5b8c14530206"
+        / "repo"
+    )
+    repo_path.mkdir(parents=True)
+
+    ownership_root = launcher._resolve_workspace_ownership_root(
+        resolved_workspace_path=str(repo_path),
+        run_id="child-run-plan",
+    )
+
+    assert ownership_root == str(repo_path.parent.resolve())
+
+
 def test_source_uses_github_https_includes_www_variant() -> None:
     assert ManagedRuntimeLauncher._source_uses_github_https(
         "https://www.github.com/MoonLadderStudios/Tactics.git"
