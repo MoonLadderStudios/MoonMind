@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 
 import type { BootPayload } from "../boot/parseBootPayload";
+import { SkillCombobox } from "../components/SkillCombobox";
 import { useLiquidGL } from "../lib/liquidGL/useLiquidGL";
 import { navigateTo } from "../lib/navigation";
 import {
@@ -20,7 +21,6 @@ import {
 const INLINE_TASK_INPUT_LIMIT_BYTES = 8_000;
 export const ARTIFACT_COMPLETE_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 2000];
 const ARTIFACT_COMPLETE_RETRY_MESSAGE = "artifact upload is not complete";
-const SKILL_OPTIONS_DATALIST_ID = "queue-skill-options";
 const MODEL_OPTIONS_DATALIST_ID = "queue-model-options";
 const EFFORT_OPTIONS_DATALIST_ID = "queue-effort-options";
 const REPOSITORY_OPTIONS_DATALIST_ID = "queue-repository-options";
@@ -5433,6 +5433,11 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     ],
   );
 
+  const skillComboboxOptions = useMemo(() => {
+    const ids = skillsQuery.data?.ids || [];
+    return Array.from(new Set(["auto", ...ids]));
+  }, [skillsQuery.data?.ids]);
+
   const effortOptions = useMemo(
     () =>
       Array.from(
@@ -8391,12 +8396,6 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           aria-label="Steps"
         >
           <div id="queue-steps-list" className="stack queue-steps-list">
-            <datalist id={SKILL_OPTIONS_DATALIST_ID}>
-              <option value="auto" />
-              {(skillsQuery.data?.ids || []).map((skillId) => (
-                <option key={skillId} value={skillId} />
-              ))}
-            </datalist>
             <datalist id={MODEL_OPTIONS_DATALIST_ID}>
               {modelOptions.map((item) => (
                 <option key={item} value={item} />
@@ -8717,19 +8716,19 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                     <div className="stack queue-step-type-panel">
                       <label>
                         Skill (optional)
-                        <input
-                          data-step-field="skillId"
-                          data-step-index={String(index)}
-                          list={SKILL_OPTIONS_DATALIST_ID}
+                        <SkillCombobox
                           value={step.skillId}
+                          options={skillComboboxOptions}
+                          dataStepIndex={String(index)}
+                          ariaLabel={`Step ${index + 1} skill`}
                           placeholder={
                             isPrimaryStep
                               ? "auto (default), moonspec-orchestrate, ..."
                               : "inherit primary step skill"
                           }
-                          onChange={(event) =>
+                          onChange={(nextValue) =>
                             updateStep(step.localId, {
-                              skillId: event.target.value,
+                              skillId: nextValue,
                             })
                           }
                         />
