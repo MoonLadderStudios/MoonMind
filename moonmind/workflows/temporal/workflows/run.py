@@ -1849,7 +1849,7 @@ class MoonMindRunWorkflow:
             manifest_payload["terminalDisposition"] = "blocked"
         try:
             manifest_ref = await self._write_json_artifact(
-                name=f"reports/step_execution_{logical_step_id}_execution_{attempt}.json",
+                name=f"reports/step_executions/{logical_step_id}_execution_{attempt}.json",
                 payload=manifest_payload,
             )
         except ValueError as exc:
@@ -4054,7 +4054,7 @@ class MoonMindRunWorkflow:
                                 and workflow.patched(RUN_STEP_EXECUTION_MANIFEST_PATCH)
                             ):
                                 child_workflow_id = (
-                                    f"{child_workflow_id}:attempt{current_step_execution}"
+                                    f"{child_workflow_id}:execution:{current_step_execution}"
                                 )
                             if system_retries > 0:
                                 child_workflow_id = (

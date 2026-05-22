@@ -21,7 +21,7 @@ class SerializedTaskState(TypedDict, total=False):
     id: str
     taskName: str
     status: str
-    attempt: int
+    executionOrdinal: int
     payload: dict[str, Any]
     message: str | None
     artifactPaths: list[str]
@@ -35,7 +35,7 @@ class SerializedTaskSummary(TypedDict, total=False):
 
     taskName: str
     status: str
-    attempt: int
+    executionOrdinal: int
     startedAt: str | None
     finishedAt: str | None
     updatedAt: str | None
@@ -105,7 +105,7 @@ def serialize_task_state(state: models.WorkflowTaskState) -> SerializedTaskState
         id=str(state.id),
         taskName=state.task_name,
         status=state.status.value,
-        attempt=state.attempt,
+        executionOrdinal=state.attempt,
         payload=state.payload or {},
         message=state.message,
         artifactPaths=list(state.artifact_paths or []),
@@ -165,7 +165,7 @@ def serialize_task_summary(
         SerializedTaskSummary(
             taskName=state.task_name,
             status=state.status.value,
-            attempt=state.attempt,
+            executionOrdinal=state.attempt,
             startedAt=_serialize_datetime(state.started_at),
             finishedAt=_serialize_datetime(state.finished_at),
             updatedAt=_serialize_datetime(state.updated_at),

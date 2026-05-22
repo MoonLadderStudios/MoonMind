@@ -11137,7 +11137,7 @@ export interface operations {
             path: {
                 workflow_id: string;
                 logical_step_id: string;
-                executionOrdinal: number;
+                execution_ordinal: number;
             };
             cookie?: never;
         };
