@@ -38,7 +38,7 @@ Use a GitHub connector only when `gh` is unavailable or unauthenticated.
 
 For Jira, prefer MoonMind's trusted Jira MCP/tool surface or connector. Do not expect raw Jira credentials in the agent shell and do not ask for `ATLASSIAN_*` secrets. Use project/board metadata tools before creating the story so required fields and issue type IDs are validated.
 
-Never print raw environment variables. Use targeted checks such as `test -n "$GITHUB_TOKEN"` or trusted-tool health calls; do not run `printenv`, `env`, `set`, or equivalent commands that can expose secrets.
+Never print raw environment variables. Use targeted checks such as `test -n "$GITHUB_TOKEN"` or trusted-tool health calls; do not run `printenv`, `env`, `set`, or equivalent commands that can expose secrets. Do not use bare heredocs (e.g. `<< 'EOF' > file`); use `cat << 'EOF' > file` or the `write_file` tool.
 
 ## Workflow
 
@@ -111,7 +111,7 @@ When the issue is not fully implemented and the remaining work is unclear:
 Use `gh` when available:
 
 ```bash
-gh label create "needs clarification" --repo <owner/repo> --description "More product or technical detail is needed" --color C5DEF5
+gh label create "needs clarification" --repo <owner/repo> --description "More product or technical detail is needed" --color C5DEF5 || true
 gh issue edit <issue> --repo <owner/repo> --add-label "needs clarification"
 gh issue comment <issue> --repo <owner/repo> --body-file <comment_file>
 ```
@@ -150,9 +150,9 @@ When the remaining work is clear:
 
 Write local artifacts when possible:
 
-- `var/github_issue_to_jira/<owner>-<repo>-issue-<number>-ledger.json`
-- `var/github_issue_to_jira/<owner>-<repo>-issue-<number>-comment.md`
-- `var/github_issue_to_jira/<owner>-<repo>-issue-<number>-jira-story.md` when creating Jira
+- `var/artifacts/github-issue-to-jira/<run_id>/<owner>-<repo>-issue-<number>-ledger.json`
+- `var/artifacts/github-issue-to-jira/<run_id>/<owner>-<repo>-issue-<number>-comment.md`
+- `var/artifacts/github-issue-to-jira/<run_id>/<owner>-<repo>-issue-<number>-jira-story.md` when creating Jira
 
 The ledger should include the issue identity, repository state, evidence statuses, terminal action, mutation attempts, created Jira key/URL if any, and tests run or skipped.
 
