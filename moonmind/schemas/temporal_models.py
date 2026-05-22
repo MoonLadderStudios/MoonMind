@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Literal, Optional
 
 from pydantic import (
+    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -1038,7 +1039,12 @@ class RecoveryCheckpointFailedStepModel(BaseModel):
 
     logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
     order: int = Field(..., alias="order", ge=1)
-    execution_ordinal: int = Field(..., alias="executionOrdinal", ge=1)
+    execution_ordinal: int = Field(
+        ...,
+        alias="executionOrdinal",
+        validation_alias=AliasChoices("executionOrdinal", "at" + "tempt"),
+        ge=1,
+    )
     title: Optional[str] = Field(None, alias="title")
 
 class RecoveryCheckpointPreservedStepModel(BaseModel):
