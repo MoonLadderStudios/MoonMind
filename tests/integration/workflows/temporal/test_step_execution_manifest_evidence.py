@@ -55,7 +55,7 @@ async def test_step_execution_manifest_refs_are_append_only_for_reexecution(
                 "metadata_json": metadata_json,
             }
         )
-        return f"artifact-attempt-{len(writes)}"
+        return f"artifact-execution-{len(writes)}"
 
     monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
     workflow._initialize_step_ledger(
@@ -90,10 +90,10 @@ async def test_step_execution_manifest_refs_are_append_only_for_reexecution(
     )
 
     step = workflow.get_step_ledger()["steps"][0]
-    assert step["refs"]["latestExecutionManifestRef"] == "artifact-attempt-2"
+    assert step["refs"]["latestExecutionManifestRef"] == "artifact-execution-2"
     assert step["refs"]["executionManifestRefs"] == [
-        "artifact-attempt-1",
-        "artifact-attempt-2",
+        "artifact-execution-1",
+        "artifact-execution-2",
     ]
     assert writes[0]["payload"]["workspace"]["policy"] == "fresh_branch_from_source"
     assert writes[0]["payload"]["workspace"]["evidenceAccepted"] is True
@@ -153,7 +153,7 @@ async def test_resume_execution_manifest_carries_lineage_without_large_payloads(
                 "metadata_json": metadata_json,
             }
         )
-        return f"artifact-attempt-{len(writes)}"
+        return f"artifact-execution-{len(writes)}"
 
     monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
     workflow._initialize_step_ledger(

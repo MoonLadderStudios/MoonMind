@@ -207,7 +207,7 @@ class StepExecutionIdentityModel(BaseModel):
 
 
 class StepExecutionLineageModel(BaseModel):
-    """Optional cross-run provenance for resumed or related attempts."""
+    """Optional cross-run provenance for resumed or related executions."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -1669,7 +1669,7 @@ class StepLedgerWorkloadModel(BaseModel):
 
     task_run_id: SkipJsonSchema[str | None] = Field(None, alias="taskRunId")
     step_id: str | None = Field(None, alias="stepId")
-    attempt: int | None = Field(None, alias="attempt", ge=1)
+    execution_ordinal: int | None = Field(None, alias="executionOrdinal", ge=1)
     tool_name: str | None = Field(None, alias="toolName")
     profile_id: str | None = Field(None, alias="profileId")
     image_ref: str | None = Field(None, alias="imageRef")

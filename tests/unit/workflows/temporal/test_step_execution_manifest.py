@@ -61,7 +61,7 @@ def test_step_execution_manifest_rejects_unsupported_canonical_values(
         "checks": [],
         "sideEffects": {"external": []},
         "dependencyEffects": {"invalidatedLogicalStepIds": []},
-        "budget": {"attemptLimit": 3},
+        "budget": {"executionLimit": 3},
     }
     payload[field] = value
 
@@ -95,7 +95,7 @@ def test_step_execution_manifest_accepts_canonical_payload_and_content_type() ->
             "checks": [{"kind": "unit", "status": "passed"}],
             "sideEffects": {"git": {"disposition": "accepted"}},
             "dependencyEffects": {"invalidatedLogicalStepIds": []},
-            "budget": {"attemptLimit": 3, "remainingAttempts": 1},
+            "budget": {"executionLimit": 3, "remainingExecutions": 1},
         }
     )
 
@@ -144,7 +144,7 @@ def test_step_execution_manifest_accepts_compact_evidence_refs() -> None:
                 }
             },
             "dependencyEffects": {"invalidatedLogicalStepIds": []},
-            "budget": {"attemptLimit": 3, "remainingAttempts": 1},
+            "budget": {"executionLimit": 3, "remainingExecutions": 1},
         }
     )
 
@@ -177,7 +177,7 @@ def test_step_execution_manifest_rejects_large_inline_evidence() -> None:
             }
         },
         "dependencyEffects": {"invalidatedLogicalStepIds": []},
-        "budget": {"attemptLimit": 3},
+        "budget": {"executionLimit": 3},
     }
 
     with pytest.raises(ValidationError, match="compact refs"):
@@ -200,7 +200,7 @@ def test_step_execution_manifest_rejects_large_inline_check_evidence() -> None:
         "checks": [{"kind": "unit", "logText": "x" * 2000}],
         "sideEffects": {},
         "dependencyEffects": {"invalidatedLogicalStepIds": []},
-        "budget": {"attemptLimit": 3},
+        "budget": {"executionLimit": 3},
     }
 
     with pytest.raises(ValidationError, match="compact refs"):

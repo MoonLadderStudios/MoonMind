@@ -9,6 +9,7 @@ from moonmind.schemas.temporal_models import (
     StepLedgerRefsModel,
     StepLedgerRowModel,
     StepLedgerSnapshotModel,
+    StepLedgerWorkloadModel,
 )
 from moonmind.workflows.temporal.step_ledger import (
     build_initial_step_rows,
@@ -54,25 +55,41 @@ def test_build_initial_step_rows_uses_plan_metadata_and_dependencies() -> None:
     assert rows[0]["refs"]["executionManifestRefs"] == []
 
 
-def test_step_ledger_refs_track_latest_and_historical_attempt_manifests() -> None:
+def test_step_ledger_refs_track_latest_and_historical_execution_manifests() -> None:
     refs = StepLedgerRefsModel.model_validate(
         {
             "childWorkflowId": "child-1",
             "childRunId": "run-child",
             "taskRunId": "task-run",
-            "latestExecutionManifestRef": "artifact-attempt-2",
-            "executionManifestRefs": ["artifact-attempt-1", "artifact-attempt-2"],
+            "latestExecutionManifestRef": "artifact-execution-2",
+            "executionManifestRefs": ["artifact-execution-1", "artifact-execution-2"],
         }
     )
 
-    assert refs.latest_execution_manifest_ref == "artifact-attempt-2"
+    assert refs.latest_execution_manifest_ref == "artifact-execution-2"
     assert refs.execution_manifest_refs == [
-        "artifact-attempt-1",
-        "artifact-attempt-2",
+        "artifact-execution-1",
+        "artifact-execution-2",
     ]
     assert refs.model_dump(by_alias=True)["latestExecutionManifestRef"] == (
-        "artifact-attempt-2"
+        "artifact-execution-2"
     )
+
+
+def test_step_ledger_workload_serializes_execution_ordinal() -> None:
+    workload = StepLedgerWorkloadModel.model_validate(
+        {
+            "taskRunId": "task-run",
+            "stepId": "step-1",
+            "executionOrdinal": 2,
+            "status": "succeeded",
+        }
+    )
+
+    dumped = workload.model_dump(by_alias=True, exclude_none=True)
+
+    assert dumped["executionOrdinal"] == 2
+    assert "attempt" not in dumped
 
 def test_build_initial_step_rows_skips_blank_node_ids() -> None:
     updated_at = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
@@ -568,9 +585,9 @@ def test_mark_step_execution_manifest_evidence_tracks_latest_and_history() -> No
         rows,
         "implement",
         updated_at=updated_at,
-        execution_manifest_ref="artifact://attempt-1",
+        execution_manifest_ref="artifact://execution-1",
     )
-    assert rows[0]["artifacts"]["executionManifestRef"] == "artifact://attempt-1"
+    assert rows[0]["artifacts"]["executionManifestRef"] == "artifact://execution-1"
     update_step_row(
         rows,
         "implement",
@@ -582,12 +599,12 @@ def test_mark_step_execution_manifest_evidence_tracks_latest_and_history() -> No
         rows,
         "implement",
         updated_at=updated_at,
-        execution_manifest_ref="artifact://attempt-2",
+        execution_manifest_ref="artifact://execution-2",
     )
 
-    assert second["artifacts"]["executionManifestRef"] == "artifact://attempt-2"
+    assert second["artifacts"]["executionManifestRef"] == "artifact://execution-2"
     assert second["artifacts"]["executionManifestRefs"] == [
-        "artifact://attempt-1",
-        "artifact://attempt-2",
+        "artifact://execution-1",
+        "artifact://execution-2",
     ]
     assert "schemaVersion" not in second["artifacts"]

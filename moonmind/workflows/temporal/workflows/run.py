@@ -929,7 +929,7 @@ class MoonMindRunWorkflow:
                     "artifact_kind": "step_execution_manifest",
                     "stepExecutionId": step_execution_id,
                     "logicalStepId": logical_step_id,
-                    "attempt": attempt,
+                    "executionOrdinal": attempt,
                     "idempotencyKey": idempotency_key,
                 },
             )
@@ -945,7 +945,7 @@ class MoonMindRunWorkflow:
                     extra={
                         "event": "step_execution_manifest_missing_artifact_id",
                         "logical_step_id": logical_step_id,
-                        "attempt": attempt,
+                        "execution_ordinal": attempt,
                     },
                 )
                 return None
@@ -2239,9 +2239,9 @@ class MoonMindRunWorkflow:
         remaining_attempts = max(0, attempts_allowed - attempts_consumed)
         metadata: dict[str, Any] = {
             "gate": "approval_policy",
-            "maxAttempts": attempts_allowed,
-            "attemptsConsumed": attempts_consumed,
-            "remainingAttempts": remaining_attempts,
+            "executionLimit": attempts_allowed,
+            "executionsConsumed": attempts_consumed,
+            "remainingExecutions": remaining_attempts,
             "stopRules": [
                 "structured_gate_verdict_required",
                 "accepted_output_evidence_required",

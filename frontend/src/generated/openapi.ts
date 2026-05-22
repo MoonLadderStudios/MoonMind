@@ -6772,9 +6772,9 @@ export interface components {
             runtimeDiagnostics?: string | null;
             /** Providersnapshot */
             providerSnapshot?: string | null;
-            /** Attemptmanifestref */
+            /** Executionmanifestref */
             executionManifestRef?: string | null;
-            /** Attemptmanifestrefs */
+            /** Executionmanifestrefs */
             executionManifestRefs?: string[];
         };
         /**
@@ -6805,9 +6805,9 @@ export interface components {
             childWorkflowId?: string | null;
             /** Childrunid */
             childRunId?: string | null;
-            /** Latestattemptmanifestref */
+            /** Latestexecutionmanifestref */
             latestExecutionManifestRef?: string | null;
-            /** Attemptmanifestrefs */
+            /** Executionmanifestrefs */
             executionManifestRefs?: string[];
         };
         /**
@@ -6855,7 +6855,7 @@ export interface components {
              */
             attentionRequired: boolean;
             /**
-             * Attempt
+             * Executionordinal
              * @default 0
              */
             executionOrdinal: number;
@@ -6908,7 +6908,7 @@ export interface components {
             /** Stepid */
             stepId?: string | null;
             /** Executionordinal */
-            attempt?: number | null;
+            executionOrdinal?: number | null;
             /** Toolname */
             toolName?: string | null;
             /** Profileid */

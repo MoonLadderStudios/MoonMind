@@ -610,7 +610,7 @@ async def test_run_records_step_execution_manifest_ref_when_work_begins(
                 "metadata_json": metadata_json,
             }
         )
-        return f"artifact-attempt-{len(writes)}"
+        return f"artifact-execution-{len(writes)}"
 
     monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
     workflow._initialize_step_ledger(
@@ -642,7 +642,7 @@ async def test_run_records_step_execution_manifest_ref_when_work_begins(
             "outputs": {
                 "childWorkflowId": "wf-child-1",
                 "childRunId": "run-child-1",
-                "outputSummaryRef": "artifact://summary/attempt-1",
+                "outputSummaryRef": "artifact://summary/execution-1",
             },
         },
         updated_at=now,
@@ -666,10 +666,10 @@ async def test_run_records_step_execution_manifest_ref_when_work_begins(
 
     step = workflow.get_step_ledger()["steps"][0]
     assert step["executionOrdinal"] == 2
-    assert step["refs"]["latestExecutionManifestRef"] == "artifact-attempt-2"
+    assert step["refs"]["latestExecutionManifestRef"] == "artifact-execution-2"
     assert step["refs"]["executionManifestRefs"] == [
-        "artifact-attempt-1",
-        "artifact-attempt-2",
+        "artifact-execution-1",
+        "artifact-execution-2",
     ]
     assert writes[0]["content_type"] == (
         "application/vnd.moonmind.step-execution+json;version=1"
@@ -680,12 +680,16 @@ async def test_run_records_step_execution_manifest_ref_when_work_begins(
     assert writes[0]["metadata_json"]["idempotencyKey"] == (
         "wf-run-1:run-1:delegate-agent:1:manifest"
     )
+    assert writes[0]["metadata_json"]["executionOrdinal"] == 1
+    assert "attempt" not in writes[0]["metadata_json"]
     assert writes[0]["payload"]["reason"] == "initial_execution"
     assert writes[0]["payload"]["execution"] == {
         "runtimeContextPolicy": "fresh_agent_run"
     }
     assert writes[0]["payload"]["outputs"] == {}
     assert writes[1]["payload"]["reason"] == "runtime_recovered"
+    assert writes[1]["metadata_json"]["executionOrdinal"] == 2
+    assert "attempt" not in writes[1]["metadata_json"]
     assert writes[1]["payload"]["execution"] == {
         "runtimeContextPolicy": "fresh_agent_run",
         "childWorkflowId": "wf-child-1",
@@ -732,7 +736,7 @@ async def test_step_execution_manifest_merges_explicit_execution_with_refs(
                 "metadata_json": metadata_json,
             }
         )
-        return f"artifact-attempt-{len(writes)}"
+        return f"artifact-execution-{len(writes)}"
 
     monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
     workflow._initialize_step_ledger(
@@ -807,7 +811,7 @@ async def test_run_records_terminal_step_execution_manifest_with_result_refs(
                 "metadata_json": metadata_json,
             }
         )
-        return f"artifact-attempt-{len(writes)}"
+        return f"artifact-execution-{len(writes)}"
 
     monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
     workflow._initialize_step_ledger(
@@ -834,9 +838,9 @@ async def test_run_records_terminal_step_execution_manifest_with_result_refs(
             "status": "COMPLETED",
             "outputs": {
                 "taskRunId": "task-run-1",
-                "outputSummaryRef": "artifact://summary/attempt-1",
-                "stdoutArtifactRef": "artifact://stdout/attempt-1",
-                "diagnosticsRef": "artifact://diagnostics/attempt-1",
+                "outputSummaryRef": "artifact://summary/execution-1",
+                "stdoutArtifactRef": "artifact://stdout/execution-1",
+                "diagnosticsRef": "artifact://diagnostics/execution-1",
             },
         },
         updated_at=now,
@@ -862,11 +866,11 @@ async def test_run_records_terminal_step_execution_manifest_with_result_refs(
     assert writes[1]["payload"]["terminalDisposition"] == "accepted"
     assert writes[1]["payload"]["execution"] == {
         "taskRunId": "task-run-1",
-        "diagnosticsRef": "artifact://diagnostics/attempt-1",
+        "diagnosticsRef": "artifact://diagnostics/execution-1",
     }
     assert writes[1]["payload"]["outputs"] == {
-        "summaryRef": "artifact://summary/attempt-1",
-        "stdoutRef": "artifact://stdout/attempt-1",
+        "summaryRef": "artifact://summary/execution-1",
+        "stdoutRef": "artifact://stdout/execution-1",
     }
 
 
@@ -1678,9 +1682,9 @@ async def test_run_execution_stage_stops_downstream_handoff_when_gate_budget_exh
     )
     assert step_execution_payloads[-1]["budget"] == {
         "gate": "approval_policy",
-        "maxAttempts": 1,
-        "attemptsConsumed": 1,
-        "remainingAttempts": 0,
+        "executionLimit": 1,
+        "executionsConsumed": 1,
+        "remainingExecutions": 0,
         "stopRules": [
             "structured_gate_verdict_required",
             "accepted_output_evidence_required",
