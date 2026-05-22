@@ -13,6 +13,22 @@ from .agent_runtime_models import (
     resolve_managed_runtime_workload_mode,
     is_terminal_agent_run_state,
 )
+from .hard_switch_cutover_models import (
+    AffectedContract,
+    AffectedContracts,
+    CompatibilityMode,
+    ContractCutoverStrategy,
+    CutoverContractCategory,
+    CutoverEnvironmentDecision,
+    CutoverFindingSeverity,
+    CutoverReleaseNotes,
+    CutoverValidationFinding,
+    CutoverValidationResult,
+    EnvironmentCutoverDecision,
+    HardSwitchCutoverRecord,
+    NewStartsBoundary,
+    WorkerRoutingBoundary,
+)
 from .agent_skill_models import (
     AgentSkillFormat,
     AgentSkillProvenance,
