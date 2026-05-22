@@ -407,6 +407,32 @@ class TestEnsureManagerAutoStart:
 
         assert sync_index < validate_index < request_index
 
+    def test_slot_wait_runtime_update_releases_stale_assigned_slot_before_request(self):
+        """A profile edit must discard any old slot assigned before the edit wins."""
+        source = textwrap.dedent(
+            inspect.getsource(
+                MoonMindAgentRun._consume_runtime_selection_update_for_slot_wait
+            )
+        )
+
+        assigned_index = source.index("assigned_profile_id = self._assigned_profile_id")
+        release_index = source.index("await previous_manager_handle.signal(")
+        clear_index = source.index("self.slot_assigned_event.clear()")
+        request_index = source.index(
+            "manager_handle = await self._ensure_manager_and_signal"
+        )
+
+        assert assigned_index < release_index < clear_index < request_index
+        assert "or assigned_profile_id" in source
+        assert "profile_id=assigned_profile_id" in source
+
+    def test_slot_wait_runtime_update_preempts_simultaneous_slot_assignment(self):
+        """The wait loop must consume runtime edits even if slot_assigned is also set."""
+        source = textwrap.dedent(inspect.getsource(MoonMindAgentRun.run))
+
+        assert "and not self.slot_assigned_event.is_set()" not in source
+        assert source.count("if self.runtime_selection_updated_event.is_set():") == 2
+
     def test_manager_signal_payload_carries_execution_profile_ref(self):
         """The auto-start helper must include execution_profile_ref in request_slot payloads."""
         source = textwrap.dedent(

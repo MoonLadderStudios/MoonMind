@@ -1384,7 +1384,8 @@ class MoonMindAgentRun:
             self._apply_runtime_selection_update(request, payload)
         runtime_id = self._managed_runtime_id(request.agent_id)
         manager_id = self._manager_workflow_id(runtime_id)
-        if manager_id != previous_manager_id:
+        assigned_profile_id = self._assigned_profile_id
+        if manager_id != previous_manager_id or assigned_profile_id:
             previous_manager_handle = workflow.get_external_workflow_handle(
                 previous_manager_id
             )
@@ -1392,7 +1393,7 @@ class MoonMindAgentRun:
                 await previous_manager_handle.signal(
                     "release_slot",
                     self._release_slot_payload(
-                        profile_id=self._assigned_profile_id,
+                        profile_id=assigned_profile_id,
                         request=request,
                     ),
                 )
@@ -1750,10 +1751,7 @@ class MoonMindAgentRun:
                                     or self.runtime_selection_updated_event.is_set(),
                                     timeout=timedelta(seconds=slot_wait_timeout_seconds),
                                 )
-                                if (
-                                    self.runtime_selection_updated_event.is_set()
-                                    and not self.slot_assigned_event.is_set()
-                                ):
+                                if self.runtime_selection_updated_event.is_set():
                                     (
                                         manager_handle,
                                         manager_id,
@@ -1844,10 +1842,7 @@ class MoonMindAgentRun:
                                 lambda: self.slot_assigned_event.is_set()
                                 or self.runtime_selection_updated_event.is_set(),
                             )
-                            if (
-                                self.runtime_selection_updated_event.is_set()
-                                and not self.slot_assigned_event.is_set()
-                            ):
+                            if self.runtime_selection_updated_event.is_set():
                                 (
                                     manager_handle,
                                     manager_id,
