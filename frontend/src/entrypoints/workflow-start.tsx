@@ -8714,9 +8714,12 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
 
                   {step.stepType === "skill" ? (
                     <div className="stack queue-step-type-panel">
-                      <label>
-                        Skill (optional)
+                      <div className="field">
+                        <label htmlFor={`queue-step-${step.localId}-skill-id`}>
+                          Skill (optional)
+                        </label>
                         <SkillCombobox
+                          inputId={`queue-step-${step.localId}-skill-id`}
                           value={step.skillId}
                           options={skillComboboxOptions}
                           dataStepIndex={String(index)}
@@ -8737,7 +8740,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                             Leave skill blank to inherit primary step defaults.
                           </span>
                         )}
-                      </label>
+                      </div>
 
                       {showSkillArgsField ? (
                         <label

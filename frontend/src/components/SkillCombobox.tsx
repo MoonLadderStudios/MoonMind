@@ -25,12 +25,10 @@ export interface SkillComboboxProps {
   inputClassName?: string;
 }
 
-const MAX_VISIBLE_OPTIONS = 50;
-
 function filterOptions(options: readonly string[], query: string): string[] {
   const trimmed = query.trim().toLowerCase();
   if (!trimmed) {
-    return options.slice(0, MAX_VISIBLE_OPTIONS);
+    return [...options];
   }
   const startsWith: string[] = [];
   const includes: string[] = [];
@@ -42,7 +40,7 @@ function filterOptions(options: readonly string[], query: string): string[] {
       includes.push(option);
     }
   }
-  return [...startsWith, ...includes].slice(0, MAX_VISIBLE_OPTIONS);
+  return [...startsWith, ...includes];
 }
 
 export function SkillCombobox({
