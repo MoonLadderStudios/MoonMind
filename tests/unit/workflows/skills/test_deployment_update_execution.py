@@ -102,6 +102,14 @@ class RecordingRunner:
             "exitCode": 0,
         }
 
+    async def inspect_image(self, requested_image: str) -> Mapping[str, Any]:
+        self.events.append("runner:inspect-image")
+        return {
+            "Id": "sha256:" + "b" * 64,
+            "RepoTags": [requested_image],
+            "RepoDigests": [],
+        }
+
     async def verify(
         self,
         *,
@@ -199,6 +207,17 @@ class FailingPullRunner(RecordingRunner):
 
 
 class SelfHostedComposeRunner(RecordingRunner):
+    def __init__(
+        self,
+        events: list[str],
+        *,
+        worker_image_id: str = "sha256:" + "a" * 64,
+        target_image_id: str = "sha256:" + "b" * 64,
+    ) -> None:
+        super().__init__(events)
+        self.worker_image_id = worker_image_id
+        self.target_image_id = target_image_id
+
     async def capture_state(self, *, stack: str, phase: str) -> Mapping[str, Any]:
         self.events.append(f"runner:capture:{phase}")
         return {
@@ -211,7 +230,19 @@ class SelfHostedComposeRunner(RecordingRunner):
                     "State": "running",
                 }
             ],
+            "images": [
+                {
+                    "ContainerName": "moonmind-temporal-worker-agent-runtime-1",
+                    "ID": self.worker_image_id,
+                    "Repository": "ghcr.io/moonladderstudios/moonmind",
+                    "Tag": "latest",
+                }
+            ],
         }
+
+    async def inspect_image(self, requested_image: str) -> Mapping[str, Any]:
+        self.events.append("runner:inspect-image")
+        return {"Id": self.target_image_id, "RepoTags": [requested_image]}
 
 
 class SecretRecordingRunner(RecordingRunner):
@@ -685,13 +716,38 @@ async def test_privileged_worker_fails_before_recreating_its_own_container(
     assert exc_info.value.details["failureClass"] == "runner_self_recreation_unsafe"
     assert exc_info.value.details["service"] == "temporal-worker-agent-runtime"
     assert store.records == []
-    assert "runner:pull" not in events
+    assert "runner:pull" in events
+    assert "runner:inspect-image" in events
     assert "runner:up" not in events
     assert [kind for kind, _payload in evidence.records] == [
         "before-state",
         "command-log",
         "after-state",
     ]
+
+
+@pytest.mark.asyncio
+async def test_privileged_worker_allows_changed_services_when_worker_image_is_current(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HOSTNAME", "abc123def456")
+    current_image_id = "sha256:" + "c" * 64
+    events: list[str] = []
+    runner = SelfHostedComposeRunner(
+        events,
+        worker_image_id=current_image_id,
+        target_image_id=current_image_id,
+    )
+    executor, store, _evidence, _runner, _events = _executor(
+        runner=runner, events=events
+    )
+
+    result = await executor.execute(_inputs())
+
+    assert result.status == "COMPLETED"
+    assert len(store.records) == 1
+    assert events.index("runner:inspect-image") < events.index("desired:persist")
+    assert "runner:up" in events
 
 
 def test_runner_guard_skips_when_targeted_services_exclude_worker(monkeypatch) -> None:
@@ -1016,8 +1072,8 @@ async def test_progress_contains_lifecycle_states_without_command_output() -> No
         "VALIDATING",
         "LOCK_WAITING",
         "CAPTURING_BEFORE_STATE",
-        "PERSISTING_DESIRED_STATE",
         "PULLING_IMAGES",
+        "PERSISTING_DESIRED_STATE",
         "RECREATING_SERVICES",
         "VERIFYING",
         "CAPTURING_AFTER_STATE",
