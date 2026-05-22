@@ -22,6 +22,7 @@ from moonmind.workflows.skills.deployment_execution import (
     _ensure_runner_survives_update,
     _is_host_absolute_path,
     _remap_host_compose_path,
+    _service_name_matches,
     _tail_text,
     build_compose_command_plan,
     build_deployment_update_handler,
@@ -415,6 +416,7 @@ async def test_lifecycle_order_persists_desired_state_before_compose_up() -> Non
 
     assert result.status == "COMPLETED"
     assert events.index("runner:capture:before") < events.index("desired:persist")
+    assert events.index("desired:persist") < events.index("runner:pull")
     assert events.index("desired:persist") < events.index("runner:up")
     assert store.records[0]["stack"] == "moonmind"
     assert store.records[0]["imageRepository"] == "ghcr.io/moonladderstudios/moonmind"
@@ -611,7 +613,7 @@ async def test_command_failures_include_normalized_failure_class(
     runner: type[RecordingRunner], expected_phase: str, expected_class: str
 ) -> None:
     events: list[str] = []
-    executor, _store, _evidence, _runner, _events = _executor(
+    executor, store, _evidence, _runner, _events = _executor(
         runner=runner(events), events=events
     )
 
@@ -620,6 +622,9 @@ async def test_command_failures_include_normalized_failure_class(
 
     assert exc_info.value.details["phase"] == expected_phase
     assert exc_info.value.details["failureClass"] == expected_class
+    if expected_phase == "pull":
+        assert len(store.records) == 1
+        assert events.index("desired:persist") < events.index("runner:pull")
 
 
 @pytest.mark.asyncio
@@ -715,7 +720,8 @@ async def test_privileged_worker_fails_before_recreating_its_own_container(
     assert exc_info.value.error_code == "DEPLOYMENT_RUNNER_UNSAFE"
     assert exc_info.value.details["failureClass"] == "runner_self_recreation_unsafe"
     assert exc_info.value.details["service"] == "temporal-worker-agent-runtime"
-    assert store.records == []
+    assert len(store.records) == 1
+    assert events.index("desired:persist") < events.index("runner:pull")
     assert "runner:pull" in events
     assert "runner:inspect-image" in events
     assert "runner:up" not in events
@@ -746,7 +752,8 @@ async def test_privileged_worker_allows_changed_services_when_worker_image_is_cu
 
     assert result.status == "COMPLETED"
     assert len(store.records) == 1
-    assert events.index("runner:inspect-image") < events.index("desired:persist")
+    assert events.index("desired:persist") < events.index("runner:pull")
+    assert events.index("runner:inspect-image") < events.index("runner:up")
     assert "runner:up" in events
 
 
@@ -804,6 +811,33 @@ def test_runner_guard_blocks_when_no_specific_services_targeted(monkeypatch) -> 
         _ensure_runner_survives_update(command_plan=plan, before_state=before_state)
 
     assert exc_info.value.error_code == "DEPLOYMENT_RUNNER_UNSAFE"
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        "moonmind-api-1",
+        "moonmind_api_1",
+        "api-1",
+        "api_1",
+        "api",
+    ],
+)
+def test_service_name_matches_compose_service_tokens(candidate: str) -> None:
+    assert _service_name_matches(candidate, "api") is True
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        "moonmind-api-gateway-1",
+        "moonmind_api_gateway_1",
+        "api-gateway-1",
+        "worker-api-sidecar-1",
+    ],
+)
+def test_service_name_does_not_match_service_prefixes(candidate: str) -> None:
+    assert _service_name_matches(candidate, "api") is False
 
 
 def test_host_alias_replaces_broken_symlink(tmp_path) -> None:
@@ -1072,8 +1106,8 @@ async def test_progress_contains_lifecycle_states_without_command_output() -> No
         "VALIDATING",
         "LOCK_WAITING",
         "CAPTURING_BEFORE_STATE",
-        "PULLING_IMAGES",
         "PERSISTING_DESIRED_STATE",
+        "PULLING_IMAGES",
         "RECREATING_SERVICES",
         "VERIFYING",
         "CAPTURING_AFTER_STATE",

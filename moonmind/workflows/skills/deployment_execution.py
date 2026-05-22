@@ -942,6 +942,23 @@ class DeploymentUpdateExecutor:
                 before_ref = await write_evidence("before-state", before_state)
 
                 _add_progress(
+                    progress_events,
+                    "PERSISTING_DESIRED_STATE",
+                    "Persisting requested deployment state.",
+                )
+                desired_payload = {
+                    "stack": parsed["stack"],
+                    "imageRepository": parsed["image"]["repository"],
+                    "requestedReference": parsed["image"]["reference"],
+                    "resolvedDigest": resolved_digest,
+                    "reason": parsed["reason"],
+                    "operator": operator or None,
+                    "createdAt": _utc_now(),
+                    "sourceRunId": source_run_id,
+                }
+                await self.desired_state_store.persist(desired_payload)
+
+                _add_progress(
                     progress_events, "PULLING_IMAGES", "Pulling requested images."
                 )
                 pull_result = await self.runner.pull(
@@ -958,23 +975,6 @@ class DeploymentUpdateExecutor:
                     before_state=before_state,
                     target_image=target_image,
                 )
-
-                _add_progress(
-                    progress_events,
-                    "PERSISTING_DESIRED_STATE",
-                    "Persisting requested deployment state.",
-                )
-                desired_payload = {
-                    "stack": parsed["stack"],
-                    "imageRepository": parsed["image"]["repository"],
-                    "requestedReference": parsed["image"]["reference"],
-                    "resolvedDigest": resolved_digest,
-                    "reason": parsed["reason"],
-                    "operator": operator or None,
-                    "createdAt": _utc_now(),
-                    "sourceRunId": source_run_id,
-                }
-                await self.desired_state_store.persist(desired_payload)
 
                 _add_progress(
                     progress_events,
@@ -1282,7 +1282,9 @@ def _service_name_matches(value: Any, normalized_service: str) -> bool:
     candidate = str(value or "").strip().lower()
     if not candidate:
         return False
-    return candidate == normalized_service or f"-{normalized_service}-" in candidate
+    return candidate == normalized_service or bool(
+        re.search(rf"(^|[-_]){re.escape(normalized_service)}[-_]\d+$", candidate)
+    )
 
 
 def _normalized_image_id(value: Any) -> str:
