@@ -9,8 +9,9 @@ import {
 import type {
   ChangeEvent,
   CSSProperties,
+  FocusEvent,
   KeyboardEvent,
-  MouseEvent as ReactMouseEvent,
+  PointerEvent as ReactPointerEvent,
   ReactElement,
 } from "react";
 
@@ -20,6 +21,7 @@ export interface SkillComboboxProps {
   onChange: (value: string) => void;
   placeholder?: string;
   inputId?: string;
+  dataStepField?: string;
   dataStepIndex?: string;
   ariaLabel?: string;
   inputClassName?: string;
@@ -49,6 +51,7 @@ export function SkillCombobox({
   onChange,
   placeholder,
   inputId,
+  dataStepField,
   dataStepIndex,
   ariaLabel,
   inputClassName,
@@ -109,8 +112,17 @@ export function SkillCombobox({
     setIsOpen(true);
   }, []);
 
+  const handleBlur = useCallback((event: FocusEvent<HTMLInputElement>) => {
+    const container = containerRef.current;
+    const next = event.relatedTarget as Node | null;
+    if (container && next && container.contains(next)) {
+      return;
+    }
+    setIsOpen(false);
+  }, []);
+
   const handleToggle = useCallback(
-    (event: ReactMouseEvent<HTMLButtonElement>) => {
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
       event.preventDefault();
       setIsOpen((prev) => {
         const next = !prev;
@@ -190,6 +202,11 @@ export function SkillCombobox({
     overflowY: "auto",
   };
 
+  const activeDescendantId =
+    isOpen && highlightedIndex >= 0 && highlightedIndex < filteredOptions.length
+      ? `${listboxId}-option-${highlightedIndex}`
+      : undefined;
+
   return (
     <div
       ref={containerRef}
@@ -205,25 +222,27 @@ export function SkillCombobox({
           role="combobox"
           aria-autocomplete="list"
           aria-expanded={isOpen}
-          aria-controls={listboxId}
+          aria-controls={isOpen ? listboxId : undefined}
+          aria-activedescendant={activeDescendantId}
           aria-label={ariaLabel}
           value={value}
           placeholder={placeholder}
-          data-step-field="skillId"
+          data-step-field={dataStepField ?? "skillId"}
           {...(dataStepIndex !== undefined ? { "data-step-index": dataStepIndex } : {})}
           className={inputClassName}
           onChange={handleInputChange}
           onPointerDown={handleInputPointerDown}
           onKeyDown={handleKeyDown}
+          onBlur={handleBlur}
         />
         <button
           type="button"
           className="skill-combobox-toggle"
           aria-label={isOpen ? "Hide skill options" : "Show skill options"}
           aria-expanded={isOpen}
-          aria-controls={listboxId}
+          aria-controls={isOpen ? listboxId : undefined}
           tabIndex={-1}
-          onClick={handleToggle}
+          onPointerDown={handleToggle}
         >
           <svg
             aria-hidden="true"
@@ -255,6 +274,7 @@ export function SkillCombobox({
             const isSelected = option === value;
             return (
               <li
+                id={`${listboxId}-option-${index}`}
                 key={option}
                 role="option"
                 aria-selected={isSelected}

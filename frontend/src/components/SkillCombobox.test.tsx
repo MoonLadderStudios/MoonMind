@@ -34,7 +34,7 @@ describe("SkillCombobox", () => {
     render(<Harness />);
 
     const toggle = screen.getByRole("button", { name: "Show skill options" });
-    fireEvent.click(toggle);
+    fireEvent.pointerDown(toggle);
 
     const listbox = screen.getByRole("listbox");
     const optionTexts = within(listbox)
