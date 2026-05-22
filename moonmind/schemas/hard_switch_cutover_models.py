@@ -55,7 +55,7 @@ class AffectedContract(BaseModel):
     model_config = ConfigDict(populate_by_name=True, use_enum_values=False)
 
     name: str = Field(..., min_length=1)
-    strategy: ContractCutoverStrategy
+    strategy: ContractCutoverStrategy | None = None
     category: CutoverContractCategory | None = None
     notes: str | None = None
 

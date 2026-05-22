@@ -87,3 +87,13 @@ def test_hard_switch_cutover_record_serializes_camel_case_boundary() -> None:
     assert "activityPayloads" in payload["affectedContracts"]
     assert payload["workerRouting"]["newStartsBoundary"] == "renamed_contract_worker"
     assert payload["environmentDecisions"][0]["recordRef"].startswith("release://")
+
+
+def test_hard_switch_cutover_record_accepts_missing_strategy_for_readiness_finding() -> None:
+    payload = _valid_payload()
+    del payload["affectedContracts"]["workflows"][0]["strategy"]  # type: ignore[index]
+
+    record = HardSwitchCutoverRecord.model_validate(payload)
+
+    assert record.affected_contracts.workflows[0].name == "MoonMind.UserWorkflow"
+    assert record.affected_contracts.workflows[0].strategy is None

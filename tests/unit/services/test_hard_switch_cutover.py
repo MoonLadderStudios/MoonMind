@@ -95,6 +95,58 @@ def test_missing_contract_category_reports_deterministic_findings() -> None:
     assert {finding.source for finding in result.findings} == {"DESIGN-REQ-019"}
 
 
+def test_named_contract_missing_strategy_reports_contract_finding() -> None:
+    payload = _valid_payload()
+    del payload["affectedContracts"]["workflows"][0]["strategy"]  # type: ignore[index]
+
+    result = validate_hard_switch_cutover(_record(payload))
+
+    assert result.ready is False
+    assert [finding.code for finding in result.findings] == [
+        "CUTOVER_MISSING_WORKFLOW_STRATEGY"
+    ]
+    assert (
+        result.findings[0].subject
+        == "affectedContracts.workflows.MoonMind.UserWorkflow.strategy"
+    )
+    assert result.findings[0].source == "DESIGN-REQ-019"
+
+
+def test_missing_strategies_across_contract_groups_are_sorted_deterministically() -> None:
+    payload = _valid_payload()
+    for category in ("workflows", "activityPayloads", "signals", "updates"):
+        del payload["affectedContracts"][category][0]["strategy"]  # type: ignore[index]
+
+    result = validate_hard_switch_cutover(_record(payload))
+
+    assert result.ready is False
+    assert [
+        (finding.code, finding.subject, finding.source)
+        for finding in result.findings
+    ] == [
+        (
+            "CUTOVER_MISSING_ACTIVITY_PAYLOAD_STRATEGY",
+            "affectedContracts.activityPayloads.RunAgentActivityInput.strategy",
+            "DESIGN-REQ-019",
+        ),
+        (
+            "CUTOVER_MISSING_SIGNAL_STRATEGY",
+            "affectedContracts.signals.RecoverFromFailedStep.strategy",
+            "DESIGN-REQ-019",
+        ),
+        (
+            "CUTOVER_MISSING_UPDATE_STRATEGY",
+            "affectedContracts.updates.RequestRerun.strategy",
+            "DESIGN-REQ-019",
+        ),
+        (
+            "CUTOVER_MISSING_WORKFLOW_STRATEGY",
+            "affectedContracts.workflows.MoonMind.UserWorkflow.strategy",
+            "DESIGN-REQ-019",
+        ),
+    ]
+
+
 def test_single_worker_build_serving_both_shapes_requires_version_boundary() -> None:
     payload = _valid_payload()
     payload["workerRouting"] = {

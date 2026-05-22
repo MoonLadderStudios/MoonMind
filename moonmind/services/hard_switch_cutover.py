@@ -58,6 +58,18 @@ def _validate_contract_coverage(
                 message=f"{subject} must include at least one affected contract strategy.",
                 source="DESIGN-REQ-019",
             )
+            continue
+        for contract in values:
+            if contract.strategy is None:
+                yield _finding(
+                    code=code,
+                    subject=f"affectedContracts.{subject}.{contract.name}.strategy",
+                    message=(
+                        f"{contract.name} must declare an explicit cutover "
+                        "strategy."
+                    ),
+                    source="DESIGN-REQ-019",
+                )
 
 
 def _validate_worker_routing(

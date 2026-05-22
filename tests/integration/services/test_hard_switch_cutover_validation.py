@@ -120,6 +120,27 @@ def test_incomplete_mm730_cutover_record_reports_all_release_blockers() -> None:
     }.issubset(codes)
 
 
+def test_mm730_cutover_record_fails_when_named_contract_strategy_is_omitted() -> None:
+    payload = _valid_payload()
+    del payload["affectedContracts"]["workflows"][0]["strategy"]  # type: ignore[index]
+
+    result = validate_hard_switch_cutover(
+        HardSwitchCutoverRecord.model_validate(payload)
+    )
+
+    assert result.ready is False
+    assert {
+        (finding.code, finding.subject, finding.source)
+        for finding in result.findings
+    } == {
+        (
+            "CUTOVER_MISSING_WORKFLOW_STRATEGY",
+            "affectedContracts.workflows.MoonMind.UserWorkflow.strategy",
+            "DESIGN-REQ-019",
+        )
+    }
+
+
 def test_mm730_cutover_record_fails_when_named_environment_decision_is_omitted() -> None:
     payload = _valid_payload()
     payload["environmentDecisions"] = [
