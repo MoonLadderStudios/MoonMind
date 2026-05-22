@@ -3799,6 +3799,9 @@ def test_create_task_shaped_execution_forwards_input_attachments(
             "sizeBytes": 20,
         }
     ]
+    # Backfill a stable stepRef so prepared-context manifest construction
+    # succeeds for steps that arrive without a client-supplied id.
+    assert initial_parameters["task"]["steps"][0]["id"] == "step-1"
 
 def test_create_task_shaped_execution_normalizes_snake_case_input_attachments(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],

@@ -4261,6 +4261,8 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
             value = step_payload.get(key)
             if isinstance(value, str) and value.strip():
                 normalized_step[key] = value.strip()
+        if not normalized_step.get("id"):
+            normalized_step["id"] = f"step-{index + 1}"
 
         normalized_skills = _normalize_task_skill_selectors(
             step_payload.get("skills"),
