@@ -24,6 +24,7 @@ from api_service.api.routers.executions import (
     _artifact_id_from_ref,
     _build_original_task_input_snapshot_payload,
     _merge_task_preserving_artifact_instructions,
+    _resolve_task_step_ids,
     _resume_not_available_reason,
     _reuse_original_task_input_snapshot_from_source,
     _task_input_snapshot_descriptor_from_record,
@@ -3744,6 +3745,16 @@ def test_create_task_shaped_execution_forwards_input_attachments(
         execute=execute
     )
 
+    captured_attachment_refs: list[list[dict[str, Any]]] = []
+
+    async def _capture_attach(**kwargs: Any) -> None:
+        captured_attachment_refs.append(list(kwargs.get("attachment_refs") or []))
+
+    monkeypatch.setattr(
+        "api_service.api.routers.executions._attach_input_attachment_artifacts_to_execution",
+        _capture_attach,
+    )
+
     response = test_client.post(
         "/api/executions",
         json={
@@ -3802,6 +3813,136 @@ def test_create_task_shaped_execution_forwards_input_attachments(
     # Backfill a stable stepRef so prepared-context manifest construction
     # succeeds for steps that arrive without a client-supplied id.
     assert initial_parameters["task"]["steps"][0]["id"] == "step-1"
+
+    # The synthesized step id must also propagate to the attachment_index so
+    # snapshot attachmentRefs carry a stepRef the worker can resolve.
+    assert captured_attachment_refs, "attach helper should have been invoked"
+    step_refs = [
+        ref
+        for ref in captured_attachment_refs[0]
+        if ref.get("targetKind") == "step"
+    ]
+    assert step_refs, "expected at least one step attachment ref"
+    assert step_refs[0]["stepRef"] == "step-1"
+    assert step_refs[0]["stepOrdinal"] == 0
+
+
+def test_create_task_shaped_execution_honors_step_id_aliases(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A step that supplies stepRef/ref instead of id must keep its alias as id."""
+
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
+    service.create_execution.return_value = _build_execution_record()
+    execute = AsyncMock(
+        return_value=_ExecuteResult(
+            [
+                SimpleNamespace(
+                    artifact_id="art_01STEPINPUT000000000000",
+                    status=TemporalArtifactStatus.COMPLETE,
+                    content_type="image/png",
+                    size_bytes=20,
+                ),
+            ]
+        )
+    )
+    test_client.app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
+        execute=execute
+    )
+
+    captured_attachment_refs: list[list[dict[str, Any]]] = []
+
+    async def _capture_attach(**kwargs: Any) -> None:
+        captured_attachment_refs.append(list(kwargs.get("attachment_refs") or []))
+
+    monkeypatch.setattr(
+        "api_service.api.routers.executions._attach_input_attachment_artifacts_to_execution",
+        _capture_attach,
+    )
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "Moon/Mind",
+                "targetRuntime": "codex",
+                "task": {
+                    "instructions": "Use the alias-supplied step id.",
+                    "steps": [
+                        {
+                            "stepRef": "custom-alias-step",
+                            "instructions": "Inspect the step screenshot.",
+                            "inputAttachments": [
+                                {
+                                    "artifactId": "art_01STEPINPUT000000000000",
+                                    "filename": "screenshot.png",
+                                    "contentType": "image/png",
+                                    "sizeBytes": 20,
+                                }
+                            ],
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["task"]["steps"][0]["id"] == "custom-alias-step"
+
+    assert captured_attachment_refs, "attach helper should have been invoked"
+    step_refs = [
+        ref
+        for ref in captured_attachment_refs[0]
+        if ref.get("targetKind") == "step"
+    ]
+    assert step_refs and step_refs[0]["stepRef"] == "custom-alias-step"
+
+
+def test_resolve_task_step_ids_avoids_collisions_with_explicit_ids() -> None:
+    """Synthesized step ids must not collide with client-supplied ones."""
+
+    raw_steps = [
+        {"id": "step-2"},
+        {},
+        {"stepRef": "step-3"},
+        {},
+    ]
+    assert _resolve_task_step_ids(raw_steps) == [
+        "step-2",
+        "step-4",
+        "step-3",
+        "step-5",
+    ]
+
+
+def test_resolve_task_step_ids_supports_all_aliases() -> None:
+    """Each recognized alias should populate the resolved step id."""
+
+    raw_steps = [
+        {"id": "explicit-id"},
+        {"stepRef": "via-step-ref"},
+        {"ref": "via-ref"},
+        {"stepId": "via-step-id-camel"},
+        {"step_id": "via-step-id-snake"},
+        {"logicalStepId": "via-logical"},
+        {},
+    ]
+    assert _resolve_task_step_ids(raw_steps) == [
+        "explicit-id",
+        "via-step-ref",
+        "via-ref",
+        "via-step-id-camel",
+        "via-step-id-snake",
+        "via-logical",
+        "step-7",
+    ]
 
 def test_create_task_shaped_execution_normalizes_snake_case_input_attachments(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
