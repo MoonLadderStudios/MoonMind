@@ -2758,7 +2758,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   -webkit-box-orient: vertical;
 }
 
-.step-attempt-pill {
+.step-execution-pill {
   display: inline-flex;
   align-items: center;
   border-radius: 999px;
@@ -3388,6 +3388,90 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .queue-step-type-panel {
   padding: 0.25rem 0 0;
+}
+
+.skill-combobox {
+  position: relative;
+  width: 100%;
+}
+
+.skill-combobox-input-row {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+}
+
+.skill-combobox-input-row > input {
+  flex: 1 1 auto;
+  width: 100%;
+  padding-inline-end: 2.25rem;
+}
+
+.skill-combobox-toggle {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border: 0;
+  color: rgb(var(--mm-muted));
+  cursor: pointer;
+  border-radius: 0.56rem;
+  touch-action: manipulation;
+}
+
+.skill-combobox-toggle:hover,
+.skill-combobox-toggle:focus-visible {
+  color: rgb(var(--mm-ink));
+}
+
+.skill-combobox-toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.skill-combobox-toggle svg {
+  transition: transform 0.15s ease;
+}
+
+.skill-combobox-listbox {
+  list-style: none;
+  margin: 0;
+  padding: 0.25rem;
+  background: rgb(var(--mm-panel));
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 0.56rem;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+}
+
+.skill-combobox-option {
+  padding: 0.6rem 0.7rem;
+  border-radius: 0.4rem;
+  font-size: 0.95rem;
+  line-height: 1.2;
+  color: rgb(var(--mm-ink));
+  cursor: pointer;
+  user-select: none;
+  touch-action: manipulation;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+
+.skill-combobox-option[data-highlighted="true"],
+.skill-combobox-option:hover {
+  background: rgb(var(--mm-accent) / 0.18);
+}
+
+.skill-combobox-option[aria-selected="true"] {
+  font-weight: 600;
 }
 
 .queue-step-preset-options {

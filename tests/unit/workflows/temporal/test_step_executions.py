@@ -21,7 +21,7 @@ def test_step_execution_id_uses_run_scoped_identity() -> None:
             workflow_id="wf-1",
             run_id="run-1",
             logical_step_id="implement",
-            attempt=2,
+            execution_ordinal=2,
         )
         == "wf-1:run-1:implement:execution:2"
     )
@@ -32,7 +32,7 @@ def test_operation_idempotency_key_includes_execution_ordinal_and_operation() ->
         workflow_id="wf-1",
         run_id="run-1",
         logical_step_id="implement",
-        attempt=2,
+        execution_ordinal=2,
         operation="execute",
     )
 
@@ -41,14 +41,14 @@ def test_operation_idempotency_key_includes_execution_ordinal_and_operation() ->
         workflow_id="wf-1",
         run_id="run-1",
         logical_step_id="implement",
-        attempt=3,
+        execution_ordinal=3,
         operation="execute",
     )
     assert key != step_execution_operation_idempotency_key(
         workflow_id="wf-1",
         run_id="run-1",
         logical_step_id="implement",
-        attempt=2,
+        execution_ordinal=2,
         operation="manifest_write",
     )
 
@@ -59,7 +59,7 @@ def test_manifest_payload_is_compact_boundary_contract() -> None:
         workflow_id="wf-1",
         run_id="run-1",
         logical_step_id="implement",
-        attempt=1,
+        execution_ordinal=1,
         reason="initial_execution",
         status="running",
         updated_at=now,
@@ -207,7 +207,7 @@ def test_manifest_payload_embeds_policy_git_effect_and_side_effect_records() -> 
         workflow_id="wf-1",
         run_id="run-1",
         logical_step_id="implement",
-        attempt=2,
+        execution_ordinal=2,
         reason="tests_failed",
         status="failed",
         updated_at=now,

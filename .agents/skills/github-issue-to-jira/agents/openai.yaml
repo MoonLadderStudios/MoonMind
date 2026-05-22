@@ -1,0 +1,4 @@
+interface:
+  display_name: "GitHub Issue to Jira"
+  short_description: "Triage GitHub issues into Jira"
+  default_prompt: "Use $github-issue-to-jira to review an open GitHub issue against the selected repository and either close it, request clarification, or create a Jira story."

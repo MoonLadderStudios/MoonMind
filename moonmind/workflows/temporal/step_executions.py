@@ -99,13 +99,13 @@ def step_execution_id(
     workflow_id: str,
     run_id: str,
     logical_step_id: str,
-    attempt: int,
+    execution_ordinal: int,
 ) -> str:
     return StepExecutionIdentityModel(
         workflowId=workflow_id,
         runId=run_id,
         logicalStepId=logical_step_id,
-        executionOrdinal=attempt,
+        executionOrdinal=execution_ordinal,
     ).step_execution_id
 
 
@@ -114,7 +114,7 @@ def step_execution_operation_idempotency_key(
     workflow_id: str,
     run_id: str,
     logical_step_id: str,
-    attempt: int,
+    execution_ordinal: int,
     operation: str,
 ) -> str:
     operation_id = str(operation or "").strip()
@@ -124,7 +124,7 @@ def step_execution_operation_idempotency_key(
         workflow_id=workflow_id,
         run_id=run_id,
         logical_step_id=logical_step_id,
-        attempt=attempt,
+        execution_ordinal=execution_ordinal,
     )
     return f"{identity}:{operation_id}"
 
@@ -316,7 +316,7 @@ def build_step_execution_manifest_payload(
     workflow_id: str,
     run_id: str,
     logical_step_id: str,
-    attempt: int,
+    execution_ordinal: int,
     reason: StepExecutionReason,
     status: StepExecutionStatus,
     updated_at: datetime,
@@ -352,7 +352,7 @@ def build_step_execution_manifest_payload(
         workflowId=workflow_id,
         runId=run_id,
         logicalStepId=logical_step_id,
-        executionOrdinal=attempt,
+        executionOrdinal=execution_ordinal,
         lineage=dict(lineage) if lineage is not None else None,
         reason=reason,
         status=status,

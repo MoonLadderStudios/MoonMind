@@ -1828,7 +1828,7 @@ class MoonMindRunWorkflow:
             workflow_id=workflow.info().workflow_id,
             run_id=workflow.info().run_id,
             logical_step_id=logical_step_id,
-            attempt=attempt,
+            execution_ordinal=attempt,
             reason=reason,  # type: ignore[arg-type]
             status="blocked" if launch_blocked else "running",
             updated_at=updated_at,
@@ -2572,7 +2572,7 @@ class MoonMindRunWorkflow:
         candidate = str(value or "").strip().lower()
         return bool(candidate and candidate in _PR_OPTIONAL_AGENT_SKILLS)
 
-    async def _attempt_publish_repair(
+    async def _execution_publish_repair(
         self,
         *,
         parameters: Mapping[str, Any],
@@ -3974,7 +3974,7 @@ class MoonMindRunWorkflow:
                                     workflow_id=workflow.info().workflow_id,
                                     run_id=workflow.info().run_id,
                                     logical_step_id=node_id,
-                                    attempt=current_step_execution,
+                                    execution_ordinal=current_step_execution,
                                     operation="execute",
                                 ),
                             },
@@ -4168,7 +4168,7 @@ class MoonMindRunWorkflow:
                                         workflow_id=workflow.info().workflow_id,
                                         run_id=workflow.info().run_id,
                                         logical_step_id=node_id,
-                                        attempt=current_step_execution,
+                                        execution_ordinal=current_step_execution,
                                         operation="execute",
                                     )
                                 )
@@ -4708,7 +4708,7 @@ class MoonMindRunWorkflow:
                 repair_failure_message = self._publish_reason or (
                     self._compose_no_change_publish_reason(publish_mode="pr")
                 )
-                repair_result = await self._attempt_publish_repair(
+                repair_result = await self._execution_publish_repair(
                     parameters=parameters,
                     failure_message=repair_failure_message,
                 )
@@ -7612,7 +7612,7 @@ class MoonMindRunWorkflow:
                 workflow_id=wf_info.workflow_id,
                 run_id=wf_info.run_id,
                 logical_step_id=node_id,
-                attempt=step_execution,
+                execution_ordinal=step_execution,
                 operation="agent_execute",
             )
         else:

@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 
 import type { BootPayload } from "../boot/parseBootPayload";
+import { SkillCombobox } from "../components/SkillCombobox";
 import { useLiquidGL } from "../lib/liquidGL/useLiquidGL";
 import { navigateTo } from "../lib/navigation";
 import {
@@ -20,7 +21,6 @@ import {
 const INLINE_TASK_INPUT_LIMIT_BYTES = 8_000;
 export const ARTIFACT_COMPLETE_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 2000];
 const ARTIFACT_COMPLETE_RETRY_MESSAGE = "artifact upload is not complete";
-const SKILL_OPTIONS_DATALIST_ID = "queue-skill-options";
 const MODEL_OPTIONS_DATALIST_ID = "queue-model-options";
 const EFFORT_OPTIONS_DATALIST_ID = "queue-effort-options";
 const REPOSITORY_OPTIONS_DATALIST_ID = "queue-repository-options";
@@ -2460,13 +2460,20 @@ function isVisiblePresetInput(
   presetSlug: string | undefined,
   definition: TaskTemplateInputDefinition,
 ): boolean {
-  if (isFeatureRequestInputKey(definition.name)) {
+  return isVisiblePresetInputName(presetSlug, definition.name);
+}
+
+function isVisiblePresetInputName(
+  presetSlug: string | undefined,
+  rawName: string,
+): boolean {
+  if (isFeatureRequestInputKey(rawName)) {
     return false;
   }
   const hiddenKeys = presetSlug
     ? HIDDEN_PRESET_INPUT_KEYS[presetSlug]
     : undefined;
-  if (hiddenKeys?.has(normalizeTemplateInputKey(definition.name))) {
+  if (hiddenKeys?.has(normalizeTemplateInputKey(rawName))) {
     return false;
   }
   return true;
@@ -2651,12 +2658,18 @@ function schemaContractHasFields(detail: Pick<TaskTemplateDetail, "inputSchema">
 function resolveSchemaCapabilityValues(
   detail: Pick<TaskTemplateDetail, "inputSchema" | "defaults">,
   explicitValues: Record<string, unknown>,
+  featureRequestOverride?: string,
 ): Record<string, unknown> {
   const values: Record<string, unknown> = {};
   const required = schemaRequired(detail.inputSchema);
   for (const [name, rawSchema] of Object.entries(schemaProperties(detail.inputSchema))) {
     const fieldSchema = recordValue(rawSchema);
-    const explicit = explicitValues[name];
+    const instructionFeatureRequest = String(featureRequestOverride || "").trim();
+    const rawExplicit = explicitValues[name];
+    const explicit =
+      isFeatureRequestInputKey(name) && instructionFeatureRequest
+        ? instructionFeatureRequest
+        : rawExplicit;
     const fallback = safeCapabilityDefault(detail.defaults, name);
     if (explicit !== undefined) {
       if (
@@ -2677,9 +2690,10 @@ function resolveSchemaCapabilityValues(
 function resolvedPresetInputValues(
   detail: Pick<TaskTemplateDetail, "inputSchema" | "defaults">,
   explicitValues: Record<string, unknown>,
+  featureRequestOverride?: string,
 ): Record<string, unknown> {
   return schemaContractHasFields(detail)
-    ? resolveSchemaCapabilityValues(detail, explicitValues)
+    ? resolveSchemaCapabilityValues(detail, explicitValues, featureRequestOverride)
     : explicitValues;
 }
 
@@ -5419,6 +5433,11 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     ],
   );
 
+  const skillComboboxOptions = useMemo(() => {
+    const ids = skillsQuery.data?.ids || [];
+    return Array.from(new Set(["auto", ...ids]));
+  }, [skillsQuery.data?.ids]);
+
   const effortOptions = useMemo(
     () =>
       Array.from(
@@ -6116,7 +6135,11 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     const schemaDriven = schemaContractHasFields(detail);
     const { values: inputs, assumptions } = schemaDriven
       ? {
-          values: resolveSchemaCapabilityValues(detail, inputValues),
+          values: resolveSchemaCapabilityValues(
+            detail,
+            inputValues,
+            featureRequestOverride,
+          ),
           assumptions: [] as string[],
         }
       : resolveTemplateInputs(
@@ -6327,7 +6350,11 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       if (schemaContractHasFields(detail)) {
         const validationErrors = validateSchemaCapabilityValues(
           detail,
-          resolveSchemaCapabilityValues(detail, step.presetInputValues),
+          resolveSchemaCapabilityValues(
+            detail,
+            step.presetInputValues,
+            step.instructions,
+          ),
         );
         if (Object.keys(validationErrors).length > 0) {
           updateStepPresetIfCurrent(localId, preset.key, {
@@ -6340,7 +6367,11 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       const expansion = await expandPresetForDraft({
         preset,
         detail,
-        inputValues: resolvedPresetInputValues(detail, step.presetInputValues),
+        inputValues: resolvedPresetInputValues(
+          detail,
+          step.presetInputValues,
+          step.instructions,
+        ),
         featureRequestOverride: step.instructions,
       });
       if (
@@ -6766,7 +6797,11 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         if (schemaContractHasFields(detail)) {
           const validationErrors = validateSchemaCapabilityValues(
             detail,
-            resolveSchemaCapabilityValues(detail, step.presetInputValues),
+            resolveSchemaCapabilityValues(
+              detail,
+              step.presetInputValues,
+              step.instructions,
+            ),
           );
           if (Object.keys(validationErrors).length > 0) {
             const message =
@@ -6786,7 +6821,11 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         const expansion = await expandPresetForDraft({
           preset,
           detail,
-          inputValues: resolvedPresetInputValues(detail, step.presetInputValues),
+          inputValues: resolvedPresetInputValues(
+            detail,
+            step.presetInputValues,
+            step.instructions,
+          ),
           featureRequestOverride: step.instructions,
           submitIntent,
         });
@@ -8357,12 +8396,6 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           aria-label="Steps"
         >
           <div id="queue-steps-list" className="stack queue-steps-list">
-            <datalist id={SKILL_OPTIONS_DATALIST_ID}>
-              <option value="auto" />
-              {(skillsQuery.data?.ids || []).map((skillId) => (
-                <option key={skillId} value={skillId} />
-              ))}
-            </datalist>
             <datalist id={MODEL_OPTIONS_DATALIST_ID}>
               {modelOptions.map((item) => (
                 <option key={item} value={item} />
@@ -8401,7 +8434,11 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
               const visiblePresetSchemaFields = schemaContractHasFields(
                 step.presetDetail,
               )
-                ? Object.entries(schemaProperties(step.presetDetail?.inputSchema))
+                ? Object.entries(
+                    schemaProperties(step.presetDetail?.inputSchema),
+                  ).filter(([name]) =>
+                    isVisiblePresetInputName(step.presetDetail?.slug, name),
+                  )
                 : [];
               const selectedSkillDetail =
                 skillsQuery.data?.detailsById[step.skillId.trim()] || null;
@@ -8677,21 +8714,24 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
 
                   {step.stepType === "skill" ? (
                     <div className="stack queue-step-type-panel">
-                      <label>
-                        Skill (optional)
-                        <input
-                          data-step-field="skillId"
-                          data-step-index={String(index)}
-                          list={SKILL_OPTIONS_DATALIST_ID}
+                      <div className="field">
+                        <label htmlFor={`queue-step-${step.localId}-skill-id`}>
+                          Skill (optional)
+                        </label>
+                        <SkillCombobox
+                          inputId={`queue-step-${step.localId}-skill-id`}
                           value={step.skillId}
+                          options={skillComboboxOptions}
+                          dataStepIndex={String(index)}
+                          ariaLabel={`Step ${index + 1} skill`}
                           placeholder={
                             isPrimaryStep
                               ? "auto (default), moonspec-orchestrate, ..."
                               : "inherit primary step skill"
                           }
-                          onChange={(event) =>
+                          onChange={(nextValue) =>
                             updateStep(step.localId, {
-                              skillId: event.target.value,
+                              skillId: nextValue,
                             })
                           }
                         />
@@ -8700,7 +8740,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                             Leave skill blank to inherit primary step defaults.
                           </span>
                         )}
-                      </label>
+                      </div>
 
                       {showSkillArgsField ? (
                         <label

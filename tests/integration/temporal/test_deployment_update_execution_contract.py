@@ -47,6 +47,9 @@ class HermeticRunner:
         self.commands.append(("up", command))
         return {"ok": True}
 
+    async def inspect_image(self, requested_image: str) -> Mapping[str, Any]:
+        return {"Id": "sha256:" + "a" * 64, "RepoTags": [requested_image]}
+
     async def verify(
         self,
         *,
