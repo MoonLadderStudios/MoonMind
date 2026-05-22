@@ -340,7 +340,7 @@ async def test_run_workflow_cancel_signal(mock_run_environment):
             assert result["status"] == "canceled"
 
 @pytest.mark.asyncio
-async def test_resume_forwards_operator_message_to_active_jules_child(monkeypatch):
+async def test_recovery_forwards_operator_message_to_active_jules_child(monkeypatch):
     workflow_instance = MoonMindRunWorkflow()
     workflow_instance._active_agent_child_workflow_id = "wf:child"
     workflow_instance._active_agent_id = "jules"
@@ -363,7 +363,7 @@ async def test_resume_forwards_operator_message_to_active_jules_child(monkeypatc
         "operator_message",
         {"message": "Please rename it to Provider Profiles."},
     )
-    assert workflow_instance._resume_requested is True
+    assert workflow_instance._recovery_requested is True
 
 @pytest.mark.asyncio
 async def test_send_message_forwards_operator_message_without_resuming(monkeypatch):
@@ -387,7 +387,7 @@ async def test_send_message_forwards_operator_message_without_resuming(monkeypat
         "operator_message",
         {"message": "Please use Provider Profiles."},
     )
-    assert workflow_instance._resume_requested is False
+    assert workflow_instance._recovery_requested is False
 
 @pytest.mark.asyncio
 async def test_update_inputs_forwards_runtime_selection_to_active_managed_child(monkeypatch):

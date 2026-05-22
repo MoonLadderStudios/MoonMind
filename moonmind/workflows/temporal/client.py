@@ -331,7 +331,7 @@ class TemporalClientAdapter:
             "stale_running": 0,
         }
 
-    # --- Worker Pause: Batch Signals for Quiesce mode (DOC-REQ-003) ---
+    # --- Worker Pause/Resume: Batch Signals for Quiesce mode (DOC-REQ-003) ---
 
     async def send_batch_pause_signal(
         self,

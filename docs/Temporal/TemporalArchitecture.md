@@ -427,7 +427,7 @@ Default rules:
 - Schedule-triggered recurring runs use fresh run Workflow IDs per tick, associated back to the schedule definition.
 - Manual schedule triggers use the schedule model and produce a fresh run Workflow ID unless the schedule contract explicitly says otherwise.
 - Rerun of the same logical execution uses Continue-As-New only where the run-history/rerun contract permits it.
-- Failed-step Resume is a linked follow-up execution with its own Workflow ID unless a future in-place continuation model is explicitly designed.
+- Failed-step recovery is a linked follow-up execution with its own Workflow ID unless a future in-place continuation model is explicitly designed.
 
 The exact per-type matrix belongs in `WorkflowTypeCatalogAndLifecycle.md` and `RunHistoryAndRerunSemantics.md`.
 
@@ -988,7 +988,7 @@ Rerun posture:
 
 - `RequestRerun` means Continue-As-New for the same logical execution only where permitted by the run-history/rerun contract
 - terminal rerun behavior must be explicitly implemented; do not assume closed executions accept ordinary updates
-- failed-step Resume is not `RequestRerun`; it is a separate linked follow-up execution with pinned source Workflow ID and Run ID
+- failed-step recovery is not `RequestRerun`; it is a separate linked follow-up execution with pinned source Workflow ID and Run ID
 
 ---
 

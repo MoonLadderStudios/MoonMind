@@ -9,8 +9,8 @@ import re
 from typing import Any, Literal
 
 from moonmind.schemas.step_execution_models import (
-    AttemptReason,
-    AttemptStatus,
+    StepExecutionReason,
+    StepExecutionStatus,
     StepExecutionIdentityModel,
     StepExecutionManifestModel,
 )
@@ -136,7 +136,7 @@ def workspace_policy_metadata(
     checkpoint_valid: bool | None = None,
     rejection_reason: str | None = None,
 ) -> dict[str, Any]:
-    """Build compact workspace policy diagnostics for an execution manifest."""
+    """Build compact workspace policy diagnostics for a step execution manifest."""
 
     required_kinds = checkpoint_kinds_for_workspace_policy(policy)
     checkpoint_text = str(checkpoint_ref or "").strip() or None
@@ -317,8 +317,8 @@ def build_step_execution_manifest_payload(
     run_id: str,
     logical_step_id: str,
     execution_ordinal: int,
-    reason: AttemptReason,
-    status: AttemptStatus,
+    reason: StepExecutionReason,
+    status: StepExecutionStatus,
     updated_at: datetime,
     started_at: datetime | None = None,
     summary: str | None = None,

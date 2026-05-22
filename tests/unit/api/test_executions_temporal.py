@@ -291,7 +291,7 @@ def test_list_executions_source_temporal_rejects_unknown_scope(client) -> None:
     assert response.json()["detail"]["code"] == "invalid_temporal_list_scope"
 
 
-def test_execution_router_exposes_recover_route_without_resume_alias() -> None:
+def test_execution_router_exposes_recover_route_without_recovery_alias() -> None:
     app = FastAPI()
     app.include_router(executions_module.router)
 

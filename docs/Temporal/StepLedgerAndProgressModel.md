@@ -15,7 +15,7 @@ It defines:
 - the bounded progress summary exposed on execution detail
 - step identity, status, attempts, checks, refs, and artifact semantics
 - latest-run behavior for task detail
-- preserved-step and checkpoint semantics for failed-step Resume
+- preserved-step and checkpoint semantics for failed-step recovery
 - the boundary between workflow state, artifacts, projections, and observability
 
 This document does **not** redefine plan syntax, artifact storage internals, or managed-run log transport. Those remain owned by:
@@ -41,10 +41,10 @@ MoonMind exposes step state through three layers:
    - Large outputs, logs, diagnostics, provider payloads, review details, and rich summaries remain in artifacts or managed-run observability APIs.
    - The ledger links to that evidence by semantic refs; it does not inline it.
 
-4. **Resume checkpoint layer**
-   - Failed-step Resume restores completed work from durable checkpoint evidence.
+4. **Recovery checkpoint layer**
+   - Failed-step recovery restores completed work from durable checkpoint evidence.
    - The checkpoint layer records the source run, completed prior steps, output refs, prepared input refs, and workspace, branch, commit, or equivalent state before the failed step.
-   - Resume checkpoints are durable evidence, not authored task input and not UI-derived state.
+   - Recovery checkpoints are durable evidence, not authored task input and not UI-derived state.
 
 ## 3. Canonical source rules
 
@@ -181,7 +181,7 @@ Representative response:
 
 ## 7. Step row contract
 
-Each row in the ledger represents the **current view of one logical step attempt** for the current/latest run.
+Each row in the ledger represents the **current view of one logical step execution** for the current/latest run.
 
 Required fields:
 
@@ -202,7 +202,7 @@ Required fields:
 | `checks[]` | Structured review/check verdicts from §9 |
 | `refs` | Child-workflow / task-run references from §10 |
 | `artifacts` | Semantic artifact refs from §11 |
-| `preservedFrom` | Optional source-run provenance when this row is restored during failed-step Resume |
+| `preservedFrom` | Optional source-run provenance when this row is restored during failed-step recovery |
 | `lastError` | Bounded latest error summary |
 
 Rules:
@@ -211,7 +211,7 @@ Rules:
 - clients must not infer step identity from array position alone
 - `summary` must stay bounded and display-safe
 - `lastError` is a summary only; large error details belong in artifacts
-- `preservedFrom` must be present when a row is reused from a source run during failed-step Resume
+- `preservedFrom` must be present when a row is reused from a source run during failed-step recovery
 - preserved rows must not be counted as freshly executed work in the resumed run
 
 If a step exhausts retries because of model-provider rate limits, the current
@@ -284,7 +284,7 @@ Rules:
   attempt summary and `lastError`, with detailed attempt evidence linked through
   artifacts rather than expanded inline
 
-### 10.1 Preserved attempts during failed-step Resume
+### 10.1 Preserved attempts during failed-step recovery
 
 When a failed task is resumed from the failed step, completed prior steps are represented in the resumed execution as preserved rows.
 
@@ -336,7 +336,7 @@ Recommended artifact slots:
 - `runtimeDiagnostics`
 - `providerSnapshot`
 - `workspaceCheckpoint`
-- `resumeCheckpoint`
+- `recoveryCheckpoint`
 
 Recommended artifact-link metadata:
 
@@ -346,9 +346,9 @@ Recommended artifact-link metadata:
 
 Clients must not guess “latest” step evidence by sorting artifacts locally. The server groups by `(step_id, attempt, link_type)` and returns the canonical refs.
 
-### 11.3 Resume checkpoint artifact
+### 11.3 Recovery checkpoint artifact
 
-The resume checkpoint is the durable evidence that makes failed-step Resume possible.
+The recovery checkpoint is the durable evidence that makes failed-step recovery possible.
 
 Recommended content type:
 
@@ -389,7 +389,7 @@ Representative shape:
   "preparedArtifactRefs": [
     { "artifactId": "art_input", "scope": "task" }
   ],
-  "resumeWorkspace": {
+  "recoveryWorkspace": {
     "kind": "workspace_checkpoint",
     "ref": "art_workspace_before_failed_step"
   }
@@ -426,7 +426,7 @@ Rules:
 - Postgres projection rows are **not** the authority for step truth
 - projection rows must be keyed by `(workflowId, runId, logicalStepId, attempt)`
 - projection repair must reconcile from workflow state and artifact linkage, not invent state locally
-- resume checkpoint projections, if added, must remain downstream of the source run's ledger and artifact linkage
+- recovery checkpoint projections, if added, must remain downstream of the source run's ledger and artifact linkage
 
 ## 13. Visibility, Memo, and `mm_updated_at`
 
@@ -448,7 +448,7 @@ Rules:
 - step succeeds
 - step fails
 - step is canceled or skipped
-- resume checkpoint is created or validated
+- recovery checkpoint is created or validated
 - preserved step rows are materialized in a resumed execution
 
 `mm_updated_at` should **not** move on:
@@ -489,7 +489,7 @@ MoonMind's step model is:
 - **plan artifact** for planned structure
 - **workflow query/state** for current step truth
 - **artifacts and `/api/task-runs/*`** for durable evidence
-- **resume checkpoints** for restoring completed work before a failed step
+- **recovery checkpoints** for restoring completed work before a failed step
 - **latest-run task detail** as the default operator view
 
 This keeps step tracking task-oriented, Temporal-idiomatic, and compact enough to preserve healthy workflow history.

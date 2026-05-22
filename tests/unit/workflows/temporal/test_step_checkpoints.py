@@ -48,7 +48,7 @@ def test_checkpoint_payload_uses_deterministic_boundary_identity() -> None:
 
     payload = build_step_checkpoint_payload(
         identity=identity,
-        boundary="before_attempt",
+        boundary="before_execution",
         task_input_snapshot_ref="artifact-input",
         plan_ref="artifact-plan",
         plan_digest="sha256:plan",
@@ -58,18 +58,18 @@ def test_checkpoint_payload_uses_deterministic_boundary_identity() -> None:
     )
 
     expected_id = (
-        "workflow-1:run-1:implement-story:execution:2:checkpoint:before_attempt"
+        "workflow-1:run-1:implement-story:execution:2:checkpoint:before_execution"
     )
     assert payload["contentType"] == STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE
     assert payload["checkpointId"] == expected_id
-    assert build_step_checkpoint_id(identity, "before_attempt") == expected_id
-    assert build_step_checkpoint_idempotency_key(identity, "before_attempt") == (
+    assert build_step_checkpoint_id(identity, "before_execution") == expected_id
+    assert build_step_checkpoint_idempotency_key(identity, "before_execution") == (
         f"{expected_id}:write"
     )
 
     repeated = build_step_checkpoint_payload(
         identity=identity,
-        boundary="before_attempt",
+        boundary="before_execution",
         task_input_snapshot_ref="artifact-input",
         plan_ref="artifact-plan",
         plan_digest="sha256:plan",
@@ -85,7 +85,7 @@ def test_checkpoint_model_rejects_inline_large_or_raw_content() -> None:
     payload = {
         **build_step_checkpoint_payload(
             identity=identity,
-            boundary="after_attempt",
+            boundary="after_execution",
             task_input_snapshot_ref="artifact-input",
             plan_ref="artifact-plan",
             workspace=_workspace_patch(),
@@ -137,7 +137,7 @@ def test_workspace_policy_matrix_and_validation_failure_codes() -> None:
     checkpoint = StepExecutionCheckpointModel.model_validate(
         build_step_checkpoint_payload(
             identity=_identity(),
-            boundary="before_attempt",
+            boundary="before_execution",
             task_input_snapshot_ref="artifact-input",
             plan_digest="sha256:plan",
             workspace={
@@ -180,7 +180,7 @@ def test_validation_reports_source_plan_and_artifact_failures() -> None:
     checkpoint = StepExecutionCheckpointModel.model_validate(
         build_step_checkpoint_payload(
             identity=_identity(),
-            boundary="before_recover_restoration",
+            boundary="before_recovery_restoration",
             task_input_snapshot_ref="artifact-input",
             plan_digest="sha256:plan",
             workspace=_workspace_patch(),
@@ -257,7 +257,7 @@ def test_validation_collects_artifact_refs_from_space_separated_keys() -> None:
     checkpoint = StepExecutionCheckpointModel.model_validate(
         build_step_checkpoint_payload(
             identity=_identity(),
-            boundary="before_recover_restoration",
+            boundary="before_recovery_restoration",
             task_input_snapshot_ref="artifact-input",
             plan_digest="sha256:plan",
             workspace=_workspace_patch(),

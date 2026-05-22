@@ -26,7 +26,7 @@ def _valid_checkpoint() -> StepExecutionCheckpointModel:
     return StepExecutionCheckpointModel.model_validate(
         build_step_checkpoint_payload(
             identity=_identity(),
-            boundary="before_attempt",
+            boundary="before_execution",
             task_input_snapshot_ref="artifact-input",
             plan_ref="artifact-plan",
             plan_digest="sha256:plan",
@@ -67,7 +67,7 @@ def test_checkpoint_validation_boundary_allows_compact_valid_evidence() -> None:
         "failureCode": None,
         "message": "checkpoint validation passed",
         "checkpointId": (
-            "workflow-1:run-1:implement-story:execution:2:checkpoint:before_attempt"
+            "workflow-1:run-1:implement-story:execution:2:checkpoint:before_execution"
         ),
         "checkpointRef": "artifact-checkpoint",
     }

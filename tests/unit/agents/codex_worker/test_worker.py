@@ -7817,7 +7817,7 @@ async def test_jules_worker_cancellation_stays_truthful_when_provider_cancel_mis
     )
 
 @pytest.mark.asyncio
-async def test_jules_worker_resume_preserves_canceled_checkpoint_status(
+async def test_jules_worker_recovery_preserves_canceled_checkpoint_status(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:

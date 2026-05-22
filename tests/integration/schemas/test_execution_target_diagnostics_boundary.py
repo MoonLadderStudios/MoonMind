@@ -80,7 +80,7 @@ def test_execution_model_preserves_target_diagnostics_alias_contract() -> None:
                         "sourceRunId": "run-source",
                     }
                 ],
-                "failedResumePhase": "checkpoint_validation",
+                "failedRecoveryPhase": "checkpoint_validation",
             },
             "degradedReason": None,
         },
@@ -101,7 +101,7 @@ def test_execution_model_preserves_target_diagnostics_alias_contract() -> None:
         == "degraded"
     )
     assert (
-        payload["targetDiagnostics"]["recovery"]["failedResumePhase"]
+        payload["targetDiagnostics"]["recovery"]["failedRecoveryPhase"]
         == "checkpoint_validation"
     )
 
@@ -167,7 +167,7 @@ def test_execution_model_preserves_failed_step_execution_recovery_phase() -> Non
                         "sourceRunId": "run-source",
                     }
                 ],
-                "failedResumePhase": "failed_step_execution",
+                "failedRecoveryPhase": "failed_step_execution",
             },
             "degradedReason": None,
         },
@@ -176,7 +176,7 @@ def test_execution_model_preserves_failed_step_execution_recovery_phase() -> Non
     payload = execution.model_dump(by_alias=True)
     recovery = payload["targetDiagnostics"]["recovery"]
 
-    assert recovery["failedResumePhase"] == "failed_step_execution"
+    assert recovery["failedRecoveryPhase"] == "failed_step_execution"
     assert recovery["preservedSteps"][0]["logicalStepId"] == "prepare"
 
 

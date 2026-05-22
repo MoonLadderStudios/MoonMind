@@ -117,7 +117,7 @@ def validate_step_checkpoint(
     if source.execution_ordinal != expected.execution_ordinal:
         return _invalid(
             request,
-            "attempt_mismatch",
+            "execution_mismatch",
             "checkpoint execution ordinal mismatch",
         )
     if checkpoint.task_input_snapshot_ref != request.expected_task_input_snapshot_ref:

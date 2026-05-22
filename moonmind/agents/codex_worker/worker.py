@@ -6898,7 +6898,7 @@ class CodexWorker:
         artifacts_dir: Path,
         step_log_offsets: Mapping[str, object],
     ) -> None:
-        """Persist resume checkpoints for step-log offset boundaries."""
+        """Persist recovery checkpoints for step-log offset boundaries."""
 
         if not step_log_offsets:
             return

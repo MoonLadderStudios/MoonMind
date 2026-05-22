@@ -74,7 +74,7 @@ Because steps are distinct activity or child-workflow executions:
 
 - step progress is durable across worker restarts
 - failed steps can be retried without rerunning earlier successful expensive steps
-- retry history is represented as step attempts scoped to `(workflowId, runId, logicalStepId, attempt)`
+- retry history is represented as step executions scoped to `(workflowId, runId, logicalStepId, attempt)`
 - current task detail shows the latest/current run's steps only by default
 
 ## 5. Observability posture

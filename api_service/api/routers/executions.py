@@ -94,7 +94,7 @@ from moonmind.schemas.temporal_models import (
 )
 from moonmind.workflows.temporal import (
     TemporalExecutionNotFoundError,
-    TemporalExecutionResumeCheckpointError,
+    TemporalExecutionRecoveryCheckpointError,
     TemporalExecutionService,
     TemporalExecutionValidationError,
     build_manifest_status_snapshot,
@@ -1918,8 +1918,8 @@ def _serialize_execution(
         if workflow_type_value == "MoonMind.Run"
         else None
     )
-    resume_summary = _build_resume_summary(record, actions=actions)
-    related_runs = _build_resume_related_runs(record, params=params)
+    resume_summary = _build_recovery_summary(record, actions=actions)
+    related_runs = _build_recovery_related_runs(record, params=params)
     target_diagnostics = _build_target_diagnostics(
         record,
         params=params,
@@ -2102,54 +2102,54 @@ def _proposal_outcomes_from_summary(
     return outcomes
 
 
-def _resume_checkpoint_ref_from_record(record) -> str | None:
+def _recovery_checkpoint_ref_from_record(record) -> str | None:
     memo = dict(getattr(record, "memo", None) or {})
     search_attributes = dict(getattr(record, "search_attributes", None) or {})
     params = dict(getattr(record, "parameters", None) or {})
-    resume_block = params.get("resumeSource")
-    if not isinstance(resume_block, Mapping):
-        resume_block = params.get("resume_source")
-    if not isinstance(resume_block, Mapping):
-        resume_block = {}
+    recovery_block = params.get("recoverySource")
+    if not isinstance(recovery_block, Mapping):
+        recovery_block = params.get("recovery_source")
+    if not isinstance(recovery_block, Mapping):
+        recovery_block = {}
     for value in (
-        memo.get("resume_checkpoint_ref"),
-        memo.get("resumeCheckpointRef"),
-        search_attributes.get("mm_resume_checkpoint_ref"),
-        resume_block.get("resumeCheckpointRef"),
-        resume_block.get("resume_checkpoint_ref"),
+        memo.get("recovery_checkpoint_ref"),
+        memo.get("recoveryCheckpointRef"),
+        search_attributes.get("mm_recovery_checkpoint_ref"),
+        recovery_block.get("recoveryCheckpointRef"),
+        recovery_block.get("recovery_checkpoint_ref"),
     ):
         candidate = str(value or "").strip()
         if candidate:
             return candidate
     return None
 
-def _resume_failed_step_id_from_record(record) -> str | None:
+def _recovery_failed_step_id_from_record(record) -> str | None:
     memo = dict(getattr(record, "memo", None) or {})
     params = dict(getattr(record, "parameters", None) or {})
-    resume_block = params.get("resumeSource")
-    if not isinstance(resume_block, Mapping):
-        resume_block = params.get("resume_source")
-    if not isinstance(resume_block, Mapping):
-        resume_block = {}
+    recovery_block = params.get("recoverySource")
+    if not isinstance(recovery_block, Mapping):
+        recovery_block = params.get("recovery_source")
+    if not isinstance(recovery_block, Mapping):
+        recovery_block = {}
     for value in (
         memo.get("resume_failed_step_id"),
         memo.get("resumeFailedStepId"),
-        resume_block.get("failedStepId"),
-        resume_block.get("failed_step_id"),
+        recovery_block.get("failedStepId"),
+        recovery_block.get("failed_step_id"),
     ):
         candidate = str(value or "").strip()
         if candidate:
             return candidate
     return None
 
-def _resume_source_block_from_record(record) -> Mapping[str, Any]:
+def _recovery_source_block_from_record(record) -> Mapping[str, Any]:
     params = dict(getattr(record, "parameters", None) or {})
-    resume_block = params.get("resumeSource")
-    if not isinstance(resume_block, Mapping):
-        resume_block = params.get("resume_source")
-    if not isinstance(resume_block, Mapping):
+    recovery_block = params.get("recoverySource")
+    if not isinstance(recovery_block, Mapping):
+        recovery_block = params.get("recovery_source")
+    if not isinstance(recovery_block, Mapping):
         return {}
-    return resume_block
+    return recovery_block
 
 def _first_nonempty_text(*values: Any) -> str | None:
     for value in values:
@@ -2158,18 +2158,18 @@ def _first_nonempty_text(*values: Any) -> str | None:
             return candidate
     return None
 
-def _resume_completed_step_refs_from_record(record) -> list[str]:
+def _recovery_completed_step_refs_from_record(record) -> list[str]:
     memo = dict(getattr(record, "memo", None) or {})
     search_attributes = dict(getattr(record, "search_attributes", None) or {})
-    resume_block = _resume_source_block_from_record(record)
+    recovery_block = _recovery_source_block_from_record(record)
     candidates = (
         memo.get("resume_completed_step_refs"),
         memo.get("resumeCompletedStepRefs"),
         memo.get("resume_preserved_step_refs"),
         memo.get("resumePreservedStepRefs"),
-        search_attributes.get("mm_resume_completed_step_refs"),
-        resume_block.get("completedStepRefs"),
-        resume_block.get("completed_step_refs"),
+        search_attributes.get("mm_recovery_completed_step_refs"),
+        recovery_block.get("completedStepRefs"),
+        recovery_block.get("completed_step_refs"),
     )
     refs: list[str] = []
     for value in candidates:
@@ -2182,7 +2182,7 @@ def _resume_completed_step_refs_from_record(record) -> list[str]:
         refs.extend(part for part in parts if part)
     if refs:
         return refs
-    preserved_steps = resume_block.get("preservedSteps") or resume_block.get(
+    preserved_steps = recovery_block.get("preservedSteps") or recovery_block.get(
         "preserved_steps"
     )
     if not isinstance(preserved_steps, list):
@@ -2199,33 +2199,33 @@ def _resume_completed_step_refs_from_record(record) -> list[str]:
             )
     return refs
 
-def _resume_workspace_checkpoint_ref_from_record(record) -> str | None:
+def _recovery_workspace_checkpoint_ref_from_record(record) -> str | None:
     memo = dict(getattr(record, "memo", None) or {})
     search_attributes = dict(getattr(record, "search_attributes", None) or {})
-    resume_block = _resume_source_block_from_record(record)
-    workspace = resume_block.get("resumeWorkspace") or resume_block.get(
-        "resume_workspace"
+    recovery_block = _recovery_source_block_from_record(record)
+    workspace = recovery_block.get("recoveryWorkspace") or recovery_block.get(
+        "recovery_workspace"
     )
     if not isinstance(workspace, Mapping):
         workspace = {}
     return _first_nonempty_text(
-        memo.get("resume_workspace_checkpoint_ref"),
-        memo.get("resumeWorkspaceCheckpointRef"),
-        memo.get("resume_workspace_ref"),
-        memo.get("resumeWorkspaceRef"),
-        search_attributes.get("mm_resume_workspace_checkpoint_ref"),
-        search_attributes.get("mm_resume_workspace_ref"),
-        resume_block.get("resumeWorkspaceCheckpointRef"),
-        resume_block.get("resume_workspace_checkpoint_ref"),
+        memo.get("recovery_workspace_checkpoint_ref"),
+        memo.get("recoveryWorkspaceCheckpointRef"),
+        memo.get("recovery_workspace_ref"),
+        memo.get("recoveryWorkspaceRef"),
+        search_attributes.get("mm_recovery_workspace_checkpoint_ref"),
+        search_attributes.get("mm_recovery_workspace_ref"),
+        recovery_block.get("recoveryWorkspaceCheckpointRef"),
+        recovery_block.get("recovery_workspace_checkpoint_ref"),
         workspace.get("checkpointRef"),
         workspace.get("checkpoint_ref"),
         workspace.get("ref"),
     )
 
-def _resume_plan_identity_from_record(record) -> str | None:
+def _recovery_plan_identity_from_record(record) -> str | None:
     memo = dict(getattr(record, "memo", None) or {})
     search_attributes = dict(getattr(record, "search_attributes", None) or {})
-    resume_block = _resume_source_block_from_record(record)
+    recovery_block = _recovery_source_block_from_record(record)
     return _first_nonempty_text(
         getattr(record, "plan_ref", None),
         memo.get("resume_plan_ref"),
@@ -2234,25 +2234,25 @@ def _resume_plan_identity_from_record(record) -> str | None:
         memo.get("resumePlanDigest"),
         memo.get("plan_ref"),
         memo.get("plan_digest"),
-        search_attributes.get("mm_resume_plan_ref"),
-        search_attributes.get("mm_resume_plan_digest"),
-        resume_block.get("sourcePlanRef"),
-        resume_block.get("source_plan_ref"),
-        resume_block.get("sourcePlanDigest"),
-        resume_block.get("source_plan_digest"),
+        search_attributes.get("mm_recovery_plan_ref"),
+        search_attributes.get("mm_recovery_plan_digest"),
+        recovery_block.get("sourcePlanRef"),
+        recovery_block.get("source_plan_ref"),
+        recovery_block.get("sourcePlanDigest"),
+        recovery_block.get("source_plan_digest"),
     )
 
 
-def _resume_evidence_marked_stale(record) -> bool:
+def _recovery_evidence_marked_stale(record) -> bool:
     memo = dict(getattr(record, "memo", None) or {})
     search_attributes = dict(getattr(record, "search_attributes", None) or {})
-    resume_block = dict(_resume_source_block_from_record(record) or {})
+    recovery_block = dict(_recovery_source_block_from_record(record) or {})
     for value in (
         memo.get("resume_evidence_stale"),
         memo.get("resumeEvidenceStale"),
-        search_attributes.get("mm_resume_evidence_stale"),
-        resume_block.get("resumeEvidenceStale"),
-        resume_block.get("resume_evidence_stale"),
+        search_attributes.get("mm_recovery_evidence_stale"),
+        recovery_block.get("resumeEvidenceStale"),
+        recovery_block.get("resume_evidence_stale"),
     ):
         if isinstance(value, bool):
             if value:
@@ -2265,22 +2265,22 @@ def _resume_evidence_marked_stale(record) -> bool:
     return False
 
 
-def _resume_evidence_disabled_reason(record) -> str | None:
-    if _resume_evidence_marked_stale(record):
-        return "stale_resume_evidence"
-    if not _resume_checkpoint_ref_from_record(record):
-        return "resume_checkpoint_missing"
-    if not _resume_failed_step_id_from_record(record):
+def _recovery_evidence_disabled_reason(record) -> str | None:
+    if _recovery_evidence_marked_stale(record):
+        return "stale_recovery_evidence"
+    if not _recovery_checkpoint_ref_from_record(record):
+        return "recovery_checkpoint_missing"
+    if not _recovery_failed_step_id_from_record(record):
         return "failed_step_identity_missing"
-    if not _resume_completed_step_refs_from_record(record):
+    if not _recovery_completed_step_refs_from_record(record):
         return "completed_step_refs_missing"
-    if not _resume_workspace_checkpoint_ref_from_record(record):
+    if not _recovery_workspace_checkpoint_ref_from_record(record):
         return "workspace_checkpoint_missing"
-    if not _resume_plan_identity_from_record(record):
+    if not _recovery_plan_identity_from_record(record):
         return "plan_identity_missing"
     return None
 
-def _build_resume_summary(
+def _build_recovery_summary(
     record,
     *,
     actions: ExecutionActionCapabilityModel,
@@ -2289,37 +2289,37 @@ def _build_resume_summary(
         return None
     return ExecutionResumeSummaryModel(
         available=actions.can_recover_from_failed_step,
-        checkpointRef=_resume_checkpoint_ref_from_record(record),
-        failedStepId=_resume_failed_step_id_from_record(record),
+        checkpointRef=_recovery_checkpoint_ref_from_record(record),
+        failedStepId=_recovery_failed_step_id_from_record(record),
         sourceRunId=str(getattr(record, "run_id", "") or "").strip() or None,
         disabledReason=actions.disabled_reasons.get("canRecoverFromFailedStep"),
     )
 
-def _build_resume_related_runs(
+def _build_recovery_related_runs(
     record,
     *,
     params: Mapping[str, Any],
 ) -> list[ExecutionRelatedRunModel]:
-    resume_source = params.get("resumeSource")
-    if not isinstance(resume_source, Mapping):
-        resume_source = params.get("resume_source")
-    if not isinstance(resume_source, Mapping):
+    recovery_source = params.get("recoverySource")
+    if not isinstance(recovery_source, Mapping):
+        recovery_source = params.get("recovery_source")
+    if not isinstance(recovery_source, Mapping):
         return []
     source_workflow_id = str(
-        resume_source.get("sourceWorkflowId")
-        or resume_source.get("source_workflow_id")
+        recovery_source.get("sourceWorkflowId")
+        or recovery_source.get("source_workflow_id")
         or ""
     ).strip()
     if not source_workflow_id:
         return []
     source_run_id = str(
-        resume_source.get("sourceRunId") or resume_source.get("source_run_id") or ""
+        recovery_source.get("sourceRunId") or recovery_source.get("source_run_id") or ""
     ).strip() or None
     return [
         ExecutionRelatedRunModel(
             workflowId=source_workflow_id,
             runId=source_run_id,
-            relationship="Resumed from failed step",
+            relationship="Recovered from failed step",
             status="failed",
             href=f"/workflows/{source_workflow_id}",
         )
@@ -2529,10 +2529,10 @@ def _merge_target_overlay(
         }
     )
 
-def _preserved_steps_from_resume_source(
-    resume_source: Mapping[str, Any],
+def _preserved_steps_from_recovery_source(
+    recovery_source: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
-    raw_steps = resume_source.get("preservedSteps") or resume_source.get(
+    raw_steps = recovery_source.get("preservedSteps") or recovery_source.get(
         "preserved_steps"
     )
     if not isinstance(raw_steps, list):
@@ -2550,10 +2550,10 @@ def _preserved_steps_from_resume_source(
         ).strip()
         if not logical_step_id:
             continue
-        source_attempt = item.get("sourceExecutionOrdinal", item.get("attempt"))
+        source_execution_ordinal = item.get("sourceExecutionOrdinal", item.get("attempt"))
         try:
             normalized_attempt = (
-                int(source_attempt) if source_attempt is not None else None
+                int(source_execution_ordinal) if source_execution_ordinal is not None else None
             )
         except (TypeError, ValueError):
             normalized_attempt = None
@@ -2565,16 +2565,16 @@ def _preserved_steps_from_resume_source(
                 "sourceWorkflowId": str(
                     item.get("sourceWorkflowId")
                     or item.get("source_workflow_id")
-                    or resume_source.get("sourceWorkflowId")
-                    or resume_source.get("source_workflow_id")
+                    or recovery_source.get("sourceWorkflowId")
+                    or recovery_source.get("source_workflow_id")
                     or ""
                 ).strip()
                 or None,
                 "sourceRunId": str(
                     item.get("sourceRunId")
                     or item.get("source_run_id")
-                    or resume_source.get("sourceRunId")
-                    or resume_source.get("source_run_id")
+                    or recovery_source.get("sourceRunId")
+                    or recovery_source.get("source_run_id")
                     or ""
                 ).strip()
                 or None,
@@ -2582,7 +2582,7 @@ def _preserved_steps_from_resume_source(
         )
     return preserved_steps
 
-def _failed_resume_phase(disabled_reason: str | None) -> str | None:
+def _failed_recovery_phase(disabled_reason: str | None) -> str | None:
     if not disabled_reason:
         return None
     if disabled_reason == "workspace_checkpoint_missing":
@@ -2590,14 +2590,14 @@ def _failed_resume_phase(disabled_reason: str | None) -> str | None:
     if disabled_reason == "completed_step_refs_missing":
         return "preserved_output_injection"
     if disabled_reason in {
-        "resume_checkpoint_missing",
+        "recovery_checkpoint_missing",
         "failed_step_identity_missing",
         "plan_identity_missing",
     }:
         return "checkpoint_validation"
     return None
 
-def _normalize_failed_resume_phase(value: Any) -> str | None:
+def _normalize_failed_recovery_phase(value: Any) -> str | None:
     phase = str(value or "").strip().lower().replace("-", "_")
     if phase in {
         "workspace_restoration",
@@ -2695,55 +2695,55 @@ def _build_target_diagnostics(
                 overlay=overlay,
             )
 
-    resume_source = _resume_source_block_from_record(record)
+    recovery_source = _recovery_source_block_from_record(record)
     diagnostics_recovery = _target_diagnostics_recovery_block(diagnostics_block)
     source_workflow_id = _mapping_str_value(
-        resume_source, "sourceWorkflowId", "source_workflow_id"
+        recovery_source, "sourceWorkflowId", "source_workflow_id"
     ) or _mapping_str_value(
         diagnostics_recovery, "sourceWorkflowId", "source_workflow_id"
     )
     source_run_id = _mapping_str_value(
-        resume_source, "sourceRunId", "source_run_id"
+        recovery_source, "sourceRunId", "source_run_id"
     ) or _mapping_str_value(diagnostics_recovery, "sourceRunId", "source_run_id")
-    failed_resume_phase = _normalize_failed_resume_phase(
+    failed_recovery_phase = _normalize_failed_recovery_phase(
         _mapping_str_value(
-            diagnostics_recovery, "failedResumePhase", "failed_resume_phase"
+            diagnostics_recovery, "failedRecoveryPhase", "failed_recovery_phase"
         )
-    ) or _failed_resume_phase(
+    ) or _failed_recovery_phase(
         resume_summary.disabled_reason if resume_summary else None
     )
     checkpoint_ref = (
         resume_summary.checkpoint_ref if resume_summary else None
     ) or _mapping_str_value(diagnostics_recovery, "checkpointRef", "checkpoint_ref")
-    preserved_steps = _preserved_steps_from_resume_source(
-        resume_source
-    ) or _preserved_steps_from_resume_source(diagnostics_recovery)
+    preserved_steps = _preserved_steps_from_recovery_source(
+        recovery_source
+    ) or _preserved_steps_from_recovery_source(diagnostics_recovery)
     recovery = None
-    has_resume_evidence = bool(
-        resume_source
+    has_recovery_evidence = bool(
+        recovery_source
         or diagnostics_recovery
         or (
             resume_summary
             and (
                 checkpoint_ref
                 or resume_summary.failed_step_id
-                or failed_resume_phase
+                or failed_recovery_phase
             )
         )
     )
-    if has_resume_evidence:
+    if has_recovery_evidence:
         recovery = {
             "resumed": bool(
                 source_workflow_id
                 or source_run_id
-                or resume_source
+                or recovery_source
                 or diagnostics_recovery.get("resumed")
             ),
             "sourceWorkflowId": source_workflow_id,
             "sourceRunId": source_run_id,
             "checkpointRef": checkpoint_ref,
             "preservedSteps": preserved_steps,
-            "failedResumePhase": failed_resume_phase,
+            "failedRecoveryPhase": failed_recovery_phase,
         }
 
     degraded_reason = str(
@@ -3328,7 +3328,7 @@ def _fallback_step_ledger_from_record(record: Any) -> StepLedgerSnapshotModel | 
             if row.get("order") != current_order:
                 continue
             row["status"] = "awaiting_external" if waiting_reason else "running"
-            row["executionOrdinal"] = max(int(row.get("executionOrdinal") or 0), 1)
+            row["attempt"] = max(int(row.get("attempt") or 0), 1)
             row["startedAt"] = row.get("startedAt") or updated_at.isoformat()
             row["updatedAt"] = updated_at.isoformat()
             row["waitingReason"] = waiting_reason or None
@@ -3474,12 +3474,12 @@ def _step_execution_manifest_refs(row: Any) -> list[str]:
     for source in (getattr(row, "refs", None), getattr(row, "artifacts", None)):
         if source is None:
             continue
-        raw_refs = getattr(source, "execution_manifest_refs", None)
+        raw_refs = getattr(source, "step_execution_manifest_refs", None)
         if isinstance(raw_refs, list):
             refs.extend(str(ref).strip() for ref in raw_refs if str(ref).strip())
         latest_ref = (
-            getattr(source, "latest_execution_manifest_ref", None)
-            or getattr(source, "execution_manifest_ref", None)
+            getattr(source, "latest_step_execution_manifest_ref", None)
+            or getattr(source, "step_execution_manifest_ref", None)
         )
         if latest_ref:
             refs.append(str(latest_ref).strip())
@@ -3676,7 +3676,7 @@ async def _read_step_execution_manifest(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
-                "code": "invalid_execution_manifest_ref",
+                "code": "invalid_step_execution_manifest_ref",
                 "message": "Step Execution manifest ref is invalid.",
             },
         )
@@ -3692,7 +3692,7 @@ async def _read_step_execution_manifest(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
-                "code": "execution_manifest_unauthorized",
+                "code": "step_execution_manifest_unauthorized",
                 "message": "Not authorized to read Step Execution manifest evidence.",
             },
         ) from exc
@@ -3700,7 +3700,7 @@ async def _read_step_execution_manifest(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={
-                "code": "invalid_execution_manifest",
+                "code": "invalid_step_execution_manifest",
                 "message": "Step Execution manifest artifact is invalid.",
             },
         ) from exc
@@ -3774,7 +3774,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
     has_task_input_snapshot = bool(
         _task_input_snapshot_ref_from_memo(dict(getattr(record, "memo", None) or {}))
     )
-    resume_evidence_disabled_reason = _resume_evidence_disabled_reason(record)
+    resume_evidence_disabled_reason = _recovery_evidence_disabled_reason(record)
     if (
         workflow_type_value != "MoonMind.Run"
         or not temporal_task_editing_enabled
@@ -4069,15 +4069,14 @@ async def _validate_and_collect_task_input_attachments(
             if refs:
                 step_refs[index] = refs
 
-    resolved_step_ids = _resolve_task_step_ids(raw_steps)
-
     attachment_index: list[dict[str, Any]] = []
     for ref in objective_refs:
         attachment_index.append({**ref, "targetKind": "objective"})
     for index, refs in step_refs.items():
-        step_ref = (
-            resolved_step_ids[index] if index < len(resolved_step_ids) else ""
-        )
+        step = raw_steps[index] if isinstance(raw_steps, list) else {}
+        step_ref = ""
+        if isinstance(step, Mapping):
+            step_ref = str(step.get("id") or "").strip()
         for ref in refs:
             attachment_index.append(
                 {
@@ -4199,48 +4198,6 @@ def _normalize_task_proposal_policy(raw: Any) -> dict[str, Any] | None:
     except (TaskContractError, ValidationError, ValueError) as exc:
         raise _invalid_task_request(str(exc)) from exc
 
-_STEP_ID_ALIASES: tuple[str, ...] = (
-    "id",
-    "stepRef",
-    "ref",
-    "stepId",
-    "step_id",
-    "logicalStepId",
-)
-
-
-def _resolve_task_step_ids(raw_steps: Any) -> list[str]:
-    """Compute stable, non-colliding step IDs for a raw steps payload.
-
-    Honors common aliases (`stepRef`, `ref`, etc.) referenced in worker-side
-    manifest construction, then synthesizes `step-N` ids for any step that
-    still lacks an identifier while avoiding collisions with already-used ids.
-    """
-    if not isinstance(raw_steps, list):
-        return []
-    resolved: list[str | None] = [None] * len(raw_steps)
-    for index, step in enumerate(raw_steps):
-        if not isinstance(step, Mapping):
-            continue
-        for alias in _STEP_ID_ALIASES:
-            value = step.get(alias)
-            if isinstance(value, str) and value.strip():
-                resolved[index] = value.strip()
-                break
-    used = {value for value in resolved if value is not None}
-    for index, value in enumerate(resolved):
-        if value is not None:
-            continue
-        counter = index + 1
-        candidate = f"step-{counter}"
-        while candidate in used:
-            counter += 1
-            candidate = f"step-{counter}"
-        used.add(candidate)
-        resolved[index] = candidate
-    return [value for value in resolved if value is not None]
-
-
 def _normalize_task_input_attachments(
     raw: Any, *, field_name: str
 ) -> list[dict[str, Any]]:
@@ -4284,8 +4241,6 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
         "container",
     }
 
-    resolved_step_ids = _resolve_task_step_ids(raw_steps)
-
     for index, item in enumerate(raw_steps):
         if not isinstance(item, Mapping):
             raise _invalid_task_request(
@@ -4302,11 +4257,10 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
             )
 
         normalized_step: dict[str, Any] = {}
-        for key in ("title", "instructions"):
+        for key in ("id", "title", "instructions"):
             value = step_payload.get(key)
             if isinstance(value, str) and value.strip():
                 normalized_step[key] = value.strip()
-        normalized_step["id"] = resolved_step_ids[index]
 
         normalized_skills = _normalize_task_skill_selectors(
             step_payload.get("skills"),
@@ -5007,7 +4961,7 @@ def _artifact_id_from_ref(value: Any) -> str | None:
     return ref.strip() or None
 
 
-async def _hydrate_resume_checkpoint_payload(
+async def _hydrate_recovery_checkpoint_payload(
     *,
     session: AsyncSession,
     user: User,
@@ -5019,8 +4973,8 @@ async def _hydrate_resume_checkpoint_payload(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "code": "resume_not_available",
-                "message": "Failed-step Resume is not available for this execution.",
-                "reason": "resume_checkpoint_missing",
+                "message": "Failed-step recovery is not available for this execution.",
+                "reason": "recovery_checkpoint_missing",
             },
         )
     try:
@@ -5033,7 +4987,7 @@ async def _hydrate_resume_checkpoint_payload(
         decoded = json.loads(body.decode("utf-8"))
     except (PermissionError, TemporalArtifactAuthorizationError) as exc:
         logger.warning(
-            "Failed to hydrate Resume checkpoint artifact %s: %s",
+            "Failed to hydrate Recovery checkpoint artifact %s: %s",
             artifact_id,
             exc,
         )
@@ -5041,13 +4995,13 @@ async def _hydrate_resume_checkpoint_payload(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "code": "resume_not_available",
-                "message": "Failed-step Resume is not available for this execution.",
+                "message": "Failed-step recovery is not available for this execution.",
                 "reason": "checkpoint_unauthorized",
             },
         ) from exc
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         logger.warning(
-            "Failed to hydrate Resume checkpoint artifact %s: %s",
+            "Failed to hydrate Recovery checkpoint artifact %s: %s",
             artifact_id,
             exc,
         )
@@ -5055,13 +5009,13 @@ async def _hydrate_resume_checkpoint_payload(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "code": "resume_not_available",
-                "message": "Failed-step Resume is not available for this execution.",
+                "message": "Failed-step recovery is not available for this execution.",
                 "reason": "checkpoint_corrupted",
             },
         ) from exc
     except Exception as exc:
         logger.warning(
-            "Failed to hydrate Resume checkpoint artifact %s: %s",
+            "Failed to hydrate Recovery checkpoint artifact %s: %s",
             artifact_id,
             exc,
         )
@@ -5069,8 +5023,8 @@ async def _hydrate_resume_checkpoint_payload(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "code": "resume_not_available",
-                "message": "Failed-step Resume is not available for this execution.",
-                "reason": "resume_checkpoint_missing",
+                "message": "Failed-step recovery is not available for this execution.",
+                "reason": "recovery_checkpoint_missing",
             },
         ) from exc
     if not isinstance(decoded, Mapping):
@@ -5078,14 +5032,14 @@ async def _hydrate_resume_checkpoint_payload(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "code": "resume_not_available",
-                "message": "Failed-step Resume is not available for this execution.",
-                "reason": "resume_checkpoint_missing",
+                "message": "Failed-step recovery is not available for this execution.",
+                "reason": "recovery_checkpoint_missing",
             },
         )
     return decoded
 
 
-def _resume_not_available_reason(exc: Exception) -> str:
+def _recovery_not_available_reason(exc: Exception) -> str:
     message = str(exc).lower()
     if "does not match" in message:
         return "checkpoint_inconsistent"
@@ -5101,7 +5055,7 @@ def _resume_not_available_reason(exc: Exception) -> str:
         return "original_task_input_snapshot_missing"
     if "payload" in message or "invalid" in message:
         return "checkpoint_corrupted"
-    return "resume_checkpoint_missing"
+    return "recovery_checkpoint_missing"
 
 
 def _snapshot_task_from_artifact_payload(
@@ -7010,7 +6964,7 @@ async def list_execution_facets(
         ) from exc
 
 @router.get(
-    "/{workflow_id}/steps/{logical_step_id}/executions",
+    "/{workflow_id}/steps/{logical_step_id}/attempts",
     response_model=StepExecutionListModel,
 )
 async def describe_execution_step_executions(
@@ -7065,7 +7019,7 @@ async def describe_execution_step_executions(
             for manifest_ref in manifest_refs
         )
     )
-    executions = [
+    attempts = [
         StepExecutionProjectionModel.model_validate(
             _step_execution_projection_payload(
                 manifest,
@@ -7074,31 +7028,31 @@ async def describe_execution_step_executions(
         )
         for manifest, manifest_ref in zip(manifests, manifest_refs, strict=True)
     ]
-    executions.sort(key=lambda item: item.execution_ordinal)
+    attempts.sort(key=lambda item: item.execution_ordinal)
     return StepExecutionListModel(
         workflowId=ledger.workflow_id,
         runId=ledger.run_id,
         runScope=ledger.run_scope,
         logicalStepId=logical_step_id,
-        executions=executions,
+        attempts=attempts,
     )
 
 
 @router.get(
-    "/{workflow_id}/steps/{logical_step_id}/executions/{execution_ordinal}",
+    "/{workflow_id}/steps/{logical_step_id}/attempts/{attempt}",
     response_model=StepExecutionDetailModel,
 )
 async def describe_execution_step_execution(
     workflow_id: str,
     logical_step_id: str,
-    execution_ordinal: int,
+    attempt: int,
     response: Response,
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
     session: AsyncSession = Depends(get_async_session),
     temporal_client: Client = Depends(get_temporal_client),
 ) -> StepExecutionDetailModel:
-    if execution_ordinal < 1:
+    if attempt < 1:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
@@ -7150,7 +7104,7 @@ async def describe_execution_step_execution(
         )
     )
     for manifest, manifest_ref in zip(manifests, manifest_refs, strict=True):
-        if manifest.execution_ordinal != execution_ordinal:
+        if manifest.execution_ordinal != attempt:
             continue
         return StepExecutionDetailModel.model_validate(
             _step_execution_detail_payload(
@@ -7885,7 +7839,7 @@ async def recover_execution_from_failed_step(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
-                "code": "invalid_resume_request",
+                "code": "invalid_recovery_request",
                 "message": str(exc),
             },
         ) from exc
@@ -7900,37 +7854,37 @@ async def recover_execution_from_failed_step(
                 "message": "Source execution was not found or is not visible.",
             },
         )
-    checkpoint_ref = request.resume_checkpoint_ref or _resume_checkpoint_ref_from_record(
+    checkpoint_ref = request.recovery_checkpoint_ref or _recovery_checkpoint_ref_from_record(
         canonical
     )
-    if _resume_evidence_marked_stale(canonical):
+    if _recovery_evidence_marked_stale(canonical):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "code": "resume_not_available",
                 "message": "Failed-step recovery is not available for this execution.",
-                "reason": "stale_resume_evidence",
+                "reason": "stale_recovery_evidence",
             },
         )
-    checkpoint_payload = await _hydrate_resume_checkpoint_payload(
+    checkpoint_payload = await _hydrate_recovery_checkpoint_payload(
         session=session,
         user=user,
         checkpoint_ref=checkpoint_ref,
     )
     try:
-        result = await service.create_failed_step_resume_execution(
+        result = await service.create_failed_step_recovery_execution(
             canonical,
-            resume_checkpoint_ref=request.resume_checkpoint_ref,
+            recovery_checkpoint_ref=request.recovery_checkpoint_ref,
             idempotency_key=request.idempotency_key,
             checkpoint_payload=checkpoint_payload,
         )
-    except TemporalExecutionResumeCheckpointError as exc:
+    except TemporalExecutionRecoveryCheckpointError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "code": "resume_not_available",
                 "message": "Failed-step recovery is not available for this execution.",
-                "reason": _resume_not_available_reason(exc),
+                "reason": _recovery_not_available_reason(exc),
             },
         ) from exc
     except TemporalExecutionValidationError as exc:

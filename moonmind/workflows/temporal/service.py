@@ -49,8 +49,8 @@ from moonmind.schemas.temporal_models import (
     TASK_RUN_ID_MEMO_KEYS,
     TASK_RUN_ID_PARAM_KEYS,
     TASK_RUN_ID_SEARCH_ATTR_KEYS,
-    ResumeCheckpointModel,
-    ResumeSourceModel,
+    RecoveryCheckpointModel,
+    RecoverySourceModel,
 )
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.manifest_ingest import (
@@ -75,10 +75,10 @@ TERMINAL_STATES: set[MoonMindWorkflowState] = {
 CREATE_IDEMPOTENCY_KEY_MAX_LENGTH = 128
 FULL_RERUN_RECOVERY_CARRYOVER_PARAM_KEYS = frozenset(
     {
-        "resumeSource",
-        "resume_source",
-        "resumeCheckpointRef",
-        "resume_checkpoint_ref",
+        "recoverySource",
+        "recovery_source",
+        "recoveryCheckpointRef",
+        "recovery_checkpoint_ref",
         "preservedSteps",
         "preserved_steps",
         "completedSteps",
@@ -105,25 +105,25 @@ def _first_nonempty_text(*values: Any) -> str | None:
     return None
 
 
-def _resume_source_block_from_record(record: TemporalExecutionRecord) -> Mapping[str, Any]:
+def _recovery_source_block_from_record(record: TemporalExecutionRecord) -> Mapping[str, Any]:
     parameters = getattr(record, "parameters", None)
     if not isinstance(parameters, Mapping):
         return {}
-    resume_source = parameters.get("resumeSource") or parameters.get("resume_source")
-    if isinstance(resume_source, Mapping):
-        return resume_source
+    recovery_source = parameters.get("recoverySource") or parameters.get("recovery_source")
+    if isinstance(recovery_source, Mapping):
+        return recovery_source
     return {}
 
 
-def _resume_plan_digest_from_record(record: TemporalExecutionRecord) -> str | None:
+def _recovery_plan_digest_from_record(record: TemporalExecutionRecord) -> str | None:
     memo = dict(getattr(record, "memo", None) or {})
     search_attributes = dict(getattr(record, "search_attributes", None) or {})
-    resume_block = _resume_source_block_from_record(record)
+    resume_block = _recovery_source_block_from_record(record)
     return _first_nonempty_text(
         memo.get("resume_plan_digest"),
         memo.get("resumePlanDigest"),
         memo.get("plan_digest"),
-        search_attributes.get("mm_resume_plan_digest"),
+        search_attributes.get("mm_recovery_plan_digest"),
         resume_block.get("sourcePlanDigest"),
         resume_block.get("source_plan_digest"),
     )
@@ -232,8 +232,8 @@ class TemporalExecutionValidationError(TemporalExecutionError):
     """Raised when lifecycle invariants are violated."""
 
 
-class TemporalExecutionResumeCheckpointError(TemporalExecutionValidationError):
-    """Raised when failed-step Resume checkpoint evidence is missing or invalid."""
+class TemporalExecutionRecoveryCheckpointError(TemporalExecutionValidationError):
+    """Raised when failed-step Recovery checkpoint evidence is missing or invalid."""
 
 
 @dataclass(slots=True)
@@ -2407,7 +2407,7 @@ class TemporalExecutionService:
     ) -> dict[str, Any]:
         updated = False
         major_reconfiguration = False
-        strip_resume_references = False
+        strip_recovery_references = False
 
         if input_artifact_ref and input_artifact_ref != record.input_ref:
             record.input_ref = input_artifact_ref
@@ -2419,7 +2419,7 @@ class TemporalExecutionService:
 
         if plan_artifact_ref and plan_artifact_ref != record.plan_ref:
             major_reconfiguration = bool(record.plan_ref)
-            strip_resume_references = major_reconfiguration
+            strip_recovery_references = major_reconfiguration
             record.plan_ref = plan_artifact_ref
             updated = True
             refs = list(record.artifact_refs or [])
@@ -2439,13 +2439,13 @@ class TemporalExecutionService:
                     for key, value in parameters_patch.items()
                     if key != "request_continue_as_new"
                 }
-                strip_resume_references = strip_resume_references or bool(
+                strip_recovery_references = strip_recovery_references or bool(
                     patch_without_rollover_flag
                 )
 
         if major_reconfiguration:
-            if strip_resume_references:
-                record.parameters = self._strip_resume_reference_parameters(
+            if strip_recovery_references:
+                record.parameters = self._strip_recovery_reference_parameters(
                     record.parameters
                 )
             self._continue_as_new(
@@ -2628,7 +2628,7 @@ class TemporalExecutionService:
         }
 
     @staticmethod
-    def _strip_resume_reference_parameters(
+    def _strip_recovery_reference_parameters(
         parameters: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
         params = dict(parameters or {})
@@ -2653,7 +2653,7 @@ class TemporalExecutionService:
         *,
         recovery_provenance: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        params = cls._strip_resume_reference_parameters(parameters)
+        params = cls._strip_recovery_reference_parameters(parameters)
         for key in TASK_RUN_ID_PARAM_KEYS:
             params.pop(key, None)
 
@@ -2733,44 +2733,46 @@ class TemporalExecutionService:
         recovery_provenance["sourceRunId"] = canonical_run_id
         return recovery_provenance
 
-    async def create_failed_step_resume_execution(
+    async def create_failed_step_recovery_execution(
         self,
         record: TemporalExecutionCanonicalRecord,
         *,
-        resume_checkpoint_ref: str | None,
+        recovery_checkpoint_ref: str | None,
         idempotency_key: str,
         checkpoint_payload: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Create a linked follow-up execution for failed-step Resume."""
+        """Create a linked follow-up execution for failed-step recovery."""
 
         if record.workflow_type is not TemporalWorkflowType.RUN:
             raise TemporalExecutionValidationError(
-                "Failed-step Resume is only available for MoonMind.Run executions."
+                "Failed-step recovery is only available for MoonMind.Run executions."
             )
         if record.state is not MoonMindWorkflowState.FAILED:
             raise TemporalExecutionValidationError(
-                "Failed-step Resume is only available for failed executions."
+                "Failed-step recovery is only available for failed executions."
             )
         source_run_id = str(record.run_id or "").strip()
         if not source_run_id:
-            raise TemporalExecutionValidationError("Resume source runId is required.")
+            raise TemporalExecutionValidationError("Recovery source runId is required.")
 
         memo = dict(record.memo or {})
         canonical_checkpoint_ref = (
-            str(memo.get("resume_checkpoint_ref") or "").strip()
+            str(memo.get("recovery_checkpoint_ref") or "").strip()
+            or str(memo.get("recoveryCheckpointRef") or "").strip()
+            or str(memo.get("resume_checkpoint_ref") or "").strip()
             or str(memo.get("resumeCheckpointRef") or "").strip()
         )
         if not canonical_checkpoint_ref:
-            raise TemporalExecutionResumeCheckpointError(
-                "Resume checkpoint ref is required."
+            raise TemporalExecutionRecoveryCheckpointError(
+                "Recovery checkpoint ref is required."
             )
-        requested_checkpoint_ref = str(resume_checkpoint_ref or "").strip()
+        requested_checkpoint_ref = str(recovery_checkpoint_ref or "").strip()
         if (
             requested_checkpoint_ref
             and requested_checkpoint_ref != canonical_checkpoint_ref
         ):
-            raise TemporalExecutionResumeCheckpointError(
-                "Resume checkpoint ref does not match source execution."
+            raise TemporalExecutionRecoveryCheckpointError(
+                "Recovery checkpoint ref does not match source execution."
             )
         checkpoint_ref = canonical_checkpoint_ref
         source_snapshot_ref = str(
@@ -2779,64 +2781,64 @@ class TemporalExecutionService:
             or ""
         ).strip()
         if not source_snapshot_ref:
-            raise TemporalExecutionResumeCheckpointError(
-                "Original task input snapshot ref is required for failed-step Resume."
+            raise TemporalExecutionRecoveryCheckpointError(
+                "Original task input snapshot ref is required for failed-step recovery."
             )
 
         if checkpoint_payload is None:
-            raise TemporalExecutionResumeCheckpointError(
-                "Resume checkpoint payload is required."
+            raise TemporalExecutionRecoveryCheckpointError(
+                "Recovery checkpoint payload is required."
             )
         try:
-            checkpoint = ResumeCheckpointModel.model_validate(checkpoint_payload)
+            checkpoint = RecoveryCheckpointModel.model_validate(checkpoint_payload)
         except ValidationError as exc:
-            raise TemporalExecutionResumeCheckpointError(
-                "Resume checkpoint payload is invalid."
+            raise TemporalExecutionRecoveryCheckpointError(
+                "Recovery checkpoint payload is invalid."
             ) from exc
         if checkpoint.source.workflow_id != record.workflow_id:
-            raise TemporalExecutionResumeCheckpointError(
-                "Resume checkpoint workflowId does not match source execution."
+            raise TemporalExecutionRecoveryCheckpointError(
+                "Recovery checkpoint workflowId does not match source execution."
             )
         if checkpoint.source.run_id != source_run_id:
-            raise TemporalExecutionResumeCheckpointError(
-                "Resume checkpoint runId does not match source execution."
+            raise TemporalExecutionRecoveryCheckpointError(
+                "Recovery checkpoint runId does not match source execution."
             )
         if checkpoint.task_input_snapshot_ref != source_snapshot_ref:
-            raise TemporalExecutionResumeCheckpointError(
-                "Resume checkpoint task input snapshot does not match source execution."
+            raise TemporalExecutionRecoveryCheckpointError(
+                "Recovery checkpoint task input snapshot does not match source execution."
             )
         source_plan_ref = str(record.plan_ref or "").strip() or None
         if checkpoint.plan_ref is not None and source_plan_ref is not None:
             if checkpoint.plan_ref != source_plan_ref:
-                raise TemporalExecutionResumeCheckpointError(
-                    "Resume checkpoint plan identity does not match source execution."
+                raise TemporalExecutionRecoveryCheckpointError(
+                    "Recovery checkpoint plan identity does not match source execution."
                 )
-        source_plan_digest = _resume_plan_digest_from_record(record)
+        source_plan_digest = _recovery_plan_digest_from_record(record)
         if checkpoint.plan_digest is not None and source_plan_digest is not None:
             if checkpoint.plan_digest != source_plan_digest:
-                raise TemporalExecutionResumeCheckpointError(
-                    "Resume checkpoint plan identity does not match source execution."
+                raise TemporalExecutionRecoveryCheckpointError(
+                    "Recovery checkpoint plan identity does not match source execution."
                 )
         failed_step_id = checkpoint.failed_step.logical_step_id
-        failed_step_execution_ordinal = checkpoint.failed_step.execution_ordinal
+        failed_step_execution = checkpoint.failed_step.execution_ordinal
         if not failed_step_id:
-            raise TemporalExecutionResumeCheckpointError(
-                "Resume failed step id is required."
+            raise TemporalExecutionRecoveryCheckpointError(
+                "Recovery failed step id is required."
             )
 
         params = dict(record.parameters or {})
         for key in TASK_RUN_ID_PARAM_KEYS:
             params.pop(key, None)
-        params["resumeSource"] = ResumeSourceModel(
+        params["recoverySource"] = RecoverySourceModel(
             sourceWorkflowId=record.workflow_id,
             sourceRunId=source_run_id,
             sourceTaskInputSnapshotRef=source_snapshot_ref,
             sourcePlanRef=checkpoint.plan_ref or source_plan_ref,
             sourcePlanDigest=checkpoint.plan_digest,
             failedStepId=failed_step_id,
-            failedStepExecutionOrdinal=failed_step_execution_ordinal,
-            resumeCheckpointRef=checkpoint_ref,
-            resumeWorkspace=checkpoint.resume_workspace,
+            failedStepExecution=failed_step_execution,
+            recoveryCheckpointRef=checkpoint_ref,
+            recoveryWorkspace=checkpoint.recovery_workspace,
             preservedSteps=checkpoint.preserved_steps,
         ).model_dump(by_alias=True, mode="json")
 
@@ -2847,21 +2849,21 @@ class TemporalExecutionService:
             "sourceWorkflowId": record.workflow_id,
             "sourceRunId": source_run_id,
         }
-        resume_ref = {
+        recover_ref = {
             "kind": "recover_from_failed_step",
             "sourceWorkflowId": record.workflow_id,
             "sourceRunId": source_run_id,
             "failedStepId": failed_step_id,
-            "failedStepExecutionOrdinal": failed_step_execution_ordinal,
-            "resumeCheckpointRef": checkpoint_ref,
+            "failedStepExecution": failed_step_execution,
+            "recoveryCheckpointRef": checkpoint_ref,
             "taskInputSnapshotRef": source_snapshot_ref,
         }
         plan_ref = checkpoint.plan_ref or source_plan_ref
         if plan_ref:
-            resume_ref["planRef"] = plan_ref
+            recover_ref["planRef"] = plan_ref
         if checkpoint.plan_digest:
-            resume_ref["planDigest"] = checkpoint.plan_digest
-        task_params["resume"] = resume_ref
+            recover_ref["planDigest"] = checkpoint.plan_digest
+        task_params["resume"] = recover_ref
         params["task"] = task_params
         title = (
             str(task_params.get("title") or "").strip()
@@ -2879,13 +2881,13 @@ class TemporalExecutionService:
             manifest_artifact_ref=record.manifest_ref,
             failure_policy=None,
             initial_parameters=params,
-            idempotency_key=self._resume_create_idempotency_key(
+            idempotency_key=self._recovery_create_idempotency_key(
                 record.workflow_id,
                 idempotency_key,
             ),
             repository=repository,
             integration=None,
-            summary=f"Resumed from failed step of {record.workflow_id}.",
+            summary=f"Recovered from failed step of {record.workflow_id}.",
         )
         return {
             "accepted": True,
@@ -2899,8 +2901,8 @@ class TemporalExecutionService:
                 "runId": created.run_id,
                 "detailHref": f"/workflows/{created.workflow_id}",
             },
-            "relationship": "Resumed from failed step",
-            "resumeCheckpointRef": checkpoint_ref,
+            "relationship": "Recovered from failed step",
+            "recoveryCheckpointRef": checkpoint_ref,
         }
 
     @staticmethod
@@ -2917,7 +2919,7 @@ class TemporalExecutionService:
         return f"rerun:{digest}"
 
     @staticmethod
-    def _resume_create_idempotency_key(
+    def _recovery_create_idempotency_key(
         workflow_id: str,
         idempotency_key: str,
     ) -> str:

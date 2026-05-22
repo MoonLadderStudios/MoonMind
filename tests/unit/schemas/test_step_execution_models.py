@@ -12,7 +12,7 @@ from moonmind.schemas.step_execution_models import (
 )
 
 
-def test_step_execution_identity_requires_run_scoped_positive_attempt() -> None:
+def test_step_execution_identity_requires_run_scoped_positive_execution_ordinal() -> None:
     identity = StepExecutionIdentityModel(
         workflowId="wf-1",
         runId="run-1",
@@ -95,20 +95,20 @@ def test_manifest_rejects_unsupported_reason_status_and_disposition(
         StepExecutionManifestModel(**payload)
 
 
-def test_execution_contract_keeps_retry_reexecution_and_recover_terms_distinct() -> None:
+def test_execution_contract_keeps_retry_reexecution_and_recovery_terms_distinct() -> None:
     first = StepExecutionIdentityModel(
         workflowId="wf-1",
         runId="run-1",
         logicalStepId="implement",
         executionOrdinal=1,
     )
-    reexecution = StepExecutionIdentityModel(
+    reexecute = StepExecutionIdentityModel(
         workflowId="wf-1",
         runId="run-1",
         logicalStepId="implement",
         executionOrdinal=2,
     )
-    recoverd = StepExecutionManifestModel(
+    resumed = StepExecutionManifestModel(
         workflowId="wf-2",
         runId="run-2",
         logicalStepId="implement",
@@ -126,6 +126,6 @@ def test_execution_contract_keeps_retry_reexecution_and_recover_terms_distinct()
         },
     )
 
-    assert first.step_execution_id != reexecution.step_execution_id
-    assert recoverd.execution_ordinal == 1
-    assert recoverd.lineage["sourceExecutionOrdinal"] == 2
+    assert first.step_execution_id != reexecute.step_execution_id
+    assert resumed.execution_ordinal == 1
+    assert resumed.lineage["sourceExecutionOrdinal"] == 2

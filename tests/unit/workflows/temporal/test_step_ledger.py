@@ -9,7 +9,6 @@ from moonmind.schemas.temporal_models import (
     StepLedgerRefsModel,
     StepLedgerRowModel,
     StepLedgerSnapshotModel,
-    StepLedgerWorkloadModel,
 )
 from moonmind.workflows.temporal.step_ledger import (
     build_initial_step_rows,
@@ -45,51 +44,35 @@ def test_build_initial_step_rows_uses_plan_metadata_and_dependencies() -> None:
     assert [row["logicalStepId"] for row in rows] == ["step-1", "step-2"]
     assert rows[0]["title"] == "Prepare workspace"
     assert rows[0]["status"] == "ready"
-    assert rows[0]["executionOrdinal"] == 0
+    assert rows[0]["attempt"] == 0
     assert rows[0]["dependsOn"] == []
     assert rows[1]["title"] == "Run tests"
     assert rows[1]["status"] == "pending"
     assert rows[1]["dependsOn"] == ["step-1"]
     assert rows[1]["tool"] == {"type": "skill", "name": "repo.test", "version": "1"}
-    assert rows[0]["refs"]["latestExecutionManifestRef"] is None
-    assert rows[0]["refs"]["executionManifestRefs"] == []
+    assert rows[0]["refs"]["latestStepExecutionManifestRef"] is None
+    assert rows[0]["refs"]["stepExecutionManifestRefs"] == []
 
 
-def test_step_ledger_refs_track_latest_and_historical_execution_manifests() -> None:
+def test_step_ledger_refs_track_latest_and_historical_step_execution_manifests() -> None:
     refs = StepLedgerRefsModel.model_validate(
         {
             "childWorkflowId": "child-1",
             "childRunId": "run-child",
             "taskRunId": "task-run",
-            "latestExecutionManifestRef": "artifact-execution-2",
-            "executionManifestRefs": ["artifact-execution-1", "artifact-execution-2"],
+            "latestStepExecutionManifestRef": "artifact-attempt-2",
+            "stepExecutionManifestRefs": ["artifact-attempt-1", "artifact-attempt-2"],
         }
     )
 
-    assert refs.latest_execution_manifest_ref == "artifact-execution-2"
-    assert refs.execution_manifest_refs == [
-        "artifact-execution-1",
-        "artifact-execution-2",
+    assert refs.latest_step_execution_manifest_ref == "artifact-attempt-2"
+    assert refs.step_execution_manifest_refs == [
+        "artifact-attempt-1",
+        "artifact-attempt-2",
     ]
-    assert refs.model_dump(by_alias=True)["latestExecutionManifestRef"] == (
-        "artifact-execution-2"
+    assert refs.model_dump(by_alias=True)["latestStepExecutionManifestRef"] == (
+        "artifact-attempt-2"
     )
-
-
-def test_step_ledger_workload_serializes_execution_ordinal() -> None:
-    workload = StepLedgerWorkloadModel.model_validate(
-        {
-            "taskRunId": "task-run",
-            "stepId": "step-1",
-            "executionOrdinal": 2,
-            "status": "succeeded",
-        }
-    )
-
-    dumped = workload.model_dump(by_alias=True, exclude_none=True)
-
-    assert dumped["executionOrdinal"] == 2
-    assert "attempt" not in dumped
 
 def test_build_initial_step_rows_skips_blank_node_ids() -> None:
     updated_at = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
@@ -120,6 +103,7 @@ def test_build_initial_step_rows_skips_blank_node_ids() -> None:
             "status": "ready",
             "waitingReason": None,
             "attentionRequired": False,
+            "attempt": 0,
             "executionOrdinal": 0,
             "startedAt": None,
             "updatedAt": updated_at.isoformat(),
@@ -129,8 +113,8 @@ def test_build_initial_step_rows_skips_blank_node_ids() -> None:
                 "childWorkflowId": None,
                 "childRunId": None,
                 "taskRunId": None,
-                "latestExecutionManifestRef": None,
-                "executionManifestRefs": [],
+                "latestStepExecutionManifestRef": None,
+                "stepExecutionManifestRefs": [],
             },
             "artifacts": {
                 "outputSummary": None,
@@ -140,8 +124,8 @@ def test_build_initial_step_rows_skips_blank_node_ids() -> None:
                 "runtimeMergedLogs": None,
                 "runtimeDiagnostics": None,
                 "providerSnapshot": None,
-                "executionManifestRef": None,
-                "executionManifestRefs": [],
+                "stepExecutionManifestRef": None,
+                "stepExecutionManifestRefs": [],
             },
             "workload": None,
             "lastError": None,
@@ -242,7 +226,7 @@ def test_contract_models_accept_representative_rows_and_progress() -> None:
             "status": "running",
             "waitingReason": None,
             "attentionRequired": False,
-            "executionOrdinal": 2,
+            "attempt": 2,
             "startedAt": updated_at.isoformat(),
             "updatedAt": updated_at.isoformat(),
             "summary": "Retrying after a bounded failure",
@@ -270,7 +254,7 @@ def test_contract_models_accept_representative_rows_and_progress() -> None:
             "status": "awaiting_external",
             "waitingReason": "Awaiting child workflow progress",
             "attentionRequired": False,
-            "executionOrdinal": 1,
+            "attempt": 1,
             "startedAt": updated_at.isoformat(),
             "updatedAt": updated_at.isoformat(),
             "summary": "Child workflow launched",
@@ -302,7 +286,7 @@ def test_contract_models_accept_representative_rows_and_progress() -> None:
             "status": "reviewing",
             "waitingReason": "Awaiting structured review result",
             "attentionRequired": False,
-            "executionOrdinal": 1,
+            "attempt": 1,
             "startedAt": updated_at.isoformat(),
             "updatedAt": updated_at.isoformat(),
             "summary": "Structured review in progress",
@@ -342,7 +326,7 @@ def test_contract_models_accept_representative_rows_and_progress() -> None:
     )
 
     assert progress.current_step_title == "Review patch"
-    assert retrying_row.execution_ordinal == 2
+    assert retrying_row.attempt == 2
     assert child_runtime_row.refs.task_run_id == "task-run-1"
     assert reviewed_row.checks == [
         StepLedgerCheckModel(
@@ -363,8 +347,8 @@ def test_row_defaults_remain_bounded_and_structured() -> None:
         "childWorkflowId": None,
         "childRunId": None,
         "taskRunId": None,
-        "latestExecutionManifestRef": None,
-        "executionManifestRefs": [],
+        "latestStepExecutionManifestRef": None,
+        "stepExecutionManifestRefs": [],
     }
     assert artifacts.model_dump(by_alias=True) == {
         "outputSummary": None,
@@ -374,8 +358,8 @@ def test_row_defaults_remain_bounded_and_structured() -> None:
         "runtimeMergedLogs": None,
         "runtimeDiagnostics": None,
         "providerSnapshot": None,
-        "executionManifestRef": None,
-        "executionManifestRefs": [],
+        "stepExecutionManifestRef": None,
+        "stepExecutionManifestRefs": [],
     }
 
 
@@ -544,8 +528,8 @@ def test_update_step_row_merges_structured_refs_and_artifacts() -> None:
         "childWorkflowId": "wf-child-1",
         "childRunId": "run-child-1",
         "taskRunId": "550e8400-e29b-41d4-a716-446655440000",
-        "latestExecutionManifestRef": None,
-        "executionManifestRefs": [],
+        "latestStepExecutionManifestRef": None,
+        "stepExecutionManifestRefs": [],
     }
     assert row["artifacts"] == {
         "outputSummary": "art_summary_1",
@@ -555,8 +539,8 @@ def test_update_step_row_merges_structured_refs_and_artifacts() -> None:
         "runtimeMergedLogs": None,
         "runtimeDiagnostics": "art_diag_1",
         "providerSnapshot": None,
-        "executionManifestRef": None,
-        "executionManifestRefs": [],
+        "stepExecutionManifestRef": None,
+        "stepExecutionManifestRefs": [],
     }
 
 
@@ -585,9 +569,9 @@ def test_mark_step_execution_manifest_evidence_tracks_latest_and_history() -> No
         rows,
         "implement",
         updated_at=updated_at,
-        execution_manifest_ref="artifact://execution-1",
+        step_execution_manifest_ref="artifact://attempt-1",
     )
-    assert rows[0]["artifacts"]["executionManifestRef"] == "artifact://execution-1"
+    assert rows[0]["artifacts"]["stepExecutionManifestRef"] == "artifact://attempt-1"
     update_step_row(
         rows,
         "implement",
@@ -599,12 +583,12 @@ def test_mark_step_execution_manifest_evidence_tracks_latest_and_history() -> No
         rows,
         "implement",
         updated_at=updated_at,
-        execution_manifest_ref="artifact://execution-2",
+        step_execution_manifest_ref="artifact://attempt-2",
     )
 
-    assert second["artifacts"]["executionManifestRef"] == "artifact://execution-2"
-    assert second["artifacts"]["executionManifestRefs"] == [
-        "artifact://execution-1",
-        "artifact://execution-2",
+    assert second["artifacts"]["stepExecutionManifestRef"] == "artifact://attempt-2"
+    assert second["artifacts"]["stepExecutionManifestRefs"] == [
+        "artifact://attempt-1",
+        "artifact://attempt-2",
     ]
     assert "schemaVersion" not in second["artifacts"]

@@ -282,7 +282,7 @@ def test_run_tracks_status_transitions_and_attempts(monkeypatch: pytest.MonkeyPa
     step = ledger["steps"][1]
     progress = workflow.get_progress()
 
-    assert step["executionOrdinal"] == 2
+    assert step["attempt"] == 2
     assert step["status"] == "canceled"
     assert step["waitingReason"] is None
     assert step["lastError"] == "pytest failed"
@@ -527,8 +527,8 @@ def test_run_groups_child_lineage_and_evidence_into_step_row(
         "childWorkflowId": "wf-child-1",
         "childRunId": "run-child-1",
         "taskRunId": "550e8400-e29b-41d4-a716-446655440000",
-        "latestExecutionManifestRef": None,
-        "executionManifestRefs": [],
+        "latestStepExecutionManifestRef": None,
+        "stepExecutionManifestRefs": [],
     }
     assert step["artifacts"] == {
         "outputSummary": "art_summary_1",
@@ -538,8 +538,8 @@ def test_run_groups_child_lineage_and_evidence_into_step_row(
         "runtimeMergedLogs": "art_merged_1",
         "runtimeDiagnostics": "art_diag_1",
         "providerSnapshot": "art_provider_1",
-        "executionManifestRef": None,
-        "executionManifestRefs": [],
+        "stepExecutionManifestRef": None,
+        "stepExecutionManifestRefs": [],
     }
 
 def test_run_waiting_state_captures_child_workflow_lineage(
@@ -581,8 +581,8 @@ def test_run_waiting_state_captures_child_workflow_lineage(
         "childWorkflowId": "wf-child-1",
         "childRunId": None,
         "taskRunId": None,
-        "latestExecutionManifestRef": None,
-        "executionManifestRefs": [],
+        "latestStepExecutionManifestRef": None,
+        "stepExecutionManifestRefs": [],
     }
 
 
@@ -610,7 +610,7 @@ async def test_run_records_step_execution_manifest_ref_when_work_begins(
                 "metadata_json": metadata_json,
             }
         )
-        return f"artifact-execution-{len(writes)}"
+        return f"artifact-attempt-{len(writes)}"
 
     monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
     workflow._initialize_step_ledger(
@@ -642,7 +642,7 @@ async def test_run_records_step_execution_manifest_ref_when_work_begins(
             "outputs": {
                 "childWorkflowId": "wf-child-1",
                 "childRunId": "run-child-1",
-                "outputSummaryRef": "artifact://summary/execution-1",
+                "outputSummaryRef": "artifact://summary/attempt-1",
             },
         },
         updated_at=now,
@@ -665,11 +665,11 @@ async def test_run_records_step_execution_manifest_ref_when_work_begins(
     )
 
     step = workflow.get_step_ledger()["steps"][0]
-    assert step["executionOrdinal"] == 2
-    assert step["refs"]["latestExecutionManifestRef"] == "artifact-execution-2"
-    assert step["refs"]["executionManifestRefs"] == [
-        "artifact-execution-1",
-        "artifact-execution-2",
+    assert step["attempt"] == 2
+    assert step["refs"]["latestStepExecutionManifestRef"] == "artifact-attempt-2"
+    assert step["refs"]["stepExecutionManifestRefs"] == [
+        "artifact-attempt-1",
+        "artifact-attempt-2",
     ]
     assert writes[0]["content_type"] == (
         "application/vnd.moonmind.step-execution+json;version=1"
@@ -680,16 +680,12 @@ async def test_run_records_step_execution_manifest_ref_when_work_begins(
     assert writes[0]["metadata_json"]["idempotencyKey"] == (
         "wf-run-1:run-1:delegate-agent:1:manifest"
     )
-    assert writes[0]["metadata_json"]["executionOrdinal"] == 1
-    assert "attempt" not in writes[0]["metadata_json"]
     assert writes[0]["payload"]["reason"] == "initial_execution"
     assert writes[0]["payload"]["execution"] == {
         "runtimeContextPolicy": "fresh_agent_run"
     }
     assert writes[0]["payload"]["outputs"] == {}
     assert writes[1]["payload"]["reason"] == "runtime_recovered"
-    assert writes[1]["metadata_json"]["executionOrdinal"] == 2
-    assert "attempt" not in writes[1]["metadata_json"]
     assert writes[1]["payload"]["execution"] == {
         "runtimeContextPolicy": "fresh_agent_run",
         "childWorkflowId": "wf-child-1",
@@ -736,7 +732,7 @@ async def test_step_execution_manifest_merges_explicit_execution_with_refs(
                 "metadata_json": metadata_json,
             }
         )
-        return f"artifact-execution-{len(writes)}"
+        return f"artifact-attempt-{len(writes)}"
 
     monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
     workflow._initialize_step_ledger(
@@ -811,7 +807,7 @@ async def test_run_records_terminal_step_execution_manifest_with_result_refs(
                 "metadata_json": metadata_json,
             }
         )
-        return f"artifact-execution-{len(writes)}"
+        return f"artifact-attempt-{len(writes)}"
 
     monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
     workflow._initialize_step_ledger(
@@ -838,9 +834,9 @@ async def test_run_records_terminal_step_execution_manifest_with_result_refs(
             "status": "COMPLETED",
             "outputs": {
                 "taskRunId": "task-run-1",
-                "outputSummaryRef": "artifact://summary/execution-1",
-                "stdoutArtifactRef": "artifact://stdout/execution-1",
-                "diagnosticsRef": "artifact://diagnostics/execution-1",
+                "outputSummaryRef": "artifact://summary/attempt-1",
+                "stdoutArtifactRef": "artifact://stdout/attempt-1",
+                "diagnosticsRef": "artifact://diagnostics/attempt-1",
             },
         },
         updated_at=now,
@@ -866,11 +862,11 @@ async def test_run_records_terminal_step_execution_manifest_with_result_refs(
     assert writes[1]["payload"]["terminalDisposition"] == "accepted"
     assert writes[1]["payload"]["execution"] == {
         "taskRunId": "task-run-1",
-        "diagnosticsRef": "artifact://diagnostics/execution-1",
+        "diagnosticsRef": "artifact://diagnostics/attempt-1",
     }
     assert writes[1]["payload"]["outputs"] == {
-        "summaryRef": "artifact://summary/execution-1",
-        "stdoutRef": "artifact://stdout/execution-1",
+        "summaryRef": "artifact://summary/attempt-1",
+        "stdoutRef": "artifact://stdout/attempt-1",
     }
 
 
@@ -905,7 +901,7 @@ async def test_write_step_execution_manifest_requires_real_artifact_id(
         match="artifact.create returned no artifact_id",
     ):
         await workflow._write_json_artifact(
-            name="reports/step_executions/run-tests_execution_1.json",
+            name="reports/step_executions/run-tests_attempt_1.json",
             payload={"schemaVersion": "v1"},
             content_type=STEP_EXECUTION_MANIFEST_CONTENT_TYPE,
         )
@@ -993,7 +989,7 @@ def test_run_projects_workload_artifacts_and_metadata_from_tool_result(
                 "workloadMetadata": {
                     "taskRunId": "wf-1",
                     "stepId": "workload-step",
-                    "executionOrdinal": 1,
+                    "attempt": 1,
                     "toolName": "container.run_workload",
                     "profileId": "local-python",
                     "imageRef": "python:3.12-slim",
@@ -1131,8 +1127,8 @@ def test_run_records_prepared_refs_and_idempotent_checkpoint_evidence(
     ]
     assert first_ref == second_ref == "artifact://runtime/checkpoint"
     assert step["stateCheckpointRef"] == "artifact://runtime/checkpoint"
-    assert step["resumePreservation"]["eligible"] is True
-    assert step["resumePreservation"]["reason"] == "complete"
+    assert step["recoveryPreservation"]["eligible"] is True
+    assert step["recoveryPreservation"]["reason"] == "complete"
 
 
 def test_run_marks_completed_step_without_checkpoint_ineligible(
@@ -1166,8 +1162,8 @@ def test_run_marks_completed_step_without_checkpoint_ineligible(
     workflow._record_step_checkpoint_evidence("plan", updated_at=now)
 
     step = workflow.get_step_ledger()["steps"][0]
-    assert step["resumePreservation"]["eligible"] is False
-    assert step["resumePreservation"]["reason"] == "missing_state_checkpoint"
+    assert step["recoveryPreservation"]["eligible"] is False
+    assert step["recoveryPreservation"]["reason"] == "missing_state_checkpoint"
     assert step.get("stateCheckpointRef") is None
 
 
@@ -1225,8 +1221,8 @@ def test_run_clears_stale_checkpoint_ref_before_successful_retry(
     step = workflow.get_step_ledger()["steps"][0]
     assert step.get("stateCheckpointRef") is None
     assert step["artifacts"]["outputPrimary"] == "artifact://successful-output"
-    assert step["resumePreservation"]["eligible"] is False
-    assert step["resumePreservation"]["reason"] == "missing_state_checkpoint"
+    assert step["recoveryPreservation"]["eligible"] is False
+    assert step["recoveryPreservation"]["reason"] == "missing_state_checkpoint"
 
 
 def test_run_reads_nested_workload_metadata_from_legacy_workload_result(
@@ -1286,7 +1282,7 @@ async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check
     written_review_payloads: list[dict[str, Any]] = []
     review_artifact_ids = iter(("art_review_1",))
     step_execution_artifact_ids = iter(
-        ("art_execution_1", "art_execution_1_terminal")
+        ("art_attempt_1", "art_attempt_1_terminal")
     )
 
     async def fake_execute_activity(
@@ -1403,7 +1399,7 @@ async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check
     assert attempt_payloads[0]["stepExecutionId"] == (
         "wf-run-review-1:run-review-1:apply-patch:execution:1"
     )
-    assert step["artifacts"]["executionManifestRef"] == "art_execution_1"
+    assert step["artifacts"]["stepExecutionManifestRef"] == "art_attempt_1"
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retry_count(
@@ -1417,9 +1413,9 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
     review_artifact_ids = iter(("art_review_1", "art_review_2"))
     step_execution_artifact_ids = iter(
         (
-            "art_execution_1",
-            "art_execution_2",
-            "art_execution_2_terminal",
+            "art_attempt_1",
+            "art_attempt_2",
+            "art_attempt_2_terminal",
         )
     )
     review_verdicts = iter(
@@ -1539,7 +1535,7 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
         ],
     }
     step = workflow.get_step_ledger()["steps"][0]
-    assert step["executionOrdinal"] == 2
+    assert step["attempt"] == 2
     assert step["status"] == "succeeded"
     assert step["checks"] == [
         {
@@ -1555,10 +1551,10 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
     ]
     assert review_payloads[0]["verdict"]["verdict"] == "ADDITIONAL_WORK_NEEDED"
     assert review_payloads[1]["verdict"]["verdict"] == "FULLY_IMPLEMENTED"
-    assert step["artifacts"]["executionManifestRef"] == "art_execution_2"
-    assert step["artifacts"]["executionManifestRefs"] == [
-        "art_execution_1",
-        "art_execution_2",
+    assert step["artifacts"]["stepExecutionManifestRef"] == "art_attempt_2"
+    assert step["artifacts"]["stepExecutionManifestRefs"] == [
+        "art_attempt_1",
+        "art_attempt_2",
     ]
 
 
@@ -1599,9 +1595,9 @@ async def test_run_execution_stage_stops_downstream_handoff_when_gate_budget_exh
     )
     artifact_ids = iter(
         (
-            "art_execution_1",
+            "art_attempt_1",
             "art_review_1",
-            "art_execution_1_terminal",
+            "art_attempt_1_terminal",
         )
     )
 
@@ -1682,8 +1678,8 @@ async def test_run_execution_stage_stops_downstream_handoff_when_gate_budget_exh
     )
     assert step_execution_payloads[-1]["budget"] == {
         "gate": "approval_policy",
-        "executionLimit": 1,
-        "executionsConsumed": 1,
+        "maxAttempts": 1,
+        "attemptsConsumed": 1,
         "remainingExecutions": 0,
         "stopRules": [
             "structured_gate_verdict_required",
@@ -1734,11 +1730,11 @@ async def test_run_execution_stage_continues_independent_nodes_after_gate_stop(
     )
     artifact_ids = iter(
         (
-            "art_execution_1",
+            "art_attempt_1",
             "art_review_1",
-            "art_execution_1_terminal",
-            "art_execution_2",
-            "art_execution_2_terminal",
+            "art_attempt_1_terminal",
+            "art_attempt_2",
+            "art_attempt_2_terminal",
         )
     )
 
@@ -1837,9 +1833,9 @@ async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_i
     review_artifact_ids = iter(("art_review_1", "art_review_2"))
     step_execution_artifact_ids = iter(
         (
-            "art_execution_1",
-            "art_execution_2",
-            "art_execution_2_terminal",
+            "art_attempt_1",
+            "art_attempt_2",
+            "art_attempt_2_terminal",
         )
     )
     review_verdicts = iter(
@@ -1966,7 +1962,7 @@ async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_i
         in child_requests[1].instruction_ref
     )
     step = workflow.get_step_ledger()["steps"][0]
-    assert step["executionOrdinal"] == 2
+    assert step["attempt"] == 2
     assert step["status"] == "succeeded"
     assert step["checks"] == [
         {
@@ -1980,6 +1976,6 @@ async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_i
     review_payloads = [
         payload for payload in written_review_payloads if "verdict" in payload
     ]
-    assert review_payloads[0]["executionOrdinal"] == 1
-    assert review_payloads[1]["executionOrdinal"] == 2
-    assert step["artifacts"]["executionManifestRef"] == "art_execution_2"
+    assert review_payloads[0]["attempt"] == 1
+    assert review_payloads[1]["attempt"] == 2
+    assert step["artifacts"]["stepExecutionManifestRef"] == "art_attempt_2"

@@ -118,7 +118,7 @@ class StepPreparedContext(BaseModel):
 
 
 class RetrievalManifest(BaseModel):
-    """Compact retrieval input manifest recorded for one execution."""
+    """Compact retrieval input manifest recorded for one attempt."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -175,7 +175,7 @@ class MemoryProposal(BaseModel):
 
 
 class MemoryManifest(BaseModel):
-    """Compact memory manifest recorded for one execution."""
+    """Compact memory manifest recorded for one attempt."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -184,7 +184,7 @@ class MemoryManifest(BaseModel):
 
 
 class ExecutionContextBundle(BaseModel):
-    """Digest-addressed context envelope for one runtime execution."""
+    """Digest-addressed context envelope for one runtime Step Execution."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -403,7 +403,7 @@ def build_retrieval_manifest(retrieval: Mapping[str, Any]) -> RetrievalManifest:
         ),
     }
     digest = _digest_payload(payload)
-    payload["retrievalManifestRef"] = f"execution-retrieval-manifest://{digest}"
+    payload["retrievalManifestRef"] = f"attempt-retrieval-manifest://{digest}"
     return RetrievalManifest.model_validate(payload)
 
 
@@ -422,7 +422,7 @@ def build_memory_manifest(
         ]
     }
     digest = _digest_payload(payload)
-    payload["memoryManifestRef"] = f"execution-memory-manifest://{digest}"
+    payload["memoryManifestRef"] = f"attempt-memory-manifest://{digest}"
     return MemoryManifest.model_validate(payload)
 
 
@@ -462,10 +462,10 @@ def _clean_existing_refs(existing_refs: Sequence[Any] | None) -> list[str]:
     return refs
 
 
-def build_resume_prepared_artifact_refs(
+def build_recovery_prepared_artifact_refs(
     manifest: PreparedInputManifest | Mapping[str, Any] | None,
 ) -> list[str]:
-    """Return compact prepared refs suitable for Resume checkpoint evidence."""
+    """Return compact prepared refs suitable for Recovery checkpoint evidence."""
 
     if manifest is None:
         return []

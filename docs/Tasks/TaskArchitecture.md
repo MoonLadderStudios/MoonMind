@@ -145,7 +145,7 @@ flowchart LR
 Key boundary:
 
 - the control plane owns authoring intent, artifact refs, target binding, runtime choice, preset compilation, and snapshot durability
-- the execution plane owns lifecycle, step execution, step ledger state, and resume checkpoint production over already resolved payloads
+- the execution plane owns lifecycle, step execution, step ledger state, and recovery checkpoint production over already resolved payloads
 - runtime adapters own provider-specific realization details
 
 ---
@@ -308,8 +308,8 @@ interface ResumeFromFailedStepRef {
   sourceWorkflowId: string;
   sourceRunId: string;
   failedStepId: string;
-  failedStepExecutionOrdinal?: number;
-  resumeCheckpointRef: string;
+  failedStepExecution?: number;
+  recoveryCheckpointRef: string;
   taskInputSnapshotRef: string;
   planRef?: string;
   planDigest?: string;
@@ -336,9 +336,9 @@ Rules:
 - `Publish Mode` remains part of task submission semantics; only its Create page placement changes
 - the execution-facing payload is resolved before workers consume it; `authoredPresets` and `source` metadata are for reconstruction, audit, diagnostics, and safe rerun semantics
 - `task.recovery.kind === "edited_full_retry"` or `"exact_full_rerun"` means the new execution starts from the beginning
-- `task.resume.kind === "recover_from_failed_step"` means the new execution must restore completed progress from `resumeCheckpointRef` and start at `failedStepId`
+- `task.resume.kind === "recover_from_failed_step"` means the new execution must restore completed progress from `recoveryCheckpointRef` and start at `failedStepId`
 - resume provenance must include both `sourceWorkflowId` and `sourceRunId` so a resume is pinned to the exact source run and cannot drift when the logical execution later changes
-- resume checkpoint refs are execution-state refs, not editable authoring fields
+- recovery checkpoint refs are execution-state refs, not editable authoring fields
 
 ---
 
@@ -403,14 +403,14 @@ Rules:
 - Resume is not an edit flow and must not allow task input changes in v1
 - Resume pins the source execution with both `sourceWorkflowId` and `sourceRunId`
 - Resume identifies the last failed step from the source run's step ledger
-- Resume creates or resolves a `resumeCheckpointRef` that records the completed steps, their output refs, the prepared input refs, and the workspace or branch state immediately before the failed step
+- Resume creates or resolves a `recoveryCheckpointRef` that records the completed steps, their output refs, the prepared input refs, and the workspace or branch state immediately before the failed step
 - the new execution imports completed prior steps as preserved progress rather than re-executing them
 - the failed step is retried as a new attempt in the new execution
 - later steps execute normally after the failed step succeeds
 - the task detail view must show preserved prior steps as reused from the source run, not freshly executed by the resumed run
 - if checkpoint restoration is incomplete, corrupted, unauthorized, or inconsistent with the original task input and plan digest, Resume must fail explicitly before executing the failed step
 
-Representative resume checkpoint artifact:
+Representative recovery checkpoint artifact:
 
 ```json
 {
@@ -440,7 +440,7 @@ Representative resume checkpoint artifact:
       }
     }
   ],
-  "resumeWorkspace": {
+  "recoveryWorkspace": {
     "kind": "workspace_checkpoint",
     "ref": "art_workspace_before_failed_step"
   }
@@ -499,7 +499,7 @@ Rules:
 - child workflows receive only the prepared context relevant to the child step
 - child workflow logs and diagnostics do not redefine target binding semantics
 
-### 8.5 Resume checkpoint responsibilities
+### 8.5 Recovery checkpoint responsibilities
 
 The execution plane owns the durable evidence that makes Resume truthful.
 
@@ -516,7 +516,7 @@ Rules:
 
 When a new execution starts with `task.resume.kind === "recover_from_failed_step"`, `MoonMind.Run` owns:
 
-- loading and validating the resume checkpoint
+- loading and validating the recovery checkpoint
 - verifying the checkpoint source `workflowId`, `runId`, task snapshot, and plan identity
 - materializing the restored workspace state before the failed step
 - marking completed prior steps as preserved from the source run without re-executing them
@@ -638,8 +638,8 @@ Rules:
 
 - attachment-aware task authoring is defined against `MoonMind.Run`
 - create, edit, rerun, and detail flows for attachment-aware tasks are all modeled in task-shaped `MoonMind.Run` terms
-- `MoonMind.Run` is the canonical workflow that produces step ledger state and resume checkpoints for failed-step Resume
-- `MoonMind.Run` may start from the beginning for full retry or start at a failed step when given a validated resume checkpoint
+- `MoonMind.Run` is the canonical workflow that produces step ledger state and recovery checkpoints for failed-step recovery
+- `MoonMind.Run` may start from the beginning for full retry or start at a failed step when given a validated recovery checkpoint
 - checkpoint durability remains a parent `MoonMind.Run` responsibility even when an individual step delegates work to `MoonMind.AgentRun`
 
 ### 12.2 `MoonMind.AgentRun`
@@ -686,7 +686,7 @@ Use the related docs for detailed behavior:
 - `docs/Tasks/AgentSkillSystem.md` for skill selection and resolution
 - `docs/Temporal/TemporalArchitecture.md` for workflow lifecycle and worker topology
 - `docs/Temporal/RunHistoryAndRerunSemantics.md` for Workflow ID, Run ID, full rerun, and Resume identity semantics
-- `docs/Temporal/StepLedgerAndProgressModel.md` for step ledger, preserved-step, and resume checkpoint semantics
+- `docs/Temporal/StepLedgerAndProgressModel.md` for step ledger, preserved-step, and recovery checkpoint semantics
 
 ---
 

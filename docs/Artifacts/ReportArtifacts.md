@@ -310,7 +310,7 @@ Recommended keys under `ArtifactMetadata.metadata`:
 - `step_id`
   - Optional step-aware presentation hint
 - `attempt`
-  - Optional step attempt hint
+  - Optional step execution hint
 
 Rules:
 
