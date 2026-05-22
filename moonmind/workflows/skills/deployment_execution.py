@@ -91,6 +91,9 @@ class ComposeRunner(Protocol):
     ) -> Mapping[str, Any]:
         """Run the up command."""
 
+    async def inspect_image(self, requested_image: str) -> Mapping[str, Any]:
+        """Inspect the pulled target image."""
+
     async def verify(
         self,
         *,
@@ -348,6 +351,17 @@ class DisabledComposeRunner:
             },
         )
 
+    async def inspect_image(self, requested_image: str) -> Mapping[str, Any]:
+        raise ToolFailure(
+            error_code="DEPLOYMENT_RUNNER_UNAVAILABLE",
+            message="Deployment update runner is not configured for this worker.",
+            retryable=False,
+            details={
+                "requestedImage": requested_image,
+                "failureClass": "runner_unavailable",
+            },
+        )
+
     async def verify(
         self,
         *,
@@ -472,6 +486,9 @@ class HostDockerComposeRunner:
         requested_image: str,
     ) -> Mapping[str, Any]:
         return await self._run_compose_command(command, requested_image=requested_image)
+
+    async def inspect_image(self, requested_image: str) -> Mapping[str, Any]:
+        return await self._inspect_image(requested_image)
 
     async def verify(
         self,
@@ -923,10 +940,6 @@ class DeploymentUpdateExecutor:
                     stack=parsed["stack"], phase="before"
                 )
                 before_ref = await write_evidence("before-state", before_state)
-                _ensure_runner_survives_update(
-                    command_plan=command_plan,
-                    before_state=before_state,
-                )
 
                 _add_progress(
                     progress_events,
@@ -955,6 +968,13 @@ class DeploymentUpdateExecutor:
                 )
                 command_log["pull"]["result"] = pull_result
                 _ensure_command_succeeded("pull", pull_result)
+                target_image = await self.runner.inspect_image(requested_image)
+                command_log["targetImage"] = _target_image_audit(target_image)
+                _ensure_runner_survives_update(
+                    command_plan=command_plan,
+                    before_state=before_state,
+                    target_image=target_image,
+                )
 
                 _add_progress(
                     progress_events,
@@ -1144,6 +1164,7 @@ def _ensure_runner_survives_update(
     *,
     command_plan: ComposeCommandPlan,
     before_state: Mapping[str, Any],
+    target_image: Mapping[str, Any] | None = None,
 ) -> None:
     if command_plan.runner_mode != "privileged_worker":
         return
@@ -1158,6 +1179,12 @@ def _ensure_runner_survives_update(
         return
     targeted_services = _compose_up_target_services(command_plan.up_args)
     if targeted_services and matching_service not in targeted_services:
+        return
+    if "--force-recreate" not in command_plan.up_args and _runner_already_uses_target_image(
+        before_state=before_state,
+        service_name=matching_service,
+        target_image=target_image,
+    ):
         return
     raise ToolFailure(
         error_code="DEPLOYMENT_RUNNER_UNSAFE",
@@ -1190,6 +1217,83 @@ def _compose_up_target_services(args: Sequence[str]) -> tuple[str, ...]:
             continue
         services.append(part)
     return tuple(services)
+
+
+def _target_image_audit(target_image: Mapping[str, Any]) -> dict[str, Any]:
+    return _compact_mapping(
+        {
+            "id": target_image.get("Id") or target_image.get("ID"),
+            "repoDigests": target_image.get("RepoDigests"),
+        }
+    )
+
+
+def _runner_already_uses_target_image(
+    *,
+    before_state: Mapping[str, Any],
+    service_name: str,
+    target_image: Mapping[str, Any] | None,
+) -> bool:
+    target_id = _normalized_image_id(
+        (target_image or {}).get("Id") or (target_image or {}).get("ID")
+    )
+    if not target_id:
+        return False
+    for image in _iter_state_images_for_service(
+        before_state.get("images"),
+        service_name=service_name,
+    ):
+        image_id = _normalized_image_id(
+            image.get("ID")
+            or image.get("Id")
+            or image.get("ImageID")
+            or image.get("image_id")
+        )
+        if image_id and image_id == target_id:
+            return True
+    return False
+
+
+def _iter_state_images_for_service(
+    images: Any,
+    *,
+    service_name: str,
+) -> Sequence[Mapping[str, Any]]:
+    if not service_name or not isinstance(images, Sequence) or isinstance(images, (str, bytes)):
+        return ()
+    normalized_service = service_name.strip().lower()
+    matches: list[Mapping[str, Any]] = []
+    for image in images:
+        if not isinstance(image, Mapping):
+            continue
+        candidates = (
+            image.get("Service"),
+            image.get("Name"),
+            image.get("Container"),
+            image.get("ContainerName"),
+            image.get("Names"),
+        )
+        if any(_service_name_matches(candidate, normalized_service) for candidate in candidates):
+            matches.append(image)
+    return tuple(matches)
+
+
+def _service_name_matches(value: Any, normalized_service: str) -> bool:
+    candidate = str(value or "").strip().lower()
+    if not candidate:
+        return False
+    return candidate == normalized_service or bool(
+        re.search(rf"(^|[-_]){re.escape(normalized_service)}[-_]\d+$", candidate)
+    )
+
+
+def _normalized_image_id(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized.startswith("sha256:"):
+        return normalized
+    if len(normalized) == 64 and all(character in "0123456789abcdef" for character in normalized):
+        return f"sha256:{normalized}"
+    return normalized
 
 
 def _current_container_id() -> str:

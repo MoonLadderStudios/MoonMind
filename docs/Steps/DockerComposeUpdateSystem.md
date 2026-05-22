@@ -602,9 +602,9 @@ The before state is written to an immutable artifact.
 
 ## 10.4 Persist desired image
 
-The tool writes the desired image reference into the allowlisted deployment env file or equivalent deployment-state store.
+The tool writes the desired image reference into the allowlisted deployment env file or equivalent deployment-state store before Compose commands resolve image variables.
 
-The tool must not edit arbitrary files selected by the caller.
+The tool must not edit arbitrary files selected by the caller. If a later pull, runner safety check, or service recreation fails, the run records the failed state and command diagnostics.
 
 ## 10.5 Pull images
 
