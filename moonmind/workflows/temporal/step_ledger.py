@@ -18,8 +18,8 @@ def default_step_refs() -> dict[str, Any]:
         "childWorkflowId": None,
         "childRunId": None,
         "taskRunId": None,
-        "latestExecutionManifestRef": None,
-        "executionManifestRefs": [],
+        "latestStepExecutionManifestRef": None,
+        "stepExecutionManifestRefs": [],
     }
 
 def default_step_artifacts() -> dict[str, Any]:
@@ -31,20 +31,12 @@ def default_step_artifacts() -> dict[str, Any]:
         "runtimeMergedLogs": None,
         "runtimeDiagnostics": None,
         "providerSnapshot": None,
-        "executionManifestRef": None,
-        "executionManifestRefs": [],
+        "stepExecutionManifestRef": None,
+        "stepExecutionManifestRefs": [],
     }
 
 def default_step_workload() -> dict[str, Any] | None:
     return None
-
-
-def _normalized_step_workload(workload: Mapping[str, Any]) -> dict[str, Any]:
-    payload = dict(workload)
-    if "executionOrdinal" not in payload and "attempt" in payload:
-        payload["executionOrdinal"] = payload["attempt"]
-    payload.pop("attempt", None)
-    return payload
 
 
 def _has_semantic_output_ref(row: Mapping[str, Any]) -> bool:
@@ -71,11 +63,11 @@ def _semantic_output_refs(row: Mapping[str, Any]) -> dict[str, str]:
 
 
 def _source_execution_ordinal_value(row: Mapping[str, Any]) -> int:
-    attempt = row.get("executionOrdinal")
-    if isinstance(attempt, bool):
+    execution_ordinal = row.get("executionOrdinal", row.get("attempt"))
+    if isinstance(execution_ordinal, bool):
         return 0
-    if isinstance(attempt, (int, float)):
-        return max(0, int(attempt))
+    if isinstance(execution_ordinal, (int, float)):
+        return max(0, int(execution_ordinal))
     return 0
 
 
@@ -132,7 +124,7 @@ def _dependency_output_signature(
     if producing_attempt is None:
         return None
     return {
-        "producingExecution": producing_attempt,
+        "producingAttempt": producing_attempt,
         "outputRefs": refs,
     }
 
@@ -154,7 +146,7 @@ def _mark_step_requires_revalidation(
         "actual": actual,
     }
     row.pop("preservedFrom", None)
-    row.pop("resumePreservation", None)
+    row.pop("recoveryPreservation", None)
     row.pop("stateCheckpointRef", None)
     row["updatedAt"] = updated_at.isoformat()
 
@@ -166,7 +158,7 @@ def dependency_input_signatures(
     workflow_id: str | None = None,
     run_id: str | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Return exact producing executions and output refs for direct dependencies."""
+    """Return exact producing attempts and output refs for direct dependencies."""
 
     row_by_id = {
         step_id: row
@@ -219,7 +211,7 @@ def preserved_outputs_for_dependencies(
             output_payload: dict[str, Any] = dict(semantic_refs)
             producing_attempt = _producing_attempt_identity(dependency_row)
             if producing_attempt is not None:
-                output_payload["producingExecution"] = producing_attempt
+                output_payload["producingAttempt"] = producing_attempt
             outputs[dep_id] = output_payload
     return outputs
 
@@ -291,7 +283,7 @@ def record_dependency_inputs_for_step(
     run_id: str,
     updated_at: datetime,
 ) -> dict[str, dict[str, Any]]:
-    """Record the exact producing executions a step consumed as dependencies."""
+    """Record the exact producing attempts a step consumed as dependencies."""
 
     signatures = dependency_input_signatures(
         rows,
@@ -369,7 +361,7 @@ def invalidate_downstream_steps_for_changed_output(
     return invalidated
 
 
-def _resume_preservation(
+def _recovery_preservation(
     *,
     eligible: bool,
     reason: str,
@@ -416,6 +408,7 @@ def build_initial_step_rows(
                 "status": "ready" if not depends_on else "pending",
                 "waitingReason": None,
                 "attentionRequired": False,
+                "attempt": 0,
                 "executionOrdinal": 0,
                 "startedAt": None,
                 "updatedAt": updated_at_iso,
@@ -490,13 +483,14 @@ def materialize_preserved_steps(
         except (TypeError, ValueError):
             source_execution_ordinal = 1
         row["status"] = str(preserved.get("status") or "succeeded")
+        row["attempt"] = 0
         row["executionOrdinal"] = 0
         row["summary"] = "Preserved from source run."
         row["waitingReason"] = None
         row["attentionRequired"] = False
         row["artifacts"] = artifacts
         row["stateCheckpointRef"] = state_checkpoint_ref
-        row["resumePreservation"] = _resume_preservation(
+        row["recoveryPreservation"] = _recovery_preservation(
             eligible=True,
             reason="complete",
             message="Step has recoverable output refs and state checkpoint evidence.",
@@ -532,30 +526,30 @@ def mark_step_checkpoint_evidence(
         existing_checkpoint = str(row.get("stateCheckpointRef") or "").strip()
         status = str(row.get("status") or "").strip()
         if status not in {"succeeded", "skipped"}:
-            preservation = _resume_preservation(
+            preservation = _recovery_preservation(
                 eligible=False,
                 reason="not_completed",
                 message="Step is not completed and cannot be preserved for Resume.",
             )
         elif not _has_semantic_output_ref(row):
-            preservation = _resume_preservation(
+            preservation = _recovery_preservation(
                 eligible=False,
                 reason="missing_output_refs",
                 message="Completed step cannot be preserved because no recoverable output refs were recorded.",
             )
         elif not existing_checkpoint:
-            preservation = _resume_preservation(
+            preservation = _recovery_preservation(
                 eligible=False,
                 reason="missing_state_checkpoint",
                 message="Completed step cannot be preserved because no state checkpoint ref was recorded.",
             )
         else:
-            preservation = _resume_preservation(
+            preservation = _recovery_preservation(
                 eligible=True,
                 reason="complete",
                 message="Step has recoverable output refs and state checkpoint evidence.",
             )
-        row["resumePreservation"] = preservation
+        row["recoveryPreservation"] = preservation
         row["updatedAt"] = updated_at.isoformat()
         return row
     raise KeyError(f"Unknown logical step id: {logical_step_id}")
@@ -566,13 +560,13 @@ def mark_step_execution_manifest_evidence(
     logical_step_id: str,
     *,
     updated_at: datetime,
-    execution_manifest_ref: str,
+    step_execution_manifest_ref: str,
 ) -> dict[str, Any]:
     """Attach compact Step Execution manifest refs to a step row."""
 
-    manifest_ref = str(execution_manifest_ref or "").strip()
+    manifest_ref = str(step_execution_manifest_ref or "").strip()
     if not manifest_ref:
-        raise ValueError("execution_manifest_ref must be a non-empty string")
+        raise ValueError("step_execution_manifest_ref must be a non-empty string")
     for row in rows:
         if row.get("logicalStepId") != logical_step_id:
             continue
@@ -580,7 +574,7 @@ def mark_step_execution_manifest_evidence(
         current_artifacts = row.get("artifacts")
         if isinstance(current_artifacts, Mapping):
             artifacts.update(current_artifacts)
-        history = artifacts.get("executionManifestRefs")
+        history = artifacts.get("stepExecutionManifestRefs")
         if not isinstance(history, list):
             history = []
         normalized_history = [
@@ -590,8 +584,8 @@ def mark_step_execution_manifest_evidence(
         ]
         if manifest_ref not in normalized_history:
             normalized_history.append(manifest_ref)
-        artifacts["executionManifestRef"] = manifest_ref
-        artifacts["executionManifestRefs"] = normalized_history
+        artifacts["stepExecutionManifestRef"] = manifest_ref
+        artifacts["stepExecutionManifestRefs"] = normalized_history
         row["artifacts"] = artifacts
         row["updatedAt"] = updated_at.isoformat()
         return row
@@ -604,13 +598,13 @@ def clear_step_checkpoint_evidence(
     *,
     updated_at: datetime,
 ) -> dict[str, Any]:
-    """Clear execution-scoped checkpoint evidence before a new step execution starts."""
+    """Clear attempt-scoped checkpoint evidence before a new step execution starts."""
 
     for row in rows:
         if row.get("logicalStepId") != logical_step_id:
             continue
         row.pop("stateCheckpointRef", None)
-        row.pop("resumePreservation", None)
+        row.pop("recoveryPreservation", None)
         row["updatedAt"] = updated_at.isoformat()
         return row
     raise KeyError(f"Unknown logical step id: {logical_step_id}")
@@ -673,7 +667,8 @@ def update_step_row(
         if status is not None:
             row["status"] = status
         if increment_attempt:
-            row["executionOrdinal"] = int(row.get("executionOrdinal") or 0) + 1
+            row["attempt"] = int(row.get("attempt") or 0) + 1
+            row["executionOrdinal"] = int(row["attempt"])
         if set_started_at:
             row["startedAt"] = updated_at.isoformat()
         if summary is not _UNSET:
@@ -703,16 +698,12 @@ def update_step_row(
                 for key, value in artifacts.items():
                     if key in merged_artifacts:
                         merged_artifacts[key] = value
-            history = merged_artifacts.get("executionManifestRefs")
+            history = merged_artifacts.get("stepExecutionManifestRefs")
             if not isinstance(history, list):
-                merged_artifacts["executionManifestRefs"] = []
+                merged_artifacts["stepExecutionManifestRefs"] = []
             row["artifacts"] = merged_artifacts
         if workload is not _UNSET:
-            row["workload"] = (
-                _normalized_step_workload(workload)
-                if isinstance(workload, Mapping)
-                else None
-            )
+            row["workload"] = dict(workload) if isinstance(workload, Mapping) else None
         if status in TERMINAL_STEP_STATUSES:
             row["waitingReason"] = None
             row["attentionRequired"] = False

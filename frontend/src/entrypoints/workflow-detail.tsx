@@ -436,7 +436,7 @@ const TargetDiagnosticsSchema = z
               .passthrough(),
           )
           .default([]),
-        failedResumePhase: z
+        failedRecoveryPhase: z
           .enum([
             'checkpoint_validation',
             'workspace_restoration',
@@ -3451,8 +3451,8 @@ function TargetDiagnosticsPanel({
             {recovery.checkpointRef ? (
               <li><strong>Checkpoint:</strong> <code className="text-xs break-all">{recovery.checkpointRef}</code></li>
             ) : null}
-            {recovery.failedResumePhase ? (
-              <li><strong>Failed phase:</strong> {formatStatusLabel(recovery.failedResumePhase)}</li>
+            {recovery.failedRecoveryPhase ? (
+              <li><strong>Failed phase:</strong> {formatStatusLabel(recovery.failedRecoveryPhase)}</li>
             ) : null}
           </ul>
           {recovery.preservedSteps.length > 0 ? (

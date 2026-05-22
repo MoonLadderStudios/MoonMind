@@ -61,7 +61,7 @@ def test_step_execution_manifest_rejects_unsupported_canonical_values(
         "checks": [],
         "sideEffects": {"external": []},
         "dependencyEffects": {"invalidatedLogicalStepIds": []},
-        "budget": {"executionLimit": 3},
+        "budget": {"attemptLimit": 3},
     }
     payload[field] = value
 
@@ -95,7 +95,7 @@ def test_step_execution_manifest_accepts_canonical_payload_and_content_type() ->
             "checks": [{"kind": "unit", "status": "passed"}],
             "sideEffects": {"git": {"disposition": "accepted"}},
             "dependencyEffects": {"invalidatedLogicalStepIds": []},
-            "budget": {"executionLimit": 3, "remainingExecutions": 1},
+            "budget": {"attemptLimit": 3, "remainingExecutions": 1},
         }
     )
 
@@ -144,7 +144,7 @@ def test_step_execution_manifest_accepts_compact_evidence_refs() -> None:
                 }
             },
             "dependencyEffects": {"invalidatedLogicalStepIds": []},
-            "budget": {"executionLimit": 3, "remainingExecutions": 1},
+            "budget": {"attemptLimit": 3, "remainingExecutions": 1},
         }
     )
 
@@ -177,7 +177,7 @@ def test_step_execution_manifest_rejects_large_inline_evidence() -> None:
             }
         },
         "dependencyEffects": {"invalidatedLogicalStepIds": []},
-        "budget": {"executionLimit": 3},
+        "budget": {"attemptLimit": 3},
     }
 
     with pytest.raises(ValidationError, match="compact refs"):
@@ -200,14 +200,14 @@ def test_step_execution_manifest_rejects_large_inline_check_evidence() -> None:
         "checks": [{"kind": "unit", "logText": "x" * 2000}],
         "sideEffects": {},
         "dependencyEffects": {"invalidatedLogicalStepIds": []},
-        "budget": {"executionLimit": 3},
+        "budget": {"attemptLimit": 3},
     }
 
     with pytest.raises(ValidationError, match="compact refs"):
         StepExecutionManifestModel.model_validate(payload)
 
 
-def test_step_execution_idempotency_key_uses_execution_identity_and_operation() -> None:
+def test_step_execution_idempotency_key_uses_attempt_identity_and_operation() -> None:
     identity = StepExecutionIdentityModel.model_validate(_identity())
 
     key = build_step_execution_idempotency_key(identity, "manifest")
@@ -224,7 +224,7 @@ def test_step_execution_boundary_result_is_compact_and_typed() -> None:
             "identity": _identity(),
             "manifestArtifactRef": "artifact-step-execution-2",
             "idempotencyKey": "workflow-1:run-1:implement-story:2:manifest",
-            "summary": "Execution manifest created.",
+            "summary": "Step execution manifest created.",
         }
     )
 
@@ -234,13 +234,13 @@ def test_step_execution_boundary_result_is_compact_and_typed() -> None:
     assert "payload" not in serialized
 
 
-def test_step_execution_semantic_operation_keeps_retry_reexecution_recover_distinct() -> None:
+def test_step_execution_semantic_operation_keeps_retry_reexecute_recovery_distinct() -> None:
     retry = StepExecutionSemanticOperationModel.model_validate({"kind": "retry"})
-    reexecution = StepExecutionSemanticOperationModel.model_validate({"kind": "reexecution"})
+    reexecute = StepExecutionSemanticOperationModel.model_validate({"kind": "reexecute"})
     recover = StepExecutionSemanticOperationModel.model_validate({"kind": "recover"})
 
-    assert {retry.kind, reexecution.kind, recover.kind} == {
+    assert {retry.kind, reexecute.kind, recover.kind} == {
         "retry",
-        "reexecution",
+        "reexecute",
         "recover",
     }

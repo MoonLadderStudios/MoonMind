@@ -10,7 +10,7 @@ from moonmind.schemas.managed_session_models import (
 )
 from moonmind.schemas.temporal_models import (
     IntegrationCallbackRequest,
-    ResumeCheckpointModel,
+    RecoveryCheckpointModel,
 )
 from moonmind.schemas.temporal_payload_policy import (
     MAX_TEMPORAL_METADATA_STRING_CHARS,
@@ -84,9 +84,9 @@ def test_external_event_provider_summary_accepts_compact_refs() -> None:
     assert signal.provider_summary == {"resultRef": "art-result", "status": "done"}
 
 
-def test_resume_checkpoint_rejects_large_inline_workspace_content() -> None:
+def test_recovery_checkpoint_rejects_large_inline_workspace_content() -> None:
     with pytest.raises(ValidationError, match="store large payloads in artifacts"):
-        ResumeCheckpointModel.model_validate(
+        RecoveryCheckpointModel.model_validate(
             {
                 "schemaVersion": "v1",
                 "source": {"workflowId": "mm:source", "runId": "run-source"},
@@ -97,7 +97,7 @@ def test_resume_checkpoint_rejects_large_inline_workspace_content() -> None:
                     "order": 2,
                     "attempt": 1,
                 },
-                "resumeWorkspace": {
+                "recoveryWorkspace": {
                     "branch": "feature",
                     "commit": "abc123",
                     "inlineDiff": "x" * (MAX_TEMPORAL_METADATA_STRING_CHARS + 1),

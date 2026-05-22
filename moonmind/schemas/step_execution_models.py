@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 STEP_EXECUTION_CONTENT_TYPE = "application/vnd.moonmind.step-execution+json;version=1"
 
-AttemptReason = Literal[
+StepExecutionReason = Literal[
     "initial_execution",
     "quality_gate_failed",
     "tests_failed",
@@ -20,7 +20,7 @@ AttemptReason = Literal[
     "dependency_invalidated",
     "policy_revalidation",
 ]
-AttemptStatus = Literal[
+StepExecutionStatus = Literal[
     "pending",
     "preparing",
     "running",
@@ -31,7 +31,7 @@ AttemptStatus = Literal[
     "canceled",
     "superseded",
 ]
-AttemptTerminalDisposition = Literal[
+StepExecutionTerminalDisposition = Literal[
     "accepted",
     "retryable",
     "blocked",
@@ -86,9 +86,9 @@ class StepExecutionManifestModel(BaseModel):
     execution_ordinal: int = Field(..., alias="executionOrdinal", ge=1)
     execution_scope: Literal["run"] = Field("run", alias="executionScope")
     lineage: dict[str, Any] | None = Field(None, alias="lineage")
-    reason: AttemptReason = Field(..., alias="reason")
-    status: AttemptStatus = Field(..., alias="status")
-    terminal_disposition: AttemptTerminalDisposition | None = Field(
+    reason: StepExecutionReason = Field(..., alias="reason")
+    status: StepExecutionStatus = Field(..., alias="status")
+    terminal_disposition: StepExecutionTerminalDisposition | None = Field(
         None,
         alias="terminalDisposition",
     )

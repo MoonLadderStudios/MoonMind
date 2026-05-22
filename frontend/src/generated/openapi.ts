@@ -1331,7 +1331,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/executions/{workflow_id}/steps/{logical_step_id}/executions": {
+    "/api/executions/{workflow_id}/steps/{logical_step_id}/attempts": {
         parameters: {
             query?: never;
             header?: never;
@@ -1339,7 +1339,7 @@ export interface paths {
             cookie?: never;
         };
         /** Describe Execution Step Executions */
-        get: operations["describe_execution_step_executions_api_executions__workflow_id__steps__logical_step_id__executions_get"];
+        get: operations["describe_execution_step_executions_api_executions__workflow_id__steps__logical_step_id__attempts_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1348,7 +1348,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/executions/{workflow_id}/steps/{logical_step_id}/executions/{execution_ordinal}": {
+    "/api/executions/{workflow_id}/steps/{logical_step_id}/attempts/{attempt}": {
         parameters: {
             query?: never;
             header?: never;
@@ -1356,7 +1356,7 @@ export interface paths {
             cookie?: never;
         };
         /** Describe Execution Step Execution */
-        get: operations["describe_execution_step_execution_api_executions__workflow_id__steps__logical_step_id__executions__execution_ordinal__get"];
+        get: operations["describe_execution_step_execution_api_executions__workflow_id__steps__logical_step_id__attempts__attempt__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4600,7 +4600,7 @@ export interface components {
         };
         /**
          * ExecutionResumeSummaryModel
-         * @description Failed-step Resume availability and checkpoint summary.
+         * @description Failed-step recovery availability and checkpoint summary.
          */
         ExecutionResumeSummaryModel: {
             /**
@@ -4789,7 +4789,7 @@ export interface components {
         };
         /**
          * ExecutionTargetDiagnosticsRecoveryModel
-         * @description Failed-step Resume provenance and degraded recovery diagnostics.
+         * @description Failed-step recovery provenance and degraded recovery diagnostics.
          */
         ExecutionTargetDiagnosticsRecoveryModel: {
             /**
@@ -4805,8 +4805,8 @@ export interface components {
             checkpointRef?: string | null;
             /** Preservedsteps */
             preservedSteps?: components["schemas"]["ExecutionTargetDiagnosticsPreservedStepModel"][];
-            /** Failedresumephase */
-            failedResumePhase?: ("checkpoint_validation" | "workspace_restoration" | "preserved_output_injection" | "failed_step_execution") | null;
+            /** Failedrecoveryphase */
+            failedRecoveryPhase?: ("checkpoint_validation" | "workspace_restoration" | "preserved_output_injection" | "failed_step_execution") | null;
         };
         /**
          * GitHubCredentialStatus
@@ -5979,12 +5979,12 @@ export interface components {
             execution: components["schemas"]["ResumeExecutionRefModel"];
             /**
              * Relationship
-             * @default Resumed from failed step
+             * @default Recovered from failed step
              * @constant
              */
-            relationship: "Resumed from failed step";
-            /** Resumecheckpointref */
-            resumeCheckpointRef: string;
+            relationship: "Recovered from failed step";
+            /** Recoverycheckpointref */
+            recoveryCheckpointRef: string;
         };
         /**
          * RecurringTaskDefinitionListResponse
@@ -6660,7 +6660,7 @@ export interface components {
         };
         /**
          * StepExecutionLineageModel
-         * @description Optional cross-run provenance for resumed or related executions.
+         * @description Optional cross-run provenance for recovered or related executions.
          */
         StepExecutionLineageModel: {
             /** Sourceworkflowid */
@@ -6678,7 +6678,7 @@ export interface components {
         };
         /**
          * StepExecutionListModel
-         * @description Bounded execution history for one logical step.
+         * @description Bounded attempt history for one logical step.
          */
         StepExecutionListModel: {
             /** Workflowid */
@@ -6693,8 +6693,8 @@ export interface components {
             runScope: "latest";
             /** Logicalstepid */
             logicalStepId: string;
-            /** Executions */
-            executions?: components["schemas"]["StepExecutionProjectionModel"][];
+            /** Attempts */
+            attempts?: components["schemas"]["StepExecutionProjectionModel"][];
         };
         /**
          * StepExecutionProjectionModel
@@ -6772,10 +6772,10 @@ export interface components {
             runtimeDiagnostics?: string | null;
             /** Providersnapshot */
             providerSnapshot?: string | null;
-            /** Executionmanifestref */
-            executionManifestRef?: string | null;
-            /** Executionmanifestrefs */
-            executionManifestRefs?: string[];
+            /** Stepexecutionmanifestref */
+            stepExecutionManifestRef?: string | null;
+            /** Stepexecutionmanifestrefs */
+            stepExecutionManifestRefs?: string[];
         };
         /**
          * StepLedgerCheckModel
@@ -6805,14 +6805,14 @@ export interface components {
             childWorkflowId?: string | null;
             /** Childrunid */
             childRunId?: string | null;
-            /** Latestexecutionmanifestref */
-            latestExecutionManifestRef?: string | null;
-            /** Executionmanifestrefs */
-            executionManifestRefs?: string[];
+            /** Lateststepexecutionmanifestref */
+            latestStepExecutionManifestRef?: string | null;
+            /** Stepexecutionmanifestrefs */
+            stepExecutionManifestRefs?: string[];
         };
         /**
          * StepLedgerResumePreservationModel
-         * @description Bounded failed-step Resume preservation eligibility for one source step.
+         * @description Bounded failed-step recovery preservation eligibility for one source step.
          */
         StepLedgerResumePreservationModel: {
             /** Eligible */
@@ -6827,7 +6827,7 @@ export interface components {
         };
         /**
          * StepLedgerRowModel
-         * @description Current/latest execution state for one logical step in the active run.
+         * @description Current/latest attempt state for one logical step in the active run.
          */
         StepLedgerRowModel: {
             /** Logicalstepid */
@@ -6855,10 +6855,10 @@ export interface components {
              */
             attentionRequired: boolean;
             /**
-             * Executionordinal
+             * Attempt
              * @default 0
              */
-            executionOrdinal: number;
+            attempt: number;
             /** Startedat */
             startedAt?: string | null;
             /**
@@ -6875,7 +6875,7 @@ export interface components {
             preservedFrom?: components["schemas"]["PreservedStepProvenanceModel"] | null;
             /** Statecheckpointref */
             stateCheckpointRef?: string | null;
-            resumePreservation?: components["schemas"]["StepLedgerResumePreservationModel"] | null;
+            recoveryPreservation?: components["schemas"]["StepLedgerResumePreservationModel"] | null;
             workload?: components["schemas"]["StepLedgerWorkloadModel"] | null;
             /** Lasterror */
             lastError?: string | null;
@@ -6907,8 +6907,8 @@ export interface components {
         StepLedgerWorkloadModel: {
             /** Stepid */
             stepId?: string | null;
-            /** Executionordinal */
-            executionOrdinal?: number | null;
+            /** Attempt */
+            attempt?: number | null;
             /** Toolname */
             toolName?: string | null;
             /** Profileid */
@@ -11098,7 +11098,7 @@ export interface operations {
             };
         };
     };
-    describe_execution_step_executions_api_executions__workflow_id__steps__logical_step_id__executions_get: {
+    describe_execution_step_executions_api_executions__workflow_id__steps__logical_step_id__attempts_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -11130,14 +11130,14 @@ export interface operations {
             };
         };
     };
-    describe_execution_step_execution_api_executions__workflow_id__steps__logical_step_id__executions__execution_ordinal__get: {
+    describe_execution_step_execution_api_executions__workflow_id__steps__logical_step_id__attempts__attempt__get: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 workflow_id: string;
                 logical_step_id: string;
-                execution_ordinal: number;
+                attempt: number;
             };
             cookie?: never;
         };

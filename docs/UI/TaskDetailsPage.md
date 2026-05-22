@@ -375,7 +375,7 @@ Destructive actions are visually separated and require confirmation.
 
 The page follows this desired action matrix.
 
-| Task status | Remediate | Edit task | Rerun | Resume failed step | Cancel | Pause | Lifecycle resume |
+| Task status | Remediate | Edit task | Rerun | Failed step recovery | Cancel | Pause | Lifecycle resume |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | Pending | No | Yes, if inputs can be updated | No | No | Yes | No | No |
 | Scheduled | No | Yes, if inputs can be updated | No | No | Yes | No | No |
@@ -725,7 +725,7 @@ Relationship labels:
 - Original run
 - Rerun
 - Edited rerun
-- Resumed from failed step
+- Recovered from failed step
 - Remediation run
 
 For a failed task, once the user clicks **Rerun**, clicks **Resume**, or submits an edited task from **Edit task**, the new run appears in this section.
@@ -1068,7 +1068,7 @@ When the user clicks **Resume** on a failed task:
 6. The new execution starts newly executed work at the last failed step.
 7. The original failed execution is not modified.
 8. The user receives a success toast or is routed to the resumed run.
-9. The new run is linked to the original execution as `Resumed from failed step`.
+9. The new run is linked to the original execution as `Recovered from failed step`.
 
 ## Non-goals
 

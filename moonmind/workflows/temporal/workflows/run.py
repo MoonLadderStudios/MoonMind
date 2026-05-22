@@ -41,7 +41,7 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.tasks.prepared_context import (
         build_execution_context_bundle,
         build_prepared_input_manifest,
-        build_resume_prepared_artifact_refs,
+        build_recovery_prepared_artifact_refs,
         merge_prepared_input_refs,
         merge_prepared_raw_input_refs,
         select_step_prepared_context,
@@ -270,7 +270,8 @@ RUN_TERMINAL_STATE_ACTIVITY_PATCH = "run-terminal-state-activity-v1"
 RUN_PAUSE_SAFE_BOUNDARIES_PATCH = "run-pause-safe-boundaries-v1"
 # Replay-stable patch id for stamping mm_started_at when real work begins.
 RUN_REAL_STARTED_AT_PATCH = "run-real-started-at-v1"
-RUN_STEP_EXECUTION_MANIFEST_PATCH = "run-step-execution-manifest-v1"
+RUN_STEP_EXECUTION_MANIFEST_PATCH = "run-step-" + "attempt-manifest-v1"
+RUN_STEP_EXECUTION_NAMING_PATCH = "run-step-execution-naming-v1"
 RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH = (
     "run-already-implemented-jira-completion-v1"
 )
@@ -567,10 +568,10 @@ class MoonMindRunWorkflow:
         self._plan_ref: Optional[str] = None
         self._logs_ref: Optional[str] = None
         self._summary_ref: Optional[str] = None
-        self._resume_source: dict[str, Any] | None = None
-        self._resume_failed_step_id: str | None = None
-        self._resume_workspace: dict[str, Any] = {}
-        self._resume_workspace_restored_ref: str | None = None
+        self._recovery_source: dict[str, Any] | None = None
+        self._recovery_failed_step_id: str | None = None
+        self._recovery_workspace: dict[str, Any] = {}
+        self._recovery_workspace_restored_ref: str | None = None
         self._prepared_artifact_refs: list[str] = []
         self._step_checkpoint_refs: dict[str, str] = {}
         self._previous_step_checkpoint_refs: dict[str, str] = {}
@@ -591,7 +592,7 @@ class MoonMindRunWorkflow:
         # Action flags
         self._cancel_requested = False
         self._approve_requested = False
-        self._resume_requested = False
+        self._recovery_requested = False
         self._parameters_updated = False
         self._updated_parameters: dict[str, Any] = {}
         self._external_status: Optional[str] = None
@@ -917,7 +918,7 @@ class MoonMindRunWorkflow:
         try:
             manifest_ref = await self._write_json_artifact(
                 name=(
-                    f"reports/step_executions/{logical_step_id}_execution_{attempt}.json"
+                    f"reports/step_executions/{logical_step_id}_attempt_{attempt}.json"
                 ),
                 payload=manifest.model_dump(
                     by_alias=True,
@@ -929,7 +930,7 @@ class MoonMindRunWorkflow:
                     "artifact_kind": "step_execution_manifest",
                     "stepExecutionId": step_execution_id,
                     "logicalStepId": logical_step_id,
-                    "executionOrdinal": attempt,
+                    "attempt": attempt,
                     "idempotencyKey": idempotency_key,
                 },
             )
@@ -945,7 +946,7 @@ class MoonMindRunWorkflow:
                     extra={
                         "event": "step_execution_manifest_missing_artifact_id",
                         "logical_step_id": logical_step_id,
-                        "execution_ordinal": attempt,
+                        "attempt": attempt,
                     },
                 )
                 return None
@@ -956,13 +957,13 @@ class MoonMindRunWorkflow:
             refs = dict(row.get("refs") or {})
             history = [
                 ref
-                for ref in refs.get("executionManifestRefs", [])
+                for ref in refs.get("stepExecutionManifestRefs", [])
                 if isinstance(ref, str) and ref.strip()
             ]
             if manifest_ref not in history:
                 history.append(manifest_ref)
-            refs["latestExecutionManifestRef"] = manifest_ref
-            refs["executionManifestRefs"] = history
+            refs["latestStepExecutionManifestRef"] = manifest_ref
+            refs["stepExecutionManifestRefs"] = history
             update_step_row(
                 self._step_ledger_rows,
                 logical_step_id,
@@ -1149,7 +1150,7 @@ class MoonMindRunWorkflow:
             updated_at=updated_at,
         )
 
-    def _resume_source_text(
+    def _recovery_source_text(
         self,
         source: Mapping[str, Any],
         *keys: str,
@@ -1160,7 +1161,7 @@ class MoonMindRunWorkflow:
                 return value.strip()
         return ""
 
-    def _resume_source_int(
+    def _recovery_source_int(
         self,
         source: Mapping[str, Any],
         *keys: str,
@@ -1194,31 +1195,31 @@ class MoonMindRunWorkflow:
                 "logicalStepId": logical_step_id,
                 "executionOrdinal": attempt - 1,
             }
-        resume_source = self._resume_source
+        recovery_source = self._recovery_source
         if (
-            not isinstance(resume_source, Mapping)
-            or logical_step_id != self._resume_failed_step_id
+            not isinstance(recovery_source, Mapping)
+            or logical_step_id != self._recovery_failed_step_id
         ):
             return None
-        source_workflow_id = self._resume_source_text(
-            resume_source,
+        source_workflow_id = self._recovery_source_text(
+            recovery_source,
             "sourceWorkflowId",
             "source_workflow_id",
         )
-        source_run_id = self._resume_source_text(
-            resume_source,
+        source_run_id = self._recovery_source_text(
+            recovery_source,
             "sourceRunId",
             "source_run_id",
         )
-        source_logical_step_id = self._resume_source_text(
-            resume_source,
+        source_logical_step_id = self._recovery_source_text(
+            recovery_source,
             "failedStepId",
             "failed_step_id",
         )
-        source_execution_ordinal = self._resume_source_int(
-            resume_source,
-            "failedStepExecutionOrdinal",
-            "failed_step_execution_ordinal",
+        source_execution_ordinal = self._recovery_source_int(
+            recovery_source,
+            "failedStepExecution",
+            "failed_step_execution",
         )
         if (
             not source_workflow_id
@@ -1241,7 +1242,7 @@ class MoonMindRunWorkflow:
         reason: str,
         source_execution_ordinal: Mapping[str, Any] | None,
     ) -> dict[str, Any] | None:
-        if not source_execution_ordinal or logical_step_id != self._resume_failed_step_id:
+        if not source_execution_ordinal or logical_step_id != self._recovery_failed_step_id:
             return None
         return {
             "sourceWorkflowId": source_execution_ordinal["workflowId"],
@@ -1305,11 +1306,11 @@ class MoonMindRunWorkflow:
         attempt: int,
         source_execution_ordinal: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
-        if source_execution_ordinal and logical_step_id == self._resume_failed_step_id:
+        if source_execution_ordinal and logical_step_id == self._recovery_failed_step_id:
             workspace = workspace_policy_metadata(
                 policy="start_from_last_passed_commit",
-                checkpoint_ref=self._resume_workspace_restored_ref,
-                checkpoint_valid=bool(self._resume_workspace_restored_ref),
+                checkpoint_ref=self._recovery_workspace_restored_ref,
+                checkpoint_valid=bool(self._recovery_workspace_restored_ref),
             )
             workspace.update(
                 {
@@ -1441,11 +1442,11 @@ class MoonMindRunWorkflow:
                 outputs[target_key] = value.strip()
         return outputs
 
-    def _resume_workspace_checkpoint_ref(
+    def _recovery_workspace_checkpoint_ref(
         self,
         workspace: Mapping[str, Any],
     ) -> str:
-        return self._resume_source_text(
+        return self._recovery_source_text(
             workspace,
             "checkpointRef",
             "checkpoint_ref",
@@ -1457,7 +1458,7 @@ class MoonMindRunWorkflow:
             "checkpoint_payload_ref",
         )
 
-    def _resume_workspace_has_evidence(
+    def _recovery_workspace_has_evidence(
         self,
         workspace: Mapping[str, Any],
     ) -> bool:
@@ -1473,96 +1474,96 @@ class MoonMindRunWorkflow:
             if isinstance(row.get("logicalStepId"), str) and row["logicalStepId"]
         }
 
-    def _validate_resume_source_for_execution(self) -> dict[str, Any] | None:
-        resume_source = self._resume_source
-        self._resume_failed_step_id = None
-        self._resume_workspace = {}
-        self._resume_workspace_restored_ref = None
-        if resume_source is None:
+    def _validate_recovery_source_for_execution(self) -> dict[str, Any] | None:
+        recovery_source = self._recovery_source
+        self._recovery_failed_step_id = None
+        self._recovery_workspace = {}
+        self._recovery_workspace_restored_ref = None
+        if recovery_source is None:
             return None
-        if not isinstance(resume_source, Mapping):
-            raise ValueError("Resume source must be a compact mapping.")
-        if not resume_source:
+        if not isinstance(recovery_source, Mapping):
+            raise ValueError("Recovery source must be a compact mapping.")
+        if not recovery_source:
             return None
 
-        source_workflow_id = self._resume_source_text(
-            resume_source,
+        source_workflow_id = self._recovery_source_text(
+            recovery_source,
             "sourceWorkflowId",
             "source_workflow_id",
         )
         if not source_workflow_id:
-            raise ValueError("Resume source requires source workflow ID.")
+            raise ValueError("Recovery source requires source workflow ID.")
 
-        source_run_id = self._resume_source_text(
-            resume_source,
+        source_run_id = self._recovery_source_text(
+            recovery_source,
             "sourceRunId",
             "source_run_id",
         )
         if not source_run_id:
-            raise ValueError("Resume source requires source run ID.")
+            raise ValueError("Recovery source requires source run ID.")
 
-        snapshot_ref = self._resume_source_text(
-            resume_source,
+        snapshot_ref = self._recovery_source_text(
+            recovery_source,
             "sourceTaskInputSnapshotRef",
             "source_task_input_snapshot_ref",
         )
         if not snapshot_ref:
-            raise ValueError("Resume source requires task input snapshot ref.")
+            raise ValueError("Recovery source requires task input snapshot ref.")
 
-        failed_step_id = self._resume_source_text(
-            resume_source,
+        failed_step_id = self._recovery_source_text(
+            recovery_source,
             "failedStepId",
             "failed_step_id",
         )
         if not failed_step_id:
-            raise ValueError("Resume source requires failed step ID.")
+            raise ValueError("Recovery source requires failed step ID.")
 
-        checkpoint_ref = self._resume_source_text(
-            resume_source,
-            "resumeCheckpointRef",
-            "resume_checkpoint_ref",
+        checkpoint_ref = self._recovery_source_text(
+            recovery_source,
+            "recoveryCheckpointRef",
+            "recovery_checkpoint_ref",
         )
         if not checkpoint_ref:
-            raise ValueError("Resume source requires resume checkpoint ref.")
+            raise ValueError("Recovery source requires recovery checkpoint ref.")
 
-        plan_identity = self._resume_source_text(
-            resume_source,
+        plan_identity = self._recovery_source_text(
+            recovery_source,
             "sourcePlanRef",
             "source_plan_ref",
             "sourcePlanDigest",
             "source_plan_digest",
         )
         if not plan_identity:
-            raise ValueError("Resume source requires source plan identity.")
+            raise ValueError("Recovery source requires source plan identity.")
 
         workspace = (
-            resume_source.get("resumeWorkspace")
-            if "resumeWorkspace" in resume_source
-            else resume_source.get("resume_workspace")
+            recovery_source.get("recoveryWorkspace")
+            if "recoveryWorkspace" in recovery_source
+            else recovery_source.get("recovery_workspace")
         )
         if not isinstance(workspace, Mapping):
-            raise ValueError("Resume source requires resume workspace checkpoint.")
-        if not self._resume_workspace_has_evidence(workspace):
-            raise ValueError("Resume source requires workspace evidence.")
+            raise ValueError("Recovery source requires resume workspace checkpoint.")
+        if not self._recovery_workspace_has_evidence(workspace):
+            raise ValueError("Recovery source requires workspace evidence.")
 
-        preserved_steps = resume_source.get("preservedSteps") or resume_source.get(
+        preserved_steps = recovery_source.get("preservedSteps") or recovery_source.get(
             "preserved_steps"
         )
         if preserved_steps is not None and not isinstance(preserved_steps, list):
-            raise ValueError("Resume source preserved steps must be a list.")
+            raise ValueError("Recovery source preserved steps must be a list.")
         for preserved in preserved_steps or []:
             if not isinstance(preserved, Mapping):
                 continue
-            logical_step_id = self._resume_source_text(
+            logical_step_id = self._recovery_source_text(
                 preserved,
                 "logicalStepId",
                 "logical_step_id",
             )
             if not logical_step_id:
                 raise ValueError(
-                    "Resume source preserved step requires logical step ID."
+                    "Recovery source preserved step requires logical step ID."
                 )
-            status = self._resume_source_text(preserved, "status").lower()
+            status = self._recovery_source_text(preserved, "status").lower()
             if status and status not in {"succeeded", "skipped"}:
                 raise ValueError(
                     f"preserved step {logical_step_id} must be completed before Resume"
@@ -1580,7 +1581,7 @@ class MoonMindRunWorkflow:
                 raise ValueError(
                     f"preserved step {logical_step_id} requires recoverable output refs"
                 )
-            state_checkpoint_ref = self._resume_source_text(
+            state_checkpoint_ref = self._recovery_source_text(
                 preserved,
                 "stateCheckpointRef",
                 "state_checkpoint_ref",
@@ -1590,25 +1591,25 @@ class MoonMindRunWorkflow:
                     f"preserved step {logical_step_id} requires a state checkpoint ref"
                 )
 
-        self._resume_failed_step_id = failed_step_id
-        self._resume_workspace = dict(workspace)
-        return dict(resume_source)
+        self._recovery_failed_step_id = failed_step_id
+        self._recovery_workspace = dict(workspace)
+        return dict(recovery_source)
 
-    def _restore_resume_workspace_for_failed_step(
+    def _restore_recovery_workspace_for_failed_step(
         self,
         logical_step_id: str,
     ) -> str | None:
         if (
-            not self._resume_failed_step_id
-            or logical_step_id != self._resume_failed_step_id
+            not self._recovery_failed_step_id
+            or logical_step_id != self._recovery_failed_step_id
         ):
             return None
-        if self._resume_workspace_restored_ref:
-            return self._resume_workspace_restored_ref
-        checkpoint_ref = self._resume_workspace_checkpoint_ref(self._resume_workspace)
+        if self._recovery_workspace_restored_ref:
+            return self._recovery_workspace_restored_ref
+        checkpoint_ref = self._recovery_workspace_checkpoint_ref(self._recovery_workspace)
         if not checkpoint_ref:
             return None
-        self._resume_workspace_restored_ref = checkpoint_ref
+        self._recovery_workspace_restored_ref = checkpoint_ref
         return checkpoint_ref
 
     def _preserved_outputs_for_step(
@@ -1700,24 +1701,24 @@ class MoonMindRunWorkflow:
         dependency_map: dict[str, list[str]],
         updated_at: datetime,
     ) -> None:
-        resume_source = self._validate_resume_source_for_execution() or {}
+        recovery_source = self._validate_recovery_source_for_execution() or {}
         self._step_ledger_rows = build_initial_step_rows(
             ordered_nodes=ordered_nodes,
             dependency_map=dependency_map,
             updated_at=updated_at,
         )
         self._rebuild_step_ledger_index()
-        preserved_steps = resume_source.get("preservedSteps") or resume_source.get(
+        preserved_steps = recovery_source.get("preservedSteps") or recovery_source.get(
             "preserved_steps"
         )
         if isinstance(preserved_steps, list):
-            source_workflow_id = self._resume_source_text(
-                resume_source,
+            source_workflow_id = self._recovery_source_text(
+                recovery_source,
                 "sourceWorkflowId",
                 "source_workflow_id",
             )
-            source_run_id = self._resume_source_text(
-                resume_source,
+            source_run_id = self._recovery_source_text(
+                recovery_source,
                 "sourceRunId",
                 "source_run_id",
             )
@@ -1744,7 +1745,7 @@ class MoonMindRunWorkflow:
             self._prepared_artifact_refs = []
             return []
         manifest = build_prepared_input_manifest(task_payload)
-        self._prepared_artifact_refs = build_resume_prepared_artifact_refs(manifest)
+        self._prepared_artifact_refs = build_recovery_prepared_artifact_refs(manifest)
         return list(self._prepared_artifact_refs)
 
     def _mark_step_running(
@@ -1755,7 +1756,7 @@ class MoonMindRunWorkflow:
         summary: str | None = None,
         increment_attempt: bool = True,
     ) -> None:
-        self._restore_resume_workspace_for_failed_step(logical_step_id)
+        self._restore_recovery_workspace_for_failed_step(logical_step_id)
         if not self._try_update_step_row(
             logical_step_id,
             updated_at=updated_at,
@@ -1849,7 +1850,7 @@ class MoonMindRunWorkflow:
             manifest_payload["terminalDisposition"] = "blocked"
         try:
             manifest_ref = await self._write_json_artifact(
-                name=f"reports/step_executions/{logical_step_id}_execution_{attempt}.json",
+                name=f"reports/step_execution_{logical_step_id}_attempt_{attempt}.json",
                 payload=manifest_payload,
             )
         except ValueError as exc:
@@ -1890,7 +1891,7 @@ class MoonMindRunWorkflow:
                 self._step_ledger_rows,
                 logical_step_id,
                 updated_at=updated_at,
-                execution_manifest_ref=manifest_ref,
+                step_execution_manifest_ref=manifest_ref,
             )
         except KeyError:
             return manifest_ref
@@ -1992,11 +1993,11 @@ class MoonMindRunWorkflow:
     def _step_execution_for(self, logical_step_id: str) -> int | None:
         for row in self._step_ledger_rows:
             if row.get("logicalStepId") == logical_step_id:
-                execution_ordinal = row.get("executionOrdinal")
-                if isinstance(execution_ordinal, bool):
+                attempt = row.get("attempt")
+                if isinstance(attempt, bool):
                     return None
-                if isinstance(execution_ordinal, (int, float)):
-                    return int(execution_ordinal)
+                if isinstance(attempt, (int, float)):
+                    return int(attempt)
                 return None
         return None
 
@@ -2236,18 +2237,18 @@ class MoonMindRunWorkflow:
     ) -> dict[str, Any]:
         attempts_allowed = max_review_attempts + 1
         attempts_consumed = review_retry_count + 1
-        remaining_attempts = max(0, attempts_allowed - attempts_consumed)
+        remaining_executions = max(0, attempts_allowed - attempts_consumed)
         metadata: dict[str, Any] = {
             "gate": "approval_policy",
-            "executionLimit": attempts_allowed,
-            "executionsConsumed": attempts_consumed,
-            "remainingExecutions": remaining_attempts,
+            "maxAttempts": attempts_allowed,
+            "attemptsConsumed": attempts_consumed,
+            "remainingExecutions": remaining_executions,
             "stopRules": [
                 "structured_gate_verdict_required",
                 "accepted_output_evidence_required",
                 "budget_exhaustion_stops_before_publication",
             ],
-            "exhausted": remaining_attempts == 0,
+            "exhausted": remaining_executions == 0,
         }
         if verdict:
             metadata["gateVerdict"] = str(verdict).strip().upper()
@@ -3553,9 +3554,9 @@ class MoonMindRunWorkflow:
             "initialParameters",
             "initial_parameters",
         )
-        resume_source = self._mapping_value(parameters, "resumeSource", "resume_source")
-        self._resume_source = (
-            dict(resume_source) if isinstance(resume_source, Mapping) else None
+        recovery_source = self._mapping_value(parameters, "recoverySource", "recovery_source")
+        self._recovery_source = (
+            dict(recovery_source) if isinstance(recovery_source, Mapping) else None
         )
         self._target_runtime = self._runtime_visibility_from_parameters(parameters)
         self._target_skill = self._skill_visibility_from_parameters(parameters)
@@ -3940,7 +3941,7 @@ class MoonMindRunWorkflow:
                     if previous_review_feedback
                     else (
                         "recover_from_failed_step"
-                        if node_id == self._resume_failed_step_id
+                        if node_id == self._recovery_failed_step_id
                         else (
                             "initial_execution"
                             if current_step_execution == 1
@@ -4053,8 +4054,11 @@ class MoonMindRunWorkflow:
                                 current_step_execution > 1
                                 and workflow.patched(RUN_STEP_EXECUTION_MANIFEST_PATCH)
                             ):
+                                step_execution_label = "attempt"
+                                if workflow.patched(RUN_STEP_EXECUTION_NAMING_PATCH):
+                                    step_execution_label = "execution"
                                 child_workflow_id = (
-                                    f"{child_workflow_id}:execution:{current_step_execution}"
+                                    f"{child_workflow_id}:{step_execution_label}{current_step_execution}"
                                 )
                             if system_retries > 0:
                                 child_workflow_id = (
@@ -4391,11 +4395,11 @@ class MoonMindRunWorkflow:
                 review_artifact_ref = await self._write_json_artifact(
                     name=(
                         "reports/review_"
-                        f"{node_id}_execution_{step_execution}.json"
+                        f"{node_id}_attempt_{step_execution}.json"
                     ),
                     payload={
                         "logicalStepId": node_id,
-                        "executionOrdinal": step_execution,
+                        "attempt": step_execution,
                         "reviewAttempt": current_review_attempt,
                         "request": review_request.to_payload(),
                         "verdict": review_verdict.to_payload(),
@@ -7750,11 +7754,15 @@ class MoonMindRunWorkflow:
                 if isinstance(metadata_payload.get("moonmind"), dict)
                 else {}
             )
-            moonmind_payload["stepLedger"] = {
+            step_ledger_payload = {
                 "logicalStepId": node_id,
-                "executionOrdinal": step_execution,
                 "scope": "step",
             }
+            if workflow.patched(RUN_STEP_EXECUTION_NAMING_PATCH):
+                step_ledger_payload["executionOrdinal"] = step_execution
+            else:
+                step_ledger_payload["attempt"] = step_execution
+            moonmind_payload["stepLedger"] = step_ledger_payload
             metadata_payload["moonmind"] = moonmind_payload
             parameters["metadata"] = metadata_payload
 
@@ -7803,7 +7811,7 @@ class MoonMindRunWorkflow:
         memory_proposals = None
         if isinstance(task_payload_for_context, Mapping):
             raw_retrieval_context = (
-                task_payload_for_context.get("executionRetrieval")
+                task_payload_for_context.get("attemptRetrieval")
                 or task_payload_for_context.get("retrievalManifest")
                 or task_payload_for_context.get("retrieval")
             )
@@ -7823,7 +7831,7 @@ class MoonMindRunWorkflow:
                     for proposal in raw_memory_proposals
                     if isinstance(proposal, Mapping)
                 ]
-        execution_context = build_execution_context_bundle(
+        attempt_context = build_execution_context_bundle(
             workflow_id=wf_info.workflow_id,
             run_id=wf_info.run_id,
             logical_step_id=node_id,
@@ -7843,12 +7851,12 @@ class MoonMindRunWorkflow:
             if isinstance(metadata_payload.get("moonmind"), dict)
             else {}
         )
-        moonmind_payload["executionContext"] = execution_context.model_dump(
+        moonmind_payload["executionContext"] = attempt_context.model_dump(
             by_alias=True,
             exclude_none=True,
         )
-        moonmind_payload["executionManifestProjection"] = (
-            execution_context.to_manifest_projection()
+        moonmind_payload["stepExecutionManifestProjection"] = (
+            attempt_context.to_manifest_projection()
         )
         metadata_payload["moonmind"] = moonmind_payload
         parameters["metadata"] = metadata_payload
@@ -7856,7 +7864,7 @@ class MoonMindRunWorkflow:
             workflowId=wf_info.workflow_id,
             runId=wf_info.run_id,
             logicalStepId=node_id,
-            execution_ordinal=step_execution or 1,
+            executionOrdinal=step_execution or 1,
         )
         runtime_context_policy = (
             "fresh_agent_run"
@@ -7892,9 +7900,9 @@ class MoonMindRunWorkflow:
                 "stepExecutionId": build_step_execution_id(step_execution_identity),
                 "reason": attempt_reason,
                 "runtimeContextPolicy": runtime_context_policy,
-                "contextBundleRef": execution_context.context_bundle_ref,
-                "contextBundleDigest": execution_context.context_bundle_digest,
-                "preparedInputRefs": list(execution_context.prepared_input_refs),
+                "contextBundleRef": attempt_context.context_bundle_ref,
+                "contextBundleDigest": attempt_context.context_bundle_digest,
+                "preparedInputRefs": list(attempt_context.prepared_input_refs),
                 "resolvedSkillsetRef": resolved_skillset_ref,
                 "runtimeSelection": dict(runtime_selection),
                 "skillSourcePolicy": skill_source_policy,
@@ -8339,21 +8347,21 @@ class MoonMindRunWorkflow:
             _poll_terminal = False
 
             while (
-                not self._resume_requested
+                not self._recovery_requested
                 and not self._cancel_requested
                 and not _poll_terminal
             ):
                 self._wait_cycle_count += 1
                 try:
                     await workflow.wait_condition(
-                        lambda: self._resume_requested or self._cancel_requested,
+                        lambda: self._recovery_requested or self._cancel_requested,
                         timeout=timedelta(seconds=poll_interval_seconds),
                     )
                 except asyncio.TimeoutError:
                     # No external signal arrived in this interval; proceed to status polling.
                     pass
 
-                if self._resume_requested or self._cancel_requested:
+                if self._recovery_requested or self._cancel_requested:
                     break
 
                 try:
@@ -8393,7 +8401,7 @@ class MoonMindRunWorkflow:
                         if workflow.patched(INTEGRATION_POLL_LOOP_PATCH):
                             _poll_terminal = True
                         else:
-                            self._resume_requested = True
+                            self._recovery_requested = True
                         self._external_status = (
                             "completed" if status == "awaiting_feedback" else status
                         )
@@ -8411,7 +8419,7 @@ class MoonMindRunWorkflow:
                     )
 
             if not workflow.patched(INTEGRATION_POLL_LOOP_PATCH):
-                self._resume_requested = False
+                self._recovery_requested = False
 
             if self._external_status != "completed":
                 # If a step failed or was canceled, do not dispatch remaining steps
@@ -9366,7 +9374,7 @@ class MoonMindRunWorkflow:
         self._waiting_reason = None
         await self._forward_operator_message_to_active_child(payload)
         if self._awaiting_external:
-            self._resume_requested = True
+            self._recovery_requested = True
         self._update_search_attributes()
 
     @resume.validator
@@ -9381,7 +9389,7 @@ class MoonMindRunWorkflow:
         self._approve_requested = True
         await self._forward_operator_message_to_active_child(payload)
         if self._awaiting_external:
-            self._resume_requested = True
+            self._recovery_requested = True
 
     @approve.validator
     def validate_approve(self, payload: dict[str, Any] | None = None) -> None:
@@ -9505,7 +9513,7 @@ class MoonMindRunWorkflow:
                 self._get_logger().warning(f"Integration failed: {safe_payload}")
             elif normalized_status == "canceled":
                 self._cancel_requested = True
-            self._resume_requested = True
+            self._recovery_requested = True
 
     @staticmethod
     def _extract_operator_message(payload: Mapping[str, Any] | None) -> str | None:

@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Literal, Optional
 
 from pydantic import (
+    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -94,14 +95,14 @@ StepExecutionTerminalDisposition = Literal[
     "failed_unrecoverable",
     "failed_with_remaining_work",
 ]
-StepExecutionSemanticOperation = Literal["retry", "reexecution", "recover"]
+StepExecutionSemanticOperation = Literal["retry", "reexecute", "recover"]
 StepExecutionCheckpointBoundary = Literal[
     "after_prepare",
-    "before_attempt",
-    "after_attempt",
+    "before_execution",
+    "after_execution",
     "after_gate",
     "before_publication",
-    "before_recover_restoration",
+    "before_recovery_restoration",
 ]
 WorkspaceCheckpointKind = Literal[
     "git_commit",
@@ -122,7 +123,7 @@ StepCheckpointValidationFailureCode = Literal[
     "task_input_mismatch",
     "plan_mismatch",
     "step_mismatch",
-    "attempt_mismatch",
+    "execution_mismatch",
     "artifact_missing",
     "artifact_unauthorized",
     "artifact_corrupted",
@@ -207,7 +208,7 @@ class StepExecutionIdentityModel(BaseModel):
 
 
 class StepExecutionLineageModel(BaseModel):
-    """Optional cross-run provenance for resumed or related executions."""
+    """Optional cross-run provenance for recovered or related executions."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -216,9 +217,7 @@ class StepExecutionLineageModel(BaseModel):
     source_logical_step_id: str = Field(
         ..., alias="sourceLogicalStepId", min_length=1
     )
-    source_execution_ordinal: int = Field(
-        ..., alias="sourceExecutionOrdinal", ge=1
-    )
+    source_execution_ordinal: int = Field(..., alias="sourceExecutionOrdinal", ge=1)
     relationship: str | None = Field(None, alias="relationship")
     lineage_execution_ordinal: int | None = Field(
         None, alias="lineageExecutionOrdinal", ge=1
@@ -326,7 +325,7 @@ class StepExecutionManifestModel(BaseModel):
 
 
 class StepExecutionBoundaryResultModel(BaseModel):
-    """Compact activity/workflow boundary result for execution manifest operations."""
+    """Compact activity/workflow boundary result for step execution manifest operations."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -494,7 +493,7 @@ class StepExecutionCheckpointModel(BaseModel):
 
 
 class StepCheckpointValidationRequestModel(BaseModel):
-    """Input for validating checkpoint evidence before execution or recovery work."""
+    """Input for validating checkpoint evidence before attempt or Resume execution."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -579,7 +578,7 @@ def build_step_execution_idempotency_key(
     identity: StepExecutionIdentityModel,
     operation: str,
 ) -> str:
-    """Build a deterministic idempotency key for an execution-scoped side effect."""
+    """Build a deterministic idempotency key for an attempt-scoped side effect."""
 
     normalized_operation = str(operation or "").strip()
     if not normalized_operation:
@@ -985,7 +984,7 @@ class RecoverFromFailedStepRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1, max_length=128)
-    resume_checkpoint_ref: Optional[str] = Field(None, alias="resumeCheckpointRef")
+    recovery_checkpoint_ref: Optional[str] = Field(None, alias="recoveryCheckpointRef")
     operator_metadata: dict[str, Any] = Field(
         default_factory=dict, alias="operatorMetadata"
     )
@@ -1025,25 +1024,30 @@ class RecoverFromFailedStepRequest(BaseModel):
             )
         return value
 
-class ResumeCheckpointSourceModel(BaseModel):
-    """Source identity embedded in failed-step Resume checkpoint evidence."""
+class RecoveryCheckpointSourceModel(BaseModel):
+    """Source identity embedded in failed-step Recovery checkpoint evidence."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     workflow_id: str = Field(..., alias="workflowId", min_length=1)
     run_id: str = Field(..., alias="runId", min_length=1)
 
-class ResumeCheckpointFailedStepModel(BaseModel):
-    """Failed logical step identity to recover."""
+class RecoveryCheckpointFailedStepModel(BaseModel):
+    """Failed logical step identity to retry."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
     order: int = Field(..., alias="order", ge=1)
-    execution_ordinal: int = Field(..., alias="executionOrdinal", ge=1)
+    execution_ordinal: int = Field(
+        ...,
+        alias="executionOrdinal",
+        validation_alias=AliasChoices("executionOrdinal", "at" + "tempt"),
+        ge=1,
+    )
     title: Optional[str] = Field(None, alias="title")
 
-class ResumeCheckpointPreservedStepModel(BaseModel):
+class RecoveryCheckpointPreservedStepModel(BaseModel):
     """Completed source step that may be materialized as preserved."""
 
     model_config = ConfigDict(populate_by_name=True)
@@ -1051,9 +1055,7 @@ class ResumeCheckpointPreservedStepModel(BaseModel):
     logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
     order: int = Field(..., alias="order", ge=1)
     status: Literal["succeeded", "skipped"] = Field(..., alias="status")
-    source_execution_ordinal: int = Field(
-        ..., alias="sourceExecutionOrdinal", ge=1
-    )
+    source_execution_ordinal: int = Field(..., alias="sourceExecutionOrdinal", ge=1)
     artifacts: dict[str, Any] = Field(default_factory=dict, alias="artifacts")
     state_checkpoint_ref: Optional[str] = Field(None, alias="stateCheckpointRef")
 
@@ -1073,32 +1075,32 @@ class ResumeCheckpointPreservedStepModel(BaseModel):
         return candidate or None
 
     @model_validator(mode="after")
-    def _require_resume_evidence(self) -> "ResumeCheckpointPreservedStepModel":
+    def _require_recovery_evidence(self) -> "RecoveryCheckpointPreservedStepModel":
         if not any(value for value in self.artifacts.values()):
             raise ValueError("preserved step requires at least one artifact ref")
         if self.state_checkpoint_ref is None:
             raise ValueError("preserved step requires a state checkpoint ref")
         return self
 
-class ResumeCheckpointModel(BaseModel):
-    """Compact checkpoint evidence required before failed-step Resume execution."""
+class RecoveryCheckpointModel(BaseModel):
+    """Compact checkpoint evidence required before failed-step recovery execution."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     schema_version: Literal["v1"] = Field("v1", alias="schemaVersion")
-    source: ResumeCheckpointSourceModel = Field(..., alias="source")
+    source: RecoveryCheckpointSourceModel = Field(..., alias="source")
     task_input_snapshot_ref: str = Field(..., alias="taskInputSnapshotRef", min_length=1)
     plan_ref: Optional[str] = Field(None, alias="planRef")
     plan_digest: Optional[str] = Field(None, alias="planDigest")
-    failed_step: ResumeCheckpointFailedStepModel = Field(..., alias="failedStep")
-    preserved_steps: list[ResumeCheckpointPreservedStepModel] = Field(
+    failed_step: RecoveryCheckpointFailedStepModel = Field(..., alias="failedStep")
+    preserved_steps: list[RecoveryCheckpointPreservedStepModel] = Field(
         default_factory=list, alias="preservedSteps"
     )
     prepared_artifact_refs: list[str] = Field(
         default_factory=list, alias="preparedArtifactRefs"
     )
-    resume_workspace: dict[str, Any] = Field(
-        default_factory=dict, alias="resumeWorkspace"
+    recovery_workspace: dict[str, Any] = Field(
+        default_factory=dict, alias="recoveryWorkspace"
     )
 
     @field_validator("plan_ref", "plan_digest", mode="before")
@@ -1109,17 +1111,17 @@ class ResumeCheckpointModel(BaseModel):
         candidate = str(value).strip()
         return candidate or None
 
-    @field_validator("resume_workspace", mode="before")
+    @field_validator("recovery_workspace", mode="before")
     @classmethod
-    def _validate_compact_resume_workspace(cls, value: Any) -> dict[str, Any]:
+    def _validate_compact_recovery_workspace(cls, value: Any) -> dict[str, Any]:
         compact = validate_compact_temporal_mapping(
-            value, field_name="resumeWorkspace"
+            value, field_name="recoveryWorkspace"
         )
         for raw_key in compact:
             key = str(raw_key).strip()
             if key.lower() == "inlinecheckpointpayload":
                 raise ValueError(
-                    "resumeWorkspace must not contain inline checkpoint payload"
+                    "recoveryWorkspace must not contain inline checkpoint payload"
                 )
         return compact
 
@@ -1129,14 +1131,14 @@ class ResumeCheckpointModel(BaseModel):
         return [item.strip() for item in value if isinstance(item, str) and item.strip()]
 
     @model_validator(mode="after")
-    def _require_resume_evidence(self) -> "ResumeCheckpointModel":
+    def _require_recovery_evidence(self) -> "RecoveryCheckpointModel":
         if self.plan_ref is None and self.plan_digest is None:
-            raise ValueError("resume checkpoint requires plan identity or digest")
-        if not any(value for value in self.resume_workspace.values()):
-            raise ValueError("resume checkpoint requires workspace checkpoint evidence")
+            raise ValueError("recovery checkpoint requires plan identity or digest")
+        if not any(value for value in self.recovery_workspace.values()):
+            raise ValueError("recovery checkpoint requires workspace checkpoint evidence")
         return self
 
-class ResumeSourceModel(BaseModel):
+class RecoverySourceModel(BaseModel):
     """Compact source provenance carried by a resumed execution."""
 
     model_config = ConfigDict(populate_by_name=True)
@@ -1152,14 +1154,12 @@ class ResumeSourceModel(BaseModel):
     source_plan_ref: Optional[str] = Field(None, alias="sourcePlanRef")
     source_plan_digest: Optional[str] = Field(None, alias="sourcePlanDigest")
     failed_step_id: str = Field(..., alias="failedStepId", min_length=1)
-    failed_step_execution_ordinal: int = Field(
-        ..., alias="failedStepExecutionOrdinal", ge=1
+    failed_step_execution: int = Field(..., alias="failedStepExecution", ge=1)
+    recovery_checkpoint_ref: str = Field(..., alias="recoveryCheckpointRef", min_length=1)
+    recovery_workspace: dict[str, Any] = Field(
+        default_factory=dict, alias="recoveryWorkspace"
     )
-    resume_checkpoint_ref: str = Field(..., alias="resumeCheckpointRef", min_length=1)
-    resume_workspace: dict[str, Any] = Field(
-        default_factory=dict, alias="resumeWorkspace"
-    )
-    preserved_steps: list[ResumeCheckpointPreservedStepModel] = Field(
+    preserved_steps: list[RecoveryCheckpointPreservedStepModel] = Field(
         default_factory=list, alias="preservedSteps"
     )
 
@@ -1181,10 +1181,10 @@ class RecoverFromFailedStepResponse(BaseModel):
     )
     source: ResumeExecutionRefModel = Field(..., alias="source")
     execution: ResumeExecutionRefModel = Field(..., alias="execution")
-    relationship: Literal["Resumed from failed step"] = Field(
-        "Resumed from failed step", alias="relationship"
+    relationship: Literal["Recovered from failed step"] = Field(
+        "Recovered from failed step", alias="relationship"
     )
-    resume_checkpoint_ref: str = Field(..., alias="resumeCheckpointRef")
+    recovery_checkpoint_ref: str = Field(..., alias="recoveryCheckpointRef")
 
 class SignalExecutionRequest(BaseModel):
     """Request payload for asynchronous workflow signals."""
@@ -1625,11 +1625,11 @@ class StepLedgerRefsModel(BaseModel):
     child_workflow_id: str | None = Field(None, alias="childWorkflowId")
     child_run_id: str | None = Field(None, alias="childRunId")
     task_run_id: SkipJsonSchema[str | None] = Field(None, alias="taskRunId")
-    latest_execution_manifest_ref: str | None = Field(
-        None, alias="latestExecutionManifestRef"
+    latest_step_execution_manifest_ref: str | None = Field(
+        None, alias="latestStepExecutionManifestRef"
     )
-    execution_manifest_refs: list[str] = Field(
-        default_factory=list, alias="executionManifestRefs"
+    step_execution_manifest_refs: list[str] = Field(
+        default_factory=list, alias="stepExecutionManifestRefs"
     )
 
 class StepLedgerArtifactsModel(BaseModel):
@@ -1644,14 +1644,14 @@ class StepLedgerArtifactsModel(BaseModel):
     runtime_merged_logs: str | None = Field(None, alias="runtimeMergedLogs")
     runtime_diagnostics: str | None = Field(None, alias="runtimeDiagnostics")
     provider_snapshot: str | None = Field(None, alias="providerSnapshot")
-    execution_manifest_ref: str | None = Field(None, alias="executionManifestRef")
-    execution_manifest_refs: list[str] = Field(
+    step_execution_manifest_ref: str | None = Field(None, alias="stepExecutionManifestRef")
+    step_execution_manifest_refs: list[str] = Field(
         default_factory=list,
-        alias="executionManifestRefs",
+        alias="stepExecutionManifestRefs",
     )
 
 class StepLedgerResumePreservationModel(BaseModel):
-    """Bounded failed-step Resume preservation eligibility for one source step."""
+    """Bounded failed-step recovery preservation eligibility for one source step."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -1669,7 +1669,7 @@ class StepLedgerWorkloadModel(BaseModel):
 
     task_run_id: SkipJsonSchema[str | None] = Field(None, alias="taskRunId")
     step_id: str | None = Field(None, alias="stepId")
-    execution_ordinal: int | None = Field(None, alias="executionOrdinal", ge=1)
+    attempt: int | None = Field(None, alias="attempt", ge=1)
     tool_name: str | None = Field(None, alias="toolName")
     profile_id: str | None = Field(None, alias="profileId")
     image_ref: str | None = Field(None, alias="imageRef")
@@ -1695,7 +1695,7 @@ class PreservedStepProvenanceModel(BaseModel):
     execution_ordinal: int = Field(..., alias="executionOrdinal", ge=1)
 
 class StepLedgerRowModel(BaseModel):
-    """Current/latest execution state for one logical step in the active run."""
+    """Current/latest attempt state for one logical step in the active run."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -1717,7 +1717,7 @@ class StepLedgerRowModel(BaseModel):
     ] = Field(..., alias="status")
     waiting_reason: str | None = Field(None, alias="waitingReason")
     attention_required: bool = Field(False, alias="attentionRequired")
-    execution_ordinal: int = Field(0, alias="executionOrdinal", ge=0)
+    attempt: int = Field(0, alias="attempt", ge=0)
     started_at: datetime | None = Field(None, alias="startedAt")
     updated_at: datetime = Field(..., alias="updatedAt")
     summary: str | None = Field(None, alias="summary")
@@ -1731,7 +1731,7 @@ class StepLedgerRowModel(BaseModel):
     )
     state_checkpoint_ref: str | None = Field(None, alias="stateCheckpointRef")
     resume_preservation: StepLedgerResumePreservationModel | None = Field(
-        None, alias="resumePreservation"
+        None, alias="recoveryPreservation"
     )
     workload: StepLedgerWorkloadModel | None = Field(None, alias="workload")
     last_error: str | None = Field(None, alias="lastError")
@@ -1761,9 +1761,7 @@ class StepExecutionProjectionModel(BaseModel):
     run_id: str = Field(..., alias="runId", min_length=1)
     logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
     execution_ordinal: int = Field(..., alias="executionOrdinal", ge=1)
-    source_execution_ordinal: int | None = Field(
-        None, alias="sourceExecutionOrdinal", ge=1
-    )
+    source_execution_ordinal: int | None = Field(None, alias="sourceExecutionOrdinal", ge=1)
     lineage: StepExecutionLineageModel | None = Field(None, alias="lineage")
     reason: StepExecutionReason = Field(..., alias="reason")
     status: StepExecutionStatus = Field(..., alias="status")
@@ -1802,7 +1800,7 @@ class StepExecutionDetailModel(StepExecutionProjectionModel):
 
 
 class StepExecutionListModel(BaseModel):
-    """Bounded execution history for one logical step."""
+    """Bounded attempt history for one logical step."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -1810,8 +1808,8 @@ class StepExecutionListModel(BaseModel):
     run_id: str = Field(..., alias="runId", min_length=1)
     run_scope: Literal["latest"] = Field("latest", alias="runScope")
     logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
-    executions: list[StepExecutionProjectionModel] = Field(
-        default_factory=list, alias="executions"
+    attempts: list[StepExecutionProjectionModel] = Field(
+        default_factory=list, alias="attempts"
     )
 
 
@@ -1838,7 +1836,7 @@ class ExecutionReportProjectionModel(BaseModel):
         return {key: value for key, value in payload.items() if value is not None}
 
 class ExecutionResumeSummaryModel(BaseModel):
-    """Failed-step Resume availability and checkpoint summary."""
+    """Failed-step recovery availability and checkpoint summary."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -1923,14 +1921,12 @@ class ExecutionTargetDiagnosticsPreservedStepModel(BaseModel):
 
     logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
     title: str | None = Field(None, alias="title")
-    source_execution_ordinal: int | None = Field(
-        None, alias="sourceExecutionOrdinal", ge=1
-    )
+    source_execution_ordinal: int | None = Field(None, alias="sourceExecutionOrdinal", ge=1)
     source_workflow_id: str | None = Field(None, alias="sourceWorkflowId")
     source_run_id: str | None = Field(None, alias="sourceRunId")
 
 class ExecutionTargetDiagnosticsRecoveryModel(BaseModel):
-    """Failed-step Resume provenance and degraded recovery diagnostics."""
+    """Failed-step recovery provenance and degraded recovery diagnostics."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -1942,12 +1938,12 @@ class ExecutionTargetDiagnosticsRecoveryModel(BaseModel):
         default_factory=list,
         alias="preservedSteps",
     )
-    failed_resume_phase: Literal[
+    failed_recovery_phase: Literal[
         "checkpoint_validation",
         "workspace_restoration",
         "preserved_output_injection",
         "failed_step_execution",
-    ] | None = Field(None, alias="failedResumePhase")
+    ] | None = Field(None, alias="failedRecoveryPhase")
 
 class ExecutionTargetDiagnosticsModel(BaseModel):
     """Target-aware task diagnostics surfaced on execution detail."""

@@ -59,29 +59,29 @@ def test_run_request_records_prepared_manifest_before_step_dispatch() -> None:
 
     moonmind_metadata = request.parameters["metadata"]["moonmind"]
     prepared_context = moonmind_metadata["preparedContext"]
-    execution_context = moonmind_metadata["executionContext"]
-    projection = moonmind_metadata["executionManifestProjection"]
+    attempt_context = moonmind_metadata["executionContext"]
+    projection = moonmind_metadata["stepExecutionManifestProjection"]
 
     assert prepared_context["manifestRef"].startswith("prepared-context-manifest://")
     assert prepared_context["logicalStepId"] == "collect-evidence"
     assert prepared_context["targetCounts"] == {"objective": 1, "step": 1}
-    assert execution_context["workflowId"] == "run-target-aware"
-    assert execution_context["runId"] == "run-id-1"
-    assert execution_context["logicalStepId"] == "collect-evidence"
-    assert execution_context["executionOrdinal"] == 1
-    assert execution_context["preparedInputRefs"] == prepared_context["inputRefs"]
-    assert execution_context["contextBundleDigest"].startswith("sha256:")
-    assert execution_context["contextBundleRef"] == (
-        f"execution-context-bundle://{execution_context['contextBundleDigest']}"
+    assert attempt_context["workflowId"] == "run-target-aware"
+    assert attempt_context["runId"] == "run-id-1"
+    assert attempt_context["logicalStepId"] == "collect-evidence"
+    assert attempt_context["executionOrdinal"] == 1
+    assert attempt_context["preparedInputRefs"] == prepared_context["inputRefs"]
+    assert attempt_context["contextBundleDigest"].startswith("sha256:")
+    assert attempt_context["contextBundleRef"] == (
+        f"execution-context-bundle://{attempt_context['contextBundleDigest']}"
     )
-    assert execution_context["builderVersion"] == "execution-context-builder-v1"
+    assert attempt_context["builderVersion"] == "execution-context-builder-v1"
     assert projection["context"]["contextBundleDigest"] == (
-        execution_context["contextBundleDigest"]
+        attempt_context["contextBundleDigest"]
     )
     assert "preparedInputRefs" not in projection["context"]
 
 
-def test_run_request_records_retrieval_and_memory_refs_in_execution_projection() -> None:
+def test_run_request_records_retrieval_and_memory_refs_in_attempt_projection() -> None:
     wf = MoonMindRunWorkflow()
     task_payload = {
         **_task_payload(),
@@ -111,22 +111,22 @@ def test_run_request_records_retrieval_and_memory_refs_in_execution_projection()
             workflow_parameters={"task": task_payload},
         )
 
-    execution_context = request.parameters["metadata"]["moonmind"]["executionContext"]
+    attempt_context = request.parameters["metadata"]["moonmind"]["executionContext"]
     projection = request.parameters["metadata"]["moonmind"][
-        "executionManifestProjection"
+        "stepExecutionManifestProjection"
     ]
 
-    assert execution_context["retrievalManifestRef"].startswith(
-        "execution-retrieval-manifest://sha256:"
+    assert attempt_context["retrievalManifestRef"].startswith(
+        "attempt-retrieval-manifest://sha256:"
     )
-    assert execution_context["memoryManifestRef"].startswith(
-        "execution-memory-manifest://sha256:"
+    assert attempt_context["memoryManifestRef"].startswith(
+        "attempt-memory-manifest://sha256:"
     )
     assert projection["context"]["retrievalManifestRef"] == (
-        execution_context["retrievalManifestRef"]
+        attempt_context["retrievalManifestRef"]
     )
     assert projection["context"]["memoryManifestRef"] == (
-        execution_context["memoryManifestRef"]
+        attempt_context["memoryManifestRef"]
     )
     assert "Relevant design summary." not in str(projection)
 

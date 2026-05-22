@@ -2450,7 +2450,7 @@ def test_runtime_send_turn_recovers_vendor_thread_path_from_sessions_dir(
     updated_state = json.loads(state_path.read_text(encoding="utf-8"))
     assert updated_state["vendorThreadPath"] == str(recovered_path)
 
-def test_runtime_send_turn_falls_back_to_new_thread_when_resume_fails(
+def test_runtime_send_turn_falls_back_to_new_thread_when_recovery_fails(
     tmp_path: Path,
 ) -> None:
     script = write_fake_app_server(tmp_path, fail_thread_resume=True)
@@ -2545,7 +2545,7 @@ def test_runtime_send_turn_drops_stale_vendor_thread_path_when_fallback_starts_n
     assert "vendorThreadPath" not in updated_state
 
 
-def test_runtime_send_turn_starts_new_thread_when_rollout_resume_file_is_empty(
+def test_runtime_send_turn_starts_new_thread_when_rollout_recovery_file_is_empty(
     tmp_path: Path,
 ) -> None:
     request = launch_request(tmp_path)
@@ -2562,7 +2562,7 @@ def test_runtime_send_turn_starts_new_thread_when_rollout_resume_file_is_empty(
     script = write_fake_app_server(
         tmp_path,
         fail_thread_resume=True,
-        thread_resume_error_message=(
+        thread_recovery_error_message=(
             "failed to read thread: thread-store internal error: failed to read "
             f"thread {empty_rollout}: rollout at {empty_rollout} is empty"
         ),

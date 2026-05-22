@@ -34,7 +34,7 @@ async def _db(tmp_path: Path):
         await engine.dispose()
 
 
-async def test_changed_edited_full_retry_creates_fresh_execution_with_provenance_and_no_resume_carryover(
+async def test_changed_edited_full_retry_creates_fresh_execution_with_provenance_and_no_recovery_carryover(
     tmp_path: Path,
 ) -> None:
     async with _db(tmp_path) as maker:
@@ -50,8 +50,8 @@ async def test_changed_edited_full_retry_creates_fresh_execution_with_provenance
                 failure_policy=None,
                 initial_parameters={
                     "repository": "MoonLadderStudios/MoonMind",
-                    "resumeSource": {"workflowId": "mm:old", "runId": "run-old"},
-                    "resumeCheckpointRef": "artifact://checkpoint/old",
+                    "recoverySource": {"workflowId": "mm:old", "runId": "run-old"},
+                    "recoveryCheckpointRef": "artifact://checkpoint/old",
                     "preservedSteps": [{"logicalStepId": "plan"}],
                     "completedSteps": [{"logicalStepId": "plan"}],
                     "task": {
@@ -67,7 +67,7 @@ async def test_changed_edited_full_retry_creates_fresh_execution_with_provenance
                             "sourceWorkflowId": "mm:old",
                             "sourceRunId": "run-old",
                             "failedStepId": "implement",
-                            "resumeCheckpointRef": "artifact://checkpoint/old",
+                            "recoveryCheckpointRef": "artifact://checkpoint/old",
                             "taskInputSnapshotRef": "artifact://snapshot/old",
                         },
                     },
@@ -83,7 +83,7 @@ async def test_changed_edited_full_retry_creates_fresh_execution_with_provenance
             source.memo = {
                 **dict(source.memo or {}),
                 "task_input_snapshot_ref": "artifact://snapshot/source",
-                "resume_checkpoint_ref": "artifact://checkpoint/old",
+                "recovery_checkpoint_ref": "artifact://checkpoint/old",
             }
             source.artifact_refs = [
                 "artifact://input/source",
@@ -125,7 +125,7 @@ async def test_changed_edited_full_retry_creates_fresh_execution_with_provenance
     assert refreshed_source.state is MoonMindWorkflowState.FAILED
     assert refreshed_source.close_status is TemporalExecutionCloseStatus.FAILED
     assert refreshed_source.parameters["task"]["instructions"] == "Original instructions."
-    assert refreshed_source.parameters["resumeCheckpointRef"] == "artifact://checkpoint/old"
+    assert refreshed_source.parameters["recoveryCheckpointRef"] == "artifact://checkpoint/old"
 
     assert edited_retry.input_ref == "artifact://input/edited"
     assert edited_retry.parameters["rerunSource"] == {
@@ -140,8 +140,8 @@ async def test_changed_edited_full_retry_creates_fresh_execution_with_provenance
         "sourceWorkflowId": refreshed_source.workflow_id,
         "sourceRunId": refreshed_source.run_id,
     }
-    assert "resumeSource" not in edited_retry.parameters
-    assert "resumeCheckpointRef" not in edited_retry.parameters
+    assert "recoverySource" not in edited_retry.parameters
+    assert "recoveryCheckpointRef" not in edited_retry.parameters
     assert "preservedSteps" not in edited_retry.parameters
     assert "completedSteps" not in edited_retry.parameters
     assert "resume" not in edited_retry.parameters["task"]

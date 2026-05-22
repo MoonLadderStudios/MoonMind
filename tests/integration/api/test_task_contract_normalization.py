@@ -32,7 +32,7 @@ _VALID_RESUME_BLOCK = {
     "sourceWorkflowId": "mm:abc123",
     "sourceRunId": "run-1",
     "failedStepId": "step-3",
-    "resumeCheckpointRef": "art_ckpt_abc",
+    "recoveryCheckpointRef": "art_ckpt_abc",
     "taskInputSnapshotRef": "art_snap_abc",
 }
 
@@ -69,12 +69,12 @@ def test_sc001_well_formed_recover_from_failed_step_accepted() -> None:
     assert task["recovery"]["sourceWorkflowId"] == "mm:abc123"
     assert task["recovery"]["sourceRunId"] == "run-1"
     assert task["resume"]["failedStepId"] == "step-3"
-    assert task["resume"]["resumeCheckpointRef"] == "art_ckpt_abc"
+    assert task["resume"]["recoveryCheckpointRef"] == "art_ckpt_abc"
     assert task["resume"]["taskInputSnapshotRef"] == "art_snap_abc"
 
 
 # T018 — SC-002
-def test_sc002_recover_from_failed_step_without_resume_block_raises() -> None:
+def test_sc002_recover_from_failed_step_without_recovery_block_raises() -> None:
     """MM-638 SC-002: recover_from_failed_step without a resume block raises
     TaskContractError with an operator-readable message identifying the missing field."""
     with pytest.raises(TaskContractError, match="task.resume is required"):
@@ -93,7 +93,7 @@ def test_sc002_recover_from_failed_step_without_resume_block_raises() -> None:
 
 
 # T019 — SC-003
-def test_sc003_resume_block_with_wrong_recovery_kind_raises() -> None:
+def test_sc003_recovery_block_with_wrong_recovery_kind_raises() -> None:
     """MM-638 SC-003: resume block paired with recovery.kind != recover_from_failed_step
     raises TaskContractError preventing ambiguous recovery inference."""
     with pytest.raises(TaskContractError, match="recover_from_failed_step"):

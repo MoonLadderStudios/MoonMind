@@ -422,7 +422,7 @@ Task queues are plumbing, not a user-visible ordering model.
 - log line
 - low-level retry
 - internal polling tick
-- low-level retry/backoff detail inside one step attempt
+- low-level retry/backoff detail inside one step execution
 
 Implementation guidance:
 

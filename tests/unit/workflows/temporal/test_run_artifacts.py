@@ -2418,7 +2418,7 @@ def test_blocked_outcome_message_detects_nested_json_code_fence() -> None:
 ```json
 {
   "decision": "blocked",
-  "details": {"source": "jira", "attempt": 1},
+  "details": {"source": "jira", "executionOrdinal": 1},
   "summary": "Nested structured blocker parsed."
 }
 ```

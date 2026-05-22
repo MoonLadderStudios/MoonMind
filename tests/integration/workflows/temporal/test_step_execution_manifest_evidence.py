@@ -90,8 +90,8 @@ async def test_step_execution_manifest_refs_are_append_only_for_reexecution(
     )
 
     step = workflow.get_step_ledger()["steps"][0]
-    assert step["refs"]["latestExecutionManifestRef"] == "artifact-execution-2"
-    assert step["refs"]["executionManifestRefs"] == [
+    assert step["refs"]["latestStepExecutionManifestRef"] == "artifact-execution-2"
+    assert step["refs"]["stepExecutionManifestRefs"] == [
         "artifact-execution-1",
         "artifact-execution-2",
     ]
@@ -117,20 +117,20 @@ async def test_step_execution_manifest_refs_are_append_only_for_reexecution(
     assert step["lastError"] == "missing_required_checkpoint_evidence"
 
 
-async def test_resume_execution_manifest_carries_lineage_without_large_payloads(
+async def test_recovery_step_execution_manifest_carries_lineage_without_large_payloads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindRunWorkflow()
-    workflow._resume_source = {
+    workflow._recovery_source = {
         "sourceWorkflowId": "wf-source",
         "sourceRunId": "run-source",
         "sourceTaskInputSnapshotRef": "artifact://snapshot/source",
         "sourcePlanDigest": "sha256:source-plan",
         "failedStepId": "implement",
-        "failedStepExecutionOrdinal": 2,
-        "resumeCheckpointRef": "artifact://resume/checkpoint",
-        "resumeWorkspace": {
+        "failedStepExecution": 2,
+        "recoveryCheckpointRef": "artifact://resume/checkpoint",
+        "recoveryWorkspace": {
             "checkpointRef": "artifact://workspace/before-implement",
         },
         "preservedSteps": [],

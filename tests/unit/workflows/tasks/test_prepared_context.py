@@ -9,7 +9,7 @@ from moonmind.workflows.tasks.prepared_context import (
     PreparedInputManifest,
     build_execution_context_bundle,
     build_memory_manifest,
-    build_resume_prepared_artifact_refs,
+    build_recovery_prepared_artifact_refs,
     build_prepared_input_manifest,
     build_retrieval_manifest,
     select_step_prepared_context,
@@ -328,7 +328,7 @@ def test_step_context_metadata_is_bounded_and_target_aware() -> None:
     assert "data:image" not in str(metadata)
 
 
-def test_attempt_context_bundle_digest_is_stable_and_attempt_scoped() -> None:
+def test_execution_context_bundle_digest_is_stable_and_execution_scoped() -> None:
     manifest = build_prepared_input_manifest(_task_payload())
     context = select_step_prepared_context(manifest, logical_step_id="collect-evidence")
 
@@ -348,7 +348,7 @@ def test_attempt_context_bundle_digest_is_stable_and_attempt_scoped() -> None:
         prepared_context=context,
         runtime_selection={"runtimeId": "codex_cli"},
     )
-    changed_attempt = build_execution_context_bundle(
+    changed_execution = build_execution_context_bundle(
         workflow_id="workflow-1",
         run_id="run-1",
         logical_step_id="collect-evidence",
@@ -361,14 +361,14 @@ def test_attempt_context_bundle_digest_is_stable_and_attempt_scoped() -> None:
     assert first.context_bundle_ref == (
         f"execution-context-bundle://{first.context_bundle_digest}"
     )
-    assert first.context_bundle_digest != changed_attempt.context_bundle_digest
+    assert first.context_bundle_digest != changed_execution.context_bundle_digest
     assert first.builder_version == "execution-context-builder-v1"
     projection = first.to_manifest_projection()
     assert projection["context"]["contextBundleDigest"] == first.context_bundle_digest
     assert "preparedInputRefs" not in projection["context"]
 
 
-def test_attempt_context_records_retrieval_and_memory_manifest_refs() -> None:
+def test_execution_context_records_retrieval_and_memory_manifest_refs() -> None:
     retrieval = build_retrieval_manifest(
         {
             "query": "execution context bundle",
@@ -423,11 +423,11 @@ def test_attempt_context_records_retrieval_and_memory_manifest_refs() -> None:
     assert retrieval.returned_refs == ["artifact://doc-1"]
     assert retrieval.compact_summaries == ["Relevant source design section."]
     assert retrieval.retrieval_manifest_ref.startswith(
-        "execution-retrieval-manifest://sha256:"
+        "attempt-retrieval-manifest://sha256:"
     )
     assert memory.proposals[0].state == "proposed"
     assert memory.proposals[1].state == "rejected"
-    assert memory.memory_manifest_ref.startswith("execution-memory-manifest://sha256:")
+    assert memory.memory_manifest_ref.startswith("attempt-memory-manifest://sha256:")
     assert bundle.retrieval_manifest_ref == retrieval.retrieval_manifest_ref
     assert bundle.memory_manifest_ref == memory.memory_manifest_ref
 
@@ -441,7 +441,7 @@ def test_retrieval_manifest_accepts_documented_retrieved_refs_key() -> None:
 
     assert retrieval.returned_refs == ["artifact://doc-1", "artifact://doc-2"]
     assert retrieval.retrieval_manifest_ref.startswith(
-        "execution-retrieval-manifest://sha256:"
+        "attempt-retrieval-manifest://sha256:"
     )
 
 
@@ -456,7 +456,7 @@ def test_retrieval_manifest_allows_literal_assignment_search_terms() -> None:
     assert retrieval.query == "find `password=` assignments and token= examples"
 
 
-def test_attempt_context_rejects_secretish_values_and_unknown_memory_states() -> None:
+def test_execution_context_rejects_secretish_values_and_unknown_memory_states() -> None:
     with pytest.raises(ValueError, match="raw secret material"):
         build_prepared_input_manifest(
             {
@@ -500,10 +500,10 @@ def test_attempt_context_rejects_secretish_values_and_unknown_memory_states() ->
         )
 
 
-def test_resume_prepared_artifact_refs_are_compact_and_deduped() -> None:
+def test_recovery_prepared_artifact_refs_are_compact_and_deduped() -> None:
     manifest = build_prepared_input_manifest(_task_payload())
 
-    refs = build_resume_prepared_artifact_refs(manifest)
+    refs = build_recovery_prepared_artifact_refs(manifest)
 
     assert refs == [
         "prepared-context://objective/artifact-objective",

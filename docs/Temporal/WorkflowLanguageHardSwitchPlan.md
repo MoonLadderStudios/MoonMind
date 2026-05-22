@@ -1,8 +1,8 @@
 # MoonMind Workflow Language Hard Switch Plan
 
-**Status:** Proposed hard-switch implementation plan  
-**Owner:** MoonMind Platform / Mission Control / Runtime  
-**Scope:** Remove MoonMind's product-level `task` terminology and replace it with Temporal-aligned workflow terminology. Replace `Step Attempt` with `Step Execution`.  
+**Status:** Proposed hard-switch implementation plan
+**Owner:** MoonMind Platform / Mission Control / Runtime
+**Scope:** Remove MoonMind's product-level `task` terminology and replace it with Temporal-aligned workflow terminology. Replace `Step Execution` with `Step Execution`.
 **Non-goal:** Preserve legacy task routes, names, pipelines, or compatibility payloads.
 
 ---
@@ -81,7 +81,7 @@ The existing MoonMind docs already show the desired direction:
 - `docs/Temporal/ActivityCatalogAndWorkerTopology.md` states that Workflow Executions orchestrate, Activities perform side effects, and Task Queues are internal routing labels rather than product semantics.
 - `docs/Temporal/TaskExecutionCompatibilityModel.md` exists as a bridge from task-oriented surfaces to Temporal-backed Workflow Executions. This plan removes that bridge rather than preserving it.
 - `docs/UI/MissionControlArchitecture.md` currently frames Mission Control as a task console backed by Temporal. This plan replaces that posture with a Workflow Execution console.
-- `docs/Steps/StepAttemptsAndCheckpointing.md` defines Step Attempt as one semantic execution of a logical step. This plan renames that concept to **Step Execution**.
+- `docs/Steps/StepExecutionsAndCheckpointing.md` defines Step Execution as one semantic execution of a logical step. This plan renames that concept to **Step Execution**.
 
 The hard switch reduces ambiguity, makes MoonMind feel Temporal-native, and prevents future APIs, docs, and UI flows from reintroducing parallel task semantics.
 
@@ -94,7 +94,7 @@ The hard switch reduces ambiguity, makes MoonMind feel Temporal-native, and prev
 3. **Run ID is the current Temporal run instance.** Use `runId` for the current/latest run. Do not route primary product pages by `runId`.
 4. **Workflow Type is the root orchestration category.** Do not introduce provider-specific workflow categories such as `Codex workflow` or `Gemini workflow`.
 5. **Step remains MoonMind's user-facing unit of work.** A Step is not a Temporal Activity and not a Temporal Task.
-6. **Step Execution replaces Step Attempt.** One semantic execution of a logical Step is a Step Execution.
+6. **Step Execution replaces Step Execution.** One semantic execution of a logical Step is a Step Execution.
 7. **Activity remains a Temporal implementation concept.** Activities perform side effects and nondeterministic work.
 8. **Task Queue remains internal routing plumbing.** Never present Task Queues as product-level queues.
 9. **No legacy aliases.** Do not preserve `taskId`, `/tasks/*`, task dashboards, or task-shaped payloads.
@@ -649,9 +649,9 @@ task.rerun_requested -> workflow_execution.new_run_requested
 
 ### 12.1 Decision
 
-Replace **Step Attempt** with **Step Execution**.
+Replace **Step Execution** with **Step Execution**.
 
-The current model defines Step Attempt as one semantic execution of a logical Step. That is exactly the concept that should now be named **Step Execution**.
+The current model defines Step Execution as one semantic execution of a logical Step. That is exactly the concept that should now be named **Step Execution**.
 
 The new hierarchy is:
 
@@ -664,7 +664,7 @@ Workflow Execution
 
 ### 12.2 Why Step Execution Is Better
 
-**Step Attempt** sounds like a retry/failure concept. It makes a successful first pass sound like `Attempt 1 succeeded`.
+**Step Execution** sounds like a retry/failure concept. It makes a successful first pass sound like `Attempt 1 succeeded`.
 
 **Step Execution** is neutral and aligns with **Workflow Execution**. It says one execution of a logical Step occurred, regardless of whether it succeeded, failed, was superseded, or was recovered from checkpoint.
 
@@ -719,7 +719,7 @@ Recommended JSON:
 Rename:
 
 ```text
-docs/Steps/StepAttemptsAndCheckpointing.md
+docs/Steps/StepExecutionsAndCheckpointing.md
 ```
 
 To:
@@ -737,38 +737,38 @@ New title:
 ### 12.6 Schema Rename Map
 
 ```text
-StepAttemptManifestModel        -> StepExecutionManifestModel
-StepAttemptIdentityModel        -> StepExecutionIdentityModel
-StepAttemptLineageModel         -> StepExecutionLineageModel
-StepAttemptSummaryRefModel      -> StepExecutionSummaryRefModel
-StepAttemptReason               -> StepExecutionReason
-StepAttemptStatus               -> StepExecutionStatus
-StepAttemptTerminalDisposition  -> StepExecutionTerminalDisposition
-StepAttemptSemanticOperation    -> StepExecutionSemanticOperation
+StepExecutionManifestModel        -> StepExecutionManifestModel
+StepExecutionIdentityModel        -> StepExecutionIdentityModel
+StepExecutionLineageModel         -> StepExecutionLineageModel
+StepExecutionSummaryRefModel      -> StepExecutionSummaryRefModel
+StepExecutionReason               -> StepExecutionReason
+StepExecutionStatus               -> StepExecutionStatus
+StepExecutionTerminalDisposition  -> StepExecutionTerminalDisposition
+StepExecutionSemanticOperation    -> StepExecutionSemanticOperation
 ```
 
 ### 12.7 Field Rename Map
 
 ```text
-stepAttemptId        -> stepExecutionId
+stepExecutionId        -> stepExecutionId
 attempt              -> executionOrdinal
-attemptScope         -> executionScope
-attemptOrdinalInLoop -> executionOrdinalInLoop
-remainingAttempts    -> remainingExecutions or remainingReexecutions
-sourceAttempt        -> sourceExecutionOrdinal
-lineageAttemptOrdinal -> lineageExecutionOrdinal
+executionScope         -> executionScope
+executionOrdinalInLoop -> executionOrdinalInLoop
+remainingExecutions    -> remainingExecutions or remainingReexecutions
+sourceExecutionOrdinal        -> sourceExecutionOrdinal
+lineageExecutionOrdinal -> lineageExecutionOrdinal
 ```
 
 ### 12.8 Content Type Rename Map
 
 ```text
-application/vnd.moonmind.step-attempt+json;version=1
+application/vnd.moonmind.step-execution+json;version=1
   -> application/vnd.moonmind.step-execution+json;version=1
 
-application/vnd.moonmind.step-attempt-checkpoint+json;version=1
+application/vnd.moonmind.step-execution-checkpoint+json;version=1
   -> application/vnd.moonmind.step-execution-checkpoint+json;version=1
 
-application/vnd.moonmind.step-attempt-context+json;version=1
+application/vnd.moonmind.step-execution-context+json;version=1
   -> application/vnd.moonmind.step-execution-context+json;version=1
 ```
 
@@ -791,7 +791,7 @@ policy_revalidation
 Replace:
 
 ```text
-resume_from_failed_step
+recover_from_failed_step
 ```
 
 With:
@@ -805,9 +805,9 @@ recover_from_failed_step
 Replace:
 
 ```text
-continue_from_previous_attempt
-restore_pre_attempt
-apply_previous_diff_to_clean_baseline
+continue_from_previous_execution
+restore_pre_execution
+apply_previous_execution_diff_to_clean_baseline
 ```
 
 With:
@@ -882,7 +882,7 @@ Rename:
 ```text
 Resume
 resume-from-failed-step
-failed-step Resume
+failed-step recovery
 ```
 
 To:
@@ -1042,7 +1042,7 @@ merge_automation
 | `docs/Temporal/TaskExecutionCompatibilityModel.md` | Delete or replace with `docs/Temporal/WorkflowExecutionProductModel.md`. Do not keep as normative. |
 | `docs/UI/MissionControlArchitecture.md` | Rewrite as `docs/UI/WorkflowConsoleArchitecture.md`. |
 | `docs/Temporal/RunHistoryAndRerunSemantics.md` | Rename to `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`. |
-| `docs/Steps/StepAttemptsAndCheckpointing.md` | Rename to `docs/Steps/StepExecutionsAndCheckpointing.md`. |
+| `docs/Steps/StepExecutionsAndCheckpointing.md` | Rename to `docs/Steps/StepExecutionsAndCheckpointing.md`. |
 | `docs/Tasks/TaskArchitecture.md` | Delete or replace with `docs/Temporal/WorkflowExecutionArchitecture.md`. |
 | `docs/Tasks/TaskPresetsSystem.md` | Rename to `docs/Steps/WorkflowPresetsSystem.md` or fold into Step/Preset docs. |
 | `docs/Tasks/TaskRemediation.md` | Rename to `docs/Temporal/WorkflowRemediation.md` or `docs/Steps/FailedStepRecovery.md`. |
@@ -1101,8 +1101,8 @@ taskId
 taskRunId
 taskStatus
 detailHref: /tasks/...
-stepAttemptId
-attemptScope
+stepExecutionId
+executionScope
 ```
 
 Add assertions that API responses contain:
@@ -1137,7 +1137,7 @@ Assert visible copy excludes:
 Task ID
 Create Task
 Task Detail
-Step Attempt
+Step Execution
 ```
 
 ### 17.4 Documentation Tests
@@ -1175,7 +1175,7 @@ Add schema tests that fail on:
 taskId
 taskRunId
 mm_task_run_id
-stepAttemptId
+stepExecutionId
 attempt
 ```
 
@@ -1202,9 +1202,9 @@ task-create
 MoonMind task
 task-oriented
 task-first
-StepAttempt
-stepAttemptId
-step-attempt
+StepExecution
+stepExecutionId
+step-execution
 ```
 
 The route-shaped banned terms `/tasks` and `/api/tasks` MUST be scoped, not matched against the entire repository tree. Scope the check to:
@@ -1265,7 +1265,7 @@ taskId
 /tasks
 TaskService
 task dashboard
-StepAttempt
+StepExecution
 ```
 
 ### Phase 2: Update Docs First
@@ -1296,13 +1296,13 @@ stepExecutionId
 executionOrdinal
 ```
 
-Remove task alias fields and Step Attempt fields.
+Remove task alias fields and Step Execution fields.
 
 Regenerate frontend OpenAPI types.
 
 #### Phase 3.1: In-flight Workflow Compatibility
 
-Removing task-shaped and Step Attempt fields from API schemas, workflow update/signal payloads, and serialized activity inputs is a non-additive Temporal contract change. Already-running workflow histories and any signal/update messages enqueued before the cutover are deserialized against the prior shapes, so a bare deletion will break in-flight runs on the new worker code.
+Removing task-shaped and Step Execution fields from API schemas, workflow update/signal payloads, and serialized activity inputs is a non-additive Temporal contract change. Already-running workflow histories and any signal/update messages enqueued before the cutover are deserialized against the prior shapes, so a bare deletion will break in-flight runs on the new worker code.
 
 Before any field deletion ships, this hard switch requires an explicit versioned cutover plan covering:
 
@@ -1381,11 +1381,11 @@ The hard switch is complete when:
 7. `runId` is the current/latest Temporal run identifier.
 8. `MoonMind.Run` is replaced by `MoonMind.UserWorkflow`, or at minimum is no longer described as standard task execution.
 9. Step docs say Workflow Executions are composed from Steps.
-10. `Step Execution` fully replaces `Step Attempt`.
+10. `Step Execution` fully replaces `Step Execution`.
 11. Step execution artifacts use `stepExecutionId`, `executionOrdinal`, and step-execution content types.
 12. Failed-step recovery says `RecoverFromFailedStep`, not bare `Resume task`.
 13. CI fails on reintroduction of unqualified MoonMind task terminology.
-14. CI fails on reintroduction of Step Attempt terminology.
+14. CI fails on reintroduction of Step Execution terminology.
 15. External systems are qualified: Jira task, Codex task, Temporal Task, Workflow Task, Activity Task, Task Queue.
 
 ---

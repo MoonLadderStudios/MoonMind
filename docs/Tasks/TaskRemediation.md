@@ -602,7 +602,7 @@ Remediation is a two-track workflow:
 
 Immediate repair is not a substitute for long-term prevention. A successful target repair still requires a recurrence analysis, and a failed or unsafe repair can still produce a prevention pull request.
 
-Corrected-instruction retries are remediation interventions, not ordinary failed-step Resume. If the platform has a distinct Resume-from-failed-step action that preserves the original task input snapshot unchanged, remediation must not overload that action with edited instructions. Any corrected instructions must be recorded as remediation repair context or a follow-up retry override with explicit provenance, not as a mutation of the original task input.
+Corrected-instruction retries are remediation interventions, not ordinary failed-step recovery. If the platform has a distinct Resume-from-failed-step action that preserves the original task input snapshot unchanged, remediation must not overload that action with edited instructions. Any corrected instructions must be recorded as remediation repair context or a follow-up retry override with explicit provenance, not as a mutation of the original task input.
 
 The remediation decision log must record:
 
@@ -783,7 +783,7 @@ This action must:
 - avoid silent fallback to a full rerun,
 - avoid retrying non-idempotent or externally side-effecting work unless policy and approval explicitly allow it.
 
-This action is distinct from an operator-facing failed-step Resume path that preserves original inputs unchanged. It is a remediation-specific intervention and must leave action, provenance, and verification artifacts.
+This action is distinct from an operator-facing failed-step recovery path that preserves original inputs unchanged. It is a remediation-specific intervention and must leave action, provenance, and verification artifacts.
 
 #### `execution.request_rerun_same_workflow`
 Represents Continue-As-New style rerun of the same logical execution where supported and accepted.

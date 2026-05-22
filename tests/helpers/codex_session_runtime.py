@@ -26,7 +26,7 @@ def write_fake_app_server(
     steer_record_path: Path | None = None,
     interrupt_record_path: Path | None = None,
     codex_home_record_path: Path | None = None,
-    thread_resume_error_message: str | None = None,
+    thread_recovery_error_message: str | None = None,
 ) -> Path:
     script = tmp_path / "fake_app_server.py"
     completion_block = """
@@ -322,7 +322,7 @@ __COMPLETION_BLOCK__
             repr(str(codex_home_record_path) if codex_home_record_path is not None else ""),
         )
         .replace("__FAIL_THREAD_RESUME__", "True" if fail_thread_resume else "False")
-        .replace("__THREAD_RESUME_ERROR_MESSAGE__", repr(thread_resume_error_message))
+        .replace("__THREAD_RESUME_ERROR_MESSAGE__", repr(thread_recovery_error_message))
         .replace(
             "__RESUME_REQUIRES_EXISTING_ROLLOUT_PATH__",
             "True" if resume_requires_existing_rollout_path else "False",

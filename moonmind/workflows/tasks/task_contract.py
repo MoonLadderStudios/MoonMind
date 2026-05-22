@@ -1534,10 +1534,8 @@ class ResumeFromFailedStepRef(BaseModel):
     source_workflow_id: str = Field(..., alias="sourceWorkflowId")
     source_run_id: str = Field(..., alias="sourceRunId")
     failed_step_id: str = Field(..., alias="failedStepId")
-    failed_step_execution_ordinal: int | None = Field(
-        None, alias="failedStepExecutionOrdinal"
-    )
-    resume_checkpoint_ref: str = Field(..., alias="resumeCheckpointRef")
+    failed_step_execution: int | None = Field(None, alias="failedStepExecution")
+    recovery_checkpoint_ref: str = Field(..., alias="recoveryCheckpointRef")
     task_input_snapshot_ref: str = Field(..., alias="taskInputSnapshotRef")
     plan_ref: str | None = Field(None, alias="planRef")
     plan_digest: str | None = Field(None, alias="planDigest")
@@ -1546,7 +1544,7 @@ class ResumeFromFailedStepRef(BaseModel):
         "source_workflow_id",
         "source_run_id",
         "failed_step_id",
-        "resume_checkpoint_ref",
+        "recovery_checkpoint_ref",
         "task_input_snapshot_ref",
         mode="before",
     )
@@ -1675,7 +1673,7 @@ class TaskExecutionSpec(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def _validate_recovery_resume_consistency(self) -> "TaskExecutionSpec":
+    def _validate_recovery_recovery_consistency(self) -> "TaskExecutionSpec":
         recovery = self.recovery
         resume = self.resume
 
