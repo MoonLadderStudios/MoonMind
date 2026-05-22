@@ -39,7 +39,7 @@ class WorkflowTaskStateModel(BaseModel):
     id: Optional[UUID] = Field(None, alias="id")
     task_name: str = Field(..., alias="taskName")
     status: models.WorkflowTaskStatus = Field(..., alias="status")
-    attempt: int = Field(..., alias="attempt")
+    execution_ordinal: int = Field(..., alias="executionOrdinal")
     payload: dict[str, Any] | None = Field(None, alias="payload")
     message: Optional[str] = Field(None, alias="message")
     artifact_paths: list[str] = Field(default_factory=list, alias="artifactPaths")
@@ -55,7 +55,7 @@ class WorkflowTaskSummaryModel(BaseModel):
 
     task_name: str = Field(..., alias="taskName")
     status: models.WorkflowTaskStatus = Field(..., alias="status")
-    attempt: int = Field(..., alias="attempt")
+    execution_ordinal: int = Field(..., alias="executionOrdinal")
     started_at: datetime | None = Field(None, alias="startedAt")
     finished_at: datetime | None = Field(None, alias="finishedAt")
     updated_at: datetime | None = Field(None, alias="updatedAt")
@@ -257,7 +257,7 @@ class AutomationPhaseState(BaseModel):
 
     phase: models.AutomationPhase
     status: models.AutomationTaskStatus
-    attempt: int = Field(ge=1)
+    execution_ordinal: int = Field(alias="executionOrdinal", ge=1)
     started_at: datetime | None = None
     completed_at: datetime | None = None
     stdout_path: str | None = None

@@ -59,12 +59,12 @@ async def test_failed_execution_direct_rerun_creates_exact_full_rerun_from_origi
                         "title": "Original task",
                         "instructions": "Run the original task input unchanged.",
                         "recovery": {
-                            "kind": "resume_from_failed_step",
+                            "kind": "recover_from_failed_step",
                             "sourceWorkflowId": "mm:old",
                             "sourceRunId": "run-old",
                         },
                         "resume": {
-                            "kind": "resume_from_failed_step",
+                            "kind": "recover_from_failed_step",
                             "sourceWorkflowId": "mm:old",
                             "sourceRunId": "run-old",
                             "failedStepId": "implement",

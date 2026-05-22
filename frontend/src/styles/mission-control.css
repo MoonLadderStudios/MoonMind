@@ -2758,7 +2758,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   -webkit-box-orient: vertical;
 }
 
-.step-attempt-pill {
+.step-execution-pill {
   display: inline-flex;
   align-items: center;
   border-radius: 999px;

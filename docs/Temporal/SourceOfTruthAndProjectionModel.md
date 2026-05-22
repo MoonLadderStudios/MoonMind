@@ -265,7 +265,7 @@ A separate derived read model such as `execution_step_projection` is allowed for
 - fast Mission Control step reads
 - degraded mode
 - compatibility joins
-- future run-history and step-attempt views
+- future run-history and step-execution views
 
 Rules:
 

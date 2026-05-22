@@ -58,21 +58,21 @@ def test_run_boundary_prepares_objective_and_current_step_context_only() -> None
     assert dumped["parameters"]["metadata"]["moonmind"]["preparedContext"][
         "targetCounts"
     ] == {"objective": 1, "step": 1}
-    attempt_context = dumped["parameters"]["metadata"]["moonmind"]["attemptContext"]
+    execution_context = dumped["parameters"]["metadata"]["moonmind"]["executionContext"]
     projection = dumped["parameters"]["metadata"]["moonmind"][
-        "attemptManifestProjection"
+        "executionManifestProjection"
     ]
-    assert attempt_context["workflowId"] == "run-target-aware-integration"
-    assert attempt_context["logicalStepId"] == "first-step"
-    assert attempt_context["preparedInputRefs"] == [
+    assert execution_context["workflowId"] == "run-target-aware-integration"
+    assert execution_context["logicalStepId"] == "first-step"
+    assert execution_context["preparedInputRefs"] == [
         "prepared-context://objective/objective-artifact",
         "prepared-context://steps/first-step/first-step-artifact",
         "artifact://objective-artifact",
         "artifact://first-step-artifact",
     ]
-    assert attempt_context["contextBundleDigest"].startswith("sha256:")
+    assert execution_context["contextBundleDigest"].startswith("sha256:")
     assert projection["context"]["contextBundleRef"] == (
-        attempt_context["contextBundleRef"]
+        execution_context["contextBundleRef"]
     )
     assert "preparedInputRefs" not in projection["context"]
 

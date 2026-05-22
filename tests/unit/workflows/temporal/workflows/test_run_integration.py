@@ -2062,7 +2062,7 @@ async def test_publish_repair_runs_one_managed_child_and_returns_result(
         fake_execute_child_workflow,
     )
 
-    result = await mock_run_workflow._attempt_publish_repair(
+    result = await mock_run_workflow._execution_publish_repair(
         parameters={"publishMode": "pr"},
         failure_message="branch has no commits ahead of origin/main",
     )

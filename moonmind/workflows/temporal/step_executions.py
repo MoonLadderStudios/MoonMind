@@ -1,4 +1,4 @@
-"""Pure helpers for Step Attempt identity, manifests, and idempotency."""
+"""Pure helpers for Step Execution identity, manifests, and idempotency."""
 
 from __future__ import annotations
 
@@ -8,11 +8,11 @@ import posixpath
 import re
 from typing import Any, Literal
 
-from moonmind.schemas.step_attempt_models import (
+from moonmind.schemas.step_execution_models import (
     AttemptReason,
     AttemptStatus,
-    StepAttemptIdentityModel,
-    StepAttemptManifestModel,
+    StepExecutionIdentityModel,
+    StepExecutionManifestModel,
 )
 from moonmind.schemas.temporal_models import WorkspacePolicy
 from moonmind.workflows.temporal.step_checkpoints import (
@@ -94,37 +94,37 @@ def _target_within_approved_workspace_roots(
     return False
 
 
-def step_attempt_id(
+def step_execution_id(
     *,
     workflow_id: str,
     run_id: str,
     logical_step_id: str,
-    attempt: int,
+    execution_ordinal: int,
 ) -> str:
-    return StepAttemptIdentityModel(
+    return StepExecutionIdentityModel(
         workflowId=workflow_id,
         runId=run_id,
         logicalStepId=logical_step_id,
-        attempt=attempt,
-    ).step_attempt_id
+        executionOrdinal=execution_ordinal,
+    ).step_execution_id
 
 
-def step_attempt_operation_idempotency_key(
+def step_execution_operation_idempotency_key(
     *,
     workflow_id: str,
     run_id: str,
     logical_step_id: str,
-    attempt: int,
+    execution_ordinal: int,
     operation: str,
 ) -> str:
     operation_id = str(operation or "").strip()
     if not operation_id:
         raise ValueError("operation must be a non-empty string")
-    identity = step_attempt_id(
+    identity = step_execution_id(
         workflow_id=workflow_id,
         run_id=run_id,
         logical_step_id=logical_step_id,
-        attempt=attempt,
+        execution_ordinal=execution_ordinal,
     )
     return f"{identity}:{operation_id}"
 
@@ -136,7 +136,7 @@ def workspace_policy_metadata(
     checkpoint_valid: bool | None = None,
     rejection_reason: str | None = None,
 ) -> dict[str, Any]:
-    """Build compact workspace policy diagnostics for an attempt manifest."""
+    """Build compact workspace policy diagnostics for an execution manifest."""
 
     required_kinds = checkpoint_kinds_for_workspace_policy(policy)
     checkpoint_text = str(checkpoint_ref or "").strip() or None
@@ -311,12 +311,12 @@ def side_effect_record(
     return record
 
 
-def build_step_attempt_manifest_payload(
+def build_step_execution_manifest_payload(
     *,
     workflow_id: str,
     run_id: str,
     logical_step_id: str,
-    attempt: int,
+    execution_ordinal: int,
     reason: AttemptReason,
     status: AttemptStatus,
     updated_at: datetime,
@@ -348,11 +348,11 @@ def build_step_attempt_manifest_payload(
     side_effect_payload = dict(side_effects or {})
     if side_effect_records:
         side_effect_payload["records"] = [dict(record) for record in side_effect_records]
-    manifest = StepAttemptManifestModel(
+    manifest = StepExecutionManifestModel(
         workflowId=workflow_id,
         runId=run_id,
         logicalStepId=logical_step_id,
-        attempt=attempt,
+        executionOrdinal=execution_ordinal,
         lineage=dict(lineage) if lineage is not None else None,
         reason=reason,
         status=status,

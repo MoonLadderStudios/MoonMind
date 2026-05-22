@@ -75,7 +75,7 @@ def test_execution_model_preserves_target_diagnostics_alias_contract() -> None:
                     {
                         "logicalStepId": "prepare",
                         "title": "Prepare context",
-                        "sourceAttempt": 1,
+                        "sourceExecutionOrdinal": 1,
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-source",
                     }
@@ -162,7 +162,7 @@ def test_execution_model_preserves_failed_step_execution_recovery_phase() -> Non
                     {
                         "logicalStepId": "prepare",
                         "title": "Prepare context",
-                        "sourceAttempt": 1,
+                        "sourceExecutionOrdinal": 1,
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-source",
                     }

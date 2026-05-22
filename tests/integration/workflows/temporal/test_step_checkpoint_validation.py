@@ -4,8 +4,8 @@ from datetime import UTC, datetime
 
 from moonmind.schemas.temporal_models import (
     StepCheckpointValidationRequestModel,
-    StepAttemptCheckpointModel,
-    StepAttemptIdentityModel,
+    StepExecutionCheckpointModel,
+    StepExecutionIdentityModel,
 )
 from moonmind.workflows.temporal.step_checkpoints import (
     build_step_checkpoint_payload,
@@ -13,17 +13,17 @@ from moonmind.workflows.temporal.step_checkpoints import (
 )
 
 
-def _identity() -> StepAttemptIdentityModel:
-    return StepAttemptIdentityModel(
+def _identity() -> StepExecutionIdentityModel:
+    return StepExecutionIdentityModel(
         workflowId="workflow-1",
         runId="run-1",
         logicalStepId="implement-story",
-        attempt=2,
+        executionOrdinal=2,
     )
 
 
-def _valid_checkpoint() -> StepAttemptCheckpointModel:
-    return StepAttemptCheckpointModel.model_validate(
+def _valid_checkpoint() -> StepExecutionCheckpointModel:
+    return StepExecutionCheckpointModel.model_validate(
         build_step_checkpoint_payload(
             identity=_identity(),
             boundary="before_attempt",
@@ -50,7 +50,7 @@ def test_checkpoint_validation_boundary_allows_compact_valid_evidence() -> None:
             expectedTaskInputSnapshotRef="artifact-input",
             expectedPlanRef="artifact-plan",
             expectedPlanDigest="sha256:plan",
-            workspacePolicy="apply_previous_diff_to_clean_baseline",
+            workspacePolicy="apply_previous_execution_diff_to_clean_baseline",
             requiredArtifactRefs=[
                 "artifact-input",
                 "artifact-plan",
@@ -67,7 +67,7 @@ def test_checkpoint_validation_boundary_allows_compact_valid_evidence() -> None:
         "failureCode": None,
         "message": "checkpoint validation passed",
         "checkpointId": (
-            "workflow-1:run-1:implement-story:attempt:2:checkpoint:before_attempt"
+            "workflow-1:run-1:implement-story:execution:2:checkpoint:before_attempt"
         ),
         "checkpointRef": "artifact-checkpoint",
     }
@@ -80,7 +80,7 @@ def test_checkpoint_validation_boundary_blocks_runtime_launch_on_mismatch() -> N
             expectedSource=_identity(),
             expectedTaskInputSnapshotRef="artifact-input",
             expectedPlanDigest="sha256:other",
-            workspacePolicy="apply_previous_diff_to_clean_baseline",
+            workspacePolicy="apply_previous_execution_diff_to_clean_baseline",
         )
     )
     assert plan_mismatch.valid is False

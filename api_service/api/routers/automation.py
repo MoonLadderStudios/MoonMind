@@ -55,7 +55,7 @@ def _serialize_phase_state(
     return AutomationPhaseState(
         phase=state.phase,
         status=state.status,
-        attempt=state.attempt,
+        executionOrdinal=state.attempt,
         started_at=state.started_at,
         completed_at=state.completed_at,
         stdout_path=state.stdout_path,

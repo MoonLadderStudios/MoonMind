@@ -254,7 +254,7 @@ Behavior:
 - require a resume checkpoint that can restore completed prior work
 - create a linked follow-up execution with its own `workflowId` and `runId` unless a future in-place continuation model is explicitly introduced
 - leave the source execution unchanged
-- record a relation from the resumed execution to the source execution with relationship type `resume_from_failed_step`
+- record a relation from the resumed execution to the source execution with relationship type `recover_from_failed_step`
 
 ### 7A.3 Resume input changes
 
