@@ -4069,14 +4069,15 @@ async def _validate_and_collect_task_input_attachments(
             if refs:
                 step_refs[index] = refs
 
+    resolved_step_ids = _resolve_task_step_ids(raw_steps)
+
     attachment_index: list[dict[str, Any]] = []
     for ref in objective_refs:
         attachment_index.append({**ref, "targetKind": "objective"})
     for index, refs in step_refs.items():
-        step = raw_steps[index] if isinstance(raw_steps, list) else {}
-        step_ref = ""
-        if isinstance(step, Mapping):
-            step_ref = str(step.get("id") or "").strip()
+        step_ref = (
+            resolved_step_ids[index] if index < len(resolved_step_ids) else ""
+        )
         for ref in refs:
             attachment_index.append(
                 {
@@ -4198,6 +4199,48 @@ def _normalize_task_proposal_policy(raw: Any) -> dict[str, Any] | None:
     except (TaskContractError, ValidationError, ValueError) as exc:
         raise _invalid_task_request(str(exc)) from exc
 
+_STEP_ID_ALIASES: tuple[str, ...] = (
+    "id",
+    "stepRef",
+    "ref",
+    "stepId",
+    "step_id",
+    "logicalStepId",
+)
+
+
+def _resolve_task_step_ids(raw_steps: Any) -> list[str]:
+    """Compute stable, non-colliding step IDs for a raw steps payload.
+
+    Honors common aliases (`stepRef`, `ref`, etc.) referenced in worker-side
+    manifest construction, then synthesizes `step-N` ids for any step that
+    still lacks an identifier while avoiding collisions with already-used ids.
+    """
+    if not isinstance(raw_steps, list):
+        return []
+    resolved: list[str | None] = [None] * len(raw_steps)
+    for index, step in enumerate(raw_steps):
+        if not isinstance(step, Mapping):
+            continue
+        for alias in _STEP_ID_ALIASES:
+            value = step.get(alias)
+            if isinstance(value, str) and value.strip():
+                resolved[index] = value.strip()
+                break
+    used = {value for value in resolved if value is not None}
+    for index, value in enumerate(resolved):
+        if value is not None:
+            continue
+        counter = index + 1
+        candidate = f"step-{counter}"
+        while candidate in used:
+            counter += 1
+            candidate = f"step-{counter}"
+        used.add(candidate)
+        resolved[index] = candidate
+    return [value for value in resolved if value is not None]
+
+
 def _normalize_task_input_attachments(
     raw: Any, *, field_name: str
 ) -> list[dict[str, Any]]:
@@ -4241,6 +4284,8 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
         "container",
     }
 
+    resolved_step_ids = _resolve_task_step_ids(raw_steps)
+
     for index, item in enumerate(raw_steps):
         if not isinstance(item, Mapping):
             raise _invalid_task_request(
@@ -4257,10 +4302,11 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
             )
 
         normalized_step: dict[str, Any] = {}
-        for key in ("id", "title", "instructions"):
+        for key in ("title", "instructions"):
             value = step_payload.get(key)
             if isinstance(value, str) and value.strip():
                 normalized_step[key] = value.strip()
+        normalized_step["id"] = resolved_step_ids[index]
 
         normalized_skills = _normalize_task_skill_selectors(
             step_payload.get("skills"),
