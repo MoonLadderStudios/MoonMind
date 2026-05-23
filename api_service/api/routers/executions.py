@@ -6039,6 +6039,15 @@ async def _handle_recurring_schedule(
 
     svc = RecurringTasksService(session)
     target = _build_recurring_target(request_payload)
+    scope_type = schedule.scope_type or "personal"
+    if scope_type == "global" and not _is_execution_admin(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "operator_role_required",
+                "message": "Operator privileges are required for global schedules.",
+            },
+        )
     try:
         definition = await svc.create_definition(
             name=schedule.name or "Inline schedule",
@@ -6047,11 +6056,11 @@ async def _handle_recurring_schedule(
             schedule_type="cron",
             cron=schedule.cron or "",
             timezone=schedule.timezone or "UTC",
-            scope_type=schedule.scope_type or "personal",
+            scope_type=scope_type,
             scope_ref=None,
             owner_user_id=user.id,
             target=target,
-            policy=schedule.policy or {},
+            policy=schedule.policy,
         )
     except RecurringTaskValidationError as exc:
         raise HTTPException(

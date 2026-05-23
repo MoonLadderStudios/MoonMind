@@ -4605,6 +4605,84 @@ def test_create_task_shaped_recurring_schedule_passes_metadata_and_response(
     assert called_kwargs["policy"] == policy
 
 
+def test_create_task_shaped_recurring_schedule_preserves_missing_policy(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, _service, _user = client
+    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+    next_run_at = datetime.now(UTC) + timedelta(hours=1)
+
+    with patch(
+        "api_service.services.recurring_tasks_service.RecurringTasksService"
+    ) as service_cls:
+        service = service_cls.return_value
+        service.create_definition = AsyncMock(
+            return_value=SimpleNamespace(
+                id=uuid4(),
+                name="Inline schedule",
+                cron="0 * * * *",
+                timezone="UTC",
+                next_run_at=next_run_at,
+            )
+        )
+
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "task",
+                "payload": {
+                    "schedule": {
+                        "mode": "recurring",
+                        "cron": "0 * * * *",
+                    },
+                    "task": {
+                        "instructions": "Run this on a schedule",
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201, response.json()
+    assert service.create_definition.await_args.kwargs["policy"] is None
+
+
+def test_create_task_shaped_recurring_schedule_rejects_global_scope_for_non_operator(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, _service, _user = client
+    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+
+    with patch(
+        "api_service.services.recurring_tasks_service.RecurringTasksService"
+    ) as service_cls:
+        service = service_cls.return_value
+        service.create_definition = AsyncMock()
+
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "task",
+                "payload": {
+                    "schedule": {
+                        "mode": "recurring",
+                        "cron": "0 * * * *",
+                        "scopeType": "global",
+                    },
+                    "task": {
+                        "instructions": "Run this on a schedule",
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == {
+        "code": "operator_role_required",
+        "message": "Operator privileges are required for global schedules.",
+    }
+    service.create_definition.assert_not_awaited()
+
+
 def test_create_task_shaped_recurring_schedule_validation_maps_to_422(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:

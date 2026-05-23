@@ -518,6 +518,22 @@ describe("WorkflowStart schedule mode entry", () => {
     expect(await screen.findByLabelText("Cron Expression")).not.toBeNull();
   });
 
+  it("preselects once schedule mode from the query parameter", async () => {
+    window.history.pushState(
+      {},
+      "Task Create",
+      "/workflows/new?scheduleMode=once",
+    );
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const scheduleMode = (await screen.findByLabelText(
+      "Schedule Mode",
+    )) as HTMLSelectElement;
+    expect(scheduleMode.value).toBe("once");
+    expect(await screen.findByLabelText("Scheduled For")).not.toBeNull();
+  });
+
   it("keeps immediate schedule mode as the default without the query parameter", async () => {
     window.history.pushState({}, "Task Create", "/workflows/new");
 

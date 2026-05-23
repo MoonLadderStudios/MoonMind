@@ -45,12 +45,20 @@ def _override_user_dependencies(app: FastAPI) -> SimpleNamespace:
     return user
 
 
+def _mock_service_override() -> AsyncMock:
+    return AsyncMock()
+
+
+def _empty_session_override() -> SimpleNamespace:
+    return SimpleNamespace()
+
+
 def _client() -> TestClient:
     app = FastAPI()
     app.include_router(router)
-    app.dependency_overrides[_get_service] = lambda: AsyncMock()
-    app.dependency_overrides[get_temporal_client] = lambda: AsyncMock()
-    app.dependency_overrides[get_async_session] = lambda: SimpleNamespace()
+    app.dependency_overrides[_get_service] = _mock_service_override
+    app.dependency_overrides[get_temporal_client] = _mock_service_override
+    app.dependency_overrides[get_async_session] = _empty_session_override
     _override_user_dependencies(app)
     return TestClient(app)
 

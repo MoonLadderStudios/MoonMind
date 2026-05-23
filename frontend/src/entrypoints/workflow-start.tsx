@@ -3826,7 +3826,11 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       return "immediate";
     }
     const params = new URLSearchParams(window.location.search);
-    return params.get("scheduleMode") === "recurring" ? "recurring" : "immediate";
+    const mode = params.get("scheduleMode");
+    if (mode === "recurring" || mode === "once") {
+      return mode;
+    }
+    return "immediate";
   });
   const [scheduledFor, setScheduledFor] = useState("");
   const [scheduleDeferredMinutes, setScheduleDeferredMinutes] = useState("");
