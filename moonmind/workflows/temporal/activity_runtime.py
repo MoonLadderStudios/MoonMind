@@ -135,6 +135,7 @@ from moonmind.workflows.skills.skill_registry import (
     create_registry_snapshot,
     parse_skill_registry,
 )
+from moonmind.workflows.skills.tool_plan_contracts import ToolFailure
 from moonmind.workflows.temporal.activity_catalog import TemporalActivityCatalog
 from moonmind.workflows.temporal.artifacts import (
     ArtifactRef,
@@ -1743,12 +1744,15 @@ class TemporalSkillActivities:
                 principal or "system:deployment",
             )
 
-        return await execute_skill_activity(
-            invocation_payload=invocation_payload,
-            registry_snapshot=resolved_snapshot,
-            dispatcher=self._dispatcher,
-            context=execution_context,
-        )
+        try:
+            return await execute_skill_activity(
+                invocation_payload=invocation_payload,
+                registry_snapshot=resolved_snapshot,
+                dispatcher=self._dispatcher,
+                context=execution_context,
+            )
+        except ToolFailure as exc:
+            raise _tool_failure_application_error(exc) from exc
 
     async def mm_tool_execute(
         self,
@@ -1772,6 +1776,27 @@ class TemporalSkillActivities:
             context=context,
             idempotency_key=idempotency_key,
         )
+
+
+def _tool_failure_application_error(
+    exc: ToolFailure,
+) -> temporal_exceptions.ApplicationError:
+    payload = _redacted_tool_failure_payload(exc)
+    return temporal_exceptions.ApplicationError(
+        f"{exc.error_code}: {exc.message}",
+        payload,
+        type=exc.error_code,
+        non_retryable=not exc.retryable,
+    )
+
+
+def _redacted_tool_failure_payload(exc: ToolFailure) -> dict[str, Any]:
+    redactor = SecretRedactor.from_environ(placeholder="[REDACTED]")
+    encoded = json.dumps(exc.to_payload(), default=str, sort_keys=True)
+    scrubbed = redactor.scrub(encoded)
+    decoded = json.loads(scrubbed)
+    return decoded if isinstance(decoded, dict) else {"message": str(decoded)}
+
 
 class TemporalManifestActivities:
     """Implementation helpers for manifest-ingest activity steps."""
@@ -7112,6 +7137,41 @@ class TemporalAgentRuntimeActivities:
             protected = {"main", "master", "HEAD"}
             if target_branch_name and not target_branch_push_allowed:
                 protected.add(target_branch_name)
+            if (
+                current_branch in {"main", "master"}
+                and head_branch_name
+                and head_branch_name not in protected
+            ):
+                checkout_proc = await asyncio.create_subprocess_exec(
+                    *self._workspace_git_command(
+                        workspace,
+                        "checkout",
+                        "-B",
+                        head_branch_name,
+                    ),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=command_env,
+                )
+                checkout_stdout, checkout_stderr = await asyncio.wait_for(
+                    checkout_proc.communicate(), timeout=30,
+                )
+                if checkout_proc.returncode != 0:
+                    detail = (
+                        checkout_stderr.decode("utf-8", errors="replace").strip()
+                        or checkout_stdout.decode("utf-8", errors="replace").strip()
+                        or "(no stderr)"
+                    )
+                    return {
+                        "push_status": "failed",
+                        "push_branch": current_branch,
+                        "push_error": (
+                            "could not switch protected workspace branch "
+                            f"'{current_branch}' to publish branch "
+                            f"'{head_branch_name}': {detail}"
+                        ),
+                    }
+                current_branch = head_branch_name
             if not current_branch or current_branch in protected:
                 logger.warning(
                     "Post-agent git push skipped for run %s: "

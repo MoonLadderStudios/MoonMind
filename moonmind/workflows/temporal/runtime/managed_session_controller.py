@@ -1344,6 +1344,17 @@ class DockerCodexManagedSessionController:
                     request=request,
                     git_env=git_env,
                 )
+            elif (
+                request.workspace_spec.get("targetBranch")
+                and await self._workspace_is_git_repository(
+                    workspace_path=workspace_path
+                )
+            ):
+                await self._ensure_target_branch(
+                    workspace_path=workspace_path,
+                    request=request,
+                    git_env=await self._git_host_environment(request),
+                )
             return
 
         if not repository:

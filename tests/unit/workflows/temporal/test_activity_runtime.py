@@ -28,6 +28,7 @@ from moonmind.workflows.skills.skill_registry import (
     create_registry_snapshot,
     parse_skill_registry,
 )
+from moonmind.workflows.skills.tool_plan_contracts import ToolFailure
 from moonmind.workflows.skills.deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
     DEPLOYMENT_UPDATE_TOOL_VERSION,
@@ -1868,6 +1869,63 @@ async def test_build_activity_bindings_mm_tool_execute_handler_supports_keyword_
             assert result.outputs["ok"] is True
             assert captured_context["workflow_id"] == "wf-1"
             assert captured_context["idempotency_key"] == "wf-1_n1_execute"
+
+
+async def test_mm_tool_execute_preserves_tool_failure_envelope() -> None:
+    dispatcher = SkillActivityDispatcher()
+
+    def _failing_handler(
+        _inputs: dict[str, object],
+        _context: dict[str, object] | None,
+    ) -> SkillResult:
+        raise ToolFailure(
+            error_code="DEPLOYMENT_RUNNER_UNSAFE",
+            message="Deployment update would recreate the worker container.",
+            retryable=False,
+            details={
+                "failureClass": "runner_self_recreation_unsafe",
+                "service": "temporal-worker-agent-runtime",
+            },
+        )
+
+    dispatcher.register_skill(
+        skill_name="repo.run_tests",
+        version="1.0.0",
+        handler=_failing_handler,
+    )
+    snapshot = create_registry_snapshot(
+        skills=parse_skill_registry(_registry_payload()),
+        artifact_store=InMemoryArtifactStore(),
+    )
+    activities = TemporalSkillActivities(dispatcher=dispatcher)
+
+    with pytest.raises(temporal_exceptions.ApplicationError) as exc_info:
+        await activities.mm_tool_execute(
+            invocation_payload={
+                "id": "deploy",
+                "tool": {
+                    "type": "skill",
+                    "name": "repo.run_tests",
+                    "version": "1.0.0",
+                },
+                "inputs": {"repo_ref": "git:org/repo#main"},
+            },
+            registry_snapshot=snapshot,
+        )
+
+    assert exc_info.value.type == "DEPLOYMENT_RUNNER_UNSAFE"
+    assert exc_info.value.non_retryable is True
+    assert "Deployment update would recreate" in str(exc_info.value)
+    assert exc_info.value.details[0] == {
+        "error_code": "DEPLOYMENT_RUNNER_UNSAFE",
+        "message": "Deployment update would recreate the worker container.",
+        "retryable": False,
+        "details": {
+            "failureClass": "runner_self_recreation_unsafe",
+            "service": "temporal-worker-agent-runtime",
+        },
+    }
+
 
 async def test_build_activity_bindings_does_not_mutate_sandbox_method_signatures(
     tmp_path: Path,

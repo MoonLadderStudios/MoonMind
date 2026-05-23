@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -194,6 +195,91 @@ async def test_controller_launches_container_and_returns_typed_handle(
     assert stored.container_id == "ctr-1"
     assert stored.runtime_id == "codex_cli"
     session_supervisor.start.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_controller_checks_out_target_branch_for_existing_git_workspace_without_repository(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller.os.geteuid",
+        lambda: 1000,
+    )
+    workspace_root = tmp_path / "agent_jobs"
+    workspace_path = workspace_root / "task-1" / "repo"
+    workspace_path.mkdir(parents=True)
+    subprocess.run(
+        ["git", "init", "-b", "main"],
+        cwd=workspace_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=workspace_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test User"],
+        cwd=workspace_path,
+        check=True,
+        capture_output=True,
+    )
+    (workspace_path / "README.md").write_text("seed\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "README.md"],
+        cwd=workspace_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "seed"],
+        cwd=workspace_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "checkout", "-b", "feature/publish"],
+        cwd=workspace_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "checkout", "main"],
+        cwd=workspace_path,
+        check=True,
+        capture_output=True,
+    )
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_path),
+        sessionWorkspacePath=str(workspace_root / "task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        workspaceSpec={"targetBranch": "feature/publish"},
+    )
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+    )
+
+    await controller._ensure_workspace_paths(request)
+
+    branch = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=workspace_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert branch == "feature/publish"
+
 
 @pytest.mark.asyncio
 async def test_controller_launches_private_docker_sidecar_for_docker_enabled_session(
