@@ -1878,13 +1878,18 @@ async def test_mm_tool_execute_preserves_tool_failure_envelope() -> None:
         _inputs: dict[str, object],
         _context: dict[str, object] | None,
     ) -> SkillResult:
+        leaked_token = "ghp_toolfailuretoken1234567890abcd"
         raise ToolFailure(
             error_code="DEPLOYMENT_RUNNER_UNSAFE",
-            message="Deployment update would recreate the worker container.",
+            message=(
+                "Deployment update would recreate the worker container "
+                f"with token {leaked_token}."
+            ),
             retryable=False,
             details={
                 "failureClass": "runner_self_recreation_unsafe",
                 "service": "temporal-worker-agent-runtime",
+                "token": leaked_token,
             },
         )
 
@@ -1916,13 +1921,19 @@ async def test_mm_tool_execute_preserves_tool_failure_envelope() -> None:
     assert exc_info.value.type == "DEPLOYMENT_RUNNER_UNSAFE"
     assert exc_info.value.non_retryable is True
     assert "Deployment update would recreate" in str(exc_info.value)
+    assert "ghp_toolfailuretoken1234567890abcd" not in str(exc_info.value)
+    assert "[REDACTED]" in str(exc_info.value)
     assert exc_info.value.details[0] == {
         "error_code": "DEPLOYMENT_RUNNER_UNSAFE",
-        "message": "Deployment update would recreate the worker container.",
+        "message": (
+            "Deployment update would recreate the worker container "
+            "with token [REDACTED]."
+        ),
         "retryable": False,
         "details": {
             "failureClass": "runner_self_recreation_unsafe",
             "service": "temporal-worker-agent-runtime",
+            "token": "[REDACTED]",
         },
     }
 

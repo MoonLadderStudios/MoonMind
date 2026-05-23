@@ -63,7 +63,7 @@ from moonmind.workflows.adapters.managed_agent_adapter import (
     ManagedProfileLaunchContext,
     build_managed_profile_launch_context,
 )
-from moonmind.utils.logging import SecretRedactor
+from moonmind.utils.logging import SecretRedactor, redact_sensitive_text
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
 from moonmind.workflows.adapters.codex_cloud_agent_adapter import CodexCloudAgentAdapter
 from moonmind.workflows.adapters.codex_cloud_client import CodexCloudClient as CodexCloudHttpClient
@@ -1781,21 +1781,45 @@ class TemporalSkillActivities:
 def _tool_failure_application_error(
     exc: ToolFailure,
 ) -> temporal_exceptions.ApplicationError:
-    payload = _redacted_tool_failure_payload(exc)
+    redactor = SecretRedactor.from_environ(placeholder="[REDACTED]")
+    payload = _redacted_tool_failure_payload(exc, redactor=redactor)
     return temporal_exceptions.ApplicationError(
-        f"{exc.error_code}: {exc.message}",
+        _scrub_temporal_failure_text(
+            f"{exc.error_code}: {exc.message}",
+            redactor=redactor,
+        ),
         payload,
         type=exc.error_code,
         non_retryable=not exc.retryable,
     )
 
 
-def _redacted_tool_failure_payload(exc: ToolFailure) -> dict[str, Any]:
-    redactor = SecretRedactor.from_environ(placeholder="[REDACTED]")
-    encoded = json.dumps(exc.to_payload(), default=str, sort_keys=True)
-    scrubbed = redactor.scrub(encoded)
-    decoded = json.loads(scrubbed)
-    return decoded if isinstance(decoded, dict) else {"message": str(decoded)}
+def _redacted_tool_failure_payload(
+    exc: ToolFailure,
+    *,
+    redactor: SecretRedactor,
+) -> dict[str, Any]:
+    try:
+        encoded = json.dumps(exc.to_payload(), default=str, sort_keys=True)
+        scrubbed = _scrub_temporal_failure_text(encoded, redactor=redactor)
+        decoded = json.loads(scrubbed)
+        return decoded if isinstance(decoded, dict) else {"message": str(decoded)}
+    except Exception:
+        return {
+            "error_code": exc.error_code,
+            "message": _scrub_temporal_failure_text(
+                exc.message,
+                redactor=redactor,
+            ),
+        }
+
+
+def _scrub_temporal_failure_text(
+    text: str,
+    *,
+    redactor: SecretRedactor,
+) -> str:
+    return redact_sensitive_text(redactor.scrub(text))
 
 
 class TemporalManifestActivities:
@@ -7153,9 +7177,14 @@ class TemporalAgentRuntimeActivities:
                     stderr=asyncio.subprocess.PIPE,
                     env=command_env,
                 )
-                checkout_stdout, checkout_stderr = await asyncio.wait_for(
-                    checkout_proc.communicate(), timeout=30,
-                )
+                try:
+                    checkout_stdout, checkout_stderr = await asyncio.wait_for(
+                        checkout_proc.communicate(), timeout=30,
+                    )
+                except asyncio.TimeoutError:
+                    checkout_proc.kill()
+                    await checkout_proc.wait()
+                    raise
                 if checkout_proc.returncode != 0:
                     detail = (
                         checkout_stderr.decode("utf-8", errors="replace").strip()
@@ -7165,10 +7194,13 @@ class TemporalAgentRuntimeActivities:
                     return {
                         "push_status": "failed",
                         "push_branch": current_branch,
-                        "push_error": (
+                        "push_error": _scrub_temporal_failure_text(
                             "could not switch protected workspace branch "
                             f"'{current_branch}' to publish branch "
-                            f"'{head_branch_name}': {detail}"
+                            f"'{head_branch_name}': {detail}",
+                            redactor=SecretRedactor.from_environ(
+                                placeholder="[REDACTED]"
+                            ),
                         ),
                     }
                 current_branch = head_branch_name
