@@ -1380,11 +1380,25 @@ class MoonMindAgentRun:
         self._pending_runtime_selection_update = None
         self.runtime_selection_updated_event.clear()
         previous_manager_id = manager_id
+        previous_profile_ref = request.execution_profile_ref
+        previous_selector_payload = request.profile_selector.model_dump(
+            by_alias=True,
+            exclude_none=True,
+        )
+        assigned_profile_id = self._assigned_profile_id
         if payload:
             self._apply_runtime_selection_update(request, payload)
         runtime_id = self._managed_runtime_id(request.agent_id)
         manager_id = self._manager_workflow_id(runtime_id)
-        if manager_id != previous_manager_id:
+        selector_payload = request.profile_selector.model_dump(
+            by_alias=True,
+            exclude_none=True,
+        )
+        slot_selection_changed = (
+            request.execution_profile_ref != previous_profile_ref
+            or selector_payload != previous_selector_payload
+        )
+        if manager_id != previous_manager_id or slot_selection_changed:
             previous_manager_handle = workflow.get_external_workflow_handle(
                 previous_manager_id
             )
@@ -1392,7 +1406,7 @@ class MoonMindAgentRun:
                 await previous_manager_handle.signal(
                     "release_slot",
                     self._release_slot_payload(
-                        profile_id=self._assigned_profile_id,
+                        profile_id=assigned_profile_id,
                         request=request,
                     ),
                 )
@@ -1403,10 +1417,19 @@ class MoonMindAgentRun:
                     raise
             self.slot_assigned_event.clear()
             self._assigned_profile_id = None
-        selector_payload = request.profile_selector.model_dump(
-            by_alias=True,
-            exclude_none=True,
-        )
+        else:
+            manager_handle = workflow.get_external_workflow_handle(manager_id)
+            profile_count = await self._sync_manager_profiles(
+                manager_id=manager_id,
+                manager_handle=manager_handle,
+                runtime_id=runtime_id,
+            )
+            self._validate_synced_profile_selection(
+                profile_count=profile_count,
+                runtime_id=runtime_id,
+                request=request,
+            )
+            return manager_handle, manager_id, runtime_id
         manager_handle = await self._ensure_manager_started(manager_id, runtime_id)
         profile_count = await self._sync_manager_profiles(
             manager_id=manager_id,
@@ -1739,8 +1762,22 @@ class MoonMindAgentRun:
 
                     if workflow.patched("agent_run_slot_wait_retry_v1"):
                         slot_resets = 0
-                        while not self.slot_assigned_event.is_set():
+                        while (
+                            not self.slot_assigned_event.is_set()
+                            or self.runtime_selection_updated_event.is_set()
+                        ):
                             try:
+                                if self.runtime_selection_updated_event.is_set():
+                                    (
+                                        manager_handle,
+                                        manager_id,
+                                        runtime_id,
+                                    ) = await self._consume_runtime_selection_update_for_slot_wait(
+                                        request=request,
+                                        manager_id=manager_id,
+                                        runtime_id=runtime_id,
+                                    )
+                                    continue
                                 slot_wait_timeout_seconds = (
                                     self._slot_wait_timeout_override_seconds
                                     or _SLOT_WAIT_TIMEOUT_SECONDS
@@ -1750,10 +1787,7 @@ class MoonMindAgentRun:
                                     or self.runtime_selection_updated_event.is_set(),
                                     timeout=timedelta(seconds=slot_wait_timeout_seconds),
                                 )
-                                if (
-                                    self.runtime_selection_updated_event.is_set()
-                                    and not self.slot_assigned_event.is_set()
-                                ):
+                                if self.runtime_selection_updated_event.is_set():
                                     (
                                         manager_handle,
                                         manager_id,
@@ -1841,22 +1875,8 @@ class MoonMindAgentRun:
                     else:
                         while not self.slot_assigned_event.is_set():
                             await workflow.wait_condition(
-                                lambda: self.slot_assigned_event.is_set()
-                                or self.runtime_selection_updated_event.is_set(),
+                                lambda: self.slot_assigned_event.is_set(),
                             )
-                            if (
-                                self.runtime_selection_updated_event.is_set()
-                                and not self.slot_assigned_event.is_set()
-                            ):
-                                (
-                                    manager_handle,
-                                    manager_id,
-                                    runtime_id,
-                                ) = await self._consume_runtime_selection_update_for_slot_wait(
-                                    request=request,
-                                    manager_id=manager_id,
-                                    runtime_id=runtime_id,
-                                )
 
                     # Reset the execution clock so the timeout budget starts
                     # from slot acquisition, not from workflow start.

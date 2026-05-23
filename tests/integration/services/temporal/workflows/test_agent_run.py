@@ -342,10 +342,14 @@ class RuntimeUpdateProviderProfileManager:
     def __init__(self) -> None:
         self.pending_requests: list[dict] = []
         self.assignable_profile_id = "alternate-managed"
+        self.release_payloads: list[dict] = []
+        self.request_payloads: list[dict] = []
+        self.assign_then_update_model: str | None = None
 
     @workflow.signal
     def request_slot(self, payload: dict) -> None:
         requester = payload["requester_workflow_id"]
+        self.request_payloads.append(dict(payload))
         self.pending_requests = [
             req
             for req in self.pending_requests
@@ -355,6 +359,7 @@ class RuntimeUpdateProviderProfileManager:
 
     @workflow.signal
     def release_slot(self, payload: dict) -> None:
+        self.release_payloads.append(dict(payload))
         requester = payload.get("requester_workflow_id")
         self.pending_requests = [
             req
@@ -372,13 +377,31 @@ class RuntimeUpdateProviderProfileManager:
 
     @workflow.query
     def get_state(self) -> dict:
-        return {"pending_requests": list(self.pending_requests)}
+        return {
+            "pending_requests": list(self.pending_requests),
+            "release_payloads": list(self.release_payloads),
+            "request_payloads": list(self.request_payloads),
+        }
 
     @workflow.run
     async def run(self, input_payload: dict) -> dict:
+        self.assign_then_update_model = input_payload.get("assign_then_update_model")
         while True:
             await workflow.wait_condition(lambda: bool(self.pending_requests))
             req = self.pending_requests[0]
+            if self.assign_then_update_model:
+                self.pending_requests.pop(0)
+                profile_id = req.get("execution_profile_ref") or "default-managed"
+                handle = workflow.get_external_workflow_handle(
+                    req["requester_workflow_id"]
+                )
+                await handle.signal(
+                    "update_runtime_selection",
+                    {"model": self.assign_then_update_model},
+                )
+                await handle.signal("slot_assigned", {"profile_id": profile_id})
+                await workflow.sleep(3600)
+                continue
             if req.get("execution_profile_ref") != self.assignable_profile_id:
                 await workflow.sleep(1)
                 continue
@@ -665,6 +688,79 @@ async def test_managed_agent_runtime_selection_update_replaces_slot_wait_request
             )
             result = await child_handle.result()
             assert result.summary == "completed after runtime update"
+
+@pytest.mark.asyncio
+async def test_managed_agent_model_update_keeps_simultaneously_assigned_slot():
+    """Model-only edits racing with slot assignment must keep the acquired slot."""
+    _managed_launch_requests.clear()
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with (
+            Worker(
+                env.client,
+                task_queue="agent-run-task-queue-runtime-update-model",
+                workflows=[MoonMindAgentRun, RuntimeUpdateProviderProfileManager],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
+            Worker(
+                env.client,
+                task_queue="mm.activity.artifacts",
+                activities=_COMMON_AGENT_RUN_ACTIVITIES,
+            ),
+            Worker(
+                env.client,
+                task_queue="mm.activity.agent_runtime",
+                activities=_COMMON_AGENT_RUN_ACTIVITIES,
+            ),
+        ):
+            manager_id = "provider-profile-manager:gemini_cli"
+            await env.client.start_workflow(
+                RuntimeUpdateProviderProfileManager.run,
+                {
+                    "runtime_id": "gemini_cli",
+                    "assign_then_update_model": "new-model",
+                },
+                id=manager_id,
+                task_queue="agent-run-task-queue-runtime-update-model",
+            )
+            manager_handle = env.client.get_workflow_handle(manager_id)
+            child_handle = await env.client.start_workflow(
+                MoonMindAgentRun.run,
+                AgentExecutionRequest(
+                    agent_kind="managed",
+                    agent_id="gemini_cli",
+                    execution_profile_ref="default-managed",
+                    correlation_id="corr-runtime-update-model",
+                    idempotency_key="idem-runtime-update-model",
+                    parameters={
+                        "model": "old-model",
+                        "profileId": "default-managed",
+                    },
+                ),
+                id="test-agent-runtime-selection-model-update",
+                task_queue="agent-run-task-queue-runtime-update-model",
+            )
+
+            for _ in range(80):
+                if _managed_launch_requests:
+                    break
+                await asyncio.sleep(0.1)
+            manager_state = await manager_handle.query(
+                RuntimeUpdateProviderProfileManager.get_state
+            )
+            assert _managed_launch_requests, manager_state
+            launched_request = _managed_launch_requests[-1]["request"]
+            assert launched_request["executionProfileRef"] == "default-managed"
+            assert launched_request["parameters"]["model"] == "new-model"
+            assert manager_state["release_payloads"] == []
+            assert len(manager_state["request_payloads"]) == 1
+
+            await child_handle.signal(
+                MoonMindAgentRun.completion_signal,
+                {"summary": "completed after model update"},
+            )
+            result = await child_handle.result()
+            assert result.summary == "completed after model update"
 
 @pytest.mark.asyncio
 async def test_agent_run_binds_managed_launch_to_parent_workflow_for_new_histories():
