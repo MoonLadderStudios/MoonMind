@@ -291,6 +291,8 @@ Key diagnostics:
 - Existing execution/artifact stores only; no new persistence (001-workflow-console-routes)
 - Python 3.12; TypeScript/React for Mission Control visible copy + Pydantic v2, FastAPI, Temporal Python SDK, pytest, React, Vitest (001-step-execution-contracts)
 - Existing Temporal artifact store and workflow history; no new persistent storage (001-step-execution-contracts)
+- Python 3.12 target per repo instructions; TypeScript/React for Mission Control UI + FastAPI, Pydantic v2, SQLAlchemy async ORM, Temporal Python SDK, React, TanStack Query, Zod, Vitest, Testing Library, pytest (001-fix-schedule-creation)
+- Existing recurring task definition/run tables and Temporal schedule state; no new persistent storage (001-fix-schedule-creation)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
