@@ -423,7 +423,7 @@ class TestEnsureManagerAutoStart:
         )
 
         assert assigned_index < release_index < clear_index < request_index
-        assert "or assigned_profile_id" in source
+        assert "slot_selection_changed" in source
         assert "profile_id=assigned_profile_id" in source
 
     def test_slot_wait_runtime_update_preempts_simultaneous_slot_assignment(self):
