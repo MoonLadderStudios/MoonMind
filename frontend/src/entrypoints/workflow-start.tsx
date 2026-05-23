@@ -3821,7 +3821,13 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     readProposeTasksPreference(defaultProposeTasks),
   );
   const isInitialMount = useRef(true);
-  const [scheduleMode, setScheduleMode] = useState<ScheduleMode>("immediate");
+  const [scheduleMode, setScheduleMode] = useState<ScheduleMode>(() => {
+    if (typeof window === "undefined") {
+      return "immediate";
+    }
+    const params = new URLSearchParams(window.location.search);
+    return params.get("scheduleMode") === "recurring" ? "recurring" : "immediate";
+  });
   const [scheduledFor, setScheduledFor] = useState("");
   const [scheduleDeferredMinutes, setScheduleDeferredMinutes] = useState("");
   const [scheduleCron, setScheduleCron] = useState("");

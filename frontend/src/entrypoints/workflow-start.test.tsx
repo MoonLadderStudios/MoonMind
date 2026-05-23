@@ -462,6 +462,74 @@ function collectObjectKeys(value: unknown, keys = new Set<string>()): Set<string
   return keys;
 }
 
+describe("WorkflowStart schedule mode entry", () => {
+  let fetchSpy: MockInstance;
+
+  beforeEach(() => {
+    fetchSpy = vi
+      .spyOn(window, "fetch")
+      .mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith("/api/workflows/skills")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: { worker: ["speckit-orchestrate", "pr-resolver"] },
+            }),
+          } as Response);
+        }
+        if (url.startsWith("/api/task-step-templates")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ items: [] }),
+          } as Response);
+        }
+        if (url.startsWith("/api/v1/provider-profiles")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => [],
+          } as Response);
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({}),
+        } as Response);
+      });
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+    window.history.pushState({}, "Task Create", "/workflows/new");
+  });
+
+  it("preselects recurring schedule mode from the query parameter", async () => {
+    window.history.pushState(
+      {},
+      "Task Create",
+      "/workflows/new?scheduleMode=recurring",
+    );
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const scheduleMode = (await screen.findByLabelText(
+      "Schedule Mode",
+    )) as HTMLSelectElement;
+    expect(scheduleMode.value).toBe("recurring");
+    expect(await screen.findByLabelText("Cron Expression")).not.toBeNull();
+  });
+
+  it("keeps immediate schedule mode as the default without the query parameter", async () => {
+    window.history.pushState({}, "Task Create", "/workflows/new");
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const scheduleMode = (await screen.findByLabelText(
+      "Schedule Mode",
+    )) as HTMLSelectElement;
+    expect(scheduleMode.value).toBe("immediate");
+  });
+});
+
 describe.skip("Task Create Entrypoint", () => {
   let fetchSpy: MockInstance;
   let consoleInfoSpy: MockInstance;

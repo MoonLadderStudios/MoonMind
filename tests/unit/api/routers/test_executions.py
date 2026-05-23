@@ -49,6 +49,7 @@ from api_service.db.models import (
     TemporalExecutionRecord,
     TemporalWorkflowType,
 )
+from api_service.services.recurring_tasks_service import RecurringTaskValidationError
 from moonmind.config.settings import settings
 from moonmind.workflows.temporal.service import ExecutionDependencySummary
 from moonmind.workflows.temporal import (
@@ -4542,6 +4543,103 @@ def test_create_task_shaped_recurring_schedule_uses_root_proposal_fallbacks(
     assert "proposalPolicy" not in stored_payload
     assert stored_payload["task"]["proposeTasks"] is True
     assert stored_payload["task"]["proposalPolicy"] == {"targets": ["moonmind"]}
+
+
+def test_create_task_shaped_recurring_schedule_passes_metadata_and_response(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, _service, _user = client
+    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+    definition_id = uuid4()
+    next_run_at = datetime.now(UTC) + timedelta(hours=1)
+    policy = {"overlap": {"mode": "skip"}}
+
+    with patch(
+        "api_service.services.recurring_tasks_service.RecurringTasksService"
+    ) as service_cls:
+        service = service_cls.return_value
+        service.create_definition = AsyncMock(
+            return_value=SimpleNamespace(
+                id=definition_id,
+                name="Nightly workflow",
+                cron="0 2 * * *",
+                timezone="America/New_York",
+                next_run_at=next_run_at,
+            )
+        )
+
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "task",
+                "payload": {
+                    "schedule": {
+                        "mode": "recurring",
+                        "name": "Nightly workflow",
+                        "description": "Run overnight",
+                        "enabled": False,
+                        "cron": "0 2 * * *",
+                        "timezone": "America/New_York",
+                        "scopeType": "personal",
+                        "policy": policy,
+                    },
+                    "task": {
+                        "instructions": "Run this on a schedule",
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201, response.json()
+    body = response.json()
+    assert body["scheduled"] is True
+    assert body["definitionId"] == str(definition_id)
+    assert body["name"] == "Nightly workflow"
+    assert body["cron"] == "0 2 * * *"
+    assert body["timezone"] == "America/New_York"
+    assert body["redirectPath"] == f"/schedules/{definition_id}"
+    called_kwargs = service.create_definition.await_args.kwargs
+    assert called_kwargs["description"] == "Run overnight"
+    assert called_kwargs["enabled"] is False
+    assert called_kwargs["scope_type"] == "personal"
+    assert called_kwargs["policy"] == policy
+
+
+def test_create_task_shaped_recurring_schedule_validation_maps_to_422(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, _service, _user = client
+    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+
+    with patch(
+        "api_service.services.recurring_tasks_service.RecurringTasksService"
+    ) as service_cls:
+        service = service_cls.return_value
+        service.create_definition = AsyncMock(
+            side_effect=RecurringTaskValidationError("target.kind is required")
+        )
+
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "task",
+                "payload": {
+                    "schedule": {
+                        "mode": "recurring",
+                        "cron": "0 * * * *",
+                    },
+                    "task": {
+                        "instructions": "Run this on a schedule",
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "code": "invalid_recurring_task",
+        "message": "target.kind is required",
+    }
 
 def test_create_execution_surfaces_domain_validation_errors(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
