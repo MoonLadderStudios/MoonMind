@@ -5974,7 +5974,7 @@ def _compute_schedule_delay(
     delay = scheduled_for - now
     if delay.total_seconds() < 1:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
                 "code": "schedule_in_past",
                 "message": "scheduledFor must be a future datetime.",
@@ -6032,23 +6032,44 @@ async def _handle_recurring_schedule(
     session: Any,
 ) -> ScheduleCreatedResponse:
     """Delegate recurring schedule creation to RecurringTasksService."""
-    from api_service.services.recurring_tasks_service import RecurringTasksService
+    from api_service.services.recurring_tasks_service import (
+        RecurringTaskValidationError,
+        RecurringTasksService,
+    )
 
     svc = RecurringTasksService(session)
     target = _build_recurring_target(request_payload)
-    definition = await svc.create_definition(
-        name=schedule.name or "Inline schedule",
-        description=None,
-        enabled=True,
-        schedule_type="cron",
-        cron=schedule.cron,
-        timezone=schedule.timezone or "UTC",
-        scope_type="personal",
-        scope_ref=None,
-        owner_user_id=user.id,
-        target=target,
-        policy=None,
-    )
+    scope_type = schedule.scope_type or "personal"
+    if scope_type == "global" and not _is_execution_admin(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "operator_role_required",
+                "message": "Operator privileges are required for global schedules.",
+            },
+        )
+    try:
+        definition = await svc.create_definition(
+            name=schedule.name or "Inline schedule",
+            description=schedule.description,
+            enabled=schedule.enabled,
+            schedule_type="cron",
+            cron=schedule.cron or "",
+            timezone=schedule.timezone or "UTC",
+            scope_type=scope_type,
+            scope_ref=None,
+            owner_user_id=user.id,
+            target=target,
+            policy=schedule.policy,
+        )
+    except RecurringTaskValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_recurring_task",
+                "message": str(exc),
+            },
+        ) from exc
     return ScheduleCreatedResponse(
         definitionId=str(definition.id),
         name=definition.name,
@@ -6094,7 +6115,7 @@ async def _resolve_schedule_routing(
     if schedule.mode == "recurring":
         if session is None:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={
                     "code": "invalid_execution_request",
                     "message": "Recurring schedules require a database session.",
@@ -6111,7 +6132,7 @@ async def _resolve_schedule_routing(
     if schedule.mode == "once":
         if schedule.scheduled_for is None:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={
                     "code": "invalid_execution_request",
                     "message": "scheduledFor is required when schedule.mode is 'once'.",

@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, status
 
 from api_service.api.routers import recurring_tasks as recurring_router
 from api_service.db.models import (
@@ -17,6 +17,7 @@ from api_service.db.models import (
     RecurringTaskScheduleType,
     RecurringTaskScopeType,
 )
+from api_service.services.recurring_tasks_service import RecurringTaskValidationError
 
 def _definition(**overrides):
     now = datetime.now(UTC)
@@ -64,6 +65,18 @@ def _run(**overrides):
     }
     base.update(overrides)
     return SimpleNamespace(**base)
+
+
+def test_recurring_task_validation_error_maps_to_422() -> None:
+    exc = recurring_router._map_error(
+        RecurringTaskValidationError("target.kind is required")
+    )
+
+    assert exc.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert exc.detail == {
+        "code": "invalid_recurring_task",
+        "message": "target.kind is required",
+    }
 
 @pytest.mark.asyncio
 async def test_list_recurring_tasks_global_requires_operator() -> None:
