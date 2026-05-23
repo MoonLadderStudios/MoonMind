@@ -13,7 +13,6 @@ const ScheduleSchema = z.object({
   lastDispatchStatus: z.string().nullable().optional(),
   nextRunAt: z.string().nullable().optional(),
 });
-type Schedule = z.infer<typeof ScheduleSchema>;
 
 const SchedulesResponseSchema = z.object({
   items: z.array(ScheduleSchema),
