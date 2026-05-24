@@ -135,6 +135,64 @@ def test_mm641_task_shaped_submission_boundary_exposes_canonical_task_parameters
     ]
     assert task["steps"][0]["jiraOrchestration"] == {"issueKey": "MM-641"}
 
+
+def test_task_shaped_submission_boundary_assigns_step_id_for_step_attachment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
+    test_client, service = _client()
+    test_client.app.dependency_overrides[get_async_session] = lambda: _artifact_session(
+        [
+            SimpleNamespace(
+                artifact_id="art_01MM641STEPANON00000000",
+                status=TemporalArtifactStatus.COMPLETE,
+                content_type="image/png",
+                size_bytes=20,
+            )
+        ]
+    )
+
+    with test_client:
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "task",
+                "payload": {
+                    "repository": "Moon/Mind",
+                    "targetRuntime": "claude_code",
+                    "task": {
+                        "instructions": "Inspect the uploaded screenshot.",
+                        "steps": [
+                            {
+                                "instructions": "Inspect the step screenshot.",
+                                "inputAttachments": [
+                                    {
+                                        "artifactId": "art_01MM641STEPANON00000000",
+                                        "filename": "step.png",
+                                        "contentType": "image/png",
+                                        "sizeBytes": 20,
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201
+    task = service.create_execution.await_args.kwargs["initial_parameters"]["task"]
+    assert task["steps"][0]["id"] == "step-1"
+    assert task["steps"][0]["inputAttachments"] == [
+        {
+            "artifactId": "art_01MM641STEPANON00000000",
+            "filename": "step.png",
+            "contentType": "image/png",
+            "sizeBytes": 20,
+        }
+    ]
+
+
 def test_task_shaped_submission_boundary_preserves_recursive_preset_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
