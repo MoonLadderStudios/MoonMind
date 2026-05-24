@@ -3800,6 +3800,7 @@ def test_create_task_shaped_execution_forwards_input_attachments(
             "sizeBytes": 20,
         }
     ]
+    assert initial_parameters["task"]["steps"][0]["id"] == "step-1"
 
 def test_create_task_shaped_execution_normalizes_snake_case_input_attachments(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -3880,6 +3881,7 @@ def test_create_task_shaped_execution_normalizes_snake_case_input_attachments(
         }
     ]
     step_payload = initial_parameters["task"]["steps"][0]
+    assert step_payload["id"] == "step-1"
     assert step_payload["inputAttachments"] == [
         {
             "artifactId": "art_01STEPINPUT000000000000",

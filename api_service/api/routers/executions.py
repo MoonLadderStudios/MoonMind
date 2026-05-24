@@ -3974,6 +3974,21 @@ def _coerce_step_count(value: Any) -> int:
         raise _invalid_task_request("payload.task.steps must be a JSON array.")
     return len(value)
 
+def _default_task_step_id(index: int) -> str:
+    return f"step-{index + 1}"
+
+def _task_step_id_from_payload(step: Mapping[str, Any], index: int) -> str:
+    return (
+        str(
+            step.get("id")
+            or step.get("stepId")
+            or step.get("stepRef")
+            or step.get("ref")
+            or ""
+        ).strip()
+        or _default_task_step_id(index)
+    )
+
 _ATTACHMENT_REF_KEYS = frozenset(
     {"artifactId", "filename", "contentType", "sizeBytes"}
 )
@@ -4076,7 +4091,7 @@ async def _validate_and_collect_task_input_attachments(
         step = raw_steps[index] if isinstance(raw_steps, list) else {}
         step_ref = ""
         if isinstance(step, Mapping):
-            step_ref = str(step.get("id") or "").strip()
+            step_ref = _task_step_id_from_payload(step, index)
         for ref in refs:
             attachment_index.append(
                 {
@@ -4261,6 +4276,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
             value = step_payload.get(key)
             if isinstance(value, str) and value.strip():
                 normalized_step[key] = value.strip()
+        normalized_step["id"] = _task_step_id_from_payload(step_payload, index)
 
         normalized_skills = _normalize_task_skill_selectors(
             step_payload.get("skills"),
