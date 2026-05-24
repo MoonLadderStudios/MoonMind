@@ -2671,10 +2671,11 @@ describe('Workflow Detail Entrypoint', () => {
         ([url, init]) => String(url) === '/api/executions/test-123/remediation' && init?.method === 'POST',
       );
       expect(remediationCreateCall).toBeTruthy();
-      expect(JSON.parse(String(remediationCreateCall?.[1]?.body))).toMatchObject({
+      const remediationBody = JSON.parse(String(remediationCreateCall?.[1]?.body));
+      expect(remediationBody).not.toHaveProperty('targetRuntime');
+      expect(remediationBody).not.toHaveProperty('profileId');
+      expect(remediationBody).toMatchObject({
         repository: 'MoonLadderStudios/MoonMind',
-        targetRuntime: 'claude_code',
-        profileId: 'claude_anthropic',
         runtime: {
           mode: 'claude_code',
           model: 'claude-opus-4-1-20250805',

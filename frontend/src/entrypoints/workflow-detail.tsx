@@ -609,8 +609,6 @@ function buildRemediationRuntimeRequestFields(
   if (profileId) runtime.profileId = profileId;
 
   return {
-    ...(mode ? { targetRuntime: mode } : {}),
-    ...(profileId ? { profileId } : {}),
     ...(Object.keys(runtime).length > 0 ? { runtime } : {}),
   };
 }
