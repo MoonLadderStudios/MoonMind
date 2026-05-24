@@ -405,6 +405,128 @@ class TestPushWorkspaceBranch:
         assert result["push_branch"] == "main"
 
     @pytest.mark.asyncio
+    async def test_push_recovers_main_workspace_to_requested_pr_head_branch(self):
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        calls: list[tuple[object, ...]] = []
+        call_count = 0
+
+        async def _mock_exec(*args, **kwargs):
+            nonlocal call_count
+            del kwargs
+            call_count += 1
+            calls.append(args)
+            proc = AsyncMock()
+            if call_count == 1:  # rev-parse --abbrev-ref HEAD
+                proc.communicate = AsyncMock(return_value=(b"main\n", b""))
+                proc.returncode = 0
+            elif call_count == 2:  # checkout -B requested head branch
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 3:  # status --porcelain
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 4:  # remote branch sha before push
+                proc.communicate = AsyncMock(return_value=(b"remote-sha\n", b""))
+                proc.returncode = 0
+            elif call_count == 5:  # push
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 6:  # rev-parse HEAD
+                proc.communicate = AsyncMock(return_value=(b"head-sha\n", b""))
+                proc.returncode = 0
+            else:  # rev-list --count
+                proc.communicate = AsyncMock(return_value=(b"1\n", b""))
+                proc.returncode = 0
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._push_workspace_branch(
+                "run-1",
+                target_branch="main",
+                head_branch="feature/recovered-publish",
+            )
+
+        assert result["push_status"] == "pushed"
+        assert result["push_branch"] == "feature/recovered-publish"
+        assert result["push_base_branch"] == "main"
+        assert result["push_head_sha"] == "head-sha"
+        assert any(
+            call[-3:] == ("checkout", "-B", "feature/recovered-publish")
+            for call in calls
+        )
+
+    @pytest.mark.asyncio
+    async def test_push_redacts_checkout_failure_for_requested_pr_head_branch(self):
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+
+        async def _mock_exec(*args, **kwargs):
+            del args, kwargs
+            proc = AsyncMock()
+            if _mock_exec.call_count == 0:
+                proc.communicate = AsyncMock(return_value=(b"main\n", b""))
+                proc.returncode = 0
+            else:
+                proc.communicate = AsyncMock(
+                    return_value=(
+                        b"",
+                        b"fatal: token=ghp_checkoutfailure1234567890abc leaked",
+                    )
+                )
+                proc.returncode = 1
+            _mock_exec.call_count += 1
+            return proc
+
+        _mock_exec.call_count = 0
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._push_workspace_branch(
+                "run-1",
+                target_branch="main",
+                head_branch="feature/recovered-publish",
+            )
+
+        assert result["push_status"] == "failed"
+        assert "ghp_checkoutfailure1234567890abc" not in result["push_error"]
+        assert "[REDACTED]" in result["push_error"]
+
+    @pytest.mark.asyncio
+    async def test_push_kills_checkout_process_on_timeout_for_requested_pr_head_branch(
+        self,
+    ):
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        checkout_proc = AsyncMock()
+        checkout_proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
+        checkout_proc.kill = MagicMock()
+        checkout_proc.wait = AsyncMock(return_value=0)
+
+        async def _mock_exec(*args, **kwargs):
+            del args, kwargs
+            if _mock_exec.call_count == 0:
+                proc = AsyncMock()
+                proc.communicate = AsyncMock(return_value=(b"main\n", b""))
+                proc.returncode = 0
+            else:
+                proc = checkout_proc
+            _mock_exec.call_count += 1
+            return proc
+
+        _mock_exec.call_count = 0
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._push_workspace_branch(
+                "run-1",
+                target_branch="main",
+                head_branch="feature/recovered-publish",
+            )
+
+        assert result["push_status"] == "failed"
+        checkout_proc.kill.assert_called_once()
+        checkout_proc.wait.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_push_protected_branch_master(self):
         store = _make_mock_store()
         activities = TemporalAgentRuntimeActivities(run_store=store)
