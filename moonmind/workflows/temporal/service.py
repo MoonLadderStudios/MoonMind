@@ -37,6 +37,7 @@ from api_service.db.models import (
     TemporalIntegrationCorrelationRecord,
     TemporalWorkflowType,
 )
+from moonmind.config.settings import settings
 from moonmind.schemas.manifest_ingest_models import (
     ManifestNodePageModel,
     ManifestStatusSnapshotModel,
@@ -53,6 +54,9 @@ from moonmind.schemas.temporal_models import (
     RecoverySourceModel,
 )
 from moonmind.workflows.temporal.client import TemporalClientAdapter
+from moonmind.workflows.temporal.hard_switch_cutover import (
+    resolve_user_workflow_start_contract,
+)
 from moonmind.workflows.temporal.manifest_ingest import (
     MANIFEST_UPDATE_NAMES,
     ManifestIngestValidationError,
@@ -977,6 +981,16 @@ class TemporalExecutionService:
         if manifest_artifact_ref:
             memo["manifest_ref"] = manifest_artifact_ref
 
+        user_workflow_start_contract = None
+        if workflow_type_enum is TemporalWorkflowType.RUN:
+            user_workflow_start_contract = resolve_user_workflow_start_contract(
+                settings.temporal
+            )
+            memo["runtimeWorkflowType"] = user_workflow_start_contract.workflow_type
+            memo["runtimeWorkflowContract"] = (
+                user_workflow_start_contract.contract_mode
+            )
+
         initial_state = (
             MoonMindWorkflowState.SCHEDULED
             if start_delay is not None
@@ -1066,7 +1080,7 @@ class TemporalExecutionService:
             input_args: dict[str, Any] = {}
             if workflow_type_enum is TemporalWorkflowType.RUN:
                 input_args = {
-                    "workflow_type": "MoonMind.Run",
+                    "workflow_type": user_workflow_start_contract.workflow_type,
                     "title": resolved_title,
                     "initial_parameters": params,
                     "input_artifact_ref": input_artifact_ref,
@@ -1083,7 +1097,11 @@ class TemporalExecutionService:
                 }
 
             start_result = await self._client_adapter.start_workflow(
-                workflow_type=workflow_type_enum.value,
+                workflow_type=(
+                    user_workflow_start_contract.workflow_type
+                    if user_workflow_start_contract is not None
+                    else workflow_type_enum.value
+                ),
                 workflow_id=record.workflow_id,
                 input_args=input_args,
                 memo=memo,

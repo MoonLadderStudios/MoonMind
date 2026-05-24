@@ -29,7 +29,7 @@ from moonmind.workflows.temporal.activity_catalog import build_default_activity_
 from moonmind.workflows.temporal.activity_catalog import AGENT_RUNTIME_FLEET
 from moonmind.workflows.temporal.activity_catalog import ARTIFACTS_FLEET
 from moonmind.workflows.temporal.runtime.providers import registry as provider_registry
-from moonmind.workflows.temporal.workers import REGISTERED_TEMPORAL_WORKFLOW_TYPES
+from moonmind.workflows.temporal.workers import list_registered_workflow_types
 
 @pytest_asyncio.fixture
 async def _oauth_activity_session_factory(tmp_path):
@@ -110,7 +110,7 @@ class TestOAuthSessionWorkflowRegistration:
     """Verify the OAuth session workflow is registered."""
 
     def test_workflow_type_registered(self) -> None:
-        assert "MoonMind.OAuthSession" in REGISTERED_TEMPORAL_WORKFLOW_TYPES
+        assert "MoonMind.OAuthSession" in list_registered_workflow_types()
 
     def test_cleanup_stale_in_catalog(self) -> None:
         catalog = build_default_activity_catalog()

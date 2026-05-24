@@ -24,6 +24,9 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalActivityBinding,
     build_activity_bindings,
 )
+from moonmind.workflows.temporal.hard_switch_cutover import (
+    registered_user_workflow_type,
+)
 
 ALLOWED_TEMPORAL_WORKER_FLEETS = (
     WORKFLOW_FLEET,
@@ -93,8 +96,7 @@ _FLEET_FORBIDDEN_CAPABILITIES = {
     INTEGRATIONS_FLEET: ("sandbox", "agent_runtime", "docker_workload"),
     AGENT_RUNTIME_FLEET: ("sandbox", "llm", "integration:jules", "integration:openclaw"),
 }
-REGISTERED_TEMPORAL_WORKFLOW_TYPES = (
-    "MoonMind.Run",
+STATIC_TEMPORAL_WORKFLOW_TYPES = (
     "MoonMind.ManifestIngest",
     "MoonMind.ProviderProfileManager",
     "MoonMind.AgentSession",
@@ -110,7 +112,18 @@ class TemporalWorkerBootstrapError(ValueError):
 def list_registered_workflow_types() -> tuple[str, ...]:
     """Return the workflow types owned by the workflow fleet."""
 
-    return REGISTERED_TEMPORAL_WORKFLOW_TYPES
+    return list_registered_workflow_types_for_settings(settings.temporal)
+
+
+def list_registered_workflow_types_for_settings(
+    temporal_settings: TemporalSettings,
+) -> tuple[str, ...]:
+    """Return workflow registrations for the configured user-workflow contract."""
+
+    return (
+        registered_user_workflow_type(temporal_settings),
+        *STATIC_TEMPORAL_WORKFLOW_TYPES,
+    )
 
 @dataclass(frozen=True, slots=True)
 class TemporalWorkerTopology:

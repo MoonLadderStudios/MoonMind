@@ -188,6 +188,7 @@ class RunWorkflowOutput(_RunWorkflowOutputBase, total=False):
     headSha: str
 
 WORKFLOW_NAME = "MoonMind.Run"
+USER_WORKFLOW_NAME = "MoonMind.UserWorkflow"
 STATE_SCHEDULED = "scheduled"
 STATE_INITIALIZING = "initializing"
 STATE_WAITING_ON_DEPENDENCIES = "waiting_on_dependencies"
@@ -293,6 +294,12 @@ def _legacy_manager_workflow_id(runtime_id: str) -> str:
 
 @workflow.defn(name="MoonMind.Run")
 class MoonMindRunWorkflow:
+    def _expected_workflow_name(self) -> str:
+        return WORKFLOW_NAME
+
+    def _supported_dependency_workflow_types(self) -> frozenset[str]:
+        return frozenset({WORKFLOW_NAME, self._expected_workflow_name()})
+
     def _manager_workflow_id(self, runtime_id: str) -> str:
         if workflow.patched(RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH):
             return workflow_id_for_runtime(runtime_id)
@@ -3107,7 +3114,10 @@ class MoonMindRunWorkflow:
             workflow_type = str(raw_entry.get("workflowType") or "").strip() or None
             message = str(raw_entry.get("summary") or "").strip() or None
 
-            if workflow_type and workflow_type != WORKFLOW_NAME:
+            if (
+                workflow_type
+                and workflow_type not in self._supported_dependency_workflow_types()
+            ):
                 self._record_dependency_outcome(
                     prerequisite_workflow_id=dependency_id,
                     terminal_state="failed",
@@ -3537,8 +3547,9 @@ class MoonMindRunWorkflow:
             "workflow_type",
             error_message="workflowType is required",
         )
-        if workflow_type != WORKFLOW_NAME:
-            raise ValueError(f"workflowType must be {WORKFLOW_NAME}")
+        expected_workflow_name = self._expected_workflow_name()
+        if workflow_type != expected_workflow_name:
+            raise ValueError(f"workflowType must be {expected_workflow_name}")
 
         self._workflow_type = workflow_type
         self._entry = "user_workflow"
@@ -9722,3 +9733,15 @@ class MoonMindRunWorkflow:
             by_alias=True,
             mode="json",
         )
+
+
+@workflow.defn(name=USER_WORKFLOW_NAME)
+class MoonMindUserWorkflow(MoonMindRunWorkflow):
+    """Renamed-contract user Workflow Execution for the MM-730 hard switch."""
+
+    def _expected_workflow_name(self) -> str:
+        return USER_WORKFLOW_NAME
+
+    @workflow.run
+    async def run(self, input_payload: RunWorkflowInput) -> RunWorkflowOutput:
+        return await super().run(input_payload)
