@@ -21,6 +21,7 @@ from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_m
 
 SUPPORTED_WORKFLOW_TYPES = (
     "MoonMind.Run",
+    "MoonMind.UserWorkflow",
     "MoonMind.ManifestIngest",
     "MoonMind.MergeAutomation",
 )

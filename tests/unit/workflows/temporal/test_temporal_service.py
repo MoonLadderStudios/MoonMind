@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -32,6 +33,7 @@ from api_service.db.models import (
     TemporalExecutionRemediationLink,
     TemporalWorkflowType,
 )
+from moonmind.config.settings import settings
 from moonmind.workflows.temporal.service import (
     TemporalExecutionNotFoundError,
     TemporalExecutionRecoveryCheckpointError,
@@ -39,9 +41,63 @@ from moonmind.workflows.temporal.service import (
     TemporalExecutionValidationError,
     _get_managed_session_store_root,
 )
+from moonmind.workflows.temporal.hard_switch_cutover import RENAMED_USER_WORKFLOW_TYPE
 from moonmind.schemas.temporal_models import RecoveryCheckpointModel
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 from moonmind.workflows.temporal.runtime.managed_session_store import ManagedSessionStore
+
+
+def _write_mm730_cutover_files(tmp_path):
+    release_notes = tmp_path / "MM-730-release-notes.md"
+    release_notes.write_text(
+        "MoonMind no longer exposes Tasks as a product/runtime concept. "
+        "Use Workflow Execution, workflowId, runId, and Step Execution.\n\n"
+        "Compatibility redirects and task-shaped aliases are not kept.\n",
+        encoding="utf-8",
+    )
+    cutover_record = tmp_path / "MM-730-cutover.json"
+    cutover_record.write_text(
+        json.dumps(
+            {
+                "jiraIssueKey": "MM-730",
+                "releaseMode": "coordinated_branch_release",
+                "legacyWorkflowType": "MoonMind.Run",
+                "newWorkflowType": "MoonMind.UserWorkflow",
+                "releaseNotesPath": str(release_notes),
+                "environments": [
+                    {
+                        "name": "ci",
+                        "decision": "drain",
+                        "recordedAt": "2026-05-24T00:00:00Z",
+                    }
+                ],
+                "affectedContracts": [
+                    {
+                        "kind": "workflow",
+                        "owner": "MoonMind.UserWorkflow",
+                        "strategy": "Use renamed workflow type after cutover.",
+                    },
+                    {
+                        "kind": "activity",
+                        "owner": "MoonMind.UserWorkflow activities",
+                        "strategy": "Use renamed activity payloads after cutover.",
+                    },
+                    {
+                        "kind": "signal",
+                        "owner": "MoonMind.UserWorkflow signals",
+                        "strategy": "Use renamed signal shapes after cutover.",
+                    },
+                    {
+                        "kind": "update",
+                        "owner": "MoonMind.UserWorkflow updates",
+                        "strategy": "Use renamed update shapes after cutover.",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return release_notes, cutover_record
 
 @pytest.fixture
 def mock_client_adapter():
@@ -127,6 +183,50 @@ async def test_create_execution_initializes_lifecycle_search_attributes(tmp_path
         source = await session.get(TemporalExecutionCanonicalRecord, record.workflow_id)
         assert source is not None
         assert source.run_id == record.run_id
+
+
+@pytest.mark.asyncio
+async def test_create_execution_routes_user_workflow_after_mm730_cutover(
+    tmp_path,
+    mock_client_adapter,
+    monkeypatch,
+):
+    release_notes, cutover_record = _write_mm730_cutover_files(tmp_path)
+    temporal_settings = settings.temporal.model_copy(
+        update={
+            "user_workflow_contract_mode": "renamed_contract",
+            "user_workflow_v2_task_queue": "mm.workflow.user.v2",
+            "user_workflow_release_notes_path": str(release_notes),
+            "user_workflow_cutover_record_path": str(cutover_record),
+        }
+    )
+    monkeypatch.setattr(settings, "temporal", temporal_settings)
+
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(
+            session,
+            client_adapter=mock_client_adapter,
+        )
+        owner_id = uuid4()
+
+        record = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Cutover run",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        start_kwargs = mock_client_adapter.start_workflow.await_args.kwargs
+        assert start_kwargs["workflow_type"] == RENAMED_USER_WORKFLOW_TYPE
+        assert start_kwargs["input_args"]["workflow_type"] == RENAMED_USER_WORKFLOW_TYPE
+        assert record.memo["runtimeWorkflowType"] == RENAMED_USER_WORKFLOW_TYPE
+        assert record.memo["runtimeWorkflowContract"] == "renamed_contract"
+
 
 @pytest.mark.asyncio
 async def test_create_execution_returns_repair_pending_fallback_when_projection_sync_fails(

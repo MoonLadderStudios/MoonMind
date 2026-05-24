@@ -22,6 +22,10 @@ from moonmind.workflows.temporal.workers import (
     TemporalWorkerTopology,
     describe_configured_worker,
 )
+from moonmind.workflows.temporal.hard_switch_cutover import (
+    RENAMED_USER_WORKFLOW_TYPE,
+    resolve_user_workflow_start_contract,
+)
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
 
 if TYPE_CHECKING:
@@ -178,8 +182,10 @@ class TemporalClientAdapter:
                 )
             return self._client
 
-    def _get_task_queue(self) -> str:
+    def _get_task_queue(self, workflow_type: str | None = None) -> str:
         """Resolve the task queue for the given workflow type."""
+        if workflow_type == RENAMED_USER_WORKFLOW_TYPE:
+            return resolve_user_workflow_start_contract(settings.temporal).task_queue
         if self._workflow_topology is None:
             self._workflow_topology = describe_configured_worker(
                 temporal_settings=settings.temporal.model_copy(
@@ -208,7 +214,7 @@ class TemporalClientAdapter:
         """
         client = await self.get_client()
 
-        task_queue = self._get_task_queue()
+        task_queue = self._get_task_queue(workflow_type)
 
         args = [input_args] if input_args is not None else []
 

@@ -1313,6 +1313,15 @@ Before any field deletion ships, this hard switch requires an explicit versioned
 
 This is consistent with the constitution's Temporal-facing contract rules in `.specify/memory/constitution.md`: workflow/activity/update/signal payload shapes are compatibility-sensitive, and any non-additive change must preserve worker-bound invocation compatibility for in-flight runs or be versioned with an explicit migration/cutover plan. The Phase 10 release notes MUST link to the per-environment cutover record before the breaking release is published.
 
+MM-730 implements this cutover as an explicit runtime gate:
+
+- `TEMPORAL_USER_WORKFLOW_CONTRACT_MODE=legacy_run` is the default and serves only `MoonMind.Run` on the legacy workflow Task Queue.
+- `TEMPORAL_USER_WORKFLOW_CONTRACT_MODE=renamed_contract` serves only `MoonMind.UserWorkflow` for new user Workflow Execution starts and requires `TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE` to be distinct from `TEMPORAL_WORKFLOW_TASK_QUEUE`.
+- `renamed_contract` startup fails unless `TEMPORAL_USER_WORKFLOW_CUTOVER_RECORD_PATH` points to a JSON record for MM-730 that lists every environment's `drain`, `pause_resume`, or `terminate_restart` decision and includes workflow, activity, signal, and update cutover strategies.
+- `renamed_contract` startup also requires `TEMPORAL_USER_WORKFLOW_RELEASE_NOTES_PATH` to include the breaking release note that Tasks are no longer exposed as a product/runtime concept and compatibility redirects/aliases are not kept.
+
+The example cutover record lives at `config/temporal/mm-730-hard-switch-cutover.example.json`. Operators must copy it and record the real environment decisions before enabling the renamed-contract worker.
+
 ### Phase 4: Rename Backend Services and Routes
 
 Remove:

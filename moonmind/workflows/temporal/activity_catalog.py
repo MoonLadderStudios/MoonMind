@@ -14,6 +14,9 @@ from moonmind.workflows.skills.skill_plan_contracts import (
     SkillDefinition,
     SkillPolicies,
 )
+from moonmind.workflows.temporal.hard_switch_cutover import (
+    resolve_user_workflow_start_contract,
+)
 
 WORKFLOW_FLEET = "workflow"
 ARTIFACTS_FLEET = "artifacts"
@@ -286,6 +289,7 @@ def build_default_activity_catalog(
     """Return the canonical Temporal activity catalog for MoonMind."""
 
     cfg = temporal_settings or settings.temporal
+    workflow_task_queue = resolve_user_workflow_start_contract(cfg).task_queue
     
     # See docs/Temporal/ErrorTaxonomy.md
     NON_RETRYABLE_ERRORS = ("INVALID_INPUT", "ProfileResolutionError", "UnsupportedStatus")
@@ -791,7 +795,7 @@ def build_default_activity_catalog(
             activity_type="integration.resolve_adapter_metadata",
             family="integration",
             capability_class="workflow",
-            task_queue=cfg.workflow_task_queue,
+            task_queue=workflow_task_queue,
             fleet=WORKFLOW_FLEET,
             timeouts=TemporalActivityTimeouts(30, 60),
             retries=_activity_retries(max_attempts=3, max_interval_seconds=30),
@@ -1091,7 +1095,7 @@ def build_default_activity_catalog(
     fleets = (
         TemporalWorkerFleet(
             fleet=WORKFLOW_FLEET,
-            task_queues=(cfg.workflow_task_queue,),
+            task_queues=(workflow_task_queue,),
             capabilities=("workflow",),
             privileges=("temporal",),
             scaling_notes="Workflow code only; no side effects.",
