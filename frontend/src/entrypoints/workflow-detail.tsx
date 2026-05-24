@@ -589,6 +589,30 @@ const ExecutionDetailSchema = z
   })
   .passthrough();
 
+type ExecutionDetail = z.infer<typeof ExecutionDetailSchema>;
+
+function buildRemediationRuntimeRequestFields(
+  execution: ExecutionDetail | null | undefined,
+): Record<string, unknown> {
+  const mode = detailStringValue(execution?.targetRuntime);
+  const profileId = detailStringValue(execution?.profileId);
+  const model = detailStringValue(
+    execution?.model,
+    execution?.resolvedModel,
+    execution?.requestedModel,
+  );
+  const effort = detailStringValue(execution?.effort);
+  const runtime: Record<string, string> = {};
+  if (mode) runtime.mode = mode;
+  if (model) runtime.model = model;
+  if (effort) runtime.effort = effort;
+  if (profileId) runtime.profileId = profileId;
+
+  return {
+    ...(Object.keys(runtime).length > 0 ? { runtime } : {}),
+  };
+}
+
 const RemediationApprovalStateSchema = z
   .object({
     requestId: z.string().nullable().optional(),
@@ -4332,6 +4356,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({
           repository: execution?.repository ?? null,
+          ...buildRemediationRuntimeRequestFields(execution),
           instructions: `Investigate and remediate target execution ${workflowId} using bounded evidence.`,
           remediation: {
             mode: remediationMode,

@@ -2548,6 +2548,10 @@ describe('Workflow Detail Entrypoint', () => {
       rawState: 'failed',
       temporalStatus: 'failed',
       repository: 'MoonLadderStudios/MoonMind',
+      targetRuntime: 'claude_code',
+      model: 'claude-opus-4-1-20250805',
+      effort: 'high',
+      profileId: 'claude_anthropic',
       createdAt: '2026-04-22T00:00:00Z',
       updatedAt: '2026-04-22T00:00:01Z',
       actions: { canSetTitle: true },
@@ -2667,8 +2671,17 @@ describe('Workflow Detail Entrypoint', () => {
         ([url, init]) => String(url) === '/api/executions/test-123/remediation' && init?.method === 'POST',
       );
       expect(remediationCreateCall).toBeTruthy();
-      expect(JSON.parse(String(remediationCreateCall?.[1]?.body))).toMatchObject({
+      const remediationBody = JSON.parse(String(remediationCreateCall?.[1]?.body));
+      expect(remediationBody).not.toHaveProperty('targetRuntime');
+      expect(remediationBody).not.toHaveProperty('profileId');
+      expect(remediationBody).toMatchObject({
         repository: 'MoonLadderStudios/MoonMind',
+        runtime: {
+          mode: 'claude_code',
+          model: 'claude-opus-4-1-20250805',
+          effort: 'high',
+          profileId: 'claude_anthropic',
+        },
         remediation: {
           mode: 'snapshot_then_follow',
           authorityMode: 'approval_gated',
