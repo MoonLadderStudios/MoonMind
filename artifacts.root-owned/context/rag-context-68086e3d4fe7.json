@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. docs/Artifacts/ArtifactPresentationContract.md (score: 1.000, trust: canonical)\n    line 29: - `docs/ManagedAgents/CodexCliManagedSessions.md`\n2. api_service/scripts/ensure_codex_config.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Ensure the Codex config enforces managed runtime defaults.\n3. moonmind/mcp/__init__.py (score: 1.000, trust: canonical)\n    line 3: from moonmind.mcp.jira_tool_registry import (\n4. docs/Artifacts/ReportArtifacts.md (score: 1.000, trust: canonical)\n    line 410: If an execution has a canonical `report.primary` artifact, Mission Control should present that artifact before making the user inspect the generic artifact list.\n5. docs/UI/MissionControlArchitecture.md (score: 1.000, trust: canonical)\n    line 100: `frontend/src` must be included because production-aligned builds generate CSS before Vite output exists. Scanning only the built `dist` files is not sufficient for Docker correctness.\n6. moonmind/indexers/jira_indexer.py (score: 1.000, trust: canonical)\n    line 8: # LlamaIndex Jira reader (ensure this import path is correct if it's part of an integration package)\n7. moonmind/indexers/google_drive_indexer.py (score: 1.000, trust: canonical)\n    line 50: status_code=500,\n8. moonmind/workloads/docker_launcher.py (score: 1.000, trust: canonical)\n    line 118: def _decode_stream(data: bytes) -> str:",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "docs/Artifacts/ArtifactPresentationContract.md",
+      "text": "line 29: - `docs/ManagedAgents/CodexCliManagedSessions.md`",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 29,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/scripts/ensure_codex_config.py",
+      "text": "line 1: \"\"\"Ensure the Codex config enforces managed runtime defaults.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/mcp/__init__.py",
+      "text": "line 3: from moonmind.mcp.jira_tool_registry import (",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Artifacts/ReportArtifacts.md",
+      "text": "line 410: If an execution has a canonical `report.primary` artifact, Mission Control should present that artifact before making the user inspect the generic artifact list.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 410,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/UI/MissionControlArchitecture.md",
+      "text": "line 100: `frontend/src` must be included because production-aligned builds generate CSS before Vite output exists. Scanning only the built `dist` files is not sufficient for Docker correctness.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 100,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/jira_indexer.py",
+      "text": "line 8: # LlamaIndex Jira reader (ensure this import path is correct if it's part of an integration package)",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 8,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/google_drive_indexer.py",
+      "text": "line 50: status_code=500,",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 50,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/workloads/docker_launcher.py",
+      "text": "line 118: def _decode_stream(data: bytes) -> str:",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 118,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-05-24T13:16:44Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
