@@ -1,0 +1,88 @@
+{
+  "issue": {
+    "repository": "MoonLadderStudios/MoonMind",
+    "number": 552,
+    "url": "https://github.com/MoonLadderStudios/MoonMind/issues/552",
+    "title": "After tasks fail or are considered successful, there should be a review step",
+    "state_at_triage": "OPEN"
+  },
+  "repository_state": {
+    "branch": "triage-github-issue-552-to-jira-after-ta-5b50303c",
+    "head_sha": "5276e23f261ee4aa260bc2537eb8f6f51ca7e06a",
+    "working_tree_before_artifacts": "clean"
+  },
+  "issue_ledger": {
+    "requested_behavior": "After failed or successful tasks, run a review step; diagnose failures and propose repair tasks; verify successful tasks are actually complete and add follow-up work if incomplete.",
+    "user_visible_goal": "Operators get an automatic quality/recovery review at task completion instead of manually discovering incomplete or failed work.",
+    "acceptance_criteria_from_triage": [
+      "Terminal success and failure paths record post-run review status or explicit skipped reason.",
+      "Failed runs produce repair proposals with root-cause evidence when actionable.",
+      "Successful runs are checked against task instructions and evidence before being treated as complete.",
+      "Incomplete successful runs produce continuation proposals or planned follow-up work.",
+      "Proposal/review behavior is idempotent across workflow retries and visible in Mission Control."
+    ],
+    "constraints": [
+      "Do not implement product code during triage.",
+      "Use trusted Jira tool path for issue creation.",
+      "Respect Temporal workflow boundary and compatibility test policy for future implementation."
+    ],
+    "affected_areas": [
+      "moonmind/workflows/temporal/workflows/run.py",
+      "moonmind/workflows/temporal/activity_runtime.py",
+      "moonmind/workflows/temporal/activities/step_review.py",
+      "moonmind/workflows/task_proposals/",
+      "api_service/api/routers/executions.py",
+      "frontend/src/entrypoints/workflow-detail.tsx"
+    ],
+    "ambiguity_notes": []
+  },
+  "evidence": [
+    {
+      "requirement": "Review after failed or successful tasks",
+      "status": "not_implemented",
+      "evidence": "moonmind/workflows/temporal/workflows/run.py _run_proposals_stage() runs only when _proposal_generation_requested(parameters) is true."
+    },
+    {
+      "requirement": "Diagnose failed tasks and propose repair task",
+      "status": "partially_implemented",
+      "evidence": "moonmind/workflows/temporal/activity_runtime.py proposal_generate() creates proposal candidates only when an explicit proposal idea is resolved; it does not inspect terminal failure evidence itself."
+    },
+    {
+      "requirement": "Verify successful tasks really completed everything",
+      "status": "not_implemented",
+      "evidence": "moonmind/workflows/temporal/activities/step_review.py currently returns FULLY_IMPLEMENTED with confidence 1.0 and contains a TODO to wire the LLM review call."
+    },
+    {
+      "requirement": "Add additional follow-up work when incomplete",
+      "status": "partially_implemented",
+      "evidence": "tests/integration/workflows/temporal/workflows/test_run.py covers proposal activities when task.proposeTasks is true and confirms no proposal activity runs when proposal opt-in is absent."
+    }
+  ],
+  "history_checks": {
+    "git_log_search": "Found multiple proposal-system commits and PRs, but no evidence that GitHub issue #552's full automatic post-run review behavior is implemented.",
+    "merged_pr_search": "Found proposal delivery and step review gate related PRs including #754, #2167, #2168, but current code still shows placeholder review and opt-in proposal gating."
+  },
+  "jira": {
+    "project_key": "MM",
+    "issue_type": "Story",
+    "issue_type_id": "10005",
+    "created_key": "MM-733",
+    "url": "https://moonladder.atlassian.net/browse/MM-733",
+    "create_result_artifact": "var/artifacts/github-issue-to-jira/issue-552-20260524T085442Z/create_jira_result.json"
+  },
+  "github_mutation": {
+    "action": "commented",
+    "comment_url": "https://github.com/MoonLadderStudios/MoonMind/issues/552#issuecomment-4527896656",
+    "issue_closed": false
+  },
+  "terminal_action": "jira_created",
+  "tests": {
+    "run": [],
+    "skipped_reason": "No product code was changed; this was a triage and external issue-creation task."
+  },
+  "artifacts": {
+    "ledger": "var/artifacts/github-issue-to-jira/issue-552-20260524T085442Z/MoonLadderStudios-MoonMind-issue-552-ledger.json",
+    "github_comment": "var/artifacts/github-issue-to-jira/issue-552-20260524T085442Z/MoonLadderStudios-MoonMind-issue-552-comment.md",
+    "jira_story": "var/artifacts/github-issue-to-jira/issue-552-20260524T085442Z/MoonLadderStudios-MoonMind-issue-552-jira-story.md"
+  }
+}

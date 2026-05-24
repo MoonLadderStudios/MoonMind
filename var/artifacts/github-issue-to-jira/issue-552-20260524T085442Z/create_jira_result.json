@@ -1,0 +1,10 @@
+{
+  "ok": true,
+  "status": 200,
+  "result": {
+    "created": true,
+    "issueKey": "MM-733",
+    "issueId": "15699",
+    "self": "https://moonladder.atlassian.net/rest/api/3/issue/15699"
+  }
+}
