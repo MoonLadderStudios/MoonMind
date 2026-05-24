@@ -1,0 +1,38 @@
+{
+  "jiraIssueKey": "MM-730",
+  "releaseMode": "coordinated_branch_release",
+  "legacyWorkflowType": "MoonMind.Run",
+  "newWorkflowType": "MoonMind.UserWorkflow",
+  "releaseNotesPath": "docs/ReleaseNotes/MM-730-hard-switch-cutover.md",
+  "environments": [
+    {
+      "name": "local",
+      "decision": "drain",
+      "recordedAt": "2026-05-24T00:00:00Z",
+      "operator": "moonmind",
+      "notes": "Example only. Copy this file and record the real environment decision before enabling renamed_contract mode."
+    }
+  ],
+  "affectedContracts": [
+    {
+      "kind": "workflow",
+      "owner": "MoonMind.UserWorkflow",
+      "strategy": "Route new starts to MoonMind.UserWorkflow on the renamed-contract Task Queue; keep MoonMind.Run on the legacy worker queue until in-flight histories drain."
+    },
+    {
+      "kind": "activity",
+      "owner": "MoonMind.UserWorkflow activities",
+      "strategy": "Deploy renamed activity payload shapes only with the renamed-contract worker build; do not serve legacy and renamed activity payloads from the same worker build."
+    },
+    {
+      "kind": "signal",
+      "owner": "MoonMind.UserWorkflow signals",
+      "strategy": "Route pre-cutover signals to legacy MoonMind.Run histories and post-cutover signals to MoonMind.UserWorkflow histories; do not add compatibility aliases."
+    },
+    {
+      "kind": "update",
+      "owner": "MoonMind.UserWorkflow updates",
+      "strategy": "Route pre-cutover updates to legacy MoonMind.Run histories and post-cutover updates to MoonMind.UserWorkflow histories; do not add compatibility aliases."
+    }
+  ]
+}

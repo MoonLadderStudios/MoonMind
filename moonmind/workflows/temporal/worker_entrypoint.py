@@ -11,6 +11,10 @@ from moonmind.workflows.temporal.workers import (
     build_worker_activity_bindings,
     describe_configured_worker,
 )
+from moonmind.workflows.temporal.hard_switch_cutover import (
+    RENAMED_USER_WORKFLOW_TYPE,
+    registered_user_workflow_type,
+)
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.workflows.agent_session import (
     MoonMindAgentSessionWorkflow,
@@ -24,7 +28,10 @@ from moonmind.workflows.temporal.workflows.oauth_session import (
 from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     MoonMindProviderProfileManagerWorkflow,
 )
-from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from moonmind.workflows.temporal.workflows.run import (
+    MoonMindRunWorkflow,
+    MoonMindUserWorkflow,
+)
 from moonmind.workflows.temporal.workflows.merge_automation import (
     MoonMindMergeAutomationWorkflow,
 )
@@ -42,9 +49,15 @@ async def main():
 
     workflows = []
     if topology.fleet == WORKFLOW_FLEET:
+        user_workflow_type = registered_user_workflow_type(settings.temporal)
+        user_workflow_class = (
+            MoonMindUserWorkflow
+            if user_workflow_type == RENAMED_USER_WORKFLOW_TYPE
+            else MoonMindRunWorkflow
+        )
         workflows.extend(
             [
-                MoonMindRunWorkflow,
+                user_workflow_class,
                 MoonMindProviderProfileManagerWorkflow,
                 MoonMindAgentSessionWorkflow,
                 MoonMindManagedSessionReconcileWorkflow,

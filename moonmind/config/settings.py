@@ -76,6 +76,22 @@ class TemporalSettings(BaseSettings):
     workflow_task_queue: str = Field(
         "mm.workflow", validation_alias="TEMPORAL_WORKFLOW_TASK_QUEUE"
     )
+    user_workflow_contract_mode: Literal["legacy_run", "renamed_contract"] = Field(
+        "legacy_run",
+        validation_alias="TEMPORAL_USER_WORKFLOW_CONTRACT_MODE",
+    )
+    user_workflow_v2_task_queue: str = Field(
+        "mm.workflow.user.v2",
+        validation_alias="TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE",
+    )
+    user_workflow_cutover_record_path: str | None = Field(
+        None,
+        validation_alias="TEMPORAL_USER_WORKFLOW_CUTOVER_RECORD_PATH",
+    )
+    user_workflow_release_notes_path: str | None = Field(
+        None,
+        validation_alias="TEMPORAL_USER_WORKFLOW_RELEASE_NOTES_PATH",
+    )
     activity_artifacts_task_queue: str = Field(
         "mm.activity.artifacts",
         validation_alias="TEMPORAL_ACTIVITY_ARTIFACTS_TASK_QUEUE",
@@ -187,6 +203,19 @@ class TemporalSettings(BaseSettings):
                 "workflow, artifacts, llm, sandbox, integrations, agent_runtime"
             )
         return normalized
+
+    @field_validator("user_workflow_v2_task_queue", mode="before")
+    @classmethod
+    def _normalize_user_workflow_v2_task_queue(cls, value: Any) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE must not be blank")
+        return normalized
+
+    @field_validator("user_workflow_contract_mode", mode="before")
+    @classmethod
+    def _normalize_user_workflow_contract_mode(cls, value: Any) -> str:
+        return str(value or "legacy_run").strip().lower()
 
 class TemporalDashboardSettings(BaseSettings):
     """Task-dashboard Temporal source contract and rollout flags."""
