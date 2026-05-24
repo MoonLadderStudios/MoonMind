@@ -1,0 +1,103 @@
+{
+  "issue": {
+    "repository": "MoonLadderStudios/MoonMind",
+    "number": 424,
+    "url": "https://github.com/MoonLadderStudios/MoonMind/issues/424",
+    "title": "Talking to MoonMind",
+    "state": "OPEN",
+    "author": "nsticco",
+    "createdAt": "2026-02-23T20:48:24Z",
+    "updatedAt": "2026-02-23T20:48:24Z"
+  },
+  "repositoryState": {
+    "branch": "triage-github-issue-424-to-jira-talking-e4d49fc0",
+    "head": "5276e23f261ee4aa260bc2537eb8f6f51ca7e06a"
+  },
+  "issueLedger": {
+    "requestedBehavior": "Better methods of talking to MoonMind, especially a way to talk to the orchestrator and understand deployment state; possibly better tools for active jobs.",
+    "userVisibleGoal": "Operators or agents can query MoonMind state and interact with active jobs through an unspecified interface.",
+    "explicitAcceptanceCriteria": [],
+    "constraints": [],
+    "examples": [],
+    "affectedAreas": [
+      "Execution lifecycle and status APIs",
+      "Managed run observability APIs",
+      "Mission Control UI",
+      "MCP/tool surface",
+      "Temporal-backed orchestration model"
+    ],
+    "ambiguityNotes": [
+      "The issue does not define the intended user or client: human operator, agent, UI, CLI, MCP client, or REST consumer.",
+      "The issue uses legacy orchestrator wording even though the repository has removed the old mm-orchestrator runtime and now centers Temporal-backed executions.",
+      "The issue does not list concrete deployment-state questions or active-job actions to support."
+    ]
+  },
+  "evidence": [
+    {
+      "requirement": "Expose current execution lifecycle and status",
+      "status": "implemented",
+      "evidence": [
+        "docs/Tasks/TaskRunsApi.md documents POST/GET /api/executions, detail, update, signal, cancel, rerun, manifest status, nodes, and steps.",
+        "api_service/api/routers/executions.py defines list/detail/update/signal/cancel/rerun execution routes."
+      ]
+    },
+    {
+      "requirement": "Expose active job observability",
+      "status": "implemented",
+      "evidence": [
+        "docs/Tasks/TaskRunsApi.md documents /api/task-runs observability summary, logs, live stream, and diagnostics.",
+        "api_service/api/routers/task_runs.py defines observability-summary, observability events, logs, diagnostics, and artifact-session control routes."
+      ]
+    },
+    {
+      "requirement": "Provide an operator UI for execution state",
+      "status": "implemented",
+      "evidence": [
+        "README.md describes Mission Control as showing real-time agent activity, step progress, logs, diagnostics, artifacts, interventions, and execution history."
+      ]
+    },
+    {
+      "requirement": "Provide better methods of talking to MoonMind/orchestrator/deployment state",
+      "status": "unclear",
+      "evidence": [],
+      "reason": "The requested interface, supported operations, actor, deployment-state scope, and Temporal-vs-legacy-orchestrator target are not specified."
+    },
+    {
+      "requirement": "Provide better tools for active jobs",
+      "status": "unclear",
+      "evidence": [],
+      "reason": "The issue says this possibly should exist but does not identify required active-job operations or acceptance criteria."
+    }
+  ],
+  "historyChecks": {
+    "gitLogSearch": "Found extensive old orchestrator removal/runtime history and current Temporal migration history, but no direct implementation for GitHub issue #424's ambiguous talking-to-MoonMind request.",
+    "mergedPrSearch": "Found unrelated Jira MM-424 visual-token PRs and orchestrator removal/migration PRs; no linked PR closing GitHub issue #424."
+  },
+  "tests": {
+    "run": [],
+    "skippedReason": "No product code changed; tests were not needed to distinguish implementation status from ambiguity."
+  },
+  "terminalAction": "needs_clarification",
+  "mutationAttempts": [
+    {
+      "surface": "github",
+      "action": "ensure_label",
+      "label": "needs clarification",
+      "result": "succeeded_or_already_exists"
+    },
+    {
+      "surface": "github",
+      "action": "apply_label",
+      "label": "needs clarification",
+      "result": "succeeded",
+      "issueUrl": "https://github.com/MoonLadderStudios/MoonMind/issues/424"
+    },
+    {
+      "surface": "github",
+      "action": "comment",
+      "result": "succeeded",
+      "commentUrl": "https://github.com/MoonLadderStudios/MoonMind/issues/424#issuecomment-4527916259"
+    }
+  ],
+  "githubCommentUrl": "https://github.com/MoonLadderStudios/MoonMind/issues/424#issuecomment-4527916259"
+}
