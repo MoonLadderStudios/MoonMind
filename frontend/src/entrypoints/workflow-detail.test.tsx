@@ -463,6 +463,9 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByRole('button', { name: 'Show Workflow Inputs' })).toBeTruthy();
       expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
       expect(screen.getByRole('heading', { name: 'Workflow Artifacts' })).toBeTruthy();
+      expect(screen.queryByText(/^Task ID:?$/)).toBeNull();
+      expect(screen.queryByText(/^Task Detail:?$/)).toBeNull();
+      expect(screen.queryByText(/^Step Attempt:?$/)).toBeNull();
     });
   });
 

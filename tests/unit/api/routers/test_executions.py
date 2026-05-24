@@ -6393,7 +6393,7 @@ def test_get_execution_steps_returns_latest_run_ledger() -> None:
     assert payload["workflowId"] == "mm:wf-1"
     assert payload["runId"] == "run-99"
     assert payload["runScope"] == "latest"
-    assert payload["steps"][0]["attempt"] == 2
+    assert payload["steps"][0]["executionOrdinal"] == 2
     assert "taskRunId" not in payload["steps"][0]["refs"]
     assert "taskRunId" not in payload["steps"][0]["workload"]
     assert payload["steps"][0]["workload"]["profileId"] == "local-python"
@@ -6636,7 +6636,7 @@ def test_get_execution_step_executions_returns_bounded_manifest_history() -> Non
     ):
         with TestClient(app) as test_client:
             response = test_client.get(
-                "/api/executions/mm:wf-1/steps/implement/attempts"
+                "/api/executions/mm:wf-1/steps/implement/step-executions"
             )
 
     assert response.status_code == 200
@@ -6644,21 +6644,21 @@ def test_get_execution_step_executions_returns_bounded_manifest_history() -> Non
     assert payload["workflowId"] == "mm:wf-1"
     assert payload["runId"] == "run-99"
     assert payload["logicalStepId"] == "implement"
-    assert [item["executionOrdinal"] for item in payload["attempts"]] == [1, 2]
-    assert payload["attempts"][1]["manifestRefs"] == {
+    assert [item["executionOrdinal"] for item in payload["stepExecutions"]] == [1, 2]
+    assert payload["stepExecutions"][1]["manifestRefs"] == {
         "manifestArtifactRef": "art-attempt-2"
     }
-    assert payload["attempts"][1]["runtimeChildRefs"] == {
+    assert payload["stepExecutions"][1]["runtimeChildRefs"] == {
         "childWorkflowId": "child-2",
         "childRunId": "child-run-2",
         "taskRunId": "task-run-2",
     }
-    assert payload["attempts"][1]["workspacePolicy"] == (
+    assert payload["stepExecutions"][1]["workspacePolicy"] == (
         "continue_from_previous_execution"
     )
-    assert payload["attempts"][1]["gitDisposition"] == "candidate"
-    assert payload["attempts"][1]["qualityGateVerdict"] == "passed"
-    assert "summary" not in payload["attempts"][1]["outputRefs"]
+    assert payload["stepExecutions"][1]["gitDisposition"] == "candidate"
+    assert payload["stepExecutions"][1]["qualityGateVerdict"] == "passed"
+    assert "summary" not in payload["stepExecutions"][1]["outputRefs"]
     assert artifact_service.read.await_args_list[0] == call(
         artifact_id="art-attempt-1",
         principal=str(user.id),
@@ -6738,7 +6738,7 @@ def test_get_execution_step_execution_returns_bounded_detail_refs() -> None:
     ):
         with TestClient(app) as test_client:
             response = test_client.get(
-                "/api/executions/mm:wf-1/steps/implement/attempts/2"
+                "/api/executions/mm:wf-1/steps/implement/step-executions/2"
             )
 
     assert response.status_code == 200
@@ -6816,7 +6816,7 @@ def test_get_execution_step_executions_preserves_artifact_authorization() -> Non
     ):
         with TestClient(app) as test_client:
             response = test_client.get(
-                "/api/executions/mm:wf-1/steps/implement/attempts"
+                "/api/executions/mm:wf-1/steps/implement/step-executions"
             )
 
     assert response.status_code == 403
@@ -6932,7 +6932,7 @@ def test_get_execution_steps_falls_back_to_stored_task_steps_when_temporal_query
     assert payload["steps"][1]["tool"]["name"] == "moonspec-implement"
     assert payload["steps"][1]["dependsOn"] == ["fetch-issue"]
     assert payload["steps"][1]["status"] == "running"
-    assert payload["steps"][1]["attempt"] == 1
+    assert payload["steps"][1]["executionOrdinal"] == 1
 
 def test_get_execution_steps_fallback_prefers_structured_step_order(
     monkeypatch: pytest.MonkeyPatch,

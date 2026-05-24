@@ -59,6 +59,10 @@ jobs:
       run: |
         set -euo pipefail
         ./tools/test_unit.sh --python-only
+    - name: Verify workflow terminology guardrails
+      run: |
+        set -euo pipefail
+        python tools/verify_workflow_terminology.py --mode all
     - name: Validate AgentSession deployment safety
       run: |
         set -euo pipefail

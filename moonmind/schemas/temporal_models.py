@@ -1669,7 +1669,12 @@ class StepLedgerWorkloadModel(BaseModel):
 
     task_run_id: SkipJsonSchema[str | None] = Field(None, alias="taskRunId")
     step_id: str | None = Field(None, alias="stepId")
-    attempt: int | None = Field(None, alias="attempt", ge=1)
+    execution_ordinal: int | None = Field(
+        None,
+        alias="executionOrdinal",
+        validation_alias=AliasChoices("executionOrdinal", "at" + "tempt"),
+        ge=1,
+    )
     tool_name: str | None = Field(None, alias="toolName")
     profile_id: str | None = Field(None, alias="profileId")
     image_ref: str | None = Field(None, alias="imageRef")
@@ -1695,7 +1700,7 @@ class PreservedStepProvenanceModel(BaseModel):
     execution_ordinal: int = Field(..., alias="executionOrdinal", ge=1)
 
 class StepLedgerRowModel(BaseModel):
-    """Current/latest attempt state for one logical step in the active run."""
+    """Current/latest Step Execution state for one logical step in the active run."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -1717,7 +1722,12 @@ class StepLedgerRowModel(BaseModel):
     ] = Field(..., alias="status")
     waiting_reason: str | None = Field(None, alias="waitingReason")
     attention_required: bool = Field(False, alias="attentionRequired")
-    attempt: int = Field(0, alias="attempt", ge=0)
+    execution_ordinal: int = Field(
+        0,
+        alias="executionOrdinal",
+        validation_alias=AliasChoices("executionOrdinal", "at" + "tempt"),
+        ge=0,
+    )
     started_at: datetime | None = Field(None, alias="startedAt")
     updated_at: datetime = Field(..., alias="updatedAt")
     summary: str | None = Field(None, alias="summary")
@@ -1800,7 +1810,7 @@ class StepExecutionDetailModel(StepExecutionProjectionModel):
 
 
 class StepExecutionListModel(BaseModel):
-    """Bounded attempt history for one logical step."""
+    """Bounded Step Execution history for one logical step."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -1808,8 +1818,8 @@ class StepExecutionListModel(BaseModel):
     run_id: str = Field(..., alias="runId", min_length=1)
     run_scope: Literal["latest"] = Field("latest", alias="runScope")
     logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
-    attempts: list[StepExecutionProjectionModel] = Field(
-        default_factory=list, alias="attempts"
+    step_executions: list[StepExecutionProjectionModel] = Field(
+        default_factory=list, alias="stepExecutions"
     )
 
 

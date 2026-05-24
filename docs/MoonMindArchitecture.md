@@ -375,7 +375,7 @@ Task, step, run, and session views are projections over artifacts and compact me
 
 ### 8. Session containers are continuity caches, not durable truth
 
-Codex session containers may preserve native runtime state for task continuity, but MoonMind remains authoritative for task status, step state, control intent, artifact refs, provider-profile policy, session epoch, thread boundary metadata, and audit metadata.
+Codex session containers may preserve native runtime state for workflow continuity, but MoonMind remains authoritative for workflow status, step state, control intent, artifact refs, provider-profile policy, session epoch, thread boundary metadata, and audit metadata.
 
 Any state required for recovery, audit, presentation, rerun, or operator understanding must be materialized as artifacts or bounded metadata. Session containers can be used to accelerate continuity, but they are not the system of record.
 
@@ -802,7 +802,7 @@ Artifacts should carry content type, retention class, ownership/lineage metadata
 
 Artifacts remain linked to concrete executions and are projected into task, step, run, and session views.
 
-Task-oriented and session-oriented views are read models, not alternate artifact authorities.
+Workflow-oriented and session-oriented views are read models, not alternate artifact authorities.
 
 ### Managed run observability
 
