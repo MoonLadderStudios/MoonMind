@@ -1,0 +1,114 @@
+{
+  "issue": {
+    "repository": "MoonLadderStudios/MoonMind",
+    "number": 529,
+    "url": "https://github.com/MoonLadderStudios/MoonMind/issues/529",
+    "title": "Preset choices should show up as the \"skill\" in that column",
+    "state_at_review": "OPEN",
+    "final_state": "CLOSED",
+    "closed_at": "2026-05-24T09:01:08Z",
+    "created_at": "2026-03-01T19:25:15Z",
+    "updated_at_after_action": "2026-05-24T09:01:08Z"
+  },
+  "repository_state": {
+    "branch": "triage-github-issue-529-to-jira-preset-c-7ddd0fd6",
+    "head_sha": "5276e23f261ee4aa260bc2537eb8f6f51ca7e06a",
+    "working_tree_before_artifacts": "clean"
+  },
+  "issue_ledger": {
+    "requested_behavior": "Preset choices should appear in the current Skill column; the issue suggests the label could perhaps become preset/skill.",
+    "user_visible_goal": "Operators scanning the task list/details can see which preset was used instead of seeing a blank Skill value.",
+    "explicit_acceptance_criteria": [
+      "Preset choices show up as the Skill column value."
+    ],
+    "constraints": [
+      "Do not treat preset slugs as executable agent skill bundles."
+    ],
+    "affected_areas": [
+      "Mission Control task creation",
+      "Execution API projection",
+      "Mission Control task list Skill column",
+      "Task details skill provenance"
+    ],
+    "ambiguity_notes": [
+      "The optional column rename to preset/skill was phrased as a possibility, not a required acceptance criterion."
+    ]
+  },
+  "evidence": [
+    {
+      "requirement": "Preset choices show up as the Skill column value.",
+      "status": "implemented",
+      "evidence": [
+        "api_service/api/routers/executions.py:_task_template_primary_skill_name derives a display skill from taskTemplate or appliedStepTemplates.",
+        "api_service/api/routers/executions.py serialization assigns targetSkill/taskSkills from that derived preset value when needed.",
+        "frontend/src/entrypoints/workflow-list.tsx renders Skill from formatTaskSkills(row.taskSkills, row.targetSkill).",
+        "tests/unit/api/routers/test_executions.py has regression coverage for task-template, applied-template, and latest-applied-template skill projection."
+      ]
+    },
+    {
+      "requirement": "Preset slugs should remain display/provenance and not break executable skill routing.",
+      "status": "implemented",
+      "evidence": [
+        "frontend/src/entrypoints/workflow-start.tsx submits the executable first-step skill while retaining appliedStepTemplates.",
+        "frontend/src/entrypoints/workflow-start.test.tsx covers Jira Orchestrate preset submission using the executable first-step skill."
+      ]
+    },
+    {
+      "requirement": "Rename the column to preset/skill.",
+      "status": "out_of_scope",
+      "evidence": [
+        "The issue body says 'Perhaps the column should be preset/skill,' which is phrased as optional rather than required."
+      ]
+    }
+  ],
+  "history_evidence": [
+    {
+      "type": "merged_pr",
+      "number": 1194,
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1194",
+      "summary": "Originally added preset slug surfacing for the Skill column."
+    },
+    {
+      "type": "merged_pr",
+      "number": 1619,
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1619",
+      "summary": "Moved preset-as-primary-skill projection into execution API serialization."
+    },
+    {
+      "type": "merged_pr",
+      "number": 1977,
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1977",
+      "summary": "Preserved executable skill routing while retaining preset provenance."
+    }
+  ],
+  "tests": [
+    {
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --python-only tests/unit/api/routers/test_executions.py -k 'template_slug_as_primary_skill or applied_template_slug_as_primary_skill or latest_applied_template_as_primary_skill'",
+      "result": "passed",
+      "summary": "3 passed, 224 deselected"
+    },
+    {
+      "command": "npm run ui:test -- frontend/src/entrypoints/workflow-start.test.tsx -t 'submits Jira Orchestrate preset runs with the executable first-step skill'",
+      "result": "not_run_environment_missing_dependency",
+      "summary": "Command could not start because vitest was not found; local JS dependencies are not installed in this workspace."
+    }
+  ],
+  "terminal_action": "closed",
+  "mutation_attempts": [
+    {
+      "action": "github_issue_comment",
+      "result": "succeeded",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/issues/529#issuecomment-4527909067"
+    },
+    {
+      "action": "github_issue_close",
+      "result": "succeeded",
+      "reason": "completed"
+    }
+  ],
+  "created_jira": null,
+  "artifact_paths": {
+    "ledger": "var/artifacts/github-issue-to-jira/issue-529-20260524/MoonLadderStudios-MoonMind-issue-529-ledger.json",
+    "comment": "var/artifacts/github-issue-to-jira/issue-529-20260524/MoonLadderStudios-MoonMind-issue-529-comment.md"
+  }
+}
