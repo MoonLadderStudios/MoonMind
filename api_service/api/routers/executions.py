@@ -3978,16 +3978,11 @@ def _default_task_step_id(index: int) -> str:
     return f"step-{index + 1}"
 
 def _task_step_id_from_payload(step: Mapping[str, Any], index: int) -> str:
-    return (
-        str(
-            step.get("id")
-            or step.get("stepId")
-            or step.get("stepRef")
-            or step.get("ref")
-            or ""
-        ).strip()
-        or _default_task_step_id(index)
-    )
+    for key in ("id", "stepId", "stepRef", "ref"):
+        candidate = str(step.get(key) or "").strip()
+        if candidate:
+            return candidate
+    return _default_task_step_id(index)
 
 _ATTACHMENT_REF_KEYS = frozenset(
     {"artifactId", "filename", "contentType", "sizeBytes"}

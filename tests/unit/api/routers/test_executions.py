@@ -3892,6 +3892,64 @@ def test_create_task_shaped_execution_normalizes_snake_case_input_attachments(
     ]
     assert "input_attachments" not in step_payload
 
+def test_create_task_shaped_execution_uses_nonblank_step_id_fallback(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
+    service.create_execution.return_value = _build_execution_record()
+    execute = AsyncMock(
+        return_value=_ExecuteResult(
+            [
+                SimpleNamespace(
+                    artifact_id="art_01STEPINPUT000000000000",
+                    status=TemporalArtifactStatus.COMPLETE,
+                    content_type="image/png",
+                    size_bytes=20,
+                ),
+            ]
+        )
+    )
+    test_client.app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
+        execute=execute
+    )
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "Moon/Mind",
+                "targetRuntime": "codex",
+                "task": {
+                    "instructions": "Inspect submitted screenshot.",
+                    "steps": [
+                        {
+                            "id": "   ",
+                            "stepRef": "review-step",
+                            "instructions": "Inspect the step screenshot.",
+                            "inputAttachments": [
+                                {
+                                    "artifactId": "art_01STEPINPUT000000000000",
+                                    "filename": "step.png",
+                                    "contentType": "image/png",
+                                    "sizeBytes": 20,
+                                }
+                            ],
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["task"]["steps"][0]["id"] == "review-step"
+
 def test_create_task_shaped_execution_preserves_canonical_mm627_task_shape(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
     monkeypatch: pytest.MonkeyPatch,
