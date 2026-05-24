@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 import json
 from pathlib import Path
 from typing import Any, Mapping
+
+from moonmind.config.settings import TemporalSettings
 
 
 LEGACY_USER_WORKFLOW_TYPE = "MoonMind.Run"
@@ -60,32 +63,49 @@ def normalize_user_workflow_contract_mode(value: Any) -> str:
 
 
 def resolve_user_workflow_start_contract(
-    temporal_settings: Any,
+    temporal_settings: TemporalSettings,
 ) -> UserWorkflowStartContract:
     """Resolve the Temporal workflow type and queue for new user starts."""
 
     mode = normalize_user_workflow_contract_mode(
-        getattr(
-            temporal_settings,
-            "user_workflow_contract_mode",
-            LEGACY_USER_WORKFLOW_CONTRACT,
-        )
+        temporal_settings.user_workflow_contract_mode
     )
     if mode == LEGACY_USER_WORKFLOW_CONTRACT:
         return UserWorkflowStartContract(
             workflow_type=LEGACY_USER_WORKFLOW_TYPE,
-            task_queue=str(getattr(temporal_settings, "workflow_task_queue")).strip(),
+            task_queue=str(temporal_settings.workflow_task_queue).strip(),
             contract_mode=mode,
         )
 
-    validate_hard_switch_cutover_inputs(temporal_settings)
-    task_queue = str(getattr(temporal_settings, "user_workflow_v2_task_queue")).strip()
+    return _resolve_renamed_user_workflow_start_contract(
+        workflow_task_queue=str(temporal_settings.workflow_task_queue),
+        user_workflow_v2_task_queue=str(temporal_settings.user_workflow_v2_task_queue),
+        cutover_record_path=temporal_settings.user_workflow_cutover_record_path,
+        release_notes_path=temporal_settings.user_workflow_release_notes_path,
+    )
+
+
+@lru_cache(maxsize=32)
+def _resolve_renamed_user_workflow_start_contract(
+    *,
+    workflow_task_queue: str,
+    user_workflow_v2_task_queue: str,
+    cutover_record_path: str | None,
+    release_notes_path: str | None,
+) -> UserWorkflowStartContract:
+    """Resolve and cache the validated renamed user-workflow start contract."""
+
+    _validate_hard_switch_cutover_input_paths(
+        cutover_record_path=cutover_record_path,
+        release_notes_path=release_notes_path,
+    )
+    task_queue = str(user_workflow_v2_task_queue).strip()
     if not task_queue:
         raise HardSwitchCutoverError(
             "TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE is required for "
             "renamed_contract mode"
         )
-    if task_queue == str(getattr(temporal_settings, "workflow_task_queue")).strip():
+    if task_queue == str(workflow_task_queue).strip():
         raise HardSwitchCutoverError(
             "TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE must be distinct from "
             "TEMPORAL_WORKFLOW_TASK_QUEUE for renamed_contract mode"
@@ -93,25 +113,36 @@ def resolve_user_workflow_start_contract(
     return UserWorkflowStartContract(
         workflow_type=RENAMED_USER_WORKFLOW_TYPE,
         task_queue=task_queue,
-        contract_mode=mode,
+        contract_mode=RENAMED_USER_WORKFLOW_CONTRACT,
     )
 
 
-def registered_user_workflow_type(temporal_settings: Any) -> str:
+def registered_user_workflow_type(temporal_settings: TemporalSettings) -> str:
     """Return the single user workflow type this worker build should serve."""
 
     return resolve_user_workflow_start_contract(temporal_settings).workflow_type
 
 
-def validate_hard_switch_cutover_inputs(temporal_settings: Any) -> None:
+def validate_hard_switch_cutover_inputs(temporal_settings: TemporalSettings) -> None:
     """Validate release and environment records before enabling the hard switch."""
 
+    _validate_hard_switch_cutover_input_paths(
+        cutover_record_path=temporal_settings.user_workflow_cutover_record_path,
+        release_notes_path=temporal_settings.user_workflow_release_notes_path,
+    )
+
+
+def _validate_hard_switch_cutover_input_paths(
+    *, cutover_record_path: Any, release_notes_path: Any
+) -> None:
+    """Validate release and environment records from configured paths."""
+
     record_path = _required_path(
-        getattr(temporal_settings, "user_workflow_cutover_record_path", None),
+        cutover_record_path,
         field_name="TEMPORAL_USER_WORKFLOW_CUTOVER_RECORD_PATH",
     )
     release_notes_path = _required_path(
-        getattr(temporal_settings, "user_workflow_release_notes_path", None),
+        release_notes_path,
         field_name="TEMPORAL_USER_WORKFLOW_RELEASE_NOTES_PATH",
     )
     record = _load_json_mapping(record_path)

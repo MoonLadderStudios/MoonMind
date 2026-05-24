@@ -1079,10 +1079,6 @@ class TemporalExecutionService:
         try:
             input_args: dict[str, Any] = {}
             if workflow_type_enum is TemporalWorkflowType.RUN:
-                if user_workflow_start_contract is None:
-                    user_workflow_start_contract = resolve_user_workflow_start_contract(
-                        settings.temporal
-                    )
                 input_args = {
                     "workflow_type": user_workflow_start_contract.workflow_type,
                     "title": resolved_title,

@@ -6,6 +6,11 @@ from pathlib import Path
 import pytest
 
 from moonmind.config.settings import settings
+from moonmind.workflows.temporal import hard_switch_cutover
+from moonmind.workflows.temporal.activity_catalog import (
+    WORKFLOW_FLEET,
+    build_default_activity_catalog,
+)
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.hard_switch_cutover import (
     HardSwitchCutoverError,
@@ -14,7 +19,12 @@ from moonmind.workflows.temporal.hard_switch_cutover import (
     resolve_user_workflow_start_contract,
 )
 from moonmind.workflows.temporal.workers import (
+    describe_configured_worker,
     list_registered_workflow_types_for_settings,
+)
+from moonmind.workflows.temporal.workflows.run import (
+    MoonMindRunWorkflow,
+    MoonMindUserWorkflow,
 )
 
 
@@ -130,6 +140,32 @@ def test_renamed_contract_routes_new_starts_to_distinct_queue(tmp_path: Path) ->
     assert contract.contract_mode == "renamed_contract"
 
 
+def test_renamed_contract_resolution_caches_cutover_file_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    temporal_settings = _renamed_contract_settings(tmp_path)
+    hard_switch_cutover._resolve_renamed_user_workflow_start_contract.cache_clear()
+    load_count = 0
+    original_load_json_mapping = hard_switch_cutover._load_json_mapping
+
+    def counting_load_json_mapping(path: Path):
+        nonlocal load_count
+        load_count += 1
+        return original_load_json_mapping(path)
+
+    monkeypatch.setattr(
+        hard_switch_cutover,
+        "_load_json_mapping",
+        counting_load_json_mapping,
+    )
+
+    first = resolve_user_workflow_start_contract(temporal_settings)
+    second = resolve_user_workflow_start_contract(temporal_settings)
+
+    assert first == second
+    assert load_count == 1
+
+
 def test_worker_registration_serves_only_one_user_workflow_type(tmp_path: Path) -> None:
     legacy_settings = settings.temporal.model_copy(
         update={"user_workflow_contract_mode": "legacy_run"}
@@ -145,6 +181,23 @@ def test_worker_registration_serves_only_one_user_workflow_type(tmp_path: Path) 
     assert LEGACY_USER_WORKFLOW_TYPE not in renamed_types
 
 
+def test_renamed_contract_workflow_fleet_polls_start_queue(tmp_path: Path) -> None:
+    temporal_settings = _renamed_contract_settings(tmp_path)
+    catalog = build_default_activity_catalog(temporal_settings)
+    topology = describe_configured_worker(
+        temporal_settings=temporal_settings.model_copy(
+            update={"worker_fleet": WORKFLOW_FLEET}
+        ),
+        catalog=catalog,
+    )
+
+    assert topology.task_queues == ("mm.workflow.user.v2",)
+    assert (
+        catalog.resolve_activity("integration.resolve_adapter_metadata").task_queue
+        == "mm.workflow.user.v2"
+    )
+
+
 def test_client_routes_renamed_user_workflow_to_v2_queue(tmp_path: Path, monkeypatch) -> None:
     temporal_settings = _renamed_contract_settings(tmp_path)
     monkeypatch.setattr(settings, "temporal", temporal_settings)
@@ -152,3 +205,12 @@ def test_client_routes_renamed_user_workflow_to_v2_queue(tmp_path: Path, monkeyp
     adapter = TemporalClientAdapter()
 
     assert adapter._get_task_queue(RENAMED_USER_WORKFLOW_TYPE) == "mm.workflow.user.v2"
+
+
+def test_renamed_user_workflow_accepts_legacy_dependency_snapshots() -> None:
+    assert MoonMindRunWorkflow()._supported_dependency_workflow_types() == frozenset(
+        {LEGACY_USER_WORKFLOW_TYPE}
+    )
+    assert MoonMindUserWorkflow()._supported_dependency_workflow_types() == frozenset(
+        {LEGACY_USER_WORKFLOW_TYPE, RENAMED_USER_WORKFLOW_TYPE}
+    )

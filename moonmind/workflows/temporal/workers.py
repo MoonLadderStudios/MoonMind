@@ -125,9 +125,6 @@ def list_registered_workflow_types_for_settings(
         *STATIC_TEMPORAL_WORKFLOW_TYPES,
     )
 
-
-REGISTERED_TEMPORAL_WORKFLOW_TYPES = list_registered_workflow_types()
-
 @dataclass(frozen=True, slots=True)
 class TemporalWorkerTopology:
     """Operational topology for one Temporal worker fleet."""

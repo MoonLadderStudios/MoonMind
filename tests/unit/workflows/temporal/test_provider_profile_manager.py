@@ -1272,9 +1272,9 @@ def test_verify_pending_requests_patch_id():
     )
 
 def test_registered_workflow_types():
-    from moonmind.workflows.temporal.workers import REGISTERED_TEMPORAL_WORKFLOW_TYPES
+    from moonmind.workflows.temporal.workers import list_registered_workflow_types
 
-    assert "MoonMind.ProviderProfileManager" in REGISTERED_TEMPORAL_WORKFLOW_TYPES
+    assert "MoonMind.ProviderProfileManager" in list_registered_workflow_types()
 
 # ---------------------------------------------------------------------------
 # DB model sanity

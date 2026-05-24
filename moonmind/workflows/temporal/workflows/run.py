@@ -298,7 +298,7 @@ class MoonMindRunWorkflow:
         return WORKFLOW_NAME
 
     def _supported_dependency_workflow_types(self) -> frozenset[str]:
-        return frozenset({self._expected_workflow_name()})
+        return frozenset({WORKFLOW_NAME, self._expected_workflow_name()})
 
     def _manager_workflow_id(self, runtime_id: str) -> str:
         if workflow.patched(RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH):
