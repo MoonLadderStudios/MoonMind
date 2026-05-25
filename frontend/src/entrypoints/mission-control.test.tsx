@@ -277,6 +277,50 @@ describe('Mission Control shared entry', () => {
     expect(stepTypeFocusBlock).toContain('box-shadow: var(--mm-control-focus-ring)');
   });
 
+  it('lets Settings use the page canvas without a surrounding shared card', async () => {
+    const settingsPanelBlock = cssRuleBlock(missionControlCss, '.panel:has(.settings-page)');
+
+    expect(settingsPanelBlock).toContain('border: 0');
+    expect(settingsPanelBlock).toContain('background: transparent');
+    expect(settingsPanelBlock).toContain('box-shadow: none');
+    expect(settingsPanelBlock).toContain('padding: 0');
+  });
+
+  it('stacks Settings section radio controls on mobile viewports', async () => {
+    const mobileSettingsNavBlock = cssRuleBlockMatching(missionControlCss, (rule) => {
+      return (
+        normalizeCssSelector(rule.selector) === '.settings-nav-options' &&
+        rule.parent?.type === 'atrule' &&
+        rule.parent.name === 'media' &&
+        rule.parent.params.includes('max-width: 640px')
+      );
+    });
+    const mobileSettingsOptionBlock = cssRuleBlockMatching(missionControlCss, (rule) => {
+      return (
+        normalizeCssSelector(rule.selector) === '.settings-nav-option' &&
+        rule.parent?.type === 'atrule' &&
+        rule.parent.name === 'media' &&
+        rule.parent.params.includes('max-width: 640px')
+      );
+    });
+    const mobileSettingsLabelBlock = cssRuleBlockMatching(missionControlCss, (rule) => {
+      return (
+        normalizeCssSelector(rule.selector) === '.settings-nav-option-label' &&
+        rule.parent?.type === 'atrule' &&
+        rule.parent.name === 'media' &&
+        rule.parent.params.includes('max-width: 640px')
+      );
+    });
+
+    expect(mobileSettingsNavBlock).toContain('display: grid');
+    expect(mobileSettingsNavBlock).toContain('grid-template-columns: minmax(0, 1fr)');
+    expect(mobileSettingsNavBlock).toContain('width: 100%');
+    expect(mobileSettingsOptionBlock).toContain('justify-content: flex-start');
+    expect(mobileSettingsOptionBlock).toContain('width: 100%');
+    expect(mobileSettingsLabelBlock).toContain('white-space: normal');
+    expect(mobileSettingsLabelBlock).toContain('overflow-wrap: anywhere');
+  });
+
   it('keeps liquidGL opt-in and away from default dense surfaces', async () => {
     expect(cssRuleBlock(missionControlCss, '.panel')).not.toContain('liquid');
     expect(cssRuleBlock(missionControlCss, '.card')).not.toContain('liquid');
