@@ -1331,7 +1331,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/executions/{workflow_id}/steps/{logical_step_id}/attempts": {
+    "/api/executions/{workflow_id}/steps/{logical_step_id}/step-executions": {
         parameters: {
             query?: never;
             header?: never;
@@ -1339,7 +1339,7 @@ export interface paths {
             cookie?: never;
         };
         /** Describe Execution Step Executions */
-        get: operations["describe_execution_step_executions_api_executions__workflow_id__steps__logical_step_id__attempts_get"];
+        get: operations["describe_execution_step_executions_api_executions__workflow_id__steps__logical_step_id__step_executions_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1348,7 +1348,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/executions/{workflow_id}/steps/{logical_step_id}/attempts/{attempt}": {
+    "/api/executions/{workflow_id}/steps/{logical_step_id}/step-executions/{execution_ordinal}": {
         parameters: {
             query?: never;
             header?: never;
@@ -1356,7 +1356,7 @@ export interface paths {
             cookie?: never;
         };
         /** Describe Execution Step Execution */
-        get: operations["describe_execution_step_execution_api_executions__workflow_id__steps__logical_step_id__attempts__attempt__get"];
+        get: operations["describe_execution_step_execution_api_executions__workflow_id__steps__logical_step_id__step_executions__execution_ordinal__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -6678,7 +6678,7 @@ export interface components {
         };
         /**
          * StepExecutionListModel
-         * @description Bounded attempt history for one logical step.
+         * @description Bounded Step Execution history for one logical step.
          */
         StepExecutionListModel: {
             /** Workflowid */
@@ -6693,8 +6693,8 @@ export interface components {
             runScope: "latest";
             /** Logicalstepid */
             logicalStepId: string;
-            /** Attempts */
-            attempts?: components["schemas"]["StepExecutionProjectionModel"][];
+            /** Stepexecutions */
+            stepExecutions?: components["schemas"]["StepExecutionProjectionModel"][];
         };
         /**
          * StepExecutionProjectionModel
@@ -6827,7 +6827,7 @@ export interface components {
         };
         /**
          * StepLedgerRowModel
-         * @description Current/latest attempt state for one logical step in the active run.
+         * @description Current/latest Step Execution state for one logical step in the active run.
          */
         StepLedgerRowModel: {
             /** Logicalstepid */
@@ -6855,10 +6855,10 @@ export interface components {
              */
             attentionRequired: boolean;
             /**
-             * Attempt
+             * Executionordinal
              * @default 0
              */
-            attempt: number;
+            executionOrdinal: number;
             /** Startedat */
             startedAt?: string | null;
             /**
@@ -6907,8 +6907,8 @@ export interface components {
         StepLedgerWorkloadModel: {
             /** Stepid */
             stepId?: string | null;
-            /** Attempt */
-            attempt?: number | null;
+            /** Executionordinal */
+            executionOrdinal?: number | null;
             /** Toolname */
             toolName?: string | null;
             /** Profileid */
@@ -11098,7 +11098,7 @@ export interface operations {
             };
         };
     };
-    describe_execution_step_executions_api_executions__workflow_id__steps__logical_step_id__attempts_get: {
+    describe_execution_step_executions_api_executions__workflow_id__steps__logical_step_id__step_executions_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -11130,14 +11130,14 @@ export interface operations {
             };
         };
     };
-    describe_execution_step_execution_api_executions__workflow_id__steps__logical_step_id__attempts__attempt__get: {
+    describe_execution_step_execution_api_executions__workflow_id__steps__logical_step_id__step_executions__execution_ordinal__get: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 workflow_id: string;
                 logical_step_id: string;
-                attempt: number;
+                execution_ordinal: number;
             };
             cookie?: never;
         };
