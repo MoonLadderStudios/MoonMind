@@ -10,6 +10,7 @@ gate so the check remains actionable.
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import sys
 from dataclasses import dataclass
@@ -69,15 +70,6 @@ RUNTIME_RULES = (
         pattern=re.compile(r"\b(Create Task|Task Detail|Task ID|Step Attempt)\b"),
         message="Use workflow-native UI copy.",
     ),
-    Rule(
-        name="execution-response-legacy-fields",
-        paths=(
-            "tests/unit/api/test_executions_temporal.py",
-            "tests/contract/test_temporal_execution_api.py",
-        ),
-        pattern=re.compile(r"BANNED_EXECUTION_(?:RESPONSE_KEYS|SCHEMA_FIELDS)\s*=\s*\{"),
-        message="Banned execution field tests must remain present.",
-    ),
 )
 
 DOC_RULES = (
@@ -114,8 +106,20 @@ def _iter_rule_files(rule: Rule, root: Path) -> Iterable[Path]:
             yield path
 
 
-def _line_is_allowed(line: str) -> bool:
-    return any(term in line for term in ALLOWED_QUALIFIED_TASK_TERMS)
+def _match_is_allowed(line: str, match: re.Match[str]) -> bool:
+    line_lower = line.lower()
+    for term in ALLOWED_QUALIFIED_TASK_TERMS:
+        start = 0
+        term_lower = term.lower()
+        while True:
+            allowed_start = line_lower.find(term_lower, start)
+            if allowed_start == -1:
+                break
+            allowed_end = allowed_start + len(term)
+            if allowed_start <= match.start() and match.end() <= allowed_end:
+                return True
+            start = allowed_start + 1
+    return False
 
 
 def check_rules(rules: Iterable[Rule], *, root: Path = REPO_ROOT) -> list[Finding]:
@@ -126,11 +130,9 @@ def check_rules(rules: Iterable[Rule], *, root: Path = REPO_ROOT) -> list[Findin
             for line_number, line in enumerate(
                 path.read_text(encoding="utf-8").splitlines(), start=1
             ):
-                if rule.name == "execution-response-legacy-fields":
-                    # This rule asserts that the guard set exists. It is not a
-                    # banned occurrence.
-                    continue
-                if rule.pattern.search(line) and not _line_is_allowed(line):
+                for match in rule.pattern.finditer(line):
+                    if _match_is_allowed(line, match):
+                        continue
                     findings.append(
                         Finding(
                             rule=rule.name,
@@ -140,7 +142,28 @@ def check_rules(rules: Iterable[Rule], *, root: Path = REPO_ROOT) -> list[Findin
                             message=rule.message,
                         )
                     )
+                    break
     return findings
+
+
+def _literal_string_set(text: str, name: str) -> set[str] | None:
+    tree = ast.parse(text)
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(
+            isinstance(target, ast.Name) and target.id == name for target in node.targets
+        ):
+            continue
+        if not isinstance(node.value, (ast.Set, ast.List, ast.Tuple)):
+            return None
+        values: set[str] = set()
+        for element in node.value.elts:
+            if not isinstance(element, ast.Constant) or not isinstance(element.value, str):
+                return None
+            values.add(element.value)
+        return values
+    return None
 
 
 def check_required_test_guard_sets(*, root: Path = REPO_ROOT) -> list[Finding]:
@@ -153,13 +176,27 @@ def check_required_test_guard_sets(*, root: Path = REPO_ROOT) -> list[Finding]:
         "taskStatus",
     }
     files = (
-        root / "tests/unit/api/test_executions_temporal.py",
-        root / "tests/contract/test_temporal_execution_api.py",
+        (
+            root / "tests/unit/api/test_executions_temporal.py",
+            "BANNED_EXECUTION_RESPONSE_KEYS",
+        ),
+        (
+            root / "tests/contract/test_temporal_execution_api.py",
+            "BANNED_EXECUTION_SCHEMA_FIELDS",
+        ),
     )
     findings: list[Finding] = []
-    for path in files:
+    for path, set_name in files:
         text = path.read_text(encoding="utf-8")
-        missing = sorted(term for term in required_terms if f'"{term}"' not in text)
+        try:
+            actual_terms = _literal_string_set(text, set_name)
+        except SyntaxError:
+            actual_terms = None
+        missing = (
+            sorted(required_terms - actual_terms)
+            if actual_terms is not None
+            else sorted(required_terms)
+        )
         if missing:
             findings.append(
                 Finding(

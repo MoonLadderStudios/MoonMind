@@ -55,12 +55,52 @@ def test_runtime_check_rejects_attempt_route_and_legacy_ui_copy(tmp_path: Path) 
     }
 
 
+def test_required_guard_sets_validate_assigned_literals(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "tests/unit/api/test_executions_temporal.py",
+        'BANNED_EXECUTION_RESPONSE_KEYS = {"taskId"}\n'
+        'assert "attempt" in some_other_guard\n',
+    )
+    _write(
+        tmp_path / "tests/contract/test_temporal_execution_api.py",
+        "BANNED_EXECUTION_SCHEMA_FIELDS = {\n"
+        "    'attempt',\n"
+        "    'attempts',\n"
+        "    'stepAttemptId',\n"
+        "    'taskId',\n"
+        "    'taskRunId',\n"
+        "    'taskStatus',\n"
+        "}\n",
+    )
+
+    findings = verify_workflow_terminology.run("runtime", root=tmp_path)
+
+    assert len(findings) == 1
+    assert findings[0].rule == "execution-response-legacy-fields"
+    assert findings[0].path == Path("tests/unit/api/test_executions_temporal.py")
+    assert "attempt" in findings[0].line
+
+
 def test_docs_check_allows_qualified_terms_and_rejects_unqualified_task(
     tmp_path: Path,
 ) -> None:
     _write(
         tmp_path / "docs/Temporal/WorkflowExecutionProductModel.md",
         "Temporal Task and Jira task are qualified.\nMoonMind task is not.\n",
+    )
+
+    findings = verify_workflow_terminology.run("docs", root=tmp_path)
+
+    assert len(findings) == 1
+    assert findings[0].rule == "canonical-doc-unqualified-task"
+
+
+def test_docs_check_rejects_unqualified_term_on_line_with_allowed_term(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path / "docs/Temporal/WorkflowExecutionProductModel.md",
+        "Temporal Task is qualified, but MoonMind task is not.\n",
     )
 
     findings = verify_workflow_terminology.run("docs", root=tmp_path)
