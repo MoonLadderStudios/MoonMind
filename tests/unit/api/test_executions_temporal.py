@@ -15,6 +15,9 @@ from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 
 BANNED_EXECUTION_RESPONSE_KEYS = {
+    "attempt",
+    "attempts",
+    "stepAttemptId",
     "taskId",
     "taskRunId",
     "taskStatus",

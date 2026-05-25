@@ -282,7 +282,7 @@ def test_run_tracks_status_transitions_and_attempts(monkeypatch: pytest.MonkeyPa
     step = ledger["steps"][1]
     progress = workflow.get_progress()
 
-    assert step["attempt"] == 2
+    assert step["executionOrdinal"] == 2
     assert step["status"] == "canceled"
     assert step["waitingReason"] is None
     assert step["lastError"] == "pytest failed"
@@ -665,7 +665,7 @@ async def test_run_records_step_execution_manifest_ref_when_work_begins(
     )
 
     step = workflow.get_step_ledger()["steps"][0]
-    assert step["attempt"] == 2
+    assert step["executionOrdinal"] == 2
     assert step["refs"]["latestStepExecutionManifestRef"] == "artifact-attempt-2"
     assert step["refs"]["stepExecutionManifestRefs"] == [
         "artifact-attempt-1",
@@ -1535,7 +1535,7 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
         ],
     }
     step = workflow.get_step_ledger()["steps"][0]
-    assert step["attempt"] == 2
+    assert step["executionOrdinal"] == 2
     assert step["status"] == "succeeded"
     assert step["checks"] == [
         {
@@ -1962,7 +1962,7 @@ async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_i
         in child_requests[1].instruction_ref
     )
     step = workflow.get_step_ledger()["steps"][0]
-    assert step["attempt"] == 2
+    assert step["executionOrdinal"] == 2
     assert step["status"] == "succeeded"
     assert step["checks"] == [
         {

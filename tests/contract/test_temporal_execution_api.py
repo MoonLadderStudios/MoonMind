@@ -36,6 +36,9 @@ from moonmind.workflows.temporal.service import TemporalExecutionService
 
 CURRENT_USER_DEP = get_current_user()
 BANNED_EXECUTION_SCHEMA_FIELDS = {
+    "attempt",
+    "attempts",
+    "stepAttemptId",
     "taskId",
     "taskRunId",
     "taskStatus",
@@ -181,6 +184,25 @@ def test_execution_openapi_response_schemas_are_workflow_native() -> None:
                 )
 
     assert findings == []
+
+
+def test_execution_openapi_paths_use_step_execution_terminology() -> None:
+    execution_paths = {
+        route_path
+        for route_path in app.openapi()["paths"]
+        if route_path.startswith("/api/executions")
+    }
+
+    assert not any("/tasks" in route_path for route_path in execution_paths)
+    assert not any("/attempts" in route_path for route_path in execution_paths)
+    assert (
+        "/api/executions/{workflow_id}/steps/{logical_step_id}/step-executions"
+        in execution_paths
+    )
+    assert (
+        "/api/executions/{workflow_id}/steps/{logical_step_id}/step-executions/{execution_ordinal}"
+        in execution_paths
+    )
 
 
 @pytest.mark.asyncio
