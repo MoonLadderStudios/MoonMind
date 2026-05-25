@@ -311,12 +311,34 @@ describe('Mission Control shared entry', () => {
         rule.parent.params.includes('max-width: 640px')
       );
     });
+    const mobileSettingsActiveBlock = cssRuleBlockMatching(missionControlCss, (rule) => {
+      return (
+        normalizeCssSelector(rule.selector) === '.settings-nav-option:has(input:checked)' &&
+        rule.parent?.type === 'atrule' &&
+        rule.parent.name === 'media' &&
+        rule.parent.params.includes('max-width: 640px')
+      );
+    });
+    const reducedMotionSettingsActiveBlock = cssRuleBlockMatching(missionControlCss, (rule) => {
+      return (
+        normalizeCssSelector(rule.selector) === '.settings-nav-option:has(input:checked)' &&
+        rule.parent?.type === 'atrule' &&
+        rule.parent.name === 'media' &&
+        rule.parent.params.includes('prefers-reduced-motion: reduce')
+      );
+    });
 
     expect(mobileSettingsNavBlock).toContain('display: grid');
     expect(mobileSettingsNavBlock).toContain('grid-template-columns: minmax(0, 1fr)');
     expect(mobileSettingsNavBlock).toContain('width: 100%');
     expect(mobileSettingsOptionBlock).toContain('justify-content: flex-start');
     expect(mobileSettingsOptionBlock).toContain('width: 100%');
+    expect(mobileSettingsActiveBlock).toContain('0 0 18px rgb(var(--mm-accent) / 0.55)');
+    expect(mobileSettingsActiveBlock).toContain('0 0 32px rgb(var(--mm-accent-2) / 0.22)');
+    expect(mobileSettingsActiveBlock).toContain(
+      'animation: queue-step-type-thumb-shimmer 5.5s ease-in-out infinite',
+    );
+    expect(reducedMotionSettingsActiveBlock).toContain('animation: none');
     expect(mobileSettingsLabelBlock).toContain('white-space: normal');
     expect(mobileSettingsLabelBlock).toContain('overflow-wrap: anywhere');
   });

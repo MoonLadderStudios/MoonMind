@@ -3431,16 +3431,25 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
         135deg,
         color-mix(in srgb, rgb(var(--mm-accent)) 82%, black) 0%,
         color-mix(in srgb, rgb(var(--mm-accent-2)) 70%, black) 100%
-      );
+    );
     box-shadow:
       0 0 0 1px rgb(var(--mm-accent) / 0.55),
+      0 0 18px rgb(var(--mm-accent) / 0.55),
+      0 0 32px rgb(var(--mm-accent-2) / 0.22),
       inset 0 1px 0 rgb(255 255 255 / 0.22);
+    animation: queue-step-type-thumb-shimmer 5.5s ease-in-out infinite;
   }
 
   .settings-nav-option-label {
     white-space: normal;
     overflow-wrap: anywhere;
     line-height: 1.2;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-nav-option:has(input:checked) {
+    animation: none;
   }
 }
 
