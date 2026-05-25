@@ -600,13 +600,7 @@ The tool captures and stores:
 
 The before state is written to an immutable artifact.
 
-## 10.4 Persist desired image
-
-The tool writes the desired image reference into the allowlisted deployment env file or equivalent deployment-state store before Compose commands resolve image variables.
-
-The tool must not edit arbitrary files selected by the caller. If a later pull, runner safety check, or service recreation fails, the run records the failed state and command diagnostics.
-
-## 10.5 Pull images
+## 10.4 Pull images and check runner safety
 
 The tool runs the equivalent of:
 
@@ -615,6 +609,21 @@ docker compose pull --policy always --ignore-buildable
 ```
 
 The exact flags are implementation-specific and policy-controlled. Pull output is captured in the command log artifact.
+
+After the target image can be inspected, the privileged worker checks whether
+applying the update would recreate the worker container that is executing the
+operation. If the update is unsafe for the current runner, the run fails before
+mutating persisted desired deployment state.
+
+## 10.5 Persist desired image
+
+The tool writes the desired image reference into the allowlisted deployment env
+file or equivalent deployment-state store after runner safety checks pass and
+before Compose commands resolve image variables for service recreation.
+
+The tool must not edit arbitrary files selected by the caller. If service
+recreation or verification fails after desired state persistence, the run records
+the failed state and command diagnostics.
 
 ## 10.6 Recreate services
 

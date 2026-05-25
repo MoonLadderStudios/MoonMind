@@ -942,23 +942,6 @@ class DeploymentUpdateExecutor:
                 before_ref = await write_evidence("before-state", before_state)
 
                 _add_progress(
-                    progress_events,
-                    "PERSISTING_DESIRED_STATE",
-                    "Persisting requested deployment state.",
-                )
-                desired_payload = {
-                    "stack": parsed["stack"],
-                    "imageRepository": parsed["image"]["repository"],
-                    "requestedReference": parsed["image"]["reference"],
-                    "resolvedDigest": resolved_digest,
-                    "reason": parsed["reason"],
-                    "operator": operator or None,
-                    "createdAt": _utc_now(),
-                    "sourceRunId": source_run_id,
-                }
-                await self.desired_state_store.persist(desired_payload)
-
-                _add_progress(
                     progress_events, "PULLING_IMAGES", "Pulling requested images."
                 )
                 pull_result = await self.runner.pull(
@@ -975,6 +958,23 @@ class DeploymentUpdateExecutor:
                     before_state=before_state,
                     target_image=target_image,
                 )
+
+                _add_progress(
+                    progress_events,
+                    "PERSISTING_DESIRED_STATE",
+                    "Persisting requested deployment state.",
+                )
+                desired_payload = {
+                    "stack": parsed["stack"],
+                    "imageRepository": parsed["image"]["repository"],
+                    "requestedReference": parsed["image"]["reference"],
+                    "resolvedDigest": resolved_digest,
+                    "reason": parsed["reason"],
+                    "operator": operator or None,
+                    "createdAt": _utc_now(),
+                    "sourceRunId": source_run_id,
+                }
+                await self.desired_state_store.persist(desired_payload)
 
                 _add_progress(
                     progress_events,
