@@ -58,12 +58,14 @@ class RecordingRunner:
         *,
         verification_succeeded: bool = True,
         verification_status: str | None = None,
+        target_repo_digests: tuple[str, ...] = (),
         block_on_before: bool = False,
     ) -> None:
         self.events = events
         self.commands: list[tuple[str, tuple[str, ...]]] = []
         self.verification_succeeded = verification_succeeded
         self.verification_status = verification_status
+        self.target_repo_digests = target_repo_digests
         self._before_event = None
         self._release_event = None
         if block_on_before:
@@ -108,7 +110,7 @@ class RecordingRunner:
         return {
             "Id": "sha256:" + "b" * 64,
             "RepoTags": [requested_image],
-            "RepoDigests": [],
+            "RepoDigests": list(self.target_repo_digests),
         }
 
     async def verify(
@@ -409,14 +411,14 @@ async def test_file_stack_lock_recovers_stale_lock_before_acquire(tmp_path) -> N
 
 
 @pytest.mark.asyncio
-async def test_lifecycle_order_persists_desired_state_before_compose_up() -> None:
+async def test_lifecycle_persists_desired_state_after_runner_safety_check() -> None:
     executor, store, _evidence, _runner, events = _executor()
 
     result = await executor.execute(_inputs(), {"source_run_id": "run-123"})
 
     assert result.status == "COMPLETED"
-    assert events.index("runner:capture:before") < events.index("desired:persist")
-    assert events.index("desired:persist") < events.index("runner:pull")
+    assert events.index("runner:capture:before") < events.index("runner:pull")
+    assert events.index("runner:inspect-image") < events.index("desired:persist")
     assert events.index("desired:persist") < events.index("runner:up")
     assert store.records[0]["stack"] == "moonmind"
     assert store.records[0]["imageRepository"] == "ghcr.io/moonladderstudios/moonmind"
@@ -424,6 +426,34 @@ async def test_lifecycle_order_persists_desired_state_before_compose_up() -> Non
     assert store.records[0]["resolvedDigest"] == "sha256:" + "a" * 64
     assert store.records[0]["reason"] == "Update to the latest tested build"
     assert store.records[0]["sourceRunId"] == "run-123"
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_persists_pulled_digest_for_mutable_tag() -> None:
+    events: list[str] = []
+    runner = RecordingRunner(
+        events,
+        target_repo_digests=(
+            "ghcr.io/moonladderstudios/moonmind@sha256:" + "d" * 64,
+        ),
+    )
+    executor, store, _evidence, _runner, _events = _executor(
+        runner=runner, events=events
+    )
+
+    result = await executor.execute(
+        _inputs(
+            image={
+                "repository": "ghcr.io/moonladderstudios/moonmind",
+                "reference": "latest",
+            }
+        )
+    )
+
+    assert result.status == "COMPLETED"
+    assert store.records[0]["requestedReference"] == "latest"
+    assert store.records[0]["resolvedDigest"] == "sha256:" + "d" * 64
+    assert result.outputs["resolvedDigest"] == "sha256:" + "d" * 64
 
 
 @pytest.mark.asyncio
@@ -623,8 +653,11 @@ async def test_command_failures_include_normalized_failure_class(
     assert exc_info.value.details["phase"] == expected_phase
     assert exc_info.value.details["failureClass"] == expected_class
     if expected_phase == "pull":
+        assert store.records == []
+        assert "desired:persist" not in events
+    else:
         assert len(store.records) == 1
-        assert events.index("desired:persist") < events.index("runner:pull")
+        assert events.index("desired:persist") < events.index("runner:up")
 
 
 @pytest.mark.asyncio
@@ -720,8 +753,8 @@ async def test_privileged_worker_fails_before_recreating_its_own_container(
     assert exc_info.value.error_code == "DEPLOYMENT_RUNNER_UNSAFE"
     assert exc_info.value.details["failureClass"] == "runner_self_recreation_unsafe"
     assert exc_info.value.details["service"] == "temporal-worker-agent-runtime"
-    assert len(store.records) == 1
-    assert events.index("desired:persist") < events.index("runner:pull")
+    assert store.records == []
+    assert "desired:persist" not in events
     assert "runner:pull" in events
     assert "runner:inspect-image" in events
     assert "runner:up" not in events
@@ -752,8 +785,8 @@ async def test_privileged_worker_allows_changed_services_when_worker_image_is_cu
 
     assert result.status == "COMPLETED"
     assert len(store.records) == 1
-    assert events.index("desired:persist") < events.index("runner:pull")
-    assert events.index("runner:inspect-image") < events.index("runner:up")
+    assert events.index("runner:inspect-image") < events.index("desired:persist")
+    assert events.index("desired:persist") < events.index("runner:up")
     assert "runner:up" in events
 
 
@@ -1106,8 +1139,8 @@ async def test_progress_contains_lifecycle_states_without_command_output() -> No
         "VALIDATING",
         "LOCK_WAITING",
         "CAPTURING_BEFORE_STATE",
-        "PERSISTING_DESIRED_STATE",
         "PULLING_IMAGES",
+        "PERSISTING_DESIRED_STATE",
         "RECREATING_SERVICES",
         "VERIFYING",
         "CAPTURING_AFTER_STATE",
@@ -1333,7 +1366,7 @@ async def test_host_compose_runner_aliases_host_project_path_for_file_reads(
 
 
 @pytest.mark.asyncio
-async def test_host_compose_runner_prefers_compose_env_file_over_process_override(
+async def test_host_compose_runner_sets_requested_image_with_env_file(
     tmp_path, monkeypatch
 ):
     compose = tmp_path / "docker-compose.yaml"
@@ -1373,7 +1406,7 @@ async def test_host_compose_runner_prefers_compose_env_file_over_process_overrid
     )
 
     assert "--env-file" in captured["args"]
-    assert captured["env"].get("MOONMIND_IMAGE") != "example/app:stable"
+    assert captured["env"].get("MOONMIND_IMAGE") == "example/app:stable"
 
 
 @pytest.mark.asyncio
