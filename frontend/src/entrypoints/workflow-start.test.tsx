@@ -2675,6 +2675,9 @@ describe.skip("Task Create Entrypoint", () => {
 
     expect(await screen.findByRole("heading", { name: "Start Workflow" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Create" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Create Task" })).toBeNull();
+    expect(screen.queryByText(/^Task ID:?$/)).toBeNull();
+    expect(screen.queryByText(/^Step Attempt:?$/)).toBeNull();
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
         "/api/workflows/skills",

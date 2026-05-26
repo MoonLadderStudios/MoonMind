@@ -501,6 +501,14 @@ h1 {
   min-height: 0;
 }
 
+.panel:has(.settings-page) {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  min-height: 0;
+}
+
 .panel.panel--data-wide {
   max-width: min(112rem, calc(100vw - 2rem));
 }
@@ -3384,6 +3392,65 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 .queue-step-type-option-label,
 .settings-nav-option-label {
   font-size: 0.78rem;
+}
+
+@media (max-width: 640px) {
+  .settings-nav-options {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.25rem;
+    width: 100%;
+    padding: 0.25rem;
+  }
+
+  .settings-nav-options::before,
+  .settings-nav-options::after {
+    display: none;
+  }
+
+  .settings-nav-option {
+    justify-content: flex-start;
+    min-height: 2.75rem;
+    width: 100%;
+    padding: 0.7rem 0.85rem;
+    border-radius: 8px;
+    letter-spacing: 0.04em;
+    text-align: left;
+  }
+
+  .settings-nav-option:has(input:checked) {
+    background:
+      linear-gradient(
+          115deg,
+          transparent 35%,
+          rgb(255 255 255 / 0.14) 50%,
+          transparent 65%
+        )
+        0 0 / 220% 100% no-repeat,
+      linear-gradient(
+        135deg,
+        color-mix(in srgb, rgb(var(--mm-accent)) 82%, black) 0%,
+        color-mix(in srgb, rgb(var(--mm-accent-2)) 70%, black) 100%
+    );
+    box-shadow:
+      0 0 0 1px rgb(var(--mm-accent) / 0.55),
+      0 0 18px rgb(var(--mm-accent) / 0.55),
+      0 0 32px rgb(var(--mm-accent-2) / 0.22),
+      inset 0 1px 0 rgb(255 255 255 / 0.22);
+    animation: queue-step-type-thumb-shimmer 5.5s ease-in-out infinite;
+  }
+
+  .settings-nav-option-label {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.2;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-nav-option:has(input:checked) {
+    animation: none;
+  }
 }
 
 .queue-step-type-panel {

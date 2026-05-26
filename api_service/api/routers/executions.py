@@ -3327,8 +3327,12 @@ def _fallback_step_ledger_from_record(record: Any) -> StepLedgerSnapshotModel | 
         for row in rows:
             if row.get("order") != current_order:
                 continue
+            execution_ordinal = max(
+                int(row.get("executionOrdinal") or row.get("attempt") or 0),
+                1,
+            )
             row["status"] = "awaiting_external" if waiting_reason else "running"
-            row["attempt"] = max(int(row.get("attempt") or 0), 1)
+            row["executionOrdinal"] = execution_ordinal
             row["startedAt"] = row.get("startedAt") or updated_at.isoformat()
             row["updatedAt"] = updated_at.isoformat()
             row["waitingReason"] = waiting_reason or None
@@ -6996,7 +7000,7 @@ async def list_execution_facets(
         ) from exc
 
 @router.get(
-    "/{workflow_id}/steps/{logical_step_id}/attempts",
+    "/{workflow_id}/steps/{logical_step_id}/step-executions",
     response_model=StepExecutionListModel,
 )
 async def describe_execution_step_executions(
@@ -7051,7 +7055,7 @@ async def describe_execution_step_executions(
             for manifest_ref in manifest_refs
         )
     )
-    attempts = [
+    step_executions = [
         StepExecutionProjectionModel.model_validate(
             _step_execution_projection_payload(
                 manifest,
@@ -7060,31 +7064,31 @@ async def describe_execution_step_executions(
         )
         for manifest, manifest_ref in zip(manifests, manifest_refs, strict=True)
     ]
-    attempts.sort(key=lambda item: item.execution_ordinal)
+    step_executions.sort(key=lambda item: item.execution_ordinal)
     return StepExecutionListModel(
         workflowId=ledger.workflow_id,
         runId=ledger.run_id,
         runScope=ledger.run_scope,
         logicalStepId=logical_step_id,
-        attempts=attempts,
+        stepExecutions=step_executions,
     )
 
 
 @router.get(
-    "/{workflow_id}/steps/{logical_step_id}/attempts/{attempt}",
+    "/{workflow_id}/steps/{logical_step_id}/step-executions/{execution_ordinal}",
     response_model=StepExecutionDetailModel,
 )
 async def describe_execution_step_execution(
     workflow_id: str,
     logical_step_id: str,
-    attempt: int,
+    execution_ordinal: int,
     response: Response,
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
     session: AsyncSession = Depends(get_async_session),
     temporal_client: Client = Depends(get_temporal_client),
 ) -> StepExecutionDetailModel:
-    if attempt < 1:
+    if execution_ordinal < 1:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
@@ -7136,7 +7140,7 @@ async def describe_execution_step_execution(
         )
     )
     for manifest, manifest_ref in zip(manifests, manifest_refs, strict=True):
-        if manifest.execution_ordinal != attempt:
+        if manifest.execution_ordinal != execution_ordinal:
             continue
         return StepExecutionDetailModel.model_validate(
             _step_execution_detail_payload(

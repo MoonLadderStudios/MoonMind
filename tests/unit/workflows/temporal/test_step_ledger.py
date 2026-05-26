@@ -326,7 +326,7 @@ def test_contract_models_accept_representative_rows_and_progress() -> None:
     )
 
     assert progress.current_step_title == "Review patch"
-    assert retrying_row.attempt == 2
+    assert retrying_row.execution_ordinal == 2
     assert child_runtime_row.refs.task_run_id == "task-run-1"
     assert reviewed_row.checks == [
         StepLedgerCheckModel(

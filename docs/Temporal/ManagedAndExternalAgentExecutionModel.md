@@ -727,7 +727,7 @@ Specifically:
 * `AgentRunResult.output_refs[]` contains durable output artifact refs for the workflow result
 * `AgentRunResult.diagnostics_ref` is the final diagnostics artifact for the run
 * live log events, artifact-backed tails, and per-stream retrieval are served through observability APIs, not through workflow payloads or `AgentRunResult`
-* Mission Control uses the observability APIs for task detail live/tailed observation, not the workflow result surface
+* Mission Control uses the observability APIs for workflow detail live/tailed observation, not the workflow result surface
 * the parent step ledger should carry only bounded refs back to that observability surface, not duplicate managed-run log state
 
 ## 10.2 Observability metadata expectations for managed runs
