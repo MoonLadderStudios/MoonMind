@@ -731,7 +731,7 @@ class HostDockerComposeRunner:
         self._ensure_host_project_read_alias()
         resolved = self._compose_command(command)
         env = os.environ.copy()
-        if requested_image and not self.env_file:
+        if requested_image:
             env["MOONMIND_IMAGE"] = requested_image
         process = await asyncio.create_subprocess_exec(
             *resolved,
@@ -942,6 +942,29 @@ class DeploymentUpdateExecutor:
                 before_ref = await write_evidence("before-state", before_state)
 
                 _add_progress(
+                    progress_events, "PULLING_IMAGES", "Pulling requested images."
+                )
+                pull_result = await self.runner.pull(
+                    stack=parsed["stack"],
+                    command=command_plan.pull_args,
+                    requested_image=requested_image,
+                )
+                command_log["pull"]["result"] = pull_result
+                _ensure_command_succeeded("pull", pull_result)
+                target_image = await self.runner.inspect_image(requested_image)
+                command_log["targetImage"] = _target_image_audit(target_image)
+                if not resolved_digest:
+                    resolved_digest = _resolved_digest_from_target_image(
+                        repository=str(parsed["image"]["repository"]),
+                        target_image=target_image,
+                    )
+                _ensure_runner_survives_update(
+                    command_plan=command_plan,
+                    before_state=before_state,
+                    target_image=target_image,
+                )
+
+                _add_progress(
                     progress_events,
                     "PERSISTING_DESIRED_STATE",
                     "Persisting requested deployment state.",
@@ -957,24 +980,6 @@ class DeploymentUpdateExecutor:
                     "sourceRunId": source_run_id,
                 }
                 await self.desired_state_store.persist(desired_payload)
-
-                _add_progress(
-                    progress_events, "PULLING_IMAGES", "Pulling requested images."
-                )
-                pull_result = await self.runner.pull(
-                    stack=parsed["stack"],
-                    command=command_plan.pull_args,
-                    requested_image=requested_image,
-                )
-                command_log["pull"]["result"] = pull_result
-                _ensure_command_succeeded("pull", pull_result)
-                target_image = await self.runner.inspect_image(requested_image)
-                command_log["targetImage"] = _target_image_audit(target_image)
-                _ensure_runner_survives_update(
-                    command_plan=command_plan,
-                    before_state=before_state,
-                    target_image=target_image,
-                )
 
                 _add_progress(
                     progress_events,
@@ -1226,6 +1231,31 @@ def _target_image_audit(target_image: Mapping[str, Any]) -> dict[str, Any]:
             "repoDigests": target_image.get("RepoDigests"),
         }
     )
+
+
+def _resolved_digest_from_target_image(
+    *, repository: str, target_image: Mapping[str, Any] | None
+) -> str | None:
+    if not target_image:
+        return None
+    repo_digests = target_image.get("RepoDigests")
+    if not isinstance(repo_digests, Sequence) or isinstance(
+        repo_digests, (str, bytes, bytearray)
+    ):
+        return None
+    repository_prefix = f"{repository}@"
+    fallback: str | None = None
+    for raw_digest in repo_digests:
+        digest = str(raw_digest or "").strip()
+        if "@sha256:" not in digest:
+            continue
+        _repo, _separator, digest_value = digest.partition("@")
+        if not digest_value:
+            continue
+        if digest.startswith(repository_prefix):
+            return digest_value
+        fallback = fallback or digest_value
+    return fallback
 
 
 def _runner_already_uses_target_image(
