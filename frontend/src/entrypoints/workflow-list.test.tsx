@@ -260,9 +260,7 @@ describe('Workflows Entrypoint', () => {
         .filter((value) => value !== ''),
     ).toEqual([
       'codex_cli',
-      'codex',
       'claude_code',
-      'claude',
       'gemini_cli',
       'jules',
       'codex_cloud',
@@ -318,6 +316,60 @@ describe('Workflows Entrypoint', () => {
     );
     expect(window.location.search).toBe('?targetRuntimeIn=codex_cli%2Cclaude_code&limit=50');
     expect(screen.getByRole('button', { name: 'Runtime filter: Codex CLI +1' })).toBeTruthy();
+  });
+
+  it('canonicalizes loaded Claude Code runtime filter labels before fetching', async () => {
+    window.history.pushState(
+      {},
+      'Runtime label filter',
+      '/workflows?targetRuntimeIn=Claude%20Code&limit=50',
+    );
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+
+    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      '/api/executions?source=temporal&pageSize=50&scope=tasks&targetRuntimeIn=claude_code',
+    );
+    expect(window.location.search).toBe('?targetRuntimeIn=claude_code&limit=50');
+    expect(screen.getByRole('button', { name: 'Runtime filter: Claude Code' })).toBeTruthy();
+  });
+
+  it('preserves raw stored runtime identifiers from loaded include filters', async () => {
+    window.history.pushState(
+      {},
+      'Raw runtime filter',
+      '/workflows?targetRuntimeIn=codex&targetRuntimeIn=claude&limit=50',
+    );
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+
+    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      '/api/executions?source=temporal&pageSize=50&scope=tasks&targetRuntimeIn=codex%2Cclaude',
+    );
+    expect(window.location.search).toBe('?targetRuntimeIn=codex%2Cclaude&limit=50');
+    expect(screen.getByRole('button', { name: 'Runtime filter: Codex CLI +1' })).toBeTruthy();
+  });
+
+  it('preserves raw stored runtime identifiers from loaded exclude filters', async () => {
+    window.history.pushState(
+      {},
+      'Raw runtime exclude filter',
+      '/workflows?targetRuntimeNotIn=codex&targetRuntimeNotIn=claude&limit=50',
+    );
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+
+    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      '/api/executions?source=temporal&pageSize=50&scope=tasks&targetRuntimeNotIn=codex%2Cclaude',
+    );
+    expect(window.location.search).toBe('?targetRuntimeNotIn=codex%2Cclaude&limit=50');
+    expect(screen.getByRole('button', { name: 'Runtime filter: not (Codex CLI +1)' })).toBeTruthy();
   });
 
   it('shows a clear validation error for contradictory canonical URL filters', async () => {
