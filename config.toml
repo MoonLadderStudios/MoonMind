@@ -7,7 +7,7 @@ container_port_range_end = 52100
 
 [llm]
 model = "gemini/gemini-2.5-pro"
-custom_llm_provider = "gemini"
+custom_llm_provider = "google"
 
 [google_drive]
 # Optional: Enable Google Drive indexing
