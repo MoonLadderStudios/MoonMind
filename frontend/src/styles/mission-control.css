@@ -1083,6 +1083,11 @@ h1 {
   grid-template-columns: minmax(0, 1fr);
 }
 
+.workflow-list-mobile-filter-controls .queue-inline-filter {
+  border-radius: 0.6rem;
+  padding: 0.28rem 0.6rem;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
