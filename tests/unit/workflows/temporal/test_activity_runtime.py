@@ -36,6 +36,7 @@ from moonmind.workflows.skills.deployment_tools import (
 from moonmind.workflows.temporal.activity_catalog import (
     AGENT_RUNTIME_FLEET,
     ARTIFACTS_FLEET,
+    DEPLOYMENT_FLEET,
     SANDBOX_FLEET,
     build_default_activity_catalog,
 )
@@ -753,7 +754,6 @@ async def test_default_skill_registry_payload_uses_curated_deployment_tool_defin
         "selector": {"mode": "by_capability"},
     }
     assert definition["requirements"]["capabilities"] == [
-        "docker_workload",
         "deployment_control",
         "docker_admin",
     ]
@@ -771,10 +771,12 @@ async def test_default_skill_registry_payload_uses_curated_deployment_tool_defin
         (DEPLOYMENT_UPDATE_TOOL_NAME, DEPLOYMENT_UPDATE_TOOL_VERSION)
     ]
     assert parsed[0].required_capabilities == (
-        "docker_workload",
         "deployment_control",
         "docker_admin",
     )
+    route = build_default_activity_catalog().resolve_skill(parsed[0])
+    assert route.fleet == DEPLOYMENT_FLEET
+    assert route.task_queue == "mm.activity.deployment"
 
 async def test_curated_pentest_activity_binding_is_registered_on_agent_runtime_fleet():
     bindings = build_activity_bindings(

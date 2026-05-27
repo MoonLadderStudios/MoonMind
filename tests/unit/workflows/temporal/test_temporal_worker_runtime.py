@@ -40,7 +40,12 @@ from moonmind.workflows.temporal.worker_runtime import (
     resolve_external_adapter,
     external_adapter_execution_style,
 )
-from moonmind.workflows.temporal.workers import AGENT_RUNTIME_FLEET, SANDBOX_FLEET, WORKFLOW_FLEET
+from moonmind.workflows.temporal.workers import (
+    AGENT_RUNTIME_FLEET,
+    DEPLOYMENT_FLEET,
+    SANDBOX_FLEET,
+    WORKFLOW_FLEET,
+)
 
 @asynccontextmanager
 async def _template_db(tmp_path):
@@ -615,6 +620,7 @@ def test_deployment_update_executor_is_enabled_only_with_project_mount(
     monkeypatch.delenv("MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", raising=False)
     monkeypatch.delenv("MOONMIND_DEPLOYMENT_LOCK_DIR", raising=False)
     monkeypatch.delenv("MOONMIND_DEPLOYMENT_PROJECT_NAME", raising=False)
+    monkeypatch.delenv("MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES", raising=False)
     # Point the local mount at a path that doesn't exist so auto-detection
     # cleanly returns None when no override is set.
     monkeypatch.setenv(
@@ -632,6 +638,10 @@ def test_deployment_update_executor_is_enabled_only_with_project_mount(
     monkeypatch.setenv("MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE", str(env_file))
     monkeypatch.setenv("MOONMIND_DEPLOYMENT_LOCK_DIR", str(lock_dir))
     monkeypatch.setenv("MOONMIND_DEPLOYMENT_PROJECT_NAME", "moonmind-test")
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES",
+        "temporal-worker-deployment-control",
+    )
 
     executor = _build_deployment_update_executor()
 
@@ -642,6 +652,8 @@ def test_deployment_update_executor_is_enabled_only_with_project_mount(
     assert executor.runner.compose_file == str(compose_file)
     assert executor.runner.project_name == "moonmind-test"
     assert executor.runner.env_file == str(env_file)
+    assert executor.runner.excluded_services == ("temporal-worker-deployment-control",)
+    assert executor.excluded_services == ("temporal-worker-deployment-control",)
     assert executor.lock_manager.lock_dir == str(lock_dir)
 
 
@@ -3154,7 +3166,7 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
         for call in mock_dispatcher_cls.return_value.register_skill.call_args_list
         if call.kwargs.get("skill_name") == "deployment.update_compose_stack"
     ]
-    assert len(deployment_handler_calls) == 1
+    assert deployment_handler_calls == []
     mock_agent_runtime_activities_cls.assert_called_once_with(
         artifact_service=ANY,
         run_store=run_store,
@@ -3174,6 +3186,72 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
         sandbox_activities=mock_sandbox_activities_cls.return_value,
         integration_activities=mock_jules_activities_cls.return_value,
         agent_runtime_activities=mock_agent_runtime_activities_cls.return_value,
+        proposal_activities=mock_proposal_activities_cls.return_value,
+        review_activities=ANY,
+        agent_skills_activities=ANY,
+    )
+    await resources.aclose()
+
+
+@pytest.mark.asyncio
+@patch("moonmind.workflows.temporal.worker_runtime.build_worker_activity_bindings")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalAgentRuntimeActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalIntegrationActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalSandboxActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalSkillActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.SkillActivityDispatcher")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalPlanActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactService")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactRepository")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalProposalActivities")
+async def test_build_runtime_activities_registers_deployment_tool_only_on_deployment_fleet(
+    mock_proposal_activities_cls,
+    mock_repository_cls,
+    mock_service_cls,
+    mock_artifact_activities_cls,
+    mock_plan_activities_cls,
+    mock_dispatcher_cls,
+    mock_skill_activities_cls,
+    mock_sandbox_activities_cls,
+    mock_jules_activities_cls,
+    mock_agent_runtime_activities_cls,
+    mock_build_bindings,
+):
+    @asynccontextmanager
+    async def _fake_session_context():
+        yield "session"
+
+    topology = MagicMock()
+    topology.fleet = DEPLOYMENT_FLEET
+
+    mock_binding = MagicMock()
+    mock_binding.handler = "deployment_handler"
+    mock_build_bindings.return_value = [mock_binding]
+
+    with patch(
+        "moonmind.workflows.temporal.worker_runtime.get_async_session_context",
+        side_effect=_fake_session_context,
+    ):
+        resources, handlers = await _build_runtime_activities(topology)
+
+    assert handlers[0] == "deployment_handler"
+    mock_agent_runtime_activities_cls.assert_not_called()
+    deployment_handler_calls = [
+        call
+        for call in mock_dispatcher_cls.return_value.register_skill.call_args_list
+        if call.kwargs.get("skill_name") == "deployment.update_compose_stack"
+    ]
+    assert len(deployment_handler_calls) == 1
+    mock_build_bindings.assert_called_once_with(
+        fleet=DEPLOYMENT_FLEET,
+        artifact_activities=mock_artifact_activities_cls.return_value,
+        plan_activities=mock_plan_activities_cls.return_value,
+        manifest_activities=ANY,
+        skill_activities=mock_skill_activities_cls.return_value,
+        sandbox_activities=mock_sandbox_activities_cls.return_value,
+        integration_activities=mock_jules_activities_cls.return_value,
+        agent_runtime_activities=None,
         proposal_activities=mock_proposal_activities_cls.return_value,
         review_activities=ANY,
         agent_skills_activities=ANY,

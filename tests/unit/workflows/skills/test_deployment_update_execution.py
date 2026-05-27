@@ -166,6 +166,7 @@ def _executor(
     runner: RecordingRunner | None = None,
     events: list[str] | None = None,
     lock_manager: DeploymentUpdateLockManager | None = None,
+    excluded_services: tuple[str, ...] = (),
 ) -> tuple[
     DeploymentUpdateExecutor,
     RecordingDesiredStateStore,
@@ -183,12 +184,27 @@ def _executor(
             desired_state_store=store,
             evidence_writer=evidence,
             runner=runner,
+            excluded_services=excluded_services,
         ),
         store,
         evidence,
         runner,
         events,
     )
+
+
+class DeploymentControlRunner(RecordingRunner):
+    async def capture_state(self, *, stack: str, phase: str) -> Mapping[str, Any]:
+        self.events.append(f"runner:capture:{phase}")
+        return {
+            "stack": stack,
+            "phase": phase,
+            "services": [
+                {"ID": "deploy123", "Service": "temporal-worker-deployment-control"},
+                {"ID": "agent456", "Service": "temporal-worker-agent-runtime"},
+                {"ID": "api789", "Service": "api"},
+            ],
+        }
 
 
 class FailingUpRunner(RecordingRunner):
@@ -788,6 +804,28 @@ async def test_privileged_worker_allows_changed_services_when_worker_image_is_cu
     assert events.index("runner:inspect-image") < events.index("desired:persist")
     assert events.index("desired:persist") < events.index("runner:up")
     assert "runner:up" in events
+
+
+@pytest.mark.asyncio
+async def test_deployment_control_runner_targets_services_except_itself(monkeypatch) -> None:
+    monkeypatch.setenv("HOSTNAME", "deploy123")
+    events: list[str] = []
+    runner = DeploymentControlRunner(events)
+    executor, store, _evidence, _runner, _events = _executor(
+        runner=runner,
+        events=events,
+        excluded_services=("temporal-worker-deployment-control",),
+    )
+
+    result = await executor.execute(_inputs())
+
+    assert result.status == "COMPLETED"
+    assert len(store.records) == 1
+    pull_command = runner.commands[0][1]
+    up_command = runner.commands[1][1]
+    assert pull_command[-2:] == ("temporal-worker-agent-runtime", "api")
+    assert up_command[-2:] == ("temporal-worker-agent-runtime", "api")
+    assert "temporal-worker-deployment-control" not in up_command
 
 
 def test_runner_guard_skips_when_targeted_services_exclude_worker(monkeypatch) -> None:

@@ -456,6 +456,7 @@ class HostDockerComposeRunner:
     command_timeout_seconds: int = 900
     local_project_dir: str | None = None
     env_file: str | None = None
+    excluded_services: tuple[str, ...] = ()
 
     async def capture_state(self, *, stack: str, phase: str) -> Mapping[str, Any]:
         services = await self._run_compose_json(("ps", "--format", "json"))
@@ -502,13 +503,24 @@ class HostDockerComposeRunner:
         images = await self._run_compose_json(("images", "--format", "json"))
         services = await self._run_compose_json(("ps", "--format", "json"))
         repository, reference = _split_requested_image(requested_image)
-        matched_images = [
-            image
-            for image in images
-            if isinstance(image, Mapping)
-            and str(image.get("Repository") or image.get("repository") or "").strip()
-            == repository
-        ]
+        matched_images = []
+        for image in images:
+            if not isinstance(image, Mapping):
+                continue
+            image_repository = str(
+                image.get("Repository") or image.get("repository") or ""
+            ).strip()
+            if image_repository != repository:
+                continue
+            service_name = str(
+                image.get("Service")
+                or image.get("Name")
+                or image.get("Container")
+                or ""
+            ).strip()
+            if _service_is_excluded(service_name, self.excluded_services):
+                continue
+            matched_images.append(image)
         mismatches: list[dict[str, Any]] = []
         updated_services: list[str] = []
         for image in matched_images:
@@ -843,6 +855,7 @@ class DeploymentUpdateExecutor:
     desired_state_store: DesiredStateStore
     evidence_writer: EvidenceWriter
     runner: ComposeRunner
+    excluded_services: tuple[str, ...] = ()
 
     async def execute(
         self,
@@ -939,6 +952,13 @@ class DeploymentUpdateExecutor:
                 before_state = await self.runner.capture_state(
                     stack=parsed["stack"], phase="before"
                 )
+                command_plan = _command_plan_targeting_services(
+                    command_plan,
+                    before_state=before_state,
+                    excluded_services=self.excluded_services,
+                )
+                command_log["pull"]["command"] = list(command_plan.pull_args)
+                command_log["up"]["command"] = list(command_plan.up_args)
                 before_ref = await write_evidence("before-state", before_state)
 
                 _add_progress(
@@ -1222,6 +1242,74 @@ def _compose_up_target_services(args: Sequence[str]) -> tuple[str, ...]:
             continue
         services.append(part)
     return tuple(services)
+
+
+def _command_plan_targeting_services(
+    command_plan: ComposeCommandPlan,
+    *,
+    before_state: Mapping[str, Any],
+    excluded_services: Sequence[str],
+) -> ComposeCommandPlan:
+    excluded = _normalized_service_names(excluded_services)
+    if not excluded:
+        return command_plan
+    services = tuple(
+        service_name
+        for service_name in _service_names_from_state(before_state.get("services"))
+        if service_name.lower() not in excluded
+    )
+    if not services:
+        raise ToolFailure(
+            error_code="DEPLOYMENT_RUNNER_UNSAFE",
+            message="Deployment update has no target services after runner exclusion.",
+            retryable=False,
+            details={
+                "excludedServices": sorted(excluded),
+                "failureClass": "runner_self_recreation_unsafe",
+            },
+        )
+    return ComposeCommandPlan(
+        runner_mode=command_plan.runner_mode,
+        pull_args=(*command_plan.pull_args, *services),
+        up_args=(*command_plan.up_args, *services),
+    )
+
+
+def _service_names_from_state(services: Any) -> tuple[str, ...]:
+    if not isinstance(services, Sequence) or isinstance(services, (str, bytes)):
+        return ()
+    names: list[str] = []
+    seen: set[str] = set()
+    for service in services:
+        if not isinstance(service, Mapping):
+            continue
+        name = str(
+            service.get("Service")
+            or service.get("Name")
+            or service.get("Names")
+            or ""
+        ).strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        names.append(name)
+    return tuple(names)
+
+
+def _normalized_service_names(services: Sequence[str]) -> set[str]:
+    return {
+        str(service or "").strip().lower()
+        for service in services
+        if str(service or "").strip()
+    }
+
+
+def _service_is_excluded(service_name: str, excluded_services: Sequence[str]) -> bool:
+    normalized = str(service_name or "").strip().lower()
+    return bool(normalized) and normalized in _normalized_service_names(excluded_services)
 
 
 def _target_image_audit(target_image: Mapping[str, Any]) -> dict[str, Any]:
