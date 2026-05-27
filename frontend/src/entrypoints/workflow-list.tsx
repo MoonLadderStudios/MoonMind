@@ -40,10 +40,8 @@ const RUNTIME_FILTER_OPTIONS = [
   'codex_cloud',
 ] as const;
 const RUNTIME_FILTER_VALUE_ALIASES: Record<string, string> = {
-  codex: 'codex_cli',
   codex_cli: 'codex_cli',
   codex_cloud: 'codex_cloud',
-  claude: 'claude_code',
   claude_code: 'claude_code',
   gemini_cli: 'gemini_cli',
   jules: 'jules',
@@ -381,7 +379,7 @@ function parseInitialFilters(params: URLSearchParams): ColumnFilters {
   const normalizedRuntimeIn = uniqueRuntimeValues(runtimeIn);
   const normalizedRuntimeNotIn = uniqueRuntimeValues(runtimeNotIn);
   const legacyRuntime = normalizeRuntimeFilterValue(params.get('targetRuntime'));
-  if (runtimeNotIn.length > 0) {
+  if (normalizedRuntimeNotIn.length > 0) {
     filters.targetRuntime = { mode: 'exclude', values: normalizedRuntimeNotIn, blank: '' };
   } else if (normalizedRuntimeIn.length > 0 || legacyRuntime) {
     filters.targetRuntime = {
