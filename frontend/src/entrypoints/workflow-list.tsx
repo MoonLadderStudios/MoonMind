@@ -34,13 +34,18 @@ const TEMPORAL_STATUSES = [
 ] as const;
 const RUNTIME_FILTER_OPTIONS = [
   'codex_cli',
-  'codex',
   'claude_code',
-  'claude',
   'gemini_cli',
   'jules',
   'codex_cloud',
 ] as const;
+const RUNTIME_FILTER_VALUE_ALIASES: Record<string, string> = {
+  codex_cli: 'codex_cli',
+  codex_cloud: 'codex_cloud',
+  claude_code: 'claude_code',
+  gemini_cli: 'gemini_cli',
+  jules: 'jules',
+};
 const TASK_WORKFLOW_TYPE = 'MoonMind.Run';
 const TASK_ENTRY = 'user_workflow';
 
@@ -306,6 +311,17 @@ function uniqueValues(values: Array<string | null | undefined>): string[] {
   return Array.from(new Set(values.map((value) => (value || '').trim()).filter(Boolean)));
 }
 
+function normalizeRuntimeFilterValue(value: string | null | undefined): string {
+  const raw = (value || '').trim();
+  if (!raw) return '';
+  const key = raw.toLowerCase().replace(/[\s-]+/g, '_');
+  return RUNTIME_FILTER_VALUE_ALIASES[key] || key;
+}
+
+function uniqueRuntimeValues(values: Array<string | null | undefined>): string[] {
+  return uniqueValues(values.map(normalizeRuntimeFilterValue));
+}
+
 function splitParamValues(values: string[]): string[] {
   return uniqueValues(values.flatMap((value) => value.split(',')));
 }
@@ -360,13 +376,15 @@ function parseInitialFilters(params: URLSearchParams): ColumnFilters {
 
   const runtimeIn = splitParam(params, 'targetRuntimeIn');
   const runtimeNotIn = splitParam(params, 'targetRuntimeNotIn');
-  const legacyRuntime = (params.get('targetRuntime') || '').trim();
-  if (runtimeNotIn.length > 0) {
-    filters.targetRuntime = { mode: 'exclude', values: runtimeNotIn, blank: '' };
-  } else if (runtimeIn.length > 0 || legacyRuntime) {
+  const normalizedRuntimeIn = uniqueRuntimeValues(runtimeIn);
+  const normalizedRuntimeNotIn = uniqueRuntimeValues(runtimeNotIn);
+  const legacyRuntime = normalizeRuntimeFilterValue(params.get('targetRuntime'));
+  if (normalizedRuntimeNotIn.length > 0) {
+    filters.targetRuntime = { mode: 'exclude', values: normalizedRuntimeNotIn, blank: '' };
+  } else if (normalizedRuntimeIn.length > 0 || legacyRuntime) {
     filters.targetRuntime = {
       mode: 'include',
-      values: runtimeIn.length > 0 ? runtimeIn : [legacyRuntime],
+      values: normalizedRuntimeIn.length > 0 ? normalizedRuntimeIn : [legacyRuntime],
       blank: '',
     };
   }
@@ -893,7 +911,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     values: string[],
   ) => {
     setDraftFilters((current) => {
-      const dedupedValues = uniqueValues(values);
+      const dedupedValues = field === 'targetRuntime' ? uniqueRuntimeValues(values) : uniqueValues(values);
       if (dedupedValues.length === 0) {
         return { ...current, [field]: { ...emptyValueFilter(), mode: current[field].mode } };
       }
@@ -929,7 +947,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     field: 'status' | 'targetRuntime' | 'targetSkill',
     values: string[],
   ) => {
-    const dedupedValues = uniqueValues(values);
+    const dedupedValues = field === 'targetRuntime' ? uniqueRuntimeValues(values) : uniqueValues(values);
     const currentField = filters[field];
     applyFilters({
       ...filters,
@@ -968,7 +986,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
         : [];
     if (field === 'status') return uniqueValues([...facetValues, ...TEMPORAL_STATUSES]);
     if (field === 'targetRuntime') {
-      return uniqueValues([
+      return uniqueRuntimeValues([
         ...filters.targetRuntime.values,
         ...draftFilters.targetRuntime.values,
         ...facetValues,
