@@ -10,15 +10,6 @@ from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
-def ollama_dependency_available() -> bool:
-    """Return whether the optional ollama package is importable."""
-
-    try:
-        import ollama  # type: ignore  # noqa: F401
-    except ImportError:
-        return False
-    return True
-
 class EmbeddingError(RuntimeError):
     """Raised when embedding generation fails."""
 
@@ -28,7 +19,6 @@ class EmbeddingConfig:
     model: str
     google_api_key: Optional[str]
     openai_api_key: Optional[str]
-    ollama_model: Optional[str]
 
 class EmbeddingClient:
     """Simple synchronous embedding adapter."""
@@ -55,12 +45,6 @@ class EmbeddingClient:
             if not api_key:
                 raise EmbeddingError("OPENAI_API_KEY is required for openai embeddings")
             self._openai = OpenAI(api_key=api_key)
-        elif self._provider == "ollama":
-            try:
-                import ollama  # type: ignore
-            except ImportError as exc:  # pragma: no cover - optional dep missing
-                raise EmbeddingError("ollama package missing") from exc
-            self._ollama = ollama
         else:
             raise EmbeddingError(f"Unsupported embedding provider: {self._provider}")
 
@@ -91,11 +75,6 @@ class EmbeddingClient:
                 raise EmbeddingError(f"OpenAI embedding failed: {exc}") from exc
             data = result.data[0].embedding
             return list(data)
-        if self._provider == "ollama":
-            response = self._ollama.embeddings(
-                model=self._config.ollama_model or self._config.model, prompt=text
-            )
-            return list(response["embedding"])
         raise EmbeddingError(f"Unsupported provider {self._provider}")
 
     def embed_many(self, texts: Iterable[str]) -> List[List[float]]:

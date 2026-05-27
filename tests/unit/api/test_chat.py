@@ -58,7 +58,6 @@ async def mock_get_user_api_key_logic(user: User, provider: str, db_session):
         return "test-google-key"  # Corrected this line
     elif provider == "Anthropic":
         return "test-anthropic-key"
-    # Ollama doesn't need a key, so get_user_api_key shouldn't be called for it.
     # If provider is None or any other unhandled case:
     return None
 
@@ -546,15 +545,6 @@ def chat_request_no_model():
         temperature=0.7,
     )
 
-@pytest.fixture
-def chat_request_ollama_model():
-    return ChatCompletionRequest(
-        model="llama2",  # A model ID that model_cache.get_model_provider would identify as Ollama
-        messages=[Message(role="user", content="Hello Ollama from cache test")],
-        max_tokens=50,
-        temperature=0.7,
-    )
-
 # Tests for provider enablement functionality
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
 @patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
@@ -598,22 +588,6 @@ def test_chat_completions_google_provider_disabled(
     # The error message comes from handle_google_request in chat.py
     assert "Google provider is disabled on the server." in json_response["detail"]
 
-@patch("api_service.api.routers.chat.model_cache.get_model_provider")
-@patch("moonmind.factories.ollama_factory.chat_with_ollama", new_callable=AsyncMock)
-def test_chat_completions_ollama_provider_disabled(
-    mock_chat_ollama, mock_get_provider, chat_request_ollama_model
-):
-    """Test that disabled Ollama provider returns appropriate error"""
-    settings_in_chat_router.ollama.ollama_enabled = False
-
-    mock_get_provider.return_value = "Ollama"
-
-    response = client.post("/completions", json=chat_request_ollama_model.model_dump())
-    assert response.status_code == 400
-    json_response = response.json()
-    # The error message comes from handle_ollama_request in chat.py
-    assert "Ollama provider is disabled or not available." in json_response["detail"]
-
 # Test default model functionality
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
 @patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
@@ -656,112 +630,3 @@ def test_chat_completions_uses_default_model(
     mock_get_provider.assert_called_once_with(actual_default_model)
     mock_async_openai_client.assert_called_once_with(api_key="sk-test-user-key")
     mock_client_instance.chat.completions.create.assert_called_once()
-
-# Test Ollama integration
-@pytest.fixture
-def mock_ollama_chat_response():
-    return {
-        "message": {
-            "content": "This is a response from Ollama (mocked).",
-            "role": "assistant",
-        },
-        "done": True,
-    }
-
-@patch(
-    "moonmind.factories.ollama_factory.list_ollama_models", new_callable=AsyncMock
-)  # Outermost
-@patch("api_service.api.routers.chat.model_cache.get_model_provider")  # Middle
-@patch(
-    "api_service.api.routers.chat.chat_with_ollama", new_callable=AsyncMock
-)  # Middle - CORRECTED TARGET
-@patch("api_service.api.routers.chat.get_ollama_model")  # Innermost - CORRECTED TARGET
-def test_chat_completions_ollama_success(
-    mock_router_get_ollama_model,  # Innermost
-    mock_router_chat_with_ollama,  # Middle
-    mock_get_provider,  # Middle
-    mock_list_ollama_models,  # Outermost
-    chat_request_ollama_model,
-    mock_ollama_chat_response,
-):
-    """Test successful Ollama chat completion"""
-    settings_in_chat_router.ollama.ollama_enabled = True
-
-    mock_list_ollama_models.return_value = []  # Prevent ModelCache network call
-    mock_get_provider.return_value = "Ollama"
-    mock_router_get_ollama_model.return_value = "llama2"
-    mock_router_chat_with_ollama.return_value = mock_ollama_chat_response
-
-    response = client.post("/completions", json=chat_request_ollama_model.model_dump())
-
-    assert response.status_code == 200
-    json_response = response.json()
-    assert json_response["model"] == "llama2"
-    assert (
-        json_response["choices"][0]["message"]["content"]
-        == mock_ollama_chat_response["message"]["content"]
-    )
-    mock_router_chat_with_ollama.assert_called_once()
-
-@patch(
-    "moonmind.factories.ollama_factory.list_ollama_models", new_callable=AsyncMock
-)  # Outermost
-@patch("api_service.api.routers.chat.model_cache.get_model_provider")  # Middle
-@patch(
-    "api_service.api.routers.chat.chat_with_ollama", new_callable=AsyncMock
-)  # Middle - CORRECTED TARGET
-@patch("api_service.api.routers.chat.get_ollama_model")  # Innermost - CORRECTED TARGET
-def test_chat_completions_ollama_api_error(
-    mock_router_get_ollama_model,  # Innermost
-    mock_router_chat_with_ollama,  # Middle
-    mock_get_provider,  # Middle
-    mock_list_ollama_models,  # Outermost
-    chat_request_ollama_model,
-):
-    """Test Ollama API error handling"""
-    settings_in_chat_router.ollama.ollama_enabled = True
-
-    mock_list_ollama_models.return_value = []  # Prevent ModelCache network call
-    mock_get_provider.return_value = "Ollama"
-    mock_router_get_ollama_model.return_value = "llama2"
-    mock_router_chat_with_ollama.side_effect = Exception("Ollama connection error")
-
-    response = client.post("/completions", json=chat_request_ollama_model.model_dump())
-
-    assert response.status_code == 500
-    json_response = response.json()
-    assert "Ollama API error: Ollama connection error" in json_response["detail"]
-
-@patch(
-    "moonmind.factories.ollama_factory.list_ollama_models", new_callable=AsyncMock
-)  # Outermost
-@patch("api_service.api.routers.chat.model_cache.get_model_provider")  # Middle
-@patch(
-    "api_service.api.routers.chat.chat_with_ollama", new_callable=AsyncMock
-)  # Middle - CORRECTED TARGET
-@patch("api_service.api.routers.chat.get_ollama_model")  # Innermost - CORRECTED TARGET
-def test_chat_completions_ollama_invalid_response(
-    mock_router_get_ollama_model,  # Innermost
-    mock_router_chat_with_ollama,  # Middle
-    mock_get_provider,  # Middle
-    mock_list_ollama_models,  # Outermost
-    chat_request_ollama_model,
-):
-    """Test Ollama invalid response handling"""
-    settings_in_chat_router.ollama.ollama_enabled = True
-
-    mock_list_ollama_models.return_value = []  # Prevent ModelCache network call
-    mock_get_provider.return_value = "Ollama"
-    mock_router_get_ollama_model.return_value = "llama2"
-    mock_router_chat_with_ollama.return_value = {
-        "invalid": "response"
-    }  # Missing message field
-
-    response = client.post("/completions", json=chat_request_ollama_model.model_dump())
-
-    assert response.status_code == 500
-    json_response = response.json()
-    assert (
-        "Invalid response from Ollama API: No message returned"
-        in json_response["detail"]
-    )

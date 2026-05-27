@@ -7,7 +7,6 @@ from moonmind.config.settings import (
     FeatureFlagsSettings,
     GoogleSettings,
     OIDCSettings,
-    OllamaSettings,
     OpenAISettings,
     WorkflowSettings,
     TemporalDashboardSettings,
@@ -25,10 +24,6 @@ def app_settings_defaults():
         "openai": OpenAISettings(
             openai_chat_model="test-openai-chat",
             openai_api_key="test_openai_key",  # Required for is_provider_enabled
-        ),
-        "ollama": OllamaSettings(
-            ollama_chat_model="test-ollama-chat",
-            ollama_embedding_model="test-ollama-embed",
         ),
         # Ensure other required fields for AppSettings have defaults if not provided
         "default_chat_provider": "google",  # Default to google for fixture

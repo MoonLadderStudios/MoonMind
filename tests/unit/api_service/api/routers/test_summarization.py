@@ -43,15 +43,6 @@ async def test_get_user_llm_api_key():
         assert token == "test_openai_key"
 
 @pytest.mark.asyncio
-async def test_get_user_llm_api_key_ollama():
-    db = AsyncMock()
-    user = User()
-    user.id = "test_user_id"
-
-    token = await get_user_llm_api_key(user, "ollama", db)
-    assert token is None
-
-@pytest.mark.asyncio
 async def test_get_user_llm_api_key_no_profile():
     db = AsyncMock()
     user = User()

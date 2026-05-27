@@ -82,7 +82,6 @@ class ReadmeAiGenerator:
                     config_loader.config.llm.api_key = self.config["api_key"]
                 elif self.config["provider"].lower() == "google":
                     config_loader.config.llm.api_key = self.config["api_key"]
-                # Ollama typically doesn't use an API key
 
             logger.debug(
                 f"readme-ai config: repository={repo_path}, model={config_loader.config.llm.model}, provider={config_loader.config.llm.api}"

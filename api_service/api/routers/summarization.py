@@ -59,17 +59,11 @@ async def get_user_llm_api_key(
         logger.warning(
             f"get_user_llm_api_key called with a non-user object for provider {provider}. Auth likely disabled."
         )
-        # For "ollama", no key is needed, so we can return None. For others, this will cause the calling function to raise an error if a key is required.
         return None
     logger.info(
         f"Attempting to retrieve API key for user {user.id} and provider {provider}"
     )
     provider_lower = provider.lower()
-
-    # Ollama typically doesn't require an API key, so return None or a specific marker if needed.
-    if provider_lower == "ollama":
-        logger.info(f"No API key needed for Ollama provider for user {user.id}.")
-        return None  # Or some other indicator if your logic expects it, e.g. "ollama_no_key"
 
     profile = await profile_service.get_profile_by_user_id(db, user.id)
 
@@ -177,9 +171,7 @@ async def summarize_repository(
     logger.info(f"Resolved provider: {provider} for model {model_to_use}")
 
     user_llm_api_key = await get_user_llm_api_key(user, provider, db)
-    if (
-        not user_llm_api_key and provider.lower() != "ollama"
-    ):  # Ollama might not need a key
+    if not user_llm_api_key:
         logger.error(f"API key for provider {provider} not found for user {user_id}")
         raise HTTPException(
             status_code=400,
@@ -277,9 +269,7 @@ async def summarize_repository(
                     "provider": provider.lower(),  # readme-ai expects lowercase
                     "model": model_to_use,
                 }
-                if (
-                    user_llm_api_key
-                ):  # Only add api_key if it exists (e.g. not for Ollama)
+                if user_llm_api_key:
                     readme_config["api_key"] = user_llm_api_key
 
                 # Potentially add other readme-ai specific settings from a global config or request if needed

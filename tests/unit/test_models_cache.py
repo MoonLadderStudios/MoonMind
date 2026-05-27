@@ -30,7 +30,6 @@ def provider_settings(monkeypatch):
     monkeypatch.setattr(settings.google, "google_enabled", True)
     monkeypatch.setattr(settings.openai, "openai_api_key", "fake_openai_key_for_test")
     monkeypatch.setattr(settings.openai, "openai_enabled", True)
-    monkeypatch.setattr(settings.ollama, "ollama_enabled", True)
     monkeypatch.setattr(settings.anthropic, "anthropic_api_key", "fake_anthropic_key_for_test")
     monkeypatch.setattr(settings.anthropic, "anthropic_enabled", True)
     monkeypatch.setattr(settings.anthropic, "anthropic_chat_model", "claude-test-cache-model")
@@ -52,16 +51,12 @@ def model_mocks(provider_settings):
     openai_model.created = int(time.time()) - 1000
     openai_model.owned_by = "openai"
 
-    ollama_model = {"name": "test-ollama-model", "details": {"parameter_size": "7B"}}
-
     def _is_provider_enabled(provider_name):
         provider_name = provider_name.lower()
         if provider_name == "google":
             return settings.google.google_enabled and bool(settings.google.google_api_key)
         elif provider_name == "openai":
             return settings.openai.openai_enabled and bool(settings.openai.openai_api_key)
-        elif provider_name == "ollama":
-            return settings.ollama.ollama_enabled
         elif provider_name == "anthropic":
             return settings.anthropic.anthropic_enabled and bool(settings.anthropic.anthropic_api_key)
         return False
@@ -69,24 +64,20 @@ def model_mocks(provider_settings):
     with (
         patch("moonmind.models_cache.list_google_models", return_value=[google_model]) as mock_google,
         patch("moonmind.models_cache.list_openai_models", return_value=[openai_model]) as mock_openai,
-        patch("moonmind.models_cache.list_ollama_models", new_callable=AsyncMock) as mock_ollama,
         patch.object(AppSettings, "is_provider_enabled", side_effect=_is_provider_enabled),
         patch("moonmind.models_cache.Thread") as mock_thread_class,
         patch("moonmind.models_cache.ModelCache._periodic_refresh", return_value=None),
     ):
-        mock_ollama.return_value = [ollama_model]
         mock_thread_instance = MagicMock()
         mock_thread_class.return_value = mock_thread_instance
 
         yield {
             "google": mock_google,
             "openai": mock_openai,
-            "ollama": mock_ollama,
             "thread_class": mock_thread_class,
             "thread_instance": mock_thread_instance,
             "google_model_raw": google_model,
             "openai_model_raw": openai_model,
-            "ollama_model_raw": ollama_model,
         }
 
 # ---------------------------------------------------------------------------
@@ -124,12 +115,10 @@ def test_initial_refresh_populates_data(model_mocks):
 
     m["google"].assert_called_once()
     m["openai"].assert_called_once()
-    m["ollama"].assert_called_once()
 
-    assert len(cache.models_data) == 4
+    assert len(cache.models_data) == 3
     assert cache.model_to_provider["models/gemini-pro"] == "Google"
     assert cache.model_to_provider["gpt-3.5-turbo"] == "OpenAI"
-    assert cache.model_to_provider["test-ollama-model"] == "Ollama"
     assert cache.model_to_provider["claude-test-cache-model"] == "Anthropic"
 
     gemini = next(m for m in cache.models_data if m["id"] == "models/gemini-pro")
@@ -140,9 +129,6 @@ def test_initial_refresh_populates_data(model_mocks):
     assert openai_data["owned_by"] == "OpenAI"
     assert openai_data["context_window"] == 4096
 
-    ollama_data = next(m for m in cache.models_data if m["id"] == "test-ollama-model")
-    assert ollama_data["owned_by"] == "Ollama"
-
     anthropic_data = next(m for m in cache.models_data if m["id"] == "claude-test-cache-model")
     assert anthropic_data["owned_by"] == "Anthropic"
     assert anthropic_data["context_window"] == 200000
@@ -152,10 +138,9 @@ def test_get_all_models_after_refresh(model_mocks):
     cache.refresh_models_sync()
 
     models = cache.get_all_models()
-    assert len(models) == 4
+    assert len(models) == 3
     assert any(m["id"] == "models/gemini-pro" for m in models)
     assert any(m["id"] == "gpt-3.5-turbo" for m in models)
-    assert any(m["id"] == "test-ollama-model" for m in models)
     assert any(m["id"] == "claude-test-cache-model" for m in models)
 
 def test_get_model_provider(model_mocks):
@@ -164,7 +149,6 @@ def test_get_model_provider(model_mocks):
 
     assert cache.get_model_provider("models/gemini-pro") == "Google"
     assert cache.get_model_provider("gpt-3.5-turbo") == "OpenAI"
-    assert cache.get_model_provider("test-ollama-model") == "Ollama"
     assert cache.get_model_provider("claude-test-cache-model") == "Anthropic"
     assert cache.get_model_provider("non-existent-model") is None
 
@@ -176,16 +160,13 @@ def test_cache_refresh_logic_manual_trigger(model_mocks):
 
         m["google"].assert_called_once()
         m["openai"].assert_called_once()
-        m["ollama"].assert_called_once()
 
         m["google"].reset_mock()
         m["openai"].reset_mock()
-        m["ollama"].reset_mock()
 
         cache.refresh_models_sync()
         m["google"].assert_called_once()
         m["openai"].assert_called_once()
-        m["ollama"].assert_called_once()
         assert cache.last_refresh_time == 1000.0
 
 def test_cache_refresh_logic_stale_get_all_models(model_mocks):
@@ -200,14 +181,12 @@ def test_cache_refresh_logic_stale_get_all_models(model_mocks):
 
         m["google"].reset_mock()
         m["openai"].reset_mock()
-        m["ollama"].reset_mock()
 
     with patch("time.time", return_value=initial_time + refresh_interval + 1):
         cache.get_all_models()
 
         m["google"].assert_called_once()
         m["openai"].assert_called_once()
-        m["ollama"].assert_called_once()
         assert cache.last_refresh_time == initial_time + refresh_interval + 1
 
 def test_error_handling_google_fetch_fails(model_mocks, monkeypatch):
@@ -221,12 +200,10 @@ def test_error_handling_google_fetch_fails(model_mocks, monkeypatch):
         cache.refresh_models_sync()
 
     assert any(m["id"] == "gpt-3.5-turbo" for m in cache.models_data)
-    assert any(m["id"] == "test-ollama-model" for m in cache.models_data)
     assert any(m["id"] == "claude-test-cache-model" for m in cache.models_data)
-    assert len(cache.models_data) == 3
+    assert len(cache.models_data) == 2
     assert cache.get_model_provider("models/gemini-pro") is None
     assert cache.get_model_provider("gpt-3.5-turbo") == "OpenAI"
-    assert cache.get_model_provider("test-ollama-model") == "Ollama"
     assert any(
         "Error fetching Google models: Google API Error" in str(arg)
         for arg_list in mock_logger.exception.call_args_list
@@ -242,10 +219,8 @@ def test_missing_api_keys_skips_providers(model_mocks, monkeypatch):
     with patch.object(cache, "logger") as mock_logger:
         cache.refresh_models_sync()
 
-    assert len(cache.models_data) == 1
-    assert any(m["id"] == "test-ollama-model" for m in cache.models_data)
-    assert len(cache.model_to_provider) == 1
-    assert cache.get_model_provider("test-ollama-model") == "Ollama"
+    assert len(cache.models_data) == 0
+    assert len(cache.model_to_provider) == 0
 
     warnings_logged = [str(args[0]) for args, kwargs in mock_logger.warning.call_args_list]
     assert any("Google API key not set." in w for w in warnings_logged)
@@ -258,14 +233,12 @@ def test_force_refresh_model_cache_function(model_mocks):
 
     m["google"].assert_called_once()
     m["openai"].assert_called_once()
-    m["ollama"].assert_called_once()
 
     cache._refresh_in_progress = False
     force_refresh_model_cache()
 
     assert m["google"].call_count == 2
     assert m["openai"].call_count == 2
-    assert m["ollama"].call_count == 2
 
 @pytest.mark.asyncio
 async def test_refresh_model_cache_for_user_does_not_mutate_singleton_keys(model_mocks):
@@ -294,7 +267,6 @@ def test_periodic_refresh_thread_execution(provider_settings):
     with (
         patch("moonmind.models_cache.list_google_models") as mock_google,
         patch("moonmind.models_cache.list_openai_models") as mock_openai,
-        patch("moonmind.models_cache.list_ollama_models", new_callable=AsyncMock) as mock_ollama,
         patch.object(AppSettings, "is_provider_enabled", return_value=True),
         patch("moonmind.models_cache.Thread") as mock_thread_ctor,
     ):
@@ -311,7 +283,6 @@ def test_periodic_refresh_thread_execution(provider_settings):
 
         mock_google.return_value = [google_model]
         mock_openai.return_value = [openai_model]
-        mock_ollama.return_value = [{"name": "test-ollama-model", "details": {"parameter_size": "7B"}}]
 
         mock_thread_instance = Mock()
         mock_thread_ctor.return_value = mock_thread_instance
@@ -325,5 +296,4 @@ def test_periodic_refresh_thread_execution(provider_settings):
 
         assert mock_google.call_count == 1
         assert mock_openai.call_count == 1
-        assert mock_ollama.call_count == 1
         assert cache.last_refresh_time > 0
