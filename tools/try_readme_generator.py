@@ -38,7 +38,6 @@ async def main():
     custom_config = {
         "badge_style": "flat-square",
         # "header_style": "classic", # Example, if supported
-        # "llm_provider": "ollama", # Example, if supported and configured in readme-ai
         # "api_key": "YOUR_API_KEY_IF_NEEDED" # Example for specific LLM providers
         "model": "gpt-3.5-turbo",  # Specify a model if required by readme-ai or if you want a specific one
         "tree_depth": "2",  # Limit tree depth for faster processing in test

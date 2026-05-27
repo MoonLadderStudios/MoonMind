@@ -1,5 +1,4 @@
 from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
-from llama_index.embeddings.ollama import OllamaEmbedding
 from llama_index.embeddings.openai import OpenAIEmbedding
 
 from ..config.settings import AppSettings
@@ -15,15 +14,7 @@ def build_embed_model(
         else "google"
     )
 
-    if provider == "ollama":
-        return (
-            OllamaEmbedding(
-                base_url=settings.ollama.ollama_base_url,
-                model_name=settings.ollama.ollama_embedding_model,
-            ),
-            settings.ollama.ollama_embeddings_dimensions,
-        )
-    elif provider == "google":
+    if provider == "google":
         key_to_use = (
             google_api_key if google_api_key else settings.google.google_api_key
         )

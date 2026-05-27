@@ -55,7 +55,7 @@ def test_as_filter_metadata_omits_none_values() -> None:
     assert meta == {}
 
 def test_embedding_provider_supported_recognizes_valid_providers() -> None:
-    for provider in ("google", "openai", "ollama"):
+    for provider in ("google", "openai"):
         settings = _settings(embedding_provider=provider)
         assert settings.embedding_provider_supported()
 

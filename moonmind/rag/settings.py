@@ -8,10 +8,9 @@ from dataclasses import dataclass
 from typing import Mapping, MutableMapping, Optional
 
 from moonmind.config.settings import settings as app_settings
-from moonmind.rag.embedding import ollama_dependency_available
 from moonmind.utils.env_bool import env_to_bool
 
-_SUPPORTED_EMBEDDING_PROVIDERS = frozenset({"google", "openai", "ollama"})
+_SUPPORTED_EMBEDDING_PROVIDERS = frozenset({"google", "openai"})
 
 def _get_env(
     source: Mapping[str, str] | None, key: str, default: str | None = None
@@ -213,8 +212,6 @@ class RagRuntimeSettings:
                 else os.getenv("OPENAI_API_KEY", "")
             ).strip()
             return bool(openai_key)
-        elif provider == "ollama":
-            return ollama_dependency_available()
         return False
 
     def retrieval_execution_reason(
@@ -239,9 +236,6 @@ class RagRuntimeSettings:
             return True, "ok"
 
         if not self.embedding_provider_configured(source):
-            provider = self.embedding_provider.lower()
-            if provider == "ollama":
-                return False, "ollama_dependency_missing"
             return False, "embedding_provider_not_configured"
         if not self.qdrant_enabled:
             return False, "qdrant_disabled"

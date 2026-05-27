@@ -21,7 +21,6 @@ from api_service.db.models import User
 from moonmind.config.settings import settings
 from moonmind.factories.anthropic_factory import AnthropicFactory
 from moonmind.factories.google_factory import get_google_model
-from moonmind.factories.ollama_factory import chat_with_ollama, get_ollama_model
 from moonmind.factories.openai_factory import get_openai_model
 from moonmind.models_cache import model_cache
 from moonmind.rag.retriever import QdrantRAG
@@ -227,9 +226,7 @@ async def chat_completions(
         logger.info(f"Requested model: {model_to_use}, Provider: {provider}")
 
         user_api_key = None
-        if (
-            provider and provider != "Ollama"
-        ):  # Only get key if provider exists and is not Ollama
+        if provider:
             user_api_key = await get_user_api_key(user, provider, db)
             if not user_api_key:
                 raise HTTPException(
@@ -251,10 +248,6 @@ async def chat_completions(
         elif provider == "Google":
             return await handle_google_request(
                 request, processed_messages, model_to_use, user_api_key
-            )
-        elif provider == "Ollama":
-            return await handle_ollama_request(
-                request, processed_messages, model_to_use
             )
         elif provider == "Anthropic":
             return await handle_anthropic_request(
@@ -646,65 +639,5 @@ async def handle_anthropic_request(
             prompt_tokens=prompt_tokens_estimate,
             completion_tokens=completion_tokens_estimate,
             total_tokens=prompt_tokens_estimate + completion_tokens_estimate,
-        ),
-    )
-
-async def handle_ollama_request(
-    request: ChatCompletionRequest, messages: List, model_to_use: str
-) -> ChatCompletionResponse:
-    """Handle Ollama provider requests."""
-    # Check if Ollama is enabled
-    if not settings.is_provider_enabled("ollama"):
-        raise HTTPException(
-            status_code=400, detail="Ollama provider is disabled or not available."
-        )
-
-    ollama_model_name = get_ollama_model(model_to_use)
-    logger.info(f"Routing to Ollama for model: {ollama_model_name}")
-
-    # Prepare messages for Ollama
-    ollama_messages = [{"role": msg.role, "content": msg.content} for msg in messages]
-
-    try:
-        ollama_response = await chat_with_ollama(
-            ollama_model_name,
-            ollama_messages,
-            temperature=request.temperature,
-            max_tokens=request.max_tokens,
-        )
-    except Exception as e:
-        logger.error(f"Error calling Ollama API for model {ollama_model_name}: {e}")
-        raise HTTPException(status_code=500, detail=f"Ollama API error: {str(e)}")
-
-    if not ollama_response.get("message"):
-        raise HTTPException(
-            status_code=500,
-            detail="Invalid response from Ollama API: No message returned.",
-        )
-
-    ai_message_content = ollama_response["message"]["content"]
-
-    # Estimate tokens for Ollama response
-    prompt_tokens_est = sum(len(msg.content.split()) for msg in messages)
-    completion_tokens_est = len(ai_message_content.split())
-
-    return ChatCompletionResponse(
-        id=f"cmpl-ollama-{uuid4().hex}",
-        object="chat.completion",
-        created=int(time.time()),
-        model=ollama_model_name,
-        choices=[
-            Choice(
-                index=0,
-                message=ChoiceMessage(
-                    role="assistant", content=ai_message_content.strip()
-                ),
-                finish_reason="stop",
-            )
-        ],
-        usage=Usage(
-            prompt_tokens=prompt_tokens_est,
-            completion_tokens=completion_tokens_est,
-            total_tokens=prompt_tokens_est + completion_tokens_est,
         ),
     )

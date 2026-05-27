@@ -53,18 +53,15 @@ def test_retrieval_executable_google_requires_google_api_key():
 
     assert settings.retrieval_executable(env, preferred_transport="direct") is False
 
-def test_retrieval_execution_reason_reports_ollama_dependency(monkeypatch):
+def test_retrieval_execution_reason_reports_unsupported_provider():
     env = {
         "RAG_ENABLED": "1",
         "QDRANT_ENABLED": "1",
-        "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+        "DEFAULT_EMBEDDING_PROVIDER": "unsupported",
     }
     settings = RagRuntimeSettings.from_env(env)
-    monkeypatch.setattr(
-        "moonmind.rag.settings.ollama_dependency_available", lambda: False
-    )
 
     executable, reason = settings.retrieval_execution_reason(env)
 
     assert executable is False
-    assert reason == "ollama_dependency_missing"
+    assert reason == "embedding_provider_unsupported"

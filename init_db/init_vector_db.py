@@ -79,8 +79,6 @@ if __name__ == "__main__":
                 embed_model_kwargs["google_api_key"] = key_to_use
             elif provider == "openai":
                 embed_model_kwargs["openai_api_key"] = key_to_use
-            elif provider == "ollama":
-                embed_model_kwargs = {}
             else:
                 raise ValueError(f"Unsupported default embed provider: {provider}.")
 
