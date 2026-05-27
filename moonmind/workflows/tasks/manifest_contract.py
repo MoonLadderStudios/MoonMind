@@ -23,7 +23,6 @@ ALLOWED_OPTION_KEYS = frozenset({"dryRun", "forceFull", "maxDocs"})
 EMBEDDING_PROVIDER_CAPABILITIES = {
     "openai": "openai",
     "google": "google",
-    "ollama": "ollama",
 }
 VECTOR_STORE_CAPABILITIES = {
     "qdrant": "qdrant",

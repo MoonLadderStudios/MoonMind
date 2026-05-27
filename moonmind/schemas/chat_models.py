@@ -50,5 +50,4 @@ from enum import Enum
 class ModelProvider(Enum):
     GOOGLE = "google"
     OPENAI = "openai"
-    OLLAMA = "ollama"
     ANTHROPIC = "anthropic"

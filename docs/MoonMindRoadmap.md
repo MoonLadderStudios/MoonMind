@@ -218,8 +218,8 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 **README claim:** *"Swap between proprietary cloud models and local open-source models with a single configuration change."* / *"Multi-Agent Chaining: Break massive goals into smaller steps. Only use expensive models for steps that need them."*
 
 ### What's shipped
-- Provider SDK clients (OpenAI, Google, Anthropic, Ollama)
-- Optional Ollama and vLLM compose profiles
+- Provider SDK clients (OpenAI, Google, Anthropic)
+- Optional vLLM compose profiles
 - Runtime selector per task submission
 - Model routing in chat endpoint
 

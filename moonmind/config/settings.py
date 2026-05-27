@@ -1463,24 +1463,6 @@ class OpenAISettings(BaseSettings):
 
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
-class OllamaSettings(BaseSettings):
-    """Ollama settings"""
-
-    ollama_base_url: str = Field("http://ollama:11434", alias="OLLAMA_BASE_URL")
-    ollama_embedding_model: str = Field(
-        "hf.co/tensorblock/gte-Qwen2-7B-instruct-GGUF:Q6_K",
-        alias="OLLAMA_EMBEDDING_MODEL",
-    )
-    ollama_embeddings_dimensions: int = Field(
-        3584, alias="OLLAMA_EMBEDDINGS_DIMENSIONS"
-    )
-    ollama_keep_alive: str = Field("-1m", alias="OLLAMA_KEEP_ALIVE")
-    ollama_chat_model: str = Field("devstral:24b", alias="OLLAMA_CHAT_MODEL")
-    ollama_modes: str = Field("chat", alias="OLLAMA_MODES")
-    ollama_enabled: bool = Field(True, alias="OLLAMA_ENABLED")
-
-    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
-
 class ConfluenceSettings(BaseSettings):
     """Confluence specific settings"""
 
@@ -2060,7 +2042,6 @@ class AppSettings(BaseSettings):
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     google: GoogleSettings = Field(default_factory=GoogleSettings)
     openai: OpenAISettings = Field(default_factory=OpenAISettings)
-    ollama: OllamaSettings = Field(default_factory=OllamaSettings)
     anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
     github: GitHubSettings = Field(default_factory=GitHubSettings)
     google_drive: GoogleDriveSettings = Field(default_factory=GoogleDriveSettings)
@@ -2255,11 +2236,6 @@ class AppSettings(BaseSettings):
         "google", alias="DEFAULT_EMBEDDING_PROVIDER"
     )
 
-    # Legacy settings for backwards compatibility
-    default_embeddings_provider: str = Field(
-        "ollama", alias="DEFAULT_EMBEDDINGS_PROVIDER"
-    )
-
     # Model cache settings
     model_cache_refresh_interval: int = Field(
         3600, alias="MODEL_CACHE_REFRESH_INTERVAL"
@@ -2329,8 +2305,6 @@ class AppSettings(BaseSettings):
             return self.google.google_enabled and bool(self.google.google_api_key)
         elif provider == "openai":
             return self.openai.openai_enabled and bool(self.openai.openai_api_key)
-        elif provider == "ollama":
-            return self.ollama.ollama_enabled
         elif provider == "anthropic":
             return self.anthropic.anthropic_enabled and bool(
                 self.anthropic.anthropic_api_key
@@ -2345,8 +2319,6 @@ class AppSettings(BaseSettings):
             return self.google.google_chat_model
         elif provider == "openai":
             return self.openai.openai_chat_model
-        elif provider == "ollama":
-            return self.ollama.ollama_chat_model
         elif provider == "anthropic":
             return self.anthropic.anthropic_chat_model
         else:

@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import time
 from threading import Lock, Thread
@@ -6,7 +5,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from moonmind.config.settings import settings
 from moonmind.factories.google_factory import list_google_models
-from moonmind.factories.ollama_factory import list_ollama_models
 from moonmind.factories.openai_factory import list_openai_models
 
 logger = logging.getLogger(__name__)
@@ -191,49 +189,6 @@ class ModelCache:
         except Exception as e:
             self.logger.exception(f"Error fetching OpenAI models: {e}")
 
-        # Fetch Ollama Models
-        try:
-            if settings.is_provider_enabled("ollama"):
-                ollama_models_raw = asyncio.run(list_ollama_models())
-                self.logger.info(f"Fetched {len(ollama_models_raw)} raw Ollama models.")
-                for model in ollama_models_raw:
-                    model_name = model.get("name", "")
-                    if not model_name:
-                        continue
-
-                    # Ollama models typically have flexible context windows, defaulting to 8192
-                    context_window = 8192
-
-                    # Assume all Ollama models support chat completion and text completion
-                    capabilities = {
-                        "chat_completion": True,
-                        "text_completion": True,
-                        "embedding": False,  # Most chat models don't do embeddings
-                    }
-
-                    model_entry = {
-                        "id": model_name,
-                        "object": "model",
-                        "created": int(time.time()),
-                        "owned_by": "Ollama",
-                        "permission": [],
-                        "root": model_name,
-                        "parent": None,
-                        "context_window": context_window,
-                        "capabilities": capabilities,
-                    }
-                    all_models_data.append(model_entry)
-                    model_to_provider_map[model_name] = "Ollama"
-            else:
-                if not settings.ollama.ollama_enabled:
-                    self.logger.info("Ollama provider is disabled.")
-                else:
-                    self.logger.info(
-                        "Ollama provider is enabled but may not be available."
-                    )
-        except Exception as e:
-            self.logger.exception(f"Error fetching Ollama models: {e}")
-
         # Fetch Anthropic Models
         # Anthropic SDK does not have a public "list_models" function like OpenAI.
         # Models are typically known and specified directly.
@@ -317,7 +272,6 @@ class ModelCache:
                 # So we need to handle this potential mismatch.
                 # For Google, model.name is "models/gemini..."
                 # For OpenAI, model.id is "gpt-..."
-                # For Ollama, model_name is "llama2:latest"
                 # For Anthropic, anthropic_model_name is "claude..."
 
                 # We need to ensure the comparison is fair.
@@ -346,7 +300,7 @@ class ModelCache:
                         )
                 elif (
                     current_model_owner == default_provider_name
-                ):  # For OpenAI, Ollama, Anthropic
+                ):  # For OpenAI and Anthropic
                     is_default_model = current_model_id == default_chat_model_id
 
                 if is_default_model:

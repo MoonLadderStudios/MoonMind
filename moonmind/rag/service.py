@@ -65,7 +65,6 @@ class ContextRetrievalService:
                     model=self._settings.embedding_model,
                     google_api_key=self._env.get("GOOGLE_API_KEY"),
                     openai_api_key=self._env.get("OPENAI_API_KEY"),
-                    ollama_model=self._env.get("OLLAMA_EMBEDDING_MODEL"),
                 )
             )
         return self._embedding

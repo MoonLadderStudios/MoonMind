@@ -48,7 +48,7 @@ def test_run_preflight_missing_rg_raises_clear_diagnostic(monkeypatch) -> None:
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     with pytest.raises(RuntimeError, match="Codex runtime requires ripgrep"):
-        cli.run_preflight(env={"DEFAULT_EMBEDDING_PROVIDER": "ollama"})
+        cli.run_preflight(env={"DEFAULT_EMBEDDING_PROVIDER": "openai"})
 
     assert calls == []
 
@@ -79,7 +79,7 @@ def test_run_preflight_login_failure_raises(monkeypatch) -> None:
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     with pytest.raises(RuntimeError):
-        cli.run_preflight(env={"DEFAULT_EMBEDDING_PROVIDER": "ollama"})
+        cli.run_preflight(env={"DEFAULT_EMBEDDING_PROVIDER": "openai"})
 
 def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> None:
     """Token-present startup should run gh auth login/setup/status in order."""
@@ -103,7 +103,7 @@ def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> N
     cli.run_preflight(
         env={
             "GITHUB_TOKEN": "ghp-test-token",
-            "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+            "DEFAULT_EMBEDDING_PROVIDER": "openai",
         }
     )
 
@@ -161,7 +161,7 @@ def test_run_preflight_without_github_token_skips_gh_auth(monkeypatch) -> None:
     monkeypatch.setattr(cli, "verify_cli_is_executable", fake_verify)
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    cli.run_preflight(env={"DEFAULT_EMBEDDING_PROVIDER": "ollama"})
+    cli.run_preflight(env={"DEFAULT_EMBEDDING_PROVIDER": "openai"})
 
     assert verifications == ["codex", "rg"]
     assert calls == [
@@ -190,7 +190,7 @@ def test_run_preflight_skips_non_matching_stage_skills(monkeypatch) -> None:
 
     cli.run_preflight(
         env={
-            "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+            "DEFAULT_EMBEDDING_PROVIDER": "openai",
             "WORKFLOW_DEFAULT_SKILL": "custom-skill",
             "WORKFLOW_DISCOVER_SKILL": "custom-skill",
             "WORKFLOW_SUBMIT_SKILL": "custom-skill",
@@ -225,7 +225,7 @@ def test_run_preflight_uses_workflow_skill_aliases(monkeypatch) -> None:
 
     cli.run_preflight(
         env={
-            "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+            "DEFAULT_EMBEDDING_PROVIDER": "openai",
             "WORKFLOW_DEFAULT_SKILL": "custom-skill",
             "WORKFLOW_DISCOVER_SKILL": "custom-skill",
             "WORKFLOW_SUBMIT_SKILL": "custom-skill",
@@ -260,7 +260,7 @@ def test_run_preflight_respects_workflow_use_skills_alias(monkeypatch) -> None:
 
     cli.run_preflight(
         env={
-            "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+            "DEFAULT_EMBEDDING_PROVIDER": "openai",
             "WORKFLOW_USE_SKILLS": "false",
             "WORKFLOW_DEFAULT_SKILL": "speckit",
         }
@@ -296,7 +296,7 @@ def test_run_preflight_missing_gh_raises_when_token_present(monkeypatch) -> None
         cli.run_preflight(
             env={
                 "GITHUB_TOKEN": "ghp-test-token",
-                "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+                "DEFAULT_EMBEDDING_PROVIDER": "openai",
             }
         )
 
@@ -327,7 +327,7 @@ def test_run_preflight_redacts_token_in_error_output(monkeypatch) -> None:
         cli.run_preflight(
             env={
                 "GITHUB_TOKEN": token,
-                "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+                "DEFAULT_EMBEDDING_PROVIDER": "openai",
             }
         )
 
@@ -472,7 +472,7 @@ def test_run_preflight_gemini_runtime_verifies_gemini_not_codex(monkeypatch) -> 
     cli.run_preflight(
         env={
             "MOONMIND_WORKER_RUNTIME": "gemini_cli",
-            "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+            "DEFAULT_EMBEDDING_PROVIDER": "openai",
         }
     )
 
@@ -488,7 +488,7 @@ def test_run_preflight_claude_runtime_requires_api_key(monkeypatch) -> None:
         cli.run_preflight(
             env={
                 "MOONMIND_WORKER_RUNTIME": "claude",
-                "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+                "DEFAULT_EMBEDDING_PROVIDER": "openai",
             }
         )
 
@@ -514,7 +514,7 @@ def test_run_preflight_claude_runtime_verifies_version_with_key(monkeypatch) -> 
     cli.run_preflight(
         env={
             "MOONMIND_WORKER_RUNTIME": "claude",
-            "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+            "DEFAULT_EMBEDDING_PROVIDER": "openai",
             "ANTHROPIC_API_KEY": "test-key",
         }
     )
@@ -546,7 +546,7 @@ def test_run_preflight_claude_runtime_accepts_anthropic_auth_token(monkeypatch) 
     cli.run_preflight(
         env={
             "MOONMIND_WORKER_RUNTIME": "claude",
-            "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+            "DEFAULT_EMBEDDING_PROVIDER": "openai",
             "ANTHROPIC_AUTH_TOKEN": "minimax-token",
         }
     )
@@ -563,7 +563,7 @@ def test_run_preflight_jules_runtime_requires_configuration(monkeypatch) -> None
         cli.run_preflight(
             env={
                 "MOONMIND_WORKER_RUNTIME": "jules",
-                "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+                "DEFAULT_EMBEDDING_PROVIDER": "openai",
             }
         )
 
@@ -589,7 +589,7 @@ def test_run_preflight_jules_runtime_succeeds_with_configuration(monkeypatch) ->
     cli.run_preflight(
         env={
             "MOONMIND_WORKER_RUNTIME": "jules",
-            "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+            "DEFAULT_EMBEDDING_PROVIDER": "openai",
             "JULES_ENABLED": "true",
             "JULES_API_URL": "https://jules.example.test",
             "JULES_API_KEY": "test-key",
@@ -623,7 +623,7 @@ def test_run_preflight_universal_without_claude_capability_skips_checks(
     cli.run_preflight(
         env={
             "MOONMIND_WORKER_RUNTIME": "universal",
-            "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+            "DEFAULT_EMBEDDING_PROVIDER": "openai",
             "MOONMIND_WORKER_CAPABILITIES": "codex,gemini_cli",        }
     )
 
@@ -647,7 +647,7 @@ def test_run_preflight_universal_with_claude_capability_requires_key(
         cli.run_preflight(
             env={
                 "MOONMIND_WORKER_RUNTIME": "universal",
-                "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+                "DEFAULT_EMBEDDING_PROVIDER": "openai",
                 "MOONMIND_WORKER_CAPABILITIES": "codex,claude,gemini_cli",
             }
         )
@@ -665,7 +665,7 @@ def test_run_preflight_universal_without_capabilities_requires_claude_key(
         cli.run_preflight(
             env={
                 "MOONMIND_WORKER_RUNTIME": "universal",
-                "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+                "DEFAULT_EMBEDDING_PROVIDER": "openai",
             }
         )
 
@@ -693,7 +693,7 @@ def test_run_preflight_universal_with_claude_capability_runs_checks(
     cli.run_preflight(
         env={
             "MOONMIND_WORKER_RUNTIME": "universal",
-            "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+            "DEFAULT_EMBEDDING_PROVIDER": "openai",
             "MOONMIND_WORKER_CAPABILITIES": "codex,claude,gemini_cli",
             "ANTHROPIC_API_KEY": "secret",
         }
@@ -734,7 +734,7 @@ def test_run_preflight_gemini_oauth_requires_gemini_home(monkeypatch) -> None:
             env={
                 "MOONMIND_WORKER_RUNTIME": "gemini_cli",
                 "MOONMIND_GEMINI_CLI_AUTH_MODE": "oauth",
-                "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+                "DEFAULT_EMBEDDING_PROVIDER": "openai",
             }
         )
 
@@ -762,7 +762,7 @@ def test_run_preflight_gemini_invalid_auth_mode_redacts_value(monkeypatch) -> No
             env={
                 "MOONMIND_WORKER_RUNTIME": "gemini_cli",
                 "MOONMIND_GEMINI_CLI_AUTH_MODE": "AIza-secret-like-value",
-                "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+                "DEFAULT_EMBEDDING_PROVIDER": "openai",
             }
         )
 
@@ -800,7 +800,7 @@ def test_run_preflight_gemini_oauth_requires_writable_gemini_home(monkeypatch) -
                 "MOONMIND_WORKER_RUNTIME": "gemini_cli",
                 "MOONMIND_GEMINI_CLI_AUTH_MODE": "oauth",
                 "GEMINI_HOME": "/tmp/gemini-auth",
-                "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+                "DEFAULT_EMBEDDING_PROVIDER": "openai",
             }
         )
 
@@ -830,7 +830,7 @@ def test_run_preflight_claude_oauth_with_valid_home_succeeds(monkeypatch) -> Non
             "MOONMIND_WORKER_RUNTIME": "claude",
             "MOONMIND_CLAUDE_CLI_AUTH_MODE": "oauth",
             "CLAUDE_HOME": "/tmp/claude-auth",
-            "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+            "DEFAULT_EMBEDDING_PROVIDER": "openai",
         }
     )
 
@@ -848,7 +848,7 @@ def test_run_preflight_claude_oauth_missing_home_raises(monkeypatch) -> None:
             env={
                 "MOONMIND_WORKER_RUNTIME": "claude",
                 "MOONMIND_CLAUDE_CLI_AUTH_MODE": "oauth",
-                "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+                "DEFAULT_EMBEDDING_PROVIDER": "openai",
             }
         )
 
@@ -866,7 +866,7 @@ def test_run_preflight_claude_oauth_non_directory_home_raises(monkeypatch) -> No
                 "MOONMIND_WORKER_RUNTIME": "claude",
                 "MOONMIND_CLAUDE_CLI_AUTH_MODE": "oauth",
                 "CLAUDE_HOME": "/tmp/no-such-dir",
-                "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+                "DEFAULT_EMBEDDING_PROVIDER": "openai",
             }
         )
 
@@ -882,7 +882,7 @@ def test_run_preflight_claude_invalid_auth_mode_redacts_value(monkeypatch) -> No
             env={
                 "MOONMIND_WORKER_RUNTIME": "claude",
                 "MOONMIND_CLAUDE_CLI_AUTH_MODE": "AIza-secret-like-value",
-                "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+                "DEFAULT_EMBEDDING_PROVIDER": "openai",
             }
         )
 
@@ -933,7 +933,7 @@ def test_run_preflight_claude_oauth_with_configured_mount_path_succeeds(monkeypa
             "MOONMIND_WORKER_RUNTIME": "claude",
             "MOONMIND_CLAUDE_CLI_AUTH_MODE": "oauth",
             "CLAUDE_HOME": "/home/app/.claude",
-            "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+            "DEFAULT_EMBEDDING_PROVIDER": "openai",
         }
     )
 
