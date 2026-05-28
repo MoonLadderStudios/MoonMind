@@ -9426,7 +9426,6 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
             <input
               type="checkbox"
               checked={showAdvancedStepOptions}
-              aria-label="Show advanced step options"
               onChange={(event) =>
                 setShowAdvancedStepOptions(event.target.checked)
               }

@@ -4391,8 +4391,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   gap: 0.5rem;
 }
 
-.queue-info-toggle,
-.queue-dependencies-info-toggle {
+.queue-info-toggle {
   width: 2rem;
   height: 2rem;
   border-radius: 999px;
@@ -4401,15 +4400,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   border-color: rgb(var(--mm-accent) / 0.55);
 }
 
-.queue-info-toggle svg,
-.queue-dependencies-info-toggle svg {
+.queue-info-toggle svg {
   width: 1.15rem;
   height: 1.15rem;
   stroke-width: 2;
 }
 
-.queue-info-toggle:hover,
-.queue-dependencies-info-toggle:hover {
+.queue-info-toggle:hover {
   color: rgb(var(--mm-ink));
 }
 
@@ -4431,14 +4428,12 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 @media (max-width: 640px) {
-  .queue-info-toggle,
-  .queue-dependencies-info-toggle {
+  .queue-info-toggle {
     width: 2.4rem;
     height: 2.4rem;
   }
 
-  .queue-info-toggle svg,
-  .queue-dependencies-info-toggle svg {
+  .queue-info-toggle svg {
     width: 1.4rem;
     height: 1.4rem;
   }
