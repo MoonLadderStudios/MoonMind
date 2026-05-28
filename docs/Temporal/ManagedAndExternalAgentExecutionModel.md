@@ -9,7 +9,8 @@ Related:
 - [`docs/Temporal/ActivityCatalogAndWorkerTopology.md`](./ActivityCatalogAndWorkerTopology.md)
 - [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)
 - [`docs/ManagedAgents/LiveLogs.md`](../ManagedAgents/LiveLogs.md) — canonical design for artifact-first log capture, live observability streaming, and the MoonMind-native log viewer UI
-- [`docs/ManagedAgents/CodexCliManagedSessions.md`](../ManagedAgents/CodexCliManagedSessions.md) — desired-state contract for the Codex task-scoped managed session plane
+- [`docs/ManagedAgents/CodexCliManagedSessions.md`](../ManagedAgents/CodexCliManagedSessions.md) — Codex CLI binding for the task-scoped managed session plane
+- [`docs/ManagedAgents/ClaudeCodeManagedSessions.md`](../ManagedAgents/ClaudeCodeManagedSessions.md) — Claude Code binding for the task-scoped managed session plane
 
 ---
 
@@ -547,6 +548,18 @@ Examples:
 * Gemini CLI
 * Claude Code
 * Codex CLI
+
+Managed runtimes and managed sessions are related but distinct:
+
+* A **managed runtime run** is one supervised CLI/API execution represented by `MoonMind.AgentRun`.
+* A **managed session** is a task-scoped runtime container and continuity boundary represented by `MoonMind.AgentSession`.
+
+The session-capable managed runtime set is:
+
+* `codex_cli`
+* `claude_code`
+
+`gemini_cli` remains a managed runtime strategy and can use the same session plane once its adapter exposes a session-capable binding.
 
 ## 8.1 Key rule
 

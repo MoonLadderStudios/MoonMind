@@ -52,15 +52,15 @@ def test_inventory_includes_representative_temporal_contracts() -> None:
 
     assert by_name[("activity", "artifact.read")].response_model is not None
     assert by_name[("workflow", "MoonMind.AgentSession")].request_model.name == (
-        "CodexManagedSessionWorkflowInput"
+        "ManagedSessionWorkflowInput"
     )
     assert by_name[("update", "SendFollowUp")].request_model.name == (
-        "CodexManagedSessionSendFollowUpRequest"
+        "ManagedSessionSendFollowUpRequest"
     )
     assert by_name[("signal", "DependencyResolved")].request_model.name == (
         "DependencyResolvedSignalPayload"
     )
     assert by_name[("query", "get_status")].response_model is not None
     assert by_name[("continue_as_new", "MoonMind.AgentSession")].request_model.name == (
-        "CodexManagedSessionWorkflowInput"
+        "ManagedSessionWorkflowInput"
     )

@@ -18,7 +18,7 @@ class MoonMindManagedSessionReconcileWorkflow:
     @workflow.run
     async def run(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         del payload
-        workflow.set_current_details("Reconciling managed Codex sessions")
+        workflow.set_current_details("Reconciling managed runtime sessions")
         workflow.upsert_search_attributes(
             {
                 "SessionStatus": ["reconciling"],
@@ -49,10 +49,10 @@ class MoonMindManagedSessionReconcileWorkflow:
                     maximum_attempts=route.retries.max_attempts,
                     non_retryable_error_types=list(route.retries.non_retryable_error_codes),
                 ),
-                summary="Reconcile managed Codex sessions",
+                summary="Reconcile managed runtime sessions",
             )
         except Exception:
-            workflow.set_current_details("Managed Codex session reconcile failed")
+            workflow.set_current_details("Managed runtime session reconcile failed")
             workflow.upsert_search_attributes(
                 {
                     "SessionStatus": ["failed"],
@@ -62,7 +62,7 @@ class MoonMindManagedSessionReconcileWorkflow:
             raise
         normalized = result or {}
         is_degraded = bool(normalized.get("degradedSessionRecords"))
-        workflow.set_current_details("Managed Codex session reconcile complete")
+        workflow.set_current_details("Managed runtime session reconcile complete")
         workflow.upsert_search_attributes(
             {
                 "SessionStatus": ["completed"],

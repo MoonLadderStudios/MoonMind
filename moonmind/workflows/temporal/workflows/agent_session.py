@@ -20,7 +20,7 @@ with workflow.unsafe.imports_passed_through():
         CodexManagedSessionHandle,
         CodexManagedSessionInterruptRequest,
         CodexManagedSessionLocator,
-        CodexManagedSessionPlaneContract,
+        ManagedSessionPlaneContract,
         CodexManagedSessionRequestTrackingEntry,
         CodexManagedSessionSendFollowUpRequest,
         CodexManagedSessionSnapshot,
@@ -32,6 +32,7 @@ with workflow.unsafe.imports_passed_through():
         CodexManagedSessionWorkflowInput,
         FetchCodexManagedSessionSummaryRequest,
         InterruptCodexManagedSessionTurnRequest,
+        managed_session_runtime_family_for_runtime_id,
         TerminateCodexManagedSessionRequest,
         PublishCodexManagedSessionArtifactsRequest,
         SendCodexManagedSessionTurnRequest,
@@ -54,7 +55,11 @@ DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 class MoonMindAgentSessionWorkflow:
     @workflow.init
     def __init__(self, session_input: CodexManagedSessionWorkflowInput) -> None:
-        self._contract = CodexManagedSessionPlaneContract()
+        self._contract = ManagedSessionPlaneContract(
+            runtime_family=managed_session_runtime_family_for_runtime_id(
+                session_input.runtime_id
+            )
+        )
         self._binding = CodexManagedSessionBinding.from_input(
             workflow_id=workflow.info().workflow_id,
             session_input=session_input,
@@ -125,14 +130,14 @@ class MoonMindAgentSessionWorkflow:
         self, activity_name: str, payload: Mapping[str, Any] | None
     ) -> str:
         action = {
-            "agent_runtime.launch_session": "Launch managed Codex session",
-            "agent_runtime.send_turn": "Send managed Codex turn",
-            "agent_runtime.steer_turn": "Steer managed Codex turn",
-            "agent_runtime.interrupt_turn": "Interrupt managed Codex turn",
-            "agent_runtime.clear_session": "Clear managed Codex session",
-            "agent_runtime.terminate_session": "Terminate managed Codex session",
-            "agent_runtime.fetch_session_summary": "Fetch managed Codex session summary",
-            "agent_runtime.publish_session_artifacts": "Publish managed Codex session artifacts",
+            "agent_runtime.launch_session": "Launch managed runtime session",
+            "agent_runtime.send_turn": "Send managed runtime turn",
+            "agent_runtime.steer_turn": "Steer managed runtime turn",
+            "agent_runtime.interrupt_turn": "Interrupt managed runtime turn",
+            "agent_runtime.clear_session": "Clear managed runtime session",
+            "agent_runtime.terminate_session": "Terminate managed runtime session",
+            "agent_runtime.fetch_session_summary": "Fetch managed runtime session summary",
+            "agent_runtime.publish_session_artifacts": "Publish managed runtime session artifacts",
         }.get(activity_name, activity_name)
         identifiers = []
         payload = payload or {}
@@ -176,7 +181,7 @@ class MoonMindAgentSessionWorkflow:
     def _current_details(self, transition: str) -> str:
         binding = self._require_binding()
         parts = [
-            f"Codex managed session {transition}",
+            f"Managed runtime session {transition}",
             f"session={binding.session_id}",
             f"runtime={binding.runtime_id}",
             f"epoch={binding.session_epoch}",

@@ -455,7 +455,7 @@ class TemporalClientAdapter:
                 ),
                 static_summary="Managed session reconcile",
                 static_details=(
-                    "Recurring operational sweeper for managed Codex sessions"
+                    "Recurring operational sweeper for managed runtime sessions"
                 ),
             ),
             spec=build_schedule_spec(

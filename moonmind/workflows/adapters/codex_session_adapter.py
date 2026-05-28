@@ -1,4 +1,4 @@
-"""Workflow-side adapter for managed Codex task-scoped sessions."""
+"""Workflow-side adapter for managed task-scoped runtime sessions."""
 
 from __future__ import annotations
 
@@ -39,7 +39,8 @@ from moonmind.schemas.managed_session_models import (
     PublishCodexManagedSessionArtifactsRequest,
     SendCodexManagedSessionTurnRequest,
     TerminateCodexManagedSessionRequest,
-    canonical_codex_managed_runtime_id,
+    canonical_managed_session_runtime_id,
+    managed_session_runtime_family_for_runtime_id,
 )
 from moonmind.schemas.temporal_payload_policy import compact_temporal_ref_metadata
 from moonmind.workflows.adapters.managed_agent_adapter import (
@@ -286,7 +287,7 @@ class CodexSessionExecutionState(BaseModel):
     result: AgentRunResult = Field(..., alias="result")
 
 class CodexSessionAdapter(ManagedAgentAdapter):
-    """Managed-session-backed ``AgentAdapter`` for Codex."""
+    """Managed session-backed ``AgentAdapter`` for session-capable runtimes."""
 
     def __init__(
         self,
@@ -332,9 +333,13 @@ class CodexSessionAdapter(ManagedAgentAdapter):
 
     async def start(self, request: AgentExecutionRequest) -> AgentRunHandle:
         binding = self._require_binding(request)
-        runtime_id = self._runtime_id or canonical_codex_managed_runtime_id(request.agent_id)
+        runtime_id = self._runtime_id or canonical_managed_session_runtime_id(
+            request.agent_id
+        )
         if runtime_id is None:
-            raise ValueError("CodexSessionAdapter only supports managed Codex runtimes")
+            raise ValueError(
+                "CodexSessionAdapter only supports managed-session runtimes"
+            )
         profile = await self._resolve_profile(
             execution_profile_ref=request.execution_profile_ref,
             runtime_id=runtime_id,
@@ -466,7 +471,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 raw_reason = str(metadata.get("reason") or turn_error.message or "").strip() or None
                 reason = _clamp_agent_run_result_summary(
                     raw_reason,
-                    default="Codex managed-session turn failed",
+                    default="Managed session turn failed",
                 )
                 failure_result = self._persist_failed_run_state(
                     run_id=run_id,
@@ -598,7 +603,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 reason = _clamp_agent_run_result_summary(
                     raw_reason,
                     default=(
-                        "Codex managed-session turn failed"
+                        "Managed session turn failed"
                         f" with status '{turn_response.status}'"
                     ),
                 )
@@ -676,7 +681,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                         else "Codex skill declared no-op."
                     )
                 else:
-                    default_summary = "Codex managed-session turn completed."
+                    default_summary = "Managed session turn completed."
                 assistant_text = _clamp_agent_run_result_summary(
                     turn_response.metadata.get("assistantText")
                     or summary.metadata.get("lastAssistantText"),
@@ -732,7 +737,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     locator=current_locator.model_dump(mode="json", by_alias=True),
                     active_turn_id=current_active_turn_id,
                     summary=exc,
-                    default_summary="Codex managed-session turn failed",
+                    default_summary="Managed session turn failed",
                     output_refs=self._merge_output_refs(
                         turn_response.output_refs,
                         publication.published_artifact_refs if publication is not None else (),
@@ -810,7 +815,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     locator=current_locator.model_dump(mode="json", by_alias=True),
                     active_turn_id=current_active_turn_id,
                     summary=exc,
-                    default_summary="Codex managed-session turn failed",
+                    default_summary="Managed session turn failed",
                     started_at=started_at,
                     finished_at=_current_time(),
                     instruction_ref=original_instruction_ref,
@@ -819,7 +824,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     profile_id=launch_context.profile_id or None,
                 )
                 raise CodexSessionRunFailedError(
-                    str(exc) or "Codex managed-session turn failed",
+                    str(exc) or "Managed session turn failed",
                     result=failure_result,
                 ) from exc
             raise
@@ -888,7 +893,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                         result = result.model_copy(update={"metadata": metadata})
             return result
         return AgentRunResult(
-            summary="Codex managed-session result not found.",
+            summary="Managed session result not found.",
             failureClass="execution_error",
         )
 
@@ -923,7 +928,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             )
 
         canceled_result = AgentRunResult(
-            summary="Canceled Codex managed-session turn.",
+            summary="Canceled managed session turn.",
             failureClass="user_error",
             metadata=state.result.metadata,
         )
@@ -1091,8 +1096,15 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         if instructions:
             return instructions
         raise ValueError(
-            "CodexSessionAdapter requires prepare_turn_instructions to return non-empty text"
+            "Managed session adapter requires prepare_turn_instructions to return "
+            "non-empty text"
         )
+
+    @staticmethod
+    def _append_runtime_note(instructions: str, *, runtime_id: str) -> str:
+        if runtime_id == "codex_cli":
+            return append_managed_codex_runtime_note(instructions)
+        return instructions
 
     async def _legacy_instructions_for_request(
         self,
@@ -1111,19 +1123,25 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 request=request,
                 workspace_path=workspace_path,
             )
-            return append_managed_codex_runtime_note(
-                str(request.instruction_ref or instruction_ref).strip()
+            return self._append_runtime_note(
+                str(request.instruction_ref or instruction_ref).strip(),
+                runtime_id=binding.runtime_id,
             )
         parameters = request.parameters if isinstance(request.parameters, dict) else {}
         instructions = str(parameters.get("instructions") or "").strip()
         if instructions:
-            return append_managed_codex_runtime_note(instructions)
-        raise ValueError("CodexSessionAdapter requires instructionRef or parameters.instructions")
+            return self._append_runtime_note(
+                instructions,
+                runtime_id=binding.runtime_id,
+            )
+        raise ValueError(
+            "Managed session adapter requires instructionRef or parameters.instructions"
+        )
 
     def _require_binding(self, request: AgentExecutionRequest) -> CodexManagedSessionBinding:
         binding = request.managed_session
         if binding is None:
-            raise ValueError("CodexSessionAdapter requires request.managed_session")
+            raise ValueError("Managed session adapter requires request.managed_session")
         return binding
 
     async def _ensure_remote_session(
@@ -1166,6 +1184,9 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             environment=environment,
         )
         launch_request = LaunchCodexManagedSessionRequest(
+            runtimeFamily=managed_session_runtime_family_for_runtime_id(
+                active_binding.runtime_id
+            ),
             taskRunId=active_binding.task_run_id,
             workflowId=self._workflow_id,
             sessionId=active_binding.session_id,
