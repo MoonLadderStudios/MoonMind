@@ -123,9 +123,7 @@ def build_deployment_update_tool_definition_payload() -> dict[str, Any]:
             "activity_type": "mm.tool.execute",
             "selector": {"mode": "by_capability"},
         },
-        "requirements": {
-            "capabilities": ["docker_workload", "deployment_control", "docker_admin"],
-        },
+        "requirements": {"capabilities": ["deployment_control", "docker_admin"]},
         "policies": {
             "timeouts": {
                 "start_to_close_seconds": 900,

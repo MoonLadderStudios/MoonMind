@@ -15,6 +15,7 @@ from moonmind.workflows.temporal.activity_catalog import (
     LLM_FLEET,
     SANDBOX_FLEET,
     WORKFLOW_FLEET,
+    DEPLOYMENT_FLEET,
     TemporalActivityCatalog,
     TemporalActivityCatalogError,
     TemporalWorkerFleet,
@@ -35,6 +36,7 @@ ALLOWED_TEMPORAL_WORKER_FLEETS = (
     SANDBOX_FLEET,
     INTEGRATIONS_FLEET,
     AGENT_RUNTIME_FLEET,
+    DEPLOYMENT_FLEET,
 )
 
 _FLEET_SERVICE_NAMES = {
@@ -44,6 +46,7 @@ _FLEET_SERVICE_NAMES = {
     SANDBOX_FLEET: "temporal-worker-sandbox",
     INTEGRATIONS_FLEET: "temporal-worker-integrations",
     AGENT_RUNTIME_FLEET: "temporal-worker-agent-runtime",
+    DEPLOYMENT_FLEET: "temporal-worker-deployment-control",
 }
 _FLEET_RESOURCE_CLASSES = {
     WORKFLOW_FLEET: "light",
@@ -52,6 +55,7 @@ _FLEET_RESOURCE_CLASSES = {
     SANDBOX_FLEET: "cpu_mem_heavy",
     INTEGRATIONS_FLEET: "rate_limited",
     AGENT_RUNTIME_FLEET: "cpu_mem_heavy",
+    DEPLOYMENT_FLEET: "singleton_control",
 }
 _FLEET_EGRESS_POLICIES = {
     WORKFLOW_FLEET: "temporal-only",
@@ -60,6 +64,7 @@ _FLEET_EGRESS_POLICIES = {
     SANDBOX_FLEET: "restricted-sandbox-egress",
     INTEGRATIONS_FLEET: "provider-api-only",
     AGENT_RUNTIME_FLEET: "restricted-sandbox-egress",
+    DEPLOYMENT_FLEET: "docker-proxy-only",
 }
 _FLEET_FORBIDDEN_CAPABILITIES = {
     WORKFLOW_FLEET: (
@@ -94,7 +99,21 @@ _FLEET_FORBIDDEN_CAPABILITIES = {
         "docker_workload",
     ),
     INTEGRATIONS_FLEET: ("sandbox", "agent_runtime", "docker_workload"),
-    AGENT_RUNTIME_FLEET: ("sandbox", "llm", "integration:jules", "integration:openclaw"),
+    AGENT_RUNTIME_FLEET: (
+        "sandbox",
+        "llm",
+        "integration:jules",
+        "integration:openclaw",
+    ),
+    DEPLOYMENT_FLEET: (
+        "artifacts",
+        "llm",
+        "sandbox",
+        "integration:jules",
+        "integration:openclaw",
+        "agent_runtime",
+        "docker_workload",
+    ),
 }
 STATIC_TEMPORAL_WORKFLOW_TYPES = (
     "MoonMind.ManifestIngest",
@@ -191,6 +210,7 @@ def _concurrency_limit_for_fleet(
         SANDBOX_FLEET: temporal_settings.sandbox_worker_concurrency,
         INTEGRATIONS_FLEET: temporal_settings.integrations_worker_concurrency,
         AGENT_RUNTIME_FLEET: temporal_settings.agent_runtime_worker_concurrency,
+        DEPLOYMENT_FLEET: temporal_settings.deployment_worker_concurrency,
     }[fleet]
 
 def _fleet_entry(

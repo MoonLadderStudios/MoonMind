@@ -22,6 +22,7 @@ from moonmind.workflows.skills.deployment_execution import (
     _ensure_runner_survives_update,
     _is_host_absolute_path,
     _remap_host_compose_path,
+    _service_is_excluded,
     _service_name_matches,
     _tail_text,
     build_compose_command_plan,
@@ -166,6 +167,7 @@ def _executor(
     runner: RecordingRunner | None = None,
     events: list[str] | None = None,
     lock_manager: DeploymentUpdateLockManager | None = None,
+    excluded_services: tuple[str, ...] = (),
 ) -> tuple[
     DeploymentUpdateExecutor,
     RecordingDesiredStateStore,
@@ -183,12 +185,33 @@ def _executor(
             desired_state_store=store,
             evidence_writer=evidence,
             runner=runner,
+            excluded_services=excluded_services,
         ),
         store,
         evidence,
         runner,
         events,
     )
+
+
+class DeploymentControlRunner(RecordingRunner):
+    async def capture_state(self, *, stack: str, phase: str) -> Mapping[str, Any]:
+        self.events.append(f"runner:capture:{phase}")
+        return {
+            "stack": stack,
+            "phase": phase,
+            "configuredServices": [
+                "temporal-worker-deployment-control",
+                "temporal-worker-agent-runtime",
+                "api",
+                "new-worker",
+            ],
+            "services": [
+                {"ID": "deploy123", "Service": "temporal-worker-deployment-control"},
+                {"ID": "agent456", "Service": "temporal-worker-agent-runtime"},
+                {"ID": "api789", "Service": "api"},
+            ],
+        }
 
 
 class FailingUpRunner(RecordingRunner):
@@ -788,6 +811,42 @@ async def test_privileged_worker_allows_changed_services_when_worker_image_is_cu
     assert events.index("runner:inspect-image") < events.index("desired:persist")
     assert events.index("desired:persist") < events.index("runner:up")
     assert "runner:up" in events
+
+
+@pytest.mark.asyncio
+async def test_deployment_control_runner_targets_services_except_itself(monkeypatch) -> None:
+    monkeypatch.setenv("HOSTNAME", "deploy123")
+    events: list[str] = []
+    runner = DeploymentControlRunner(events)
+    executor, store, _evidence, _runner, _events = _executor(
+        runner=runner,
+        events=events,
+        excluded_services=("temporal-worker-deployment-control",),
+    )
+
+    result = await executor.execute(_inputs())
+
+    assert result.status == "COMPLETED"
+    assert len(store.records) == 1
+    pull_command = runner.commands[0][1]
+    up_command = runner.commands[1][1]
+    assert pull_command[-3:] == ("temporal-worker-agent-runtime", "api", "new-worker")
+    assert up_command[-3:] == ("temporal-worker-agent-runtime", "api", "new-worker")
+    assert "temporal-worker-deployment-control" not in up_command
+
+
+def test_service_exclusion_matches_compose_container_names() -> None:
+    excluded = {"temporal-worker-deployment-control"}
+
+    assert _service_is_excluded(
+        "moonmind-temporal-worker-deployment-control-1",
+        excluded,
+    )
+    assert _service_is_excluded(
+        "moonmind_temporal-worker-deployment-control_1",
+        excluded,
+    )
+    assert not _service_is_excluded("moonmind-api-1", excluded)
 
 
 def test_runner_guard_skips_when_targeted_services_exclude_worker(monkeypatch) -> None:
@@ -1480,13 +1539,14 @@ async def test_host_compose_runner_parses_full_json_stdout_with_stderr_warning(
         stderr: Any,
     ):
         calls.append(args)
-        payload = (
-            json.dumps(images_record)
-            if args[-3:] == ("images", "--format", "json")
-            else json.dumps(large_service_record)
-        )
+        if args[-2:] == ("config", "--services"):
+            payload = "api\nworker\n"
+        elif args[-3:] == ("images", "--format", "json"):
+            payload = json.dumps(images_record) + "\n"
+        else:
+            payload = json.dumps(large_service_record) + "\n"
         return FakeProcess(
-            f"{payload}\n".encode("utf-8"),
+            payload.encode("utf-8"),
             b'time="2026-05-13T16:37:34Z" level=warning msg="diagnostic"\n',
         )
 
@@ -1499,7 +1559,8 @@ async def test_host_compose_runner_parses_full_json_stdout_with_stderr_warning(
 
     assert state["services"] == [large_service_record]
     assert state["images"] == [images_record]
-    assert len(calls) == 2
+    assert state["configuredServices"] == ("api", "worker")
+    assert len(calls) == 3
 
 
 @pytest.mark.asyncio

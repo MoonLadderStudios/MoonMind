@@ -211,7 +211,7 @@ describe("Task Create Step Type authoring", () => {
       ),
     ).toEqual(["Skill", "Tool", "Preset"]);
 
-    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
     fireEvent.change(within(primaryStep).getByLabelText(/Skill \(optional\)/), {
       target: { value: "moonspec-orchestrate" },
     });

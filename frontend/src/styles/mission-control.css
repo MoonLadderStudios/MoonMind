@@ -4391,20 +4391,52 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   gap: 0.5rem;
 }
 
-.queue-dependencies-info-toggle {
-  width: 1.75rem;
-  height: 1.75rem;
+.queue-info-toggle {
+  width: 2rem;
+  height: 2rem;
   border-radius: 999px;
+  flex-shrink: 0;
+  color: rgb(var(--mm-accent));
+  border-color: rgb(var(--mm-accent) / 0.55);
 }
 
-.queue-dependencies-info-toggle svg {
-  width: 1rem;
-  height: 1rem;
+.queue-info-toggle svg {
+  width: 1.15rem;
+  height: 1.15rem;
+  stroke-width: 2;
 }
 
-.queue-dependencies-info-panel {
+.queue-info-toggle:hover {
+  color: rgb(var(--mm-ink));
+}
+
+.queue-dependencies-info-panel,
+.queue-advanced-info-panel {
   display: grid;
   gap: 0.4rem;
+}
+
+.queue-advanced-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.queue-advanced-checkbox {
+  margin: 0;
+}
+
+@media (max-width: 640px) {
+  .queue-info-toggle {
+    width: 2.4rem;
+    height: 2.4rem;
+  }
+
+  .queue-info-toggle svg {
+    width: 1.4rem;
+    height: 1.4rem;
+  }
 }
 
 .queue-preset-dialog {

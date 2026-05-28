@@ -93,7 +93,7 @@ SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 WORKDIR /deps
 
 RUN pip install --disable-pip-version-check \
-        poetry==2.2.1 \
+        poetry==2.4.1 \
         poetry-plugin-export==1.10.0
 
 COPY pyproject.toml poetry.lock README.md /deps/
