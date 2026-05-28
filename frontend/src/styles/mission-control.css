@@ -3412,7 +3412,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     grid-template-columns: minmax(0, 1fr);
     gap: 0.25rem;
     width: 100%;
-    padding: 0.25rem;
+    padding: 0;
   }
 
   .settings-nav-options::before,
@@ -3428,6 +3428,16 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     border-radius: 8px;
     letter-spacing: 0.04em;
     text-align: left;
+  }
+
+  .settings-nav-option:first-of-type {
+    border-top-left-radius: 9px;
+    border-top-right-radius: 9px;
+  }
+
+  .settings-nav-option:last-of-type {
+    border-bottom-left-radius: 9px;
+    border-bottom-right-radius: 9px;
   }
 
   .settings-nav-option:has(input:checked) {
