@@ -5,6 +5,7 @@ from datetime import timedelta
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import ValidationError
 from temporalio.common import RetryPolicy
 
 from moonmind.schemas.managed_session_models import (
@@ -125,6 +126,13 @@ def test_agent_session_initializes_task_scoped_codex_binding(
     assert status["binding"]["executionProfileRef"] == "codex-default"
     assert status["binding"]["sessionId"] == "sess:wf-run-1:codex_cli"
 
+def test_agent_session_rejects_task_scoped_claude_code_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    with pytest.raises(ValidationError, match="managed-session runtime"):
+        _workflow_input(runtimeId="claude_code", executionProfileRef="claude-default")
+
 @pytest.mark.asyncio
 async def test_agent_session_run_initializes_bounded_temporal_visibility(
     monkeypatch: pytest.MonkeyPatch,
@@ -162,7 +170,7 @@ async def test_agent_session_run_initializes_bounded_temporal_visibility(
     await workflow.run(_workflow_input())
 
     assert current_details[:1] == [
-        "Codex managed session session started | "
+        "Managed runtime session session started | "
         "session=sess:wf-run-1:codex_cli | runtime=codex_cli | "
         "epoch=1 | status=active"
     ]
@@ -212,9 +220,9 @@ def test_agent_session_visibility_and_activity_summaries_exclude_forbidden_value
         },
     )
 
-    assert "Send managed Codex turn" in summary
+    assert "Send managed runtime turn" in summary
     assert workflow._activity_summary("agent_runtime.send_turn", None) == (
-        "Send managed Codex turn"
+        "Send managed runtime turn"
     )
     _assert_forbidden_metadata_absent(summary)
     _assert_forbidden_metadata_absent(current_details)
@@ -899,7 +907,7 @@ async def test_agent_session_send_follow_up_update_executes_session_activity_sur
         )
 
     assert captured[0][2]["summary"] == (
-        "Send managed Codex turn: "
+        "Send managed runtime turn: "
         "sessionId=sess:wf-run-1:codex_cli, sessionEpoch=1, "
         "containerId=container-1, threadId=thread-1"
     )

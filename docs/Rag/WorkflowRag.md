@@ -138,7 +138,7 @@ This retrieval path does not route through a separate generative LLM summarizati
 
 ### 5.2 Managed runtime integration today
 
-Codex is the current reference managed-session implementation.
+Codex CLI and Claude Code are the current reference managed-session implementations.
 
 In the current Codex runtime strategy, `prepare_workspace()` invokes `ContextInjectionService` before the command is built. `ContextInjectionService` resolves retrieval, persists a context artifact under `artifacts/context/`, prepends the retrieved context to `instruction_ref`, and adds safety framing that treats retrieved text as untrusted reference data.
 
@@ -507,13 +507,13 @@ Prompt injection and runtime instructions must continue to:
 
 ## 15. Runtime rollout
 
-### 15.1 Codex is the reference implementation today
+### 15.1 Codex CLI and Claude Code are reference implementations today
 
-Codex is the current live managed-session reference implementation for Workflow RAG.
+Codex CLI and Claude Code are the current live managed-session reference implementations for Workflow RAG.
 
-### 15.2 Future runtimes should implement the same shared model
+### 15.2 Additional runtimes should implement the same shared model
 
-Claude Code, Gemini CLI, and future runtimes should support the same retrieval contract:
+Gemini CLI and future runtimes should support the same retrieval contract:
 
 - MoonMind-owned initial context resolution,
 - artifact/ref-backed retrieval publication,

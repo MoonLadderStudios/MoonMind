@@ -1,4 +1,4 @@
-"""Session-level supervision for durable Codex managed session records."""
+"""Session-level supervision for durable managed session records."""
 
 from __future__ import annotations
 

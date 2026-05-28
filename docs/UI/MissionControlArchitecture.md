@@ -411,7 +411,7 @@ Rules:
 * ended runs must skip step 3 entirely; never attempt a live stream connection on a completed run
 * step 2 must always happen first and must always produce visible content when artifacts exist
 * stream failure at step 3 transitions the viewer to `error` state backed by artifact content
-* for Codex managed sessions, `activeTurnId` and related session header fields come from the managed-session record when it is fresher than the run record
+* for managed sessions, `activeTurnId` and related session header fields come from the managed-session record when it is fresher than the run record
 * this sequence replaces any legacy approach of connecting SSE first and loading content through the stream
 
 ---

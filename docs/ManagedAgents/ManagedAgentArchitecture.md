@@ -10,6 +10,7 @@
 - [`docs/ManagedAgents/SharedManagedAgentAbstractions.md`](./SharedManagedAgentAbstractions.md)
 - [`docs/ManagedAgents/CodexManagedSessionPlane.md`](./CodexManagedSessionPlane.md)
 - [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)
+- [`docs/ManagedAgents/ClaudeCodeManagedSessions.md`](./ClaudeCodeManagedSessions.md)
 - [`docs/ManagedAgents/LiveLogs.md`](./LiveLogs.md)
 - [`docs/ManagedAgents/DockerSidecarRuntime.md`](./DockerSidecarRuntime.md)
 - [`docs/ManagedAgents/DockerOutOfDocker.md`](./DockerOutOfDocker.md)
@@ -39,7 +40,7 @@ At the system level:
 - **Authentication** is owned by Provider Profiles plus OAuth and secret-resolution subsystems.
 - **Secrets** are provided through references and launch-time materialization, never as raw durable payloads.
 
-Current maturity remains **Codex-first**. Codex is the live managed-session implementation and reference plane. Claude Code, Gemini CLI, and future managed runtimes should be added by implementing additional session planes against the same shared model rather than inventing new top-level managed-agent abstractions.
+Current maturity is **Codex and Claude Code first-class for managed sessions**. Codex CLI and Claude Code are both live task-scoped managed-session runtimes behind the shared `MoonMind.AgentSession` control plane. Gemini CLI remains a managed-runtime strategy and can adopt the session plane by implementing the same shared contracts rather than inventing a new top-level managed-agent abstraction.
 
 ---
 
@@ -663,15 +664,15 @@ This distinction is especially important as MoonMind evolves richer build/test/c
 
 ## 11. Current maturity and runtime evolution
 
-### 11.1 Codex is the current reference plane
+### 11.1 Codex and Claude Code are current session runtimes
 
-Codex is the current concrete managed-session implementation and reference plane.
+Codex CLI and Claude Code are current concrete managed-session implementations.
 
-The current live task-scoped session plane is therefore Codex-first. Runtime-specific details such as Codex App Server protocol, thread/turn semantics, and session reset mechanics remain documented in the Codex-specific docs.
+The live task-scoped session plane is shared. Runtime-specific details such as Codex App Server protocol, Claude Code policy/context/checkpoint semantics, thread/turn mappings, and session reset mechanics remain documented in runtime-specific docs.
 
-### 11.2 Future runtimes should extend the same model
+### 11.2 Additional runtimes should extend the same model
 
-Claude Code, Gemini CLI, and future managed runtimes should be added by implementing new session planes against the same shared model.
+Gemini CLI and future managed runtimes should be added by implementing new session bindings against the same shared model.
 
 They should not add new top-level abstractions such as:
 
@@ -683,9 +684,7 @@ The allowed variation is inside runtime-specific planes and capability flags.
 
 ### 11.3 Contract extraction rule
 
-While Codex remains the only real managed-session implementation, some activity and session contracts may stay Codex-shaped internally.
-
-When a second managed-session runtime becomes real, MoonMind should extract or harden the runtime-neutral `ManagedSession*` contract layer more explicitly at the activity boundary.
+The activity and session contracts are runtime-neutral `ManagedSession*` contracts at the workflow boundary. Codex-prefixed implementation classes may remain where they are private compatibility shims or runtime-specific bindings, but new shared workflow/activity contracts should use `ManagedSession*` names and carry the runtime family explicitly.
 
 This document does not block that evolution. It provides the architectural direction that such extraction should serve.
 

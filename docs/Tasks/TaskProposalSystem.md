@@ -89,7 +89,7 @@ The canonical direction is:
 
 All new task submission paths must normalize proposal intent into the same canonical nested task payload accepted by `/api/executions` before `MoonMind.Run` starts.
 
-Codex managed sessions do not define a parallel proposal contract. They are the highest-risk producer because session containers may create additional MoonMind tasks through the internal API path, but the rule also applies to ordinary API submission, proposal promotion, schedules, and any future task-creation surface.
+Managed sessions do not define a parallel proposal contract. They are the highest-risk producer because session containers may create additional MoonMind tasks through the internal API path, but the rule also applies to ordinary API submission, proposal promotion, schedules, and any future task-creation surface.
 
 Required mapping:
 
@@ -101,7 +101,7 @@ Non-canonical locations such as root-level `initialParameters.proposeTasks`, tur
 
 Workflow code may read root-level `initialParameters.proposeTasks` or older policy shapes only for replay and in-flight compatibility. New submission paths must write the nested `task.*` fields so future behavior does not depend on compatibility fallbacks.
 
-For Codex, this applies both when a user submits a task targeting a managed Codex runtime and when a Codex managed session creates additional MoonMind tasks through the internal API path.
+For session-capable runtimes, this applies both when a user submits a task targeting a managed-session runtime and when a managed session creates additional MoonMind tasks through the internal API path.
 
 ### 3.2 Run states
 
@@ -138,7 +138,7 @@ The `proposals` stage runs only when both conditions are true:
 
 This gives operators a real global off switch while still allowing task-level opt-in when the feature is enabled system-wide.
 
-For Codex managed-session originated runs, the durable gate is the canonical nested value preserved in `initialParameters.task.proposeTasks`; session-local flags alone must not determine whether the workflow enters `proposals`.
+For managed-session originated runs, the durable gate is the canonical nested value preserved in `initialParameters.task.proposeTasks`; session-local flags alone must not determine whether the workflow enters `proposals`.
 
 ### 3.4 Proposal generation
 
@@ -521,7 +521,7 @@ That means:
 7. Proposals must not embed full agent skill bodies inline when refs or selectors are the correct contract.
 8. Proposals preserve execution intent, not raw runtime materialization state.
 9. Proposal payloads must not store mutable `.agents/skills` directory state, runtime-local materialization outputs, or ephemeral prompt bundles produced only for one adapter session.
-10. Proposal-capable work originating from a Codex managed session must already carry `task.proposeTasks` and any `task.proposalPolicy` in the canonical task payload.
+10. Proposal-capable work originating from a managed session must already carry `task.proposeTasks` and any `task.proposalPolicy` in the canonical task payload.
 11. Proposal generation must not reconstruct proposal intent from session-local metadata.
 12. Proposal payloads may include optional `task.authoredPresets` and `steps[].source` provenance when the metadata is reliable.
 13. Preset provenance fields are reconstruction and review metadata only; they do not change the executable meaning of the flat task payload.

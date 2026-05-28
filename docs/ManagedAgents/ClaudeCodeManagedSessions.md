@@ -1,12 +1,12 @@
 # Claude Code Managed Sessions
 
-**Status:** Draft
+**Status:** Current implementation and desired-state contract
 **Audience:** Managed Agents platform, runtime integration, client surfaces, security, and enterprise administration
 **Related:** `docs/ManagedAgents/CodexCliManagedSessions.md`
 
 ## 1. Executive summary
 
-`Claude Code Managed Sessions` is the Claude Code binding of the shared Managed Session Plane abstraction. It should preserve the same core control-plane model used by the Codex design wherever possible:
+`Claude Code Managed Sessions` is the Claude Code binding of the shared Managed Session Plane abstraction. It preserves the same core control-plane model used by the Codex design wherever possible:
 
 - a canonical session record
 - append-only event history
@@ -26,7 +26,20 @@ The Claude Code variant diverges from Codex in a few important ways that must be
 5. **Checkpointing is first-class.** Claude automatically creates rewindable checkpoints around edits and user prompts. That belongs in the plane, not as an afterthought.
 6. **Child work comes in two shapes.** Claude subagents are child contexts inside one session; agent teams are multiple sessions with direct peer communication.
 
-This design therefore keeps the shared Managed Session Plane concepts intact, but changes the runtime adapter, policy compiler, context model, and child-session model to fit Claude Code.
+The live MoonMind session-control plane now accepts `runtimeId = "claude_code"` and carries `runtimeFamily = "claude_code"` through `MoonMind.AgentSession`, `ManagedSessionBinding`, launch requests, and session projections. The Claude Code binding keeps the shared Managed Session Plane concepts intact, but changes the runtime adapter, policy compiler, context model, and child-session model to fit Claude Code.
+
+Current live boundaries:
+
+- `MoonMind.Run` starts `MoonMind.AgentSession` for `codex_cli` and `claude_code` managed task steps.
+- `MoonMind.AgentSession` stores compact `ManagedSession*` binding, epoch, runtime handles, request tracking, and continuity refs.
+- `MoonMind.AgentRun` uses the session adapter when `request.managed_session` is present, regardless of whether the binding runtime is Codex CLI or Claude Code.
+- `agent_runtime.launch_session`, `send_turn`, `steer_turn`, `interrupt_turn`, `clear_session`, `terminate_session`, `fetch_session_summary`, and `publish_session_artifacts` use the shared session activity surface and carry the runtime family through the payload.
+- The Docker-backed session controller records Claude Code sessions as `runtimeId = "claude_code"` and preserves runtime-specific profile materialization through Provider Profiles.
+
+Known implementation gaps versus Codex:
+
+- Claude Code still uses the shared remote-session activity transport; Claude-native checkpoint, policy-dialog, Remote Control, and subagent/team semantics are represented by domain models and documentation but are not yet all exposed as separate live workflow updates.
+- Codex App Server-specific implementation class names remain in a few private adapter/controller modules as compatibility shims. Shared workflow/activity contracts should use `ManagedSession*` names.
 
 ---
 

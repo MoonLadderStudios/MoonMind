@@ -121,12 +121,12 @@ _CONTRACTS: tuple[TemporalBoundaryContract, ...] = (
         owner="MoonMind.AgentSession",
         requestModel=_model(
             module=_MANAGED_SESSION_MODELS,
-            name="CodexManagedSessionWorkflowInput",
+            name="ManagedSessionWorkflowInput",
             role="request",
         ),
         responseModel=_model(
             module=_MANAGED_SESSION_MODELS,
-            name="CodexManagedSessionSnapshot",
+            name="ManagedSessionSnapshot",
             role="snapshot",
         ),
         status="modeled",
@@ -139,12 +139,12 @@ _CONTRACTS: tuple[TemporalBoundaryContract, ...] = (
         owner="MoonMind.AgentSession",
         requestModel=_model(
             module=_MANAGED_SESSION_MODELS,
-            name="CodexManagedSessionWorkflowInput",
+            name="ManagedSessionWorkflowInput",
             role="continuation",
         ),
         responseModel=_model(
             module=_MANAGED_SESSION_MODELS,
-            name="CodexManagedSessionSnapshot",
+            name="ManagedSessionSnapshot",
             role="snapshot",
         ),
         status="modeled",
@@ -157,12 +157,12 @@ _CONTRACTS: tuple[TemporalBoundaryContract, ...] = (
         owner="MoonMind.AgentSession",
         requestModel=_model(
             module=_MANAGED_SESSION_MODELS,
-            name="CodexManagedSessionSendFollowUpRequest",
+            name="ManagedSessionSendFollowUpRequest",
             role="request",
         ),
         responseModel=_model(
             module=_MANAGED_SESSION_MODELS,
-            name="CodexManagedSessionSnapshot",
+            name="ManagedSessionSnapshot",
             role="snapshot",
         ),
         status="modeled",
@@ -175,12 +175,12 @@ _CONTRACTS: tuple[TemporalBoundaryContract, ...] = (
         owner="MoonMind.AgentSession",
         requestModel=_model(
             module=_MANAGED_SESSION_MODELS,
-            name="CodexManagedSessionWorkflowInput",
+            name="ManagedSessionWorkflowInput",
             role="metadata",
         ),
         responseModel=_model(
             module=_MANAGED_SESSION_MODELS,
-            name="CodexManagedSessionSnapshot",
+            name="ManagedSessionSnapshot",
             role="snapshot",
         ),
         status="modeled",

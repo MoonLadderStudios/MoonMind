@@ -478,7 +478,7 @@ Example:
 }
 ```
 
-This is the preferred future mode for runtimes with session control planes. The Codex managed-session design already describes a normalized control/action vocabulary around session and turn lifecycle, which is a better long-term home for structured command events than prompt rewriting.
+This is the preferred future mode for runtimes with session control planes. The shared managed-session design already describes a normalized control/action vocabulary around session and turn lifecycle, which is a better long-term home for structured command events than prompt rewriting.
 
 Unknown opaque commands may use native command mode only if the runtime adapter exposes a generic opaque-command transport. Otherwise they use `prompt_prefix`.
 

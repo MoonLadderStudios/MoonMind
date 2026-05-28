@@ -91,9 +91,9 @@ async def test_run_starts_one_task_scoped_codex_session_and_reuses_it(
     assert payload.task_run_id == "wf-run-1"
     assert payload.runtime_id == "codex_cli"
     assert payload.execution_profile_ref == "codex-default"
-    assert kwargs["static_summary"] == "Task-scoped Codex managed session"
+    assert kwargs["static_summary"] == "Task-scoped managed runtime session"
     assert kwargs["static_details"] == (
-        "Task-scoped Codex managed session | taskRunId=wf-run-1 | "
+        "Task-scoped managed runtime session | taskRunId=wf-run-1 | "
         "runtime=codex_cli | session=sess:wf-run-1:codex_cli | epoch=1"
     )
     assert kwargs["search_attributes"] == {
@@ -111,7 +111,43 @@ async def test_run_starts_one_task_scoped_codex_session_and_reuses_it(
     assert first.managed_session.session_epoch == 1
 
 @pytest.mark.asyncio
-async def test_run_skips_task_scoped_session_for_non_codex_managed_runtime(
+async def test_run_skips_task_scoped_claude_code_session_until_runtime_is_wired(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    _configure_workflow_runtime(monkeypatch)
+    start_calls: list[tuple[str, Any, str, str, dict[str, Any]]] = []
+
+    class _FakeHandle:
+        async def signal(self, _signal_name: str, _payload: Any = None) -> None:
+            return None
+
+    async def fake_start_child_workflow(
+        workflow_name: str,
+        payload: Any,
+        *,
+        id: str,
+        task_queue: str,
+        **kwargs: Any,
+    ) -> _FakeHandle:
+        start_calls.append((workflow_name, payload, id, task_queue, kwargs))
+        return _FakeHandle()
+
+    monkeypatch.setattr(
+        run_module.workflow,
+        "start_child_workflow",
+        fake_start_child_workflow,
+    )
+
+    request = await workflow._maybe_bind_task_scoped_session(
+        _managed_request("claude_code")
+    )
+
+    assert start_calls == []
+    assert request.managed_session is None
+
+@pytest.mark.asyncio
+async def test_run_skips_task_scoped_session_for_non_session_managed_runtime(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflow = MoonMindRunWorkflow()
@@ -130,7 +166,7 @@ async def test_run_skips_task_scoped_session_for_non_codex_managed_runtime(
     )
 
     request = await workflow._maybe_bind_task_scoped_session(
-        _managed_request("claude_code")
+        _managed_request("gemini_cli")
     )
 
     assert request.managed_session is None
@@ -307,7 +343,7 @@ async def test_run_termination_v3_update_failure_falls_back_to_activity_then_sig
         )
     ]
     assert warnings == [
-        "Task-scoped Codex terminate update failed for sess:wf-run-1:codex_cli: "
+        "Task-scoped managed-session terminate update failed for sess:wf-run-1:codex_cli: "
         "terminate update failed"
     ]
     assert workflow._codex_session_handle is None
@@ -767,7 +803,7 @@ async def test_run_termination_signals_session_when_v1_terminate_activity_fails(
         )
     ]
     assert warnings == [
-        "Task-scoped Codex terminate activity failed for sess:wf-run-1:codex_cli; "
+        "Task-scoped managed-session terminate activity failed for sess:wf-run-1:codex_cli; "
         "falling back to session signal: terminate failed"
     ]
     assert workflow._codex_session_handle is None

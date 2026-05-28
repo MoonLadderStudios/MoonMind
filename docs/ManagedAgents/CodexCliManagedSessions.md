@@ -12,18 +12,18 @@ Related:
 
 ## 1. Purpose
 
-This document defines the desired-state architecture contract for the **Codex managed session plane**.
+This document defines the desired-state architecture contract for the **Codex CLI binding** of the shared managed session plane.
 
 It freezes the smallest supported session-plane shape before broader implementation work:
 
-- Codex only
+- Codex binding only
 - Docker only
 - one task-scoped session container per task
 - optional per-session Docker sidecar for ordinary repo Docker commands
 - no cross-task session reuse
 - artifact-first logs and continuity
 - no Kubernetes orchestration
-- no Claude/Gemini managed session plane
+- no Claude Code or Gemini binding details
 - no generic runtime marketplace
 
 This document defines the target contract only. Rollout sequencing and implementation backlog belong in specs or `local-only handoffs`.
@@ -263,5 +263,5 @@ This contract does not define:
 - cross-task session reuse
 - session UIs beyond continuity-aware artifact presentation
 - generalized multi-runtime certification
-- Claude/Gemini session-plane behavior
+- Claude Code/Gemini binding behavior
 - PTY attach or interactive terminal embedding

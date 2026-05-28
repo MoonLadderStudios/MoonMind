@@ -9,6 +9,7 @@
 - [`docs/ManagedAgents/ManagedAgentArchitecture.md`](./ManagedAgentArchitecture.md)
 - [`docs/ManagedAgents/CodexManagedSessionPlane.md`](./CodexManagedSessionPlane.md)
 - [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)
+- [`docs/ManagedAgents/ClaudeCodeManagedSessions.md`](./ClaudeCodeManagedSessions.md)
 - [`docs/ManagedAgents/LiveLogs.md`](./LiveLogs.md)
 - [`docs/ManagedAgents/DockerOutOfDocker.md`](./DockerOutOfDocker.md)
 - [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)
@@ -30,7 +31,7 @@ The core model is:
 - higher layers store and exchange bindings, observations, events, and artifact refs,
 - runtime-native process, thread, container, transcript, and session identifiers remain opaque outside the owning plane.
 
-Codex is the current concrete reference implementation. Claude Code, Gemini CLI, and future managed runtimes should implement the same shared contract through their own runtime-specific planes.
+Codex CLI and Claude Code are the current concrete managed-session bindings. Gemini CLI and future managed runtimes should implement the same shared contract through their own runtime-specific planes.
 
 ---
 
@@ -125,7 +126,7 @@ Reconciliation must be idempotent. Repeating the same reconcile request without 
 
 ## 4. Core contract objects
 
-The names below are the normative documentation names for the shared model. Implementation type names may vary while Codex remains the only concrete runtime, but their semantics must stay aligned with this contract.
+The names below are the normative documentation names for the shared model. Workflow and activity boundaries should use `ManagedSession*` names for shared contracts; runtime-specific names belong only inside a runtime binding.
 
 ### 4.1 `ManagedAgentSpec`
 
@@ -598,6 +599,7 @@ Use the managed-agent docs as follows:
 - [`SharedManagedAgentAbstractions.md`](./SharedManagedAgentAbstractions.md) is this runtime-neutral shared contract layer.
 - [`CodexManagedSessionPlane.md`](./CodexManagedSessionPlane.md) is the current Codex runtime-specific architecture entrypoint.
 - [`CodexCliManagedSessions.md`](./CodexCliManagedSessions.md) defines Codex-specific session details.
+- [`ClaudeCodeManagedSessions.md`](./ClaudeCodeManagedSessions.md) defines Claude Code-specific session details.
 - [`LiveLogs.md`](./LiveLogs.md) defines session-aware observability.
 
 Canonical docs should stay focused on target architecture and contracts. Migration notes, rollout sequencing, and incomplete implementation checklists belong under `local-only handoffs`.

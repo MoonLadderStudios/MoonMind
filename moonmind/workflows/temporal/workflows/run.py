@@ -23,7 +23,7 @@ with workflow.unsafe.imports_passed_through():
         CodexManagedSessionSnapshot,
         CodexManagedSessionWorkflowInput,
         TerminateCodexManagedSessionRequest,
-        canonical_codex_managed_runtime_id,
+        canonical_managed_session_runtime_id,
     )
     from moonmind.schemas.temporal_activity_models import (
         ArtifactReadInput,
@@ -5377,7 +5377,7 @@ class MoonMindRunWorkflow:
     ) -> str | None:
         if request.agent_kind != "managed":
             return None
-        return canonical_codex_managed_runtime_id(request.agent_id)
+        return canonical_managed_session_runtime_id(request.agent_id)
 
     def _task_scoped_session_workflow_id(self, runtime_id: str) -> str:
         return f"{workflow.info().workflow_id}:session:{runtime_id}"
@@ -5402,7 +5402,7 @@ class MoonMindRunWorkflow:
         binding: CodexManagedSessionBinding,
     ) -> str:
         return (
-            "Task-scoped Codex managed session | "
+            "Task-scoped managed runtime session | "
             f"taskRunId={binding.task_run_id} | "
             f"runtime={binding.runtime_id} | "
             f"session={binding.session_id} | "
@@ -5449,7 +5449,7 @@ class MoonMindRunWorkflow:
             search_attributes=self._task_scoped_session_visibility(
                 binding=initial_binding
             ),
-            static_summary="Task-scoped Codex managed session",
+            static_summary="Task-scoped managed runtime session",
             static_details=self._task_scoped_session_static_details(
                 binding=initial_binding
             ),
@@ -5482,7 +5482,7 @@ class MoonMindRunWorkflow:
                         )
                     except Exception as exc:
                         self._get_logger().warning(
-                            "Task-scoped Codex terminate update failed for %s: %s",
+                            "Task-scoped managed-session terminate update failed for %s: %s",
                             binding.session_id,
                             exc,
                         )
@@ -5493,7 +5493,7 @@ class MoonMindRunWorkflow:
                             )
                         except Exception as activity_exc:
                             self._get_logger().warning(
-                                "Task-scoped Codex terminate activity failed for %s; "
+                                "Task-scoped managed-session terminate activity failed for %s; "
                                 "falling back to session signal: %s",
                                 binding.session_id,
                                 activity_exc,
@@ -5521,7 +5521,7 @@ class MoonMindRunWorkflow:
                         )
                     except Exception as exc:
                         self._get_logger().warning(
-                            "Task-scoped Codex terminate activity failed for %s; "
+                            "Task-scoped managed-session terminate activity failed for %s; "
                             "falling back to session signal: %s",
                             binding.session_id,
                             exc,
