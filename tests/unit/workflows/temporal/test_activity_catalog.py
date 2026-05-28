@@ -8,6 +8,8 @@ from moonmind.workflows.skills.skill_plan_contracts import parse_skill_definitio
 from moonmind.workflows.temporal.activity_catalog import (
     ARTIFACTS_FLEET,
     ARTIFACTS_TASK_QUEUE,
+    DEPLOYMENT_FLEET,
+    DEPLOYMENT_TASK_QUEUE,
     INTEGRATIONS_FLEET,
     INTEGRATIONS_TASK_QUEUE,
     LLM_FLEET,
@@ -103,6 +105,8 @@ def test_default_catalog_exposes_canonical_queues_and_fleets():
     assert fleets[LLM_FLEET].task_queues == (LLM_TASK_QUEUE,)
     assert fleets[SANDBOX_FLEET].task_queues == (SANDBOX_TASK_QUEUE,)
     assert fleets[INTEGRATIONS_FLEET].task_queues == (INTEGRATIONS_TASK_QUEUE,)
+    assert fleets[DEPLOYMENT_FLEET].task_queues == (DEPLOYMENT_TASK_QUEUE,)
+    assert "deployment_control" in fleets[DEPLOYMENT_FLEET].capabilities
     assert "docker_workload" in fleets[AGENT_RUNTIME_FLEET].capabilities
 
 def test_resolve_skill_uses_capability_routing_for_mm_skill_execute():
@@ -119,6 +123,9 @@ def test_resolve_skill_uses_capability_routing_for_mm_skill_execute():
     artifact_route = catalog.resolve_skill(
         _skill_definition(capabilities=["artifacts"])
     )
+    deployment_route = catalog.resolve_skill(
+        _skill_definition(capabilities=["deployment_control", "docker_admin"])
+    )
 
     assert llm_route.fleet == LLM_FLEET
     assert llm_route.task_queue == LLM_TASK_QUEUE
@@ -131,6 +138,9 @@ def test_resolve_skill_uses_capability_routing_for_mm_skill_execute():
     assert integration_route.task_queue == INTEGRATIONS_TASK_QUEUE
     assert artifact_route.fleet == ARTIFACTS_FLEET
     assert artifact_route.task_queue == ARTIFACTS_TASK_QUEUE
+    assert deployment_route.fleet == DEPLOYMENT_FLEET
+    assert deployment_route.task_queue == DEPLOYMENT_TASK_QUEUE
+    assert deployment_route.capability_class == "deployment_control"
 
 def test_resolve_skill_preserves_skill_policy_timeouts():
     catalog = build_default_activity_catalog()

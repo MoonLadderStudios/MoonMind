@@ -24,6 +24,7 @@ LLM_FLEET = "llm"
 SANDBOX_FLEET = "sandbox"
 INTEGRATIONS_FLEET = "integrations"
 AGENT_RUNTIME_FLEET = "agent_runtime"
+DEPLOYMENT_FLEET = "deployment"
 
 WORKFLOW_TASK_QUEUE = "mm.workflow"
 ARTIFACTS_TASK_QUEUE = "mm.activity.artifacts"
@@ -31,6 +32,7 @@ LLM_TASK_QUEUE = "mm.activity.llm"
 SANDBOX_TASK_QUEUE = "mm.activity.sandbox"
 INTEGRATIONS_TASK_QUEUE = "mm.activity.integrations"
 AGENT_RUNTIME_TASK_QUEUE = "mm.activity.agent_runtime"
+DEPLOYMENT_TASK_QUEUE = "mm.activity.deployment"
 
 class TemporalActivityCatalogError(ValueError):
     """Raised when Temporal activity routing metadata is invalid."""
@@ -139,6 +141,8 @@ def _skill_route_family(required_capabilities: tuple[str, ...]) -> tuple[str, st
         categories.add("sandbox")
     if "docker_workload" in required_capabilities:
         categories.add("docker_workload")
+    if "deployment_control" in required_capabilities:
+        categories.add("deployment_control")
     if integration_caps:
         categories.add("integrations")
 
@@ -161,6 +165,8 @@ def _skill_route_family(required_capabilities: tuple[str, ...]) -> tuple[str, st
         return SANDBOX_FLEET, "sandbox"
     if category == "docker_workload":
         return AGENT_RUNTIME_FLEET, "docker_workload"
+    if category == "deployment_control":
+        return DEPLOYMENT_FLEET, "deployment_control"
     return INTEGRATIONS_FLEET, integration_caps[0]
 
 class TemporalActivityCatalog:
@@ -1184,6 +1190,17 @@ def build_default_activity_catalog(
                 )
             ),
         ),
+        TemporalWorkerFleet(
+            fleet=DEPLOYMENT_FLEET,
+            task_queues=(cfg.activity_deployment_task_queue,),
+            capabilities=("deployment_control", "docker_admin"),
+            privileges=("docker_proxy", "deployment_state_write"),
+            scaling_notes=(
+                "Singleton deployment-control runner for audited Docker Compose "
+                "stack updates."
+            ),
+            activity_types=("mm.tool.execute",),
+        ),
     )
 
     return TemporalActivityCatalog(activities=activities, fleets=fleets)
@@ -1238,6 +1255,8 @@ __all__ = [
     "AGENT_RUNTIME_TASK_QUEUE",
     "ARTIFACTS_FLEET",
     "ARTIFACTS_TASK_QUEUE",
+    "DEPLOYMENT_FLEET",
+    "DEPLOYMENT_TASK_QUEUE",
     "INTEGRATIONS_FLEET",
     "INTEGRATIONS_TASK_QUEUE",
     "LLM_FLEET",

@@ -112,6 +112,10 @@ class TemporalSettings(BaseSettings):
         "mm.activity.agent_runtime",
         validation_alias="TEMPORAL_ACTIVITY_AGENT_RUNTIME_TASK_QUEUE",
     )
+    activity_deployment_task_queue: str = Field(
+        "mm.activity.deployment",
+        validation_alias="TEMPORAL_ACTIVITY_DEPLOYMENT_TASK_QUEUE",
+    )
     temporal_authoritative_read_enabled: bool = Field(
         True,
         alias="TEMPORAL_AUTHORITATIVE_READ_ENABLED",
@@ -144,6 +148,11 @@ class TemporalSettings(BaseSettings):
     agent_runtime_worker_concurrency: int | None = Field(
         16,
         validation_alias="TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY",
+        ge=1,
+    )
+    deployment_worker_concurrency: int | None = Field(
+        1,
+        validation_alias="TEMPORAL_DEPLOYMENT_WORKER_CONCURRENCY",
         ge=1,
     )
     integration_poll_initial_seconds: int = Field(
@@ -196,11 +205,13 @@ class TemporalSettings(BaseSettings):
             "sandbox",
             "integrations",
             "agent_runtime",
+            "deployment",
         }
         if normalized not in allowed:
             raise ValueError(
                 "TEMPORAL_WORKER_FLEET must be one of "
-                "workflow, artifacts, llm, sandbox, integrations, agent_runtime"
+                "workflow, artifacts, llm, sandbox, integrations, agent_runtime, "
+                "deployment"
             )
         return normalized
 
