@@ -44,7 +44,7 @@ These modes govern whether workflows may use Docker-backed workload tools throug
 
 ### 1.3 Goals (control-plane DooD)
 
-* keep the **Codex managed session plane** focused on managed agent continuity
+* keep the **shared managed session plane** focused on managed agent continuity
 * keep the **Temporal control plane** as the owner of launch, policy, cancellation, audit, and observability for **control-plane-originated** Docker workloads
 * keep worker images generic and maintainable
 * support both curated and unrestricted Docker-backed workloads where the control plane is the right place to run them, without giving the MoonMind API container the host Docker socket and without re-introducing it as the default path for session-originated work
@@ -331,7 +331,7 @@ Runtime enforcement remains authoritative even when tool registration and planne
 
 ### 7.1 Role A: task-scoped managed session container
 
-The Codex managed session plane remains:
+The shared managed session plane remains:
 
 * Docker only
 * one task-scoped session container per task
@@ -1225,14 +1225,14 @@ Queue and fleet splitting follow operational need, not naming nostalgia.
 
 ### 18.1 Unreal test run in `profiles` mode
 
-1. A task runs in a task-scoped Codex managed session.
+1. A task runs in a task-scoped managed session.
 2. The session determines that the repository is an Unreal project.
 3. It requests `unreal.run_tests`.
 4. MoonMind resolves the tool to the `unreal-5_3-linux` runner profile.
 5. A `docker_workload` worker launches the workload through the configured Docker host or proxy.
 6. The container writes reports and build outputs under the task workspace.
 7. MoonMind captures logs, diagnostics, and artifacts and returns a normal tool result.
-8. The Codex managed session continues with the new evidence.
+8. The managed session continues with the new evidence.
 
 ### 18.2 Dynamic dotnet container in `unrestricted` mode
 
@@ -1300,7 +1300,7 @@ A trusted workflow uses the Docker CLI escape hatch for compose-driven behavior.
 
 The following rules remain stable as implementation details evolve:
 
-1. **Codex managed session containers and DooD workload containers are different architectural roles.** Session-originated Docker work uses the per-session sidecar; DooD workload containers are launched by the control plane.
+1. **managed session containers and DooD workload containers are different architectural roles.** Session-originated Docker work uses the per-session sidecar; DooD workload containers are launched by the control plane.
 2. **The control plane launches control-plane DooD workloads.** Ordinary session-originated container work goes through the per-session sidecar (see [`DockerSidecarRuntime.md`](./DockerSidecarRuntime.md)).
 3. **Session containers never receive the host Docker socket or shared-daemon `DOCKER_HOST`.** They may hold a `DOCKER_HOST` that points at their own private per-session sidecar daemon; that daemon is sandboxed to the session.
 4. **`disabled`, `profiles`, and `unrestricted` are the only supported control-plane DooD modes.**

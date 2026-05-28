@@ -12,7 +12,9 @@ Related:
 ## Purpose
 
 This document preserves the canonical Codex managed session plane entrypoint used
-by managed-agent architecture references. The detailed Codex CLI session
+by managed-agent architecture references for the Codex binding. The shared
+managed session plane also has a Claude Code binding described in
+[`ClaudeCodeManagedSessions.md`](./ClaudeCodeManagedSessions.md). The detailed Codex CLI session
 contract lives in [`CodexCliManagedSessions.md`](./CodexCliManagedSessions.md).
 
 The Codex managed session plane is the task-scoped managed runtime environment

@@ -19,7 +19,7 @@ from pydantic import (
 from moonmind.schemas._validation import require_non_blank
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionBinding,
-    canonical_codex_managed_runtime_id,
+    canonical_managed_session_runtime_id,
 )
 from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
 from moonmind.schemas.workload_models import parse_cpu_units, parse_size_bytes
@@ -448,14 +448,14 @@ class AgentExecutionRequest(BaseModel):
                 resolved_skillset_ref, field_name="resolvedSkillsetRef"
             )
         if self.managed_session is not None:
-            canonical_runtime_id = canonical_codex_managed_runtime_id(self.agent_id)
+            canonical_runtime_id = canonical_managed_session_runtime_id(self.agent_id)
             if self.agent_kind != "managed" or canonical_runtime_id is None:
                 raise ValueError(
-                    "managedSession is only supported for managed Codex runtimes"
+                    "managedSession is only supported for managed-session runtimes"
                 )
             if self.managed_session.runtime_id != canonical_runtime_id:
                 raise ValueError(
-                    "managedSession.runtimeId must match the managed Codex runtime"
+                    "managedSession.runtimeId must match the managed-session runtime"
                 )
         self.input_refs = [
             require_non_blank(item, field_name="inputRefs[]")

@@ -69,7 +69,7 @@ from moonmind.workflows.temporal.runtime.managed_session_store import (
     ManagedSessionStore,
     TERMINAL_MANAGED_SESSION_STATUSES,
 )
-from moonmind.schemas.managed_session_models import canonical_codex_managed_runtime_id
+from moonmind.schemas.managed_session_models import canonical_managed_session_runtime_id
 
 TERMINAL_STATES: set[MoonMindWorkflowState] = {
     MoonMindWorkflowState.COMPLETED,
@@ -2008,7 +2008,7 @@ class TemporalExecutionService:
             record.workflow_type is TemporalWorkflowType.RUN
             and record.state not in TERMINAL_STATES
         ):
-            await self._best_effort_terminate_task_scoped_codex_session(
+            await self._best_effort_terminate_task_scoped_managed_sessions(
                 workflow_id=record.workflow_id,
                 reason=reason_text,
             )
@@ -2315,34 +2315,35 @@ class TemporalExecutionService:
         await self._session.refresh(record)
         return record
 
-    async def _best_effort_terminate_task_scoped_codex_session(
+    async def _best_effort_terminate_task_scoped_managed_sessions(
         self,
         *,
         workflow_id: str,
         reason: str,
     ) -> None:
         store = ManagedSessionStore(_get_managed_session_store_root())
-        canonical_runtime_id = "codex_cli"
-        default_session_id = f"sess:{workflow_id}:{canonical_runtime_id}"
+        canonical_runtime_ids = ("codex_cli", "claude_code")
+        session_record = None
         try:
-            session_record = store.load(default_session_id)
+            for canonical_runtime_id in canonical_runtime_ids:
+                default_session_id = f"sess:{workflow_id}:{canonical_runtime_id}"
+                session_record = store.load(default_session_id)
+                if (
+                    session_record is not None
+                    and session_record.task_run_id == workflow_id
+                    and canonical_managed_session_runtime_id(session_record.runtime_id)
+                    == canonical_runtime_id
+                    and session_record.status not in TERMINAL_MANAGED_SESSION_STATUSES
+                ):
+                    break
+                session_record = None
         except Exception:
             logger.warning(
-                "Failed to load managed session record %s before cancel for workflow %s",
-                default_session_id,
+                "Failed to load managed session records before cancel for workflow %s",
                 workflow_id,
                 exc_info=True,
             )
             session_record = None
-        else:
-            if (
-                session_record is None
-                or session_record.task_run_id != workflow_id
-                or canonical_codex_managed_runtime_id(session_record.runtime_id)
-                != canonical_runtime_id
-                or session_record.status in TERMINAL_MANAGED_SESSION_STATUSES
-            ):
-                session_record = None
 
         if session_record is None:
             try:
@@ -2360,8 +2361,8 @@ class TemporalExecutionService:
                     record
                     for record in session_records
                     if record.task_run_id == workflow_id
-                    and canonical_codex_managed_runtime_id(record.runtime_id)
-                    == canonical_runtime_id
+                    and canonical_managed_session_runtime_id(record.runtime_id)
+                    in canonical_runtime_ids
                 ),
                 None,
             )

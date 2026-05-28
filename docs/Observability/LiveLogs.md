@@ -30,10 +30,10 @@ For managed agent runs, live visibility should be based on:
 With this design:
 - **OAuth** continues to use `xterm.js` plus a MoonMind PTY/WebSocket bridge because OAuth is an interactive terminal flow
 - **managed run logs** do **not** use `xterm.js` and do **not** depend on terminal embedding
-- **Codex managed sessions** surface session continuity events such as epoch boundaries, thread changes, turn lifecycle, approvals, and reset boundaries inside the same operator-visible observability timeline
+- **managed sessions** surface session continuity events such as epoch boundaries, thread changes, turn lifecycle, approvals, and reset boundaries inside the same operator-visible observability timeline
 - Mission Control shows logs through a MoonMind-native React viewer backed by MoonMind APIs and artifacts, implemented with `react-virtuoso` for virtualized rendering, `anser` for ANSI parsing, TanStack Query for retrieval state, and SSE via `EventSource` for live follow mode
 
-This keeps observability deterministic, persistent, auditable, and independent from interactive terminal transport while still preserving continuity visibility for the Codex managed session plane.
+This keeps observability deterministic, persistent, auditable, and independent from interactive terminal transport while still preserving continuity visibility for the shared managed session plane.
 
 ### 1.1 Implementation tracking
 
@@ -52,7 +52,7 @@ The first Live Logs redesign correctly replaced that with an artifact-first mode
 - MoonMind adds a few `system` annotations
 - Mission Control shows a merged tail and optionally follows live SSE
 
-That is no longer sufficient for the Codex managed session plane.
+That is no longer sufficient for the shared managed session plane.
 
 The Codex session-plane contract introduces a richer continuity model:
 - one task-scoped managed session container per task
@@ -165,7 +165,7 @@ Behavior:
 - upgrades to a live stream only when the run is active and live streaming is supported
 - shows provenance per row or chunk, including `stdout`, `stderr`, `system`, and session-plane events
 - shows the current session snapshot in the panel header: `session_id`, `session_epoch`, `container_id`, `thread_id`, and `active_turn_id` when available
-- for Codex managed sessions, receives in-flight rollout-derived output while `send_turn` is still running, including assistant messages, tool-call markers, and tool-call output
+- for managed sessions, receives in-flight rollout-derived output while `send_turn` is still running, including assistant messages, tool-call markers, and tool-call output
 - renders epoch boundaries and reset boundaries as explicit timeline banners rather than burying them as plain text
 - can reconnect from the last known `sequence`; resume is best-effort and artifacts remain the durable fallback
 - falls back to artifact-backed mode if live streaming is unavailable or reconnect fails
@@ -179,7 +179,7 @@ The merged Live Logs timeline should support at least these row types:
 - `system` annotations from MoonMind supervision
 - session lifecycle rows such as `session_started`, `session_resumed`, `session_cleared`, and `session_terminated`
 - turn lifecycle rows such as `turn_started`, `turn_completed`, and `turn_interrupted`
-- Codex managed-session output rows derived from visible rollout entries, normalized as `stdout`/`stderr` events rather than raw provider transcript records
+- managed-session output rows derived from visible rollout entries, normalized as `stdout`/`stderr` events rather than raw provider transcript records
 - approval rows such as `approval_requested` and `approval_resolved`
 - continuity publication rows such as `summary_published`, `checkpoint_published`, and `reset_boundary_published`
 
@@ -232,7 +232,7 @@ The observation plane owns passive visibility.
 Components:
 - launcher
 - supervisor
-- Codex managed session adapter
+- managed session adapter
 - log and session-event capture pipeline
 - diagnostics builder
 - continuity artifact publisher
@@ -443,11 +443,11 @@ Rules for merged tail:
 
 ---
 
-## 8. Codex managed session integration
+## 8. Managed session integration
 
 ## 8.1 Session-plane ownership
 
-`CodexManagedSessionPlane` is responsible for adapting provider-native session activity into MoonMind-owned observability outputs.
+The managed session plane is responsible for adapting provider-native session activity into MoonMind-owned observability outputs.
 
 It must publish:
 - continuity artifacts
@@ -517,7 +517,7 @@ For raw subprocess-based managed runs, this still means direct pipe capture with
 - `stdout=PIPE`
 - `stderr=PIPE`
 
-For Codex managed sessions, the launcher and session-plane runtime must still ensure that raw `stdout` and `stderr` from the managed environment are durably captured where applicable.
+For managed sessions, the launcher and session-plane runtime must still ensure that raw `stdout` and `stderr` from the managed environment are durably captured where applicable.
 
 The managed path must not depend on tmate wrapping for observability.
 
@@ -1112,7 +1112,7 @@ Phased rollout notes, migration sequencing, and remaining implementation work ar
 With the updated decision:
 - **OAuth terminal UX** should use `xterm.js`
 - **managed run logs** should not
-- **Codex managed session continuity** must become visible inside the same MoonMind observability experience
+- **Managed session continuity** must become visible inside the same MoonMind observability experience
 
 The architecture should move from:
 - terminal embedding
@@ -1128,4 +1128,4 @@ To:
 - explicit continuity artifacts and epoch boundaries
 - separate intervention controls
 
-That is the cleanest architecture and the one that best matches both the existing Live Logs direction and the Codex managed session plane.
+That is the cleanest architecture and the one that best matches both the existing Live Logs direction and the shared managed session plane.

@@ -3097,7 +3097,7 @@ async def test_cancel_interrupts_active_turn_and_marks_run_canceled(
     assert interrupt_calls[0].turn_id == "turn-active"
     assert status.status == "canceled"
     assert result.failure_class == "user_error"
-    assert result.summary == "Canceled Codex managed-session turn."
+    assert result.summary == "Canceled managed session turn."
 
 async def test_save_run_state_persists_blank_workspace_path_as_none(
     tmp_path: Path,
@@ -3363,7 +3363,7 @@ async def test_fetch_result_maps_failed_pr_resolver_artifact_for_completed_run(
         },
         active_turn_id=None,
         result={
-            "summary": "Codex managed-session turn completed.",
+            "summary": "Managed session turn completed.",
             "metadata": {},
         },
         status="completed",
@@ -3444,7 +3444,7 @@ async def test_fetch_result_maps_blocked_pr_resolver_artifact_for_completed_run(
         },
         active_turn_id=None,
         result={
-            "summary": "Codex managed-session turn completed.",
+            "summary": "Managed session turn completed.",
             "metadata": {},
         },
         status="completed",
@@ -3525,7 +3525,7 @@ async def test_fetch_result_maps_merged_pr_resolver_artifact_metadata(
         },
         active_turn_id=None,
         result={
-            "summary": "Codex managed-session turn completed.",
+            "summary": "Managed session turn completed.",
             "metadata": {},
         },
         status="completed",
@@ -3607,7 +3607,7 @@ async def test_fetch_result_maps_final_state_field_pr_resolver_artifact_metadata
         },
         active_turn_id=None,
         result={
-            "summary": "Codex managed-session turn completed.",
+            "summary": "Managed session turn completed.",
             "metadata": {},
         },
         status="completed",
@@ -3692,7 +3692,7 @@ async def test_fetch_result_prefers_explicit_pr_resolver_disposition(
         },
         active_turn_id=None,
         result={
-            "summary": "Codex managed-session turn completed.",
+            "summary": "Managed session turn completed.",
             "metadata": {},
         },
         status="completed",
@@ -3776,7 +3776,7 @@ async def test_fetch_result_maps_final_state_merged_pr_resolver_artifact_metadat
         },
         active_turn_id=None,
         result={
-            "summary": "Codex managed-session turn completed.",
+            "summary": "Managed session turn completed.",
             "metadata": {},
         },
         status="completed",
@@ -3863,7 +3863,7 @@ async def test_fetch_result_maps_outcome_merged_pr_resolver_artifact_metadata(
         },
         active_turn_id=None,
         result={
-            "summary": "Codex managed-session turn completed.",
+            "summary": "Managed session turn completed.",
             "metadata": {},
         },
         status="completed",

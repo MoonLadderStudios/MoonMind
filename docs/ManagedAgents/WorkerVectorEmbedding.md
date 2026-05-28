@@ -14,7 +14,7 @@ Related:
 This document defines the desired-state approach for managed agent access to
 MoonMind vector search and embedding services.
 
-It is compatible with the Codex managed session plane:
+It is compatible with the shared managed session plane:
 
 - Codex is the concrete managed-session runtime.
 - Each task has one task-scoped Codex session container.
@@ -110,7 +110,7 @@ all of the following are true:
 - operation summaries are published as artifacts or bounded workflow metadata
 - no embedding vectors or large document chunks are recorded in workflow history
 
-For Codex managed sessions, direct Qdrant access should be rare. The preferred
+For managed sessions, direct Qdrant access should be rare. The preferred
 shape is that Codex invokes a MoonMind vector tool, and that tool either serves
 the request through the control plane or launches a separate workload container
 for heavy batch work.
@@ -189,7 +189,7 @@ Rules:
 
 ## Minimal Runtime Contract
 
-A managed Codex session or workload vector tool needs only bounded configuration:
+A managed session or workload vector tool needs only bounded configuration:
 
 - MoonMind API endpoint for control-plane vector operations.
 - Run, task, repository, and tenant scope.
@@ -198,6 +198,6 @@ A managed Codex session or workload vector tool needs only bounded configuration
 - Embedding model identity and expected vector dimension, supplied by MoonMind
   configuration or collection metadata.
 
-This keeps vector search compatible with the Codex managed session plane while
+This keeps vector search compatible with the shared managed session plane while
 preserving Temporal as the orchestrator, artifacts as durable evidence, and
 session containers as replaceable runtime envelopes.

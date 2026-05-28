@@ -6,7 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from moonmind.schemas.managed_session_models import (
-    CODEX_MANAGED_SESSION_CONTROL_ACTIONS,
+    MANAGED_SESSION_CONTROL_ACTIONS,
     CodexManagedSessionAttachRuntimeHandlesSignal,
     CodexManagedSessionArtifactsPublication,
     CodexManagedSessionCancelUpdateRequest,
@@ -14,18 +14,19 @@ from moonmind.schemas.managed_session_models import (
     CodexManagedSessionClearUpdateRequest,
     CodexManagedSessionHandle,
     CodexManagedSessionLocator,
-    CodexManagedSessionPlaneContract,
     CodexManagedSessionState,
     CodexManagedSessionSummary,
     CodexManagedSessionTerminateUpdateRequest,
     CodexManagedSessionTurnResponse,
     LaunchCodexManagedSessionRequest,
+    ManagedSessionPlaneContract,
     ManagedGitHubCredentialDescriptor,
     SendCodexManagedSessionTurnRequest,
+    canonical_managed_session_runtime_id,
 )
 
-def test_codex_managed_session_plane_contract_freezes_phase1_mvp_scope() -> None:
-    contract = CodexManagedSessionPlaneContract()
+def test_managed_session_plane_contract_freezes_task_scoped_scope() -> None:
+    contract = ManagedSessionPlaneContract()
 
     assert contract.runtime_family == "codex"
     assert contract.protocol == "codex_app_server"
@@ -41,10 +42,25 @@ def test_codex_managed_session_plane_contract_freezes_phase1_mvp_scope() -> None
     )
     assert contract.clear_behavior == "new_thread_same_container_new_epoch"
 
-def test_codex_managed_session_plane_contract_exposes_canonical_control_actions() -> None:
-    contract = CodexManagedSessionPlaneContract()
+def test_managed_session_plane_contract_supports_claude_code_family() -> None:
+    contract = ManagedSessionPlaneContract(runtime_family="claude_code")
 
-    assert contract.control_actions == CODEX_MANAGED_SESSION_CONTROL_ACTIONS
+    assert contract.runtime_family == "claude_code"
+    assert contract.protocol == "codex_app_server"
+    assert contract.container_backend == "docker"
+    assert contract.control_actions == MANAGED_SESSION_CONTROL_ACTIONS
+
+def test_managed_session_runtime_id_canonicalizes_codex_and_claude_code() -> None:
+    assert canonical_managed_session_runtime_id("codex") == "codex_cli"
+    assert canonical_managed_session_runtime_id("codex_cli") == "codex_cli"
+    assert canonical_managed_session_runtime_id("claude") == "claude_code"
+    assert canonical_managed_session_runtime_id("claude_code") == "claude_code"
+    assert canonical_managed_session_runtime_id("gemini_cli") is None
+
+def test_managed_session_plane_contract_exposes_canonical_control_actions() -> None:
+    contract = ManagedSessionPlaneContract()
+
+    assert contract.control_actions == MANAGED_SESSION_CONTROL_ACTIONS
     assert contract.control_actions == (
         "start_session",
         "resume_session",
@@ -56,14 +72,14 @@ def test_codex_managed_session_plane_contract_exposes_canonical_control_actions(
         "terminate_session",
     )
 
-def test_codex_managed_session_plane_contract_rejects_non_canonical_overrides() -> None:
+def test_managed_session_plane_contract_rejects_non_canonical_overrides() -> None:
     with pytest.raises(ValidationError, match="Input should be False"):
-        CodexManagedSessionPlaneContract(cross_task_reuse=True)
+        ManagedSessionPlaneContract(cross_task_reuse=True)
 
     with pytest.raises(
         ValidationError, match="control_actions must match the canonical"
     ):
-        CodexManagedSessionPlaneContract(
+        ManagedSessionPlaneContract(
             control_actions=("start_session", "send_turn")
         )
 
@@ -161,6 +177,22 @@ def test_launch_codex_managed_session_request_freezes_remote_container_defaults(
     assert request.control_mode == "remote_container"
     assert request.protocol == "codex_app_server"
     assert request.session_epoch == 1
+
+def test_launch_managed_session_request_accepts_claude_code_runtime_family() -> None:
+    request = LaunchCodexManagedSessionRequest(
+        runtimeFamily="claude_code",
+        taskRunId="task-123",
+        sessionId="sess-123",
+        threadId="thread-1",
+        workspacePath="/work/task/repo",
+        sessionWorkspacePath="/work/task/session",
+        artifactSpoolPath="/work/task/artifacts",
+        codexHomePath="/work/task/runtime-home",
+        imageRef="moonmind:latest",
+    )
+
+    assert request.runtime_family == "claude_code"
+    assert request.protocol == "codex_app_server"
 
 def test_mm693_launch_request_serializes_docker_capability_contract() -> None:
     request = LaunchCodexManagedSessionRequest(

@@ -1,4 +1,4 @@
-"""Docker-backed controller for transitional Codex managed sessions."""
+"""Docker-backed controller for managed runtime sessions."""
 
 from __future__ import annotations
 
@@ -175,7 +175,7 @@ def _is_sensitive_env_key(key: str) -> bool:
     return bool(_SENSITIVE_ENV_KEY_PATTERN.search(key))
 
 class DockerCodexManagedSessionController:
-    """Launch and control managed Codex session containers via Docker CLI."""
+    """Launch and control managed runtime session containers via Docker CLI."""
 
     def __init__(
         self,
@@ -938,7 +938,11 @@ class DockerCodexManagedSessionController:
             containerId=handle.session_state.container_id,
             threadId=handle.session_state.thread_id,
             activeTurnId=handle.session_state.active_turn_id,
-            runtimeId="codex_cli",
+            runtimeId=(
+                "claude_code"
+                if request.runtime_family == "claude_code"
+                else "codex_cli"
+            ),
             imageRef=handle.image_ref or request.image_ref,
             controlUrl=handle.control_url or f"docker-exec://{handle.session_state.container_id}",
             status=self._record_status_from_handle_status(handle.status),
@@ -949,6 +953,12 @@ class DockerCodexManagedSessionController:
             startedAt=now,
             updatedAt=now,
         )
+
+    @staticmethod
+    def _with_runtime_family(response: Any, request: CodexManagedSessionLocator) -> Any:
+        if getattr(response, "runtime_family", None) == request.runtime_family:
+            return response
+        return response.model_copy(update={"runtime_family": request.runtime_family})
 
     @staticmethod
     def _matches_locator(
@@ -1970,6 +1980,7 @@ class DockerCodexManagedSessionController:
                 and await self._container_exists(existing_record.container_id)
             ):
                 return CodexManagedSessionHandle(
+                    runtimeFamily=request.runtime_family,
                     sessionState=existing_record.session_state(),
                     status=self._handle_status_from_record_status(
                         existing_record.status
@@ -2177,7 +2188,10 @@ class DockerCodexManagedSessionController:
             if github_broker_started:
                 await self._github_auth_brokers.stop(request.session_id)
             raise
-        handle = CodexManagedSessionHandle.model_validate(payload)
+        handle = self._with_runtime_family(
+            CodexManagedSessionHandle.model_validate(payload),
+            request,
+        )
         if docker_capability_metadata:
             handle = handle.model_copy(
                 update={
@@ -2216,7 +2230,10 @@ class DockerCodexManagedSessionController:
             action="session_status",
             payload=request.model_dump(by_alias=True),
         )
-        handle = CodexManagedSessionHandle.model_validate(payload)
+        handle = self._with_runtime_family(
+            CodexManagedSessionHandle.model_validate(payload),
+            request,
+        )
         record = await self._persist_handle_transition(
             locator=self._locator_from_session_state(handle.session_state),
             status=handle.status,
@@ -2254,12 +2271,15 @@ class DockerCodexManagedSessionController:
                 action="send_turn",
                 payload=request.model_dump(by_alias=True),
             )
-            response = CodexManagedSessionTurnResponse.model_validate(payload)
+            response = self._with_runtime_family(
+                CodexManagedSessionTurnResponse.model_validate(payload),
+                request,
+            )
         except RuntimeError:
             recovered = self._recover_send_turn_response(request)
             if recovered is None:
                 raise
-            response = recovered
+            response = self._with_runtime_family(recovered, request)
 
         terminal_response = response
         if response.status in {"accepted", "running"}:
@@ -2267,6 +2287,7 @@ class DockerCodexManagedSessionController:
                 request=request,
                 initial_response=response,
             )
+            terminal_response = self._with_runtime_family(terminal_response, request)
 
         if self._session_store is not None:
             record = self._session_store.load(request.session_id)
@@ -2322,7 +2343,10 @@ class DockerCodexManagedSessionController:
             action="steer_turn",
             payload=request.model_dump(by_alias=True),
         )
-        response = CodexManagedSessionTurnResponse.model_validate(payload)
+        response = self._with_runtime_family(
+            CodexManagedSessionTurnResponse.model_validate(payload),
+            request,
+        )
         if self._session_store is not None:
             record = self._session_store.load(request.session_id)
             if record is not None:
@@ -2360,6 +2384,7 @@ class DockerCodexManagedSessionController:
                 self._matches_locator(record, request)
                 if record.active_turn_id is None and record.status == "ready":
                     return CodexManagedSessionTurnResponse(
+                        runtimeFamily=request.runtime_family,
                         sessionState=record.session_state(),
                         turnId=request.turn_id,
                         status="interrupted",
@@ -2370,7 +2395,10 @@ class DockerCodexManagedSessionController:
             action="interrupt_turn",
             payload=request.model_dump(by_alias=True),
         )
-        response = CodexManagedSessionTurnResponse.model_validate(payload)
+        response = self._with_runtime_family(
+            CodexManagedSessionTurnResponse.model_validate(payload),
+            request,
+        )
         if self._session_store is not None:
             record = self._session_store.load(request.session_id)
             if record is not None:
@@ -2413,6 +2441,7 @@ class DockerCodexManagedSessionController:
                     and previous_record.latest_reset_boundary_ref
                 ):
                     return CodexManagedSessionHandle(
+                        runtimeFamily=request.runtime_family,
                         sessionState=previous_record.session_state(),
                         status=self._handle_status_from_record_status(
                             previous_record.status
@@ -2426,7 +2455,10 @@ class DockerCodexManagedSessionController:
             action="clear_session",
             payload=request.model_dump(by_alias=True),
         )
-        handle = CodexManagedSessionHandle.model_validate(payload)
+        handle = self._with_runtime_family(
+            CodexManagedSessionHandle.model_validate(payload),
+            request,
+        )
         if previous_record is not None:
             assert session_store is not None
             updated_record = await session_store.update(
@@ -2473,6 +2505,7 @@ class DockerCodexManagedSessionController:
                     )
                 await self._github_auth_brokers.stop(request.session_id)
                 return CodexManagedSessionHandle(
+                    runtimeFamily=request.runtime_family,
                     sessionState=record.session_state(),
                     status="terminated",
                     imageRef=record.image_ref,
@@ -2492,6 +2525,7 @@ class DockerCodexManagedSessionController:
             )
         await self._github_auth_brokers.stop(request.session_id)
         handle = CodexManagedSessionHandle(
+            runtimeFamily=request.runtime_family,
             sessionState={
                 "sessionId": request.session_id,
                 "sessionEpoch": request.session_epoch,
@@ -2543,8 +2577,12 @@ class DockerCodexManagedSessionController:
                 action="fetch_session_summary",
                 payload=request.model_dump(by_alias=True),
             )
-            return CodexManagedSessionSummary.model_validate(payload)
+            return self._with_runtime_family(
+                CodexManagedSessionSummary.model_validate(payload),
+                request,
+            )
         return CodexManagedSessionSummary(
+            runtimeFamily=request.runtime_family,
             sessionState=record.session_state(),
             latestSummaryRef=record.latest_summary_ref,
             latestCheckpointRef=record.latest_checkpoint_ref,
@@ -2572,13 +2610,17 @@ class DockerCodexManagedSessionController:
                 action="publish_session_artifacts",
                 payload=request.model_dump(by_alias=True),
             )
-            return CodexManagedSessionArtifactsPublication.model_validate(payload)
+            return self._with_runtime_family(
+                CodexManagedSessionArtifactsPublication.model_validate(payload),
+                request,
+            )
         if (
             self._session_supervisor is not None
             and not record.published_artifact_refs()
         ):
             record = await self._session_supervisor.publish_snapshot(request.session_id)
         return CodexManagedSessionArtifactsPublication(
+            runtimeFamily=request.runtime_family,
             sessionState=record.session_state(),
             publishedArtifactRefs=record.published_artifact_refs(),
             latestSummaryRef=record.latest_summary_ref,

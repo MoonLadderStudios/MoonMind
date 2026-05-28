@@ -466,16 +466,16 @@ Worker queue: `mm.activity.agent_runtime`
 - `agent_runtime.status(...) -> AgentRunStatus`
 - `agent_runtime.fetch_result(...) -> AgentRunResult`
 - `agent_runtime.cancel(...) -> AgentRunStatus`
-- `agent_runtime.launch_session(...) -> CodexManagedSessionHandle`
-- `agent_runtime.session_status(...) -> CodexManagedSessionHandle`
+- `agent_runtime.launch_session(...) -> ManagedSessionHandle`
+- `agent_runtime.session_status(...) -> ManagedSessionHandle`
 - `agent_runtime.prepare_turn_instructions(...) -> str | prepared-instructions payload`
-- `agent_runtime.send_turn(...) -> CodexManagedSessionTurnResponse`
-- `agent_runtime.steer_turn(...) -> CodexManagedSessionTurnResponse`
-- `agent_runtime.interrupt_turn(...) -> CodexManagedSessionTurnResponse`
-- `agent_runtime.clear_session(...) -> CodexManagedSessionHandle`
-- `agent_runtime.terminate_session(...) -> CodexManagedSessionHandle`
-- `agent_runtime.fetch_session_summary(...) -> CodexManagedSessionSummary`
-- `agent_runtime.publish_session_artifacts(...) -> CodexManagedSessionArtifactsPublication`
+- `agent_runtime.send_turn(...) -> ManagedSessionTurnResponse`
+- `agent_runtime.steer_turn(...) -> ManagedSessionTurnResponse`
+- `agent_runtime.interrupt_turn(...) -> ManagedSessionTurnResponse`
+- `agent_runtime.clear_session(...) -> ManagedSessionHandle`
+- `agent_runtime.terminate_session(...) -> ManagedSessionHandle`
+- `agent_runtime.fetch_session_summary(...) -> ManagedSessionSummary`
+- `agent_runtime.publish_session_artifacts(...) -> ManagedSessionArtifactsPublication`
 - `agent_runtime.reconcile_managed_sessions(...) -> reconciliation summary payload`
 
 `agent_runtime.publish_artifacts` should return a canonical-result-compatible enriched payload that can be materialized as `AgentRunResult`.
@@ -484,7 +484,7 @@ Worker queue: `mm.activity.agent_runtime`
 
 The session-oriented activities are remote-session contracts. They must delegate through a session controller or adapter boundary and must not fall back to the worker-local managed runtime launcher/process loop.
 
-The current session-oriented return types are Codex-specific because Codex is the live managed-session implementation. When a second runtime adopts task-scoped managed sessions, introduce a neutral managed-session request/response surface above runtime-specific adapters rather than spreading Codex contracts into the public workflow boundary.
+The session-oriented activity surface is runtime-neutral at the workflow boundary. Codex CLI and Claude Code both enter through `ManagedSession*` request and response envelopes; runtime-specific protocol details remain behind the session adapter/controller boundary. The current container transport uses the Codex App Server-compatible remote-session protocol for the Codex binding, while Claude Code carries `runtimeFamily = "claude_code"` through the same control surface and records `runtimeId = "claude_code"` in session state and projections.
 
 `agent_runtime.prepare_turn_instructions` is replay-visible when scheduled by
 `MoonMind.AgentRun`. Moving it before or after session launch/status activities,

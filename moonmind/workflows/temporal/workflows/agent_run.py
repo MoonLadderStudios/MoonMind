@@ -393,8 +393,8 @@ class MoonMindAgentRun:
         kwargs.setdefault(
             "summary",
             {
-                "agent_runtime.launch_session": "Launch managed Codex session",
-                "agent_runtime.session_status": "Fetch managed Codex session status",
+                "agent_runtime.launch_session": "Launch managed runtime session",
+                "agent_runtime.session_status": "Fetch managed runtime session status",
             }.get(activity_name, activity_name),
         )
         return await execute_typed_activity(

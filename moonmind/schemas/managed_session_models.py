@@ -1,4 +1,4 @@
-"""Canonical contracts for the Codex managed session plane."""
+"""Canonical contracts for the shared managed session plane."""
 
 from __future__ import annotations
 
@@ -53,6 +53,8 @@ ManagedSessionControlAction = Literal[
 ]
 
 ManagedSessionControlMode = Literal["remote_container"]
+ManagedSessionRuntimeFamily = Literal["codex", "claude_code"]
+ManagedSessionRuntimeId = Literal["codex_cli", "claude_code"]
 ManagedSessionProtocol = Literal["codex_app_server"]
 ManagedSessionContainerBackend = Literal["docker"]
 ManagedGitHubCredentialSource = Literal["secret_ref", "managed_secret", "environment"]
@@ -748,7 +750,7 @@ _CLAUDE_CONTEXT_RETAINED_POLICIES: frozenset[
     ClaudeContextReinjectionPolicy
 ] = frozenset({"always", "startup_refresh", "budgeted", "configurable"})
 
-CODEX_MANAGED_SESSION_CONTROL_ACTIONS: tuple[ManagedSessionControlAction, ...] = (
+MANAGED_SESSION_CONTROL_ACTIONS: tuple[ManagedSessionControlAction, ...] = (
     "start_session",
     "resume_session",
     "send_turn",
@@ -758,6 +760,7 @@ CODEX_MANAGED_SESSION_CONTROL_ACTIONS: tuple[ManagedSessionControlAction, ...] =
     "cancel_session",
     "terminate_session",
 )
+CODEX_MANAGED_SESSION_CONTROL_ACTIONS = MANAGED_SESSION_CONTROL_ACTIONS
 
 CodexManagedSessionWorkflowStatus = Literal[
     "initializing",
@@ -767,6 +770,19 @@ CodexManagedSessionWorkflowStatus = Literal[
     "terminated",
 ]
 
+def canonical_managed_session_runtime_id(
+    runtime_id: str,
+) -> ManagedSessionRuntimeId | None:
+    """Return the canonical managed-session runtime ID for session-capable runtimes."""
+
+    normalized = str(runtime_id or "").strip().lower().replace("-", "_")
+    if normalized in {"codex", "codex_cli"}:
+        return "codex_cli"
+    if normalized in {"claude", "claude_code"}:
+        return "claude_code"
+    return None
+
+
 def canonical_codex_managed_runtime_id(runtime_id: str) -> str | None:
     """Return the canonical managed-session runtime ID for Codex."""
 
@@ -774,6 +790,19 @@ def canonical_codex_managed_runtime_id(runtime_id: str) -> str | None:
     if normalized in {"codex", "codex_cli"}:
         return "codex_cli"
     return None
+
+
+def managed_session_runtime_family_for_runtime_id(
+    runtime_id: str,
+) -> ManagedSessionRuntimeFamily:
+    """Return the managed-session runtime family for a canonical runtime ID."""
+
+    canonical = canonical_managed_session_runtime_id(runtime_id)
+    if canonical == "codex_cli":
+        return "codex"
+    if canonical == "claude_code":
+        return "claude_code"
+    raise ValueError("runtimeId must identify a managed-session runtime")
 
 _ASSISTANT_TEXT_METADATA_KEYS = frozenset({"assistantText", "lastAssistantText"})
 _ASSISTANT_TEXT_METADATA_MAX_BYTES = 8 * 1024
@@ -825,12 +854,12 @@ def _compact_managed_session_metadata(
             normalized[f"{key}OriginalChars"] = original_chars
     return normalized
 
-class CodexManagedSessionPlaneContract(BaseModel):
-    """Frozen Phase 1 MVP contract for the Codex managed session plane."""
+class ManagedSessionPlaneContract(BaseModel):
+    """Shared task-scoped managed session plane contract."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    runtime_family: Literal["codex"] = "codex"
+    runtime_family: ManagedSessionRuntimeFamily = "codex"
     protocol: ManagedSessionProtocol = "codex_app_server"
     container_backend: ManagedSessionContainerBackend = "docker"
     session_scope: Literal["task"] = "task"
@@ -847,16 +876,19 @@ class CodexManagedSessionPlaneContract(BaseModel):
         "new_thread_same_container_new_epoch"
     )
     control_actions: tuple[ManagedSessionControlAction, ...] = (
-        CODEX_MANAGED_SESSION_CONTROL_ACTIONS
+        MANAGED_SESSION_CONTROL_ACTIONS
     )
 
     @model_validator(mode="after")
-    def _freeze_phase1_values(self) -> "CodexManagedSessionPlaneContract":
-        if self.control_actions != CODEX_MANAGED_SESSION_CONTROL_ACTIONS:
+    def _freeze_values(self) -> "ManagedSessionPlaneContract":
+        if self.control_actions != MANAGED_SESSION_CONTROL_ACTIONS:
             raise ValueError(
-                "control_actions must match the canonical Phase 1 action set"
+                "control_actions must match the canonical managed-session action set"
             )
         return self
+
+
+CodexManagedSessionPlaneContract = ManagedSessionPlaneContract
 
 class CodexManagedSessionState(BaseModel):
     """Identity and continuity state for one task-scoped Codex session."""
@@ -890,7 +922,7 @@ class _CodexManagedSessionRemoteContract(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    runtime_family: Literal["codex"] = Field("codex", alias="runtimeFamily")
+    runtime_family: ManagedSessionRuntimeFamily = Field("codex", alias="runtimeFamily")
     protocol: ManagedSessionProtocol = Field(
         "codex_app_server", alias="protocol"
     )
@@ -1199,9 +1231,9 @@ class CodexManagedSessionRecord(BaseModel):
         self.task_run_id = require_non_blank(self.task_run_id, field_name="taskRunId")
         self.container_id = require_non_blank(self.container_id, field_name="containerId")
         self.thread_id = require_non_blank(self.thread_id, field_name="threadId")
-        runtime_id = canonical_codex_managed_runtime_id(self.runtime_id)
+        runtime_id = canonical_managed_session_runtime_id(self.runtime_id)
         if runtime_id is None:
-            raise ValueError("runtimeId must identify a managed Codex runtime")
+            raise ValueError("runtimeId must identify a managed-session runtime")
         self.runtime_id = runtime_id
         self.image_ref = require_non_blank(self.image_ref, field_name="imageRef")
         self.control_url = require_non_blank(self.control_url, field_name="controlUrl")
@@ -1314,9 +1346,9 @@ class CodexManagedSessionBinding(BaseModel):
         self.workflow_id = require_non_blank(self.workflow_id, field_name="workflowId")
         self.task_run_id = require_non_blank(self.task_run_id, field_name="taskRunId")
         self.session_id = require_non_blank(self.session_id, field_name="sessionId")
-        runtime_id = canonical_codex_managed_runtime_id(self.runtime_id)
+        runtime_id = canonical_managed_session_runtime_id(self.runtime_id)
         if runtime_id is None:
-            raise ValueError("runtimeId must identify a managed Codex runtime")
+            raise ValueError("runtimeId must identify a managed-session runtime")
         self.runtime_id = runtime_id
         if self.execution_profile_ref is not None:
             self.execution_profile_ref = require_non_blank(
@@ -1344,7 +1376,7 @@ class CodexManagedSessionBinding(BaseModel):
         )
 
 class CodexManagedSessionWorkflowInput(BaseModel):
-    """Workflow input for one task-scoped Codex managed session."""
+    """Workflow input for one task-scoped managed runtime session."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -1374,9 +1406,9 @@ class CodexManagedSessionWorkflowInput(BaseModel):
     @model_validator(mode="after")
     def _normalize(self) -> "CodexManagedSessionWorkflowInput":
         self.task_run_id = require_non_blank(self.task_run_id, field_name="taskRunId")
-        runtime_id = canonical_codex_managed_runtime_id(self.runtime_id)
+        runtime_id = canonical_managed_session_runtime_id(self.runtime_id)
         if runtime_id is None:
-            raise ValueError("runtimeId must identify a managed Codex runtime")
+            raise ValueError("runtimeId must identify a managed-session runtime")
         self.runtime_id = runtime_id
         if self.execution_profile_ref is not None:
             self.execution_profile_ref = require_non_blank(
@@ -1555,7 +1587,7 @@ class CodexManagedSessionTerminateUpdateRequest(CodexManagedSessionWorkflowContr
     """Typed workflow update request for terminating the managed session."""
 
 class CodexManagedSessionSnapshot(BaseModel):
-    """Workflow-owned snapshot of one task-scoped Codex session."""
+    """Workflow-owned snapshot of one task-scoped managed runtime session."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -1576,6 +1608,36 @@ class CodexManagedSessionSnapshot(BaseModel):
     request_tracking_state: tuple[CodexManagedSessionRequestTrackingEntry, ...] = Field(
         default=(), alias="requestTrackingState"
     )
+
+
+ManagedSessionArtifactsPublication = CodexManagedSessionArtifactsPublication
+ManagedSessionAttachRuntimeHandlesSignal = CodexManagedSessionAttachRuntimeHandlesSignal
+ManagedSessionBinding = CodexManagedSessionBinding
+ManagedSessionCancelUpdateRequest = CodexManagedSessionCancelUpdateRequest
+ManagedSessionClearRequest = CodexManagedSessionClearRequest
+ManagedSessionClearUpdateRequest = CodexManagedSessionClearUpdateRequest
+ManagedSessionHandle = CodexManagedSessionHandle
+ManagedSessionInterruptRequest = CodexManagedSessionInterruptRequest
+ManagedSessionLocator = CodexManagedSessionLocator
+ManagedSessionRecord = CodexManagedSessionRecord
+ManagedSessionRequestTrackingEntry = CodexManagedSessionRequestTrackingEntry
+ManagedSessionSendFollowUpRequest = CodexManagedSessionSendFollowUpRequest
+ManagedSessionSnapshot = CodexManagedSessionSnapshot
+ManagedSessionState = CodexManagedSessionState
+ManagedSessionSteerRequest = CodexManagedSessionSteerRequest
+ManagedSessionSummary = CodexManagedSessionSummary
+ManagedSessionTerminateUpdateRequest = CodexManagedSessionTerminateUpdateRequest
+ManagedSessionTurnResponse = CodexManagedSessionTurnResponse
+ManagedSessionWorkflowControlRequest = CodexManagedSessionWorkflowControlRequest
+ManagedSessionWorkflowInput = CodexManagedSessionWorkflowInput
+ManagedSessionWorkflowStatus = CodexManagedSessionWorkflowStatus
+FetchManagedSessionSummaryRequest = FetchCodexManagedSessionSummaryRequest
+InterruptManagedSessionTurnRequest = InterruptCodexManagedSessionTurnRequest
+LaunchManagedSessionRequest = LaunchCodexManagedSessionRequest
+PublishManagedSessionArtifactsRequest = PublishCodexManagedSessionArtifactsRequest
+SendManagedSessionTurnRequest = SendCodexManagedSessionTurnRequest
+SteerManagedSessionTurnRequest = SteerCodexManagedSessionTurnRequest
+TerminateManagedSessionRequest = TerminateCodexManagedSessionRequest
 
 class ClaudeSurfaceBinding(BaseModel):
     """Durable representation of one surface attached to a Claude session."""
@@ -4573,11 +4635,39 @@ __all__ = [
     "FetchCodexManagedSessionSummaryRequest",
     "InterruptCodexManagedSessionTurnRequest",
     "LaunchCodexManagedSessionRequest",
+    "FetchManagedSessionSummaryRequest",
+    "InterruptManagedSessionTurnRequest",
+    "LaunchManagedSessionRequest",
+    "ManagedSessionArtifactsPublication",
+    "ManagedSessionAttachRuntimeHandlesSignal",
+    "ManagedSessionBinding",
+    "ManagedSessionCancelUpdateRequest",
+    "ManagedSessionClearRequest",
+    "ManagedSessionClearUpdateRequest",
+    "ManagedSessionHandle",
+    "ManagedSessionInterruptRequest",
+    "ManagedSessionLocator",
+    "ManagedSessionPlaneContract",
+    "ManagedSessionRecord",
+    "ManagedSessionRequestTrackingEntry",
+    "ManagedSessionSendFollowUpRequest",
+    "ManagedSessionSnapshot",
+    "ManagedSessionState",
+    "ManagedSessionSteerRequest",
+    "ManagedSessionSummary",
+    "ManagedSessionTerminateUpdateRequest",
+    "ManagedSessionTurnResponse",
+    "ManagedSessionWorkflowControlRequest",
+    "ManagedSessionWorkflowInput",
+    "ManagedSessionWorkflowStatus",
+    "ManagedSessionRuntimeFamily",
+    "ManagedSessionRuntimeId",
     "ManagedGitHubCredentialDescriptor",
     "ManagedGitHubCredentialSource",
     "ManagedSessionDockerCapabilityMode",
     "ManagedSessionDockerCapabilityRequest",
     "ManagedSessionContainerBackend",
+    "MANAGED_SESSION_CONTROL_ACTIONS",
     "ManagedSessionControlAction",
     "ManagedSessionControlMode",
     "ManagedSessionHandleStatus",
@@ -4586,6 +4676,7 @@ __all__ = [
     "ManagedSessionRequestTrackingStatus",
     "ManagedSessionTurnStatus",
     "PublishCodexManagedSessionArtifactsRequest",
+    "PublishManagedSessionArtifactsRequest",
     "build_claude_child_work_fixture_flow",
     "build_claude_governance_telemetry_fixture_flow",
     "build_claude_surface_handoff_fixture_flow",
@@ -4597,8 +4688,13 @@ __all__ = [
     "create_claude_rewind_work_items",
     "resolve_claude_policy_envelope",
     "SendCodexManagedSessionTurnRequest",
+    "SendManagedSessionTurnRequest",
     "SteerCodexManagedSessionTurnRequest",
+    "SteerManagedSessionTurnRequest",
     "TerminateCodexManagedSessionRequest",
+    "TerminateManagedSessionRequest",
     "canonical_codex_managed_runtime_id",
+    "canonical_managed_session_runtime_id",
+    "managed_session_runtime_family_for_runtime_id",
     "validate_claude_team_message_membership",
 ]

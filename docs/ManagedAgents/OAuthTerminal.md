@@ -1,7 +1,7 @@
 # OAuth Terminal and Managed Session Auth Volumes
 
 **Replaces:** `docs/ManagedAgents/TmateArchitecture.md`
-**Status:** Desired state, Codex-focused current target
+**Status:** Desired state, Codex CLI and Claude Code session target
 **Owners:** MoonMind Engineering
 **Last updated:** 2026-05-04
 
@@ -19,15 +19,13 @@ runtimes and then target the resulting credential volume into managed runtime
 containers. This document defines the desired auth-terminal and volume-targeting
 contract.
 
-The current concrete managed-session target is **Codex only**. Claude Code and
-Gemini CLI can still have auth volumes and provider profiles, but they are not
-yet the fully updated task-scoped managed-session plane described here.
+The current concrete managed-session targets are **Codex CLI** and **Claude Code**. Gemini CLI can still have auth volumes and provider profiles, but it is not yet a first-class task-scoped managed-session target.
 
-For Codex, the important boundary is:
+For Codex CLI and Claude Code, the important boundary is:
 
 - OAuth or manual auth writes durable credential material into a provider-profile
   auth volume such as `codex_auth_volume`.
-- A task-scoped managed Codex session container receives that auth volume only
+- A task-scoped managed session container receives that auth volume only
   through an explicit auth-volume mount target.
 - The Codex App Server runs from a per-run `CODEX_HOME` under the shared task
   workspace, not directly from the durable auth volume.
@@ -42,7 +40,7 @@ This document covers:
 - browser-initiated OAuth or terminal-auth enrollment
 - persistent runtime auth volumes
 - Provider Profile registration for OAuth-backed profiles
-- Codex managed-session volume targeting
+- Codex CLI and Claude Code managed-session volume targeting
 - the separation between auth volumes, task workspaces, and workload containers
 
 This document does not define:
@@ -50,12 +48,13 @@ This document does not define:
 - PTY attach for ordinary managed task runs
 - Live Logs transport for managed runs
 - a generic remote shell product
-- Claude/Gemini task-scoped managed-session parity
+- Gemini task-scoped managed-session parity
 - Docker-backed workload container auth inheritance
 
-OAuth can require an interactive terminal. Managed Codex task execution should
-not. Codex managed sessions use the Codex App Server protocol, with operator
-observability through artifacts and normalized session events.
+OAuth can require an interactive terminal. Managed task execution should not.
+Codex CLI and Claude Code managed sessions consume mounted auth volumes through
+Provider Profiles, with operator observability through artifacts and normalized
+session events.
 
 ## 3. Current Codex Volume Model
 
@@ -83,6 +82,13 @@ volume_ref: codex_auth_volume
 volume_mount_path: /home/app/.codex
 ```
 
+Claude Code uses the same Provider Profile and explicit mount-target pattern,
+with the runtime profile selecting the Claude auth volume and mount path. The
+session launch payload carries the same `MANAGED_AUTH_VOLUME_PATH` environment
+contract and `runtimeFamily = "claude_code"` so the managed-session controller
+can keep auth material separate from the task workspace while still recording a
+Claude Code session binding.
+
 That shape describes the credential enrollment and verification home only. It
 does not set `CODEX_HOME` for managed sessions. The managed-session launcher
 maps the durable auth volume through the managed-session volume rules below and
@@ -90,7 +96,7 @@ keeps the live session `CODEX_HOME` under the task workspace.
 
 ### 3.2 Shared task workspace volume
 
-The managed Codex session container receives the shared task workspace volume:
+The managed session container receives the shared task workspace volume:
 
 - default volume name: `agent_workspaces`
 - configurable compose name: `MOONMIND_AGENT_WORKSPACES_VOLUME_NAME`
@@ -109,7 +115,7 @@ Server for that task-scoped session.
 
 ### 3.3 Explicit auth-volume target
 
-A Codex managed-session container may receive the durable auth volume at an
+A managed-session container may receive the durable auth volume at an
 explicit, separate target path through `MANAGED_AUTH_VOLUME_PATH`, for example:
 
 ```text
@@ -186,7 +192,7 @@ Settings / Mission Control UI
 ```
 
 The OAuth terminal is only for credential enrollment or repair. It does not
-become the runtime surface for managed Codex task execution.
+become the runtime surface for managed task execution.
 
 ### 5.1 Auth runner container
 
@@ -308,11 +314,11 @@ For Codex OAuth, the resulting profile should preserve:
   duration
 
 Managed-session launch then resolves the selected profile and applies the
-Codex-specific volume targeting rules in this document.
+runtime-specific volume targeting rules in this document.
 
-## 7. Managed Codex Session Launch
+## 7. Managed Session Launch
 
-The Codex managed-session launcher should build the container with these mount
+The managed-session launcher should build the container with these mount
 classes:
 
 | Mount | Required | Target | Purpose |
@@ -390,10 +396,10 @@ For Codex OAuth enrollment:
 7. MoonMind enters `registering_profile`, registers or updates the Codex
    Provider Profile, and refreshes any Settings-side profile views that are open.
    Returning to Settings is optional.
-8. Later task-scoped Codex managed sessions target that profile and mount the
-   auth volume at `MANAGED_AUTH_VOLUME_PATH` when needed.
-9. The session runtime seeds the per-run `CODEX_HOME` under `agent_workspaces`
-   and starts Codex App Server.
+8. Later task-scoped managed sessions target that profile and mount the auth
+   volume at `MANAGED_AUTH_VOLUME_PATH` when needed.
+9. The session runtime seeds the per-run runtime home under `agent_workspaces`
+   and starts the runtime session control surface.
 
 For ordinary task execution, operators should inspect Live Logs, artifacts,
 session summaries, diagnostics, and reset/control-boundary artifacts. They should
@@ -403,12 +409,12 @@ not inspect terminal scrollback or auth volumes as the execution record.
 
 - OAuth terminal code owns interactive enrollment only.
 - Provider Profile code owns credential refs, slot policy, and profile metadata.
-- Managed-session controller code owns Codex session container mounts.
-- Codex session runtime code owns seeding the per-run Codex home and starting
-  Codex App Server.
+- Managed-session controller code owns Codex CLI and Claude Code session container mounts.
+- Runtime session code owns seeding the per-run runtime home and starting the
+  session control surface.
 - Docker workload orchestration owns non-agent workload containers and must not
   implicitly inherit managed-runtime auth volumes.
 
 These boundaries keep auth, session continuity, and workload execution separate
-while still allowing the Codex managed-session plane to use durable OAuth
-credentials safely.
+while still allowing Codex CLI and Claude Code managed-session bindings to use
+durable OAuth credentials safely.
