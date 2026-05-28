@@ -5200,7 +5200,7 @@ describe.skip("Task Create Entrypoint", () => {
       },
     );
 
-    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
     fireEvent.change(
       within(primaryStep as HTMLElement).getByLabelText(
         "Step 1 Skill Args (optional JSON object)",
@@ -5296,7 +5296,7 @@ describe.skip("Task Create Entrypoint", () => {
       ),
     ).toBeNull();
 
-    const advancedToggle = screen.getByLabelText("Show advanced step options");
+    const advancedToggle = screen.getByLabelText("Advanced mode");
     expect(advancedToggle.closest('[data-canonical-create-section="Submit"]')).not.toBeNull();
     fireEvent.click(advancedToggle);
 
@@ -5363,7 +5363,7 @@ describe.skip("Task Create Entrypoint", () => {
       },
     );
 
-    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
     fireEvent.change(
       within(primaryStep as HTMLElement).getByLabelText(
         "Step 1 Skill Args (optional JSON object)",
@@ -5381,7 +5381,7 @@ describe.skip("Task Create Entrypoint", () => {
       },
     );
 
-    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
     expect(
       within(primaryStep as HTMLElement).queryByLabelText(
         /Skill Args \(optional JSON object\)/,
@@ -5393,7 +5393,7 @@ describe.skip("Task Create Entrypoint", () => {
       ),
     ).toBeNull();
 
-    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
     const skillArgsField = within(primaryStep as HTMLElement).getByLabelText(
       "Step 1 Skill Args (optional JSON object)",
     ) as HTMLTextAreaElement;
@@ -5430,7 +5430,7 @@ describe.skip("Task Create Entrypoint", () => {
     );
     expect(primaryStep).not.toBeNull();
 
-    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
     fireEvent.change(
       within(primaryStep as HTMLElement).getByLabelText(
         "Step 1 Skill Args (optional JSON object)",
@@ -5447,7 +5447,7 @@ describe.skip("Task Create Entrypoint", () => {
         target: { value: "docker, qdrant" },
       },
     );
-    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
     fireEvent.change(screen.getByLabelText("Instructions"), {
       target: { value: "Run without hidden advanced routing." },
     });
@@ -6080,7 +6080,7 @@ describe.skip("Task Create Entrypoint", () => {
         target: { value: "pr-resolver" },
       },
     );
-    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
     await waitFor(() => {
       expect(
         within(additionalStep as HTMLElement).getByLabelText(
@@ -8344,7 +8344,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(primaryStep).not.toBeNull();
     const step = primaryStep as HTMLElement;
 
-    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
     fireEvent.change(within(step).getByLabelText(/Skill \(optional\)/), {
       target: { value: "custom-skill" },
     });
@@ -10245,7 +10245,7 @@ describe.skip("Task Create Entrypoint", () => {
         target: { value: "pr-resolver" },
       },
     );
-    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
     await waitFor(() => {
       expect(
         within(primaryStep as HTMLElement).getByLabelText(
@@ -10299,7 +10299,7 @@ describe.skip("Task Create Entrypoint", () => {
         target: { value: "Capture auto skill args in a preset." },
       },
     );
-    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
     fireEvent.change(
       within(primaryStep as HTMLElement).getByLabelText(
         "Step 1 Skill Args (optional JSON object)",
@@ -15571,7 +15571,7 @@ describe("Task Create governed Tool authoring", () => {
       target: { value: "moonspec-orchestrate" },
     });
 
-    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
     fireEvent.change(
       within(step).getByLabelText("Step 1 Skill Args (optional JSON object)"),
       {
