@@ -3412,7 +3412,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     grid-template-columns: minmax(0, 1fr);
     gap: 0.25rem;
     width: 100%;
-    padding: 0.25rem;
+    padding: 0;
   }
 
   .settings-nav-options::before,

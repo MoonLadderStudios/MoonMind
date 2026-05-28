@@ -331,6 +331,7 @@ describe('Mission Control shared entry', () => {
     expect(mobileSettingsNavBlock).toContain('display: grid');
     expect(mobileSettingsNavBlock).toContain('grid-template-columns: minmax(0, 1fr)');
     expect(mobileSettingsNavBlock).toContain('width: 100%');
+    expect(mobileSettingsNavBlock).toContain('padding: 0');
     expect(mobileSettingsOptionBlock).toContain('justify-content: flex-start');
     expect(mobileSettingsOptionBlock).toContain('width: 100%');
     expect(mobileSettingsActiveBlock).toContain('0 0 18px rgb(var(--mm-accent) / 0.55)');
