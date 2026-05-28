@@ -461,10 +461,12 @@ class HostDockerComposeRunner:
     async def capture_state(self, *, stack: str, phase: str) -> Mapping[str, Any]:
         services = await self._run_compose_json(("ps", "--format", "json"))
         images = await self._run_compose_json(("images", "--format", "json"))
+        configured_services = await self._run_compose_services()
         return {
             "stack": stack,
             "phase": phase,
             "projectName": self.project_name,
+            "configuredServices": configured_services,
             "services": services,
             "images": images,
             "capturedAt": _utc_now(),
@@ -503,6 +505,7 @@ class HostDockerComposeRunner:
         images = await self._run_compose_json(("images", "--format", "json"))
         services = await self._run_compose_json(("ps", "--format", "json"))
         repository, reference = _split_requested_image(requested_image)
+        excluded_services = _normalized_service_names(self.excluded_services)
         matched_images = []
         for image in images:
             if not isinstance(image, Mapping):
@@ -518,7 +521,7 @@ class HostDockerComposeRunner:
                 or image.get("Container")
                 or ""
             ).strip()
-            if _service_is_excluded(service_name, self.excluded_services):
+            if _service_is_excluded(service_name, excluded_services):
                 continue
             matched_images.append(image)
         mismatches: list[dict[str, Any]] = []
@@ -812,6 +815,19 @@ class HostDockerComposeRunner:
                 "stderr": result.get("stderr"),
                 "failureClass": "compose_config_validation_failure",
             },
+        )
+
+    async def _run_compose_services(self) -> tuple[str, ...]:
+        result = await self._run_compose_command(
+            ("docker", "compose", "config", "--services"),
+            max_stdout_chars=None,
+            max_stderr_chars=2000,
+        )
+        _ensure_command_succeeded("config", result)
+        return tuple(
+            line.strip()
+            for line in str(result.get("stdout") or "").splitlines()
+            if line.strip()
         )
 
     async def _inspect_image(self, requested_image: str) -> Mapping[str, Any]:
@@ -1255,8 +1271,8 @@ def _command_plan_targeting_services(
         return command_plan
     services = tuple(
         service_name
-        for service_name in _service_names_from_state(before_state.get("services"))
-        if service_name.lower() not in excluded
+        for service_name in _target_service_names_from_state(before_state)
+        if not _service_is_excluded(service_name, excluded)
     )
     if not services:
         raise ToolFailure(
@@ -1275,20 +1291,37 @@ def _command_plan_targeting_services(
     )
 
 
+def _target_service_names_from_state(before_state: Mapping[str, Any]) -> tuple[str, ...]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for source in (
+        before_state.get("configuredServices"),
+        before_state.get("services"),
+    ):
+        for name in _service_names_from_state(source):
+            key = name.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            names.append(name)
+    return tuple(names)
+
+
 def _service_names_from_state(services: Any) -> tuple[str, ...]:
     if not isinstance(services, Sequence) or isinstance(services, (str, bytes)):
         return ()
     names: list[str] = []
     seen: set[str] = set()
     for service in services:
-        if not isinstance(service, Mapping):
-            continue
-        name = str(
-            service.get("Service")
-            or service.get("Name")
-            or service.get("Names")
-            or ""
-        ).strip()
+        if isinstance(service, Mapping):
+            name = str(
+                service.get("Service")
+                or service.get("Name")
+                or service.get("Names")
+                or ""
+            ).strip()
+        else:
+            name = str(service or "").strip()
         if not name:
             continue
         key = name.lower()
@@ -1307,9 +1340,12 @@ def _normalized_service_names(services: Sequence[str]) -> set[str]:
     }
 
 
-def _service_is_excluded(service_name: str, excluded_services: Sequence[str]) -> bool:
+def _service_is_excluded(service_name: str, excluded_services: set[str]) -> bool:
     normalized = str(service_name or "").strip().lower()
-    return bool(normalized) and normalized in _normalized_service_names(excluded_services)
+    return bool(normalized) and any(
+        _service_name_matches(normalized, excluded_service)
+        for excluded_service in excluded_services
+    )
 
 
 def _target_image_audit(target_image: Mapping[str, Any]) -> dict[str, Any]:
