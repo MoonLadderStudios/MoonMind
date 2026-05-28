@@ -111,7 +111,7 @@ async def test_run_starts_one_task_scoped_codex_session_and_reuses_it(
     assert first.managed_session.session_epoch == 1
 
 @pytest.mark.asyncio
-async def test_run_starts_task_scoped_claude_code_session(
+async def test_run_skips_task_scoped_claude_code_session_until_runtime_is_wired(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflow = MoonMindRunWorkflow()
@@ -143,14 +143,8 @@ async def test_run_starts_task_scoped_claude_code_session(
         _managed_request("claude_code")
     )
 
-    assert len(start_calls) == 1
-    workflow_name, payload, workflow_id, _task_queue, kwargs = start_calls[0]
-    assert workflow_name == "MoonMind.AgentSession"
-    assert workflow_id == "wf-run-1:session:claude_code"
-    assert payload.runtime_id == "claude_code"
-    assert kwargs["search_attributes"]["RuntimeId"] == ["claude_code"]
-    assert request.managed_session is not None
-    assert request.managed_session.runtime_id == "claude_code"
+    assert start_calls == []
+    assert request.managed_session is None
 
 @pytest.mark.asyncio
 async def test_run_skips_task_scoped_session_for_non_session_managed_runtime(

@@ -213,7 +213,7 @@ def test_runtime_command_render_result_supports_failure_and_prompt_prefix() -> N
 def test_agent_execution_request_rejects_managed_session_for_claude_code_runtime() -> None:
     with pytest.raises(
         ValidationError,
-        match="managedSession is only supported for managed-session runtimes",
+        match="runtimeId must identify a managed-session runtime",
     ):
         AgentExecutionRequest(
             agentKind="managed",

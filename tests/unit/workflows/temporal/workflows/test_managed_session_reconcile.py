@@ -53,7 +53,7 @@ async def test_managed_session_reconcile_updates_terminal_visibility(
     assert result["managedSessionRecordsReconciled"] == 2
     assert details == [
         "Reconciling managed runtime sessions",
-        "Managed Codex session reconcile complete",
+        "Managed runtime session reconcile complete",
     ]
     assert search_attributes == [
         {
@@ -65,4 +65,3 @@ async def test_managed_session_reconcile_updates_terminal_visibility(
             "IsDegraded": [True],
         },
     ]
-
