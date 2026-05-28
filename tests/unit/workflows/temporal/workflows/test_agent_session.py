@@ -5,6 +5,7 @@ from datetime import timedelta
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import ValidationError
 from temporalio.common import RetryPolicy
 
 from moonmind.schemas.managed_session_models import (
@@ -125,20 +126,12 @@ def test_agent_session_initializes_task_scoped_codex_binding(
     assert status["binding"]["executionProfileRef"] == "codex-default"
     assert status["binding"]["sessionId"] == "sess:wf-run-1:codex_cli"
 
-def test_agent_session_initializes_task_scoped_claude_code_binding(
+def test_agent_session_rejects_task_scoped_claude_code_binding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
-    workflow = MoonMindAgentSessionWorkflow(
+    with pytest.raises(ValidationError, match="managed-session runtime"):
         _workflow_input(runtimeId="claude_code", executionProfileRef="claude-default")
-    )
-
-    status = workflow.get_status()
-
-    assert status["status"] == AGENT_SESSION_STATUS_ACTIVE
-    assert status["binding"]["runtimeId"] == "claude_code"
-    assert status["binding"]["sessionId"] == "sess:wf-run-1:claude_code"
-    assert status["binding"]["executionProfileRef"] == "claude-default"
 
 @pytest.mark.asyncio
 async def test_agent_session_run_initializes_bounded_temporal_visibility(

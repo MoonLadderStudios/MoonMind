@@ -955,10 +955,13 @@ class DockerCodexManagedSessionController:
         )
 
     @staticmethod
-    def _with_runtime_family(response: Any, request: CodexManagedSessionLocator) -> Any:
-        if getattr(response, "runtime_family", None) == request.runtime_family:
+    def _with_runtime_family(response: Any, request: Any) -> Any:
+        runtime_family = getattr(request, "runtime_family", None)
+        if not runtime_family:
             return response
-        return response.model_copy(update={"runtime_family": request.runtime_family})
+        if getattr(response, "runtime_family", None) == runtime_family:
+            return response
+        return response.model_copy(update={"runtime_family": runtime_family})
 
     @staticmethod
     def _matches_locator(

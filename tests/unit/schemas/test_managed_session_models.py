@@ -50,11 +50,11 @@ def test_managed_session_plane_contract_supports_claude_code_family() -> None:
     assert contract.container_backend == "docker"
     assert contract.control_actions == MANAGED_SESSION_CONTROL_ACTIONS
 
-def test_managed_session_runtime_id_canonicalizes_codex_and_claude_code() -> None:
+def test_managed_session_runtime_id_canonicalizes_session_capable_runtimes() -> None:
     assert canonical_managed_session_runtime_id("codex") == "codex_cli"
     assert canonical_managed_session_runtime_id("codex_cli") == "codex_cli"
-    assert canonical_managed_session_runtime_id("claude") == "claude_code"
-    assert canonical_managed_session_runtime_id("claude_code") == "claude_code"
+    assert canonical_managed_session_runtime_id("claude") is None
+    assert canonical_managed_session_runtime_id("claude_code") is None
     assert canonical_managed_session_runtime_id("gemini_cli") is None
 
 def test_managed_session_plane_contract_exposes_canonical_control_actions() -> None:

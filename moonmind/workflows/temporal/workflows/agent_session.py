@@ -32,6 +32,7 @@ with workflow.unsafe.imports_passed_through():
         CodexManagedSessionWorkflowInput,
         FetchCodexManagedSessionSummaryRequest,
         InterruptCodexManagedSessionTurnRequest,
+        managed_session_runtime_family_for_runtime_id,
         TerminateCodexManagedSessionRequest,
         PublishCodexManagedSessionArtifactsRequest,
         SendCodexManagedSessionTurnRequest,
@@ -55,10 +56,8 @@ class MoonMindAgentSessionWorkflow:
     @workflow.init
     def __init__(self, session_input: CodexManagedSessionWorkflowInput) -> None:
         self._contract = ManagedSessionPlaneContract(
-            runtime_family=(
-                "claude_code"
-                if session_input.runtime_id == "claude_code"
-                else "codex"
+            runtime_family=managed_session_runtime_family_for_runtime_id(
+                session_input.runtime_id
             )
         )
         self._binding = CodexManagedSessionBinding.from_input(

@@ -773,13 +773,11 @@ CodexManagedSessionWorkflowStatus = Literal[
 def canonical_managed_session_runtime_id(
     runtime_id: str,
 ) -> ManagedSessionRuntimeId | None:
-    """Return the canonical managed-session runtime ID for session-capable runtimes."""
+    """Return the canonical runtime ID for task-scoped managed sessions."""
 
     normalized = str(runtime_id or "").strip().lower().replace("-", "_")
     if normalized in {"codex", "codex_cli"}:
         return "codex_cli"
-    if normalized in {"claude", "claude_code"}:
-        return "claude_code"
     return None
 
 

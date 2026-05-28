@@ -210,23 +210,24 @@ def test_runtime_command_render_result_supports_failure_and_prompt_prefix() -> N
     assert ok.rendered_instruction.startswith("/review")
     assert failed.failure_reason == "runtime_command_render_failed"
 
-def test_agent_execution_request_accepts_managed_session_for_claude_code_runtime() -> None:
-    request = AgentExecutionRequest(
-        agentKind="managed",
-        agentId="claude_code",
-        correlationId="corr-1",
-        idempotencyKey="idem-1",
-        managedSession={
-            "workflowId": "wf-run-1:session:claude_code",
-            "taskRunId": "wf-run-1",
-            "sessionId": "sess:wf-run-1:claude_code",
-            "sessionEpoch": 1,
-            "runtimeId": "claude_code",
-        },
-    )
-
-    assert request.managed_session is not None
-    assert request.managed_session.runtime_id == "claude_code"
+def test_agent_execution_request_rejects_managed_session_for_claude_code_runtime() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="managedSession is only supported for managed-session runtimes",
+    ):
+        AgentExecutionRequest(
+            agentKind="managed",
+            agentId="claude_code",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            managedSession={
+                "workflowId": "wf-run-1:session:claude_code",
+                "taskRunId": "wf-run-1",
+                "sessionId": "sess:wf-run-1:claude_code",
+                "sessionEpoch": 1,
+                "runtimeId": "claude_code",
+            },
+        )
 
 def test_agent_execution_request_rejects_managed_session_for_non_session_runtime() -> None:
     with pytest.raises(

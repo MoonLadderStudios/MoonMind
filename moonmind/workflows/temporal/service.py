@@ -2324,9 +2324,9 @@ class TemporalExecutionService:
         store = ManagedSessionStore(_get_managed_session_store_root())
         canonical_runtime_ids = ("codex_cli", "claude_code")
         session_record = None
-        try:
-            for canonical_runtime_id in canonical_runtime_ids:
-                default_session_id = f"sess:{workflow_id}:{canonical_runtime_id}"
+        for canonical_runtime_id in canonical_runtime_ids:
+            default_session_id = f"sess:{workflow_id}:{canonical_runtime_id}"
+            try:
                 session_record = store.load(default_session_id)
                 if (
                     session_record is not None
@@ -2336,13 +2336,13 @@ class TemporalExecutionService:
                     and session_record.status not in TERMINAL_MANAGED_SESSION_STATUSES
                 ):
                     break
-                session_record = None
-        except Exception:
-            logger.warning(
-                "Failed to load managed session records before cancel for workflow %s",
-                workflow_id,
-                exc_info=True,
-            )
+            except Exception:
+                logger.warning(
+                    "Failed to load managed session record %s before cancel for workflow %s",
+                    default_session_id,
+                    workflow_id,
+                    exc_info=True,
+                )
             session_record = None
 
         if session_record is None:
