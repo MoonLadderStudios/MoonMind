@@ -3632,9 +3632,15 @@ function PresetLayersIcon() {
 function InfoIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <circle cx="12" cy="12" r="9" />
-      <path d="M12 11v6" />
-      <path d="M12 7.5v1.5" />
+      <circle cx="12" cy="12" r="9.5" strokeWidth="2" />
+      <path d="M12 11v6.25" strokeWidth="2.6" strokeLinecap="round" />
+      <circle
+        cx="12"
+        cy="7.75"
+        r="1.45"
+        fill="currentColor"
+        stroke="none"
+      />
     </svg>
   );
 }
@@ -3909,6 +3915,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   >(null);
   const [presetDialogName, setPresetDialogName] = useState("");
   const [dependencyInfoOpen, setDependencyInfoOpen] = useState(false);
+  const [advancedInfoOpen, setAdvancedInfoOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submitExpansionInFlightRef = useRef(false);
   const submitExpansionRequestIdRef = useRef(0);
@@ -9414,22 +9421,43 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           />
           Report
         </label>
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            checked={showAdvancedStepOptions}
-            aria-label="Show advanced step options"
-            onChange={(event) =>
-              setShowAdvancedStepOptions(event.target.checked)
-            }
-          />
-          Advanced mode
-          <span className="small">
-            Adds skill args and required capabilities to each step. Optional
-            worker routing overrides; runtime, publish mode, skills, and
-            presets already add the common capabilities automatically.
-          </span>
-        </label>
+        <div className="queue-advanced-row">
+          <label className="checkbox queue-advanced-checkbox">
+            <input
+              type="checkbox"
+              checked={showAdvancedStepOptions}
+              aria-label="Show advanced step options"
+              onChange={(event) =>
+                setShowAdvancedStepOptions(event.target.checked)
+              }
+            />
+            Advanced mode
+          </label>
+          <button
+            type="button"
+            className="queue-step-icon-button queue-info-toggle queue-advanced-info-toggle"
+            aria-label="Advanced mode info"
+            aria-expanded={advancedInfoOpen}
+            aria-controls="queue-advanced-info-panel"
+            title="About advanced mode"
+            onClick={() => setAdvancedInfoOpen((open) => !open)}
+          >
+            <InfoIcon />
+          </button>
+        </div>
+        {advancedInfoOpen ? (
+          <div
+            id="queue-advanced-info-panel"
+            className="notice queue-advanced-info-panel"
+            role="note"
+          >
+            <p className="small">
+              Adds skill args and required capabilities to each step. Optional
+              worker routing overrides; runtime, publish mode, skills, and
+              presets already add the common capabilities automatically.
+            </p>
+          </div>
+        ) : null}
         </section>
 
         {pageMode.mode === "create" ? (
@@ -9743,7 +9771,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
             <strong>Dependencies</strong>
             <button
               type="button"
-              className="queue-step-icon-button queue-dependencies-info-toggle"
+              className="queue-step-icon-button queue-info-toggle queue-dependencies-info-toggle"
               aria-label="Dependencies info"
               aria-expanded={dependencyInfoOpen}
               aria-controls="queue-dependencies-info-panel"
