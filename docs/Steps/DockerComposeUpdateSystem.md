@@ -20,7 +20,7 @@ docker compose pull
 docker compose up -d --remove-orphans --wait
 ```
 
-The system may use an ephemeral updater container or a privileged deployment-control worker to run the Docker commands. That runner is an implementation detail. The operator-facing control is the **target MoonMind image** to deploy.
+The system uses a dedicated deployment-control worker or an ephemeral updater container to run the Docker commands. The deployment-control worker is excluded from the Compose update target list so the activity runner is not recreated while it is applying and verifying the stack update. That runner is an implementation detail. The operator-facing control is the **target MoonMind image** to deploy.
 
 ---
 
@@ -691,6 +691,8 @@ with:
 - `MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE` for the allowlisted env file
 - `MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE` for the audit sidecar
 - `MOONMIND_DEPLOYMENT_LOCK_DIR` for durable per-stack lock files
+- `MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES` for runner services that must not be
+  targeted by `docker compose up`
 
 ## 11.2 Ephemeral updater container
 

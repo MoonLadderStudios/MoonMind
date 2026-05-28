@@ -79,7 +79,6 @@ def test_deployment_update_tool_definition_matches_mm519_contract() -> None:
     assert definition.executor.activity_type == "mm.tool.execute"
     assert definition.executor.selector_mode == "by_capability"
     assert definition.required_capabilities == (
-        "docker_workload",
         "deployment_control",
         "docker_admin",
     )

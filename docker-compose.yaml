@@ -611,6 +611,75 @@ services:
       - docker-proxy-network
     restart: unless-stopped
 
+  temporal-worker-deployment-control:
+    image: ${MOONMIND_DEPLOYMENT_WORKER_IMAGE:-${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}}
+    init: true
+    environment:
+      - PYTHONPATH=/app
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+      - PYTHONUNBUFFERED=1
+      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
+      - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-default}
+      - TEMPORAL_WORKER_FLEET=deployment
+      - TEMPORAL_ACTIVITY_DEPLOYMENT_TASK_QUEUE=${TEMPORAL_ACTIVITY_DEPLOYMENT_TASK_QUEUE:-mm.activity.deployment}
+      - TEMPORAL_DEPLOYMENT_WORKER_CONCURRENCY=${TEMPORAL_DEPLOYMENT_WORKER_CONCURRENCY:-1}
+      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m
+        moonmind.workflows.temporal.worker_runtime}
+      - TEMPORAL_ARTIFACT_BACKEND=${TEMPORAL_ARTIFACT_BACKEND:-s3}
+      - TEMPORAL_ARTIFACT_S3_ENDPOINT=${TEMPORAL_ARTIFACT_S3_ENDPOINT:-http://moonmind-temporal-artifacts-s3:9000}
+      - TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT=${TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT:-http://localhost:9000}
+      - TEMPORAL_ARTIFACT_S3_BUCKET=${TEMPORAL_ARTIFACT_S3_BUCKET:-moonmind-temporal-artifacts}
+      - TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID=${TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID:-minioadmin}
+      - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
+      - SYSTEM_DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
+      - DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
+      - MOONMIND_DEPLOYMENT_PROJECT_DIR=${MOONMIND_DEPLOYMENT_PROJECT_DIR:-}
+      - MOONMIND_DEPLOYMENT_COMPOSE_FILE=${MOONMIND_DEPLOYMENT_COMPOSE_FILE:-}
+      - MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR=/workspace/host_project
+      - MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE=${MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE:-/workspace/deployment_state/.env.deploy}
+      - MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE=${MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE:-/workspace/deployment_state/desired-state.json}
+      - MOONMIND_DEPLOYMENT_LOCK_DIR=${MOONMIND_DEPLOYMENT_LOCK_DIR:-/workspace/deployment_state/locks}
+      - MOONMIND_DEPLOYMENT_PROJECT_NAME=${MOONMIND_DEPLOYMENT_PROJECT_NAME:-moonmind}
+      - MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES=${MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES:-temporal-worker-deployment-control}
+      - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
+    env_file:
+      - .env
+    volumes:
+      - .:/workspace/host_project:ro
+      - ./deploy/state:/workspace/deployment_state:rw
+      - ./moonmind:/app/moonmind:ro
+      - ./api_service:/app/api_service:ro
+      - ./services:/app/services:ro
+      - ./.agents:/app/.agents:ro
+      - moonmind_secrets:/app/var/secrets
+    entrypoint:
+      - /bin/sh
+      - /app/services/temporal/scripts/start-worker.sh
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request;
+            urllib.request.urlopen('http://localhost:8080/healthz')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      temporal:
+        condition: service_started
+      temporal-namespace-init:
+        condition: service_completed_successfully
+      docker-proxy:
+        condition: service_started
+    networks:
+      - local-network
+      - docker-proxy-network
+    restart: unless-stopped
+
   temporal-worker-integrations:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     init: true

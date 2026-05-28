@@ -73,6 +73,7 @@ from moonmind.workflows.temporal.artifacts import (
 )
 from moonmind.workflows.temporal.workers import (
     AGENT_RUNTIME_FLEET,
+    DEPLOYMENT_FLEET,
     SANDBOX_FLEET,
     WORKFLOW_FLEET,
     build_worker_activity_bindings,
@@ -659,6 +660,13 @@ def _build_deployment_update_executor() -> DeploymentUpdateExecutor | None:
         str(os.environ.get("MOONMIND_DEPLOYMENT_PROJECT_NAME") or "").strip()
         or "moonmind"
     )
+    excluded_services = tuple(
+        part.strip()
+        for part in str(
+            os.environ.get("MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES") or ""
+        ).split(",")
+        if part.strip()
+    )
     timeout_raw = str(
         os.environ.get("MOONMIND_DEPLOYMENT_COMMAND_TIMEOUT_SECONDS") or ""
     ).strip()
@@ -693,7 +701,9 @@ def _build_deployment_update_executor() -> DeploymentUpdateExecutor | None:
             command_timeout_seconds=timeout_seconds,
             local_project_dir=runner_local,
             env_file=desired_state_env_file,
+            excluded_services=excluded_services,
         ),
+        excluded_services=excluded_services,
     )
 
 def _coerce_mapping(value: Any) -> dict[str, Any]:
@@ -2013,6 +2023,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 launcher=workload_launcher,
                 workflow_docker_mode=settings.workflow.workflow_docker_mode,
             )
+        if topology.fleet == DEPLOYMENT_FLEET:
             register_deployment_update_tool_handler(
                 dispatcher,
                 executor=_build_deployment_update_executor(),

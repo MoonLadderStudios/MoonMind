@@ -15,6 +15,7 @@ from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
 from moonmind.workflows.temporal import (
     AGENT_RUNTIME_FLEET,
     ARTIFACTS_FLEET,
+    DEPLOYMENT_FLEET,
     INTEGRATIONS_FLEET,
     LLM_FLEET,
     SANDBOX_FLEET,
@@ -72,6 +73,7 @@ def test_build_all_worker_topologies_covers_canonical_fleets():
         SANDBOX_FLEET,
         INTEGRATIONS_FLEET,
         AGENT_RUNTIME_FLEET,
+        DEPLOYMENT_FLEET,
     }
     assert topologies[WORKFLOW_FLEET].service_name == "temporal-worker-workflow"
     assert topologies[ARTIFACTS_FLEET].required_secrets == (
@@ -86,6 +88,10 @@ def test_build_all_worker_topologies_covers_canonical_fleets():
     assert "mm.skill.execute" in topologies[ARTIFACTS_FLEET].activity_types
     assert "mm.skill.execute" in topologies[SANDBOX_FLEET].activity_types
     assert "mm.skill.execute" in topologies[INTEGRATIONS_FLEET].activity_types
+    assert topologies[DEPLOYMENT_FLEET].service_name == (
+        "temporal-worker-deployment-control"
+    )
+    assert topologies[DEPLOYMENT_FLEET].activity_types == ("mm.tool.execute",)
 
 def test_registered_workflow_types_include_manifest_ingest():
     assert list_registered_workflow_types() == (
@@ -131,6 +137,21 @@ def test_agent_runtime_topology_exposes_docker_workload_capability():
     assert "workload.run" in topology.activity_types
     assert "oauth_session.start_auth_runner" in topology.activity_types
     assert "oauth_session.verify_volume" in topology.activity_types
+
+
+def test_deployment_topology_exposes_deployment_control_capability():
+    topology = describe_configured_worker(
+        temporal_settings=settings.temporal.model_copy(
+            update={"worker_fleet": DEPLOYMENT_FLEET}
+        )
+    )
+
+    assert topology.task_queues == (settings.temporal.activity_deployment_task_queue,)
+    assert topology.concurrency_limit == 1
+    assert "deployment_control" in topology.capabilities
+    assert "docker_admin" in topology.capabilities
+    assert "mm.tool.execute" in topology.activity_types
+    assert "workload.run" not in topology.activity_types
 
 def test_build_worker_activity_bindings_only_registers_selected_fleet(tmp_path: Path):
     async def _run() -> None:
