@@ -2405,18 +2405,18 @@ wrapt = "*"
 
 [[package]]
 name = "llama-index-embeddings-google-genai"
-version = "0.5.0"
+version = "0.5.1"
 description = "llama-index embeddings google genai integration"
 optional = false
 python-versions = "<4.0,>=3.10"
 groups = ["main"]
 files = [
-    {file = "llama_index_embeddings_google_genai-0.5.0-py3-none-any.whl", hash = "sha256:25a32ec995785e5e903c08561252bb107fc3f41b79691eb8fabb6a8e09ca238f"},
-    {file = "llama_index_embeddings_google_genai-0.5.0.tar.gz", hash = "sha256:051d7ca0a95e3bc1d0f32f5cc167cca119ce42bc4a516c8117934c589c93b19f"},
+    {file = "llama_index_embeddings_google_genai-0.5.1-py3-none-any.whl", hash = "sha256:e2332c462a5367101f1ed0dba6cadcfb06f329c8bf4385565ae3b3362e3d2c4b"},
+    {file = "llama_index_embeddings_google_genai-0.5.1.tar.gz", hash = "sha256:c40d09eb9b981949db59a361d3227453c22e98e9e18d35c72bd264967bddd944"},
 ]
 
 [package.dependencies]
-google-genai = ">=1.24.0,<2"
+google-genai = ">=1.24.0,<3"
 llama-index-core = ">=0.13.0,<0.15"
 
 [[package]]
