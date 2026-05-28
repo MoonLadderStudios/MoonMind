@@ -3430,6 +3430,16 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     text-align: left;
   }
 
+  .settings-nav-option:first-of-type {
+    border-top-left-radius: 9px;
+    border-top-right-radius: 9px;
+  }
+
+  .settings-nav-option:last-of-type {
+    border-bottom-left-radius: 9px;
+    border-bottom-right-radius: 9px;
+  }
+
   .settings-nav-option:has(input:checked) {
     background:
       linear-gradient(

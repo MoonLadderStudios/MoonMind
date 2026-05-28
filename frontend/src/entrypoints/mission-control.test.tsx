@@ -303,6 +303,22 @@ describe('Mission Control shared entry', () => {
         rule.parent.params.includes('max-width: 640px')
       );
     });
+    const mobileFirstSettingsOptionBlock = cssRuleBlockMatching(missionControlCss, (rule) => {
+      return (
+        normalizeCssSelector(rule.selector) === '.settings-nav-option:first-of-type' &&
+        rule.parent?.type === 'atrule' &&
+        rule.parent.name === 'media' &&
+        rule.parent.params.includes('max-width: 640px')
+      );
+    });
+    const mobileLastSettingsOptionBlock = cssRuleBlockMatching(missionControlCss, (rule) => {
+      return (
+        normalizeCssSelector(rule.selector) === '.settings-nav-option:last-of-type' &&
+        rule.parent?.type === 'atrule' &&
+        rule.parent.name === 'media' &&
+        rule.parent.params.includes('max-width: 640px')
+      );
+    });
     const mobileSettingsLabelBlock = cssRuleBlockMatching(missionControlCss, (rule) => {
       return (
         normalizeCssSelector(rule.selector) === '.settings-nav-option-label' &&
@@ -334,6 +350,10 @@ describe('Mission Control shared entry', () => {
     expect(mobileSettingsNavBlock).toContain('padding: 0');
     expect(mobileSettingsOptionBlock).toContain('justify-content: flex-start');
     expect(mobileSettingsOptionBlock).toContain('width: 100%');
+    expect(mobileFirstSettingsOptionBlock).toContain('border-top-left-radius: 9px');
+    expect(mobileFirstSettingsOptionBlock).toContain('border-top-right-radius: 9px');
+    expect(mobileLastSettingsOptionBlock).toContain('border-bottom-left-radius: 9px');
+    expect(mobileLastSettingsOptionBlock).toContain('border-bottom-right-radius: 9px');
     expect(mobileSettingsActiveBlock).toContain('0 0 18px rgb(var(--mm-accent) / 0.55)');
     expect(mobileSettingsActiveBlock).toContain('0 0 32px rgb(var(--mm-accent-2) / 0.22)');
     expect(mobileSettingsActiveBlock).toContain(
