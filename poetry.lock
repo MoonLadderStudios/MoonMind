@@ -6449,4 +6449,4 @@ tests = ["pytest", "pytest-asyncio", "pytest-mock", "pytest-timeout", "pytest-xd
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "970fc8489fd463ebbde34d0b092db115677028e9215c287ddc2e443b75bf6179"
+content-hash = "c8e81b4d28d381cf8b452c7b6ba98bcb9793e96853418a9c85b1dcada71e901f"
