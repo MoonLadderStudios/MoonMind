@@ -120,6 +120,36 @@ if [[ ${#PYTEST_TARGETS[@]} -eq 0 ]]; then
     PYTEST_TARGETS=(tests/unit)
 fi
 
+uses_temporal_test_server=0
+if [[ "$RUN_PYTHON_TESTS" == "1" && "$USE_XDIST" == "1" ]]; then
+    for target in "${PYTEST_TARGETS[@]}"; do
+        case "$target" in
+            tests/unit|tests/unit/workflows/temporal|tests/unit/workflows/temporal/*)
+                uses_temporal_test_server=1
+                break
+                ;;
+        esac
+    done
+fi
+
+if [[ "$uses_temporal_test_server" == "1" ]]; then
+    temporal_test_tmpdir="${TMPDIR:-/tmp}"
+    rm -f "$temporal_test_tmpdir"/temporal-test-server-sdk-python-*.downloading
+    "$PYTHON_BIN" - <<'PY'
+import asyncio
+
+from temporalio.testing import WorkflowEnvironment
+
+
+async def main() -> None:
+    env = await WorkflowEnvironment.start_time_skipping()
+    await env.shutdown()
+
+
+asyncio.run(main())
+PY
+fi
+
 if [[ "$RUN_PYTHON_TESTS" == "1" ]]; then
     "$PYTHON_BIN" -m pytest -q ${PYTEST_PARALLEL_ARGS[@]+"${PYTEST_PARALLEL_ARGS[@]}"} "${PYTEST_TARGETS[@]}"
 fi
