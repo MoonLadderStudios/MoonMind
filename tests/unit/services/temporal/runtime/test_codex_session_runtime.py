@@ -3024,6 +3024,11 @@ def test_runtime_launch_session_seeds_auth_directories_and_excludes_sessions(
     tmp_dir = auth_volume_path / ".tmp" / "plugins" / ".git" / "objects" / "pack"
     tmp_dir.mkdir(parents=True)
     (tmp_dir / "pack-readonly.pack").write_text("plugin cache", encoding="utf-8")
+    transient_tmp_dir = auth_volume_path / "tmp" / "arg0" / "codex-helpers"
+    transient_tmp_dir.mkdir(parents=True)
+    (transient_tmp_dir / "apply_patch").symlink_to(
+        transient_tmp_dir / "missing-apply-patch"
+    )
     symlink_path = auth_volume_path / "linked-auth.json"
     symlink_path.symlink_to(auth_volume_path / "auth.json")
 
@@ -3045,6 +3050,7 @@ def test_runtime_launch_session_seeds_auth_directories_and_excludes_sessions(
     assert Path(request.codex_home_path, "accounts", "default.json").is_file()
     assert not Path(request.codex_home_path, "sessions").exists()
     assert not Path(request.codex_home_path, ".tmp").exists()
+    assert not Path(request.codex_home_path, "tmp").exists()
     assert not Path(request.codex_home_path, "linked-auth.json").exists()
 
 def test_runtime_launch_session_auth_seed_overwrites_read_only_files_on_retry(

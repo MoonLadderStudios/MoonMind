@@ -124,6 +124,11 @@ def test_runtime_launch_session_seeds_auth_volume_and_uses_per_run_codex_home(
     (auth_volume_path / "auth.json").write_text('{"token":"oauth"}', encoding="utf-8")
     (auth_volume_path / "logs_1.sqlite").write_text("runtime log", encoding="utf-8")
     (auth_volume_path / "sessions").mkdir()
+    transient_tmp_dir = auth_volume_path / "tmp" / "arg0" / "codex-helpers"
+    transient_tmp_dir.mkdir(parents=True)
+    (transient_tmp_dir / "apply_patch").symlink_to(
+        transient_tmp_dir / "missing-apply-patch"
+    )
 
     runtime = CodexManagedSessionRuntime(
         workspace_path=request.workspace_path,
@@ -142,6 +147,7 @@ def test_runtime_launch_session_seeds_auth_volume_and_uses_per_run_codex_home(
     assert Path(request.codex_home_path, "auth.json").is_file()
     assert not Path(request.codex_home_path, "logs_1.sqlite").exists()
     assert not Path(request.codex_home_path, "sessions").exists()
+    assert not Path(request.codex_home_path, "tmp").exists()
     assert codex_home_record_path.read_text(encoding="utf-8").splitlines()[-1] == str(
         Path(request.codex_home_path)
     )

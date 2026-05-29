@@ -462,11 +462,13 @@ class HostDockerComposeRunner:
         services = await self._run_compose_json(("ps", "--format", "json"))
         images = await self._run_compose_json(("images", "--format", "json"))
         configured_services = await self._run_compose_services()
+        configured_service_images = await self._run_compose_config_service_images()
         return {
             "stack": stack,
             "phase": phase,
             "projectName": self.project_name,
             "configuredServices": configured_services,
+            "configuredServiceImages": configured_service_images,
             "services": services,
             "images": images,
             "capturedAt": _utc_now(),
@@ -830,6 +832,53 @@ class HostDockerComposeRunner:
             if line.strip()
         )
 
+    async def _run_compose_config_service_images(self) -> Mapping[str, str]:
+        result = await self._run_compose_command(
+            ("docker", "compose", "config", "--format", "json"),
+            max_stdout_chars=None,
+            max_stderr_chars=2000,
+        )
+        _ensure_command_succeeded("config", result)
+        stdout = str(result.get("stdout") or "")
+        try:
+            parsed = json.loads(stdout)
+        except json.JSONDecodeError as exc:
+            raise ToolFailure(
+                error_code="DEPLOYMENT_COMMAND_FAILED",
+                message="Deployment compose config returned invalid JSON.",
+                retryable=False,
+                details={
+                    "phase": "config",
+                    "command": result.get("command"),
+                    "stdout": _tail_text(stdout.encode("utf-8"), max_chars=2000),
+                    "stderr": result.get("stderr"),
+                    "failureClass": "compose_config_validation_failure",
+                },
+            ) from exc
+        if not isinstance(parsed, Mapping):
+            raise ToolFailure(
+                error_code="DEPLOYMENT_COMMAND_FAILED",
+                message="Deployment compose config returned an invalid payload.",
+                retryable=False,
+                details={
+                    "phase": "config",
+                    "command": result.get("command"),
+                    "stderr": result.get("stderr"),
+                    "failureClass": "compose_config_validation_failure",
+                },
+            )
+        services = parsed.get("services")
+        if not isinstance(services, Mapping):
+            return {}
+        configured_images: dict[str, str] = {}
+        for service_name, service_config in services.items():
+            if not isinstance(service_config, Mapping):
+                continue
+            image = str(service_config.get("image") or "").strip()
+            if image:
+                configured_images[str(service_name)] = image
+        return configured_images
+
     async def _inspect_image(self, requested_image: str) -> Mapping[str, Any]:
         process = await asyncio.create_subprocess_exec(
             "docker",
@@ -971,6 +1020,7 @@ class DeploymentUpdateExecutor:
                 command_plan = _command_plan_targeting_services(
                     command_plan,
                     before_state=before_state,
+                    requested_repository=str(parsed["image"]["repository"]),
                     excluded_services=self.excluded_services,
                 )
                 command_log["pull"]["command"] = list(command_plan.pull_args)
@@ -1264,23 +1314,35 @@ def _command_plan_targeting_services(
     command_plan: ComposeCommandPlan,
     *,
     before_state: Mapping[str, Any],
+    requested_repository: str,
     excluded_services: Sequence[str],
 ) -> ComposeCommandPlan:
     excluded = _normalized_service_names(excluded_services)
-    if not excluded:
+    target_candidates = _target_service_names_from_state(
+        before_state,
+        requested_repository=requested_repository,
+    )
+    if not target_candidates and not excluded and not isinstance(
+        before_state.get("configuredServiceImages"),
+        Mapping,
+    ):
         return command_plan
     services = tuple(
         service_name
-        for service_name in _target_service_names_from_state(before_state)
+        for service_name in target_candidates
         if not _service_is_excluded(service_name, excluded)
     )
     if not services:
         raise ToolFailure(
             error_code="DEPLOYMENT_RUNNER_UNSAFE",
-            message="Deployment update has no target services after runner exclusion.",
+            message=(
+                "Deployment update has no target services for the requested "
+                "image after applying service exclusions."
+            ),
             retryable=False,
             details={
                 "excludedServices": sorted(excluded),
+                "requestedRepository": requested_repository,
                 "failureClass": "runner_self_recreation_unsafe",
             },
         )
@@ -1291,7 +1353,19 @@ def _command_plan_targeting_services(
     )
 
 
-def _target_service_names_from_state(before_state: Mapping[str, Any]) -> tuple[str, ...]:
+def _target_service_names_from_state(
+    before_state: Mapping[str, Any],
+    *,
+    requested_repository: str,
+) -> tuple[str, ...]:
+    configured_image_targets = _target_service_names_from_configured_images(
+        before_state=before_state,
+        requested_repository=requested_repository,
+    )
+    if configured_image_targets:
+        return configured_image_targets
+    if isinstance(before_state.get("configuredServiceImages"), Mapping):
+        return ()
     names: list[str] = []
     seen: set[str] = set()
     for source in (
@@ -1304,6 +1378,45 @@ def _target_service_names_from_state(before_state: Mapping[str, Any]) -> tuple[s
                 continue
             seen.add(key)
             names.append(name)
+    return tuple(names)
+
+
+def _target_service_names_from_configured_images(
+    *,
+    before_state: Mapping[str, Any],
+    requested_repository: str,
+) -> tuple[str, ...]:
+    requested = str(requested_repository or "").strip().lower()
+    if not requested:
+        return ()
+    configured_images = before_state.get("configuredServiceImages")
+    if not isinstance(configured_images, Mapping):
+        return ()
+    configured_services = _service_names_from_state(
+        before_state.get("configuredServices")
+    )
+    service_order = [
+        *configured_services,
+        *(
+            str(service_name)
+            for service_name in configured_images
+            if str(service_name) not in configured_services
+        ),
+    ]
+    names: list[str] = []
+    seen: set[str] = set()
+    for service_name in service_order:
+        image = str(configured_images.get(service_name) or "").strip()
+        if not image:
+            continue
+        repository, _reference = _split_requested_image(image)
+        if repository.strip().lower() != requested:
+            continue
+        key = service_name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        names.append(service_name)
     return tuple(names)
 
 

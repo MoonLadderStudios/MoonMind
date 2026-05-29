@@ -52,7 +52,7 @@ _DEFAULT_TURN_COMPLETION_TIMEOUT_SECONDS = (
     float(DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS)
 )
 _STDOUT_EOF = object()
-_AUTH_SEED_EXCLUDED_NAMES = frozenset({".tmp", "config.toml", "sessions"})
+_AUTH_SEED_EXCLUDED_NAMES = frozenset({".tmp", "config.toml", "sessions", "tmp"})
 _AUTH_SEED_EXCLUDED_PREFIXES: tuple[str, ...] = ("logs_", "state_")
 _ROLLOUT_RECOVERY_MAX_BYTES = 4 * 1024 * 1024
 _ROLLOUT_RECOVERY_TIMESTAMP_SKEW_SECONDS = 5.0
