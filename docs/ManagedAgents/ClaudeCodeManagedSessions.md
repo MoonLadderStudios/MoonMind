@@ -1,6 +1,6 @@
 # Claude Code Managed Sessions
 
-**Status:** Current implementation and desired-state contract
+**Status:** Desired-state contract and domain model notes; not yet a live task-scoped managed-session runtime
 **Audience:** Managed Agents platform, runtime integration, client surfaces, security, and enterprise administration
 **Related:** `docs/ManagedAgents/CodexCliManagedSessions.md`
 
@@ -26,20 +26,20 @@ The Claude Code variant diverges from Codex in a few important ways that must be
 5. **Checkpointing is first-class.** Claude automatically creates rewindable checkpoints around edits and user prompts. That belongs in the plane, not as an afterthought.
 6. **Child work comes in two shapes.** Claude subagents are child contexts inside one session; agent teams are multiple sessions with direct peer communication.
 
-The live MoonMind session-control plane now accepts `runtimeId = "claude_code"` and carries `runtimeFamily = "claude_code"` through `MoonMind.AgentSession`, `ManagedSessionBinding`, launch requests, and session projections. The Claude Code binding keeps the shared Managed Session Plane concepts intact, but changes the runtime adapter, policy compiler, context model, and child-session model to fit Claude Code.
+The live MoonMind session-control plane currently admits Codex CLI only. Claude Code is a live managed-run runtime, and this document describes the Claude Code binding that should eventually join the shared Managed Session Plane once it has a Claude-specific session adapter/controller. That future binding should keep the shared Managed Session Plane concepts intact, but change the runtime adapter, policy compiler, context model, and child-session model to fit Claude Code.
 
 Current live boundaries:
 
-- `MoonMind.Run` starts `MoonMind.AgentSession` for `codex_cli` and `claude_code` managed task steps.
-- `MoonMind.AgentSession` stores compact `ManagedSession*` binding, epoch, runtime handles, request tracking, and continuity refs.
-- `MoonMind.AgentRun` uses the session adapter when `request.managed_session` is present, regardless of whether the binding runtime is Codex CLI or Claude Code.
-- `agent_runtime.launch_session`, `send_turn`, `steer_turn`, `interrupt_turn`, `clear_session`, `terminate_session`, `fetch_session_summary`, and `publish_session_artifacts` use the shared session activity surface and carry the runtime family through the payload.
-- The Docker-backed session controller records Claude Code sessions as `runtimeId = "claude_code"` and preserves runtime-specific profile materialization through Provider Profiles.
+- `MoonMind.Run` starts `MoonMind.AgentSession` for `codex_cli` managed task steps.
+- `MoonMind.AgentSession` stores compact Codex session binding, epoch, runtime handles, request tracking, and continuity refs.
+- `MoonMind.AgentRun` uses the Codex session adapter when `request.managed_session` is present and the managed-session runtime canonicalizes to `codex_cli`.
+- `agent_runtime.launch_session`, `send_turn`, `steer_turn`, `interrupt_turn`, `clear_session`, `terminate_session`, `fetch_session_summary`, and `publish_session_artifacts` use the live Codex session activity surface.
+- The Docker-backed session controller records Codex CLI sessions as `runtimeId = "codex_cli"` and preserves Codex profile materialization through Provider Profiles.
 
 Known implementation gaps versus Codex:
 
-- Claude Code still uses the shared remote-session activity transport; Claude-native checkpoint, policy-dialog, Remote Control, and subagent/team semantics are represented by domain models and documentation but are not yet all exposed as separate live workflow updates.
-- Codex App Server-specific implementation class names remain in a few private adapter/controller modules as compatibility shims. Shared workflow/activity contracts should use `ManagedSession*` names.
+- Claude Code does not yet use the live remote-session activity transport. Claude-native checkpoint, policy-dialog, Remote Control, and subagent/team semantics are represented by domain models and documentation but are not yet exposed as live session workflow updates.
+- Codex App Server-specific implementation class names remain in private adapter/controller modules because the only live task-scoped managed-session transport is Codex-specific. Shared workflow/activity contracts should use `ManagedSession*` names when a second live runtime is added.
 
 ---
 

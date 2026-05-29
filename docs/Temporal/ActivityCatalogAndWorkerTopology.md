@@ -484,7 +484,7 @@ Worker queue: `mm.activity.agent_runtime`
 
 The session-oriented activities are remote-session contracts. They must delegate through a session controller or adapter boundary and must not fall back to the worker-local managed runtime launcher/process loop.
 
-The session-oriented activity surface is runtime-neutral at the workflow boundary. Codex CLI and Claude Code both enter through `ManagedSession*` request and response envelopes; runtime-specific protocol details remain behind the session adapter/controller boundary. The current container transport uses the Codex App Server-compatible remote-session protocol for the Codex binding, while Claude Code carries `runtimeFamily = "claude_code"` through the same control surface and records `runtimeId = "claude_code"` in session state and projections.
+The session-oriented activity surface is intended to become runtime-neutral at the workflow boundary, but the live activity/controller path currently admits Codex CLI only. Runtime-specific protocol details remain behind the session adapter/controller boundary. The current container transport uses the Codex App Server-compatible remote-session protocol for the Codex binding. Claude Code must add a Claude-specific session adapter/controller before carrying `runtimeFamily = "claude_code"` or recording `runtimeId = "claude_code"` through this activity surface.
 
 `agent_runtime.prepare_turn_instructions` is replay-visible when scheduled by
 `MoonMind.AgentRun`. Moving it before or after session launch/status activities,

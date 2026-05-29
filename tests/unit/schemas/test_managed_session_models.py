@@ -42,13 +42,9 @@ def test_managed_session_plane_contract_freezes_task_scoped_scope() -> None:
     )
     assert contract.clear_behavior == "new_thread_same_container_new_epoch"
 
-def test_managed_session_plane_contract_supports_claude_code_family() -> None:
-    contract = ManagedSessionPlaneContract(runtime_family="claude_code")
-
-    assert contract.runtime_family == "claude_code"
-    assert contract.protocol == "codex_app_server"
-    assert contract.container_backend == "docker"
-    assert contract.control_actions == MANAGED_SESSION_CONTROL_ACTIONS
+def test_managed_session_plane_contract_rejects_claude_code_until_session_controller_exists() -> None:
+    with pytest.raises(ValidationError, match="Input should be 'codex'"):
+        ManagedSessionPlaneContract(runtime_family="claude_code")
 
 def test_managed_session_runtime_id_canonicalizes_session_capable_runtimes() -> None:
     assert canonical_managed_session_runtime_id("codex") == "codex_cli"
@@ -178,21 +174,19 @@ def test_launch_codex_managed_session_request_freezes_remote_container_defaults(
     assert request.protocol == "codex_app_server"
     assert request.session_epoch == 1
 
-def test_launch_managed_session_request_accepts_claude_code_runtime_family() -> None:
-    request = LaunchCodexManagedSessionRequest(
-        runtimeFamily="claude_code",
-        taskRunId="task-123",
-        sessionId="sess-123",
-        threadId="thread-1",
-        workspacePath="/work/task/repo",
-        sessionWorkspacePath="/work/task/session",
-        artifactSpoolPath="/work/task/artifacts",
-        codexHomePath="/work/task/runtime-home",
-        imageRef="moonmind:latest",
-    )
-
-    assert request.runtime_family == "claude_code"
-    assert request.protocol == "codex_app_server"
+def test_launch_managed_session_request_rejects_claude_code_runtime_family() -> None:
+    with pytest.raises(ValidationError, match="Input should be 'codex'"):
+        LaunchCodexManagedSessionRequest(
+            runtimeFamily="claude_code",
+            taskRunId="task-123",
+            sessionId="sess-123",
+            threadId="thread-1",
+            workspacePath="/work/task/repo",
+            sessionWorkspacePath="/work/task/session",
+            artifactSpoolPath="/work/task/artifacts",
+            codexHomePath="/work/task/runtime-home",
+            imageRef="moonmind:latest",
+        )
 
 def test_mm693_launch_request_serializes_docker_capability_contract() -> None:
     request = LaunchCodexManagedSessionRequest(

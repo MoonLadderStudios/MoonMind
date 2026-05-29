@@ -53,8 +53,8 @@ ManagedSessionControlAction = Literal[
 ]
 
 ManagedSessionControlMode = Literal["remote_container"]
-ManagedSessionRuntimeFamily = Literal["codex", "claude_code"]
-ManagedSessionRuntimeId = Literal["codex_cli", "claude_code"]
+ManagedSessionRuntimeFamily = Literal["codex"]
+ManagedSessionRuntimeId = Literal["codex_cli"]
 ManagedSessionProtocol = Literal["codex_app_server"]
 ManagedSessionContainerBackend = Literal["docker"]
 ManagedGitHubCredentialSource = Literal["secret_ref", "managed_secret", "environment"]
@@ -798,8 +798,6 @@ def managed_session_runtime_family_for_runtime_id(
     canonical = canonical_managed_session_runtime_id(runtime_id)
     if canonical == "codex_cli":
         return "codex"
-    if canonical == "claude_code":
-        return "claude_code"
     raise ValueError("runtimeId must identify a managed-session runtime")
 
 _ASSISTANT_TEXT_METADATA_KEYS = frozenset({"assistantText", "lastAssistantText"})
