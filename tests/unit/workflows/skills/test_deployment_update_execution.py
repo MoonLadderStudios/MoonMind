@@ -869,6 +869,41 @@ async def test_deployment_control_runner_targets_services_except_itself(monkeypa
     assert "temporal" not in up_command
 
 
+@pytest.mark.asyncio
+async def test_configured_image_mismatch_fails_without_full_stack_fallback(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HOSTNAME", "deploy123")
+    events: list[str] = []
+    runner = DeploymentControlRunner(events)
+    executor, store, evidence, _runner, _events = _executor(
+        runner=runner,
+        events=events,
+        excluded_services=("temporal-worker-deployment-control",),
+    )
+
+    with pytest.raises(ToolFailure) as exc_info:
+        await executor.execute(
+            _inputs(
+                image={
+                    "repository": "ghcr.io/moonladderstudios/unknown",
+                    "reference": "latest",
+                }
+            )
+        )
+
+    assert exc_info.value.error_code == "DEPLOYMENT_RUNNER_UNSAFE"
+    assert exc_info.value.details["requestedRepository"] == (
+        "ghcr.io/moonladderstudios/unknown"
+    )
+    assert store.records == []
+    assert [kind for kind, _payload in evidence.records] == ["command-log"]
+    assert evidence.records[0][1]["error"]["error_code"] == "DEPLOYMENT_RUNNER_UNSAFE"
+    assert runner.commands == []
+    assert "runner:pull" not in events
+    assert "runner:up" not in events
+
+
 def test_service_exclusion_matches_compose_container_names() -> None:
     excluded = {"temporal-worker-deployment-control"}
 

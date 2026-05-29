@@ -1364,6 +1364,8 @@ def _target_service_names_from_state(
     )
     if configured_image_targets:
         return configured_image_targets
+    if isinstance(before_state.get("configuredServiceImages"), Mapping):
+        return ()
     names: list[str] = []
     seen: set[str] = set()
     for source in (
