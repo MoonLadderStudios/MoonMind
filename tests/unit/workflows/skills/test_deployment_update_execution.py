@@ -201,12 +201,33 @@ class DeploymentControlRunner(RecordingRunner):
             "stack": stack,
             "phase": phase,
             "configuredServices": [
+                "postgres",
+                "docker-proxy",
+                "temporal",
                 "temporal-worker-deployment-control",
                 "temporal-worker-agent-runtime",
+                "init-db",
                 "api",
                 "new-worker",
             ],
+            "configuredServiceImages": {
+                "postgres": "postgres:17",
+                "docker-proxy": "tecnativa/docker-socket-proxy:0.1.1",
+                "temporal": "temporalio/auto-setup:1.29.1",
+                "temporal-worker-deployment-control": (
+                    "ghcr.io/moonladderstudios/moonmind:latest"
+                ),
+                "temporal-worker-agent-runtime": (
+                    "ghcr.io/moonladderstudios/moonmind:latest"
+                ),
+                "init-db": "ghcr.io/moonladderstudios/moonmind:latest",
+                "api": "ghcr.io/moonladderstudios/moonmind:latest",
+                "new-worker": "ghcr.io/moonladderstudios/moonmind:latest",
+            },
             "services": [
+                {"ID": "pg123", "Service": "postgres"},
+                {"ID": "proxy123", "Service": "docker-proxy"},
+                {"ID": "temporal123", "Service": "temporal"},
                 {"ID": "deploy123", "Service": "temporal-worker-deployment-control"},
                 {"ID": "agent456", "Service": "temporal-worker-agent-runtime"},
                 {"ID": "api789", "Service": "api"},
@@ -830,9 +851,22 @@ async def test_deployment_control_runner_targets_services_except_itself(monkeypa
     assert len(store.records) == 1
     pull_command = runner.commands[0][1]
     up_command = runner.commands[1][1]
-    assert pull_command[-3:] == ("temporal-worker-agent-runtime", "api", "new-worker")
-    assert up_command[-3:] == ("temporal-worker-agent-runtime", "api", "new-worker")
+    assert pull_command[-4:] == (
+        "temporal-worker-agent-runtime",
+        "init-db",
+        "api",
+        "new-worker",
+    )
+    assert up_command[-4:] == (
+        "temporal-worker-agent-runtime",
+        "init-db",
+        "api",
+        "new-worker",
+    )
     assert "temporal-worker-deployment-control" not in up_command
+    assert "postgres" not in up_command
+    assert "docker-proxy" not in up_command
+    assert "temporal" not in up_command
 
 
 def test_service_exclusion_matches_compose_container_names() -> None:
@@ -1539,7 +1573,20 @@ async def test_host_compose_runner_parses_full_json_stdout_with_stderr_warning(
         stderr: Any,
     ):
         calls.append(args)
-        if args[-2:] == ("config", "--services"):
+        if args[-3:] == ("config", "--format", "json"):
+            payload = json.dumps(
+                {
+                    "services": {
+                        "api": {
+                            "image": "ghcr.io/moonladderstudios/moonmind:latest"
+                        },
+                        "worker": {
+                            "image": "ghcr.io/moonladderstudios/moonmind:latest"
+                        },
+                    }
+                }
+            )
+        elif args[-2:] == ("config", "--services"):
             payload = "api\nworker\n"
         elif args[-3:] == ("images", "--format", "json"):
             payload = json.dumps(images_record) + "\n"
@@ -1560,7 +1607,11 @@ async def test_host_compose_runner_parses_full_json_stdout_with_stderr_warning(
     assert state["services"] == [large_service_record]
     assert state["images"] == [images_record]
     assert state["configuredServices"] == ("api", "worker")
-    assert len(calls) == 3
+    assert state["configuredServiceImages"] == {
+        "api": "ghcr.io/moonladderstudios/moonmind:latest",
+        "worker": "ghcr.io/moonladderstudios/moonmind:latest",
+    }
+    assert len(calls) == 4
 
 
 @pytest.mark.asyncio
