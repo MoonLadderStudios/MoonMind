@@ -84,10 +84,10 @@ volume_mount_path: /home/app/.codex
 
 Claude Code uses the same Provider Profile and explicit mount-target pattern,
 with the runtime profile selecting the Claude auth volume and mount path. The
-session launch payload carries the same `MANAGED_AUTH_VOLUME_PATH` environment
-contract and `runtimeFamily = "claude_code"` so the managed-session controller
-can keep auth material separate from the task workspace while still recording a
-Claude Code session binding.
+managed-run launcher carries the same `MANAGED_AUTH_VOLUME_PATH` environment
+contract so auth material stays separate from the task workspace. A future
+Claude managed-session controller should preserve that separation before
+recording any Claude Code session binding.
 
 That shape describes the credential enrollment and verification home only. It
 does not set `CODEX_HOME` for managed sessions. The managed-session launcher

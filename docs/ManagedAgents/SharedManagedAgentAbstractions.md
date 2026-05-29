@@ -31,7 +31,7 @@ The core model is:
 - higher layers store and exchange bindings, observations, events, and artifact refs,
 - runtime-native process, thread, container, transcript, and session identifiers remain opaque outside the owning plane.
 
-Codex CLI and Claude Code are the current concrete managed-session bindings. Gemini CLI and future managed runtimes should implement the same shared contract through their own runtime-specific planes.
+Codex CLI is the current concrete managed-session binding. Claude Code has managed-run support and Claude-specific session design models, but it should not be treated as a live managed-session binding until it implements its own runtime-specific session plane. Gemini CLI and future managed runtimes should implement the same shared contract through their own runtime-specific planes before being described as session-capable.
 
 ---
 
@@ -570,7 +570,7 @@ Runtime differences belong in:
 - bounded `runtimeDetails`,
 - runtime-specific docs.
 
-Codex-specific behavior belongs in Codex-managed-session docs. Claude Code, Gemini CLI, and future runtime docs should describe how their planes realize this contract rather than redefining it.
+Codex-specific behavior belongs in Codex-managed-session docs. Claude Code, Gemini CLI, and future runtime docs should describe how their future planes realize this contract rather than redefining it.
 
 ---
 

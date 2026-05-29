@@ -40,7 +40,7 @@ At the system level:
 - **Authentication** is owned by Provider Profiles plus OAuth and secret-resolution subsystems.
 - **Secrets** are provided through references and launch-time materialization, never as raw durable payloads.
 
-Current maturity is **Codex and Claude Code first-class for managed sessions**. Codex CLI and Claude Code are both live task-scoped managed-session runtimes behind the shared `MoonMind.AgentSession` control plane. Gemini CLI remains a managed-runtime strategy and can adopt the session plane by implementing the same shared contracts rather than inventing a new top-level managed-agent abstraction.
+Current maturity is **Codex CLI first-class for managed sessions, with Claude Code first-class for managed runs**. Codex CLI is the live task-scoped managed-session runtime behind the shared `MoonMind.AgentSession` control plane. Claude Code has a live managed-run path and Claude-specific session design models, but it does not yet enter the live managed-session controller. Gemini CLI remains a managed-runtime strategy and can adopt the session plane by implementing the same shared contracts rather than inventing a new top-level managed-agent abstraction.
 
 ---
 
@@ -664,11 +664,11 @@ This distinction is especially important as MoonMind evolves richer build/test/c
 
 ## 11. Current maturity and runtime evolution
 
-### 11.1 Codex and Claude Code are current session runtimes
+### 11.1 Codex is the current live session runtime
 
-Codex CLI and Claude Code are current concrete managed-session implementations.
+Codex CLI is the current concrete managed-session implementation.
 
-The live task-scoped session plane is shared. Runtime-specific details such as Codex App Server protocol, Claude Code policy/context/checkpoint semantics, thread/turn mappings, and session reset mechanics remain documented in runtime-specific docs.
+The live task-scoped session plane is designed for shared workflow/activity contracts, but the current controller and transport are Codex-specific. Runtime-specific details such as Codex App Server protocol, thread/turn mappings, and session reset mechanics remain documented in runtime-specific docs. Claude Code policy/context/checkpoint semantics remain documented as design/domain model work until a Claude session controller is implemented.
 
 ### 11.2 Additional runtimes should extend the same model
 
@@ -684,7 +684,7 @@ The allowed variation is inside runtime-specific planes and capability flags.
 
 ### 11.3 Contract extraction rule
 
-The activity and session contracts are runtime-neutral `ManagedSession*` contracts at the workflow boundary. Codex-prefixed implementation classes may remain where they are private compatibility shims or runtime-specific bindings, but new shared workflow/activity contracts should use `ManagedSession*` names and carry the runtime family explicitly.
+The activity and session contracts should be runtime-neutral `ManagedSession*` contracts at the workflow boundary when additional runtimes are admitted. Today the live path is Codex-only, and Codex-prefixed implementation classes may remain where they are private compatibility shims or runtime-specific bindings. New shared workflow/activity contracts should use `ManagedSession*` names and carry the runtime family explicitly once a non-Codex controller exists.
 
 This document does not block that evolution. It provides the architectural direction that such extraction should serve.
 

@@ -36,7 +36,7 @@ If you already have a subscription with a model provider:
 
 ### 🛰️ Bring Your Own Agent — or let MoonMind run one for you
 Other platforms make you rebuild agents in their SDK. MoonMind operates at a higher level of abstraction, orchestrating state-of-the-art agents out of the box.
-- **Managed Sessions and Managed Runs:** MoonMind can run owned CLI runtimes on your own infrastructure using your existing subscriptions or API keys. Codex CLI and Claude Code are first-class task-scoped managed-session runtimes; Gemini CLI remains a managed-runtime target that can adopt the same session pattern where its adapter supports it.
+- **Managed Sessions and Managed Runs:** MoonMind can run owned CLI runtimes on your own infrastructure using your existing subscriptions or API keys. Codex CLI is the live first-class task-scoped managed-session runtime. Claude Code is a first-class managed-runtime target and has Claude-specific session design models, but it does not yet enter the live task-scoped managed-session controller path. Gemini CLI remains a managed-runtime target that can adopt the same session pattern where its adapter supports it.
 - **External Delegated Agents:** Cloud-hosted agents like Jules and Codex Cloud are coordinated through external-agent adapters. MoonMind tracks status, injects context, and closes the feedback loop even when it does not own the provider's runtime envelope.
 - **Sandboxed Execution:** Managed runtime sessions and specialized workload containers run through controlled Docker boundaries with strict capability routing. File allowlists restrict modifications, and credentials are automatically sanitized from logs.
 - **Personal-use friendly defaults:** A fresh local install should boot successfully with `docker compose up -d`, then let you enter a small number of secrets in Mission Control instead of forcing enterprise-only secret infrastructure up front.
@@ -63,7 +63,7 @@ MoonMind runs as a set of decoupled containers from a single `docker-compose.yam
 | **API Service** | FastAPI control plane for Mission Control, `/api/executions`, artifacts, templates, proposals, and MCP/context surfaces. |
 | **Temporal Server** | Durable execution engine with PostgreSQL persistence. |
 | **Worker Fleet** | Specialized isolated workers for orchestration, sandbox execution, LLM calls, managed runtime supervision, and external integrations. |
-| **Managed Session Plane** | Task-scoped owned runtime sessions for Codex CLI and Claude Code. Ordinary managed-session Docker work uses a per-session sidecar daemon rather than the host socket. Additional runtime adapters can adopt the same shared `ManagedSession*` pattern. |
+| **Managed Session Plane** | Task-scoped owned runtime sessions for Codex CLI. Ordinary managed-session Docker work uses a per-session sidecar daemon rather than the host socket. Claude Code and additional runtime adapters can adopt the same shared `ManagedSession*` pattern once they provide a runtime-specific session controller. |
 | **External Agent Adapters** | Provider adapters for delegated external agents such as Jules and Codex Cloud. |
 | **Docker Workload Plane** | Control-plane-launched specialized workload containers for MoonMind admin/update, helper, and deliberately gated exceptional workloads, kept separate from managed agent session identity. |
 | **Mission Control** | Operational dashboard for managing tasks, reviewing per-step progress, and inspecting logs, diagnostics, and artifacts. |
