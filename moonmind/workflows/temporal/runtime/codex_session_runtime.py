@@ -544,12 +544,17 @@ class CodexManagedSessionRuntime:
 
     def _app_server_client(self) -> CodexAppServerRpcClient:
         if self._client is None:
+            codex_home = str(self._codex_home_path)
             self._client = CodexAppServerRpcClient(
                 command=self._app_server_command,
                 client_name="MoonMind",
                 client_version="phase4",
                 cwd=str(self._workspace_path),
-                env={"CODEX_HOME": str(self._codex_home_path)},
+                env={
+                    "CODEX_HOME": codex_home,
+                    "CODEX_CONFIG_HOME": codex_home,
+                    "CODEX_CONFIG_PATH": str(self._codex_home_path / "config.toml"),
+                },
                 notification_timeout_seconds=self._turn_completion_timeout_seconds,
             )
         return self._client

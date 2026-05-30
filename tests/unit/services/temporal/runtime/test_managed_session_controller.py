@@ -4574,7 +4574,12 @@ async def test_controller_launch_mounts_auth_volume_at_separate_managed_auth_pat
         artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
         codexHomePath=str(workspace_root / "task-1" / ".moonmind" / "codex-home"),
         imageRef="ghcr.io/moonladderstudios/moonmind:latest",
-        environment={"MANAGED_AUTH_VOLUME_PATH": "/home/app/.codex-auth"},
+        environment={
+            "MANAGED_AUTH_VOLUME_PATH": "/home/app/.codex-auth",
+            "CODEX_HOME": "/home/app/.codex",
+            "CODEX_CONFIG_HOME": "/home/app/.codex",
+            "CODEX_CONFIG_PATH": "/home/app/.codex/config.toml",
+        },
     )
     commands: list[tuple[str, ...]] = []
 
@@ -4626,6 +4631,19 @@ async def test_controller_launch_mounts_auth_volume_at_separate_managed_auth_pat
         f"type=volume,src=codex_auth_volume,dst={request.codex_home_path}"
         not in run_command
     )
+    run_env = {
+        value.split("=", 1)[0]: value.split("=", 1)[1]
+        for index, value in enumerate(run_command)
+        if index > 0 and run_command[index - 1] == "-e" and "=" in value
+    }
+    assert run_env["CODEX_HOME"] == request.codex_home_path
+    assert run_env["CODEX_CONFIG_HOME"] == request.codex_home_path
+    from pathlib import PurePosixPath
+
+    assert run_env["CODEX_CONFIG_PATH"] == str(
+        PurePosixPath(request.codex_home_path) / "config.toml"
+    )
+
 
 @pytest.mark.asyncio
 async def test_controller_launch_normalizes_materialized_codex_home_for_container_user(
