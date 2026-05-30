@@ -2950,6 +2950,64 @@ async def test_launch_adds_trusted_jira_tool_hint_for_claude_jira_skill(
 
 
 @pytest.mark.asyncio
+async def test_launch_preserves_missing_instruction_ref_without_jira_skill(
+    tmp_path, monkeypatch
+):
+    """Non-Jira launches should not normalize a missing instruction ref to blank."""
+
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(
+        store, artifact_service=_SkillArtifactService({})
+    )
+
+    profile = _make_profile(
+        runtime_id="claude_code", command_template=["claude", "-p"]
+    )
+    request = _make_request(instruction_ref=None, parameters={})
+    workspace = tmp_path / "workspaces" / "run-no-jira" / "repo"
+    workspace.mkdir(parents=True)
+
+    class _FakeProcess:
+        def __init__(self) -> None:
+            self.pid = 4245
+            self.returncode = 0
+            self.stdout = asyncio.StreamReader()
+            self.stderr = asyncio.StreamReader()
+
+        async def wait(self) -> int:
+            return 0
+
+    async def _fake_create_subprocess_exec(*_args, **_kwargs):
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    async def _fake_resolve(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.resolve_github_token_for_launch",
+        _fake_resolve,
+    )
+
+    _record, process, _cleanup, _deferred = await launcher.launch(
+        run_id="run-no-jira",
+        request=request,
+        profile=profile,
+        workspace_path=str(workspace),
+    )
+    await process.wait()
+
+    assert request.instruction_ref is None
+
+
+@pytest.mark.asyncio
 async def test_launch_skips_skill_projection_when_no_snapshot_ref(tmp_path, monkeypatch):
     """Without ``resolved_skillset_ref`` the launcher leaves instruction_ref alone."""
 
