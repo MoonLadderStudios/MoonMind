@@ -28,6 +28,9 @@ from moonmind.workflows.skills.run_projection import (
     prepend_skill_activation_summary,
     verify_skill_projection,
 )
+from moonmind.workflows.temporal.jira_tool_hints import (
+    append_selected_jira_tool_hint,
+)
 
 from .github_auth_broker import GitHubAuthBrokerManager
 from .git_auth import build_github_token_git_environment
@@ -854,7 +857,11 @@ class ManagedRuntimeLauncher:
         if result.status in {"failed", "unsupported"}:
             reason = result.failure_reason or "runtime_command_render_failed"
             raise RuntimeError(reason)
-        if result.rendered_instruction is not None:
+        if result.rendered_instruction is not None and (
+            result.rendered_instruction
+            or request.instruction_ref is not None
+            or request.runtime_command is not None
+        ):
             request.instruction_ref = result.rendered_instruction
 
     async def _project_run_skill_snapshot(
@@ -1108,6 +1115,12 @@ class ManagedRuntimeLauncher:
                     request=request,
                     strategy=strategy,
                 )
+            hinted_instruction_ref = append_selected_jira_tool_hint(
+                request.instruction_ref or "",
+                parameters=request.parameters,
+            )
+            if hinted_instruction_ref:
+                request.instruction_ref = hinted_instruction_ref
 
             cmd = self.build_command(profile, request, strategy=strategy)
             self._reset_live_log_spool(resolved_workspace_path)
