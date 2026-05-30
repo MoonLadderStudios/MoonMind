@@ -3160,6 +3160,36 @@ def test_runtime_launch_session_rejects_auth_volume_equal_to_codex_home(
     ):
         runtime.launch_session(request)
 
+def test_runtime_launch_session_points_codex_config_env_at_per_run_home(
+    tmp_path: Path,
+) -> None:
+    script = write_fake_app_server(tmp_path)
+    request = launch_request(tmp_path)
+    auth_volume_path = tmp_path / "auth-volume"
+    auth_volume_path.mkdir()
+    (auth_volume_path / "auth.json").write_text('{"token":"oauth"}', encoding="utf-8")
+
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        auth_volume_path=str(auth_volume_path),
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+
+    runtime.launch_session(request)
+
+    assert runtime._client is not None
+    assert runtime._client._env["CODEX_HOME"] == request.codex_home_path
+    assert runtime._client._env["CODEX_CONFIG_HOME"] == request.codex_home_path
+    assert runtime._client._env["CODEX_CONFIG_PATH"] == str(
+        Path(request.codex_home_path) / "config.toml"
+    )
+
 def test_run_ready_requires_runtime_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     workspace_path = tmp_path / "repo"
     workspace_path.mkdir()

@@ -1994,6 +1994,11 @@ class DockerCodexManagedSessionController:
         await self._ensure_workspace_paths(request)
         session_environment = dict(request.environment)
         session_environment.pop("GITHUB_TOKEN", None)
+        session_environment["CODEX_HOME"] = request.codex_home_path
+        session_environment["CODEX_CONFIG_HOME"] = request.codex_home_path
+        session_environment["CODEX_CONFIG_PATH"] = str(
+            Path(request.codex_home_path) / "config.toml"
+        )
         if request.workflow_id:
             session_environment.setdefault(
                 "MOONMIND_TASK_WORKFLOW_ID",
