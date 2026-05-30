@@ -2869,6 +2869,87 @@ async def test_launch_projects_resolved_skill_snapshot_for_claude_code(
 
 
 @pytest.mark.asyncio
+async def test_launch_adds_trusted_jira_tool_hint_for_claude_jira_skill(
+    tmp_path, monkeypatch
+):
+    """Claude Code direct launches must receive the trusted Jira tool surface hint."""
+
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    snapshot_payload, skill_payloads = _build_skill_snapshot_artifact(
+        "snap-jira-1", ["jira-issue-creator"]
+    )
+    artifact_service = _SkillArtifactService(
+        {"resolved-set-jira": snapshot_payload, **skill_payloads}
+    )
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store, artifact_service=artifact_service)
+
+    profile = _make_profile(
+        runtime_id="claude_code", command_template=["claude", "-p"]
+    )
+    request = _make_request(
+        instruction_ref="Create THOR stories.",
+        resolved_skillset_ref="resolved-set-jira",
+        parameters={
+            "selectedSkill": "jira-issue-creator",
+            "storyBreakdownPath": "artifacts/story-breakdowns/demo/stories.json",
+        },
+    )
+    workspace = tmp_path / "workspaces" / "run-jira" / "repo"
+    workspace.mkdir(parents=True)
+
+    captured_args: tuple[object, ...] = ()
+
+    class _FakeProcess:
+        def __init__(self) -> None:
+            self.pid = 4244
+            self.returncode = 0
+            self.stdout = asyncio.StreamReader()
+            self.stderr = asyncio.StreamReader()
+
+        async def wait(self) -> int:
+            return 0
+
+    async def _fake_create_subprocess_exec(*args, **_kwargs):
+        nonlocal captured_args
+        captured_args = args
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    async def _fake_resolve(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.resolve_github_token_for_launch",
+        _fake_resolve,
+    )
+
+    _record, process, _cleanup, _deferred = await launcher.launch(
+        run_id="run-jira",
+        request=request,
+        profile=profile,
+        workspace_path=str(workspace),
+    )
+    await process.wait()
+
+    prompt_args = [arg for arg in captured_args if isinstance(arg, str)]
+    assert any("Active MoonMind skill snapshot:" in arg for arg in prompt_args)
+    assert any("Selected skill: jira-issue-creator" in arg for arg in prompt_args)
+    assert any("MoonMind trusted Jira tools:" in arg for arg in prompt_args)
+    assert any("POST $MOONMIND_URL/mcp/tools/call" in arg for arg in prompt_args)
+    assert any("jira.create_issue" in arg for arg in prompt_args)
+    assert any(
+        "artifacts/story-breakdowns/demo/stories.json" in arg for arg in prompt_args
+    )
+
+
+@pytest.mark.asyncio
 async def test_launch_skips_skill_projection_when_no_snapshot_ref(tmp_path, monkeypatch):
     """Without ``resolved_skillset_ref`` the launcher leaves instruction_ref alone."""
 

@@ -28,6 +28,9 @@ from moonmind.workflows.skills.run_projection import (
     prepend_skill_activation_summary,
     verify_skill_projection,
 )
+from moonmind.workflows.temporal.jira_tool_hints import (
+    append_selected_jira_tool_hint,
+)
 
 from .github_auth_broker import GitHubAuthBrokerManager
 from .git_auth import build_github_token_git_environment
@@ -1108,6 +1111,10 @@ class ManagedRuntimeLauncher:
                     request=request,
                     strategy=strategy,
                 )
+            request.instruction_ref = append_selected_jira_tool_hint(
+                str(request.instruction_ref or ""),
+                parameters=request.parameters,
+            )
 
             cmd = self.build_command(profile, request, strategy=strategy)
             self._reset_live_log_spool(resolved_workspace_path)
