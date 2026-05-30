@@ -1997,7 +1997,7 @@ class DockerCodexManagedSessionController:
         session_environment["CODEX_HOME"] = request.codex_home_path
         session_environment["CODEX_CONFIG_HOME"] = request.codex_home_path
         session_environment["CODEX_CONFIG_PATH"] = str(
-            Path(request.codex_home_path) / "config.toml"
+            PurePosixPath(request.codex_home_path) / "config.toml"
         )
         if request.workflow_id:
             session_environment.setdefault(

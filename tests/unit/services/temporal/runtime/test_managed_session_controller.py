@@ -4638,9 +4638,12 @@ async def test_controller_launch_mounts_auth_volume_at_separate_managed_auth_pat
     }
     assert run_env["CODEX_HOME"] == request.codex_home_path
     assert run_env["CODEX_CONFIG_HOME"] == request.codex_home_path
+    from pathlib import PurePosixPath
+
     assert run_env["CODEX_CONFIG_PATH"] == str(
-        Path(request.codex_home_path) / "config.toml"
+        PurePosixPath(request.codex_home_path) / "config.toml"
     )
+
 
 @pytest.mark.asyncio
 async def test_controller_launch_normalizes_materialized_codex_home_for_container_user(
