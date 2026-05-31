@@ -229,6 +229,79 @@ async def test_create_execution_routes_user_workflow_after_mm730_cutover(
 
 
 @pytest.mark.asyncio
+async def test_create_execution_routes_pr_merge_automation_workflows_to_dedicated_queue(
+    tmp_path,
+    mock_client_adapter,
+    monkeypatch,
+):
+    temporal_settings = settings.temporal.model_copy(
+        update={
+            "merge_automation_workflow_task_queue": "mm.workflow.merge_automation.test"
+        }
+    )
+    monkeypatch.setattr(settings, "temporal", temporal_settings)
+
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(
+            session,
+            client_adapter=mock_client_adapter,
+        )
+
+        await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="Merge automation run",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "publishMode": "pr",
+                "task": {
+                    "publish": {
+                        "mode": "pr",
+                        "mergeAutomation": {"enabled": True},
+                    },
+                },
+            },
+            idempotency_key=None,
+        )
+
+        start_kwargs = mock_client_adapter.start_workflow.await_args.kwargs
+        assert start_kwargs["task_queue"] == "mm.workflow.merge_automation.test"
+
+
+@pytest.mark.asyncio
+async def test_create_execution_keeps_default_priority_without_merge_automation(
+    tmp_path,
+    mock_client_adapter,
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(
+            session,
+            client_adapter=mock_client_adapter,
+        )
+
+        await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="Plain run",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "publishMode": "pr",
+                "task": {"publish": {"mode": "pr"}},
+            },
+            idempotency_key=None,
+        )
+
+        start_kwargs = mock_client_adapter.start_workflow.await_args.kwargs
+        assert start_kwargs["task_queue"] is None
+
+
+@pytest.mark.asyncio
 async def test_create_execution_returns_repair_pending_fallback_when_projection_sync_fails(
     tmp_path, monkeypatch
 ):
