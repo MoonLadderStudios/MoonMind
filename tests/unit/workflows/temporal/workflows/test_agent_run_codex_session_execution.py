@@ -466,6 +466,203 @@ async def test_agent_run_keeps_managed_adapter_for_non_session_managed_request(
         "agent_runtime.publish_artifacts",
     ]
 
+async def test_agent_run_starts_deferred_codex_session_only_after_slot_assignment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent_info = type(
+        "ParentInfo",
+        (),
+        {"workflow_id": "wf-task-1", "run_id": "parent-run-1"},
+    )
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": "wf-agent-run-1",
+            "run_id": "run-1",
+            "search_attributes": {},
+            "parent": parent_info,
+        },
+    )
+    logger = type(
+        "Logger",
+        (),
+        {"info": lambda *a, **k: None, "warning": lambda *a, **k: None},
+    )
+    monkeypatch.setattr(agent_run_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(agent_run_module.workflow, "logger", logger)
+    monkeypatch.setattr(agent_run_module.workflow, "patched", _patch_all_enabled)
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+
+    run = MoonMindAgentRun()
+    order: list[str] = []
+    parent_signals: list[tuple[str, Any]] = []
+    session_starts: list[tuple[str, Any, dict[str, Any]]] = []
+    session_adapter_requests: list[AgentExecutionRequest] = []
+
+    class _FakeParentHandle:
+        async def signal(
+            self, signal_name: str, payload: Any = None, **kwargs: Any
+        ) -> None:
+            parent_signals.append(
+                (signal_name, payload if payload is not None else kwargs.get("args"))
+            )
+
+    class _FakeSessionHandle:
+        async def signal(self, _signal_name: str, _payload: Any = None) -> None:
+            return None
+
+    async def fake_start_child_workflow(
+        workflow_name: str,
+        payload: Any,
+        **kwargs: Any,
+    ) -> _FakeSessionHandle:
+        order.append("start_session")
+        session_starts.append((workflow_name, payload, kwargs))
+        return _FakeSessionHandle()
+
+    class _FakeManagerHandle:
+        async def signal(self, _signal_name: str, _payload: Any) -> None:
+            return None
+
+    async def fake_ensure_manager_and_signal(
+        manager_id: str,
+        runtime_id: str,
+        *,
+        request_slot: bool,
+        execution_profile_ref: str | None,
+        profile_selector: dict[str, Any],
+    ) -> _FakeManagerHandle:
+        if request_slot:
+            order.append("request_slot")
+            run._assigned_profile_id = execution_profile_ref or "codex-default"
+            run.slot_assigned_event.set()
+        return _FakeManagerHandle()
+
+    async def fake_sync_manager_profiles(
+        *,
+        manager_id: str,
+        manager_handle: object,
+        runtime_id: str,
+    ) -> int:
+        return 1
+
+    class _FakeManagedAgentAdapter:
+        def __init__(self, **_kwargs: Any) -> None:
+            raise AssertionError(
+                "ManagedAgentAdapter should not run for deferred session intent"
+            )
+
+    class _FakeCodexSessionAdapter:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def start(self, request: AgentExecutionRequest) -> AgentRunHandle:
+            order.append("adapter_start")
+            session_adapter_requests.append(request)
+            return AgentRunHandle(
+                runId="managed-session-run-1",
+                agentKind="managed",
+                agentId=request.agent_id,
+                status="completed",
+                startedAt=agent_run_module.workflow.now(),
+            )
+
+    async def fake_execute_routed_activity(
+        activity_name: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_name == "agent_runtime.fetch_result":
+            return {"summary": "Session-backed Codex step completed.", "metadata": {}}
+        if activity_name == "agent_runtime.publish_artifacts":
+            return payload
+        raise AssertionError(f"Unexpected routed activity: {activity_name}")
+
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "get_external_workflow_handle",
+        lambda *_args, **_kwargs: _FakeParentHandle(),
+    )
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "start_child_workflow",
+        fake_start_child_workflow,
+    )
+    monkeypatch.setattr(
+        agent_run_module,
+        "ManagedAgentAdapter",
+        _FakeManagedAgentAdapter,
+    )
+    monkeypatch.setattr(
+        agent_run_module,
+        "CodexSessionAdapter",
+        _FakeCodexSessionAdapter,
+    )
+    monkeypatch.setattr(
+        run,
+        "_ensure_manager_and_signal",
+        fake_ensure_manager_and_signal,
+    )
+    monkeypatch.setattr(run, "_sync_manager_profiles", fake_sync_manager_profiles)
+    monkeypatch.setattr(run, "_execute_routed_activity", fake_execute_routed_activity)
+
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex",
+        executionProfileRef="codex-default",
+        correlationId="corr-managed-deferred-1",
+        idempotencyKey="idem-managed-deferred-1",
+        instructionRef="artifact:instructions",
+        parameters={
+            "publishMode": "none",
+            "metadata": {
+                "moonmind": {
+                    "deferManagedSessionUntilSlot": {
+                        "runtimeId": "codex_cli",
+                        "taskRunId": "wf-task-1",
+                    }
+                }
+            },
+        },
+        workspaceSpec={},
+    )
+
+    result = await run.run(request)
+
+    assert order[:3] == ["request_slot", "start_session", "adapter_start"]
+    assert len(session_starts) == 1
+    workflow_name, session_input, kwargs = session_starts[0]
+    assert workflow_name == "MoonMind.AgentSession"
+    assert kwargs["id"] == "wf-task-1:session:codex_cli"
+    assert (
+        kwargs["parent_close_policy"]
+        == agent_run_module.workflow.ParentClosePolicy.ABANDON
+    )
+    assert session_input.task_run_id == "wf-task-1"
+    assert session_input.runtime_id == "codex_cli"
+    assert session_adapter_requests[0].managed_session is not None
+    assert session_adapter_requests[0].managed_session.session_id == (
+        "sess:wf-task-1:codex_cli"
+    )
+    assert (
+        "managed_session_bound",
+        {
+            "binding": session_adapter_requests[0].managed_session.model_dump(
+                mode="json",
+                by_alias=True,
+            ),
+            "child_workflow_id": "wf-agent-run-1",
+            "runtime_id": "codex_cli",
+        },
+    ) in parent_signals
+    assert result.summary == "Session-backed Codex step completed."
+
 async def test_agent_run_managed_session_passes_publish_branch_context_to_fetch_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

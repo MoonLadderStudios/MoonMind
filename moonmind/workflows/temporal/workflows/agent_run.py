@@ -18,6 +18,11 @@ with workflow.unsafe.imports_passed_through():
         ProfileSelector,
         _MAX_SUMMARY_CHARS,
     )
+    from moonmind.schemas.managed_session_models import (
+        CodexManagedSessionBinding,
+        CodexManagedSessionWorkflowInput,
+        canonical_managed_session_runtime_id,
+    )
     from moonmind.schemas.temporal_activity_models import (
         AgentRuntimeCancelInput,
         AgentRuntimeFetchResultInput,
@@ -42,6 +47,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.workflows.temporal.activity_catalog import (
         TemporalActivityRoute,
+        WORKFLOW_TASK_QUEUE,
         build_default_activity_catalog,
     )
     from moonmind.workflows.temporal.runtime.store import ManagedRunStore
@@ -139,6 +145,9 @@ SYNC_PROFILES_BEFORE_SLOT_REQUEST_PATCH_ID = (
 )
 PIN_PROVIDER_PROFILE_BEFORE_SLOT_REQUEST_PATCH_ID = (
     "agent-run-pin-provider-profile-before-slot-request-v1"
+)
+MANAGED_SESSION_START_AFTER_SLOT_PATCH_ID = (
+    "agent-run-managed-session-start-after-slot-v1"
 )
 
 # Module-level activity catalog — deterministic, safe for Temporal replay.
@@ -786,6 +795,136 @@ class MoonMindAgentRun:
     @staticmethod
     def _uses_codex_session_adapter(request: AgentExecutionRequest) -> bool:
         return request.agent_kind == "managed" and request.managed_session is not None
+
+    @staticmethod
+    def _deferred_managed_session_intent(
+        request: AgentExecutionRequest,
+    ) -> dict[str, Any] | None:
+        parameters = (
+            request.parameters if isinstance(request.parameters, Mapping) else {}
+        )
+        metadata = parameters.get("metadata")
+        metadata_map = metadata if isinstance(metadata, Mapping) else {}
+        moonmind = metadata_map.get("moonmind")
+        moonmind_map = moonmind if isinstance(moonmind, Mapping) else {}
+        raw_intent = moonmind_map.get("deferManagedSessionUntilSlot")
+        if raw_intent is True:
+            return {}
+        if isinstance(raw_intent, Mapping):
+            return dict(raw_intent)
+        return None
+
+    @staticmethod
+    def _managed_session_runtime_id(
+        request: AgentExecutionRequest,
+    ) -> str | None:
+        if request.agent_kind != "managed":
+            return None
+        return canonical_managed_session_runtime_id(request.agent_id)
+
+    @staticmethod
+    def _task_scoped_session_workflow_id(
+        *,
+        task_workflow_id: str,
+        runtime_id: str,
+    ) -> str:
+        return f"{task_workflow_id}:session:{runtime_id}"
+
+    @staticmethod
+    def _task_scoped_session_visibility(
+        *,
+        binding: CodexManagedSessionBinding,
+    ) -> dict[str, Any]:
+        return {
+            "TaskRunId": [binding.task_run_id],
+            "RuntimeId": [binding.runtime_id],
+            "SessionId": [binding.session_id],
+            "SessionEpoch": [binding.session_epoch],
+            "SessionStatus": ["active"],
+            "IsDegraded": [False],
+        }
+
+    @staticmethod
+    def _task_scoped_session_static_details(
+        *,
+        binding: CodexManagedSessionBinding,
+    ) -> str:
+        return (
+            "Task-scoped managed runtime session | "
+            f"taskRunId={binding.task_run_id} | "
+            f"runtime={binding.runtime_id} | "
+            f"session={binding.session_id} | "
+            f"epoch={binding.session_epoch}"
+        )
+
+    async def _bind_deferred_task_scoped_session_after_slot(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        runtime_id: str,
+        parent_info: Any,
+    ) -> AgentExecutionRequest:
+        if request.managed_session is not None:
+            return request
+        if not workflow.patched(MANAGED_SESSION_START_AFTER_SLOT_PATCH_ID):
+            return request
+        intent = self._deferred_managed_session_intent(request)
+        if intent is None:
+            return request
+        session_runtime_id = self._managed_session_runtime_id(request)
+        if session_runtime_id is None:
+            return request
+        if session_runtime_id != runtime_id:
+            raise ApplicationError(
+                "Deferred managed session runtime does not match assigned runtime",
+                type="ManagedSessionRuntimeMismatch",
+                non_retryable=True,
+            )
+
+        task_workflow_id = str(intent.get("taskRunId") or "").strip()
+        if not task_workflow_id and parent_info is not None:
+            task_workflow_id = str(parent_info.workflow_id or "").strip()
+        if not task_workflow_id:
+            task_workflow_id = workflow.info().workflow_id
+
+        session_input = CodexManagedSessionWorkflowInput(
+            taskRunId=task_workflow_id,
+            runtimeId=session_runtime_id,
+            executionProfileRef=request.execution_profile_ref,
+        )
+        session_workflow_id = self._task_scoped_session_workflow_id(
+            task_workflow_id=task_workflow_id,
+            runtime_id=session_runtime_id,
+        )
+        binding = CodexManagedSessionBinding.from_input(
+            workflow_id=session_workflow_id,
+            session_input=session_input,
+        )
+        await workflow.start_child_workflow(
+            "MoonMind.AgentSession",
+            session_input,
+            id=session_workflow_id,
+            task_queue=WORKFLOW_TASK_QUEUE,
+            parent_close_policy=workflow.ParentClosePolicy.ABANDON,
+            search_attributes=self._task_scoped_session_visibility(binding=binding),
+            static_summary="Task-scoped managed runtime session",
+            static_details=self._task_scoped_session_static_details(binding=binding),
+        )
+
+        if parent_info is not None:
+            parent_handle = workflow.get_external_workflow_handle(
+                parent_info.workflow_id,
+                run_id=parent_info.run_id,
+            )
+            await parent_handle.signal(
+                "managed_session_bound",
+                {
+                    "binding": binding.model_dump(mode="json", by_alias=True),
+                    "child_workflow_id": workflow.info().workflow_id,
+                    "runtime_id": runtime_id,
+                },
+            )
+        return request.model_copy(update={"managed_session": binding})
 
     @staticmethod
     def _request_workspace_starting_branch(
@@ -1911,6 +2050,15 @@ class MoonMindAgentRun:
                                     "runtime_id": runtime_id,
                                 },
                             )
+
+                    request = await self._bind_deferred_task_scoped_session_after_slot(
+                        request=request,
+                        runtime_id=runtime_id,
+                        parent_info=parent_info,
+                    )
+                    uses_codex_session_adapter = self._uses_codex_session_adapter(
+                        request
+                    )
 
                     # Wire ManagedAgentAdapter with real DI callables.
                     # The slot_requester / slot_releaser / cooldown_reporter
