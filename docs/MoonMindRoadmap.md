@@ -76,9 +76,10 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - Manifest-based task submission (`manifest.schema.json`, `moonmind/manifest/`)
 - Task proposal queue for automated step generation
 - `proposal_generate` activity implemented
+- Task proposal UI surfacing and review actions — MM-743
 
 ### Remaining tasks
-- [ ] **3.1** Fix task proposal system end-to-end — `proposal_generate` activity exists but proposals not surfaced reliably in UI
+- [x] **3.1** Fix task proposal system end-to-end — generated proposals are surfaced in Mission Control through `/proposals`, workflow proposal outcomes, and review actions (MM-743)
 - [ ] **3.2** Automatic context injection per step — Context pack exists (`rag/context_pack.py`), not wired into step execution
 - [ ] **3.3** Context clearing between steps — No implementation; promised in README
 - [ ] **3.4** Multi-step workflow visualization in Mission Control — Dashboard shows tasks but not step DAGs
