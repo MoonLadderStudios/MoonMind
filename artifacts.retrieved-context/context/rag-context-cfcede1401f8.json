@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. moonmind/workloads/docker_launcher.py (score: 1.000, trust: canonical)\n    line 118: def _decode_stream(data: bytes) -> str:\n2. docs/MoonMindRoadmap.md (score: 1.000, trust: canonical)\n    line 28: **README claim:** *\"MoonMind can run Claude Code, Gemini CLI, and Codex CLI as managed workers on your own infrastructure.\"*\n3. docs/ReleaseNotes/MM-730-hard-switch-cutover.md (score: 1.000, trust: canonical)\n    line 5: This is a breaking release. Compatibility redirects and task-shaped aliases are not kept after the cutover boundary. Operators must keep the previous worker build draining on the legacy Task Queue for in-flight `MoonMind.Run` histories, or record an explicit pause/resume or terminate/restart decision before enabling `TEMPORAL_USER_WORKFLOW_CONTRACT_MODE=renamed_contract`.\n4. docs/UI/TypeScriptSystem.md (score: 1.000, trust: canonical)\n    line 21: - **Adopt TypeScript for all new frontend code.**\n5. docs/Temporal/ErrorTaxonomy.md (score: 1.000, trust: canonical)\n    line 30: This taxonomy is the policy source of truth for how MoonMind should think about failures. Individual activity families may still be adopting the full taxonomy in code, but new work should align with this document.\n6. docs/Temporal/TaskExecutionCompatibilityModel.md (score: 1.000, trust: canonical)\n    line 14: The term Task is reserved for Temporal Tasks, Temporal Workflow Tasks, Temporal Activity Tasks, Temporal Task Queues, and explicitly qualified external systems such as Jira tasks or Codex provider tasks.\n7. moonmind/auth/secret_refs.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Secret reference resolution helpers for codex worker task auth.\"\"\"\n8. docs/Temporal/IntegrationsMonitoringDesign.md (score: 1.000, trust: canonical)\n    line 23: This design is intentionally **provider-neutral**. Jules is the default example throughout because MoonMind already has a Jules adapter and current Jules polling behavior elsewhere in the codebase.",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "moonmind/workloads/docker_launcher.py",
+      "text": "line 118: def _decode_stream(data: bytes) -> str:",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 118,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/MoonMindRoadmap.md",
+      "text": "line 28: **README claim:** *\"MoonMind can run Claude Code, Gemini CLI, and Codex CLI as managed workers on your own infrastructure.\"*",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 28,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ReleaseNotes/MM-730-hard-switch-cutover.md",
+      "text": "line 5: This is a breaking release. Compatibility redirects and task-shaped aliases are not kept after the cutover boundary. Operators must keep the previous worker build draining on the legacy Task Queue for in-flight `MoonMind.Run` histories, or record an explicit pause/resume or terminate/restart decision before enabling `TEMPORAL_USER_WORKFLOW_CONTRACT_MODE=renamed_contract`.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 5,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/UI/TypeScriptSystem.md",
+      "text": "line 21: - **Adopt TypeScript for all new frontend code.**",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 21,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Temporal/ErrorTaxonomy.md",
+      "text": "line 30: This taxonomy is the policy source of truth for how MoonMind should think about failures. Individual activity families may still be adopting the full taxonomy in code, but new work should align with this document.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 30,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Temporal/TaskExecutionCompatibilityModel.md",
+      "text": "line 14: The term Task is reserved for Temporal Tasks, Temporal Workflow Tasks, Temporal Activity Tasks, Temporal Task Queues, and explicitly qualified external systems such as Jira tasks or Codex provider tasks.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 14,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/auth/secret_refs.py",
+      "text": "line 1: \"\"\"Secret reference resolution helpers for codex worker task auth.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Temporal/IntegrationsMonitoringDesign.md",
+      "text": "line 23: This design is intentionally **provider-neutral**. Jules is the default example throughout because MoonMind already has a Jules adapter and current Jules polling behavior elsewhere in the codebase.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 23,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-05-31T16:24:54Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
