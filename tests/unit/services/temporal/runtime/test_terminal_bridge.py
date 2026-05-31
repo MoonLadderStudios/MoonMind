@@ -260,6 +260,44 @@ async def test_start_terminal_bridge_container_uses_claude_home_environment(
     assert observed[-1] != "claude auth login"
 
 @pytest.mark.asyncio
+async def test_start_terminal_bridge_container_uses_gemini_home_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[str] = []
+
+    async def fake_create_subprocess_exec(*args, **_kwargs):
+        observed.extend(args)
+        return _FakeProcess()
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "ambient-google")
+    monkeypatch.setenv("GEMINI_API_KEY", "ambient-gemini")
+    monkeypatch.setattr(
+        terminal_bridge.asyncio,
+        "create_subprocess_exec",
+        fake_create_subprocess_exec,
+    )
+
+    await start_terminal_bridge_container(
+        session_id="oas_terminal_runner_gemini",
+        runtime_id="gemini_cli",
+        volume_ref="gemini_auth_volume",
+        volume_mount_path="/var/lib/gemini-auth",
+        session_ttl=1800,
+        bootstrap_command=("gemini",),
+    )
+
+    assert "gemini_auth_volume:/var/lib/gemini-auth" in observed
+    assert "HOME=/home/app" in observed
+    assert "GEMINI_HOME=/var/lib/gemini-auth" in observed
+    assert "GEMINI_CLI_HOME=/var/lib/gemini-auth" in observed
+    assert "GOOGLE_API_KEY=" in observed
+    assert "GEMINI_API_KEY=" in observed
+    assert "GOOGLE_API_KEY=ambient-google" not in observed
+    assert "GEMINI_API_KEY=ambient-gemini" not in observed
+    assert "CODEX_HOME=/var/lib/gemini-auth" not in observed
+    assert "command -v gemini" in observed[-1]
+
+@pytest.mark.asyncio
 async def test_start_terminal_bridge_container_redacts_startup_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

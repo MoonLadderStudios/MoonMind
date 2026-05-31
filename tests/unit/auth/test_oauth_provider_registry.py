@@ -20,9 +20,10 @@ class TestOAuthProviderRegistry:
         assert spec is not None
         assert spec["runtime_id"] == "gemini_cli"
         assert spec["auth_mode"] == "oauth"
-        assert spec["session_transport"] == "none"
+        assert spec["session_transport"] == "moonmind_pty_ws"
         assert spec["default_volume_name"] == "gemini_auth_volume"
         assert spec["default_mount_path"] == "/var/lib/gemini-auth"
+        assert get_provider_bootstrap_command("gemini_cli") == ("gemini",)
 
     def test_codex_provider_exists(self) -> None:
         spec = get_provider("codex_cli")
@@ -77,16 +78,13 @@ class TestOAuthProviderRegistry:
             for key in required_keys:
                 assert key in spec, f"Missing key '{key}' in provider '{runtime_id}'"
 
-    def test_gemini_provider_uses_none_transport(self) -> None:
-        for runtime_id, spec in OAUTH_PROVIDERS.items():
-            if runtime_id != "gemini_cli":
-                continue
-            assert spec["session_transport"] == "none", (
-                f"Provider '{runtime_id}' should use none transport until a replacement exists"
-            )
+    def test_interactive_oauth_providers_use_pty_transport(self) -> None:
+        for runtime_id in ("gemini_cli", "codex_cli", "claude_code"):
+            assert OAUTH_PROVIDERS[runtime_id]["session_transport"] == "moonmind_pty_ws"
 
     def test_session_transport_default_is_exposed_for_runtime_boundaries(self) -> None:
         assert get_provider_default("codex_cli", "session_transport") == "moonmind_pty_ws"
+        assert get_provider_default("gemini_cli", "session_transport") == "moonmind_pty_ws"
 
     def test_all_providers_use_oauth_mode(self) -> None:
         for runtime_id, spec in OAUTH_PROVIDERS.items():

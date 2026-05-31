@@ -284,7 +284,7 @@ interface ClaudeReadinessMetadata {
 }
 
 type ProviderAuthModel =
-  | { kind: 'codex_oauth' }
+  | { kind: 'terminal_oauth' }
   | {
       kind: 'claude_credentials';
       statusLabel: string | null;
@@ -423,13 +423,16 @@ function extractErrorMessage(payload: unknown): string {
   return 'Anthropic API key validation failed.';
 }
 
-function isCodexOAuthProfile(profile: ProviderProfile): boolean {
+function isOAuthVolumeProfile(profile: ProviderProfile): boolean {
   return (
-    profile.runtime_id === 'codex_cli' &&
-    (profile.credential_source === 'oauth_volume' ||
-      profile.runtime_materialization_mode === 'oauth_home' ||
-      Boolean(profile.volume_ref || profile.volume_mount_path))
+    profile.credential_source === 'oauth_volume' ||
+    profile.runtime_materialization_mode === 'oauth_home' ||
+    Boolean(profile.volume_ref || profile.volume_mount_path)
   );
+}
+
+function supportsTerminalOAuth(profile: ProviderProfile): boolean {
+  return ['codex_cli', 'gemini_cli'].includes(profile.runtime_id) && isOAuthVolumeProfile(profile);
 }
 
 function isCanonicalClaudeAnthropicProfile(profile: ProviderProfile): boolean {
@@ -452,9 +455,7 @@ function defaultClaudeCredentialActions(profile: ProviderProfile): string[] {
   }
   const actions = ['use_api_key'];
   if (
-    (profile.credential_source === 'oauth_volume' ||
-      profile.runtime_materialization_mode === 'oauth_home' ||
-      Boolean(profile.volume_ref || profile.volume_mount_path))
+    isOAuthVolumeProfile(profile)
   ) {
     actions.unshift('connect_oauth');
   }
@@ -473,8 +474,8 @@ function claudeCredentialActions(profile: ProviderProfile): ClaudeAuthAction[] {
 }
 
 function providerAuthModel(profile: ProviderProfile): ProviderAuthModel {
-  if (isCodexOAuthProfile(profile)) {
-    return { kind: 'codex_oauth' };
+  if (supportsTerminalOAuth(profile)) {
+    return { kind: 'terminal_oauth' };
   }
 
   if (!isClaudeCredentialMethodProfile(profile)) {
@@ -1205,7 +1206,7 @@ export function ProviderProfilesManager({
               profiles.map((profile) => {
                 const oauthSession = oauthSessions[profile.profile_id];
                 const authModel = providerAuthModel(profile);
-                const canStartOAuth = authModel.kind === 'codex_oauth';
+                const canStartOAuth = authModel.kind === 'terminal_oauth';
                 return (
                 <tr key={profile.profile_id} role="row">
                   <td

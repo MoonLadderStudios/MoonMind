@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _GEMINI_CREDENTIAL_PATHS = (
+    ".gemini/oauth_creds.json",
+    ".gemini/settings.json",
+    ".gemini/google_accounts.json",
     ".config/gemini/credentials.json",
     ".config/google-cloud-sdk/application_default_credentials.json",
 )

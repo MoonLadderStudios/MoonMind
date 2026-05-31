@@ -330,6 +330,20 @@ describe('ProviderProfilesManager form controls', () => {
     account_label: 'Codex account',
   };
 
+  const geminiOauthProfile: ProviderProfile = {
+    ...profile,
+    profile_id: 'gemini-oauth',
+    runtime_id: 'gemini_cli',
+    provider_id: 'google',
+    provider_label: 'Google',
+    credential_source: 'oauth_volume',
+    runtime_materialization_mode: 'oauth_home',
+    secret_refs: {},
+    volume_ref: 'gemini_auth_volume',
+    volume_mount_path: '/var/lib/gemini-auth',
+    account_label: 'Gemini account',
+  };
+
   const claudeCredentialProfile: ProviderProfile = {
     ...profile,
     profile_id: 'claude-anthropic',
@@ -575,6 +589,46 @@ describe('ProviderProfilesManager form controls', () => {
     });
     expect(openSpy).toHaveBeenCalledWith(
       '/oauth-terminal?session_id=oas_settings_auth',
+      '_blank',
+      'noopener,noreferrer',
+    );
+    expect(await screen.findByText('OAuth: Pending')).toBeTruthy();
+  });
+
+  it('starts a Gemini OAuth terminal session from the profile OAuth action', async () => {
+    const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        session_id: 'oas_gemini_settings_auth',
+        runtime_id: 'gemini_cli',
+        profile_id: 'gemini-oauth',
+        status: 'pending',
+        session_transport: 'moonmind_pty_ws',
+      }),
+    } as Response);
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(null);
+
+    renderProviderProfilesManager([geminiOauthProfile]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'OAuth gemini-oauth' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/oauth-sessions',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+    const [, requestInit] = fetchSpy.mock.calls[0] ?? [];
+    const payload = JSON.parse(String((requestInit as RequestInit).body));
+    expect(payload).toMatchObject({
+      runtime_id: 'gemini_cli',
+      profile_id: 'gemini-oauth',
+      volume_ref: 'gemini_auth_volume',
+      volume_mount_path: '/var/lib/gemini-auth',
+      account_label: 'Gemini account',
+    });
+    expect(openSpy).toHaveBeenCalledWith(
+      '/oauth-terminal?session_id=oas_gemini_settings_auth',
       '_blank',
       'noopener,noreferrer',
     );

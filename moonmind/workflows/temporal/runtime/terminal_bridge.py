@@ -121,6 +121,19 @@ def _runner_environment_args(runtime_id: str, volume_mount_path: str) -> list[st
                 f"CODEX_CONFIG_PATH={volume_mount_path.rstrip('/')}/config.toml",
             ]
         )
+    if runtime_id == "gemini_cli":
+        args.extend(
+            [
+                "-e",
+                f"GEMINI_HOME={volume_mount_path}",
+                "-e",
+                f"GEMINI_CLI_HOME={volume_mount_path}",
+                "-e",
+                "GOOGLE_API_KEY=",
+                "-e",
+                "GEMINI_API_KEY=",
+            ]
+        )
     return args
 
 class DockerExecPtyAdapter:

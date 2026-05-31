@@ -151,6 +151,39 @@ async def test_create_codex_oauth_session_applies_durable_auth_volume_defaults(
     assert captured["metadata_json"]["provider_label"] == "OpenAI"
 
 @pytest.mark.asyncio
+async def test_create_gemini_oauth_session_applies_terminal_transport_defaults(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = {}
+
+    async def _capture_start(session_model):
+        captured["volume_ref"] = session_model.volume_ref
+        captured["volume_mount_path"] = session_model.volume_mount_path
+        captured["session_transport"] = session_model.session_transport
+        captured["metadata_json"] = session_model.metadata_json
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.start_oauth_session_workflow",
+        _capture_start,
+    )
+
+    payload = {
+        "runtime_id": "gemini_cli",
+        "profile_id": "gemini-cli-default-volume",
+        "account_label": "gemini account",
+    }
+    async with client_app as client:
+        response = await client.post("/api/v1/oauth-sessions", json=payload)
+
+    assert response.status_code == 201
+    assert response.json()["session_transport"] == "moonmind_pty_ws"
+    assert captured["volume_ref"] == "gemini_auth_volume"
+    assert captured["volume_mount_path"] == "/var/lib/gemini-auth"
+    assert captured["session_transport"] == "moonmind_pty_ws"
+    assert captured["metadata_json"]["provider_id"] == "google"
+    assert captured["metadata_json"]["provider_label"] == "Google"
+
+@pytest.mark.asyncio
 async def test_create_claude_oauth_session_applies_profile_and_transport_defaults(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:

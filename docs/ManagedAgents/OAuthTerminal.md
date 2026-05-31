@@ -1,7 +1,7 @@
 # OAuth Terminal and Managed Session Auth Volumes
 
 **Replaces:** `docs/ManagedAgents/TmateArchitecture.md`
-**Status:** Desired state, Codex CLI and Claude Code session target
+**Status:** Desired state, active OAuth terminal contract for Codex CLI, Claude Code, and Gemini CLI
 **Owners:** MoonMind Engineering
 **Last updated:** 2026-05-04
 
@@ -19,9 +19,13 @@ runtimes and then target the resulting credential volume into managed runtime
 containers. This document defines the desired auth-terminal and volume-targeting
 contract.
 
-The current concrete managed-session targets are **Codex CLI** and **Claude Code**. Gemini CLI can still have auth volumes and provider profiles, but it is not yet a first-class task-scoped managed-session target.
+The current concrete OAuth terminal targets are **Codex CLI**, **Claude Code**,
+and **Gemini CLI**. Codex CLI is the live first-class task-scoped managed-session
+runtime. Claude Code and Gemini CLI can use the same OAuth terminal and
+provider-profile volume enrollment path while their task-scoped managed-session
+parity remains runtime-specific.
 
-For Codex CLI and Claude Code, the important boundary is:
+For Codex CLI, Claude Code, and Gemini CLI, the important boundary is:
 
 - OAuth or manual auth writes durable credential material into a provider-profile
   auth volume such as `codex_auth_volume`.
@@ -40,7 +44,7 @@ This document covers:
 - browser-initiated OAuth or terminal-auth enrollment
 - persistent runtime auth volumes
 - Provider Profile registration for OAuth-backed profiles
-- Codex CLI and Claude Code managed-session volume targeting
+- Codex CLI, Claude Code, and Gemini CLI auth-terminal volume targeting
 - the separation between auth volumes, task workspaces, and workload containers
 
 This document does not define:
@@ -48,15 +52,15 @@ This document does not define:
 - PTY attach for ordinary managed task runs
 - Live Logs transport for managed runs
 - a generic remote shell product
-- Gemini task-scoped managed-session parity
+- generic task-scoped managed-session parity for every OAuth-capable runtime
 - Docker-backed workload container auth inheritance
 
 OAuth can require an interactive terminal. Managed task execution should not.
-Codex CLI and Claude Code managed sessions consume mounted auth volumes through
-Provider Profiles, with operator observability through artifacts and normalized
-session events.
+Codex CLI, Claude Code, and Gemini CLI OAuth enrollment consume mounted auth
+volumes through Provider Profiles, with operator observability through artifacts
+and normalized session events.
 
-## 3. Current Codex Volume Model
+## 3. Current OAuth Volume Model
 
 ### 3.1 Durable auth volume
 
@@ -207,8 +211,10 @@ It should:
 - leave credentials in the durable auth volume for later verification
 
 For Codex, the auth runner targets `codex_auth_volume` at `/home/app/.codex`
-while enrollment is happening. This is separate from the later managed-session
-container target path.
+while enrollment is happening. For Claude Code, it targets `claude_auth_volume`
+at `/home/app/.claude`. For Gemini CLI, it targets `gemini_auth_volume` at
+`/var/lib/gemini-auth`. These enrollment mount paths are separate from later
+managed-session container target paths.
 
 ### 5.2 Terminal bridge
 
@@ -239,11 +245,11 @@ OAuth session state should be transport-neutral:
 - `cancelled`
 - `expired`
 
-Runtime provider registry entries may use `session_transport = "none"` while the
-interactive PTY bridge is unavailable or intentionally disabled. When the bridge
-is enabled, the transport identifier should be a MoonMind-owned value such as
-`moonmind_pty_ws`; provider profile and workflow semantics should not depend on
-the old `tmate` URL model.
+Interactive OAuth-capable runtime provider registry entries use
+`session_transport = "moonmind_pty_ws"`. Runtime provider registry entries may
+use `session_transport = "none"` only while interactive enrollment is
+intentionally unsupported. Provider profile and workflow semantics must not
+depend on the old `tmate` URL model.
 
 ### 5.4 Provider terminal finalization workflow
 
