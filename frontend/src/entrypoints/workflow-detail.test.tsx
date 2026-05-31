@@ -379,9 +379,14 @@ describe('Workflow Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
-      expect(screen.getByText('Plan work')).toBeTruthy();
-      expect(screen.getByText('Apply patch')).toBeTruthy();
-      expect(screen.getByText('Verify tests')).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Workflow Step DAG' })).toBeTruthy();
+      expect(screen.getByRole('img', { name: 'Workflow step dependency graph' })).toBeTruthy();
+      expect(screen.getByText('3 nodes / 2 edges')).toBeTruthy();
+      expect(screen.getByText('Plan work to Apply patch')).toBeTruthy();
+      expect(screen.getByText('Apply patch to Verify tests')).toBeTruthy();
+      expect(screen.getAllByText('Plan work').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Apply patch').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Verify tests').length).toBeGreaterThan(0);
       expect(screen.getByText('Merge Automation').closest('div')?.textContent).toContain('—');
       expect(screen.getByText(/^Current Run ID:?$/)).toBeTruthy();
       expect(screen.getAllByText('02-run').length).toBeGreaterThan(0);

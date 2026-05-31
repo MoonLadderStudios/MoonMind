@@ -2614,6 +2614,118 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 /* ── Step timeline ─────────────────────────────────────── */
 
+.step-dag-panel {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.step-dag-heading-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.step-dag-heading-row h4 {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgb(var(--mm-muted));
+}
+
+.step-dag-summary {
+  color: rgb(var(--mm-muted));
+  font-size: 0.78rem;
+}
+
+.step-dag-canvas {
+  position: relative;
+  overflow-x: auto;
+  overflow-y: hidden;
+  min-width: 0;
+  border: 1px solid rgb(var(--mm-border) / 0.5);
+  border-radius: 0.5rem;
+  background:
+    linear-gradient(90deg, rgb(var(--mm-border) / 0.18) 1px, transparent 1px),
+    linear-gradient(0deg, rgb(var(--mm-border) / 0.12) 1px, transparent 1px),
+    rgb(var(--mm-panel) / 0.34);
+  background-size: 5rem 5rem;
+}
+
+.step-dag-edges,
+.step-dag-nodes {
+  position: absolute;
+  inset: 0;
+  min-width: 760px;
+}
+
+.step-dag-edges {
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.step-dag-edges marker path {
+  fill: rgb(var(--mm-accent-2) / 0.72);
+}
+
+.step-dag-edge {
+  fill: none;
+  stroke: rgb(var(--mm-accent-2) / 0.58);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.step-dag-nodes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.step-dag-node {
+  position: absolute;
+  display: grid;
+  gap: 0.28rem;
+  width: clamp(10.5rem, 24vw, 13.5rem);
+  min-height: 5.1rem;
+  transform: translate(-50%, -50%);
+  padding: 0.62rem 0.7rem;
+  border: 1px solid rgb(var(--mm-border) / 0.58);
+  border-radius: 0.5rem;
+  background: rgb(var(--mm-panel) / 0.96);
+  box-shadow: 0 14px 28px -24px rgb(var(--mm-ink) / 0.44);
+  overflow-wrap: anywhere;
+}
+
+.step-dag-node.step-icon-ok {
+  border-color: rgb(var(--mm-ok) / 0.45);
+}
+
+.step-dag-node.step-icon-fail {
+  border-color: rgb(var(--mm-danger) / 0.5);
+}
+
+.step-dag-node.step-icon-running {
+  border-color: rgb(var(--mm-accent-2) / 0.5);
+}
+
+.step-dag-node-order,
+.step-dag-node-deps {
+  color: rgb(var(--mm-muted));
+  font-size: 0.72rem;
+  line-height: 1.25;
+}
+
+.step-dag-node strong {
+  color: rgb(var(--mm-ink));
+  font-size: 0.86rem;
+  line-height: 1.25;
+}
+
 .step-tl-list {
   display: flex;
   flex-direction: column;

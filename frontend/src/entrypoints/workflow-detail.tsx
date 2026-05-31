@@ -1000,6 +1000,8 @@ const StepLedgerSnapshotSchema = z.object({
   steps: z.array(StepLedgerRowSchema).default([]),
 });
 
+type StepLedgerRow = z.infer<typeof StepLedgerRowSchema>;
+
 const RunSummaryArtifactSchema = z
   .object({
     finishOutcome: z
@@ -2608,6 +2610,154 @@ function stepStatusIcon(status: string): { icon: string; cssClass: string } {
   if (s === 'running' || s === 'executing' || s === 'planning' || s === 'initializing' || s === 'finalizing')
     return { icon: '●', cssClass: 'step-icon-running' };
   return { icon: '○', cssClass: 'step-icon-pending' };
+}
+
+type StepDagNode = {
+  row: StepLedgerRow;
+  level: number;
+  x: number;
+  y: number;
+};
+
+type StepDagEdge = {
+  id: string;
+  from: StepDagNode;
+  to: StepDagNode;
+};
+
+function buildStepDag(steps: StepLedgerRow[]): {
+  nodes: StepDagNode[];
+  edges: StepDagEdge[];
+  width: number;
+  height: number;
+} {
+  const ordered = [...steps].sort((a, b) => a.order - b.order);
+  const byId = new Map(ordered.map((row) => [row.logicalStepId, row]));
+  const levels = new Map<string, number>();
+
+  const resolveLevel = (row: StepLedgerRow, seen: Set<string> = new Set()): number => {
+    const cached = levels.get(row.logicalStepId);
+    if (cached !== undefined) return cached;
+    if (seen.has(row.logicalStepId)) return 0;
+    seen.add(row.logicalStepId);
+
+    const upstreamLevels = row.dependsOn
+      .map((dependencyId) => byId.get(dependencyId))
+      .filter((dependency): dependency is StepLedgerRow => Boolean(dependency))
+      .map((dependency) => resolveLevel(dependency, new Set(seen)) + 1);
+    const level = upstreamLevels.length > 0 ? Math.max(...upstreamLevels) : 0;
+    levels.set(row.logicalStepId, level);
+    return level;
+  };
+
+  for (const row of ordered) resolveLevel(row);
+
+  const maxLevel = Math.max(0, ...Array.from(levels.values()));
+  const width = 1000;
+  const height = Math.max(210, ordered.length * 104);
+  const columnWidth = width / (maxLevel + 1);
+  const rowHeight = height / Math.max(ordered.length, 1);
+  const nodes = ordered.map((row, index) => {
+    const level = levels.get(row.logicalStepId) ?? 0;
+    return {
+      row,
+      level,
+      x: Math.round(columnWidth * level + columnWidth / 2),
+      y: Math.round(rowHeight * index + rowHeight / 2),
+    };
+  });
+  const nodesById = new Map(nodes.map((node) => [node.row.logicalStepId, node]));
+  const edges = nodes.flatMap((node) => (
+    node.row.dependsOn
+      .map((dependencyId) => nodesById.get(dependencyId))
+      .filter((dependency): dependency is StepDagNode => Boolean(dependency))
+      .map((dependency) => ({
+        id: `${dependency.row.logicalStepId}->${node.row.logicalStepId}`,
+        from: dependency,
+        to: node,
+      }))
+  ));
+
+  return { nodes, edges, width, height };
+}
+
+function StepDagGraph({ steps }: { steps: StepLedgerRow[] }) {
+  const graph = useMemo(() => buildStepDag(steps), [steps]);
+
+  if (steps.length === 0) {
+    return (
+      <section className="step-dag-panel" aria-labelledby="step-dag-heading">
+        <h4 id="step-dag-heading">Workflow Step DAG</h4>
+        <p className="small">No planned steps are available for graph rendering.</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="step-dag-panel" aria-labelledby="step-dag-heading">
+      <div className="step-dag-heading-row">
+        <h4 id="step-dag-heading">Workflow Step DAG</h4>
+        <span className="step-dag-summary">
+          {graph.nodes.length} node{graph.nodes.length === 1 ? '' : 's'} / {graph.edges.length} edge{graph.edges.length === 1 ? '' : 's'}
+        </span>
+      </div>
+      <div
+        className="step-dag-canvas"
+        role="img"
+        aria-label="Workflow step dependency graph"
+        style={{ minHeight: `${graph.height}px` }}
+      >
+        <svg
+          className="step-dag-edges"
+          viewBox={`0 0 ${graph.width} ${graph.height}`}
+          preserveAspectRatio="none"
+          aria-hidden="true"
+        >
+          <defs>
+            <marker id="step-dag-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" />
+            </marker>
+          </defs>
+          {graph.edges.map((edge) => (
+            <path
+              key={edge.id}
+              className="step-dag-edge"
+              d={`M ${edge.from.x + 86} ${edge.from.y} C ${edge.from.x + 160} ${edge.from.y}, ${edge.to.x - 160} ${edge.to.y}, ${edge.to.x - 86} ${edge.to.y}`}
+              markerEnd="url(#step-dag-arrow)"
+            />
+          ))}
+        </svg>
+        <ol className="step-dag-nodes">
+          {graph.nodes.map((node) => {
+            const dependencyTitles = node.row.dependsOn
+              .map((dependencyId) => graph.nodes.find((candidate) => candidate.row.logicalStepId === dependencyId)?.row.title || dependencyId);
+            return (
+              <li
+                key={node.row.logicalStepId}
+                className={`step-dag-node ${stepStatusIcon(node.row.status).cssClass}`}
+                style={{
+                  left: `${(node.x / graph.width) * 100}%`,
+                  top: `${node.y}px`,
+                }}
+              >
+                <span className="step-dag-node-order">Step {node.row.order}</span>
+                <strong>{node.row.title}</strong>
+                <span {...executionStatusPillProps(node.row.status)}>{formatStatusLabel(node.row.status)}</span>
+                <span className="step-dag-node-deps">
+                  {dependencyTitles.length > 0 ? `Depends on ${dependencyTitles.join(', ')}` : 'Root step'}
+                </span>
+              </li>
+            );
+          })}
+        </ol>
+        <ul className="sr-only">
+          {graph.edges.map((edge) => (
+            <li key={edge.id}>{edge.from.row.title} to {edge.to.row.title}</li>
+          ))}
+        </ul>
+      </div>
+    </section>
+  );
 }
 
 function StepLedgerRowCard({
@@ -4923,23 +5073,26 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
               ) : stepsQuery.isError ? (
                 <div className="notice error">{(stepsQuery.error as Error).message}</div>
               ) : stepsQuery.data ? (
-                <div className="step-tl-list">
-                  {stepsQuery.data.steps.map((row, idx) => (
-                    <StepLedgerRowCard
-                      key={row.logicalStepId}
-                      apiBase={payload.apiBase}
-                      logStreamingEnabled={logStreamingEnabled}
-                      sessionTimelineEnabled={sessionTimelineEnabled}
-                      structuredHistoryEnabled={structuredHistoryEnabled}
-                      row={row}
-                      runId={latestRunId}
-                      expanded={Boolean(expandedSteps[row.logicalStepId])}
-                      onToggle={() => toggleStep(row.logicalStepId)}
-                      isLast={idx === stepsQuery.data.steps.length - 1}
-                      routes={taskRunRoutes}
-                    />
-                  ))}
-                </div>
+                <>
+                  <StepDagGraph steps={stepsQuery.data.steps} />
+                  <div className="step-tl-list">
+                    {stepsQuery.data.steps.map((row, idx) => (
+                      <StepLedgerRowCard
+                        key={row.logicalStepId}
+                        apiBase={payload.apiBase}
+                        logStreamingEnabled={logStreamingEnabled}
+                        sessionTimelineEnabled={sessionTimelineEnabled}
+                        structuredHistoryEnabled={structuredHistoryEnabled}
+                        row={row}
+                        runId={latestRunId}
+                        expanded={Boolean(expandedSteps[row.logicalStepId])}
+                        onToggle={() => toggleStep(row.logicalStepId)}
+                        isLast={idx === stepsQuery.data.steps.length - 1}
+                        routes={taskRunRoutes}
+                      />
+                    ))}
+                  </div>
+                </>
               ) : (
                 <p className="small">No step ledger available for this execution.</p>
               )}

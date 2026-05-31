@@ -81,7 +81,7 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - [ ] **3.1** Fix task proposal system end-to-end — `proposal_generate` activity exists but proposals not surfaced reliably in UI
 - [ ] **3.2** Automatic context injection per step — Context pack exists (`rag/context_pack.py`), not wired into step execution
 - [ ] **3.3** Context clearing between steps — No implementation; promised in README
-- [ ] **3.4** Multi-step workflow visualization in Mission Control — Dashboard shows tasks but not step DAGs
+- [x] **3.4** Multi-step workflow visualization in Mission Control — Mission Control task detail renders a graphical step DAG from the step ledger (`dependsOn`) above the step timeline (MM-746)
 - [ ] **3.5** Preset-driven scheduling (auto-sequence from goal) — Presets exist but goal-to-plan decomposition is manual
 - [ ] **3.6** Overhaul and streamline schedules UI — Current schedules interface needs UX improvement
 
@@ -173,7 +173,7 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - [ ] **7.3** Intervention request monitoring — Not implemented
 - [ ] **7.4** Execution history / audit trail view — Spec 067 (`run-history-rerun`), API exists, UI incomplete
 - [ ] **7.5** Side-by-side comparison view — README promises "run the same task with different models and runtimes to compare results"
-- [ ] **7.6** Multi-step / step DAG visualization — Steps are tracked but no graphical visualization
+- [x] **7.6** Multi-step / step DAG visualization — Mission Control renders tracked steps as a graphical dependency DAG on task detail (MM-746)
 - [ ] **7.7** Worker fleet health dashboard — No per-worker health view
 
 ---
