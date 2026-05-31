@@ -67,6 +67,20 @@ async def test_default_adapter_allows_explicit_live_connection_opt_in(monkeypatc
     assert connected is not None
     assert captured["data_converter"] is MOONMIND_TEMPORAL_DATA_CONVERTER
 
+
+async def test_explicit_task_queue_override_wins_over_default_topology():
+    adapter = TemporalClientAdapter(client=AsyncMock())
+    adapter._workflow_topology = SimpleNamespace(task_queues=["mm.workflow"])
+
+    assert (
+        adapter._get_task_queue(
+            workflow_type="MoonMind.Run",
+            task_queue="mm.workflow.merge_automation",
+        )
+        == "mm.workflow.merge_automation"
+    )
+    assert adapter._get_task_queue(workflow_type="MoonMind.Run") == "mm.workflow"
+
 # ---- get_drain_metrics ----
 
 async def test_get_drain_metrics_counts_running_workflows(adapter):
