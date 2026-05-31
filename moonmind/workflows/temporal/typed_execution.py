@@ -136,6 +136,21 @@ async def execute_typed_activity(
 
 @overload
 async def execute_typed_activity(
+    activity: Literal["execution.notify_completion"],
+    arg: Mapping[str, Any],
+    *,
+    task_queue: str | None = None,
+    start_to_close_timeout: timedelta | None = None,
+    schedule_to_close_timeout: timedelta | None = None,
+    heartbeat_timeout: timedelta | None = None,
+    retry_policy: RetryPolicy | None = None,
+    cancellation_type: ActivityCancellationType | None = None,
+    summary: str | Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    pass
+
+@overload
+async def execute_typed_activity(
     activity: Literal["agent_runtime.status"],
     arg: AgentRuntimeStatusInput,
     *,

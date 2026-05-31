@@ -98,14 +98,15 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - Recurring task schedules (spec 049)
 - TRY_CANCEL activity cancellation — fast cancellation without waiting for activity completion
 - Force-terminate path for stuck tasks
+- Runtime-specific agent-run resiliency policies, generic no-progress detection, intervention escalation, and completion webhooks (MM-749)
 
 ### Remaining tasks
 - [x] **4.1** Fast cancellation via `TRY_CANCEL` — All `execute_activity` calls now use `ActivityCancellationType.TRY_CANCEL`
 - [x] **4.2** Force-terminate path for stuck tasks — Shipped in `9050b4d9`
-- [ ] **4.3** Automatic stuck-detection for agent runs — Spec 039 (`worker-self-heal`), partial design
-- [ ] **4.4** Smart retry policies per runtime — Temporal retries exist but not tuned per agent type
-- [ ] **4.5** Intervention request signaling (agent asks for human help) — README promises "monitor intervention requests"
-- [ ] **4.6** Notification system (email/webhook on completion) — No notification channel for fire-and-forget results
+- [x] **4.3** Automatic stuck-detection for agent runs — AgentRun detects repeated no-progress status observations and escalates to `intervention_requested`
+- [x] **4.4** Smart retry policies per runtime — AgentRun records runtime-specific resiliency policy metadata for managed and external runtimes
+- [x] **4.5** Intervention request signaling (agent asks for human help) — Non-auto-answer feedback requests signal `intervention_requested` to the parent workflow
+- [x] **4.6** Notification system (email/webhook on completion) — `execution.notify_completion` emits opt-in terminal-result webhooks via `MOONMIND_EXECUTION_NOTIFICATIONS_*`
 
 ---
 

@@ -2045,6 +2045,39 @@ class TaskProposalSettings(BaseSettings):
         extra="ignore",
     )
 
+class ExecutionNotificationSettings(BaseSettings):
+    """Operator notification settings for terminal execution outcomes."""
+
+    enabled: bool = Field(
+        False,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_ENABLED",
+        description="Emit webhook notifications when an agent run reaches a terminal result.",
+    )
+    webhook_url: Optional[str] = Field(
+        None,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_WEBHOOK_URL",
+        description="Webhook endpoint for agent run completion notifications.",
+    )
+    authorization: Optional[str] = Field(
+        None,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_AUTHORIZATION",
+        description="Optional Authorization header for completion notification webhooks.",
+    )
+    timeout_seconds: int = Field(
+        5,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_TIMEOUT_SECONDS",
+        description="Webhook timeout in seconds.",
+        gt=0,
+    )
+
+    model_config = SettingsConfigDict(
+        populate_by_name=True,
+        env_prefix="",
+        env_file=str(ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
 class AppSettings(BaseSettings):
     """Main application settings"""
 
@@ -2069,6 +2102,9 @@ class AppSettings(BaseSettings):
     workflow: AppWorkflowSettings = Field(default_factory=AppWorkflowSettings)
     feature_flags: FeatureFlagsSettings = Field(default_factory=FeatureFlagsSettings)
     task_proposals: TaskProposalSettings = Field(default_factory=TaskProposalSettings)
+    execution_notifications: ExecutionNotificationSettings = Field(
+        default_factory=ExecutionNotificationSettings
+    )
     jules: JulesSettings = Field(default_factory=JulesSettings)
     worker_enable_task_proposals: Optional[bool] = Field(
         None,
