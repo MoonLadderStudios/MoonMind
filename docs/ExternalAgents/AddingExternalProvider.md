@@ -522,16 +522,20 @@ For a normal polling or callback provider using:
 
 This is the preferred provider integration path.
 
-## 12.2 Streaming gateway exception
+## 12.2 Streaming gateway provider path
 
-If the provider uses a one-shot streaming gateway execution style, workflow changes may still be required unless the runtime has already been generalized for `integration.<provider>.execute`.
+For a one-shot streaming gateway provider using:
 
-Today, that path is not yet fully generalized for arbitrary new providers.
+* `integration.<provider>.execute`
 
-So the accurate guidance is:
+`MoonMind.AgentRun` should not require provider-specific workflow changes once:
 
-* **standard polling/callback providers:** no workflow changes expected
-* **new streaming-gateway providers:** expect runtime generalization work unless the workflow has first been extended to support generic `integration.<provider>.execute`
+* the adapter is registered with `execution_style="streaming_gateway"`
+* the execute activity type is in the catalog
+* the execute activity handler is deployed
+
+The workflow resolves the adapter metadata, validates the provider id, and then
+routes to `integration.<provider>.execute` dynamically.
 
 ---
 
