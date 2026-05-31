@@ -172,6 +172,48 @@ async def test_execution_notify_completion_posts_sanitized_payload(monkeypatch) 
     assert calls[0]["json"]["summary"] == "token=[REDACTED]"
     assert calls[0]["json"]["taskRunId"] == "task-1"
 
+async def test_publish_artifacts_notifies_terminal_result(monkeypatch) -> None:
+    calls: list[dict[str, Any]] = []
+
+    async def fake_write_json_artifact(*_args: Any, **_kwargs: Any) -> SimpleNamespace:
+        return SimpleNamespace(artifact_id=f"art-{len(calls)}")
+
+    async def fake_notify(payload: dict[str, Any]) -> dict[str, str]:
+        calls.append(payload)
+        return {"status": "sent"}
+
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_write_json_artifact",
+        fake_write_json_artifact,
+    )
+    activities = TemporalAgentRuntimeActivities(artifact_service=SimpleNamespace())
+    monkeypatch.setattr(activities, "execution_notify_completion", fake_notify)
+
+    result = await activities.agent_runtime_publish_artifacts(
+        AgentRunResult(
+            summary="completed",
+            metadata={
+                "agentId": "codex_cli",
+                "agentKind": "managed",
+                "status": "completed",
+                "taskRunId": "task-1",
+            },
+        )
+    )
+
+    assert isinstance(result, AgentRunResult)
+    assert calls == [
+        {
+            "workflowId": "",
+            "runId": "",
+            "agentId": "codex_cli",
+            "agentKind": "managed",
+            "status": "completed",
+            "result": result.model_dump(mode="json", by_alias=True),
+        }
+    ]
+
 
 def _save_record(
     store: ManagedRunStore,
