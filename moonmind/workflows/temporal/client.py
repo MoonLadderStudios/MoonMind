@@ -11,7 +11,12 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Protocol
 
 from temporalio.client import Client, WorkflowExecutionDescription
-from temporalio.common import SearchAttributeKey, SearchAttributePair, TypedSearchAttributes
+from temporalio.common import (
+    Priority,
+    SearchAttributeKey,
+    SearchAttributePair,
+    TypedSearchAttributes,
+)
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from api_service.db.models import TemporalExecutionRecord
@@ -203,6 +208,7 @@ class TemporalClientAdapter:
         memo: Mapping[str, Any] | None = None,
         search_attributes: Mapping[str, Any] | None = None,
         start_delay: timedelta | None = None,
+        priority_key: int | None = None,
     ) -> WorkflowStartResult:
         """Start a new Temporal workflow.
 
@@ -240,6 +246,8 @@ class TemporalClientAdapter:
         }
         if start_delay is not None:
             start_kwargs["start_delay"] = start_delay
+        if priority_key is not None:
+            start_kwargs["priority"] = Priority(priority_key=priority_key)
 
         try:
             handle = await client.start_workflow(

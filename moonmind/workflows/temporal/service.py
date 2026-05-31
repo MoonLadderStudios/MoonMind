@@ -77,6 +77,12 @@ TERMINAL_STATES: set[MoonMindWorkflowState] = {
     MoonMindWorkflowState.CANCELED,
 }
 CREATE_IDEMPOTENCY_KEY_MAX_LENGTH = 128
+TEMPORAL_HIGHEST_PRIORITY_KEY = 1
+TEMPORAL_DEFAULT_PRIORITY_KEY = 3
+TEMPORAL_MERGE_AUTOMATION_PRIORITY_KEY = max(
+    TEMPORAL_HIGHEST_PRIORITY_KEY,
+    TEMPORAL_DEFAULT_PRIORITY_KEY - 1,
+)
 FULL_RERUN_RECOVERY_CARRYOVER_PARAM_KEYS = frozenset(
     {
         "recoverySource",
@@ -89,6 +95,57 @@ FULL_RERUN_RECOVERY_CARRYOVER_PARAM_KEYS = frozenset(
         "completed_steps",
     }
 )
+
+
+def _mapping_payload(value: object) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _truthy_enabled(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    if isinstance(value, (int, float)):
+        return value != 0
+    return False
+
+
+def _merge_automation_publish_selected(parameters: Mapping[str, Any]) -> bool:
+    task_payload = _mapping_payload(parameters.get("task"))
+    task_publish = _mapping_payload(task_payload.get("publish"))
+    publish_payload = _mapping_payload(parameters.get("publish"))
+
+    publish_mode = str(
+        parameters.get("publishMode")
+        or parameters.get("publish_mode")
+        or task_publish.get("mode")
+        or publish_payload.get("mode")
+        or ""
+    ).strip().lower()
+    if publish_mode != "pr":
+        return False
+
+    candidates = (
+        publish_payload.get("mergeAutomation")
+        or publish_payload.get("merge_automation"),
+        task_payload.get("mergeAutomation") or task_payload.get("merge_automation"),
+        task_publish.get("mergeAutomation") or task_publish.get("merge_automation"),
+        parameters.get("mergeAutomation") or parameters.get("merge_automation"),
+    )
+    return any(
+        isinstance(candidate, Mapping)
+        and _truthy_enabled(candidate.get("enabled"))
+        for candidate in candidates
+    )
+
+
+def _workflow_start_priority_key(parameters: Mapping[str, Any]) -> int | None:
+    if not _merge_automation_publish_selected(parameters):
+        return None
+    return TEMPORAL_MERGE_AUTOMATION_PRIORITY_KEY
+
+
 ALLOWED_REMEDIATION_AUTHORITY_MODES = frozenset(
     {"observe_only", "approval_gated", "admin_auto"}
 )
@@ -1106,6 +1163,7 @@ class TemporalExecutionService:
                 input_args=input_args,
                 memo=memo,
                 search_attributes=search_attributes,
+                priority_key=_workflow_start_priority_key(params),
                 start_delay=(
                     start_delay
                     if workflow_type_enum is not TemporalWorkflowType.RUN

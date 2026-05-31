@@ -35,6 +35,7 @@ from api_service.db.models import (
 )
 from moonmind.config.settings import settings
 from moonmind.workflows.temporal.service import (
+    TEMPORAL_MERGE_AUTOMATION_PRIORITY_KEY,
     TemporalExecutionNotFoundError,
     TemporalExecutionRecoveryCheckpointError,
     TemporalExecutionService,
@@ -226,6 +227,71 @@ async def test_create_execution_routes_user_workflow_after_mm730_cutover(
         assert start_kwargs["input_args"]["workflow_type"] == RENAMED_USER_WORKFLOW_TYPE
         assert record.memo["runtimeWorkflowType"] == RENAMED_USER_WORKFLOW_TYPE
         assert record.memo["runtimeWorkflowContract"] == "renamed_contract"
+
+
+@pytest.mark.asyncio
+async def test_create_execution_prioritizes_pr_merge_automation_workflows(
+    tmp_path,
+    mock_client_adapter,
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(
+            session,
+            client_adapter=mock_client_adapter,
+        )
+
+        await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="Merge automation run",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "publishMode": "pr",
+                "task": {
+                    "publish": {
+                        "mode": "pr",
+                        "mergeAutomation": {"enabled": True},
+                    },
+                },
+            },
+            idempotency_key=None,
+        )
+
+        start_kwargs = mock_client_adapter.start_workflow.await_args.kwargs
+        assert start_kwargs["priority_key"] == TEMPORAL_MERGE_AUTOMATION_PRIORITY_KEY
+
+
+@pytest.mark.asyncio
+async def test_create_execution_keeps_default_priority_without_merge_automation(
+    tmp_path,
+    mock_client_adapter,
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(
+            session,
+            client_adapter=mock_client_adapter,
+        )
+
+        await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="Plain run",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "publishMode": "pr",
+                "task": {"publish": {"mode": "pr"}},
+            },
+            idempotency_key=None,
+        )
+
+        start_kwargs = mock_client_adapter.start_workflow.await_args.kwargs
+        assert start_kwargs["priority_key"] is None
 
 
 @pytest.mark.asyncio
