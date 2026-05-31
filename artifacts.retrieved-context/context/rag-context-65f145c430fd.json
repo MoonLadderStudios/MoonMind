@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. api_service/auth.py (score: 1.000, trust: canonical)\n    line 3: from typing import AsyncGenerator, Optional\n2. moonmind/publish/service.py (score: 1.000, trust: canonical)\n    line 3: from __future__ import annotations\n3. moonmind/publish/sanitization.py (score: 1.000, trust: canonical)\n    line 3: from __future__ import annotations\n4. moonmind/vision/__init__.py (score: 1.000, trust: canonical)\n    line 3: from .service import (\n5. moonmind/vision/service.py (score: 1.000, trust: canonical)\n    line 3: from __future__ import annotations\n6. moonmind/claude/__init__.py (score: 1.000, trust: canonical)\n    line 3: from .runtime import (\n7. moonmind/claude/runtime.py (score: 1.000, trust: canonical)\n    line 3: from __future__ import annotations\n8. moonmind/indexers/jira_indexer.py (score: 1.000, trust: canonical)\n    line 2: from typing import Dict, Optional, Union",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "api_service/auth.py",
+      "text": "line 3: from typing import AsyncGenerator, Optional",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/publish/service.py",
+      "text": "line 3: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/publish/sanitization.py",
+      "text": "line 3: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/vision/__init__.py",
+      "text": "line 3: from .service import (",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/vision/service.py",
+      "text": "line 3: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/claude/__init__.py",
+      "text": "line 3: from .runtime import (",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/claude/runtime.py",
+      "text": "line 3: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/jira_indexer.py",
+      "text": "line 2: from typing import Dict, Optional, Union",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 2,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-05-31T20:27:07Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
