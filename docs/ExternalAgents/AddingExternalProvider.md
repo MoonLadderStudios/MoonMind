@@ -92,18 +92,21 @@ Use this for most new providers.
 
 ## 3.2 Streaming gateway provider
 
-This is a special-case path for providers that execute through one long-running activity and directly produce a terminal result.
+This path is for providers that execute through one long-running activity and directly produce a terminal result.
 
-Current example:
+Activity shape:
+
+- `integration.<provider>.execute`
+
+Current provider example:
 
 - `integration.openclaw.execute`
 
-At the moment, MoonMind’s workflow path is still specialized for this style rather than fully generalized for arbitrary `integration.<provider>.execute` activity names.
-
-That means:
-
-- new providers should strongly prefer the standard polling/callback pattern
-- adding a second streaming-gateway-style provider may require runtime generalization work in `MoonMind.AgentRun` before the provider is truly plug-and-play
+`MoonMind.AgentRun` selects this path from adapter metadata and invokes
+`integration.<provider>.execute` using the validated provider id. A new
+streaming-gateway provider still needs its adapter registration, activity
+implementation, catalog entry, and worker binding, but it does not require a
+provider-specific workflow branch.
 
 ---
 
@@ -428,6 +431,30 @@ If the provider supports additional operations, you may add narrowly scoped prov
 These are provider-specific extensions, not part of the core required lifecycle set.
 
 Only add them when the provider’s product semantics actually need them.
+
+## 9.3 Streaming gateway activity
+
+For a streaming-gateway provider, add one activity instead of the polling
+lifecycle set:
+
+```python id="81378"
+from temporalio import activity
+
+from moonmind.schemas.agent_runtime_models import (
+ AgentExecutionRequest,
+ AgentRunResult,
+)
+
+@activity.defn(name="integration.<provider>.execute")
+async def provider_execute_activity(
+ request: AgentExecutionRequest,
+) -> AgentRunResult:
+ ...
+```
+
+The activity must return a canonical `AgentRunResult`. Provider-native stream
+chunks, usage records, trace identifiers, and URLs belong in `metadata` or
+artifact refs, not provider-shaped top-level fields.
 
 ---
 

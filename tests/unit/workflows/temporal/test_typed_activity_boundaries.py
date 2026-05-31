@@ -14,7 +14,11 @@ from moonmind.schemas.temporal_activity_models import (
     ExternalAgentRunInput,
 )
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
-from moonmind.workflows.temporal.typed_execution import execute_typed_activity
+from moonmind.workflows.temporal import typed_execution as typed_execution_module
+from moonmind.workflows.temporal.typed_execution import (
+    execute_external_status_activity,
+    execute_typed_activity,
+)
 
 def test_external_agent_run_input_rejects_unknown_fields() -> None:
     with pytest.raises(ValidationError):
@@ -50,6 +54,46 @@ def test_agent_runtime_fetch_result_input_normalizes_parent_and_fetch_fields() -
     assert request.commit_message == "Use typed payloads"
     assert request.target_branch == "main"
     assert request.head_branch is None
+
+@pytest.mark.asyncio
+async def test_external_lifecycle_helper_accepts_provider_neutral_activity_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, object]] = []
+
+    async def fake_execute_typed_activity(
+        activity: str,
+        arg: object,
+        **_kwargs: object,
+    ) -> AgentRunStatus:
+        calls.append((activity, arg))
+        assert isinstance(arg, ExternalAgentRunInput)
+        return AgentRunStatus(
+            runId=arg.run_id,
+            agentKind="external",
+            agentId="future_provider",
+            status="running",
+        )
+
+    monkeypatch.setattr(
+        typed_execution_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+
+    result = await execute_external_status_activity(
+        "integration.future_provider.status",
+        ExternalAgentRunInput(runId="future-run-1"),
+    )
+
+    assert calls == [
+        (
+            "integration.future_provider.status",
+            ExternalAgentRunInput(runId="future-run-1"),
+        )
+    ]
+    assert result.agent_id == "future_provider"
+    assert result.status == "running"
 
 @activity.defn(name="typed.boundary.status")
 async def _typed_status_activity(request: ExternalAgentRunInput) -> AgentRunStatus:

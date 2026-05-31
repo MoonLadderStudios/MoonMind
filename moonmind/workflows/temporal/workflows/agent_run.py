@@ -2212,9 +2212,12 @@ class MoonMindAgentRun:
                             max(int(timeout_seconds), 60),
                             86400,
                         )
+                        act_name = f"integration.{validated_id}.execute"
                         result_payload = await self._execute_routed_activity(
-                            "integration.openclaw.execute",
+                            act_name,
                             request,
+                            start_to_close_timeout=timedelta(seconds=stc_seconds),
+                            schedule_to_close_timeout=timedelta(seconds=stc_seconds),
                             heartbeat_timeout=STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT,
                             cancellation_type=ActivityCancellationType.TRY_CANCEL,
                         )
