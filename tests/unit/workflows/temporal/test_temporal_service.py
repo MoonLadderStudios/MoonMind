@@ -35,7 +35,6 @@ from api_service.db.models import (
 )
 from moonmind.config.settings import settings
 from moonmind.workflows.temporal.service import (
-    TEMPORAL_MERGE_AUTOMATION_PRIORITY_KEY,
     TemporalExecutionNotFoundError,
     TemporalExecutionRecoveryCheckpointError,
     TemporalExecutionService,
@@ -230,10 +229,18 @@ async def test_create_execution_routes_user_workflow_after_mm730_cutover(
 
 
 @pytest.mark.asyncio
-async def test_create_execution_prioritizes_pr_merge_automation_workflows(
+async def test_create_execution_routes_pr_merge_automation_workflows_to_dedicated_queue(
     tmp_path,
     mock_client_adapter,
+    monkeypatch,
 ):
+    temporal_settings = settings.temporal.model_copy(
+        update={
+            "merge_automation_workflow_task_queue": "mm.workflow.merge_automation.test"
+        }
+    )
+    monkeypatch.setattr(settings, "temporal", temporal_settings)
+
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(
             session,
@@ -261,7 +268,7 @@ async def test_create_execution_prioritizes_pr_merge_automation_workflows(
         )
 
         start_kwargs = mock_client_adapter.start_workflow.await_args.kwargs
-        assert start_kwargs["priority_key"] == TEMPORAL_MERGE_AUTOMATION_PRIORITY_KEY
+        assert start_kwargs["task_queue"] == "mm.workflow.merge_automation.test"
 
 
 @pytest.mark.asyncio
@@ -291,7 +298,7 @@ async def test_create_execution_keeps_default_priority_without_merge_automation(
         )
 
         start_kwargs = mock_client_adapter.start_workflow.await_args.kwargs
-        assert start_kwargs["priority_key"] is None
+        assert start_kwargs["task_queue"] is None
 
 
 @pytest.mark.asyncio

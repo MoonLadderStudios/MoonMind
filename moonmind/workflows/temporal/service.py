@@ -77,12 +77,6 @@ TERMINAL_STATES: set[MoonMindWorkflowState] = {
     MoonMindWorkflowState.CANCELED,
 }
 CREATE_IDEMPOTENCY_KEY_MAX_LENGTH = 128
-TEMPORAL_HIGHEST_PRIORITY_KEY = 1
-TEMPORAL_DEFAULT_PRIORITY_KEY = 3
-TEMPORAL_MERGE_AUTOMATION_PRIORITY_KEY = max(
-    TEMPORAL_HIGHEST_PRIORITY_KEY,
-    TEMPORAL_DEFAULT_PRIORITY_KEY - 1,
-)
 FULL_RERUN_RECOVERY_CARRYOVER_PARAM_KEYS = frozenset(
     {
         "recoverySource",
@@ -140,10 +134,10 @@ def _merge_automation_publish_selected(parameters: Mapping[str, Any]) -> bool:
     )
 
 
-def _workflow_start_priority_key(parameters: Mapping[str, Any]) -> int | None:
+def _workflow_start_task_queue(parameters: Mapping[str, Any]) -> str | None:
     if not _merge_automation_publish_selected(parameters):
         return None
-    return TEMPORAL_MERGE_AUTOMATION_PRIORITY_KEY
+    return settings.temporal.merge_automation_workflow_task_queue
 
 
 ALLOWED_REMEDIATION_AUTHORITY_MODES = frozenset(
@@ -1163,7 +1157,7 @@ class TemporalExecutionService:
                 input_args=input_args,
                 memo=memo,
                 search_attributes=search_attributes,
-                priority_key=_workflow_start_priority_key(params),
+                task_queue=_workflow_start_task_queue(params),
                 start_delay=(
                     start_delay
                     if workflow_type_enum is not TemporalWorkflowType.RUN
