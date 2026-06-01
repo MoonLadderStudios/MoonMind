@@ -267,6 +267,9 @@ RUN_WORKFLOW_PUBLISH_OUTCOME_PATCH = "run-workflow-publish-outcome-v1"
 RUN_PUBLISH_REPAIR_FEEDBACK_PATCH = "run-publish-repair-feedback-v1"
 RUN_FETCH_PROFILE_SNAPSHOTS_PATCH = "fetch-profile-snapshots-v1"
 RUN_SLOT_CONTINUITY_PATCH = "run-slot-continuity-v1"
+RUN_DEFER_TASK_SCOPED_SESSION_UNTIL_SLOT_PATCH = (
+    "run-defer-task-scoped-session-until-slot-v1"
+)
 RUN_TASK_SCOPED_SESSION_CLEAR_BETWEEN_STEPS_PATCH = (
     "run-task-scoped-session-clear-between-steps-v1"
 )
@@ -5468,6 +5471,34 @@ class MoonMindRunWorkflow:
     async def _maybe_bind_task_scoped_session(
         self, request: AgentExecutionRequest
     ) -> AgentExecutionRequest:
+        if workflow.patched(RUN_DEFER_TASK_SCOPED_SESSION_UNTIL_SLOT_PATCH):
+            runtime_id = self._managed_session_runtime_id(request)
+            if runtime_id is None:
+                return request
+            if self._codex_session_binding is not None:
+                return request.model_copy(
+                    update={"managed_session": self._codex_session_binding}
+                )
+
+            parameters = dict(request.parameters or {})
+            metadata = (
+                dict(parameters.get("metadata"))
+                if isinstance(parameters.get("metadata"), Mapping)
+                else {}
+            )
+            moonmind_metadata = (
+                dict(metadata.get("moonmind"))
+                if isinstance(metadata.get("moonmind"), Mapping)
+                else {}
+            )
+            moonmind_metadata["deferManagedSessionUntilSlot"] = {
+                "runtimeId": runtime_id,
+                "taskRunId": workflow.info().workflow_id,
+            }
+            metadata["moonmind"] = moonmind_metadata
+            parameters["metadata"] = metadata
+            return request.model_copy(update={"parameters": parameters})
+
         binding = await self._ensure_task_scoped_codex_session(request)
         if binding is None:
             return request
@@ -9325,6 +9356,27 @@ class MoonMindRunWorkflow:
             "Child workflow %s assigned profile %s",
             self._assigned_child_workflow_id,
             self._assigned_profile_id,
+        )
+
+    @workflow.signal
+    def managed_session_bound(self, payload: dict) -> None:
+        """Record a task-scoped managed session started after slot admission."""
+
+        binding_payload = payload.get("binding") if isinstance(payload, dict) else None
+        if not isinstance(binding_payload, Mapping):
+            return
+        try:
+            binding = CodexManagedSessionBinding.model_validate(binding_payload)
+        except Exception as exc:
+            self._get_logger().warning(
+                "Ignoring invalid managed_session_bound payload",
+                extra={"error": str(exc)},
+            )
+            return
+        self._codex_session_binding = binding
+        self._get_logger().debug(
+            "Task-scoped managed session bound: %s",
+            binding.session_id,
         )
 
     @workflow.signal(name="DependencyResolved")
