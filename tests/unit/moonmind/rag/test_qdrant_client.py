@@ -193,3 +193,30 @@ def test_merge_results_keeps_multiple_chunks_when_hash_missing():
 
     assert len(items) == 2
     assert {item.text for item in items} == {"one", "two"}
+
+
+def test_canonical_vectors_use_supplied_ids_and_delete_by_point_ids():
+    client = _client()
+    calls = []
+
+    class FakeQdrant:
+        def upsert(self, *, collection_name, points):
+            calls.append(("upsert", collection_name, points.ids, points.vectors))
+
+        def delete(self, *, collection_name, points_selector):
+            calls.append(("delete", collection_name, points_selector.points))
+
+    client._client = FakeQdrant()  # type: ignore[assignment]
+
+    client.upsert_canonical_vectors(
+        collection_name="repo-main",
+        ids=["point-a"],
+        vectors=[[0.1, 0.2]],
+        payloads=[{"path": "a.txt"}],
+    )
+    client.delete_vectors(collection_name="repo-main", point_ids=["point-old"])
+
+    assert calls == [
+        ("upsert", "repo-main", ["point-a"], [[0.1, 0.2]]),
+        ("delete", "repo-main", ["point-old"]),
+    ]

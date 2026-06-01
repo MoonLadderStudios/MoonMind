@@ -196,6 +196,18 @@ class CustomTestAdapter:
     def state(self) -> Dict[str, Any]:
         return {"custom_cursor": "v1"}
 
+
+class RecordingIndexWriter:
+    def __init__(self) -> None:
+        self.deleted_batches: list[list[str]] = []
+        self.upsert_batches: list[list[object]] = []
+
+    def delete_points(self, point_ids):
+        self.deleted_batches.append(list(point_ids))
+
+    def upsert_chunks(self, chunks):
+        self.upsert_batches.append(list(chunks))
+
 class TestExtensibility:
     def test_register_custom_adapter(self):
         register_adapter("CustomReader", CustomTestAdapter)
@@ -237,7 +249,7 @@ class TestExtensibility:
         assert plan.dry_run
         assert plan.total_docs == 42
 
-    def test_custom_adapter_runs(self):
+    def test_custom_adapter_runs(self, tmp_path):
         register_adapter("CustomReader", CustomTestAdapter)
         manifest = ManifestV0.from_yaml_string(textwrap.dedent("""\
             version: "v0"
@@ -260,7 +272,7 @@ class TestExtensibility:
                 type: "Vector"
                 indices: ["idx1"]
         """))
-        pipeline = ManifestPipeline(manifest)
+        pipeline = ManifestPipeline(manifest, state_path=tmp_path / "state.json")
         result = pipeline.run()
         assert result.total_docs == 1
         assert result.sources[0].doc_count == 1
@@ -343,16 +355,71 @@ class TestPipelineLocalAdapter:
         assert plan.total_docs == 1
 
     def test_run_with_local_files(self, tmp_path):
-        (tmp_path / "a.txt").write_text("alpha")
-        (tmp_path / "b.txt").write_text("beta")
+        data_dir = tmp_path / "docs"
+        data_dir.mkdir()
+        (data_dir / "a.txt").write_text("alpha")
+        (data_dir / "b.txt").write_text("beta")
         manifest = ManifestV0.from_yaml_string(
-            MINIMAL_MANIFEST.format(input_dir=str(tmp_path))
+            MINIMAL_MANIFEST.format(input_dir=str(data_dir))
         )
-        pipeline = ManifestPipeline(manifest)
+        pipeline = ManifestPipeline(manifest, state_path=tmp_path / "state.json")
         result = pipeline.run()
         assert not result.dry_run
         assert result.total_docs == 2
         assert result.sources[0].doc_count == 2
+        assert result.sources[0].indexed_doc_count == 2
+
+    def test_run_skips_unchanged_local_source(self, tmp_path):
+        data_dir = tmp_path / "docs"
+        data_dir.mkdir()
+        (data_dir / "a.txt").write_text("alpha")
+        manifest = ManifestV0.from_yaml_string(
+            MINIMAL_MANIFEST.format(input_dir=str(data_dir))
+        )
+        state_path = tmp_path / "incremental-state.json"
+
+        first = ManifestPipeline(manifest, state_path=state_path).run()
+        second = ManifestPipeline(manifest, state_path=state_path).run()
+
+        assert first.sources[0].doc_count == 1
+        assert first.sources[0].skipped is False
+        assert second.sources[0].doc_count == 0
+        assert second.sources[0].indexed_doc_count == 0
+        assert second.sources[0].skipped is True
+
+    def test_run_updates_changed_documents_and_deletes_stale_chunks(self, tmp_path):
+        data_dir = tmp_path / "docs"
+        data_dir.mkdir()
+        a_path = data_dir / "a.txt"
+        b_path = data_dir / "b.txt"
+        a_path.write_text("alpha")
+        b_path.write_text("beta")
+        manifest = ManifestV0.from_yaml_string(
+            MINIMAL_MANIFEST.format(input_dir=str(data_dir))
+        )
+        state_path = tmp_path / "incremental-state.json"
+        writer = RecordingIndexWriter()
+
+        first = ManifestPipeline(
+            manifest,
+            state_path=state_path,
+            index_writer=writer,
+        ).run()
+        b_path.unlink()
+        a_path.write_text("alpha changed")
+        second = ManifestPipeline(
+            manifest,
+            state_path=state_path,
+            index_writer=writer,
+        ).run()
+
+        assert first.sources[0].indexed_doc_count == 2
+        assert second.sources[0].doc_count == 1
+        assert second.sources[0].indexed_doc_count == 1
+        assert second.sources[0].deleted_doc_count == 1
+        assert len(writer.upsert_batches[0]) == 2
+        assert len(writer.upsert_batches[1]) == 1
+        assert writer.deleted_batches[1]
 
     def test_run_unknown_adapter_continues(self, tmp_path):
         yaml_str = textwrap.dedent("""\
@@ -377,7 +444,7 @@ class TestPipelineLocalAdapter:
                 indices: ["idx1"]
         """)
         manifest = ManifestV0.from_yaml_string(yaml_str)
-        pipeline = ManifestPipeline(manifest)
+        pipeline = ManifestPipeline(manifest, state_path=tmp_path / "state.json")
         result = pipeline.run()
         assert result.sources[0].error is not None
         assert "No adapter" in result.sources[0].error
@@ -411,7 +478,7 @@ class TestPipelineLocalAdapter:
               errorPolicy: "stopOnFirstError"
         """.format(input_dir=str(tmp_path)))
         manifest = ManifestV0.from_yaml_string(yaml_str)
-        pipeline = ManifestPipeline(manifest)
+        pipeline = ManifestPipeline(manifest, state_path=tmp_path / "state.json")
         result = pipeline.run()
         # Should stop after first error, not process "good"
         assert len(result.sources) == 1

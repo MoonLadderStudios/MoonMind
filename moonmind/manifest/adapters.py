@@ -9,6 +9,7 @@ Adapters are auto-registered when this module is imported.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 from pathlib import Path
@@ -185,6 +186,23 @@ class GoogleDriveReaderAdapter(_BaseAdapter):
 class SimpleDirectoryReaderAdapter(_BaseAdapter):
     """Wraps ``moonmind.indexers.local_data_indexer.LocalDataIndexer``."""
 
+    def _iter_files(self) -> Iterator[Path]:
+        input_dir = self.ds.params.get("inputDir", ".")
+        recursive = self.ds.params.get("recursive", False)
+        exts = self.ds.params.get("requiredExts")
+        p = Path(input_dir)
+        if not p.exists():
+            return
+        pattern = "**/*" if recursive else "*"
+        for f in sorted(p.glob(pattern)):
+            if not f.is_file():
+                continue
+            if ".moonmind" in f.parts:
+                continue
+            if exts and f.suffix not in exts:
+                continue
+            yield f
+
     def plan(self) -> PlanResult:
         input_dir = self.ds.params.get("inputDir", ".")
         p = Path(input_dir)
@@ -192,17 +210,12 @@ class SimpleDirectoryReaderAdapter(_BaseAdapter):
             return PlanResult(estimated_docs=0, metadata={"error": f"{p} not found"})
 
         recursive = self.ds.params.get("recursive", False)
-        exts = self.ds.params.get("requiredExts")
 
         count = 0
         total_bytes = 0
-        pattern = "**/*" if recursive else "*"
-        for f in p.glob(pattern):
-            if f.is_file():
-                if exts and f.suffix not in exts:
-                    continue
-                count += 1
-                total_bytes += f.stat().st_size
+        for f in self._iter_files():
+            count += 1
+            total_bytes += f.stat().st_size
 
         return PlanResult(
             estimated_docs=count,
@@ -212,20 +225,13 @@ class SimpleDirectoryReaderAdapter(_BaseAdapter):
 
     def fetch(self) -> Iterator[Tuple[str, Dict[str, Any]]]:
         input_dir = self.ds.params.get("inputDir", ".")
-        recursive = self.ds.params.get("recursive", False)
-        exts = self.ds.params.get("requiredExts")
 
         p = Path(input_dir)
         if not p.exists():
             logger.error("Input directory does not exist: %s", p)
             return
 
-        pattern = "**/*" if recursive else "*"
-        for f in p.glob(pattern):
-            if not f.is_file():
-                continue
-            if exts and f.suffix not in exts:
-                continue
+        for f in self._iter_files():
             try:
                 text = f.read_text(encoding="utf-8", errors="replace")
             except Exception as exc:
@@ -240,7 +246,27 @@ class SimpleDirectoryReaderAdapter(_BaseAdapter):
             yield (text, meta)
 
     def state(self) -> Dict[str, Any]:
-        return {"inputDir": self.ds.params.get("inputDir", ".")}
+        files: list[dict[str, Any]] = []
+        for f in self._iter_files():
+            try:
+                stat = f.stat()
+                digest = hashlib.sha256(f.read_bytes()).hexdigest()
+            except OSError:
+                continue
+            files.append(
+                {
+                    "path": str(f),
+                    "size": stat.st_size,
+                    "mtime_ns": stat.st_mtime_ns,
+                    "sha256": digest,
+                }
+            )
+        return {
+            "inputDir": self.ds.params.get("inputDir", "."),
+            "recursive": self.ds.params.get("recursive", False),
+            "requiredExts": self.ds.params.get("requiredExts"),
+            "files": files,
+        }
 
 # ---------------------------------------------------------------------------
 # Confluence

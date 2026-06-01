@@ -265,6 +265,38 @@ class RagQdrantClient:
         batch = qmodels.Batch(ids=ids, vectors=vectors, payloads=payloads)
         self._client.upsert(collection_name=collection_name, points=batch)
 
+    def upsert_canonical_vectors(
+        self,
+        *,
+        collection_name: str,
+        ids: Sequence[str],
+        vectors: Sequence[Sequence[float]],
+        payloads: Sequence[MutableMapping[str, Any]],
+    ) -> None:
+        if not (len(ids) == len(vectors) == len(payloads)):
+            raise RuntimeError(
+                "Canonical vector upsert requires equal id, vector, and payload counts"
+            )
+        if not ids:
+            return
+        batch = qmodels.Batch(
+            ids=list(ids),
+            vectors=[list(vector) for vector in vectors],
+            payloads=list(payloads),
+        )
+        self._client.upsert(collection_name=collection_name, points=batch)
+
+    def delete_vectors(
+        self,
+        *,
+        collection_name: str,
+        point_ids: Sequence[str],
+    ) -> None:
+        if not point_ids:
+            return
+        selector = qmodels.PointIdsList(points=list(point_ids))
+        self._client.delete(collection_name=collection_name, points_selector=selector)
+
     def delete_overlay_collection(self, collection_name: str) -> None:
         try:
             self._client.delete_collection(collection_name=collection_name)
