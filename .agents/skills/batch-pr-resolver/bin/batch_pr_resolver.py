@@ -398,22 +398,35 @@ def _resolve_runtime_selection(args: argparse.Namespace) -> RuntimeSelection:
     configured_default_mode = _normalize_runtime_mode(
         os.getenv("MOONMIND_DEFAULT_TASK_RUNTIME")
     )
-    runtime_mode = _normalize_runtime_mode(args.runtime_mode) or (
-        inherited.mode if inherited else configured_default_mode
-    )
-    runtime_model = _runtime_text(args.runtime_model)
-    runtime_effort = _runtime_text(args.runtime_effort)
-    runtime_provider_profile = _runtime_text(
-        getattr(args, "runtime_provider_profile", None)
-    )
     runtime_execution_profile_ref = _runtime_text(
         os.getenv("MOONMIND_EXECUTION_PROFILE_REF")
     )
     runtime_execution_profile_runtime = _runtime_text(
         os.getenv("MOONMIND_EXECUTION_PROFILE_RUNTIME")
     )
-    if runtime_mode is None and runtime_execution_profile_ref:
-        runtime_mode = _normalize_runtime_mode(runtime_execution_profile_runtime)
+    # Resolution order, most to least specific: explicit args, the parent
+    # runtime copied from task_context.json, the caller's own execution
+    # profile (the runtime this skill is currently executing under), and
+    # finally the generic system default. The execution profile must beat
+    # MOONMIND_DEFAULT_TASK_RUNTIME: when batch-pr-resolver runs under Claude
+    # Code the default is still codex_cli, so preferring it would queue the
+    # children on Codex instead of inheriting the caller's Claude Code runtime.
+    execution_profile_mode = (
+        _normalize_runtime_mode(runtime_execution_profile_runtime)
+        if runtime_execution_profile_ref
+        else None
+    )
+    runtime_mode = (
+        _normalize_runtime_mode(args.runtime_mode)
+        or (inherited.mode if inherited else None)
+        or execution_profile_mode
+        or configured_default_mode
+    )
+    runtime_model = _runtime_text(args.runtime_model)
+    runtime_effort = _runtime_text(args.runtime_effort)
+    runtime_provider_profile = _runtime_text(
+        getattr(args, "runtime_provider_profile", None)
+    )
     if runtime_model is None and inherited is not None:
         runtime_model = inherited.model
     if runtime_effort is None and inherited is not None:

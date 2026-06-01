@@ -76,6 +76,10 @@ class TemporalSettings(BaseSettings):
     workflow_task_queue: str = Field(
         "mm.workflow", validation_alias="TEMPORAL_WORKFLOW_TASK_QUEUE"
     )
+    merge_automation_workflow_task_queue: str = Field(
+        "mm.workflow.merge_automation",
+        validation_alias="TEMPORAL_MERGE_AUTOMATION_WORKFLOW_TASK_QUEUE",
+    )
     user_workflow_contract_mode: Literal["legacy_run", "renamed_contract"] = Field(
         "legacy_run",
         validation_alias="TEMPORAL_USER_WORKFLOW_CONTRACT_MODE",
@@ -221,6 +225,16 @@ class TemporalSettings(BaseSettings):
         normalized = str(value or "").strip()
         if not normalized:
             raise ValueError("TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE must not be blank")
+        return normalized
+
+    @field_validator("merge_automation_workflow_task_queue", mode="before")
+    @classmethod
+    def _normalize_merge_automation_workflow_task_queue(cls, value: Any) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError(
+                "TEMPORAL_MERGE_AUTOMATION_WORKFLOW_TASK_QUEUE must not be blank"
+            )
         return normalized
 
     @field_validator("user_workflow_contract_mode", mode="before")
