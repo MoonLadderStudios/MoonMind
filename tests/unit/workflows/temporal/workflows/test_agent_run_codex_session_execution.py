@@ -126,6 +126,83 @@ async def test_managed_fetch_result_marks_pr_resolver_from_task_tool_contract(
     assert activity_input.pr_resolver_expected is True
     assert activity_input.head_branch == "feature/pr-1671"
 
+async def test_parent_child_state_signal_failure_is_logged_not_raised(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    warnings: list[tuple[str, tuple[Any, ...]]] = []
+
+    class _FailingParentHandle:
+        async def signal(self, signal_name: str, args: list[str]) -> None:
+            raise RuntimeError("parent unavailable")
+
+    class _Logger:
+        def warning(self, message: str, *args: Any, **_kwargs: Any) -> None:
+            warnings.append((message, args))
+
+    parent_info = type(
+        "ParentInfo",
+        (),
+        {"workflow_id": "wf-parent-1", "run_id": "parent-run-1"},
+    )()
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "get_external_workflow_handle",
+        lambda *_args, **_kwargs: _FailingParentHandle(),
+    )
+    monkeypatch.setattr(run, "_get_logger", lambda: _Logger())
+
+    await run._signal_parent_child_state_changed(
+        parent_info,
+        "intervention_requested",
+        "Agent requested human feedback.",
+    )
+
+    assert len(warnings) == 1
+    assert warnings[0][0] == "Failed to signal parent workflow %s: %s"
+    assert warnings[0][1][0] == "wf-parent-1"
+    assert str(warnings[0][1][1]) == "parent unavailable"
+
+async def test_timeout_result_is_published_through_artifact_activity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    routed_calls: list[tuple[str, Any]] = []
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    now_values = iter([start, start + timedelta(seconds=2)])
+
+    async def fake_execute_routed_activity(
+        activity_name: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        routed_calls.append((activity_name, payload))
+        if activity_name == "agent_runtime.publish_artifacts":
+            return payload
+        raise AssertionError(f"Unexpected routed activity: {activity_name}")
+
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "now",
+        lambda: next(now_values),
+    )
+    monkeypatch.setattr(run, "_execute_routed_activity", fake_execute_routed_activity)
+
+    result = await run.run(
+        _managed_session_request(
+            parameters={"publishMode": "none"},
+        ).model_copy(update={"timeout_policy": {"timeout_seconds": 1}})
+    )
+
+    assert result.failure_class == "execution_error"
+    assert result.metadata["childWorkflowId"] == "wf-agent-run-1"
+    assert result.metadata["childRunId"] == "run-1"
+    assert [name for name, _payload in routed_calls] == [
+        "agent_runtime.publish_artifacts"
+    ]
+
 async def test_managed_session_result_enrichment_omits_large_inline_instruction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1,4 +1,4 @@
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunStatus
 from moonmind.workflows.temporal.workflows.agent_run import (
     MoonMindAgentRun,
     RunStatus,
@@ -64,6 +64,75 @@ def test_managed_runtime_id_normalizes_aliases() -> None:
     assert MoonMindAgentRun._managed_runtime_id("Codex-CLI") == "codex_cli"
     assert MoonMindAgentRun._managed_runtime_id("claude") == "claude_code"
     assert MoonMindAgentRun._managed_runtime_id("CLAUDE_CODE") == "claude_code"
+
+def test_resiliency_policy_is_runtime_specific() -> None:
+    codex_request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex_cli",
+        correlationId="run-1",
+        idempotencyKey="run-1:step-1",
+    )
+    jules_request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="jules",
+        correlationId="run-2",
+        idempotencyKey="run-2:step-1",
+    )
+
+    codex_policy = MoonMindAgentRun._resiliency_policy_for_request(codex_request)
+    jules_policy = MoonMindAgentRun._resiliency_policy_for_request(jules_request)
+
+    assert codex_policy["runtime"] == "codex_cli"
+    assert codex_policy["retryPolicy"] == "session_turn_self_heal_then_cooldown_retry"
+    assert jules_policy["runtime"] == "jules"
+    assert (
+        jules_policy["retryPolicy"]
+        == "provider_polling_with_human_feedback_escalation"
+    )
+    assert codex_policy["noProgressTimeoutSeconds"] != jules_policy[
+        "noProgressTimeoutSeconds"
+    ]
+
+def test_status_progress_signature_tracks_metadata_progress_keys() -> None:
+    first = AgentRunStatus(
+        runId="run-1",
+        agentKind="managed",
+        agentId="codex_cli",
+        status="running",
+        metadata={"lastEventId": "1"},
+    )
+    second = AgentRunStatus(
+        runId="run-1",
+        agentKind="managed",
+        agentId="codex_cli",
+        status="running",
+        metadata={"lastEventId": "2"},
+    )
+
+    assert MoonMindAgentRun._status_progress_signature(first) != (
+        MoonMindAgentRun._status_progress_signature(second)
+    )
+
+def test_intervention_result_uses_terminal_operator_review_metadata() -> None:
+    workflow_instance = MoonMindAgentRun()
+    workflow_instance.run_id = "run-1"
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="codex_cloud",
+        correlationId="run-1",
+        idempotencyKey="run-1:step-1",
+    )
+
+    result = workflow_instance._intervention_result(
+        summary="Agent requested human feedback.",
+        request=request,
+        metadata={"reason": "agent_requested_feedback"},
+    )
+
+    assert result.failure_class == "user_error"
+    assert result.provider_error_code == "intervention_requested"
+    assert result.metadata["status"] == "intervention_requested"
+    assert result.metadata["reason"] == "agent_requested_feedback"
 
 def test_coerce_external_status_payload_maps_integration_shape() -> None:
     workflow_instance = MoonMindAgentRun()

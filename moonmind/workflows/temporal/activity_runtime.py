@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import httpx
 import inspect
 import json
 from copy import deepcopy
@@ -66,7 +67,7 @@ from moonmind.workflows.adapters.managed_agent_adapter import (
     ManagedProfileLaunchContext,
     build_managed_profile_launch_context,
 )
-from moonmind.utils.logging import SecretRedactor, redact_sensitive_text
+from moonmind.utils.logging import SecretRedactor, redact_sensitive_payload, redact_sensitive_text
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
 from moonmind.workflows.adapters.codex_cloud_agent_adapter import CodexCloudAgentAdapter
 from moonmind.workflows.adapters.codex_cloud_client import CodexCloudClient as CodexCloudHttpClient
@@ -574,6 +575,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "artifacts",
         "execution_record_terminal_state",
     ),
+    "execution.notify_completion": ("agent_runtime", "execution_notify_completion"),
     "artifact.list_for_execution": ("artifacts", "artifact_list_for_execution"),
     "artifact.compute_preview": ("artifacts", "artifact_compute_preview"),
     "artifact.link": ("artifacts", "artifact_link"),
@@ -1365,6 +1367,43 @@ def _coerce_activity_payload_input(
     elif request is None:
         request = kwargs
     return _coerce_activity_request(request, activity_type=activity_type)
+
+def _redacted_webhook_target(webhook_url: str) -> str:
+    if not webhook_url:
+        return ""
+    return webhook_url.split("?", 1)[0]
+
+def _build_execution_notification_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    result_payload = payload.get("result")
+    if isinstance(result_payload, BaseModel):
+        result_payload = result_payload.model_dump(mode="json", by_alias=True)
+    result = result_payload if isinstance(result_payload, Mapping) else {}
+    metadata = result.get("metadata") if isinstance(result.get("metadata"), Mapping) else {}
+    event: dict[str, Any] = {
+        "event": "moonmind.execution.completed",
+        "workflowId": str(payload.get("workflowId") or ""),
+        "runId": str(payload.get("runId") or ""),
+        "agentId": str(payload.get("agentId") or ""),
+        "agentKind": str(payload.get("agentKind") or ""),
+        "status": str(payload.get("status") or ""),
+        "failureClass": result.get("failureClass"),
+        "providerErrorCode": result.get("providerErrorCode"),
+        "retryRecommendation": result.get("retryRecommendation"),
+        "summary": result.get("summary"),
+        "diagnosticsRef": result.get("diagnosticsRef"),
+        "outputRefs": list(result.get("outputRefs") or []),
+    }
+    for key in (
+        "taskRunId",
+        "childWorkflowId",
+        "childRunId",
+        "pullRequestUrl",
+        "publishOutcome",
+    ):
+        value = metadata.get(key)
+        if value is not None:
+            event[key] = value
+    return redact_sensitive_payload(event)
 
 def _validate_external_agent_run_input(payload: Any) -> ExternalAgentRunInput:
     """Validate external activity input, including scalar legacy histories."""
@@ -3565,6 +3604,49 @@ class TemporalAgentRuntimeActivities:
         self._client_adapter = client_adapter
         self._supervision_tasks: set[asyncio.Task] = set()
 
+    async def execution_notify_completion(
+        self,
+        request: Any = None,
+        /,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Best-effort webhook notification for terminal agent-run results."""
+
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="execution.notify_completion",
+            kwargs=kwargs,
+        )
+        notification_settings = settings.execution_notifications
+        webhook_url = str(notification_settings.webhook_url or "").strip()
+        if not notification_settings.enabled or not webhook_url:
+            return {"status": "skipped", "reason": "disabled"}
+
+        headers = {"Content-Type": "application/json"}
+        authorization = str(notification_settings.authorization or "").strip()
+        if authorization:
+            headers["Authorization"] = authorization
+
+        event = _build_execution_notification_payload(payload)
+        try:
+            async with httpx.AsyncClient(
+                timeout=max(1, int(notification_settings.timeout_seconds or 5))
+            ) as client:
+                response = await client.post(
+                    webhook_url,
+                    json=event,
+                    headers=headers,
+                )
+                response.raise_for_status()
+        except Exception as exc:  # pragma: no cover - best effort telemetry
+            logger.warning("Execution completion notification failed: %s", exc)
+            return {
+                "status": "failed",
+                "reason": redact_sensitive_text(str(exc)),
+                "target": _redacted_webhook_target(webhook_url),
+            }
+        return {"status": "sent", "target": _redacted_webhook_target(webhook_url)}
+
     async def oauth_session_ensure_volume(
         self,
         request: Any = None,
@@ -4064,6 +4146,51 @@ class TemporalAgentRuntimeActivities:
         except RuntimeError:
             info = None
 
+        async def _notify_terminal_result(
+            published_result: AgentRunResult | Mapping[str, Any],
+        ) -> None:
+            result_payload = (
+                published_result.model_dump(mode="json", by_alias=True)
+                if isinstance(published_result, BaseModel)
+                else dict(published_result)
+            )
+            result_metadata = (
+                result_payload.get("metadata")
+                if isinstance(result_payload.get("metadata"), Mapping)
+                else {}
+            )
+            try:
+                await self.execution_notify_completion(
+                    {
+                        "workflowId": (
+                            info.workflow_id
+                            if info is not None
+                            else result_metadata.get("childWorkflowId", "")
+                        ),
+                        "runId": (
+                            info.workflow_run_id
+                            if info is not None
+                            else result_metadata.get("childRunId", "")
+                        ),
+                        "agentId": result_metadata.get("agentId", ""),
+                        "agentKind": result_metadata.get("agentKind", ""),
+                        "status": (
+                            result_metadata.get("status")
+                            or (
+                                "failed"
+                                if result_payload.get("failureClass")
+                                else "completed"
+                            )
+                        ),
+                        "result": result_payload,
+                    }
+                )
+            except Exception:
+                logger.warning(
+                    "agent_runtime.publish_artifacts completion notification failed",
+                    exc_info=True,
+                )
+
         def _execution_ref(link_type: str) -> ExecutionRef | None:
             if info is None:
                 return None
@@ -4552,6 +4679,7 @@ class TemporalAgentRuntimeActivities:
                 # Remove snake_case if alias is present to avoid Pydantic validation errors
                 if "diagnosticsRef" in enriched and "diagnostics_ref" in enriched:
                     del enriched["diagnostics_ref"]
+                await _notify_terminal_result(enriched)
                 return enriched
             if hasattr(result, "diagnostics_ref"):
                 result.diagnostics_ref = agent_result_ref.artifact_id
@@ -4568,6 +4696,7 @@ class TemporalAgentRuntimeActivities:
                     }
                 )
                 result.metadata = enriched_metadata
+            await _notify_terminal_result(result)
             return result
         except Exception as exc:
             logger.warning(
