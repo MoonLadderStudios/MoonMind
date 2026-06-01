@@ -146,6 +146,7 @@ SYNC_PROFILES_BEFORE_SLOT_REQUEST_PATCH_ID = (
 PIN_PROVIDER_PROFILE_BEFORE_SLOT_REQUEST_PATCH_ID = (
     "agent-run-pin-provider-profile-before-slot-request-v1"
 )
+AGENT_RUN_RESILIENCY_POLICY_PATCH_ID = "agent-run-resiliency-policy-v1"
 MANAGED_SESSION_START_AFTER_SLOT_PATCH_ID = (
     "agent-run-managed-session-start-after-slot-v1"
 )
@@ -158,6 +159,7 @@ DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 # stuck (e.g. nondeterminism error) and resetting it.
 _SLOT_WAIT_TIMEOUT_SECONDS = 120
 _SLOT_WAIT_MAX_RESETS = 3
+_DEFAULT_NO_PROGRESS_TIMEOUT_SECONDS = 1800
 _DEFAULT_MANAGED_429_RETRY_DELAY_SECONDS = 900
 _MANAGED_RUNTIME_STORE_ROOT = os.environ.get(
     "MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"
@@ -413,6 +415,30 @@ class MoonMindAgentRun:
             **kwargs,
         )
 
+    async def _signal_parent_child_state_changed(
+        self,
+        parent_info: Any,
+        new_state: str,
+        reason: str,
+    ) -> None:
+        if not parent_info:
+            return
+        parent_handle = workflow.get_external_workflow_handle(
+            parent_info.workflow_id,
+            run_id=parent_info.run_id,
+        )
+        try:
+            await parent_handle.signal(
+                "child_state_changed",
+                args=[new_state, reason],
+            )
+        except Exception as exc:
+            self._get_logger().warning(
+                "Failed to signal parent workflow %s: %s",
+                parent_info.workflow_id,
+                exc,
+            )
+
     @staticmethod
     def _managed_runtime_id(agent_id: str) -> str:
         runtime_mapping = {
@@ -503,6 +529,114 @@ class MoonMindAgentRun:
             "Managed provider capacity exhausted for "
             f"{runtime_id}{profile_fragment}; retry scheduled for "
             f"{self._format_retry_timestamp(retry_at)} after {cooldown_seconds}s cooldown."
+        )
+
+    @staticmethod
+    def _resiliency_policy_for_request(
+        request: AgentExecutionRequest,
+    ) -> dict[str, Any]:
+        """Return runtime-specific retry and stuck-detection policy metadata."""
+
+        agent_id = _normalize_agent_runtime_id(request.agent_id)
+        if request.agent_kind == "external":
+            if agent_id in {"jules", "jules_api"}:
+                return {
+                    "runtime": agent_id,
+                    "noProgressTimeoutSeconds": 2400,
+                    "stuckAction": "request_intervention",
+                    "retryPolicy": "provider_polling_with_human_feedback_escalation",
+                }
+            if agent_id == "codex_cloud":
+                return {
+                    "runtime": agent_id,
+                    "noProgressTimeoutSeconds": 1800,
+                    "stuckAction": "request_intervention",
+                    "retryPolicy": "provider_polling_with_terminal_fetch",
+                }
+            return {
+                "runtime": agent_id or request.agent_id,
+                "noProgressTimeoutSeconds": _DEFAULT_NO_PROGRESS_TIMEOUT_SECONDS,
+                "stuckAction": "request_intervention",
+                "retryPolicy": "generic_external_polling",
+            }
+
+        runtime_id = MoonMindAgentRun._managed_runtime_id(request.agent_id)
+        if runtime_id == "codex_cli":
+            return {
+                "runtime": runtime_id,
+                "noProgressTimeoutSeconds": 1800,
+                "stuckAction": "request_intervention",
+                "retryPolicy": "session_turn_self_heal_then_cooldown_retry",
+            }
+        if runtime_id == "claude_code":
+            return {
+                "runtime": runtime_id,
+                "noProgressTimeoutSeconds": 1500,
+                "stuckAction": "request_intervention",
+                "retryPolicy": "managed_runtime_polling_with_profile_cooldown",
+            }
+        return {
+            "runtime": runtime_id,
+            "noProgressTimeoutSeconds": _DEFAULT_NO_PROGRESS_TIMEOUT_SECONDS,
+            "stuckAction": "request_intervention",
+            "retryPolicy": "managed_runtime_polling_with_profile_cooldown",
+        }
+
+    @staticmethod
+    def _status_progress_signature(status_obj: AgentRunStatusModel) -> tuple[Any, ...]:
+        metadata = status_obj.metadata if isinstance(status_obj.metadata, Mapping) else {}
+        progress_keys = (
+            "providerStatus",
+            "normalizedStatus",
+            "progress",
+            "progressPercent",
+            "lastEventId",
+            "latestActivityId",
+            "latestAgentQuestion",
+            "trackingRef",
+            "externalUrl",
+            "updatedAt",
+            "lastUpdatedAt",
+            "lastOutputAt",
+        )
+        return (
+            status_obj.status,
+            tuple((key, str(metadata.get(key))) for key in progress_keys if key in metadata),
+        )
+
+    @staticmethod
+    def _max_no_progress_polls(
+        *,
+        policy: Mapping[str, Any],
+        poll_interval: int,
+    ) -> int:
+        timeout_seconds = int(
+            policy.get("noProgressTimeoutSeconds")
+            or _DEFAULT_NO_PROGRESS_TIMEOUT_SECONDS
+        )
+        return max(1, timeout_seconds // max(1, poll_interval))
+
+    def _intervention_result(
+        self,
+        *,
+        summary: str,
+        request: AgentExecutionRequest,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> AgentRunResult:
+        result_metadata = {
+            "status": "intervention_requested",
+            "agentId": request.agent_id,
+            "agentKind": request.agent_kind,
+        }
+        if self.run_id:
+            result_metadata["runId"] = self.run_id
+        if metadata:
+            result_metadata.update(dict(metadata))
+        return AgentRunResult(
+            summary=summary,
+            failureClass="user_error",
+            providerErrorCode="intervention_requested",
+            metadata=result_metadata,
         )
 
     def _enrich_result_metadata(
@@ -659,6 +793,32 @@ class MoonMindAgentRun:
                 metadata["storyOutput"] = story_output_metadata
 
         return result.model_copy(update={"metadata": metadata})
+
+    async def _publish_terminal_result(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        result: AgentRunResult,
+    ) -> AgentRunResult:
+        self.final_result = self._enrich_result_metadata(
+            request=request,
+            result=result,
+        )
+        enriched_result = await self._execute_routed_activity(
+            "agent_runtime.publish_artifacts",
+            self.final_result,
+            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+        )
+        if isinstance(enriched_result, AgentRunResult):
+            self.final_result = enriched_result
+        elif isinstance(enriched_result, dict):
+            if (
+                "diagnosticsRef" in enriched_result
+                and "diagnostics_ref" in enriched_result
+            ):
+                del enriched_result["diagnostics_ref"]
+            self.final_result = AgentRunResult(**enriched_result)
+        return self.final_result
 
     def _record_provider_native_pr_metadata(
         self,
@@ -1805,15 +1965,22 @@ class MoonMindAgentRun:
             MANAGED_STATUS_ACTIVITY_PATCH_ID
         )
         requested_execution_profile_ref = request.execution_profile_ref
+        resiliency_policy: Mapping[str, Any] = {}
+        if workflow.patched(AGENT_RUN_RESILIENCY_POLICY_PATCH_ID):
+            resiliency_policy = self._resiliency_policy_for_request(request)
 
         try:
             while True:
                 skip_poll_and_fetch = False
                 uses_codex_session_adapter = self._uses_codex_session_adapter(request)
+                parent_info = workflow.info().parent
                 elapsed = (workflow.now() - overall_start).total_seconds()
                 if elapsed >= timeout_seconds:
                     self.run_status = RunStatus.timed_out
-                    return AgentRunResult(failure_class="execution_error")
+                    return await self._publish_terminal_result(
+                        request=request,
+                        result=AgentRunResult(failure_class="execution_error"),
+                    )
 
                 manager_handle = None
                 # Acquire provider-profile slot if managed
@@ -1882,8 +2049,6 @@ class MoonMindAgentRun:
                     # of awaiting_slot when we actually need to wait — otherwise
                     # the parent sees awaiting_slot→launching in the same
                     # workflow task and the "queued" state is never visible.
-                    parent_info = workflow.info().parent
-
                     if not self.slot_assigned_event.is_set():
                         self.run_status = RunStatus.awaiting_slot
                         waiting_reason = (
@@ -1891,14 +2056,11 @@ class MoonMindAgentRun:
                             or f"Waiting for provider profile slot on {runtime_id}"
                         )
                         self._awaiting_slot_reason_override = None
-                        if parent_info:
-                            parent_handle = workflow.get_external_workflow_handle(
-                                parent_info.workflow_id, run_id=parent_info.run_id
-                            )
-                            await parent_handle.signal(
-                                "child_state_changed",
-                                args=["awaiting_slot", waiting_reason]
-                            )
+                        await self._signal_parent_child_state_changed(
+                            parent_info,
+                            "awaiting_slot",
+                            waiting_reason,
+                        )
 
                     if workflow.patched("agent_run_slot_wait_retry_v1"):
                         slot_resets = 0
@@ -2425,6 +2587,8 @@ class MoonMindAgentRun:
 
                 # Wait for completion checking periodically
                 if not skip_poll_and_fetch:
+                    last_progress_signature: tuple[Any, ...] | None = None
+                    stagnant_poll_count = 0
                     while True:
                         if (
                             request.agent_kind == "external"
@@ -2500,6 +2664,77 @@ class MoonMindAgentRun:
                                     )
 
                             self.run_status = status_obj.status
+                            if workflow.patched(AGENT_RUN_RESILIENCY_POLICY_PATCH_ID):
+                                progress_signature = self._status_progress_signature(
+                                    status_obj
+                                )
+                                if progress_signature == last_progress_signature:
+                                    stagnant_poll_count += 1
+                                else:
+                                    last_progress_signature = progress_signature
+                                    stagnant_poll_count = 0
+                                max_stagnant_polls = self._max_no_progress_polls(
+                                    policy=resiliency_policy,
+                                    poll_interval=poll_interval,
+                                )
+                                if stagnant_poll_count >= max_stagnant_polls:
+                                    self.run_status = "intervention_requested"
+                                    self.final_result = self._intervention_result(
+                                        summary=(
+                                            "Agent run made no observable progress "
+                                            f"for {resiliency_policy.get('noProgressTimeoutSeconds', _DEFAULT_NO_PROGRESS_TIMEOUT_SECONDS)}s; "
+                                            "human intervention is required before retrying."
+                                        ),
+                                        request=request,
+                                        metadata={
+                                            "reason": "stuck_no_progress",
+                                            "resiliencyPolicy": dict(resiliency_policy),
+                                            "lastStatus": status_obj.model_dump(
+                                                mode="json",
+                                                by_alias=True,
+                                            ),
+                                        },
+                                    )
+                                    await self._signal_parent_child_state_changed(
+                                        parent_info,
+                                        "intervention_requested",
+                                        (
+                                            "Agent run made no observable progress "
+                                            "and needs human review."
+                                        ),
+                                    )
+                                    break
+
+                            if (
+                                workflow.patched(AGENT_RUN_RESILIENCY_POLICY_PATCH_ID)
+                                and status_obj.status == RunStatus.awaiting_feedback
+                                and not (
+                                    request.agent_kind == "external"
+                                    and self._external_agent_id == "jules"
+                                )
+                            ):
+                                self.run_status = "intervention_requested"
+                                self.final_result = self._intervention_result(
+                                    summary=(
+                                        "Agent requested human feedback; "
+                                        "operator intervention is required."
+                                    ),
+                                    request=request,
+                                    metadata={
+                                        "reason": "agent_requested_feedback",
+                                        "resiliencyPolicy": dict(resiliency_policy),
+                                        "lastStatus": status_obj.model_dump(
+                                            mode="json",
+                                            by_alias=True,
+                                        ),
+                                    },
+                                )
+                                await self._signal_parent_child_state_changed(
+                                    parent_info,
+                                    "intervention_requested",
+                                    "Agent requested human feedback.",
+                                )
+                                break
 
                             # --- Jules auto-answer sub-flow (spec 094) ---
                             # Only react when Jules explicitly signals
@@ -2589,7 +2824,10 @@ class MoonMindAgentRun:
                                 request=request,
                             ),
                         )
-                    return AgentRunResult(failure_class="execution_error")
+                    return await self._publish_terminal_result(
+                        request=request,
+                        result=AgentRunResult(failure_class="execution_error"),
+                    )
 
                 if self.final_result is None:
                     if request.agent_kind == "external":
@@ -2716,14 +2954,11 @@ class MoonMindAgentRun:
                             cooldown_seconds=cooldown_seconds,
                         )
                         parent_info = workflow.info().parent
-                        if parent_info:
-                            parent_handle = workflow.get_external_workflow_handle(
-                                parent_info.workflow_id, run_id=parent_info.run_id
-                            )
-                            await parent_handle.signal(
-                                "child_state_changed",
-                                args=["awaiting_slot", waiting_reason],
-                            )
+                        await self._signal_parent_child_state_changed(
+                            parent_info,
+                            "awaiting_slot",
+                            waiting_reason,
+                        )
                         await manager_handle.signal(
                             "report_cooldown",
                             {
@@ -2790,24 +3025,23 @@ class MoonMindAgentRun:
                     request=request,
                     result=self.final_result,
                 )
+                if (
+                    workflow.patched(AGENT_RUN_RESILIENCY_POLICY_PATCH_ID)
+                    and self.final_result is not None
+                ):
+                    result_metadata = dict(self.final_result.metadata or {})
+                    result_metadata.setdefault(
+                        "resiliencyPolicy",
+                        dict(resiliency_policy),
+                    )
+                    self.final_result = self.final_result.model_copy(
+                        update={"metadata": result_metadata}
+                    )
 
-                # Post-run artifact publishing via the agent_runtime activity fleet.
-                enriched_result = await self._execute_routed_activity(
-                    "agent_runtime.publish_artifacts",
-                    self.final_result,
-                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
-
+                return await self._publish_terminal_result(
+                    request=request,
+                    result=self.final_result,
                 )
-
-                if isinstance(enriched_result, AgentRunResult):
-                    self.final_result = enriched_result
-                elif isinstance(enriched_result, dict):
-                    # Handle duplicate aliases from older history events
-                    if "diagnosticsRef" in enriched_result and "diagnostics_ref" in enriched_result:
-                        del enriched_result["diagnostics_ref"]
-                    self.final_result = AgentRunResult(**enriched_result)
-
-                return self.final_result
 
         except asyncio.TimeoutError:
             self.run_status = RunStatus.timed_out
@@ -2826,7 +3060,10 @@ class MoonMindAgentRun:
                     )
                 except Exception:
                     self._get_logger().warning("Failed to release slot on timeout, which may lead to a leak.", exc_info=True)
-            return AgentRunResult(failure_class="execution_error")
+            return await self._publish_terminal_result(
+                request=request,
+                result=AgentRunResult(failure_class="execution_error"),
+            )
 
         except CancelledError:
             tasks = []
