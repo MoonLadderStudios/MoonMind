@@ -728,6 +728,22 @@ async def task_manifest_detail_route(
         user=_user,
     )
 
+@router.get("/index-health", response_class=HTMLResponse)
+async def index_health_route(
+    request: Request,
+    session: AsyncSession = Depends(get_async_session),
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the React-powered RAG index health page."""
+    return await _render_react_page(
+        request,
+        "index-health",
+        "/index-health",
+        data_wide_panel=True,
+        session=session,
+        user=_user,
+    )
+
 @router.get("/workers")
 async def task_workers_route(
     request: Request,

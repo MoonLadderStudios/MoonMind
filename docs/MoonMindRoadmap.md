@@ -128,13 +128,14 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - Context pack primitives (`rag/context_pack.py`)
 - RAG retrieval CLI (`moonmind rag search`)
 - RAG overlay and guardrails
+- Index health monitoring for Mission Control — indexed collections, document counts, and freshness (MM-758)
 - RAG doc ↔ spec consolidation completed (see `docs/MoonMindRoadmap.md`)
 
 ### Remaining tasks
 - [ ] **5.1** End-to-end manifest ingest testing — Manifest pipeline built but not fully tested against live data sources
 - [ ] **5.2** RAG retrieval quality validation — Evaluation framework exists (`manifest/evaluation.py`) but no golden datasets or baseline metrics established
 - [ ] **5.3** Context pack assembly wired into agent runs — Primitives exist; not integrated into Temporal activity execution
-- [ ] **5.4** Index health monitoring — No dashboard view of indexed collections, document counts, or freshness
+- [x] **5.4** Index health monitoring — Mission Control shows indexed collections, document counts, and freshness
 - [ ] **5.5** Incremental re-indexing — Full reindex only; no delta/incremental update path
 - [ ] **5.6** Multi-collection retrieval — Single-collection queries; no cross-collection or federated search
 

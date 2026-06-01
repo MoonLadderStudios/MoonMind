@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from qdrant_client.http import models as qmodels
 
 from moonmind.rag.qdrant_client import RagQdrantClient
@@ -193,3 +195,98 @@ def test_merge_results_keeps_multiple_chunks_when_hash_missing():
 
     assert len(items) == 2
     assert {item.text for item in items} == {"one", "two"}
+
+def test_index_health_lists_collections_counts_and_freshness():
+    client = _client()
+
+    class FakeQdrant:
+        def get_collections(self):
+            return SimpleNamespace(
+                collections=[
+                    SimpleNamespace(name="repo-b"),
+                    SimpleNamespace(name="repo-a"),
+                ]
+            )
+
+        def get_collection(self, collection_name):
+            counts = {
+                "repo-a": (3, 2, 1, "green"),
+                "repo-b": (0, 0, 0, "yellow"),
+            }
+            points_count, indexed_count, segments_count, status = counts[collection_name]
+            return SimpleNamespace(
+                status=status,
+                points_count=points_count,
+                indexed_vectors_count=indexed_count,
+                segments_count=segments_count,
+                config=SimpleNamespace(
+                    params=SimpleNamespace(
+                        vectors=SimpleNamespace(size=768, distance="Cosine")
+                    )
+                ),
+            )
+
+        def scroll(self, *, collection_name, **kwargs):
+            _ = kwargs
+            if collection_name == "repo-a":
+                return (
+                    [
+                        SimpleNamespace(payload={"indexed_at": "2026-05-01T10:00:00Z"}),
+                        SimpleNamespace(
+                            payload={
+                                "metadata": {
+                                    "source_updated_at": "2026-05-02T12:30:00+00:00"
+                                }
+                            }
+                        ),
+                    ],
+                    None,
+                )
+            return ([], None)
+
+    client._client = FakeQdrant()  # type: ignore[assignment]
+
+    result = client.index_health()
+
+    assert result.total_collections == 2
+    assert result.total_points == 3
+    assert [collection.name for collection in result.collections] == ["repo-a", "repo-b"]
+    first = result.collections[0]
+    assert first.points_count == 3
+    assert first.indexed_vectors_count == 2
+    assert first.segments_count == 1
+    assert first.vector_size == 768
+    assert first.vector_distance == "Cosine"
+    assert first.freshness_status == "known"
+    assert first.freshness_at == "2026-05-02T12:30:00+00:00"
+    assert first.freshness_source == "metadata.source_updated_at"
+    assert result.collections[1].freshness_status == "empty"
+
+def test_index_health_reports_unknown_freshness_when_payload_has_no_timestamp():
+    client = _client()
+
+    class FakeQdrant:
+        def get_collections(self):
+            return SimpleNamespace(collections=[SimpleNamespace(name="repo-main")])
+
+        def get_collection(self, collection_name):
+            _ = collection_name
+            return SimpleNamespace(
+                status="green",
+                points_count=1,
+                indexed_vectors_count=1,
+                segments_count=1,
+                config=SimpleNamespace(params=SimpleNamespace(vectors=None)),
+            )
+
+        def scroll(self, *, collection_name, **kwargs):
+            _ = collection_name, kwargs
+            return ([SimpleNamespace(payload={"path": "src/a.py"})], None)
+
+    client._client = FakeQdrant()  # type: ignore[assignment]
+
+    result = client.index_health()
+
+    assert result.collections[0].freshness_status == "unknown"
+    assert result.collections[0].freshness_at is None
+    assert result.collections[0].freshness_source is None
