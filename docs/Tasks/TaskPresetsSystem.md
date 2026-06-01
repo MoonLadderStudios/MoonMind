@@ -354,6 +354,7 @@ The same path is used by:
 - task submission with unexpanded presets
 - API-created tasks
 - task edit and re-run flows that reconstruct preset-originated steps
+- goal-only task submissions that are first mapped to a seeded preset
 
 Expansion must:
 
@@ -445,6 +446,27 @@ The user may click Create Task while one or more preset steps are still unexpand
 5. Submit the task.
 
 If a required preset input is missing, Create Task is blocked and the missing field is highlighted. If backend expansion fails, the Create page displays the field-addressable errors and preserves the user's entered values.
+
+## Goal-Driven Preset Scheduling
+
+When a task is submitted with a plain `goal` and without already-authored
+steps, an explicit plan, a selected tool/skill, or a selected preset, MoonMind
+may map that goal to a seeded preset before normal submit-time expansion. This
+keeps the fast path from requiring manual preset selection while preserving the
+same deterministic expansion, validation, and provenance used by explicit
+preset submissions.
+
+The initial selector is deterministic and conservative:
+
+- a goal containing a Jira issue key maps to a Jira implementation or
+  orchestration preset, depending on the goal wording
+- a breakdown/story-generation goal maps to the Jira breakdown orchestration
+  preset
+- a general implementation goal maps to MoonSpec Orchestrate
+
+The submitted task records `presetSchedule` metadata with the goal source,
+selected preset, preset version, and reason. Once the preset is selected, the
+normal backend expansion service owns the executable step list.
 
 ## Apply and Reapply
 

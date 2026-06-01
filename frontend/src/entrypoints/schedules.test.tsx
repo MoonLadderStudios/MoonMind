@@ -130,4 +130,52 @@ describe("SchedulesPage", () => {
     expect(screen.getByText("Total").nextElementSibling?.textContent).toBe("0");
     expect(screen.queryByRole("button", { name: "Create Schedule" })).toBeNull();
   });
+
+  it("honors dashboard schedule list sources from the boot payload", async () => {
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ items: [] }),
+    } as Response);
+
+    renderWithClient(
+      <SchedulesPage
+        payload={{
+          page: "schedules",
+          apiBase: "/tenant/api",
+          initialData: {
+            dashboardConfig: {
+              sources: {
+                schedules: {
+                  list: "/console/schedules?scope=personal",
+                },
+              },
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(await screen.findByText("No recurring schedules yet. Create one from the workflow page.")).not.toBeNull();
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/console/schedules?scope=personal");
+  });
+
+  it("uses apiBase for the default schedule list endpoint", async () => {
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ items: [] }),
+    } as Response);
+
+    renderWithClient(
+      <SchedulesPage
+        payload={{
+          page: "schedules",
+          apiBase: "/tenant/api",
+          initialData: {},
+        }}
+      />,
+    );
+
+    expect(await screen.findByText("No recurring schedules yet. Create one from the workflow page.")).not.toBeNull();
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/tenant/api/recurring-tasks?scope=personal");
+  });
 });

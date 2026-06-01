@@ -45,7 +45,6 @@ from moonmind.schemas.temporal_activity_models import (
     AgentRuntimeCancelInput,
     AgentRuntimeStatusInput,
 )
-from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
 from moonmind.workflows.temporal import client as temporal_client_module
 from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
 from moonmind.workflows.temporal.activity_runtime import (
@@ -77,6 +76,143 @@ class _StaticArtifactService:
     ) -> tuple[SimpleNamespace, bytes]:
         del principal, allow_restricted_raw
         return SimpleNamespace(artifact_id=artifact_id), self._payloads[artifact_id]
+
+
+async def test_execution_notify_completion_skips_when_disabled(monkeypatch) -> None:
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "enabled",
+        False,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "webhook_url",
+        "https://hooks.example.test/notify",
+    )
+
+    activities = TemporalAgentRuntimeActivities()
+    result = await activities.execution_notify_completion(
+        {"workflowId": "wf-1", "result": {"summary": "done"}}
+    )
+
+    assert result == {"status": "skipped", "reason": "disabled"}
+
+
+async def test_execution_notify_completion_posts_sanitized_payload(monkeypatch) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+    class _Client:
+        def __init__(self, *, timeout: int) -> None:
+            self.timeout = timeout
+
+        async def __aenter__(self) -> "_Client":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def post(
+            self,
+            url: str,
+            *,
+            json: dict[str, Any],
+            headers: dict[str, str],
+        ) -> _Response:
+            calls.append({"url": url, "json": json, "headers": headers})
+            return _Response()
+
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "webhook_url",
+        "https://hooks.example.test/notify?token=secret",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "authorization",
+        "Bearer secret",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "timeout_seconds",
+        7,
+    )
+    monkeypatch.setattr(activity_runtime_module.httpx, "AsyncClient", _Client)
+
+    activities = TemporalAgentRuntimeActivities()
+    result = await activities.execution_notify_completion(
+        {
+            "workflowId": "wf-1",
+            "runId": "run-1",
+            "agentId": "codex_cli",
+            "agentKind": "managed",
+            "status": "completed",
+            "result": {
+                "summary": "token=secret",
+                "failureClass": None,
+                "metadata": {"taskRunId": "task-1"},
+            },
+        }
+    )
+
+    assert result == {
+        "status": "sent",
+        "target": "https://hooks.example.test/notify",
+    }
+    assert calls[0]["headers"]["Authorization"] == "Bearer secret"
+    assert calls[0]["json"]["event"] == "moonmind.execution.completed"
+    assert calls[0]["json"]["summary"] == "token=[REDACTED]"
+    assert calls[0]["json"]["taskRunId"] == "task-1"
+
+async def test_publish_artifacts_notifies_terminal_result(monkeypatch) -> None:
+    calls: list[dict[str, Any]] = []
+
+    async def fake_write_json_artifact(*_args: Any, **_kwargs: Any) -> SimpleNamespace:
+        return SimpleNamespace(artifact_id=f"art-{len(calls)}")
+
+    async def fake_notify(payload: dict[str, Any]) -> dict[str, str]:
+        calls.append(payload)
+        return {"status": "sent"}
+
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_write_json_artifact",
+        fake_write_json_artifact,
+    )
+    activities = TemporalAgentRuntimeActivities(artifact_service=SimpleNamespace())
+    monkeypatch.setattr(activities, "execution_notify_completion", fake_notify)
+
+    result = await activities.agent_runtime_publish_artifacts(
+        AgentRunResult(
+            summary="completed",
+            metadata={
+                "agentId": "codex_cli",
+                "agentKind": "managed",
+                "status": "completed",
+                "taskRunId": "task-1",
+            },
+        )
+    )
+
+    assert isinstance(result, AgentRunResult)
+    assert calls == [
+        {
+            "workflowId": "",
+            "runId": "",
+            "agentId": "codex_cli",
+            "agentKind": "managed",
+            "status": "completed",
+            "result": result.model_dump(mode="json", by_alias=True),
+        }
+    ]
 
 
 def _save_record(
