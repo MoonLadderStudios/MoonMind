@@ -108,6 +108,10 @@ describe('ProposalsPage', () => {
         expect.objectContaining({ method: 'POST' }),
       ),
     );
+    await waitFor(() => {
+      const button = screen.getAllByRole('button', { name: 'Promote' })[0] as HTMLButtonElement;
+      expect(button.disabled).toBe(false);
+    });
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Dismiss' })[0]);
     await waitFor(() =>
@@ -116,5 +120,9 @@ describe('ProposalsPage', () => {
         expect.objectContaining({ method: 'POST' }),
       ),
     );
+    await waitFor(() => {
+      const button = screen.getAllByRole('button', { name: 'Dismiss' })[0] as HTMLButtonElement;
+      expect(button.disabled).toBe(false);
+    });
   });
 });
