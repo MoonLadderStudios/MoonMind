@@ -2,7 +2,7 @@
 
 > Tracking the major milestones remaining to fully deliver on the README promise.
 >
-> Last updated: 2026-03-21
+> Last updated: 2026-05-31
 
 ---
 
@@ -62,7 +62,7 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - [x] **2.1** Jules end-to-end external event workflow — Spec 048/066, adapter exists, event wiring complete
 - [x] **2.2** Remove External Runs tab — External runs integrated into main dashboard
 - [ ] **2.3** Codex Cloud integration adapter — No adapter yet for the hosted Codex product
-- [ ] **2.4** Generic external-agent adapter pattern — Designed in `ExternalAgentIntegrationSystem.md`, not generalized in code
+- [x] **2.4** Generic external-agent adapter pattern — MM-741; shared adapter contract, registry-based provider selection, polling and streaming-gateway execution styles
 
 ---
 
@@ -77,11 +77,13 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - Task proposal queue for automated step generation
 - `proposal_generate` activity implemented
 - Task proposal admin/recovery UI surfacing and review actions — MM-743
+- Context clearing between ordered Codex managed-session steps via the
+  task-scoped AgentSession reset boundary (MM-745)
 
 ### Remaining tasks
 - [ ] **3.1** Fix task proposal system end-to-end — tracker-native GitHub/Jira proposal delivery and review remains the desired primary workflow; `/proposals` is admin/recovery coverage only
 - [ ] **3.2** Automatic context injection per step — Context pack exists (`rag/context_pack.py`), not wired into step execution
-- [ ] **3.3** Context clearing between steps — No implementation; promised in README
+- [x] **3.3** Context clearing between steps — Task-scoped Codex managed sessions clear to a new epoch before reuse by a later ordered step (MM-745)
 - [ ] **3.4** Multi-step workflow visualization in Mission Control — Dashboard shows tasks but not step DAGs
 - [ ] **3.5** Preset-driven scheduling (auto-sequence from goal) — Presets exist but goal-to-plan decomposition is manual
 - [ ] **3.6** Overhaul and streamline schedules UI — Current schedules interface needs UX improvement

@@ -11,7 +11,11 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Protocol
 
 from temporalio.client import Client, WorkflowExecutionDescription
-from temporalio.common import SearchAttributeKey, SearchAttributePair, TypedSearchAttributes
+from temporalio.common import (
+    SearchAttributeKey,
+    SearchAttributePair,
+    TypedSearchAttributes,
+)
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from api_service.db.models import TemporalExecutionRecord
@@ -37,6 +41,7 @@ MANIFEST_CHILD_PARENT_CLOSE_POLICY = "REQUEST_CANCEL"
 # so that drain metrics and batch signals only target our own workflows.
 _MOONMIND_TASK_QUEUES: tuple[str, ...] = (
     "mm.workflow",
+    "mm.workflow.merge_automation",
     "mm.activity.artifacts",
     "mm.activity.llm",
     "mm.activity.sandbox",
@@ -182,8 +187,15 @@ class TemporalClientAdapter:
                 )
             return self._client
 
-    def _get_task_queue(self, workflow_type: str | None = None) -> str:
+    def _get_task_queue(
+        self,
+        workflow_type: str | None = None,
+        *,
+        task_queue: str | None = None,
+    ) -> str:
         """Resolve the task queue for the given workflow type."""
+        if task_queue:
+            return task_queue
         if workflow_type == RENAMED_USER_WORKFLOW_TYPE:
             return resolve_user_workflow_start_contract(settings.temporal).task_queue
         if self._workflow_topology is None:
@@ -203,6 +215,7 @@ class TemporalClientAdapter:
         memo: Mapping[str, Any] | None = None,
         search_attributes: Mapping[str, Any] | None = None,
         start_delay: timedelta | None = None,
+        task_queue: str | None = None,
     ) -> WorkflowStartResult:
         """Start a new Temporal workflow.
 
@@ -214,7 +227,7 @@ class TemporalClientAdapter:
         """
         client = await self.get_client()
 
-        task_queue = self._get_task_queue(workflow_type)
+        task_queue = self._get_task_queue(workflow_type, task_queue=task_queue)
 
         args = [input_args] if input_args is not None else []
 
@@ -240,7 +253,6 @@ class TemporalClientAdapter:
         }
         if start_delay is not None:
             start_kwargs["start_delay"] = start_delay
-
         try:
             handle = await client.start_workflow(
                 workflow_type,

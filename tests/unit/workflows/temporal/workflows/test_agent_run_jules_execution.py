@@ -257,6 +257,76 @@ async def test_agent_run_external_poll_and_fetch_use_typed_activity_inputs(
     assert isinstance(fetch_payload, ExternalAgentRunInput)
     assert fetch_payload.run_id == "session-typed-1"
 
+
+async def test_resolve_adapter_metadata_normalizes_case_for_activity_routing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.workflows.adapters.external_adapter_registry import (
+        ExternalAdapterRegistry,
+    )
+    from moonmind.workflows.adapters.openclaw_agent_adapter import (
+        OpenClawExternalAdapter,
+    )
+
+    registry = ExternalAdapterRegistry()
+    registry.register("openclaw", OpenClawExternalAdapter)
+    monkeypatch.setattr(
+        agent_run_module,
+        "build_default_registry",
+        lambda: registry,
+    )
+
+    metadata = await agent_run_module.resolve_adapter_metadata("OpenClaw")
+
+    assert metadata == {
+        "agent_id": "openclaw",
+        "execution_style": "streaming_gateway",
+    }
+
+async def test_agent_run_streaming_gateway_uses_validated_provider_execute_activity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = MoonMindAgentRun()
+    routed_calls: list[tuple[str, Any, dict[str, Any]]] = []
+
+    _configure_workflow_runtime(monkeypatch)
+
+    async def fake_execute_routed_activity(
+        activity_name: str,
+        payload: Any,
+        **kwargs: Any,
+    ) -> Any:
+        routed_calls.append((activity_name, payload, kwargs))
+        if activity_name == "integration.resolve_adapter_metadata":
+            return {"agent_id": "stream_test", "execution_style": "streaming_gateway"}
+        if activity_name == "integration.stream_test.execute":
+            assert isinstance(payload, AgentExecutionRequest)
+            return AgentRunResult(summary="Stream complete", metadata={})
+        if activity_name == "agent_runtime.publish_artifacts":
+            return payload
+        raise AssertionError(f"Unexpected routed activity: {activity_name}")
+
+    monkeypatch.setattr(run, "_execute_routed_activity", fake_execute_routed_activity)
+
+    result = await run.run(
+        _request(
+            agentId="stream_test",
+            executionProfileRef="profile:stream-test",
+        )
+    )
+
+    execute_call = next(
+        call for call in routed_calls if call[0] == "integration.stream_test.execute"
+    )
+    assert execute_call[0] == "integration.stream_test.execute"
+    assert (
+        execute_call[2]["heartbeat_timeout"]
+        == agent_run_module.STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT
+    )
+    assert all(name != "integration.openclaw.execute" for name, _, _ in routed_calls)
+    assert result.summary == "Stream complete"
+    assert result.metadata["childWorkflowId"] == "wf-agent-run-1"
+
 async def test_agent_run_managed_passes_commit_message_override_to_fetch_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

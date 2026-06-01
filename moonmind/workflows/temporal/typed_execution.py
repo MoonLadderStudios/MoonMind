@@ -72,6 +72,21 @@ async def execute_typed_activity(
 
 @overload
 async def execute_typed_activity(
+    activity: Literal["integration.openclaw.execute"],
+    arg: AgentExecutionRequest,
+    *,
+    task_queue: str | None = None,
+    start_to_close_timeout: timedelta | None = None,
+    schedule_to_close_timeout: timedelta | None = None,
+    heartbeat_timeout: timedelta | None = None,
+    retry_policy: RetryPolicy | None = None,
+    cancellation_type: ActivityCancellationType | None = None,
+    summary: str | Mapping[str, Any] | None = None,
+) -> AgentRunResult:
+    pass
+
+@overload
+async def execute_typed_activity(
     activity: Literal["integration.jules.start", "integration.codex_cloud.start"],
     arg: AgentExecutionRequest,
     *,
@@ -223,3 +238,58 @@ async def execute_typed_activity(
     filtered_kwargs = {k: v for k, v in kwargs.items() if v is not None}
 
     return await workflow.execute_activity(activity, arg, **filtered_kwargs)
+
+
+async def execute_external_start_activity(
+    activity: str,
+    arg: AgentExecutionRequest,
+    **kwargs: Any,
+) -> AgentRunHandle:
+    """Execute any provider start activity that returns ``AgentRunHandle``."""
+
+    result = await execute_typed_activity(activity, arg, **kwargs)
+    return AgentRunHandle(**result) if isinstance(result, dict) else result
+
+
+async def execute_external_status_activity(
+    activity: str,
+    arg: ExternalAgentRunInput,
+    **kwargs: Any,
+) -> AgentRunStatus:
+    """Execute any provider status activity that returns ``AgentRunStatus``."""
+
+    result = await execute_typed_activity(activity, arg, **kwargs)
+    return AgentRunStatus(**result) if isinstance(result, dict) else result
+
+
+async def execute_external_fetch_result_activity(
+    activity: str,
+    arg: ExternalAgentRunInput,
+    **kwargs: Any,
+) -> AgentRunResult:
+    """Execute any provider fetch activity that returns ``AgentRunResult``."""
+
+    result = await execute_typed_activity(activity, arg, **kwargs)
+    return AgentRunResult(**result) if isinstance(result, dict) else result
+
+
+async def execute_external_cancel_activity(
+    activity: str,
+    arg: ExternalAgentRunInput,
+    **kwargs: Any,
+) -> AgentRunStatus:
+    """Execute any provider cancel activity that returns ``AgentRunStatus``."""
+
+    result = await execute_typed_activity(activity, arg, **kwargs)
+    return AgentRunStatus(**result) if isinstance(result, dict) else result
+
+
+async def execute_external_streaming_activity(
+    activity: str,
+    arg: AgentExecutionRequest,
+    **kwargs: Any,
+) -> AgentRunResult:
+    """Execute any streaming-gateway provider activity returning ``AgentRunResult``."""
+
+    result = await execute_typed_activity(activity, arg, **kwargs)
+    return AgentRunResult(**result) if isinstance(result, dict) else result

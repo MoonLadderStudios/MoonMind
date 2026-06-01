@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -8,13 +9,26 @@ from temporalio import activity, workflow
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
-from moonmind.schemas.agent_runtime_models import AgentRunStatus
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    AgentRunHandle,
+    AgentRunResult,
+    AgentRunStatus,
+)
 from moonmind.schemas.temporal_activity_models import (
     AgentRuntimeFetchResultInput,
     ExternalAgentRunInput,
 )
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
-from moonmind.workflows.temporal.typed_execution import execute_typed_activity
+from moonmind.workflows.temporal import typed_execution as typed_execution_module
+from moonmind.workflows.temporal.typed_execution import (
+    execute_external_cancel_activity,
+    execute_external_fetch_result_activity,
+    execute_external_start_activity,
+    execute_external_status_activity,
+    execute_external_streaming_activity,
+    execute_typed_activity,
+)
 
 def test_external_agent_run_input_rejects_unknown_fields() -> None:
     with pytest.raises(ValidationError):
@@ -50,6 +64,126 @@ def test_agent_runtime_fetch_result_input_normalizes_parent_and_fetch_fields() -
     assert request.commit_message == "Use typed payloads"
     assert request.target_branch == "main"
     assert request.head_branch is None
+
+@pytest.mark.asyncio
+async def test_external_lifecycle_helper_accepts_provider_neutral_activity_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, object]] = []
+
+    async def fake_execute_typed_activity(
+        activity: str,
+        arg: object,
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        calls.append((activity, arg))
+        assert isinstance(arg, ExternalAgentRunInput)
+        return {
+            "runId": arg.run_id,
+            "agentKind": "external",
+            "agentId": "future_provider",
+            "status": "running",
+        }
+
+    monkeypatch.setattr(
+        typed_execution_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+
+    result = await execute_external_status_activity(
+        "integration.future_provider.status",
+        ExternalAgentRunInput(runId="future-run-1"),
+    )
+
+    assert calls == [
+        (
+            "integration.future_provider.status",
+            ExternalAgentRunInput(runId="future-run-1"),
+        )
+    ]
+    assert result.agent_id == "future_provider"
+    assert result.status == "running"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("helper", "arg", "payload", "expected_type"),
+    [
+        (
+            execute_external_start_activity,
+            AgentExecutionRequest(
+                agentKind="external",
+                agentId="future_provider",
+                correlationId="corr-1",
+                idempotencyKey="idem-1",
+                instructionRef="Run it",
+                workspaceSpec={},
+            ),
+            {
+                "runId": "future-run-1",
+                "agentKind": "external",
+                "agentId": "future_provider",
+                "status": "running",
+                "startedAt": datetime(2026, 1, 1, tzinfo=UTC),
+            },
+            AgentRunHandle,
+        ),
+        (
+            execute_external_cancel_activity,
+            ExternalAgentRunInput(runId="future-run-1"),
+            {
+                "runId": "future-run-1",
+                "agentKind": "external",
+                "agentId": "future_provider",
+                "status": "canceled",
+            },
+            AgentRunStatus,
+        ),
+        (
+            execute_external_fetch_result_activity,
+            ExternalAgentRunInput(runId="future-run-1"),
+            {"summary": "done", "metadata": {"provider": "future_provider"}},
+            AgentRunResult,
+        ),
+        (
+            execute_external_streaming_activity,
+            AgentExecutionRequest(
+                agentKind="external",
+                agentId="future_provider",
+                correlationId="corr-1",
+                idempotencyKey="idem-1",
+                instructionRef="Run it",
+                workspaceSpec={},
+            ),
+            {"summary": "streamed", "metadata": {"provider": "future_provider"}},
+            AgentRunResult,
+        ),
+    ],
+)
+async def test_external_lifecycle_helpers_convert_raw_dict_results(
+    monkeypatch: pytest.MonkeyPatch,
+    helper: Any,
+    arg: object,
+    payload: dict[str, object],
+    expected_type: type[object],
+) -> None:
+    async def fake_execute_typed_activity(
+        _activity: str,
+        _arg: object,
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        return payload
+
+    monkeypatch.setattr(
+        typed_execution_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+
+    result = await helper("integration.future_provider.execute", arg)
+
+    assert isinstance(result, expected_type)
 
 @activity.defn(name="typed.boundary.status")
 async def _typed_status_activity(request: ExternalAgentRunInput) -> AgentRunStatus:
