@@ -2,7 +2,7 @@
 
 > Tracking the major milestones remaining to fully deliver on the README promise.
 >
-> Last updated: 2026-03-21
+> Last updated: 2026-05-31
 
 ---
 
@@ -62,7 +62,7 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - [x] **2.1** Jules end-to-end external event workflow — Spec 048/066, adapter exists, event wiring complete
 - [x] **2.2** Remove External Runs tab — External runs integrated into main dashboard
 - [ ] **2.3** Codex Cloud integration adapter — No adapter yet for the hosted Codex product
-- [ ] **2.4** Generic external-agent adapter pattern — Designed in `ExternalAgentIntegrationSystem.md`, not generalized in code
+- [x] **2.4** Generic external-agent adapter pattern — MM-741; shared adapter contract, registry-based provider selection, polling and streaming-gateway execution styles
 
 ---
 
@@ -76,13 +76,16 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - Manifest-based task submission (`manifest.schema.json`, `moonmind/manifest/`)
 - Task proposal queue for automated step generation
 - `proposal_generate` activity implemented
+- Task proposal admin/recovery UI surfacing and review actions — MM-743
+- Context clearing between ordered Codex managed-session steps via the
+  task-scoped AgentSession reset boundary (MM-745)
 
 ### Remaining tasks
-- [ ] **3.1** Fix task proposal system end-to-end — `proposal_generate` activity exists but proposals not surfaced reliably in UI
+- [ ] **3.1** Fix task proposal system end-to-end — tracker-native GitHub/Jira proposal delivery and review remains the desired primary workflow; `/proposals` is admin/recovery coverage only
 - [ ] **3.2** Automatic context injection per step — Context pack exists (`rag/context_pack.py`), not wired into step execution
-- [ ] **3.3** Context clearing between steps — No implementation; promised in README
+- [x] **3.3** Context clearing between steps — Task-scoped Codex managed sessions clear to a new epoch before reuse by a later ordered step (MM-745)
 - [ ] **3.4** Multi-step workflow visualization in Mission Control — Dashboard shows tasks but not step DAGs
-- [ ] **3.5** Preset-driven scheduling (auto-sequence from goal) — Presets exist but goal-to-plan decomposition is manual
+- [x] **3.5** Preset-driven scheduling (auto-sequence from goal) — Goal-only task submissions are deterministically mapped to seeded presets before backend expansion (MM-747)
 - [x] **3.6** Overhaul and streamline schedules UI — Current schedules interface needs UX improvement
 
 ---
@@ -98,14 +101,15 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - Recurring task schedules (spec 049)
 - TRY_CANCEL activity cancellation — fast cancellation without waiting for activity completion
 - Force-terminate path for stuck tasks
+- Runtime-specific agent-run resiliency policies, generic no-progress detection, intervention escalation, and completion webhooks (MM-749)
 
 ### Remaining tasks
 - [x] **4.1** Fast cancellation via `TRY_CANCEL` — All `execute_activity` calls now use `ActivityCancellationType.TRY_CANCEL`
 - [x] **4.2** Force-terminate path for stuck tasks — Shipped in `9050b4d9`
-- [ ] **4.3** Automatic stuck-detection for agent runs — Spec 039 (`worker-self-heal`), partial design
-- [ ] **4.4** Smart retry policies per runtime — Temporal retries exist but not tuned per agent type
-- [ ] **4.5** Intervention request signaling (agent asks for human help) — README promises "monitor intervention requests"
-- [ ] **4.6** Notification system (email/webhook on completion) — No notification channel for fire-and-forget results
+- [x] **4.3** Automatic stuck-detection for agent runs — AgentRun detects repeated no-progress status observations and escalates to `intervention_requested`
+- [x] **4.4** Smart retry policies per runtime — AgentRun records runtime-specific resiliency policy metadata for managed and external runtimes
+- [x] **4.5** Intervention request signaling (agent asks for human help) — Non-auto-answer feedback requests signal `intervention_requested` to the parent workflow
+- [x] **4.6** Notification system (email/webhook on completion) — `execution.notify_completion` emits opt-in terminal-result webhooks via `MOONMIND_EXECUTION_NOTIFICATIONS_*`
 
 ---
 

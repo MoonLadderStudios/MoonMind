@@ -31,6 +31,46 @@ const SchedulesResponseSchema = z.object({
 
 type Schedule = z.infer<typeof ScheduleSchema>;
 
+const SchedulesBootDataSchema = z
+  .object({
+    dashboardConfig: z
+      .object({
+        sources: z
+          .object({
+            schedules: z
+              .object({
+                list: z.string().optional(),
+              })
+              .partial()
+              .optional(),
+          })
+          .partial()
+          .optional(),
+      })
+      .partial()
+      .optional(),
+    sources: z
+      .object({
+        schedules: z
+          .object({
+            list: z.string().optional(),
+          })
+          .partial()
+          .optional(),
+      })
+      .partial()
+      .optional(),
+  })
+  .passthrough();
+
+function scheduleListEndpoint(payload: BootPayload): string {
+  const parsed = SchedulesBootDataSchema.safeParse(payload.initialData || {});
+  const schedules = parsed.success
+    ? parsed.data.dashboardConfig?.sources?.schedules || parsed.data.sources?.schedules
+    : undefined;
+  return schedules?.list || `${payload.apiBase || '/api'}/recurring-tasks?scope=personal`;
+}
+
 function formatWhen(value: string | null | undefined): string {
   const raw = String(value || '').trim();
   if (!raw) {
@@ -111,10 +151,11 @@ function isDueSoon(schedule: Schedule, now: number): boolean {
 }
 
 export function SchedulesPage({ payload }: { payload: BootPayload }) {
+  const listEndpoint = useMemo(() => scheduleListEndpoint(payload), [payload]);
   const { data, isLoading, isError, error, isFetching, refetch } = useQuery({
-    queryKey: ['schedules'],
+    queryKey: ['schedules', listEndpoint],
     queryFn: async () => {
-      const response = await fetch(`${payload.apiBase}/recurring-tasks?scope=personal`);
+      const response = await fetch(listEndpoint, { credentials: 'include' });
       if (!response.ok) {
         throw new Error(`Failed to fetch: ${response.statusText}`);
       }

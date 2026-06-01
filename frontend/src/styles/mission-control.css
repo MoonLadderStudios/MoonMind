@@ -2368,6 +2368,77 @@ tr[data-proposal-id].proposal-consuming td {
   min-height: 3.2rem;
 }
 
+.schedule-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.schedule-summary-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  width: 100%;
+  min-height: 5.6rem;
+  padding: 0.9rem;
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 0.5rem;
+  background: rgb(var(--mm-panel) / 0.74);
+  color: rgb(var(--mm-ink));
+  text-align: left;
+  box-shadow: 0 18px 44px -34px rgb(var(--mm-ink) / 0.5);
+}
+
+.schedule-summary-tile:hover,
+.schedule-summary-tile:focus-visible,
+.schedule-summary-tile.active {
+  border-color: rgb(var(--mm-accent) / 0.58);
+  background: rgb(var(--mm-accent) / 0.08);
+  transform: none;
+}
+
+.schedule-summary-value {
+  font-size: 1.65rem;
+  font-weight: 740;
+  line-height: 1;
+}
+
+.schedule-summary-label {
+  color: rgb(var(--mm-muted));
+  font-size: 0.85rem;
+  font-weight: 650;
+}
+
+.schedule-name-cell,
+.schedule-dispatch-cell,
+.schedule-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.schedule-name-cell span,
+.schedule-dispatch-cell span {
+  color: rgb(var(--mm-muted));
+  font-size: 0.82rem;
+}
+
+.schedule-dispatch-error {
+  color: rgb(var(--mm-danger)) !important;
+}
+
+.schedule-actions {
+  min-width: 7.5rem;
+}
+
+.small-button {
+  justify-content: center;
+  min-height: 2rem;
+  padding: 0.35rem 0.62rem;
+  font-size: 0.8rem;
+}
+
 .small {
   font-size: 0.85rem;
   color: rgb(var(--mm-muted));
@@ -3192,6 +3263,14 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 @media (max-width: 720px) {
+  .schedule-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .schedule-actions {
+    min-width: 0;
+  }
+
   .step-tl-row {
     grid-template-columns: 1.3rem 1fr;
     gap: 0 0.45rem;

@@ -83,6 +83,11 @@ from moonmind.workflows.temporal.workers import (
 from moonmind.workflows.tasks.task_contract import (
     build_authoritative_task_input_snapshot,
 )
+from moonmind.workflows.tasks.preset_goal_scheduler import (
+    goal_from_payloads,
+    schedule_preset_from_goal,
+    task_is_already_authored,
+)
 from moonmind.workflows.temporal.workflows.provider_profile_manager import MoonMindProviderProfileManagerWorkflow as MoonMindProviderProfileManager
 from moonmind.workflows.temporal.workflows.manifest_ingest import (
     MoonMindManifestIngestWorkflow as MoonMindManifestIngest,
@@ -219,7 +224,35 @@ async def _expand_task_template_for_child_run(
     )
     template_slug = _template_slug_from_task(task_payload)
     if not template_slug:
-        return parameters
+        goal = goal_from_payloads(
+            task_payload=task_payload,
+            parameter_payload=parameters,
+        )
+        schedule = (
+            None
+            if task_is_already_authored(task_payload)
+            else schedule_preset_from_goal(goal)
+        )
+        if schedule is None:
+            return parameters
+        template_slug = schedule.slug
+        template_payload = {
+            "slug": schedule.slug,
+            "version": schedule.version,
+            "scope": "global",
+        }
+        existing_inputs = _coerce_mapping(task_payload.get("inputs"))
+        task_payload["inputs"] = {**schedule.inputs, **existing_inputs}
+        task_payload["goal"] = schedule.goal
+        task_payload.setdefault("instructions", schedule.goal)
+        task_payload["taskTemplate"] = dict(template_payload)
+        task_payload["presetSchedule"] = {
+            "source": "goal",
+            "reason": schedule.reason,
+            "presetSlug": schedule.slug,
+            "presetVersion": schedule.version,
+            "jiraIssueKey": schedule.issue_key,
+        }
 
     from api_service.services.task_templates.catalog import (
         ExpandOptions,
@@ -244,6 +277,9 @@ async def _expand_task_template_for_child_run(
     if isinstance(repository, str) and repository.strip():
         template_context["repository"] = repository.strip()
         template_context["repo"] = repository.strip()
+    target_runtime = parameters.get("targetRuntime")
+    if isinstance(target_runtime, str) and target_runtime.strip():
+        template_context["targetRuntime"] = target_runtime.strip()
     catalog = TaskTemplateCatalogService(session)
     expand_kwargs = {
         "slug": template_slug,

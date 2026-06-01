@@ -76,6 +76,10 @@ class TemporalSettings(BaseSettings):
     workflow_task_queue: str = Field(
         "mm.workflow", validation_alias="TEMPORAL_WORKFLOW_TASK_QUEUE"
     )
+    merge_automation_workflow_task_queue: str = Field(
+        "mm.workflow.merge_automation",
+        validation_alias="TEMPORAL_MERGE_AUTOMATION_WORKFLOW_TASK_QUEUE",
+    )
     user_workflow_contract_mode: Literal["legacy_run", "renamed_contract"] = Field(
         "legacy_run",
         validation_alias="TEMPORAL_USER_WORKFLOW_CONTRACT_MODE",
@@ -221,6 +225,16 @@ class TemporalSettings(BaseSettings):
         normalized = str(value or "").strip()
         if not normalized:
             raise ValueError("TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE must not be blank")
+        return normalized
+
+    @field_validator("merge_automation_workflow_task_queue", mode="before")
+    @classmethod
+    def _normalize_merge_automation_workflow_task_queue(cls, value: Any) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError(
+                "TEMPORAL_MERGE_AUTOMATION_WORKFLOW_TASK_QUEUE must not be blank"
+            )
         return normalized
 
     @field_validator("user_workflow_contract_mode", mode="before")
@@ -2045,6 +2059,39 @@ class TaskProposalSettings(BaseSettings):
         extra="ignore",
     )
 
+class ExecutionNotificationSettings(BaseSettings):
+    """Operator notification settings for terminal execution outcomes."""
+
+    enabled: bool = Field(
+        False,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_ENABLED",
+        description="Emit webhook notifications when an agent run reaches a terminal result.",
+    )
+    webhook_url: Optional[str] = Field(
+        None,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_WEBHOOK_URL",
+        description="Webhook endpoint for agent run completion notifications.",
+    )
+    authorization: Optional[str] = Field(
+        None,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_AUTHORIZATION",
+        description="Optional Authorization header for completion notification webhooks.",
+    )
+    timeout_seconds: int = Field(
+        5,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_TIMEOUT_SECONDS",
+        description="Webhook timeout in seconds.",
+        gt=0,
+    )
+
+    model_config = SettingsConfigDict(
+        populate_by_name=True,
+        env_prefix="",
+        env_file=str(ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
 class AppSettings(BaseSettings):
     """Main application settings"""
 
@@ -2069,6 +2116,9 @@ class AppSettings(BaseSettings):
     workflow: AppWorkflowSettings = Field(default_factory=AppWorkflowSettings)
     feature_flags: FeatureFlagsSettings = Field(default_factory=FeatureFlagsSettings)
     task_proposals: TaskProposalSettings = Field(default_factory=TaskProposalSettings)
+    execution_notifications: ExecutionNotificationSettings = Field(
+        default_factory=ExecutionNotificationSettings
+    )
     jules: JulesSettings = Field(default_factory=JulesSettings)
     worker_enable_task_proposals: Optional[bool] = Field(
         None,
