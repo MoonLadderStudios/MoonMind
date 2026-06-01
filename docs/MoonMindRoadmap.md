@@ -76,11 +76,12 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - Manifest-based task submission (`manifest.schema.json`, `moonmind/manifest/`)
 - Task proposal queue for automated step generation
 - `proposal_generate` activity implemented
+- Task proposal admin/recovery UI surfacing and review actions — MM-743
 - Context clearing between ordered Codex managed-session steps via the
   task-scoped AgentSession reset boundary (MM-745)
 
 ### Remaining tasks
-- [ ] **3.1** Fix task proposal system end-to-end — `proposal_generate` activity exists but proposals not surfaced reliably in UI
+- [ ] **3.1** Fix task proposal system end-to-end — tracker-native GitHub/Jira proposal delivery and review remains the desired primary workflow; `/proposals` is admin/recovery coverage only
 - [ ] **3.2** Automatic context injection per step — Context pack exists (`rag/context_pack.py`), not wired into step execution
 - [x] **3.3** Context clearing between steps — Task-scoped Codex managed sessions clear to a new epoch before reuse by a later ordered step (MM-745)
 - [ ] **3.4** Multi-step workflow visualization in Mission Control — Dashboard shows tasks but not step DAGs
