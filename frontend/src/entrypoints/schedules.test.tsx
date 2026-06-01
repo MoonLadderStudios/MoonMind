@@ -100,6 +100,13 @@ describe("SchedulesPage", () => {
     expect(screen.getAllByText("Paused").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Needs Attention")).not.toBeNull();
     expect(screen.getByText("Worker unavailable")).not.toBeNull();
+    expect(
+      screen.getByText(
+        new Date(scheduleOne.nextRunAt).toLocaleString(undefined, {
+          timeZone: scheduleOne.timezone,
+        }),
+      ),
+    ).not.toBeNull();
     expect(screen.getAllByText("-").length).toBeGreaterThanOrEqual(1);
   });
 
@@ -145,5 +152,75 @@ describe("SchedulesPage", () => {
           String(init?.method).toUpperCase() === "PATCH",
       ),
     ).toBe(true);
+  });
+
+  it("honors dashboard schedule sources from the boot payload", async () => {
+    fetchSpy.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = String(init?.method || "GET").toUpperCase();
+      if (url === "/console/schedules?scope=personal" && method === "GET") {
+        return response({ items: [scheduleOne] });
+      }
+      if (url === "/console/schedules/schedule-1/toggle" && method === "PATCH") {
+        return response({ ...scheduleOne, name: "Server schedule", enabled: false });
+      }
+      return response({}, false);
+    });
+
+    renderWithClient(
+      <SchedulesPage
+        payload={{
+          page: "schedules",
+          apiBase: "/tenant/api",
+          initialData: {
+            dashboardConfig: {
+              sources: {
+                schedules: {
+                  list: "/console/schedules?scope=personal",
+                  update: "/console/schedules/{id}/toggle",
+                  runNow: "/console/schedules/{id}/run-now",
+                },
+              },
+            },
+          },
+        }}
+      />,
+    );
+
+    await screen.findByText("Daily roadmap follow-up");
+    fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+    await screen.findByText("Server schedule paused.");
+
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) =>
+          String(url) === "/console/schedules/schedule-1/toggle" &&
+          String(init?.method).toUpperCase() === "PATCH",
+      ),
+    ).toBe(true);
+  });
+
+  it("uses apiBase for default schedule endpoints", async () => {
+    fetchSpy.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = String(init?.method || "GET").toUpperCase();
+      if (url === "/tenant/api/recurring-tasks?scope=personal" && method === "GET") {
+        return response({ items: [scheduleOne] });
+      }
+      return response({}, false);
+    });
+
+    renderWithClient(
+      <SchedulesPage
+        payload={{
+          page: "schedules",
+          apiBase: "/tenant/api",
+          initialData: {},
+        }}
+      />,
+    );
+
+    await screen.findByText("Daily roadmap follow-up");
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/tenant/api/recurring-tasks?scope=personal");
   });
 });

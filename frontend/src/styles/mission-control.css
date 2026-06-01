@@ -2259,6 +2259,7 @@ tr[data-proposal-id].proposal-consuming td {
   flex-direction: column;
   align-items: flex-start;
   gap: 0.25rem;
+  width: 100%;
   min-height: 5.6rem;
   padding: 0.9rem;
   border: 1px solid rgb(var(--mm-border));

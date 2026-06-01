@@ -35,6 +35,24 @@ type ScheduleFilter = "all" | "enabled" | "paused" | "needs_attention";
 
 const SchedulesBootDataSchema = z
   .object({
+    dashboardConfig: z
+      .object({
+        sources: z
+          .object({
+            schedules: z
+              .object({
+                list: z.string().optional(),
+                update: z.string().optional(),
+                runNow: z.string().optional(),
+              })
+              .partial()
+              .optional(),
+          })
+          .partial()
+          .optional(),
+      })
+      .partial()
+      .optional(),
     sources: z
       .object({
         schedules: z
@@ -57,18 +75,28 @@ function endpoint(template: string, scheduleId: string): string {
 
 function scheduleSources(payload: BootPayload) {
   const parsed = SchedulesBootDataSchema.safeParse(payload.initialData || {});
-  const schedules = parsed.success ? parsed.data.sources?.schedules : undefined;
+  const schedules = parsed.success
+    ? parsed.data.dashboardConfig?.sources?.schedules || parsed.data.sources?.schedules
+    : undefined;
+  const base = payload.apiBase || "/api";
   return {
-    list: schedules?.list || "/api/recurring-tasks?scope=personal",
-    update: schedules?.update || "/api/recurring-tasks/{id}",
-    runNow: schedules?.runNow || "/api/recurring-tasks/{id}/run",
+    list: schedules?.list || `${base}/recurring-tasks?scope=personal`,
+    update: schedules?.update || `${base}/recurring-tasks/{id}`,
+    runNow: schedules?.runNow || `${base}/recurring-tasks/{id}/run`,
   };
 }
 
-function formatWhen(iso: string | null | undefined): string {
+function formatWhen(iso: string | null | undefined, timezone?: string): string {
   if (!iso) return "-";
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
+  if (timezone) {
+    try {
+      return date.toLocaleString(undefined, { timeZone: timezone });
+    } catch {
+      // Fall back to local formatting when a persisted timezone is unsupported.
+    }
+  }
   return date.toLocaleString();
 }
 
@@ -149,10 +177,10 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
       }
       return ScheduleSchema.parse(await response.json());
     },
-    onSuccess: (_result, schedule) => {
+    onSuccess: (result) => {
       setFeedback({
         tone: "ok",
-        text: `${schedule.name} ${schedule.enabled ? "paused" : "enabled"}.`,
+        text: `${result.name} ${result.enabled ? "enabled" : "paused"}.`,
       });
       queryClient.invalidateQueries({ queryKey });
     },
@@ -317,7 +345,7 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
             {
               key: "nextRunAt",
               header: "Next Run",
-              render: (item) => formatWhen(item.nextRunAt),
+              render: (item) => formatWhen(item.nextRunAt, item.timezone),
             },
             {
               key: "actions",
