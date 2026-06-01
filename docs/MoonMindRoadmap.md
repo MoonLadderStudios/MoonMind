@@ -85,7 +85,7 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - [ ] **3.2** Automatic context injection per step — Context pack exists (`rag/context_pack.py`), not wired into step execution
 - [x] **3.3** Context clearing between steps — Task-scoped Codex managed sessions clear to a new epoch before reuse by a later ordered step (MM-745)
 - [ ] **3.4** Multi-step workflow visualization in Mission Control — Dashboard shows tasks but not step DAGs
-- [ ] **3.5** Preset-driven scheduling (auto-sequence from goal) — Presets exist but goal-to-plan decomposition is manual
+- [x] **3.5** Preset-driven scheduling (auto-sequence from goal) — Goal-only task submissions are deterministically mapped to seeded presets before backend expansion (MM-747)
 - [ ] **3.6** Overhaul and streamline schedules UI — Current schedules interface needs UX improvement
 
 ---
