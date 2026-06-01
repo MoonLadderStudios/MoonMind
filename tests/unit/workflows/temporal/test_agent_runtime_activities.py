@@ -145,6 +145,21 @@ async def test_execution_notify_completion_posts_sanitized_payload(monkeypatch) 
         "timeout_seconds",
         7,
     )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "email_to",
+        None,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "email_from",
+        None,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_host",
+        None,
+    )
     monkeypatch.setattr(activity_runtime_module.httpx, "AsyncClient", _Client)
 
     activities = TemporalAgentRuntimeActivities()
@@ -171,6 +186,135 @@ async def test_execution_notify_completion_posts_sanitized_payload(monkeypatch) 
     assert calls[0]["json"]["event"] == "moonmind.execution.completed"
     assert calls[0]["json"]["summary"] == "token=[REDACTED]"
     assert calls[0]["json"]["taskRunId"] == "task-1"
+
+
+async def test_execution_notify_completion_sends_email_channel(monkeypatch) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class _SMTP:
+        def __init__(self, host: str, port: int, *, timeout: int) -> None:
+            calls.append(
+                {"action": "connect", "host": host, "port": port, "timeout": timeout}
+            )
+
+        def __enter__(self) -> "_SMTP":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def starttls(self) -> None:
+            calls.append({"action": "starttls"})
+
+        def login(self, username: str, password: str) -> None:
+            calls.append(
+                {"action": "login", "username": username, "password": password}
+            )
+
+        def send_message(self, message: Any) -> None:
+            calls.append(
+                {
+                    "action": "send_message",
+                    "from": message["From"],
+                    "to": message["To"],
+                    "subject": message["Subject"],
+                    "body": message.get_content(),
+                }
+            )
+
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "webhook_url",
+        None,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "email_to",
+        "ops@example.test, owner@example.test",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "email_from",
+        "moonmind@example.test",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_host",
+        "smtp.example.test",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_port",
+        2525,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_username",
+        "smtp-user",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_password",
+        "smtp-secret",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_use_tls",
+        True,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_use_ssl",
+        False,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "timeout_seconds",
+        9,
+    )
+    monkeypatch.setattr(activity_runtime_module.smtplib, "SMTP", _SMTP)
+
+    activities = TemporalAgentRuntimeActivities()
+    result = await activities.execution_notify_completion(
+        {
+            "workflowId": "wf-email",
+            "runId": "run-email",
+            "agentId": "codex_cli",
+            "agentKind": "managed",
+            "status": "failed",
+            "result": {
+                "summary": "password=secret",
+                "failureClass": "permanent",
+                "metadata": {"taskRunId": "task-email"},
+            },
+        }
+    )
+
+    assert result == {"status": "sent", "target": "email:2 recipients"}
+    assert calls[0] == {
+        "action": "connect",
+        "host": "smtp.example.test",
+        "port": 2525,
+        "timeout": 9,
+    }
+    assert {"action": "starttls"} in calls
+    assert {
+        "action": "login",
+        "username": "smtp-user",
+        "password": "smtp-secret",
+    } in calls
+    sent = [call for call in calls if call["action"] == "send_message"][0]
+    assert sent["from"] == "moonmind@example.test"
+    assert sent["to"] == "ops@example.test, owner@example.test"
+    assert sent["subject"] == "MoonMind execution failed: wf-email"
+    assert "password=[REDACTED]" in sent["body"]
+    assert "task-email" in sent["body"]
+
 
 async def test_publish_artifacts_notifies_terminal_result(monkeypatch) -> None:
     calls: list[dict[str, Any]] = []
