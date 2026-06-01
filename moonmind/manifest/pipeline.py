@@ -30,6 +30,8 @@ class SourceResult:
     source_type: str
     doc_count: int = 0
     error: Optional[str] = None
+    skipped: bool = False
+    state: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
 class PipelineResult:
@@ -53,6 +55,8 @@ class PipelineResult:
                     "type": s.source_type,
                     "docs": s.doc_count,
                     "error": s.error,
+                    "skipped": s.skipped,
+                    "state": s.state,
                 }
                 for s in self.sources
             ],
@@ -78,9 +82,11 @@ class ManifestPipeline:
         self,
         manifest: ManifestV0,
         logger: Optional[logging.Logger] = None,
+        previous_state: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.manifest = manifest
         self.log = logger or logging.getLogger(__name__)
+        self.previous_state = previous_state or {}
 
         # Ensure adapters are registered
         try:
@@ -157,7 +163,21 @@ class ManifestPipeline:
 
             try:
                 doc_count = 0
+                current_state = adapter.state()
+                if self._source_unchanged(ds.id, current_state):
+                    result.sources.append(
+                        SourceResult(
+                            source_id=ds.id,
+                            source_type=ds.type,
+                            skipped=True,
+                            state=current_state,
+                        )
+                    )
+                    self.log.info("Source %s unchanged; skipping fetch", ds.id)
+                    continue
+
                 for text, metadata in adapter.fetch():
+                    _ = text, metadata
                     doc_count += 1
                     # In full integration, documents would be:
                     # 1. Transformed (htmlToText, splitter, enrichMetadata)
@@ -171,12 +191,11 @@ class ManifestPipeline:
                 )
                 result.total_docs += doc_count
 
-                # Record state for incremental re-index
-                state = adapter.state()
                 self.log.info(
                     "Source %s: fetched %d docs, state=%s",
-                    ds.id, doc_count, state,
+                    ds.id, doc_count, current_state,
                 )
+                src_result.state = current_state
 
             except Exception as exc:
                 self.log.exception(
@@ -196,3 +215,16 @@ class ManifestPipeline:
             result.sources.append(src_result)
 
         return result
+
+    def _source_unchanged(
+        self,
+        source_id: str,
+        current_state: Dict[str, Any],
+    ) -> bool:
+        sources_state = self.previous_state.get("sources", self.previous_state)
+        if not isinstance(sources_state, dict):
+            return False
+        previous = sources_state.get(source_id)
+        if not isinstance(previous, dict):
+            return False
+        return previous == current_state

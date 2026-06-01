@@ -140,6 +140,83 @@ def test_search_uses_query_points_when_search_api_is_unavailable():
         "src/canon_a.py",
     ]
 
+def test_search_queries_multiple_canonical_collections_and_reranks():
+    client = _client()
+    calls: list[str] = []
+
+    class FakeQdrant:
+        def search(self, *, collection_name, **kwargs):
+            _ = kwargs
+            calls.append(collection_name)
+            if collection_name == "repo-main":
+                return [
+                    _point(
+                        score=0.70,
+                        path="src/main.py",
+                        chunk_hash="main",
+                        text="main",
+                    )
+                ]
+            if collection_name == "repo-docs":
+                return [
+                    _point(
+                        score=0.95,
+                        path="docs/rag.md",
+                        chunk_hash="docs",
+                        text="docs",
+                    )
+                ]
+            raise AssertionError("unexpected collection")
+
+    client._client = FakeQdrant()  # type: ignore[assignment]
+    result = client.search(
+        query_vector=[0.1, 0.2],
+        filters={"repo": "moonmind"},
+        top_k=2,
+        overlay_policy="skip",
+        overlay_collection=None,
+        collections=("repo-main", "repo-docs"),
+        trust_overrides=None,
+    )
+
+    assert calls == ["repo-main", "repo-docs"]
+    assert [item.source for item in result.items] == ["docs/rag.md", "src/main.py"]
+
+def test_collection_health_reports_counts_and_dimensions():
+    client = _client()
+
+    class _Vectors:
+        size = 768
+
+    class _Params:
+        vectors = _Vectors()
+
+    class _Config:
+        params = _Params()
+
+    class _Info:
+        status = "green"
+        points_count = 12
+        vectors_count = 12
+        indexed_vectors_count = 10
+        config = _Config()
+
+    class FakeQdrant:
+        def get_collection(self, name):
+            assert name == "repo-main"
+            return _Info()
+
+    client._client = FakeQdrant()  # type: ignore[assignment]
+
+    result = client.collection_health(collection_names=("repo-main",))
+
+    assert result[0].name == "repo-main"
+    assert result[0].status == "green"
+    assert result[0].points_count == 12
+    assert result[0].indexed_vectors_count == 10
+    assert result[0].dimensions == 768
+    assert result[0].freshness == "ready"
+
 def test_merge_results_skips_expired_overlay_chunks():
     client = _client()
     expired_overlay = _point(

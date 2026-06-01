@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
+import hashlib
 from pathlib import Path
 from typing import Any, Dict, Iterator, Tuple
 
@@ -240,7 +241,34 @@ class SimpleDirectoryReaderAdapter(_BaseAdapter):
             yield (text, meta)
 
     def state(self) -> Dict[str, Any]:
-        return {"inputDir": self.ds.params.get("inputDir", ".")}
+        input_dir = self.ds.params.get("inputDir", ".")
+        recursive = self.ds.params.get("recursive", False)
+        exts = self.ds.params.get("requiredExts")
+        p = Path(input_dir)
+        files: Dict[str, Dict[str, Any]] = {}
+        if p.exists():
+            pattern = "**/*" if recursive else "*"
+            for f in sorted(p.glob(pattern)):
+                if not f.is_file():
+                    continue
+                if exts and f.suffix not in exts:
+                    continue
+                stat = f.stat()
+                try:
+                    digest = hashlib.sha256(f.read_bytes()).hexdigest()
+                except OSError:
+                    digest = ""
+                files[str(f.relative_to(p))] = {
+                    "size": stat.st_size,
+                    "mtime_ns": stat.st_mtime_ns,
+                    "sha256": digest,
+                }
+        return {
+            "inputDir": input_dir,
+            "recursive": recursive,
+            "requiredExts": exts or [],
+            "files": files,
+        }
 
 # ---------------------------------------------------------------------------
 # Confluence

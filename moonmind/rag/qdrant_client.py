@@ -22,6 +22,29 @@ class SearchResult:
     items: List[ContextItem]
     latency_ms: float
 
+@dataclass(slots=True)
+class CollectionHealth:
+    name: str
+    status: str
+    vectors_count: int | None = None
+    points_count: int | None = None
+    indexed_vectors_count: int | None = None
+    dimensions: int | None = None
+    freshness: str | None = None
+    error: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "status": self.status,
+            "vectors_count": self.vectors_count,
+            "points_count": self.points_count,
+            "indexed_vectors_count": self.indexed_vectors_count,
+            "dimensions": self.dimensions,
+            "freshness": self.freshness,
+            "error": self.error,
+        }
+
 class RagQdrantClient:
     """High-level helper that enforces guardrails for vector operations."""
 
@@ -95,18 +118,24 @@ class RagQdrantClient:
         top_k: int,
         overlay_policy: str,
         overlay_collection: Optional[str],
+        collections: Sequence[str] | None = None,
         trust_overrides: Optional[Mapping[str, str]] = None,
     ) -> SearchResult:
         start = time.perf_counter()
         filter_obj = self._build_filter(filters)
-        canonical = self._search_points(
-            collection_name=self.collection,
-            query_vector=query_vector,
-            limit=top_k,
-            with_payload=True,
-            with_vectors=False,
-            query_filter=filter_obj,
-        )
+        canonical = []
+        target_collections = tuple(collections or (self.collection,))
+        for collection_name in target_collections:
+            canonical.extend(
+                self._search_points(
+                    collection_name=collection_name,
+                    query_vector=query_vector,
+                    limit=top_k,
+                    with_payload=True,
+                    with_vectors=False,
+                    query_filter=filter_obj,
+                )
+            )
         overlay_points = []
         if overlay_policy == "include" and overlay_collection:
             try:
@@ -122,6 +151,7 @@ class RagQdrantClient:
             except UnexpectedResponse:
                 overlay_points = []
         merge = self._merge_results(overlay_points, canonical, trust_overrides)
+        merge.sort(key=lambda item: item.score, reverse=True)
         latency_ms = (time.perf_counter() - start) * 1000
         return SearchResult(items=merge[:top_k], latency_ms=latency_ms)
 
@@ -312,3 +342,46 @@ class RagQdrantClient:
         self._client.create_collection(
             collection_name=collection_name, vectors_config=vectors
         )
+
+    def collection_health(
+        self,
+        *,
+        collection_names: Sequence[str] | None = None,
+    ) -> list[CollectionHealth]:
+        targets = tuple(collection_names or (self.collection,))
+        health: list[CollectionHealth] = []
+        for name in targets:
+            try:
+                info = self._client.get_collection(name)
+            except UnexpectedResponse as exc:
+                health.append(
+                    CollectionHealth(
+                        name=name,
+                        status="unavailable",
+                        error=str(exc),
+                    )
+                )
+                continue
+            vectors_config = getattr(getattr(info, "config", None), "params", None)
+            vectors = getattr(vectors_config, "vectors", None)
+            dimensions = getattr(vectors, "size", None)
+            if dimensions is None:
+                dimensions = getattr(vectors_config, "size", None)
+            points_count = getattr(info, "points_count", None)
+            vectors_count = getattr(info, "vectors_count", None)
+            indexed_vectors_count = getattr(info, "indexed_vectors_count", None)
+            if points_count is None:
+                points_count = vectors_count
+            freshness = "empty" if not points_count else "ready"
+            health.append(
+                CollectionHealth(
+                    name=name,
+                    status=str(getattr(info, "status", "available")),
+                    vectors_count=vectors_count,
+                    points_count=points_count,
+                    indexed_vectors_count=indexed_vectors_count,
+                    dimensions=dimensions,
+                    freshness=freshness,
+                )
+            )
+        return health

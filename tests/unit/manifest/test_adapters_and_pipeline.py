@@ -265,6 +265,43 @@ class TestExtensibility:
         assert result.total_docs == 1
         assert result.sources[0].doc_count == 1
 
+    def test_pipeline_skips_unchanged_source_from_previous_state(self, tmp_path):
+        source_dir = tmp_path / "docs"
+        source_dir.mkdir()
+        (source_dir / "a.md").write_text("hello", encoding="utf-8")
+        manifest = ManifestV0.from_yaml_string(textwrap.dedent(f"""\
+            version: "v0"
+            metadata:
+              name: "incremental-run"
+            embeddings:
+              provider: "openai"
+              model: "text-embedding-3-large"
+            vectorStore:
+              type: "qdrant"
+              indexName: "test"
+            dataSources:
+              - id: "local"
+                type: "SimpleDirectoryReader"
+                params:
+                  inputDir: "{source_dir}"
+                  requiredExts: [".md"]
+            indices:
+              - id: "idx1"
+                sources: ["local"]
+            retrievers:
+              - id: "ret1"
+                type: "Vector"
+                indices: ["idx1"]
+        """))
+        first = ManifestPipeline(manifest).run()
+        previous_state = {"sources": {"local": first.sources[0].state}}
+
+        second = ManifestPipeline(manifest, previous_state=previous_state).run()
+
+        assert second.total_docs == 0
+        assert second.sources[0].skipped is True
+        assert second.sources[0].state == first.sources[0].state
+
 # ---------------------------------------------------------------------------
 # T026: PII redaction enforcement
 # ---------------------------------------------------------------------------
