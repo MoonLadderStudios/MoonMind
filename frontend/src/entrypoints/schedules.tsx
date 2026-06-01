@@ -123,13 +123,13 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
   });
 
   const schedules = data?.items || [];
-  const now = Date.now();
   const stats = useMemo(() => {
+    const now = Date.now();
     const active = schedules.filter((schedule) => schedule.enabled).length;
     const attention = schedules.filter((schedule) => scheduleState(schedule) === 'attention').length;
     const dueSoon = schedules.filter((schedule) => isDueSoon(schedule, now)).length;
     return { active, attention, dueSoon, total: schedules.length };
-  }, [now, schedules]);
+  }, [schedules]);
 
   return (
     <div className="schedules-page stack">
