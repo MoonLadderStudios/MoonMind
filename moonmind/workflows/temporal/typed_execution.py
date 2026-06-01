@@ -247,7 +247,8 @@ async def execute_external_start_activity(
 ) -> AgentRunHandle:
     """Execute any provider start activity that returns ``AgentRunHandle``."""
 
-    return await execute_typed_activity(activity, arg, **kwargs)
+    result = await execute_typed_activity(activity, arg, **kwargs)
+    return AgentRunHandle(**result) if isinstance(result, dict) else result
 
 
 async def execute_external_status_activity(
@@ -257,7 +258,8 @@ async def execute_external_status_activity(
 ) -> AgentRunStatus:
     """Execute any provider status activity that returns ``AgentRunStatus``."""
 
-    return await execute_typed_activity(activity, arg, **kwargs)
+    result = await execute_typed_activity(activity, arg, **kwargs)
+    return AgentRunStatus(**result) if isinstance(result, dict) else result
 
 
 async def execute_external_fetch_result_activity(
@@ -267,7 +269,8 @@ async def execute_external_fetch_result_activity(
 ) -> AgentRunResult:
     """Execute any provider fetch activity that returns ``AgentRunResult``."""
 
-    return await execute_typed_activity(activity, arg, **kwargs)
+    result = await execute_typed_activity(activity, arg, **kwargs)
+    return AgentRunResult(**result) if isinstance(result, dict) else result
 
 
 async def execute_external_cancel_activity(
@@ -277,7 +280,8 @@ async def execute_external_cancel_activity(
 ) -> AgentRunStatus:
     """Execute any provider cancel activity that returns ``AgentRunStatus``."""
 
-    return await execute_typed_activity(activity, arg, **kwargs)
+    result = await execute_typed_activity(activity, arg, **kwargs)
+    return AgentRunStatus(**result) if isinstance(result, dict) else result
 
 
 async def execute_external_streaming_activity(
@@ -287,4 +291,5 @@ async def execute_external_streaming_activity(
 ) -> AgentRunResult:
     """Execute any streaming-gateway provider activity returning ``AgentRunResult``."""
 
-    return await execute_typed_activity(activity, arg, **kwargs)
+    result = await execute_typed_activity(activity, arg, **kwargs)
+    return AgentRunResult(**result) if isinstance(result, dict) else result

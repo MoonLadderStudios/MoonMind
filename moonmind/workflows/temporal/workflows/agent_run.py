@@ -270,11 +270,12 @@ async def resolve_adapter_metadata(agent_id: str) -> dict:
     raises if no adapter is registered for *agent_id*.
     """
     registry = build_default_registry()
-    adapter = registry.create(agent_id)
+    resolved_agent_id = str(agent_id).strip().lower()
+    adapter = registry.create(resolved_agent_id)
     execution_style = "polling"
     if isinstance(adapter, BaseExternalAgentAdapter):
         execution_style = adapter.provider_capability.execution_style
-    return {"agent_id": agent_id, "execution_style": execution_style}
+    return {"agent_id": resolved_agent_id, "execution_style": execution_style}
 
 # --- In-flight compatibility shims (spec #285) ---
 # These activities were superseded by resolve_adapter_metadata but must remain

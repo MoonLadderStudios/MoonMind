@@ -257,6 +257,32 @@ async def test_agent_run_external_poll_and_fetch_use_typed_activity_inputs(
     assert isinstance(fetch_payload, ExternalAgentRunInput)
     assert fetch_payload.run_id == "session-typed-1"
 
+
+async def test_resolve_adapter_metadata_normalizes_case_for_activity_routing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.workflows.adapters.external_adapter_registry import (
+        ExternalAdapterRegistry,
+    )
+    from moonmind.workflows.adapters.openclaw_agent_adapter import (
+        OpenClawExternalAdapter,
+    )
+
+    registry = ExternalAdapterRegistry()
+    registry.register("openclaw", OpenClawExternalAdapter)
+    monkeypatch.setattr(
+        agent_run_module,
+        "build_default_registry",
+        lambda: registry,
+    )
+
+    metadata = await agent_run_module.resolve_adapter_metadata("OpenClaw")
+
+    assert metadata == {
+        "agent_id": "openclaw",
+        "execution_style": "streaming_gateway",
+    }
+
 async def test_agent_run_streaming_gateway_uses_validated_provider_execute_activity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
