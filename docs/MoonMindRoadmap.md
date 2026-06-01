@@ -62,7 +62,7 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - [x] **2.1** Jules end-to-end external event workflow — Spec 048/066, adapter exists, event wiring complete
 - [x] **2.2** Remove External Runs tab — External runs integrated into main dashboard
 - [ ] **2.3** Codex Cloud integration adapter — No adapter yet for the hosted Codex product
-- [ ] **2.4** Generic external-agent adapter pattern — Designed in `ExternalAgentIntegrationSystem.md`, not generalized in code
+- [x] **2.4** Generic external-agent adapter pattern — MM-741; shared adapter contract, registry-based provider selection, polling and streaming-gateway execution styles
 
 ---
 
