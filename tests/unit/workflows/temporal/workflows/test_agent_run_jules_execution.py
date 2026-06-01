@@ -257,6 +257,73 @@ async def test_agent_run_external_poll_and_fetch_use_typed_activity_inputs(
     assert isinstance(fetch_payload, ExternalAgentRunInput)
     assert fetch_payload.run_id == "session-typed-1"
 
+async def test_agent_run_jules_feedback_with_auto_answer_disabled_signals_intervention(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = MoonMindAgentRun()
+    routed_calls: list[tuple[str, Any]] = []
+    parent_signals: list[tuple[str, str]] = []
+
+    _configure_workflow_runtime(monkeypatch)
+
+    async def fake_wait_condition(_condition: Any, timeout: timedelta) -> None:
+        raise asyncio.TimeoutError()
+
+    async def fake_execute_routed_activity(
+        activity_name: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        routed_calls.append((activity_name, payload))
+        if activity_name == "integration.resolve_adapter_metadata":
+            return {"agent_id": "jules", "execution_style": "polling"}
+        if activity_name == "integration.jules.start":
+            return {"external_id": "jules-session-1", "status": "running"}
+        if activity_name == "integration.jules.status":
+            return AgentRunStatus(
+                runId="jules-session-1",
+                agentKind="external",
+                agentId="jules",
+                status="awaiting_feedback",
+                metadata={"activityId": "activity-1"},
+            )
+        if activity_name == "integration.jules.list_activities":
+            return {
+                "activityId": "activity-1",
+                "latestAgentQuestion": "Which branch should I use?",
+            }
+        if activity_name == "integration.jules.get_auto_answer_config":
+            return {"enabled": False, "max_answers": 3}
+        if activity_name == "agent_runtime.publish_artifacts":
+            return payload
+        raise AssertionError(f"Unexpected routed activity: {activity_name}")
+
+    async def fake_signal_parent_child_state_changed(
+        parent_info: Any,
+        state: str,
+        reason: str,
+    ) -> None:
+        parent_signals.append((state, reason))
+
+    monkeypatch.setattr(agent_run_module.workflow, "wait_condition", fake_wait_condition)
+    monkeypatch.setattr(run, "_execute_routed_activity", fake_execute_routed_activity)
+    monkeypatch.setattr(
+        run,
+        "_signal_parent_child_state_changed",
+        fake_signal_parent_child_state_changed,
+    )
+
+    result = await run.run(_request())
+
+    assert result.failure_class == "user_error"
+    assert result.provider_error_code == "intervention_requested"
+    assert result.metadata["status"] == "intervention_requested"
+    assert result.metadata["reason"] == "agent_requested_feedback"
+    assert result.metadata["julesAutoAnswerReason"] == "jules_auto_answer_disabled"
+    assert result.metadata["lastStatus"]["status"] == "awaiting_feedback"
+    assert ("intervention_requested", "Jules requested human feedback.") in parent_signals
+    assert all(name != "integration.jules.fetch_result" for name, _ in routed_calls)
+
 
 async def test_resolve_adapter_metadata_normalizes_case_for_activity_routing(
     monkeypatch: pytest.MonkeyPatch,
