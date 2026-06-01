@@ -270,6 +270,9 @@ RUN_SLOT_CONTINUITY_PATCH = "run-slot-continuity-v1"
 RUN_DEFER_TASK_SCOPED_SESSION_UNTIL_SLOT_PATCH = (
     "run-defer-task-scoped-session-until-slot-v1"
 )
+RUN_TASK_SCOPED_SESSION_CLEAR_BETWEEN_STEPS_PATCH = (
+    "run-task-scoped-session-clear-between-steps-v1"
+)
 RUN_TERMINAL_STATE_ACTIVITY_PATCH = "run-terminal-state-activity-v1"
 RUN_PAUSE_SAFE_BOUNDARIES_PATCH = "run-pause-safe-boundaries-v1"
 # Replay-stable patch id for stamping mm_started_at when real work begins.
@@ -645,6 +648,7 @@ class MoonMindRunWorkflow:
         self._last_publish_repair_node_id: str | None = None
         self._codex_session_handle: Any | None = None
         self._codex_session_binding: CodexManagedSessionBinding | None = None
+        self._codex_session_cleared_before_step_ids: set[str] = set()
         self._trusted_jira_context: dict[str, Any] | None = None
         self._step_ledger_rows: list[dict[str, Any]] = []
         self._step_ledger_by_id: dict[str, dict[str, Any]] = {}
@@ -4049,6 +4053,10 @@ class MoonMindRunWorkflow:
                                     ordered_nodes=ordered_nodes,
                                     current_index=index,
                                 )
+                            await self._maybe_clear_task_scoped_session_before_step(
+                                request=request,
+                                logical_step_id=node_id,
+                            )
                             request = await self._maybe_bind_task_scoped_session(request)
                             selected_skill_for_repair = node_inputs.get(
                                 "selectedSkill"
@@ -5495,6 +5503,47 @@ class MoonMindRunWorkflow:
         if binding is None:
             return request
         return request.model_copy(update={"managed_session": binding})
+
+    async def _maybe_clear_task_scoped_session_before_step(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        logical_step_id: str,
+    ) -> None:
+        if not workflow.patched(RUN_TASK_SCOPED_SESSION_CLEAR_BETWEEN_STEPS_PATCH):
+            return
+        if logical_step_id in self._codex_session_cleared_before_step_ids:
+            return
+        binding = self._codex_session_binding
+        if binding is None:
+            return
+        if self._managed_session_runtime_id(request) != binding.runtime_id:
+            return
+        session_handle = workflow.get_external_workflow_handle(binding.workflow_id)
+        reason = f"Clearing task-scoped context before step {logical_step_id}"
+        result = await session_handle.execute_update(
+            "ClearSession",
+            {
+                "reason": reason,
+                "requestId": step_execution_operation_idempotency_key(
+                    workflow_id=workflow.info().workflow_id,
+                    run_id=workflow.info().run_id,
+                    logical_step_id=logical_step_id,
+                    execution_ordinal=self._step_execution_for(logical_step_id) or 1,
+                    operation="clear_session",
+                ),
+            },
+        )
+        session_state = self._get_from_result(
+            result, "sessionState"
+        ) or self._get_from_result(result, "session_state")
+        if isinstance(session_state, Mapping):
+            session_epoch = self._get_from_result(session_state, "sessionEpoch")
+            if isinstance(session_epoch, int) and session_epoch >= 1:
+                self._codex_session_binding = binding.model_copy(
+                    update={"session_epoch": session_epoch}
+                )
+        self._codex_session_cleared_before_step_ids.add(logical_step_id)
 
     async def _terminate_task_scoped_sessions(self, *, reason: str) -> None:
         binding = self._codex_session_binding

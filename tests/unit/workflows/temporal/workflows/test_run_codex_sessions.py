@@ -9,6 +9,7 @@ from moonmind.schemas.managed_session_models import CodexManagedSessionBinding
 from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.temporal.workflows.run import (
     RUN_DEFER_TASK_SCOPED_SESSION_UNTIL_SLOT_PATCH,
+    RUN_TASK_SCOPED_SESSION_CLEAR_BETWEEN_STEPS_PATCH,
     RUN_TASK_SCOPED_SESSION_TERMINATION_PATCH,
     RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_EXECUTE_PATCH,
     RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_PATCH,
@@ -168,6 +169,112 @@ async def test_run_skips_task_scoped_session_for_non_session_managed_runtime(
 
     assert request.managed_session is None
     assert started is False
+
+@pytest.mark.asyncio
+async def test_run_clears_existing_task_scoped_codex_session_before_next_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    _configure_workflow_runtime(monkeypatch)
+    update_calls: list[tuple[str, Any]] = []
+
+    class _FakeHandle:
+        async def execute_update(
+            self, update_name: str, payload: Any = None
+        ) -> dict[str, Any]:
+            update_calls.append((update_name, payload))
+            return {
+                "sessionState": {
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 2,
+                    "containerId": "container-1",
+                    "threadId": "thread:sess:wf-run-1:codex_cli:2",
+                },
+                "latestResetBoundaryRef": "artifact://reset-boundary-1",
+            }
+
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_TASK_SCOPED_SESSION_CLEAR_BETWEEN_STEPS_PATCH,
+    )
+    _use_external_handle(monkeypatch, _FakeHandle())
+    workflow._codex_session_binding = CodexManagedSessionBinding(
+        workflowId="wf-run-1:session:codex_cli",
+        taskRunId="wf-run-1",
+        sessionId="sess:wf-run-1:codex_cli",
+        sessionEpoch=1,
+        runtimeId="codex_cli",
+        executionProfileRef="codex-default",
+    )
+
+    await workflow._maybe_clear_task_scoped_session_before_step(
+        request=_managed_request("codex"),
+        logical_step_id="step-2",
+    )
+
+    assert update_calls == [
+        (
+            "ClearSession",
+            {
+                "reason": "Clearing task-scoped context before step step-2",
+                "requestId": "wf-run-1:run-1:step-2:execution:1:clear_session",
+            },
+        )
+    ]
+    assert workflow._codex_session_binding is not None
+    assert workflow._codex_session_binding.session_epoch == 2
+    assert "step-2" in workflow._codex_session_cleared_before_step_ids
+
+
+@pytest.mark.asyncio
+async def test_run_does_not_clear_task_scoped_session_twice_for_same_step_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    _configure_workflow_runtime(monkeypatch)
+    update_calls: list[tuple[str, Any]] = []
+
+    class _FakeHandle:
+        async def execute_update(
+            self, update_name: str, payload: Any = None
+        ) -> dict[str, Any]:
+            update_calls.append((update_name, payload))
+            return {
+                "sessionState": {
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 2,
+                    "containerId": "container-1",
+                    "threadId": "thread:sess:wf-run-1:codex_cli:2",
+                },
+            }
+
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_TASK_SCOPED_SESSION_CLEAR_BETWEEN_STEPS_PATCH,
+    )
+    _use_external_handle(monkeypatch, _FakeHandle())
+    workflow._codex_session_binding = CodexManagedSessionBinding(
+        workflowId="wf-run-1:session:codex_cli",
+        taskRunId="wf-run-1",
+        sessionId="sess:wf-run-1:codex_cli",
+        sessionEpoch=1,
+        runtimeId="codex_cli",
+        executionProfileRef="codex-default",
+    )
+
+    await workflow._maybe_clear_task_scoped_session_before_step(
+        request=_managed_request("codex"),
+        logical_step_id="step-2",
+    )
+    await workflow._maybe_clear_task_scoped_session_before_step(
+        request=_managed_request("codex"),
+        logical_step_id="step-2",
+    )
+
+    assert len(update_calls) == 1
+
 
 def test_run_pending_agent_step_refs_include_session_task_run_id() -> None:
     workflow = MoonMindRunWorkflow()
