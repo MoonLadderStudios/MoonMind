@@ -27,11 +27,17 @@ def _module_assignment_value(path: Path, name: str):
     module = ast.parse(path.read_text(encoding="utf-8"))
     for node in module.body:
         if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            if node.target.id == name:
-                return ast.literal_eval(node.value)
+            if node.target.id == name and node.value is not None:
+                try:
+                    return ast.literal_eval(node.value)
+                except (ValueError, TypeError):
+                    pass
         if isinstance(node, ast.Assign):
             if any(isinstance(target, ast.Name) and target.id == name for target in node.targets):
-                return ast.literal_eval(node.value)
+                try:
+                    return ast.literal_eval(node.value)
+                except (ValueError, TypeError):
+                    pass
     return None
 
 
@@ -41,6 +47,8 @@ def test_alembic_revision_ids_fit_default_version_column():
     assert migration_dir.exists(), "Alembic versions directory is missing"
 
     for migration_path in migration_dir.glob("*.py"):
+        if migration_path.name == "__init__.py":
+            continue
         revision = _module_assignment_value(migration_path, "revision")
         assert isinstance(revision, str), (
             f"{migration_path} must declare a string Alembic revision id"
