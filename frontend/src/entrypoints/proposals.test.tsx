@@ -101,7 +101,9 @@ describe('ProposalsPage', () => {
       ).toBe(true),
     );
 
-    fireEvent.click(screen.getAllByRole('button', { name: 'Promote' })[0]);
+    const promoteButton = screen.getAllByRole('button', { name: 'Promote' })[0];
+    expect(promoteButton).toBeDefined();
+    fireEvent.click(promoteButton!);
     await waitFor(() =>
       expect(fetchSpy).toHaveBeenCalledWith(
         '/api/proposals/11111111-1111-4111-8111-111111111111/promote',
@@ -113,7 +115,9 @@ describe('ProposalsPage', () => {
       expect(button.disabled).toBe(false);
     });
 
-    fireEvent.click(screen.getAllByRole('button', { name: 'Dismiss' })[0]);
+    const dismissButton = screen.getAllByRole('button', { name: 'Dismiss' })[0];
+    expect(dismissButton).toBeDefined();
+    fireEvent.click(dismissButton!);
     await waitFor(() =>
       expect(fetchSpy).toHaveBeenCalledWith(
         '/api/proposals/11111111-1111-4111-8111-111111111111/dismiss',
