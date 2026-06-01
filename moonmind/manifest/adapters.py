@@ -90,7 +90,11 @@ class GitHubReaderAdapter(_BaseAdapter):
 
         try:
             github_client = GithubClient(github_token=token, verbose=False)
-            filter_tuple = (filter_exts, "INCLUDE") if filter_exts else None
+            filter_tuple = (
+                (filter_exts, GithubRepositoryReader.FilterType.INCLUDE)
+                if filter_exts
+                else None
+            )
             reader = GithubRepositoryReader(
                 github_client=github_client,
                 owner=owner,
