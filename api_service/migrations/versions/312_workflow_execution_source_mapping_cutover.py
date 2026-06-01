@@ -1,6 +1,6 @@
 """Convert legacy task source mappings to workflow execution source mappings.
 
-Revision ID: 312_workflow_execution_source_mapping_cutover
+Revision ID: 312_source_mapping_cutover
 Revises: 311_proposal_delivery_records
 Create Date: 2026-05-21
 
@@ -15,7 +15,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "312_workflow_execution_source_mapping_cutover"
+revision: str = "312_source_mapping_cutover"
 down_revision: Union[str, None] = "311_proposal_delivery_records"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

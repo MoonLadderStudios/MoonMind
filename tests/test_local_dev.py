@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import yaml
@@ -20,6 +21,34 @@ def _has_volume_mount(service_config: dict, source: str, target: str) -> bool:
             if volume.get("source") == source and volume.get("target") == target:
                 return True
     return False
+
+
+def _module_assignment_value(path: Path, name: str):
+    module = ast.parse(path.read_text(encoding="utf-8"))
+    for node in module.body:
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            if node.target.id == name:
+                return ast.literal_eval(node.value)
+        if isinstance(node, ast.Assign):
+            if any(isinstance(target, ast.Name) and target.id == name for target in node.targets):
+                return ast.literal_eval(node.value)
+    return None
+
+
+def test_alembic_revision_ids_fit_default_version_column():
+    """Alembic's default version table stores revision ids in VARCHAR(32)."""
+    migration_dir = Path("api_service/migrations/versions")
+    assert migration_dir.exists(), "Alembic versions directory is missing"
+
+    for migration_path in migration_dir.glob("*.py"):
+        revision = _module_assignment_value(migration_path, "revision")
+        assert isinstance(revision, str), (
+            f"{migration_path} must declare a string Alembic revision id"
+        )
+        assert len(revision) <= 32, (
+            f"{migration_path} revision id is too long for alembic_version.version_num: "
+            f"{revision!r}"
+        )
 
 
 def test_docker_compose_has_temporal_worker_auto_start_configured():
