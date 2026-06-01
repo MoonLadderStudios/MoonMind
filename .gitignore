@@ -44,6 +44,7 @@ agent_jobs/
 # Runtime / ephemeral data (never commit)
 /var/
 /artifacts/
+/artifacts.retrieved-context/
 /artifacts.root-owned/
 /artifacts.root-readonly/
 /specs/
