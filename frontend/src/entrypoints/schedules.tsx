@@ -1,37 +1,35 @@
-import { useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { z } from "zod";
+import { useQuery } from '@tanstack/react-query';
+import { useMemo } from 'react';
+import { DataTable } from '../components/tables/DataTable';
 
-import { BootPayload } from "../boot/parseBootPayload";
-import { DataTable } from "../components/tables/DataTable";
+import { z } from 'zod';
+import { BootPayload } from '../boot/parseBootPayload';
+import { formatStatusLabel } from '../utils/formatters';
 
-const ScheduleSchema = z
-  .object({
-    id: z.string(),
-    name: z.string(),
-    description: z.string().nullable().optional(),
-    enabled: z.boolean().default(true),
-    scheduleType: z.string().optional(),
-    cron: z.string().optional(),
-    timezone: z.string().optional(),
-    nextRunAt: z.string().nullable().optional(),
-    lastScheduledFor: z.string().nullable().optional(),
-    lastDispatchStatus: z.string().nullable().optional(),
-    lastDispatchError: z.string().nullable().optional(),
-    scopeType: z.string().nullable().optional(),
-    scopeRef: z.string().nullable().optional(),
-    target: z.record(z.string(), z.unknown()).optional(),
-    policy: z.record(z.string(), z.unknown()).optional(),
-    updatedAt: z.string().nullable().optional(),
-  })
-  .passthrough();
+const ScheduleSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().nullable().optional(),
+  enabled: z.boolean(),
+  scheduleType: z.string().optional(),
+  cron: z.string(),
+  timezone: z.string(),
+  lastDispatchStatus: z.string().nullable().optional(),
+  lastDispatchError: z.string().nullable().optional(),
+  nextRunAt: z.string().nullable().optional(),
+  lastScheduledFor: z.string().nullable().optional(),
+  scopeType: z.string().optional(),
+  scopeRef: z.string().nullable().optional(),
+  target: z.record(z.string(), z.unknown()).optional(),
+  policy: z.record(z.string(), z.unknown()).optional(),
+  updatedAt: z.string().optional(),
+}).passthrough();
 
 const SchedulesResponseSchema = z.object({
   items: z.array(ScheduleSchema),
 });
 
 type Schedule = z.infer<typeof ScheduleSchema>;
-type ScheduleFilter = "all" | "enabled" | "paused" | "needs_attention";
 
 const SchedulesBootDataSchema = z
   .object({
@@ -42,8 +40,6 @@ const SchedulesBootDataSchema = z
             schedules: z
               .object({
                 list: z.string().optional(),
-                update: z.string().optional(),
-                runNow: z.string().optional(),
               })
               .partial()
               .optional(),
@@ -58,8 +54,6 @@ const SchedulesBootDataSchema = z
         schedules: z
           .object({
             list: z.string().optional(),
-            update: z.string().optional(),
-            runNow: z.string().optional(),
           })
           .partial()
           .optional(),
@@ -69,91 +63,99 @@ const SchedulesBootDataSchema = z
   })
   .passthrough();
 
-function endpoint(template: string, scheduleId: string): string {
-  return template.replace("{id}", encodeURIComponent(scheduleId));
-}
-
-function scheduleSources(payload: BootPayload) {
+function scheduleListEndpoint(payload: BootPayload): string {
   const parsed = SchedulesBootDataSchema.safeParse(payload.initialData || {});
   const schedules = parsed.success
     ? parsed.data.dashboardConfig?.sources?.schedules || parsed.data.sources?.schedules
     : undefined;
-  const base = payload.apiBase || "/api";
-  return {
-    list: schedules?.list || `${base}/recurring-tasks?scope=personal`,
-    update: schedules?.update || `${base}/recurring-tasks/{id}`,
-    runNow: schedules?.runNow || `${base}/recurring-tasks/{id}/run`,
-  };
+  return schedules?.list || `${payload.apiBase || '/api'}/recurring-tasks?scope=personal`;
 }
 
-function formatWhen(iso: string | null | undefined, timezone?: string): string {
-  if (!iso) return "-";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  if (timezone) {
-    try {
-      return date.toLocaleString(undefined, { timeZone: timezone });
-    } catch {
-      // Fall back to local formatting when a persisted timezone is unsupported.
-    }
+function formatWhen(value: string | null | undefined): string {
+  const raw = String(value || '').trim();
+  if (!raw) {
+    return '-';
+  }
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) {
+    return raw;
   }
   return date.toLocaleString();
 }
 
-function formatStatus(value: string | null | undefined): string {
-  if (!value) return "No dispatch yet";
-  return value
-    .split(/[_\s-]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
+function compactId(id: string): string {
+  return id.length > 12 ? `${id.slice(0, 8)}...${id.slice(-4)}` : id;
 }
 
-function targetLabel(schedule: Schedule): string {
-  const target = schedule.target || {};
-  const kind = typeof target.kind === "string" ? target.kind : "";
-  const workflow =
-    typeof target.workflowType === "string"
-      ? target.workflowType
-      : typeof target.workflow_type === "string"
-        ? target.workflow_type
-        : "";
-  if (kind && workflow) return `${kind} -> ${workflow}`;
-  if (kind) return kind;
-  if (workflow) return workflow;
-  return "Task";
+function displayValue(value: string | null | undefined): string {
+  const normalized = String(value || '').trim();
+  return normalized || '-';
 }
 
-function needsAttention(schedule: Schedule): boolean {
-  const status = (schedule.lastDispatchStatus || "").toLowerCase();
-  return (
-    Boolean(schedule.lastDispatchError) ||
-    status.includes("fail") ||
-    status.includes("error")
-  );
+function titleCaseLabel(value: string): string {
+  return value.replace(/\b[a-z]/g, (match) => match.toUpperCase());
 }
 
-function filterSchedules(items: Schedule[], filter: ScheduleFilter): Schedule[] {
-  if (filter === "enabled") return items.filter((item) => item.enabled);
-  if (filter === "paused") return items.filter((item) => !item.enabled);
-  if (filter === "needs_attention") return items.filter(needsAttention);
-  return items;
+function scheduleState(schedule: Schedule): 'active' | 'paused' | 'attention' {
+  if (!schedule.enabled) {
+    return 'paused';
+  }
+  const status = String(schedule.lastDispatchStatus || '').toLowerCase();
+  return status.includes('error') || status.includes('failed') ? 'attention' : 'active';
+}
+
+function stateLabel(schedule: Schedule): string {
+  const state = scheduleState(schedule);
+  if (state === 'attention') {
+    return 'Needs attention';
+  }
+  return state === 'active' ? 'Active' : 'Paused';
+}
+
+function targetKind(schedule: Schedule): string {
+  const raw = schedule.target?.kind;
+  return typeof raw === 'string' && raw.trim() ? titleCaseLabel(formatStatusLabel(raw)) : 'Queue task';
+}
+
+function targetRepository(schedule: Schedule): string {
+  const job = schedule.target?.job;
+  if (!job || typeof job !== 'object' || !('payload' in job)) {
+    return '-';
+  }
+  const payload = (job as { payload?: unknown }).payload;
+  if (!payload || typeof payload !== 'object' || !('repository' in payload)) {
+    return '-';
+  }
+  const repository = (payload as { repository?: unknown }).repository;
+  return typeof repository === 'string' && repository.trim() ? repository : '-';
+}
+
+function policySummary(schedule: Schedule): string {
+  const overlap = schedule.policy?.overlap;
+  const catchup = schedule.policy?.catchup;
+  const overlapMode = overlap && typeof overlap === 'object' && 'mode' in overlap
+    ? String((overlap as { mode?: unknown }).mode || '').trim()
+    : '';
+  const catchupMode = catchup && typeof catchup === 'object' && 'mode' in catchup
+    ? String((catchup as { mode?: unknown }).mode || '').trim()
+    : '';
+  return [overlapMode, catchupMode].filter(Boolean).map((value) => titleCaseLabel(formatStatusLabel(value))).join(' / ') || '-';
+}
+
+function isDueSoon(schedule: Schedule, now: number): boolean {
+  if (!schedule.enabled || !schedule.nextRunAt) {
+    return false;
+  }
+  const nextRun = new Date(schedule.nextRunAt).getTime();
+  return Number.isFinite(nextRun) && nextRun >= now && nextRun <= now + 24 * 60 * 60 * 1000;
 }
 
 export function SchedulesPage({ payload }: { payload: BootPayload }) {
-  const queryClient = useQueryClient();
-  const sources = useMemo(() => scheduleSources(payload), [payload]);
-  const [filter, setFilter] = useState<ScheduleFilter>("all");
-  const [feedback, setFeedback] = useState<{
-    tone: "ok" | "error";
-    text: string;
-  } | null>(null);
-
-  const queryKey = ["schedules", sources.list] as const;
-  const { data, isLoading, isError, error } = useQuery({
-    queryKey,
+  const listEndpoint = useMemo(() => scheduleListEndpoint(payload), [payload]);
+  const { data, isLoading, isError, error, isFetching, refetch } = useQuery({
+    queryKey: ['schedules', listEndpoint],
     queryFn: async () => {
-      const response = await fetch(sources.list, { credentials: "include" });
+      const response = await fetch(listEndpoint, { credentials: 'include' });
       if (!response.ok) {
         throw new Error(`Failed to fetch: ${response.statusText}`);
       }
@@ -161,231 +163,132 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
     },
   });
 
-  const toggleMutation = useMutation({
-    mutationFn: async (schedule: Schedule) => {
-      const response = await fetch(endpoint(sources.update, schedule.id), {
-        method: "PATCH",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify({ enabled: !schedule.enabled }),
-      });
-      if (!response.ok) {
-        throw new Error(`Failed to update schedule: ${response.statusText}`);
-      }
-      return ScheduleSchema.parse(await response.json());
-    },
-    onSuccess: (result) => {
-      setFeedback({
-        tone: "ok",
-        text: `${result.name} ${result.enabled ? "enabled" : "paused"}.`,
-      });
-      queryClient.invalidateQueries({ queryKey });
-    },
-    onError: (mutationError) => {
-      const message =
-        mutationError instanceof Error
-          ? mutationError.message
-          : "Schedule update failed.";
-      setFeedback({ tone: "error", text: message });
-    },
-  });
-
-  const runNowMutation = useMutation({
-    mutationFn: async (schedule: Schedule) => {
-      const response = await fetch(endpoint(sources.runNow, schedule.id), {
-        method: "POST",
-        credentials: "include",
-        headers: { Accept: "application/json" },
-      });
-      if (!response.ok) {
-        throw new Error(`Failed to run schedule: ${response.statusText}`);
-      }
-      return response.json();
-    },
-    onSuccess: (_result, schedule) => {
-      setFeedback({
-        tone: "ok",
-        text: `${schedule.name} queued for an immediate run.`,
-      });
-      queryClient.invalidateQueries({ queryKey });
-    },
-    onError: (mutationError) => {
-      const message =
-        mutationError instanceof Error
-          ? mutationError.message
-          : "Run-now request failed.";
-      setFeedback({ tone: "error", text: message });
-    },
-  });
-
   const schedules = data?.items || [];
-  const filteredSchedules = filterSchedules(schedules, filter);
-  const enabledCount = schedules.filter((item) => item.enabled).length;
-  const pausedCount = schedules.length - enabledCount;
-  const attentionCount = schedules.filter(needsAttention).length;
+  const stats = useMemo(() => {
+    const now = Date.now();
+    const active = schedules.filter((schedule) => schedule.enabled).length;
+    const attention = schedules.filter((schedule) => scheduleState(schedule) === 'attention').length;
+    const dueSoon = schedules.filter((schedule) => isDueSoon(schedule, now)).length;
+    return { active, attention, dueSoon, total: schedules.length };
+  }, [schedules]);
 
   return (
-    <div className="stack">
-      <div className="toolbar">
+    <div className="schedules-page stack">
+      <header className="toolbar schedules-toolbar">
         <div>
           <h2 className="page-title">Recurring Schedules</h2>
-          <p className="page-meta">
-            Review cadence, target, dispatch health, and manual controls for
-            scheduled workflows.
-          </p>
+          <p className="page-meta">Managed recurring schedules for queue and manifest targets.</p>
         </div>
         <div className="toolbar-controls">
+          <button type="button" className="secondary" onClick={() => void refetch()} disabled={isFetching}>
+            {isFetching ? 'Refreshing' : 'Refresh'}
+          </button>
           <a href="/workflows/new?scheduleMode=recurring" className="button">
-            Create Schedule
+            Create from workflow page
           </a>
         </div>
-      </div>
+      </header>
 
-      <div className="schedule-summary-grid" aria-label="Schedule summary">
-        <button
-          type="button"
-          className={`schedule-summary-tile${filter === "all" ? " active" : ""}`}
-          onClick={() => setFilter("all")}
-        >
-          <span className="schedule-summary-value">{schedules.length}</span>
-          <span className="schedule-summary-label">Total</span>
-        </button>
-        <button
-          type="button"
-          className={`schedule-summary-tile${
-            filter === "enabled" ? " active" : ""
-          }`}
-          onClick={() => setFilter("enabled")}
-        >
-          <span className="schedule-summary-value">{enabledCount}</span>
-          <span className="schedule-summary-label">Enabled</span>
-        </button>
-        <button
-          type="button"
-          className={`schedule-summary-tile${
-            filter === "paused" ? " active" : ""
-          }`}
-          onClick={() => setFilter("paused")}
-        >
-          <span className="schedule-summary-value">{pausedCount}</span>
-          <span className="schedule-summary-label">Paused</span>
-        </button>
-        <button
-          type="button"
-          className={`schedule-summary-tile${
-            filter === "needs_attention" ? " active" : ""
-          }`}
-          onClick={() => setFilter("needs_attention")}
-        >
-          <span className="schedule-summary-value">{attentionCount}</span>
-          <span className="schedule-summary-label">Needs Attention</span>
-        </button>
-      </div>
+      <section className="schedules-summary-grid" aria-label="Schedule summary">
+        <div className="schedules-summary-item">
+          <span>Total</span>
+          <strong>{stats.total}</strong>
+        </div>
+        <div className="schedules-summary-item">
+          <span>Active</span>
+          <strong>{stats.active}</strong>
+        </div>
+        <div className="schedules-summary-item">
+          <span>Next 24h</span>
+          <strong>{stats.dueSoon}</strong>
+        </div>
+        <div className="schedules-summary-item">
+          <span>Attention</span>
+          <strong>{stats.attention}</strong>
+        </div>
+      </section>
 
-      {feedback ? <div className={`notice ${feedback.tone}`}>{feedback.text}</div> : null}
-
-      {isLoading ? (
-        <p className="loading">Loading recurring schedules...</p>
-      ) : isError ? (
-        <div className="notice error">{(error as Error).message}</div>
-      ) : (
-        <DataTable
-          ariaLabel="Recurring schedules"
-          data={filteredSchedules}
-          columns={[
-            {
-              key: "name",
-              header: "Schedule",
-              render: (item) => (
-                <div className="schedule-name-cell">
-                  <strong>{item.name}</strong>
-                  {item.description ? (
-                    <span>{item.description}</span>
-                  ) : null}
-                </div>
-              ),
-            },
-            {
-              key: "enabled",
-              header: "State",
-              render: (item) => (
-                <span
-                  className={`status ${
-                    item.enabled ? "status-completed" : "status-neutral"
-                  }`}
-                >
-                  {item.enabled ? "Enabled" : "Paused"}
-                </span>
-              ),
-            },
-            { key: "cron", header: "Cron", render: (item) => item.cron || "-" },
-            {
-              key: "timezone",
-              header: "Timezone",
-              render: (item) => item.timezone || "UTC",
-            },
-            { key: "target", header: "Target", render: targetLabel },
-            {
-              key: "lastDispatchStatus",
-              header: "Last Dispatch",
-              render: (item) => (
-                <div className="schedule-dispatch-cell">
-                  <span>{formatStatus(item.lastDispatchStatus)}</span>
-                  {item.lastDispatchError ? (
-                    <span className="schedule-dispatch-error">
-                      {item.lastDispatchError}
-                    </span>
-                  ) : null}
-                </div>
-              ),
-            },
-            {
-              key: "nextRunAt",
-              header: "Next Run",
-              render: (item) => formatWhen(item.nextRunAt, item.timezone),
-            },
-            {
-              key: "actions",
-              header: "Actions",
-              render: (item) => (
-                <div className="schedule-actions">
-                  <button
-                    type="button"
-                    className="button small-button"
-                    disabled={
-                      runNowMutation.isPending || toggleMutation.isPending
-                    }
-                    onClick={() => runNowMutation.mutate(item)}
-                  >
-                    Run Now
-                  </button>
-                  <button
-                    type="button"
-                    className="button secondary small-button"
-                    disabled={
-                      runNowMutation.isPending || toggleMutation.isPending
-                    }
-                    onClick={() => toggleMutation.mutate(item)}
-                  >
-                    {item.enabled ? "Pause" : "Enable"}
-                  </button>
-                </div>
-              ),
-            },
-          ]}
-          emptyMessage={
-            filter === "all"
-              ? "No recurring schedules found."
-              : "No schedules match this filter."
-          }
-          getRowKey={(item) => item.id}
-        />
-      )}
+      <section className="panel--data schedules-table-panel" aria-label="Recurring schedule list">
+        {isLoading ? (
+          <p className="loading">Loading recurring schedules...</p>
+        ) : isError ? (
+          <div className="schedules-error" role="alert">{(error as Error).message}</div>
+        ) : (
+          <DataTable
+            data={schedules}
+            columns={[
+              {
+                key: 'name',
+                header: 'Schedule',
+                render: (item) => (
+                  <div className="schedules-primary-cell">
+                    <a href={`/schedules/${encodeURIComponent(item.id)}`}>{item.name}</a>
+                    <span title={item.id}>{compactId(item.id)}</span>
+                  </div>
+                ),
+              },
+              {
+                key: 'enabled',
+                header: 'State',
+                render: (item) => (
+                  <span className={`schedules-state schedules-state--${scheduleState(item)}`}>
+                    {stateLabel(item)}
+                  </span>
+                ),
+              },
+              {
+                key: 'target',
+                header: 'Target',
+                render: (item) => (
+                  <div className="schedules-secondary-cell">
+                    <strong>{targetKind(item)}</strong>
+                    <span>{targetRepository(item)}</span>
+                  </div>
+                ),
+              },
+              {
+                key: 'cron',
+                header: 'Cadence',
+                render: (item) => (
+                  <div className="schedules-secondary-cell">
+                    <code>{item.cron}</code>
+                    <span>{displayValue(item.timezone)}</span>
+                  </div>
+                ),
+              },
+              {
+                key: 'nextRunAt',
+                header: 'Next Run',
+                render: (item) => formatWhen(item.nextRunAt),
+              },
+              {
+                key: 'lastScheduledFor',
+                header: 'Last Scheduled',
+                render: (item) => formatWhen(item.lastScheduledFor),
+              },
+              {
+                key: 'lastDispatchStatus',
+                header: 'Dispatch',
+                render: (item) => (
+                  <div className="schedules-secondary-cell">
+                    <strong>{item.lastDispatchStatus ? titleCaseLabel(formatStatusLabel(item.lastDispatchStatus)) : '-'}</strong>
+                    <span>{displayValue(item.lastDispatchError)}</span>
+                  </div>
+                ),
+              },
+              {
+                key: 'policy',
+                header: 'Policy',
+                render: (item) => policySummary(item),
+              },
+            ]}
+            emptyMessage="No recurring schedules yet. Create one from the workflow page."
+            getRowKey={(item) => item.id}
+            ariaLabel="Recurring schedules"
+          />
+        )}
+      </section>
     </div>
   );
 }
-
 export default SchedulesPage;
