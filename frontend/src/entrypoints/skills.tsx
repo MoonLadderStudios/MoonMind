@@ -384,7 +384,7 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
                   </h3>
                 </div>
                 <div
-                  className="min-w-0 break-words text-sm leading-7 text-slate-700 dark:text-slate-300 [&_a]:break-words [&_a]:text-mm-accent [&_a]:underline [&_code]:break-words [&_code]:rounded [&_code]:bg-slate-100 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-xs [&_code]:text-slate-900 dark:[&_code]:bg-slate-900 dark:[&_code]:text-slate-100"
+                  className="min-w-0 break-words text-sm leading-7 text-slate-700 dark:text-slate-300 [&_a]:break-words [&_a]:text-mm-accent [&_a]:underline [&_:not(pre)_>_code]:break-words [&_:not(pre)_>_code]:rounded [&_:not(pre)_>_code]:bg-slate-100 [&_:not(pre)_>_code]:px-1.5 [&_:not(pre)_>_code]:py-0.5 [&_:not(pre)_>_code]:font-mono [&_:not(pre)_>_code]:text-xs [&_:not(pre)_>_code]:text-slate-900 dark:[&_:not(pre)_>_code]:bg-slate-900 dark:[&_:not(pre)_>_code]:text-slate-100"
                   data-testid="skill-markdown-preview"
                 >
                   <MarkdownRenderer markdown={selectedSkill.markdown || ''} />
