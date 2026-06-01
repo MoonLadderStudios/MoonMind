@@ -7,6 +7,8 @@ T027 (metadata allowlist).
 from __future__ import annotations
 
 import textwrap
+from enum import Enum
+from types import SimpleNamespace
 from typing import Any, Dict, Iterator, Tuple
 
 import pytest
@@ -176,6 +178,68 @@ class TestAdapterContracts:
         adapter = GitHubReaderAdapter(ds)
         state = adapter.state()
         assert state["branch"] == "dev"
+
+    def test_github_fetch_uses_reader_filter_type_enum(self, monkeypatch):
+        class FilterType(Enum):
+            INCLUDE = 2
+
+        calls = {}
+
+        class FakeGithubClient:
+            def __init__(self, github_token: str, verbose: bool) -> None:
+                calls["github_token"] = github_token
+                calls["client_verbose"] = verbose
+
+        class FakeGithubRepositoryReader:
+            def __init__(self, **kwargs: Any) -> None:
+                calls.update(kwargs)
+
+            def load_data(self, *, branch: str):
+                calls["branch"] = branch
+                return [SimpleNamespace(text="readme", metadata={})]
+
+        FakeGithubRepositoryReader.FilterType = FilterType
+
+        import llama_index.readers.github as github_module
+        import llama_index.readers.github.repository.github_client as client_module
+
+        monkeypatch.setattr(
+            github_module,
+            "GithubRepositoryReader",
+            FakeGithubRepositoryReader,
+        )
+        monkeypatch.setattr(client_module, "GithubClient", FakeGithubClient)
+
+        ds = DataSourceConfig(
+            id="gh",
+            type="GithubRepositoryReader",
+            params={
+                "owner": "owner",
+                "repo": "repo",
+                "branch": "main",
+                "filterExtensions": [".md"],
+            },
+            auth={"githubToken": "${GITHUB_TOKEN}"},
+        )
+        adapter = GitHubReaderAdapter(ds)
+
+        docs = list(adapter.fetch())
+
+        assert docs == [
+            (
+                "readme",
+                {
+                    "source_type": "GithubRepositoryReader",
+                    "owner": "owner",
+                    "repo": "repo",
+                },
+            )
+        ]
+        assert calls["filter_file_extensions"] == (
+            [".md"],
+            FilterType.INCLUDE,
+        )
+        assert calls["branch"] == "main"
 
 # ---------------------------------------------------------------------------
 # T025: Extensibility test — register custom adapter
