@@ -277,6 +277,9 @@ async def _expand_task_template_for_child_run(
     if isinstance(repository, str) and repository.strip():
         template_context["repository"] = repository.strip()
         template_context["repo"] = repository.strip()
+    target_runtime = parameters.get("targetRuntime")
+    if isinstance(target_runtime, str) and target_runtime.strip():
+        template_context["targetRuntime"] = target_runtime.strip()
     catalog = TaskTemplateCatalogService(session)
     expand_kwargs = {
         "slug": template_slug,

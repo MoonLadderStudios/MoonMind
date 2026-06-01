@@ -3261,6 +3261,74 @@ def test_create_task_shaped_execution_defaults_runtime_into_parameters(
     assert initial_parameters["targetRuntime"] == "codex_cli"
     assert initial_parameters["task"]["runtime"]["mode"] == "codex_cli"
 
+
+def test_create_task_shaped_execution_preserves_preset_schedule_provenance(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "targetRuntime": "codex_cli",
+                "task": {
+                    "title": "MM-747 goal",
+                    "instructions": "Complete Jira issue MM-747.",
+                    "steps": [
+                        {
+                            "id": "step-1",
+                            "title": "Implement",
+                            "instructions": "Implement MM-747.",
+                        }
+                    ],
+                    "taskTemplate": {
+                        "slug": "jira-implement",
+                        "version": "1.0.0",
+                        "scope": "global",
+                    },
+                    "presetSchedule": {
+                        "source": "goal",
+                        "reason": "jira_issue_goal",
+                        "presetSlug": "jira-implement",
+                        "presetVersion": "1.0.0",
+                        "jiraIssueKey": "MM-747",
+                    },
+                    "appliedStepTemplates": [
+                        {
+                            "slug": "jira-implement",
+                            "version": "1.0.0",
+                            "stepIds": ["step-1"],
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    task = initial_parameters["task"]
+    assert task["taskTemplate"] == {
+        "slug": "jira-implement",
+        "version": "1.0.0",
+        "scope": "global",
+    }
+    assert task["presetSchedule"] == {
+        "source": "goal",
+        "reason": "jira_issue_goal",
+        "presetSlug": "jira-implement",
+        "presetVersion": "1.0.0",
+        "jiraIssueKey": "MM-747",
+    }
+    assert task["appliedStepTemplates"][0]["slug"] == "jira-implement"
+
+
 def test_create_task_shaped_execution_preserves_steps_and_uses_step_title_defaults(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:

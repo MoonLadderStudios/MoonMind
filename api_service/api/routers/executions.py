@@ -5833,6 +5833,12 @@ async def _create_execution_from_task_request(
         value = task_payload.get(key)
         if isinstance(value, str) and value.strip():
             normalized_task_for_planner[key] = value.strip()
+    if isinstance(task_payload.get("taskTemplate"), Mapping):
+        normalized_task_for_planner["taskTemplate"] = dict(task_payload["taskTemplate"])
+    if isinstance(task_payload.get("presetSchedule"), Mapping):
+        normalized_task_for_planner["presetSchedule"] = dict(
+            task_payload["presetSchedule"]
+        )
     for key in ("authoredPresets", "appliedStepTemplates"):
         value = task_payload.get(key)
         if isinstance(value, list):

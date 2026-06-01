@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import re
 from typing import Any, Mapping
 
-_JIRA_ISSUE_KEY_PATTERN = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b")
+_JIRA_ISSUE_KEY_PATTERN = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,7 +34,10 @@ def _first_text(*values: Any) -> str:
 
 
 def _contains_any(value: str, needles: tuple[str, ...]) -> bool:
-    return any(needle in value for needle in needles)
+    return any(
+        re.search(r"\b" + re.escape(needle) + r"\b", value) is not None
+        for needle in needles
+    )
 
 
 def _jira_project_key(goal: str) -> str:
@@ -99,7 +102,7 @@ def schedule_preset_from_goal(goal: str) -> GoalPresetSchedule | None:
     issue_key = _issue_key(normalized_goal)
     wants_breakdown = _contains_any(
         lowered,
-        ("break down", "breakdown", "split ", "stories", "story candidates"),
+        ("break down", "breakdown", "split", "stories", "story candidates"),
     )
     wants_implementation = _contains_any(
         lowered,

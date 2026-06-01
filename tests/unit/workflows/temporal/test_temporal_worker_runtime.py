@@ -283,6 +283,32 @@ async def test_child_run_auto_sequences_jira_goal_through_implement_preset(tmp_p
     assert task["appliedStepTemplates"][0]["slug"] == "jira-implement"
     assert task["authoredPresets"][0]["presetSlug"] == "jira-implement"
 
+
+@pytest.mark.asyncio
+async def test_child_run_goal_scheduled_breakdown_preserves_target_runtime(tmp_path):
+    async with _template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            expanded_parameters = await _expand_task_template_for_child_run(
+                session=session,
+                initial_parameters={
+                    "requestType": "task",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "jules",
+                    "publishMode": "pr",
+                    "task": {
+                        "title": "Break down feature",
+                        "goal": "Split docs/Design.md into Jira stories.",
+                    },
+                },
+            )
+
+    downstream_task = expanded_parameters["task"]["steps"][3]["jiraOrchestration"][
+        "task"
+    ]
+    assert downstream_task["repository"] == "MoonLadderStudios/MoonMind"
+    assert downstream_task["runtime"] == {"mode": "jules"}
+
+
 def test_runtime_planner_maps_explicit_tool_step_to_typed_tool_node():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
