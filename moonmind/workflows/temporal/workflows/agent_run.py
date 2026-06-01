@@ -405,6 +405,30 @@ class MoonMindAgentRun:
             **kwargs,
         )
 
+    async def _signal_parent_child_state_changed(
+        self,
+        parent_info: Any,
+        new_state: str,
+        reason: str,
+    ) -> None:
+        if not parent_info:
+            return
+        parent_handle = workflow.get_external_workflow_handle(
+            parent_info.workflow_id,
+            run_id=parent_info.run_id,
+        )
+        try:
+            await parent_handle.signal(
+                "child_state_changed",
+                args=[new_state, reason],
+            )
+        except Exception as exc:
+            self._get_logger().warning(
+                "Failed to signal parent workflow %s: %s",
+                parent_info.workflow_id,
+                exc,
+            )
+
     @staticmethod
     def _managed_runtime_id(agent_id: str) -> str:
         runtime_mapping = {
@@ -759,6 +783,32 @@ class MoonMindAgentRun:
                 metadata["storyOutput"] = story_output_metadata
 
         return result.model_copy(update={"metadata": metadata})
+
+    async def _publish_terminal_result(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        result: AgentRunResult,
+    ) -> AgentRunResult:
+        self.final_result = self._enrich_result_metadata(
+            request=request,
+            result=result,
+        )
+        enriched_result = await self._execute_routed_activity(
+            "agent_runtime.publish_artifacts",
+            self.final_result,
+            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+        )
+        if isinstance(enriched_result, AgentRunResult):
+            self.final_result = enriched_result
+        elif isinstance(enriched_result, dict):
+            if (
+                "diagnosticsRef" in enriched_result
+                and "diagnostics_ref" in enriched_result
+            ):
+                del enriched_result["diagnostics_ref"]
+            self.final_result = AgentRunResult(**enriched_result)
+        return self.final_result
 
     def _record_provider_native_pr_metadata(
         self,
@@ -1787,7 +1837,10 @@ class MoonMindAgentRun:
                 elapsed = (workflow.now() - overall_start).total_seconds()
                 if elapsed >= timeout_seconds:
                     self.run_status = RunStatus.timed_out
-                    return AgentRunResult(failure_class="execution_error")
+                    return await self._publish_terminal_result(
+                        request=request,
+                        result=AgentRunResult(failure_class="execution_error"),
+                    )
 
                 manager_handle = None
                 # Acquire provider-profile slot if managed
@@ -1863,14 +1916,11 @@ class MoonMindAgentRun:
                             or f"Waiting for provider profile slot on {runtime_id}"
                         )
                         self._awaiting_slot_reason_override = None
-                        if parent_info:
-                            parent_handle = workflow.get_external_workflow_handle(
-                                parent_info.workflow_id, run_id=parent_info.run_id
-                            )
-                            await parent_handle.signal(
-                                "child_state_changed",
-                                args=["awaiting_slot", waiting_reason]
-                            )
+                        await self._signal_parent_child_state_changed(
+                            parent_info,
+                            "awaiting_slot",
+                            waiting_reason,
+                        )
 
                     if workflow.patched("agent_run_slot_wait_retry_v1"):
                         slot_resets = 0
@@ -2493,18 +2543,14 @@ class MoonMindAgentRun:
                                             ),
                                         },
                                     )
-                                    if parent_info:
-                                        parent_handle = workflow.get_external_workflow_handle(
-                                            parent_info.workflow_id,
-                                            run_id=parent_info.run_id,
-                                        )
-                                        await parent_handle.signal(
-                                            "child_state_changed",
-                                            args=[
-                                                "intervention_requested",
-                                                "Agent run made no observable progress and needs human review.",
-                                            ],
-                                        )
+                                    await self._signal_parent_child_state_changed(
+                                        parent_info,
+                                        "intervention_requested",
+                                        (
+                                            "Agent run made no observable progress "
+                                            "and needs human review."
+                                        ),
+                                    )
                                     break
 
                             if (
@@ -2531,18 +2577,11 @@ class MoonMindAgentRun:
                                         ),
                                     },
                                 )
-                                if parent_info:
-                                    parent_handle = workflow.get_external_workflow_handle(
-                                        parent_info.workflow_id,
-                                        run_id=parent_info.run_id,
-                                    )
-                                    await parent_handle.signal(
-                                        "child_state_changed",
-                                        args=[
-                                            "intervention_requested",
-                                            "Agent requested human feedback.",
-                                        ],
-                                    )
+                                await self._signal_parent_child_state_changed(
+                                    parent_info,
+                                    "intervention_requested",
+                                    "Agent requested human feedback.",
+                                )
                                 break
 
                             # --- Jules auto-answer sub-flow (spec 094) ---
@@ -2633,7 +2672,10 @@ class MoonMindAgentRun:
                                 request=request,
                             ),
                         )
-                    return AgentRunResult(failure_class="execution_error")
+                    return await self._publish_terminal_result(
+                        request=request,
+                        result=AgentRunResult(failure_class="execution_error"),
+                    )
 
                 if self.final_result is None:
                     if request.agent_kind == "external":
@@ -2760,14 +2802,11 @@ class MoonMindAgentRun:
                             cooldown_seconds=cooldown_seconds,
                         )
                         parent_info = workflow.info().parent
-                        if parent_info:
-                            parent_handle = workflow.get_external_workflow_handle(
-                                parent_info.workflow_id, run_id=parent_info.run_id
-                            )
-                            await parent_handle.signal(
-                                "child_state_changed",
-                                args=["awaiting_slot", waiting_reason],
-                            )
+                        await self._signal_parent_child_state_changed(
+                            parent_info,
+                            "awaiting_slot",
+                            waiting_reason,
+                        )
                         await manager_handle.signal(
                             "report_cooldown",
                             {
@@ -2847,23 +2886,10 @@ class MoonMindAgentRun:
                         update={"metadata": result_metadata}
                     )
 
-                # Post-run artifact publishing via the agent_runtime activity fleet.
-                enriched_result = await self._execute_routed_activity(
-                    "agent_runtime.publish_artifacts",
-                    self.final_result,
-                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
-
+                return await self._publish_terminal_result(
+                    request=request,
+                    result=self.final_result,
                 )
-
-                if isinstance(enriched_result, AgentRunResult):
-                    self.final_result = enriched_result
-                elif isinstance(enriched_result, dict):
-                    # Handle duplicate aliases from older history events
-                    if "diagnosticsRef" in enriched_result and "diagnostics_ref" in enriched_result:
-                        del enriched_result["diagnostics_ref"]
-                    self.final_result = AgentRunResult(**enriched_result)
-
-                return self.final_result
 
         except asyncio.TimeoutError:
             self.run_status = RunStatus.timed_out
@@ -2882,7 +2908,10 @@ class MoonMindAgentRun:
                     )
                 except Exception:
                     self._get_logger().warning("Failed to release slot on timeout, which may lead to a leak.", exc_info=True)
-            return AgentRunResult(failure_class="execution_error")
+            return await self._publish_terminal_result(
+                request=request,
+                result=AgentRunResult(failure_class="execution_error"),
+            )
 
         except CancelledError:
             tasks = []
