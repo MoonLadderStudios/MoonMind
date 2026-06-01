@@ -11,6 +11,7 @@ import os
 import re
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, Literal, Optional
 from urllib.parse import quote, urlsplit
 from uuid import uuid4
@@ -108,6 +109,12 @@ from moonmind.workflows.temporal.report_artifacts import build_report_projection
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.client import TemporalClientAdapter, query_workflow
 from moonmind.workflows.tasks.model_resolver import resolve_effective_model
+from moonmind.workflows.tasks.preset_goal_scheduler import (
+    GoalPresetSchedule,
+    goal_from_payloads,
+    schedule_preset_from_goal,
+    task_is_already_authored,
+)
 from moonmind.workflows.tasks.runtime_defaults import normalize_runtime_id
 from moonmind.workflows.tasks.runtime_inheritance import (
     RuntimeInheritanceError,
@@ -4403,6 +4410,135 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
 
     return normalized_steps
 
+
+def _task_template_seed_dir() -> Path:
+    import api_service
+
+    return Path(api_service.__file__).resolve().parent / "data" / "task_step_templates"
+
+
+def _apply_goal_schedule_metadata(
+    *,
+    task_payload: dict[str, Any],
+    schedule: GoalPresetSchedule,
+    expanded: Mapping[str, Any],
+) -> None:
+    applied_template = (
+        expanded.get("appliedTemplate")
+        if isinstance(expanded.get("appliedTemplate"), Mapping)
+        else {}
+    )
+    applied_template_payload = {
+        "slug": str(applied_template.get("slug") or schedule.slug),
+        "version": str(applied_template.get("version") or schedule.version),
+        "inputs": (
+            dict(applied_template.get("inputs"))
+            if isinstance(applied_template.get("inputs"), Mapping)
+            else dict(schedule.inputs)
+        ),
+        "stepIds": list(applied_template.get("stepIds") or []),
+        "appliedAt": str(applied_template.get("appliedAt") or ""),
+        "capabilities": list(expanded.get("capabilities") or []),
+    }
+    composition = applied_template.get("composition") or expanded.get("composition")
+    if isinstance(composition, Mapping):
+        applied_template_payload["composition"] = dict(composition)
+
+    authored_presets = applied_template.get("authoredPresets") or expanded.get(
+        "authoredPresets"
+    )
+    if isinstance(authored_presets, list):
+        task_payload["authoredPresets"] = [
+            dict(item) if isinstance(item, Mapping) else item
+            for item in authored_presets
+        ]
+
+    task_payload["appliedStepTemplates"] = [applied_template_payload]
+    task_payload["taskTemplate"] = {
+        "slug": str(applied_template.get("slug") or schedule.slug),
+        "version": str(applied_template.get("version") or schedule.version),
+        "scope": "global",
+    }
+    task_payload["presetSchedule"] = {
+        "source": "goal",
+        "reason": schedule.reason,
+        "presetSlug": schedule.slug,
+        "presetVersion": schedule.version,
+        "jiraIssueKey": schedule.issue_key,
+    }
+
+
+async def _expand_goal_preset_for_task_submission(
+    *,
+    task_payload: dict[str, Any],
+    request_payload: Mapping[str, Any],
+    session: Any,
+    user_id: Any,
+) -> None:
+    if task_is_already_authored(task_payload):
+        return
+
+    schedule = schedule_preset_from_goal(
+        goal_from_payloads(task_payload=task_payload, parameter_payload=request_payload)
+    )
+    if schedule is None:
+        return
+
+    from api_service.services.task_templates.catalog import (
+        ExpandOptions,
+        TaskTemplateCatalogService,
+        TaskTemplateNotFoundError,
+    )
+
+    catalog = TaskTemplateCatalogService(session)
+    existing_inputs = (
+        dict(task_payload.get("inputs")) if isinstance(task_payload.get("inputs"), Mapping) else {}
+    )
+    template_inputs = {**schedule.inputs, **existing_inputs}
+    context: dict[str, Any] = {}
+    repository = request_payload.get("repository") or task_payload.get("repository")
+    if isinstance(repository, str) and repository.strip():
+        context["repository"] = repository.strip()
+        context["repo"] = repository.strip()
+    runtime_payload = (
+        task_payload.get("runtime") if isinstance(task_payload.get("runtime"), Mapping) else {}
+    )
+    target_runtime = request_payload.get("targetRuntime") or runtime_payload.get("mode")
+    if isinstance(target_runtime, str) and target_runtime.strip():
+        context["targetRuntime"] = target_runtime.strip()
+
+    expand_kwargs = {
+        "slug": schedule.slug,
+        "scope": "global",
+        "scope_ref": None,
+        "version": schedule.version,
+        "inputs": template_inputs,
+        "context": context,
+        "options": ExpandOptions(should_enforce_step_limit=True),
+        "user_id": user_id,
+    }
+    try:
+        expanded = await catalog.expand_template(**expand_kwargs)
+    except TaskTemplateNotFoundError:
+        await catalog.sync_seed_templates(seed_dir=_task_template_seed_dir())
+        expanded = await catalog.expand_template(**expand_kwargs)
+
+    expanded_steps = expanded.get("steps") if isinstance(expanded, Mapping) else None
+    if not isinstance(expanded_steps, list) or not expanded_steps:
+        raise _invalid_task_request(
+            f"Goal preset '{schedule.slug}' expansion produced no executable steps."
+        )
+
+    task_payload["goal"] = schedule.goal
+    task_payload.setdefault("instructions", schedule.goal)
+    task_payload["inputs"] = template_inputs
+    task_payload["steps"] = list(expanded_steps)
+    _apply_goal_schedule_metadata(
+        task_payload=task_payload,
+        schedule=schedule,
+        expanded=expanded,
+    )
+
 def _normalize_publish_payload(raw_publish: Any) -> dict[str, Any]:
     publish_payload = _coerce_mapping(raw_publish)
     if not publish_payload:
@@ -5528,6 +5664,15 @@ async def _create_execution_from_task_request(
 
     if len(depends_on) > 10:
         raise _invalid_task_request(f"{field_name} can have a maximum of 10 items.")
+
+    if session is not None:
+        await _expand_goal_preset_for_task_submission(
+            task_payload=task_payload,
+            request_payload=payload,
+            session=session,
+            user_id=user.id,
+        )
+
     (
         objective_attachment_refs,
         step_attachment_refs,

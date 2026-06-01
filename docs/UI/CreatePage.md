@@ -33,8 +33,10 @@ The page should support simple one-step tasks while also scaling to advanced wor
 1. User enters task instructions.
 2. User selects repository and branch context if needed.
 3. User accepts the default single step or chooses a step type.
-4. User clicks **Create Task**.
-5. MoonMind validates inputs and starts the workflow.
+4. If the draft provides a plain goal and no explicit steps, tool/skill, plan,
+   or preset, the backend may map the goal to a seeded preset and expand it.
+5. User clicks **Create Task**.
+6. MoonMind validates inputs and starts the workflow.
 
 ### Preset Path
 
@@ -324,6 +326,19 @@ Example error:
 ```
 
 The user's entered values must be preserved after validation failures.
+
+## Goal-Driven Preset Scheduling
+
+The Create page may submit a task with a plain `goal` instead of a manually
+selected preset. When no explicit execution shape is present, the backend
+selects a seeded preset from the goal, expands it through the same authoritative
+template service used by apply and submit-time expansion, and stores the
+selected preset in task provenance.
+
+This is not a separate Create page mode. The page still submits structured task
+data, and the backend remains responsible for selecting and expanding the
+preset. Authored steps, selected tools/skills, explicit plans, and explicit
+presets always take precedence over goal-driven scheduling.
 
 ## Validation UX
 

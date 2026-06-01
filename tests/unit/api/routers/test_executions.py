@@ -23,6 +23,7 @@ from api_service.api.routers.executions import (
     _get_service,
     _artifact_id_from_ref,
     _build_original_task_input_snapshot_payload,
+    _expand_goal_preset_for_task_submission,
     _merge_task_preserving_artifact_instructions,
     _recovery_not_available_reason,
     _reuse_original_task_input_snapshot_from_source,
@@ -202,6 +203,45 @@ def _mm639_authored_task_payload() -> dict[str, Any]:
             },
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_goal_preset_submission_expands_before_planner(tmp_path) -> None:
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/goal_preset_submission.db"
+    engine = create_async_engine(db_url, future=True)
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        async with session_factory() as session:
+            task_payload = {
+                "title": "MM-747 goal",
+                "goal": "Complete Jira issue MM-747 using preset scheduling.",
+            }
+            await _expand_goal_preset_for_task_submission(
+                task_payload=task_payload,
+                request_payload={
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "codex_cli",
+                },
+                session=session,
+                user_id=uuid4(),
+            )
+    finally:
+        await engine.dispose()
+
+    assert task_payload["taskTemplate"] == {
+        "slug": "jira-implement",
+        "version": "1.0.0",
+        "scope": "global",
+    }
+    assert task_payload["inputs"]["jira_issue_key"] == "MM-747"
+    assert task_payload["presetSchedule"]["presetSlug"] == "jira-implement"
+    assert task_payload["steps"][0]["title"] == "Load Jira preset brief"
+    assert task_payload["steps"][1]["title"] == "Assess existing implementation state"
+    assert task_payload["appliedStepTemplates"][0]["slug"] == "jira-implement"
+
 
 class _QueryHandle:
     def __init__(

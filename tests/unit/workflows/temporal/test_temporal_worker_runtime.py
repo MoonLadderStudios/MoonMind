@@ -242,6 +242,47 @@ def test_runtime_planner_promotes_profile_id_to_runtime_node():
     assert runtime_node["profileId"] == "codex-provider-profile"
     assert runtime_node["providerProfile"] == "codex-provider-profile"
 
+
+@pytest.mark.asyncio
+async def test_child_run_auto_sequences_jira_goal_through_implement_preset(tmp_path):
+    async with _template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            expanded_parameters = await _expand_task_template_for_child_run(
+                session=session,
+                initial_parameters={
+                    "requestType": "task",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "codex_cli",
+                    "publishMode": "pr",
+                    "task": {
+                        "title": "MM-747 goal",
+                        "goal": "Implement Jira issue MM-747 using the right preset.",
+                    },
+                },
+            )
+
+    task = expanded_parameters["task"]
+    assert task["taskTemplate"] == {
+        "slug": "jira-implement",
+        "version": "1.0.0",
+        "scope": "global",
+    }
+    assert task["presetSchedule"] == {
+        "source": "goal",
+        "reason": "jira_issue_goal",
+        "presetSlug": "jira-implement",
+        "presetVersion": "1.0.0",
+        "jiraIssueKey": "MM-747",
+    }
+    assert task["inputs"]["jira_issue_key"] == "MM-747"
+    assert task["instructions"] == "Implement Jira issue MM-747 using the right preset."
+    assert expanded_parameters["stepCount"] == len(task["steps"])
+    assert task["steps"][0]["title"] == "Load Jira preset brief"
+    assert task["steps"][1]["title"] == "Assess existing implementation state"
+    assert task["steps"][-1]["title"] == "Finalize Jira status"
+    assert task["appliedStepTemplates"][0]["slug"] == "jira-implement"
+    assert task["authoredPresets"][0]["presetSlug"] == "jira-implement"
+
 def test_runtime_planner_maps_explicit_tool_step_to_typed_tool_node():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
