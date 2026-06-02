@@ -3447,7 +3447,7 @@ describe('Workflow Detail Entrypoint', () => {
     });
 
     expect(screen.queryByText('PR Link')).toBeNull();
-    expect(screen.queryByRole('link')).toBeNull();
+    expect(document.querySelector('a[href^="javascript:"]')).toBeNull();
   });
 
   it('renders merge automation visibility from the run summary', async () => {
@@ -4433,6 +4433,145 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByText('test-456')).toBeTruthy();
       expect(screen.getAllByText('gpt-5').length).toBeGreaterThan(0);
     });
+  });
+
+  it('MM-772 renders the runs subroute as a dedicated execution history view', async () => {
+    window.history.pushState({}, 'Runs Test', '/workflows/test-123/runs?source=temporal');
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'History task',
+      summary: 'Audit history',
+      status: 'completed',
+      state: 'completed',
+      rawState: 'completed',
+      targetRuntime: 'codex_cli',
+      model: 'gpt-5',
+      createdAt: '2026-03-28T00:00:00Z',
+      startedAt: '2026-03-28T00:00:01Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      closedAt: '2026-03-28T00:00:03Z',
+      closeStatus: 'completed',
+      actions: {},
+      interventionAudit: [
+        {
+          action: 'send_message',
+          transport: 'temporal_update',
+          summary: 'Operator guidance recorded.',
+          createdAt: '2026-03-28T00:00:02Z',
+        },
+      ],
+      relatedRuns: [
+        {
+          workflowId: 'test-456',
+          runId: '02-run',
+          relationship: 'rerun',
+          status: 'failed',
+          href: '/workflows/test-456/runs?source=temporal',
+        },
+      ],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('heading', { name: 'Execution History' }).length).toBeGreaterThan(1);
+      expect(screen.getByRole('link', { name: 'Runs' }).getAttribute('aria-current')).toBe('page');
+      expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('href')).toBe('/workflows/test-123?source=temporal');
+      expect(screen.getAllByText(/^Current Run ID:?$/).length).toBeGreaterThan(1);
+      expect(screen.getAllByText('01-run').length).toBeGreaterThan(0);
+      expect(screen.getByText('test-456')).toBeTruthy();
+      expect(screen.getByText('02-run')).toBeTruthy();
+      expect(screen.getByText('Operator guidance recorded.')).toBeTruthy();
+      expect(screen.queryByRole('heading', { name: 'Run Comparison' })).toBeNull();
+    });
+  });
+
+  it('MM-772 renders duplicate related runs without duplicate React keys', async () => {
+    window.history.pushState({}, 'Runs Test', '/workflows/test-123/runs?source=temporal');
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'History task',
+      summary: 'Audit history',
+      status: 'completed',
+      state: 'completed',
+      rawState: 'completed',
+      targetRuntime: 'codex_cli',
+      model: 'gpt-5',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {},
+      relatedRuns: [
+        {
+          workflowId: 'duplicate-workflow',
+          relationship: 'rerun',
+          status: 'failed',
+          href: '/workflows/duplicate-workflow/runs?source=temporal',
+        },
+        {
+          workflowId: 'duplicate-workflow',
+          relationship: 'rerun',
+          status: 'completed',
+          href: '/workflows/duplicate-workflow/runs?source=temporal',
+        },
+      ],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText('duplicate-workflow').length).toBeGreaterThanOrEqual(2);
+    });
+    const duplicateKeyWarnings = consoleErrorSpy.mock.calls.filter(([message]) =>
+      String(message).includes('Encountered two children with the same key'),
+    );
+    expect(duplicateKeyWarnings).toHaveLength(0);
   });
 
   it('routes Pause through the explicit signal endpoint without requiring live log fetches', async () => {
