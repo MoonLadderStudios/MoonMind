@@ -200,14 +200,15 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 **README claim:** *"Connect any agent through MCP or standard API endpoints."*
 
 ### What's shipped
-- MCP server endpoint (`/context` — `context_protocol.py`)
-- MCP tools wrapper (`mcp_tools.py`)
+- MCP Streamable HTTP endpoint (`/mcp` — `mcp_tools.py`, MM-777)
+- Legacy context completion endpoint (`/context` — `context_protocol.py`)
+- MCP JSON helper routes (`/mcp/tools`, `/mcp/tools/call`)
 - OpenAI-compatible chat API (`chat.py`)
-- Operator doc [`docs/ModelContextProtocol.md`](../ModelContextProtocol.md) (context endpoint + `/mcp` HTTP tools; supersedes removed `CodexMcpToolsAdapter.md`)
+- Operator doc [`docs/ExternalAgents/ModelContextProtocol.md`](ExternalAgents/ModelContextProtocol.md) (`/mcp` Streamable HTTP endpoint, legacy `/context`, and JSON helper routes; supersedes removed `CodexMcpToolsAdapter.md`)
 
 ### Remaining tasks
-- [ ] **8.1** MCP Streamable HTTP Transport (2025 spec) — Current `/context` is REST-style; modern MCP uses streamable HTTP
-- [ ] **8.2** MCP resource & tool discovery — Clients can't discover what MoonMind offers via MCP
+- [x] **8.1** MCP Streamable HTTP Transport (2025 spec) — `/mcp` accepts JSON-RPC over the 2025 Streamable HTTP transport shape (MM-777)
+- [ ] **8.2** MCP resource/prompt discovery beyond tools — `tools/list` is available on `/mcp`; resources and prompts are not yet exposed
 - [ ] **8.3** Webhook / callback API for external agents — Jules external events started, no generic webhook receiver
 - [ ] **8.4** OpenAI Responses API compatibility — Only Chat Completions format supported
 

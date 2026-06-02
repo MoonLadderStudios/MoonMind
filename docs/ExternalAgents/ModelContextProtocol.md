@@ -1,29 +1,81 @@
 # Model Context Protocol in MoonMind
 
-This document describes how MoonMind exposes **agent-facing HTTP surfaces** related to the Model Context Protocol (MCP) ecosystem: a **context-style chat completion** endpoint and a small **MCP tool HTTP API** for discovery and invocation. Together they replace the older standalone `docs/CodexMcpToolsAdapter.md` guide; operational detail for Jules-specific behavior lives in [`docs/ExternalAgents/JulesAdapter.md`](JulesAdapter.md) (§ MCP tooling posture).
+This document describes how MoonMind exposes **agent-facing HTTP surfaces** related to the Model Context Protocol (MCP) ecosystem: the 2025 **MCP Streamable HTTP** endpoint, a legacy **context-style chat completion** endpoint, and a small JSON helper API for discovery and invocation. Together they replace the older standalone `docs/CodexMcpToolsAdapter.md` guide; operational detail for Jules-specific behavior lives in [`docs/ExternalAgents/JulesAdapter.md`](JulesAdapter.md) (§ MCP tooling posture).
 
-MoonMind does **not** implement the full MCP streamable-HTTP or JSON-RPC transport on `/context`; that route is a **REST JSON** contract documented below. Tooling uses **JSON over HTTP** at `/mcp/*`, which clients such as Codex CLI can configure as an HTTP MCP tool server.
+The canonical MCP transport is now the single `/mcp` endpoint. It accepts JSON-RPC 2.0 messages over HTTP POST using the 2025 Streamable HTTP transport shape. The older `/context` route remains a REST JSON chat-style completion contract and is not the MCP transport.
 
 ## Surfaces at a glance
 
 | Surface | Method and path | Purpose |
 | -------- | ---------------- | ------- |
-| Context completion | `POST /context` | Chat-style generation with optional RAG; backed by **Google Gemini** in the current implementation. |
-| Tool discovery | `GET /mcp/tools` | Lists tool names, descriptions, and JSON Schemas (`inputSchema`). |
-| Tool invocation | `POST /mcp/tools/call` | Dispatches one tool by name with a JSON `arguments` object. |
+| MCP Streamable HTTP | `POST /mcp` | JSON-RPC 2.0 MCP endpoint for `initialize`, `ping`, `tools/list`, and `tools/call`. |
+| MCP server stream probe | `GET /mcp` | Returns `405 Method Not Allowed` because MoonMind does not currently emit server-initiated SSE messages. |
+| Context completion | `POST /context` | Legacy chat-style generation with optional RAG; backed by **Google Gemini** in the current implementation. |
+| JSON tool discovery helper | `GET /mcp/tools` | Lists tool names, descriptions, and JSON Schemas (`inputSchema`) for non-MCP helper clients. |
+| JSON tool invocation helper | `POST /mcp/tools/call` | Dispatches one tool by name with a JSON `arguments` object for non-MCP helper clients. |
 
 Implementation: [`api_service/api/routers/context_protocol.py`](../api_service/api/routers/context_protocol.py), [`api_service/api/routers/mcp_tools.py`](../api_service/api/routers/mcp_tools.py).
 
 ## Authentication
 
-Both `/context` and `/mcp/*` use the same **`get_current_user()`** dependency as the rest of the API.
+`/mcp`, `/context`, and `/mcp/*` use the same **`get_current_user()`** dependency as the rest of the API.
 
 - When **`AUTH_PROVIDER`** is not `disabled`, clients must authenticate the same way as other protected routes (typically a **Bearer token** for JWT/OIDC flows). Your HTTP MCP client configuration must send that credential on every request.
 - When **`AUTH_PROVIDER`** is `disabled`, the API still resolves a **default user** from the database (see [`api_service/auth_providers.py`](../api_service/auth_providers.py)) so downstream code has a stable user id unless tests or env overrides use a stub.
 
 The example script under `examples/context_protocol_client.py` does not attach auth headers; use it only against a dev stack where that matches your auth mode, or extend it to send `Authorization: Bearer …`.
 
-## `POST /context` — context-style completion
+## `POST /mcp` — MCP Streamable HTTP
+
+`POST /mcp` is the standards-oriented MCP endpoint. Clients send one JSON-RPC 2.0 message, or a 2025-03-26 JSON-RPC batch, per HTTP POST. The request `Accept` header must include both `application/json` and `text/event-stream`, matching the 2025 Streamable HTTP transport. MoonMind responds with JSON for request messages and returns `202 Accepted` with an empty body when the input is only notifications or client-side JSON-RPC responses.
+
+MoonMind supports the `2025-03-26` MCP protocol version and accepts `2025-06-18` clients for the overlapping lifecycle/tool methods implemented here. If an `MCP-Protocol-Version` header is present, it must be one of those supported versions.
+
+Supported methods:
+
+- `initialize` — negotiates protocol version and declares the `tools` capability.
+- `notifications/initialized` — accepted as a notification after initialization.
+- `ping` — returns an empty result object.
+- `tools/list` — returns the same trusted tool catalog exposed by the helper discovery route.
+- `tools/call` — invokes the same trusted tool dispatch path as the helper invocation route, returning MCP tool content plus `structuredContent`.
+
+MoonMind does not currently send server-initiated JSON-RPC messages, so `GET /mcp` returns `405 Method Not Allowed` for SSE stream attempts. This is allowed by the Streamable HTTP transport when a server does not offer an SSE stream.
+
+Example initialization:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "initialize",
+  "params": {
+    "protocolVersion": "2025-03-26",
+    "capabilities": {},
+    "clientInfo": {
+      "name": "example-client",
+      "version": "1.0.0"
+    }
+  }
+}
+```
+
+Example tool call:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "tools/call",
+  "params": {
+    "name": "jira.get_issue",
+    "arguments": {
+      "issueKey": "MM-777"
+    }
+  }
+}
+```
+
+## `POST /context` — legacy context-style completion
 
 This endpoint accepts a JSON body shaped for multi-turn chat and returns a single assistant string. It is **not** vendor-agnostic today: the router calls **`get_google_model(request.model)`** and uses the **Gemini** generate API. The `model` field must be a model id your MoonMind Google factory supports (for example values used elsewhere in the project such as `gemini-pro`).
 

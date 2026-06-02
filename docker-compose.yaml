@@ -87,8 +87,8 @@ services:
       retries: 3
       start_period: 30s
     labels:
-      - "ai.model.context.protocol.version=0.1"
-      - "ai.model.context.protocol.endpoint=/context"
+      - "ai.model.context.protocol.version=2025-03-26"
+      - "ai.model.context.protocol.endpoint=/mcp"
     depends_on:
       init-db:
         condition: service_completed_successfully
