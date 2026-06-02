@@ -2619,7 +2619,7 @@ class TemporalArtifactActivities:
         try:
             import os
 
-            from moonmind.memory import TaskHistoryService
+            from moonmind.memory.run_digest import TaskHistoryService
             from moonmind.rag.service import ContextRetrievalService
             from moonmind.rag.settings import RagRuntimeSettings
 

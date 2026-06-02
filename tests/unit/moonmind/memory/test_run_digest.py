@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from moonmind.memory import TaskHistoryService
-from moonmind.memory.run_digest import RUN_DIGEST_RECORD_KIND
+from moonmind.memory.run_digest import RUN_DIGEST_RECORD_KIND, TaskHistoryService
 
 
 class _Embedder:

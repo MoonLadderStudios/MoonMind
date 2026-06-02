@@ -214,6 +214,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/retrieval/index-health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Index Health */
+        get: operations["index_health_retrieval_index_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/retrieval/context": {
         parameters: {
             query?: never;
@@ -2162,6 +2179,26 @@ export interface paths {
          * @description Serve the manifests shell for manifest deep links.
          */
         get: operations["task_manifest_detail_route_manifests__manifest_name__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/index-health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Index Health Route
+         * @description Serve the React-powered RAG index health page.
+         */
+        get: operations["index_health_route_index_health_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4881,6 +4918,40 @@ export interface components {
             /** Repositories */
             repositories: components["schemas"]["ImageTargetModel"][];
         };
+        /** IndexCollectionHealthModel */
+        IndexCollectionHealthModel: {
+            /** Name */
+            name: string;
+            /** Status */
+            status: string;
+            /** Pointscount */
+            pointsCount?: number | null;
+            /** Indexedvectorscount */
+            indexedVectorsCount?: number | null;
+            /** Segmentscount */
+            segmentsCount?: number | null;
+            /** Vectorsize */
+            vectorSize?: number | null;
+            /** Vectordistance */
+            vectorDistance?: string | null;
+            /** Freshnessat */
+            freshnessAt?: string | null;
+            /** Freshnesssource */
+            freshnessSource?: string | null;
+            /** Freshnessstatus */
+            freshnessStatus: string;
+        };
+        /** IndexHealthResponse */
+        IndexHealthResponse: {
+            /** Generatedat */
+            generatedAt: string;
+            /** Totalcollections */
+            totalCollections: number;
+            /** Totalpoints */
+            totalPoints: number;
+            /** Collections */
+            collections: components["schemas"]["IndexCollectionHealthModel"][];
+        };
         /**
          * IntegrationCallbackRequest
          * @description Generic provider callback payload resolved through correlation storage.
@@ -6292,6 +6363,8 @@ export interface components {
             query: string;
             /** Top K */
             top_k?: number | null;
+            /** Collections */
+            collections?: string[];
             /** Filters */
             filters?: {
                 [key: string]: string;
@@ -6305,6 +6378,8 @@ export interface components {
             budgets?: {
                 [key: string]: number;
             };
+            /** Planning Ref */
+            planning_ref?: string | null;
         };
         /**
          * RetryWorkflowMode
@@ -8642,8 +8717,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        [key: string]: string;
+                        [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    index_health_retrieval_index_health_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IndexHealthResponse"];
                 };
             };
         };
@@ -12739,6 +12834,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    index_health_route_index_health_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
                 };
             };
         };

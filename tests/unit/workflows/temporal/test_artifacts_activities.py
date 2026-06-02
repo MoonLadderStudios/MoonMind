@@ -175,7 +175,7 @@ async def test_write_run_digest_best_effort_runs_sync_indexing_in_executor(
     activities,
     monkeypatch,
 ):
-    import moonmind.memory as memory_module
+    import moonmind.memory.run_digest as run_digest_module
     import moonmind.rag.service as rag_service
     import moonmind.rag.settings as rag_settings
 
@@ -208,7 +208,7 @@ async def test_write_run_digest_best_effort_runs_sync_indexing_in_executor(
         lambda _env: _Settings(),
     )
     monkeypatch.setattr(rag_service, "ContextRetrievalService", _RetrievalService)
-    monkeypatch.setattr(memory_module, "TaskHistoryService", _TaskHistoryService)
+    monkeypatch.setattr(run_digest_module, "TaskHistoryService", _TaskHistoryService)
 
     await activities._write_run_digest_best_effort(
         SimpleNamespace(workflow_id="mm:run:123")
@@ -223,7 +223,7 @@ async def test_write_run_digest_best_effort_timeout_fails_open(
     activities,
     monkeypatch,
 ):
-    import moonmind.memory as memory_module
+    import moonmind.memory.run_digest as run_digest_module
     import moonmind.rag.service as rag_service
     import moonmind.rag.settings as rag_settings
     import moonmind.workflows.temporal.artifacts as artifacts_module
@@ -256,7 +256,7 @@ async def test_write_run_digest_best_effort_timeout_fails_open(
         lambda _env: _Settings(),
     )
     monkeypatch.setattr(rag_service, "ContextRetrievalService", _RetrievalService)
-    monkeypatch.setattr(memory_module, "TaskHistoryService", _TaskHistoryService)
+    monkeypatch.setattr(run_digest_module, "TaskHistoryService", _TaskHistoryService)
     monkeypatch.setattr(artifacts_module.asyncio, "wait_for", _raise_timeout)
 
     await activities._write_run_digest_best_effort(

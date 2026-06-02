@@ -92,9 +92,9 @@ evaluation:
       path: "examples/eval/smoke.jsonl"
   metrics:
     - name: "hitRate@10"
-      threshold: 0.7
+      threshold: 0.8
     - name: "ndcg@10"
-      threshold: 0.5
+      threshold: 0.7
 
 run:
   concurrency: 6

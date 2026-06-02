@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from email.message import EmailMessage
 import hashlib
 import httpx
 import inspect
@@ -14,6 +15,7 @@ import os
 import re
 import shlex
 import shutil
+import smtplib
 import tempfile
 import time
 from dataclasses import dataclass
@@ -1373,6 +1375,24 @@ def _redacted_webhook_target(webhook_url: str) -> str:
         return ""
     return webhook_url.split("?", 1)[0]
 
+
+def _coerce_notification_recipients(value: str | Sequence[str] | None) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw_values = value.split(",")
+    else:
+        raw_values = [str(item) for item in value]
+    return [item.strip() for item in raw_values if item.strip()]
+
+
+def _redacted_email_target(recipients: Sequence[str]) -> str:
+    count = len([recipient for recipient in recipients if str(recipient).strip()])
+    if count == 1:
+        return "email:1 recipient"
+    return f"email:{count} recipients"
+
+
 def _build_execution_notification_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     result_payload = payload.get("result")
     if isinstance(result_payload, BaseModel):
@@ -1404,6 +1424,53 @@ def _build_execution_notification_payload(payload: Mapping[str, Any]) -> dict[st
         if value is not None:
             event[key] = value
     return redact_sensitive_payload(event)
+
+
+def _build_execution_notification_email(
+    event: Mapping[str, Any],
+    *,
+    sender: str,
+    recipients: Sequence[str],
+) -> EmailMessage:
+    status = str(event.get("status") or "completed")
+    workflow_id = str(event.get("workflowId") or "unknown-workflow")
+    message = EmailMessage()
+    message["From"] = sender
+    message["To"] = ", ".join(recipients)
+    message["Subject"] = f"MoonMind execution {status}: {workflow_id}"
+    message.set_content(
+        "MoonMind execution completed.\n\n"
+        + json.dumps(dict(event), indent=2, sort_keys=True)
+        + "\n"
+    )
+    return message
+
+
+def _send_execution_notification_email(
+    event: Mapping[str, Any],
+    *,
+    sender: str,
+    recipients: Sequence[str],
+    smtp_host: str,
+    smtp_port: int,
+    smtp_username: str | None,
+    smtp_password: str | None,
+    smtp_use_tls: bool,
+    smtp_use_ssl: bool,
+    timeout_seconds: int,
+) -> None:
+    message = _build_execution_notification_email(
+        event,
+        sender=sender,
+        recipients=recipients,
+    )
+    smtp_cls = smtplib.SMTP_SSL if smtp_use_ssl else smtplib.SMTP
+    with smtp_cls(smtp_host, smtp_port, timeout=timeout_seconds) as client:
+        if smtp_use_tls and not smtp_use_ssl:
+            client.starttls()
+        if smtp_username:
+            client.login(smtp_username, smtp_password or "")
+        client.send_message(message)
 
 def _validate_external_agent_run_input(payload: Any) -> ExternalAgentRunInput:
     """Validate external activity input, including scalar legacy histories."""
@@ -3619,33 +3686,102 @@ class TemporalAgentRuntimeActivities:
         )
         notification_settings = settings.execution_notifications
         webhook_url = str(notification_settings.webhook_url or "").strip()
-        if not notification_settings.enabled or not webhook_url:
+        email_recipients = _coerce_notification_recipients(
+            notification_settings.email_to
+        )
+        email_sender = str(notification_settings.email_from or "").strip()
+        smtp_host = str(notification_settings.smtp_host or "").strip()
+        email_configured = bool(email_recipients and email_sender and smtp_host)
+        if not notification_settings.enabled:
             return {"status": "skipped", "reason": "disabled"}
-
-        headers = {"Content-Type": "application/json"}
-        authorization = str(notification_settings.authorization or "").strip()
-        if authorization:
-            headers["Authorization"] = authorization
+        if not webhook_url and not email_configured:
+            return {"status": "skipped", "reason": "no_channels"}
 
         event = _build_execution_notification_payload(payload)
-        try:
-            async with httpx.AsyncClient(
-                timeout=max(1, int(notification_settings.timeout_seconds or 5))
-            ) as client:
-                response = await client.post(
-                    webhook_url,
-                    json=event,
-                    headers=headers,
+        results: list[dict[str, str]] = []
+        errors: list[dict[str, str]] = []
+        timeout_seconds = max(1, int(notification_settings.timeout_seconds or 5))
+        if webhook_url:
+            headers = {"Content-Type": "application/json"}
+            authorization = str(notification_settings.authorization or "").strip()
+            if authorization:
+                headers["Authorization"] = authorization
+            try:
+                async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+                    response = await client.post(
+                        webhook_url,
+                        json=event,
+                        headers=headers,
+                    )
+                    response.raise_for_status()
+            except Exception as exc:  # pragma: no cover - best effort telemetry
+                logger.warning("Execution completion webhook failed: %s", exc)
+                errors.append(
+                    {
+                        "channel": "webhook",
+                        "reason": redact_sensitive_text(str(exc)),
+                        "target": _redacted_webhook_target(webhook_url),
+                    }
                 )
-                response.raise_for_status()
-        except Exception as exc:  # pragma: no cover - best effort telemetry
-            logger.warning("Execution completion notification failed: %s", exc)
-            return {
-                "status": "failed",
-                "reason": redact_sensitive_text(str(exc)),
-                "target": _redacted_webhook_target(webhook_url),
-            }
-        return {"status": "sent", "target": _redacted_webhook_target(webhook_url)}
+            else:
+                results.append(
+                    {
+                        "channel": "webhook",
+                        "target": _redacted_webhook_target(webhook_url),
+                    }
+                )
+        if email_configured:
+            try:
+                await asyncio.to_thread(
+                    _send_execution_notification_email,
+                    event,
+                    sender=email_sender,
+                    recipients=email_recipients,
+                    smtp_host=smtp_host,
+                    smtp_port=int(notification_settings.smtp_port),
+                    smtp_username=notification_settings.smtp_username,
+                    smtp_password=notification_settings.smtp_password,
+                    smtp_use_tls=bool(notification_settings.smtp_use_tls),
+                    smtp_use_ssl=bool(notification_settings.smtp_use_ssl),
+                    timeout_seconds=timeout_seconds,
+                )
+            except Exception as exc:  # pragma: no cover - best effort telemetry
+                logger.warning("Execution completion email failed: %s", exc)
+                errors.append(
+                    {
+                        "channel": "email",
+                        "reason": redact_sensitive_text(str(exc)),
+                        "target": _redacted_email_target(email_recipients),
+                    }
+                )
+            else:
+                results.append(
+                    {
+                        "channel": "email",
+                        "target": _redacted_email_target(email_recipients),
+                    }
+                )
+        if errors and not results:
+            if len(errors) == 1:
+                return {
+                    "status": "failed",
+                    "reason": errors[0]["reason"],
+                    "target": errors[0]["target"],
+                }
+            return {"status": "failed", "errors": errors}
+        if len(results) == 1:
+            result: dict[str, Any] = {"status": "sent", "target": results[0]["target"]}
+            if errors:
+                result["errors"] = errors
+            return result
+        result = {
+            "status": "sent",
+            "channels": [result["channel"] for result in results],
+            "targets": [result["target"] for result in results],
+        }
+        if errors:
+            result["errors"] = errors
+        return result
 
     async def oauth_session_ensure_volume(
         self,
