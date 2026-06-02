@@ -2600,6 +2600,8 @@ class TemporalArtifactActivities:
                 error_category=model.error_category,
             )
 
+        await self._write_run_digest_best_effort(record)
+
         return {
             "workflowId": record.workflow_id,
             "state": getattr(getattr(record, "state", None), "value", record.state),
@@ -2609,6 +2611,42 @@ class TemporalArtifactActivities:
                 record.close_status,
             ),
         }
+
+    async def _write_run_digest_best_effort(self, record: Any) -> None:
+        """Index a Plane B run digest without making terminal state recording fail."""
+
+        try:
+            import os
+
+            from moonmind.memory import TaskHistoryService
+            from moonmind.rag.service import ContextRetrievalService
+            from moonmind.rag.settings import RagRuntimeSettings
+
+            settings = RagRuntimeSettings.from_env(os.environ)
+            executable, reason = settings.retrieval_execution_reason(
+                os.environ,
+                preferred_transport="direct",
+            )
+            if not executable:
+                logger.info(
+                    "Skipping run digest indexing for %s: %s",
+                    getattr(record, "workflow_id", "unknown"),
+                    reason,
+                )
+                return
+
+            retrieval_service = ContextRetrievalService(settings=settings)
+            history_service = TaskHistoryService(
+                qdrant_client=retrieval_service.qdrant_client,
+                embedding_provider=retrieval_service.embedding_client,
+            )
+            history_service.build_and_upsert_run_digest(record)
+        except Exception as exc:
+            logger.warning(
+                "Run digest indexing failed for %s: %s",
+                getattr(record, "workflow_id", "unknown"),
+                exc,
+            )
 
     async def artifact_list_for_execution(
         self,

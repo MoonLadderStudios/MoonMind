@@ -265,6 +265,20 @@ class RagQdrantClient:
         batch = qmodels.Batch(ids=ids, vectors=vectors, payloads=payloads)
         self._client.upsert(collection_name=collection_name, points=batch)
 
+    def upsert_memory_vectors(
+        self,
+        *,
+        vectors: List[List[float]],
+        payloads: List[MutableMapping[str, Any]],
+        ids: List[str],
+        collection_name: Optional[str] = None,
+    ) -> None:
+        if len(vectors) != len(payloads) or len(vectors) != len(ids):
+            raise ValueError("vectors, payloads, and ids must have matching lengths")
+        target = collection_name or self.collection
+        batch = qmodels.Batch(ids=ids, vectors=vectors, payloads=payloads)
+        self._client.upsert(collection_name=target, points=batch)
+
     def delete_overlay_collection(self, collection_name: str) -> None:
         try:
             self._client.delete_collection(collection_name=collection_name)
