@@ -2818,6 +2818,65 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   flex-direction: column;
 }
 
+.step-dag-panel {
+  border: 1px solid rgb(226 232 240);
+  border-radius: 1rem;
+  padding: 1rem;
+  background: rgb(248 250 252 / 0.72);
+}
+
+.dark .step-dag-panel {
+  border-color: rgb(30 41 59);
+  background: rgb(15 23 42 / 0.48);
+}
+
+.step-dag-panel h4 {
+  margin: 0 0 0.75rem;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.step-dag-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+
+.step-dag-node {
+  position: relative;
+  min-height: 7rem;
+  border: 1px solid rgb(203 213 225);
+  border-radius: 0.75rem;
+  padding: 0.85rem;
+  background: white;
+}
+
+.dark .step-dag-node {
+  border-color: rgb(51 65 85);
+  background: rgb(15 23 42);
+}
+
+.step-dag-node::after {
+  content: "";
+  position: absolute;
+  right: -0.55rem;
+  top: 50%;
+  width: 0.55rem;
+  border-top: 2px solid rgb(148 163 184);
+}
+
+.step-dag-node:last-child::after {
+  display: none;
+}
+
+.step-dag-node-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
 .step-tl-row {
   display: grid;
   grid-template-columns: 1.6rem 1fr;

@@ -20,6 +20,7 @@ const WorkerSnapshotSchema = z.object({
       running: z.number().optional(),
       staleRunning: z.number().optional(),
       isDrained: z.boolean().optional(),
+      metricsSource: z.string().optional(),
     })
     .optional(),
   audit: z
@@ -634,6 +635,13 @@ export function OperationsSettingsSection({
   const system = snapshot?.system ?? {};
   const metrics = snapshot?.metrics ?? {};
   const commands = snapshot?.commands ?? [];
+  const unavailableCommands = commands.filter((command) => !command.available);
+  const commandTargets = uniqueStrings(commands.map((command) => command.target || 'workers'));
+  const fleetHealthStatus = metrics.staleRunning && metrics.staleRunning > 0
+    ? 'Attention required'
+    : isError
+      ? 'Unavailable'
+      : 'Healthy';
   const isPaused = Boolean(system.workersPaused);
   const stateLabel = isPaused
     ? system.mode === 'quiesce'
@@ -1059,6 +1067,54 @@ export function OperationsSettingsSection({
                 </div>
               </div>
             </div>
+
+            <section className="rounded-3xl border border-slate-200 dark:border-slate-800 p-5">
+              <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <h4 className="text-base font-semibold text-slate-900 dark:text-white">
+                    Worker Fleet Health
+                  </h4>
+                  <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                    Snapshot combines worker pause state, Temporal-backed queue counters, stale-running detection, and operation command availability.
+                  </p>
+                </div>
+                <span
+                  className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                    fleetHealthStatus === 'Healthy'
+                      ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                      : 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
+                  }`}
+                >
+                  {fleetHealthStatus}
+                </span>
+              </div>
+              <div className="mt-4 grid gap-4 md:grid-cols-3">
+                <div className="rounded-2xl bg-slate-50 dark:bg-slate-800/50 p-4">
+                  <div className="text-sm font-medium text-slate-500 dark:text-slate-400">
+                    Metrics source
+                  </div>
+                  <div className="mt-1 text-base font-semibold text-slate-900 dark:text-white">
+                    {String((metrics as Record<string, unknown>).metricsSource || 'temporal')}
+                  </div>
+                </div>
+                <div className="rounded-2xl bg-slate-50 dark:bg-slate-800/50 p-4">
+                  <div className="text-sm font-medium text-slate-500 dark:text-slate-400">
+                    Command targets
+                  </div>
+                  <div className="mt-1 text-base font-semibold text-slate-900 dark:text-white">
+                    {commandTargets.length > 0 ? commandTargets.join(', ') : 'workers'}
+                  </div>
+                </div>
+                <div className="rounded-2xl bg-slate-50 dark:bg-slate-800/50 p-4">
+                  <div className="text-sm font-medium text-slate-500 dark:text-slate-400">
+                    Unavailable commands
+                  </div>
+                  <div className="mt-1 text-base font-semibold text-slate-900 dark:text-white">
+                    {String(unavailableCommands.length)}
+                  </div>
+                </div>
+              </div>
+            </section>
 
             <div className="grid gap-6 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
               <section className="rounded-3xl border border-slate-200 dark:border-slate-800 p-5">

@@ -4027,6 +4027,296 @@ function RemediationEvidencePanel({
   );
 }
 
+type ArtifactCategory = 'files' | 'logs' | 'patches' | 'reports' | 'other';
+
+function artifactBrowserCategory(artifact: z.infer<typeof ArtifactSummarySchema>): ArtifactCategory {
+  const metadata = artifact.metadata || {};
+  const searchText = [
+    artifact.artifactId,
+    artifact.contentType,
+    metadataString(metadata, 'filename', 'name', 'label', 'artifact_type', 'artifactType', 'render_hint', 'renderHint'),
+    artifact.links.map((link) => `${link.linkType} ${link.label || ''}`).join(' '),
+  ]
+    .join(' ')
+    .toLowerCase();
+  if (searchText.includes('report')) return 'reports';
+  if (/\b(log|stdout|stderr|diagnostic|trace)\b/.test(searchText)) return 'logs';
+  if (/\b(patch|diff|apply_output)\b/.test(searchText)) return 'patches';
+  if (/\b(file|attachment|input|context|summary|checkpoint)\b/.test(searchText)) return 'files';
+  return 'other';
+}
+
+function ArtifactBrowserPanel({
+  artifacts,
+  apiBase,
+  isLoading,
+  error,
+}: {
+  artifacts: z.infer<typeof ArtifactSummarySchema>[];
+  apiBase: string;
+  isLoading: boolean;
+  error: Error | null;
+}) {
+  const grouped = artifacts.reduce<Record<ArtifactCategory, z.infer<typeof ArtifactSummarySchema>[]>>(
+    (acc, artifact) => {
+      acc[artifactBrowserCategory(artifact)].push(artifact);
+      return acc;
+    },
+    { files: [], logs: [], patches: [], reports: [], other: [] },
+  );
+  const categoryRows = (Object.keys(grouped) as ArtifactCategory[]).filter(
+    (category) => grouped[category].length > 0,
+  );
+
+  return (
+    <section className="stack td-artifacts-region td-evidence-region">
+      <div className="step-tl-section-header">
+        <h3>Workflow Artifacts</h3>
+        <span className="step-tl-count">
+          Artifact Browser | {artifacts.length} artifact{artifacts.length === 1 ? '' : 's'}
+        </span>
+      </div>
+      {isLoading ? (
+        <p className="loading">Loading artifacts...</p>
+      ) : error ? (
+        <div className="notice error">{error.message}</div>
+      ) : artifacts.length === 0 ? (
+        <p className="small">No artifacts.</p>
+      ) : (
+        <div className="queue-table-wrapper td-evidence-slab" data-layout="table">
+          <table>
+            <thead>
+              <tr>
+                <th>Group</th>
+                <th>Artifact</th>
+                <th>Size</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {categoryRows.flatMap((category) =>
+                grouped[category].map((artifact) => (
+                  <tr key={`${category}-${artifact.artifactId}`}>
+                    <td>{formatStatusLabel(category)}</td>
+                    <td>
+                      <code>{metadataString(artifact.metadata, 'filename', 'name', 'label') || artifact.artifactId}</code>
+                      {artifact.contentType ? <div className="small">{artifact.contentType}</div> : null}
+                    </td>
+                    <td>{artifact.sizeBytes ?? '—'}</td>
+                    <td>{formatStatusLabel(artifact.status)}</td>
+                    <td>
+                      <div className="actions">
+                        <a
+                          className="button secondary"
+                          href={artifactDownloadHref(apiBase, artifact)}
+                          title="Download artifact"
+                        >
+                          Download
+                        </a>
+                        <a
+                          className="button secondary"
+                          href={reportOpenHref(apiBase, artifact)}
+                          title="Open readable artifact content"
+                        >
+                          Open
+                        </a>
+                      </div>
+                    </td>
+                  </tr>
+                )),
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function StepDagOverview({
+  snapshot,
+}: {
+  snapshot: z.infer<typeof StepLedgerSnapshotSchema>;
+}) {
+  return (
+    <section className="step-dag-panel" aria-label="Step DAG visualization">
+      <h4>Step DAG</h4>
+      <div className="step-dag-grid">
+        {snapshot.steps.map((step) => (
+          <article key={step.logicalStepId} className="step-dag-node">
+            <div className="step-dag-node-header">
+              <strong>{step.title}</strong>
+              <span {...executionStatusPillProps(step.status)}>
+                {formatStatusLabel(step.status)}
+              </span>
+            </div>
+            <div className="small">
+              <code>{step.logicalStepId}</code>
+            </div>
+            <div className="small">
+              Depends on: {step.dependsOn.length > 0 ? step.dependsOn.join(', ') : 'start'}
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function InterventionMonitorPanel({
+  execution,
+}: {
+  execution: z.infer<typeof ExecutionDetailSchema>;
+}) {
+  const state = execution.rawState || execution.state || execution.status;
+  const requested = execution.attentionRequired || state === 'intervention_requested';
+  const auditCount = execution.interventionAudit?.length ?? 0;
+  if (!requested && auditCount === 0 && !execution.waitingReason) {
+    return null;
+  }
+  return (
+    <section className="stack td-intervention-monitor-region td-evidence-region">
+      <h3>Intervention Monitor</h3>
+      <div className="grid-2">
+        <Card label="Request State">{requested ? 'Intervention requested' : 'No active request'}</Card>
+        <Card label="Workflow State">{formatStatusLabel(state)}</Card>
+        <Card label="Audit Entries">{String(auditCount)}</Card>
+        <Card label="Waiting Reason">{execution.waitingReason || '—'}</Card>
+      </div>
+    </section>
+  );
+}
+
+function AuditTrailPanel({
+  execution,
+  steps,
+}: {
+  execution: z.infer<typeof ExecutionDetailSchema>;
+  steps: z.infer<typeof StepLedgerSnapshotSchema> | null | undefined;
+}) {
+  const rows: Array<{ stage: string; timestamp: string | null | undefined; detail: ReactNode }> = [
+    { stage: 'Started', timestamp: execution.startedAt, detail: 'Execution created.' },
+    {
+      stage: 'Last update',
+      timestamp: execution.updatedAt,
+      detail: <>State: {formatStatusLabel(execution.state, '')}</>,
+    },
+  ];
+  if (execution.waitingReason || execution.attentionRequired) {
+    rows.push({
+      stage: 'Waiting',
+      timestamp: execution.updatedAt,
+      detail: `${execution.waitingReason || 'Awaiting external input.'}${execution.attentionRequired ? ' Attention required.' : ''}`,
+    });
+  }
+  for (const step of steps?.steps ?? []) {
+    rows.push({
+      stage: `Step ${step.order}`,
+      timestamp: step.updatedAt || step.startedAt,
+      detail: (
+        <>
+          {step.title}: {formatStatusLabel(step.status)}
+        </>
+      ),
+    });
+  }
+  for (const entry of execution.interventionAudit || []) {
+    rows.push({
+      stage: 'Intervention',
+      timestamp: entry.createdAt,
+      detail: (
+        <>
+          {entry.summary} <code className="text-xs">{entry.transport}</code>
+        </>
+      ),
+    });
+  }
+  if (execution.closedAt) {
+    rows.push({
+      stage: 'Closed',
+      timestamp: execution.closedAt,
+      detail: <>Close status: {formatStatusLabel(execution.closeStatus || execution.temporalStatus)}</>,
+    });
+  }
+
+  return (
+    <section className="stack td-timeline-region td-evidence-region">
+      <h3>Timeline</h3>
+      <div className="queue-table-wrapper td-evidence-slab" data-layout="table">
+        <table>
+          <thead>
+            <tr>
+              <th>Stage</th>
+              <th>Timestamp</th>
+              <th>Detail</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, index) => (
+              <tr key={`${row.stage}-${row.timestamp || index}`}>
+                <td>{row.stage}</td>
+                <td>{formatWhen(row.timestamp)}</td>
+                <td>{row.detail}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function RunComparisonPanel({
+  execution,
+}: {
+  execution: z.infer<typeof ExecutionDetailSchema>;
+}) {
+  if (!execution.relatedRuns || execution.relatedRuns.length === 0) {
+    return null;
+  }
+  const currentStatus = execution.rawState || execution.state || execution.status;
+  return (
+    <section className="stack td-comparison-region td-evidence-region">
+      <h3>Run Comparison</h3>
+      <div className="queue-table-wrapper td-evidence-slab" data-layout="table">
+        <table>
+          <thead>
+            <tr>
+              <th>Relation</th>
+              <th>Workflow</th>
+              <th>Run</th>
+              <th>Status</th>
+              <th>Runtime</th>
+              <th>Model</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>current</td>
+              <td><code>{execution.workflowId || execution.taskId}</code></td>
+              <td><code>{execution.runId || execution.temporalRunId || '—'}</code></td>
+              <td>{formatStatusLabel(currentStatus)}</td>
+              <td>{formatRuntimeLabel(execution.targetRuntime)}</td>
+              <td>{execution.model || execution.resolvedModel || execution.requestedModel || '—'}</td>
+            </tr>
+            {execution.relatedRuns.map((run) => (
+              <tr key={`${run.relationship}-${run.workflowId}-${run.runId || ''}`}>
+                <td>{formatStatusLabel(run.relationship)}</td>
+                <td><a href={run.href}><code>{run.workflowId}</code></a></td>
+                <td><code>{run.runId || '—'}</code></td>
+                <td>{formatStatusLabel(run.status || 'unknown')}</td>
+                <td>—</td>
+                <td>—</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const queryClient = useQueryClient();
   const cfg = readDashboardConfig(payload);
@@ -4923,28 +5213,33 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
               ) : stepsQuery.isError ? (
                 <div className="notice error">{(stepsQuery.error as Error).message}</div>
               ) : stepsQuery.data ? (
-                <div className="step-tl-list">
-                  {stepsQuery.data.steps.map((row, idx) => (
-                    <StepLedgerRowCard
-                      key={row.logicalStepId}
-                      apiBase={payload.apiBase}
-                      logStreamingEnabled={logStreamingEnabled}
-                      sessionTimelineEnabled={sessionTimelineEnabled}
-                      structuredHistoryEnabled={structuredHistoryEnabled}
-                      row={row}
-                      runId={latestRunId}
-                      expanded={Boolean(expandedSteps[row.logicalStepId])}
-                      onToggle={() => toggleStep(row.logicalStepId)}
-                      isLast={idx === stepsQuery.data.steps.length - 1}
-                      routes={taskRunRoutes}
-                    />
-                  ))}
-                </div>
+                <>
+                  <StepDagOverview snapshot={stepsQuery.data} />
+                  <div className="step-tl-list">
+                    {stepsQuery.data.steps.map((row, idx) => (
+                      <StepLedgerRowCard
+                        key={row.logicalStepId}
+                        apiBase={payload.apiBase}
+                        logStreamingEnabled={logStreamingEnabled}
+                        sessionTimelineEnabled={sessionTimelineEnabled}
+                        structuredHistoryEnabled={structuredHistoryEnabled}
+                        row={row}
+                        runId={latestRunId}
+                        expanded={Boolean(expandedSteps[row.logicalStepId])}
+                        onToggle={() => toggleStep(row.logicalStepId)}
+                        isLast={idx === stepsQuery.data.steps.length - 1}
+                        routes={taskRunRoutes}
+                      />
+                    ))}
+                  </div>
+                </>
               ) : (
                 <p className="small">No step ledger available for this execution.</p>
               )}
             </section>
           ) : null}
+
+          <InterventionMonitorPanel execution={execution} />
 
           {execution.attentionRequired ? (
             <section className="notice">
@@ -5061,6 +5356,8 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
               </div>
             </section>
           ) : null}
+
+          <RunComparisonPanel execution={execution} />
 
           <RemediationRelationshipsPanel
             inbound={inboundRemediationsQuery.data}
@@ -5246,97 +5543,14 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             showEmpty={shouldFetchRemediationLinks && artifactsQuery.isSuccess}
           />
 
-          <section className="stack td-timeline-region td-evidence-region">
-            <h3>Timeline</h3>
-            <div className="queue-table-wrapper td-evidence-slab" data-layout="table">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Stage</th>
-                    <th>Timestamp</th>
-                    <th>Detail</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>Started</td>
-                    <td>{formatWhen(execution.startedAt)}</td>
-                    <td>Execution created.</td>
-                  </tr>
-                  <tr>
-                    <td>Last update</td>
-                    <td>{formatWhen(execution.updatedAt)}</td>
-                    <td>State: {formatStatusLabel(execution.state, '')}</td>
-                  </tr>
-                  {execution.waitingReason || execution.attentionRequired ? (
-                    <tr>
-                      <td>Waiting</td>
-                      <td>{formatWhen(execution.updatedAt)}</td>
-                      <td>
-                        {execution.waitingReason || 'Awaiting external input.'}
-                        {execution.attentionRequired ? ' Attention required.' : ''}
-                      </td>
-                    </tr>
-                  ) : null}
-                  {execution.closedAt ? (
-                    <tr>
-                      <td>Closed</td>
-                      <td>{formatWhen(execution.closedAt)}</td>
-                      <td>Close status: {formatStatusLabel(execution.closeStatus || execution.temporalStatus)}</td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
-            </div>
-          </section>
+          <AuditTrailPanel execution={execution} steps={stepsQuery.data} />
 
-          <section className="stack td-artifacts-region td-evidence-region">
-            <h3>Workflow Artifacts</h3>
-            {artifactsQuery.isLoading ? (
-              <p className="loading">Loading artifacts...</p>
-            ) : artifactsQuery.isError ? (
-              <div className="notice error">{(artifactsQuery.error as Error).message}</div>
-            ) : (
-              <div className="queue-table-wrapper td-evidence-slab" data-layout="table">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Artifact</th>
-                      <th>Size</th>
-                      <th>Status</th>
-                      <th>Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(artifactsQuery.data?.artifacts || []).length === 0 ? (
-                      <tr>
-                        <td colSpan={4}>No artifacts.</td>
-                      </tr>
-                    ) : (
-                      (artifactsQuery.data?.artifacts || []).map((artifact) => (
-                        <tr key={artifact.artifactId}>
-                          <td>
-                            <code>{artifact.artifactId}</code>
-                          </td>
-                          <td>{artifact.sizeBytes ?? '—'}</td>
-                          <td>{formatStatusLabel(artifact.status)}</td>
-                          <td>
-                            <a
-                              className="button secondary"
-                              href={artifactDownloadHref(payload.apiBase, artifact)}
-                              title="Download artifact"
-                            >
-                              Download
-                            </a>
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
+          <ArtifactBrowserPanel
+            artifacts={artifactsQuery.data?.artifacts || []}
+            apiBase={payload.apiBase}
+            isLoading={artifactsQuery.isLoading}
+            error={artifactsQuery.isError ? (artifactsQuery.error as Error) : null}
+          />
 
           {showExecutionObservationFallback ? (
             <section className="stack td-observation-region td-evidence-region">
