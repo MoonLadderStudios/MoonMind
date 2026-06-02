@@ -232,8 +232,14 @@ def _enforce_retrieval_available(service: ContextRetrievalService) -> None:
     )
 
 @router.get("/health")
-def health() -> Dict[str, str]:
-    return {"status": "ok"}
+def health(
+    service: ContextRetrievalService = Depends(get_retrieval_service),
+) -> Dict[str, object]:
+    try:
+        return service.collection_health()
+    except Exception as exc:  # pragma: no cover - defensive runtime probe
+        logger.warning("Retrieval health probe failed: %s", exc)
+        return {"status": "degraded", "collections": []}
 
 @router.post("/context")
 async def retrieve_context_pack(

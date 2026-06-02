@@ -11,6 +11,7 @@ def _settings(**overrides: object) -> RagRuntimeSettings:
         qdrant_port=6333,
         qdrant_api_key=None,
         vector_collection="test_collection",
+        vector_collections=("test_collection",),
         embedding_provider="google",
         embedding_model="test-model",
         embedding_dimensions=768,
@@ -53,6 +54,27 @@ def test_as_filter_metadata_omits_none_values() -> None:
     settings = _settings(job_id=None, run_id=None)
     meta = settings.as_filter_metadata()
     assert meta == {}
+
+def test_from_env_defaults_vector_collections_to_primary() -> None:
+    settings = RagRuntimeSettings.from_env(
+        {
+            "VECTOR_STORE_COLLECTION_NAME": "primary",
+            "DEFAULT_EMBEDDING_PROVIDER": "google",
+        }
+    )
+    assert settings.vector_collection == "primary"
+    assert settings.vector_collections == ("primary",)
+
+def test_from_env_parses_multiple_vector_collections_with_primary_first() -> None:
+    settings = RagRuntimeSettings.from_env(
+        {
+            "VECTOR_STORE_COLLECTION_NAME": "primary",
+            "VECTOR_STORE_COLLECTION_NAMES": "docs, primary, support",
+            "DEFAULT_EMBEDDING_PROVIDER": "google",
+        }
+    )
+    assert settings.vector_collection == "primary"
+    assert settings.vector_collections == ("primary", "docs", "support")
 
 def test_embedding_provider_supported_recognizes_valid_providers() -> None:
     for provider in ("google", "openai"):

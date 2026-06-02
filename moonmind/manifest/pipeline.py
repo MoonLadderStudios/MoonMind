@@ -44,6 +44,7 @@ class SourceResult:
     chunk_count: int = 0
     skipped: bool = False
     error: Optional[str] = None
+    state: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
 class PipelineResult:
@@ -71,6 +72,7 @@ class PipelineResult:
                     "chunks": s.chunk_count,
                     "skipped": s.skipped,
                     "error": s.error,
+                    "state": s.state,
                 }
                 for s in self.sources
             ],
@@ -225,6 +227,7 @@ class ManifestPipeline:
                             source_id=ds.id,
                             source_type=ds.type,
                             skipped=True,
+                            state=source_cursor,
                         )
                     )
                     continue
@@ -256,6 +259,7 @@ class ManifestPipeline:
                     indexed_doc_count=len(changeset.changed_documents),
                     deleted_doc_count=len(changeset.deleted_document_ids),
                     chunk_count=len(changeset.chunks),
+                    state=source_cursor,
                 )
                 result.total_docs += len(documents)
                 result.total_chunks += len(changeset.chunks)

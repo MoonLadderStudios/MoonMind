@@ -236,6 +236,23 @@ class TestAdapterContracts:
         state = adapter.state()
         assert "inputDir" in state
 
+    def test_local_state_hashes_file_in_chunks(self, tmp_path, monkeypatch):
+        (tmp_path / "file.txt").write_text("hello", encoding="utf-8")
+        monkeypatch.setattr(
+            "pathlib.Path.read_bytes",
+            lambda self: (_ for _ in ()).throw(AssertionError("read_bytes used")),
+        )
+        ds = DataSourceConfig(
+            id="loc", type="SimpleDirectoryReader",
+            params={"inputDir": str(tmp_path)}
+        )
+        adapter = SimpleDirectoryReaderAdapter(ds)
+        state = adapter.state()
+
+        assert state["files"]["file.txt"]["sha256"] == (
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        )
+
     def test_github_state_returns_branch(self):
         ds = DataSourceConfig(
             id="gh", type="GithubRepositoryReader",
