@@ -5195,6 +5195,33 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   min-width: 0;
 }
 
+.td-subroute-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  padding: 0.35rem;
+  border: 1px solid rgb(var(--mm-border) / 0.46);
+  border-radius: 0.6rem;
+  background: rgb(var(--mm-panel) / 0.62);
+}
+
+.td-subroute-nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.1rem;
+  padding: 0.42rem 0.68rem;
+  border-radius: 0.45rem;
+  color: rgb(var(--mm-muted) / 0.92);
+  text-decoration: none;
+  font-weight: 650;
+}
+
+.td-subroute-nav a:hover,
+.td-subroute-nav a[aria-current="page"] {
+  color: rgb(var(--mm-ink));
+  background: rgb(var(--mm-accent) / 0.12);
+}
+
 .td-facts-region {
   display: grid;
   gap: 0.2rem;
@@ -5215,6 +5242,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 .td-steps-region,
 .td-artifacts-region,
 .td-remediation-region,
+.td-runs-region,
 .td-timeline-region,
 .td-observation-region {
   overflow-wrap: anywhere;
