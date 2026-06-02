@@ -174,11 +174,12 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - Task detail fields: Runtime, Model, Effort
 - Fast cancellation UX (TRY_CANCEL + force-terminate)
 - External runs integrated into main task dashboard
+- Intervention requests surface as the `intervention_requested` execution state in the task dashboard and live status stream
 
 ### Remaining tasks
 - [ ] **7.1** Migrate settings page to Mission Control — Settings currently in separate profile page, should be unified
 - [ ] **7.2** Artifact browsing UI (files/logs/patches) — API exists (`temporal_artifacts.py`), dashboard integration partial
-- [ ] **7.3** Intervention request monitoring — Not implemented
+- [x] **7.3** Intervention request monitoring — Agent requests for human help surface through `intervention_requested` run status monitoring
 - [ ] **7.4** Execution history / audit trail view — Spec 067 (`run-history-rerun`), API exists, UI incomplete
 - [ ] **7.5** Side-by-side comparison view — README promises "run the same task with different models and runtimes to compare results"
 - [ ] **7.6** Multi-step / step DAG visualization — Steps are tracked but no graphical visualization
