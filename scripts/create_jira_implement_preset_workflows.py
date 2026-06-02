@@ -17,6 +17,24 @@ DEFAULT_RUNTIME = "codex_cli"
 DEFAULT_PRESET_VERSION = "1.0.0"
 
 
+def build_idempotency_key(
+    *,
+    issue_key: str,
+    repository: str,
+    runtime: str,
+    preset_version: str,
+) -> str:
+    issue = issue_key.strip().upper()
+    return (
+        "jira-implement:"
+        f"{issue}:"
+        f"{repository.strip()}:"
+        f"{runtime.strip()}:"
+        f"{preset_version.strip()}:"
+        "pr-merge-automation-expanded-steps"
+    )
+
+
 def build_payload(
     *,
     issue_key: str,
@@ -67,8 +85,11 @@ def build_payload(
             "targetRuntime": runtime,
             "publishMode": "pr",
             "mergeAutomation": {"enabled": True},
-            "idempotencyKey": (
-                f"jira-implement:{issue}:pr-merge-automation-expanded-steps"
+            "idempotencyKey": build_idempotency_key(
+                issue_key=issue,
+                repository=repository,
+                runtime=runtime,
+                preset_version=preset_version,
             ),
             "integration": "jira",
             "task": task,
@@ -113,6 +134,8 @@ def post_json(*, base_url: str, payload: dict[str, Any], timeout: float) -> dict
     except error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         return {"status": exc.code, "error": body}
+    except Exception as exc:
+        return {"status": 0, "error": str(exc)}
 
 
 def expand_jira_implement(
@@ -188,14 +211,24 @@ def main() -> int:
             )
             continue
 
-        expanded = expand_jira_implement(
-            base_url=args.base_url,
-            issue_key=issue,
-            repository=args.repository,
-            runtime=args.runtime,
-            preset_version=args.preset_version,
-            timeout=args.timeout,
-        )
+        try:
+            expanded = expand_jira_implement(
+                base_url=args.base_url,
+                issue_key=issue,
+                repository=args.repository,
+                runtime=args.runtime,
+                preset_version=args.preset_version,
+                timeout=args.timeout,
+            )
+        except Exception as exc:
+            record = {
+                "issue": issue.upper(),
+                "status": 0,
+                "error": f"Expansion failed: {exc}",
+            }
+            failures.append(record)
+            results.append(record)
+            continue
         raw_steps = expanded.get("steps")
         if not isinstance(raw_steps, list) or len(raw_steps) != 8:
             failures.append(
