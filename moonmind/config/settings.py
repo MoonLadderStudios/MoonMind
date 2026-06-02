@@ -2210,6 +2210,70 @@ class ExecutionNotificationSettings(BaseSettings):
         extra="ignore",
     )
 
+class IntegrationCallbackSettings(BaseSettings):
+    """Generic external integration callback ingress settings."""
+
+    base_url: Optional[str] = Field(
+        None,
+        alias="MOONMIND_INTEGRATION_CALLBACK_BASE_URL",
+        description=(
+            "Absolute public base URL used to build external integration callback URLs."
+        ),
+    )
+    callback_token: Optional[str] = Field(
+        None,
+        alias="MOONMIND_INTEGRATION_CALLBACK_TOKEN",
+        description="Optional shared bearer/header token for generic integration callbacks.",
+    )
+    max_payload_bytes: int = Field(
+        64 * 1024,
+        alias="MOONMIND_INTEGRATION_CALLBACK_MAX_PAYLOAD_BYTES",
+        ge=1,
+        description="Maximum callback payload size for generic integrations.",
+    )
+    rate_limit_per_window: int = Field(
+        30,
+        alias="MOONMIND_INTEGRATION_CALLBACK_RATE_LIMIT_PER_WINDOW",
+        ge=1,
+        description="Generic integration callback requests allowed per window.",
+    )
+    rate_limit_window_seconds: int = Field(
+        60,
+        alias="MOONMIND_INTEGRATION_CALLBACK_RATE_LIMIT_WINDOW_SECONDS",
+        ge=1,
+        description="Generic integration callback rate limit window in seconds.",
+    )
+    artifact_capture_enabled: bool = Field(
+        False,
+        alias="MOONMIND_INTEGRATION_CALLBACK_ARTIFACT_CAPTURE_ENABLED",
+        description="Capture raw generic integration callback payloads as artifacts.",
+    )
+
+    @field_validator("base_url", mode="after")
+    @classmethod
+    def _normalize_base_url(cls, value: Optional[str]) -> Optional[str]:
+        text = str(value or "").strip().rstrip("/")
+        if not text:
+            return None
+        parsed = urlsplit(text)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError(
+                "MOONMIND_INTEGRATION_CALLBACK_BASE_URL must be an absolute http(s) URL"
+            )
+        if parsed.query or parsed.fragment:
+            raise ValueError(
+                "MOONMIND_INTEGRATION_CALLBACK_BASE_URL must not include query or fragment"
+            )
+        return text
+
+    model_config = SettingsConfigDict(
+        populate_by_name=True,
+        env_prefix="",
+        env_file=str(ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
 class AppSettings(BaseSettings):
     """Main application settings"""
 
@@ -2237,6 +2301,9 @@ class AppSettings(BaseSettings):
     task_proposals: TaskProposalSettings = Field(default_factory=TaskProposalSettings)
     execution_notifications: ExecutionNotificationSettings = Field(
         default_factory=ExecutionNotificationSettings
+    )
+    integration_callbacks: IntegrationCallbackSettings = Field(
+        default_factory=IntegrationCallbackSettings
     )
     jules: JulesSettings = Field(default_factory=JulesSettings)
     worker_enable_task_proposals: Optional[bool] = Field(
