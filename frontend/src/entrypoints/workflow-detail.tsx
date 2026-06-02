@@ -90,6 +90,26 @@ function shouldUseStructuredHistory(config: DashboardConfig | undefined): boolea
   return config?.features?.liveLogsStructuredHistoryEnabled !== false;
 }
 
+type WorkflowDetailSubroute = 'overview' | 'steps' | 'artifacts' | 'runs';
+
+function workflowDetailSubrouteFromPath(pathname: string): WorkflowDetailSubroute {
+  const match = pathname.match(/^\/workflows\/[^/]+(?:\/(steps|artifacts|runs))?$/);
+  if (match?.[1] === 'steps' || match?.[1] === 'artifacts' || match?.[1] === 'runs') {
+    return match[1];
+  }
+  return 'overview';
+}
+
+function workflowDetailSubrouteHref(
+  workflowId: string,
+  subroute: WorkflowDetailSubroute,
+  search: URLSearchParams,
+): string {
+  const suffix = subroute === 'overview' ? '' : `/${subroute}`;
+  const query = search.toString();
+  return `/workflows/${encodeURIComponent(workflowId)}${suffix}${query ? `?${query}` : ''}`;
+}
+
 function detailObjectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -4277,6 +4297,104 @@ function AuditTrailPanel({
   );
 }
 
+function WorkflowDetailSubrouteNav({
+  workflowId,
+  current,
+  search,
+}: {
+  workflowId: string;
+  current: WorkflowDetailSubroute;
+  search: URLSearchParams;
+}) {
+  const items: Array<{ route: WorkflowDetailSubroute; label: string }> = [
+    { route: 'overview', label: 'Overview' },
+    { route: 'steps', label: 'Steps' },
+    { route: 'artifacts', label: 'Artifacts' },
+    { route: 'runs', label: 'Runs' },
+  ];
+  return (
+    <nav className="td-subroute-nav" aria-label="Workflow detail sections">
+      {items.map((item) => (
+        <a
+          key={item.route}
+          href={workflowDetailSubrouteHref(workflowId, item.route, search)}
+          aria-current={current === item.route ? 'page' : undefined}
+        >
+          {item.label}
+        </a>
+      ))}
+    </nav>
+  );
+}
+
+function ExecutionHistoryPanel({
+  execution,
+}: {
+  execution: z.infer<typeof ExecutionDetailSchema>;
+}) {
+  const currentStatus = execution.rawState || execution.state || execution.status;
+  const currentRunId = execution.runId || execution.temporalRunId || '—';
+  const rows = [
+    {
+      relationship: 'current',
+      workflowId: execution.workflowId || execution.taskId || '—',
+      runId: currentRunId,
+      status: currentStatus,
+      href: '',
+    },
+    ...(execution.relatedRuns || []).map((run) => ({
+      relationship: run.relationship,
+      workflowId: run.workflowId,
+      runId: run.runId || '—',
+      status: run.status || 'unknown',
+      href: run.href,
+    })),
+  ];
+  return (
+    <section className="stack td-runs-region td-evidence-region" data-mm-issue="MM-772">
+      <h3>Execution History</h3>
+      <div className="grid-2">
+        <Card label="Workflow ID">
+          <code className="text-xs break-all">{execution.workflowId || execution.taskId || '—'}</code>
+        </Card>
+        <Card label="Current Run ID">
+          <code className="text-xs break-all">{currentRunId}</code>
+        </Card>
+        <Card label="Workflow State">{formatStatusLabel(currentStatus)}</Card>
+        <Card label="Related Runs">{String(execution.relatedRuns?.length ?? 0)}</Card>
+      </div>
+      <div className="queue-table-wrapper td-evidence-slab" data-layout="table">
+        <table>
+          <thead>
+            <tr>
+              <th>Relation</th>
+              <th>Workflow</th>
+              <th>Run</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={`${row.relationship}-${row.workflowId}-${row.runId}`}>
+                <td>{formatStatusLabel(row.relationship)}</td>
+                <td>
+                  {row.href ? (
+                    <a href={row.href}><code>{row.workflowId}</code></a>
+                  ) : (
+                    <code>{row.workflowId}</code>
+                  )}
+                </td>
+                <td><code>{row.runId}</code></td>
+                <td>{formatStatusLabel(row.status)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 function RunComparisonPanel({
   execution,
 }: {
@@ -4344,6 +4462,8 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const taskId = decodeTaskPathSegment(workflowIdMatch ? workflowIdMatch[1] : null);
   const encodedTaskId = taskId ? encodeURIComponent(taskId) : null;
   const search = useMemo(() => new URLSearchParams(window.location.search), []);
+  const detailSubroute = workflowDetailSubrouteFromPath(window.location.pathname);
+  const isRunsSubroute = detailSubroute === 'runs';
   const sourceTemporal = search.get('source') === 'temporal';
 
   const [actionError, setActionError] = useState<string | null>(null);
@@ -4886,7 +5006,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     <div className="stack workflow-detail-page">
       <div className="toolbar">
         <div>
-          <h2 className="page-title">Workflow Detail</h2>
+          <h2 className="page-title">{isRunsSubroute ? 'Execution History' : 'Workflow Detail'}</h2>
           <div className="toolbar-identity-row">
             <p className="page-meta">Workflow {taskId || '—'}</p>
             {execution ? (
@@ -4910,6 +5030,14 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           </span>
         </div>
       </div>
+
+      {taskId ? (
+        <WorkflowDetailSubrouteNav
+          workflowId={taskId}
+          current={detailSubroute}
+          search={search}
+        />
+      ) : null}
 
       {actionError ? <div className="notice error">{actionError}</div> : null}
       {actionNotice ? (
@@ -4974,6 +5102,10 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
 
           {shouldShowRuntimeCommand ? (
             <RuntimeCommandDetail command={runtimeCommand} />
+          ) : null}
+
+          {isRunsSubroute ? (
+            <ExecutionHistoryPanel execution={execution} />
           ) : null}
 
           <div className="td-summary-block">
@@ -5367,7 +5499,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             </section>
           ) : null}
 
-          <RunComparisonPanel execution={execution} />
+          {isRunsSubroute ? null : <RunComparisonPanel execution={execution} />}
 
           <RemediationRelationshipsPanel
             inbound={inboundRemediationsQuery.data}
