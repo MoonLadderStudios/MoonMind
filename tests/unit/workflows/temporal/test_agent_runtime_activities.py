@@ -316,6 +316,236 @@ async def test_execution_notify_completion_sends_email_channel(monkeypatch) -> N
     assert "task-email" in sent["body"]
 
 
+async def test_execution_notify_completion_continues_to_email_after_webhook_failure(
+    monkeypatch,
+) -> None:
+    email_calls: list[dict[str, Any]] = []
+
+    class _Client:
+        def __init__(self, *, timeout: int) -> None:
+            self.timeout = timeout
+
+        async def __aenter__(self) -> "_Client":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def post(
+            self,
+            url: str,
+            *,
+            json: dict[str, Any],
+            headers: dict[str, str],
+        ) -> object:
+            del url, json, headers
+            raise RuntimeError("token=secret webhook down")
+
+    def fake_send_email(*_args: Any, **kwargs: Any) -> None:
+        email_calls.append(kwargs)
+
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "webhook_url",
+        "https://hooks.example.test/notify?token=secret",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "authorization",
+        None,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "email_to",
+        "ops@example.test",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "email_from",
+        "moonmind@example.test",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_host",
+        "smtp.example.test",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_port",
+        2525,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_username",
+        None,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_password",
+        None,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_use_tls",
+        False,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_use_ssl",
+        False,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "timeout_seconds",
+        5,
+    )
+    monkeypatch.setattr(activity_runtime_module.httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_send_execution_notification_email",
+        fake_send_email,
+    )
+
+    activities = TemporalAgentRuntimeActivities()
+    result = await activities.execution_notify_completion(
+        {"workflowId": "wf-partial", "status": "completed"}
+    )
+
+    assert result == {
+        "status": "sent",
+        "target": "email:1 recipient",
+        "errors": [
+            {
+                "channel": "webhook",
+                "reason": "token=[REDACTED] webhook down",
+                "target": "https://hooks.example.test/notify",
+            }
+        ],
+    }
+    assert len(email_calls) == 1
+    assert email_calls[0]["recipients"] == ["ops@example.test"]
+
+
+async def test_execution_notify_completion_reports_email_failure_after_webhook_success(
+    monkeypatch,
+) -> None:
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+    class _Client:
+        def __init__(self, *, timeout: int) -> None:
+            self.timeout = timeout
+
+        async def __aenter__(self) -> "_Client":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def post(
+            self,
+            url: str,
+            *,
+            json: dict[str, Any],
+            headers: dict[str, str],
+        ) -> _Response:
+            del url, json, headers
+            return _Response()
+
+    def fake_send_email(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("password=secret smtp down")
+
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "webhook_url",
+        "https://hooks.example.test/notify",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "authorization",
+        None,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "email_to",
+        "ops@example.test",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "email_from",
+        "moonmind@example.test",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_host",
+        "smtp.example.test",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_port",
+        2525,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_username",
+        None,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_password",
+        None,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_use_tls",
+        False,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_use_ssl",
+        False,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "timeout_seconds",
+        5,
+    )
+    monkeypatch.setattr(activity_runtime_module.httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_send_execution_notification_email",
+        fake_send_email,
+    )
+
+    activities = TemporalAgentRuntimeActivities()
+    result = await activities.execution_notify_completion(
+        {"workflowId": "wf-partial", "status": "completed"}
+    )
+
+    assert result == {
+        "status": "sent",
+        "target": "https://hooks.example.test/notify",
+        "errors": [
+            {
+                "channel": "email",
+                "reason": "password=[REDACTED] smtp down",
+                "target": "email:1 recipient",
+            }
+        ],
+    }
+
+
 async def test_publish_artifacts_notifies_terminal_result(monkeypatch) -> None:
     calls: list[dict[str, Any]] = []
 

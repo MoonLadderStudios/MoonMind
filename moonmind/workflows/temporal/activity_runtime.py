@@ -3699,6 +3699,7 @@ class TemporalAgentRuntimeActivities:
 
         event = _build_execution_notification_payload(payload)
         results: list[dict[str, str]] = []
+        errors: list[dict[str, str]] = []
         timeout_seconds = max(1, int(notification_settings.timeout_seconds or 5))
         if webhook_url:
             headers = {"Content-Type": "application/json"}
@@ -3715,17 +3716,20 @@ class TemporalAgentRuntimeActivities:
                     response.raise_for_status()
             except Exception as exc:  # pragma: no cover - best effort telemetry
                 logger.warning("Execution completion webhook failed: %s", exc)
-                return {
-                    "status": "failed",
-                    "reason": redact_sensitive_text(str(exc)),
-                    "target": _redacted_webhook_target(webhook_url),
-                }
-            results.append(
-                {
-                    "channel": "webhook",
-                    "target": _redacted_webhook_target(webhook_url),
-                }
-            )
+                errors.append(
+                    {
+                        "channel": "webhook",
+                        "reason": redact_sensitive_text(str(exc)),
+                        "target": _redacted_webhook_target(webhook_url),
+                    }
+                )
+            else:
+                results.append(
+                    {
+                        "channel": "webhook",
+                        "target": _redacted_webhook_target(webhook_url),
+                    }
+                )
         if email_configured:
             try:
                 await asyncio.to_thread(
@@ -3743,24 +3747,41 @@ class TemporalAgentRuntimeActivities:
                 )
             except Exception as exc:  # pragma: no cover - best effort telemetry
                 logger.warning("Execution completion email failed: %s", exc)
+                errors.append(
+                    {
+                        "channel": "email",
+                        "reason": redact_sensitive_text(str(exc)),
+                        "target": _redacted_email_target(email_recipients),
+                    }
+                )
+            else:
+                results.append(
+                    {
+                        "channel": "email",
+                        "target": _redacted_email_target(email_recipients),
+                    }
+                )
+        if errors and not results:
+            if len(errors) == 1:
                 return {
                     "status": "failed",
-                    "reason": redact_sensitive_text(str(exc)),
-                    "target": _redacted_email_target(email_recipients),
+                    "reason": errors[0]["reason"],
+                    "target": errors[0]["target"],
                 }
-            results.append(
-                {
-                    "channel": "email",
-                    "target": _redacted_email_target(email_recipients),
-                }
-            )
+            return {"status": "failed", "errors": errors}
         if len(results) == 1:
-            return {"status": "sent", "target": results[0]["target"]}
-        return {
+            result: dict[str, Any] = {"status": "sent", "target": results[0]["target"]}
+            if errors:
+                result["errors"] = errors
+            return result
+        result = {
             "status": "sent",
             "channels": [result["channel"] for result in results],
             "targets": [result["target"] for result in results],
         }
+        if errors:
+            result["errors"] = errors
+        return result
 
     async def oauth_session_ensure_volume(
         self,
