@@ -526,6 +526,18 @@ class WorkflowSettings(BaseSettings):
         ge=64,
         description="Maximum token budget allocated per vision prompt batch.",
     )
+    memory_context_budget_tokens: int = Field(
+        4096,
+        validation_alias=AliasChoices(
+            "MOONMIND_MEMORY_CONTEXT_BUDGET_TOKENS",
+            "MEMORY_CONTEXT_BUDGET_TOKENS",
+        ),
+        ge=1,
+        description=(
+            "Maximum token budget for normalized memory context-pack items "
+            "assembled before runtime injection."
+        ),
+    )
     vision_ocr_enabled: bool = Field(
         True,
         validation_alias=AliasChoices("MOONMIND_VISION_OCR_ENABLED"),

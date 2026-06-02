@@ -1,5 +1,13 @@
 """Memory contracts, services, and procedural primitives for MoonMind."""
 
+from moonmind.memory.context_pack import (
+    MemoryContextBudgetExceeded,
+    MemoryContextCandidate,
+    MemoryContextItem,
+    MemoryContextPack,
+    MemoryPlane,
+    build_memory_context_pack,
+)
 from moonmind.memory.models import (
     ContextPack,
     ContextPackBudget,
@@ -33,6 +41,12 @@ __all__ = [
     "ErrorSignature",
     "FileFixPatternStore",
     "FixPattern",
+    "MemoryContextBudgetExceeded",
+    "MemoryContextCandidate",
+    "MemoryContextItem",
+    "MemoryContextPack",
+    "MemoryPlane",
+    "build_memory_context_pack",
     "ContextPack",
     "ContextPackBudget",
     "extract_error_signature",

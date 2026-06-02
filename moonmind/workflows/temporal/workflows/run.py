@@ -7900,6 +7900,7 @@ class MoonMindRunWorkflow:
             runtime_selection["skillId"] = selected_skill
         retrieval_context = None
         memory_proposals = None
+        memory_context = None
         fix_patterns = None
         if isinstance(task_payload_for_context, Mapping):
             raw_retrieval_context = (
@@ -7923,6 +7924,12 @@ class MoonMindRunWorkflow:
                     for proposal in raw_memory_proposals
                     if isinstance(proposal, Mapping)
                 ]
+            raw_memory_context = (
+                task_payload_for_context.get("memoryContext")
+                or task_payload_for_context.get("memory_context")
+            )
+            if isinstance(raw_memory_context, Mapping):
+                memory_context = raw_memory_context
             raw_fix_patterns = (
                 task_payload_for_context.get("matchedFixPatterns")
                 or task_payload_for_context.get("fixPatterns")
@@ -7945,6 +7952,7 @@ class MoonMindRunWorkflow:
             runtime_selection=runtime_selection,
             retrieval=retrieval_context,
             memory_proposals=memory_proposals,
+            memory_context=memory_context,
             fix_patterns=fix_patterns,
         )
         metadata_payload = (
