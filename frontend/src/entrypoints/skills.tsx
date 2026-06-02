@@ -257,13 +257,13 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
   );
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-      <div className="space-y-6">
-        <header className="rounded-[2rem] border border-mm-border/80 bg-transparent px-6 py-6 shadow-sm">
+    <div className="skills-page mx-auto w-full max-w-7xl px-2 py-4 sm:px-6 sm:py-6 lg:px-8">
+      <div className="space-y-5 sm:space-y-6">
+        <header className="px-1 sm:px-0">
           <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">
             Agent Skills
           </p>
-          <h2 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950 dark:text-white">
+          <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl dark:text-white">
             Skills
           </h2>
           <p className="mt-2 max-w-3xl text-sm text-slate-600 dark:text-slate-400">
@@ -271,8 +271,8 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
           </p>
         </header>
 
-        <div className="grid gap-6 lg:grid-cols-[18rem_minmax(0,1fr)]">
-          <section className="rounded-[2rem] border border-mm-border/80 bg-transparent p-4 shadow-sm">
+        <div className="grid gap-5 sm:gap-6 lg:grid-cols-[18rem_minmax(0,1fr)]">
+          <section className="min-w-0 rounded-2xl border border-mm-border/80 bg-transparent p-4 shadow-sm">
             <div className="flex items-center justify-between gap-3">
               <h3 className="text-base font-semibold text-slate-900 dark:text-white">Available Skills</h3>
               <button
@@ -305,7 +305,7 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
             </div>
           </section>
 
-          <section className="rounded-[2rem] border border-mm-border/80 bg-transparent p-6 shadow-sm">
+          <section className="min-w-0 rounded-2xl border border-mm-border/80 bg-transparent p-4 shadow-sm sm:p-6">
             {isCreating ? (
               <form
                 onSubmit={(event) => {
@@ -384,7 +384,7 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
                   </h3>
                 </div>
                 <div
-                  className="text-sm leading-7 text-slate-700 dark:text-slate-300 [&_a]:text-mm-accent [&_a]:underline [&_code]:rounded [&_code]:bg-slate-100 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-xs [&_code]:text-slate-900 dark:[&_code]:bg-slate-900 dark:[&_code]:text-slate-100"
+                  className="min-w-0 break-words text-sm leading-7 text-slate-700 dark:text-slate-300 [&_a]:break-words [&_a]:text-mm-accent [&_a]:underline [&_:not(pre)_>_code]:break-words [&_:not(pre)_>_code]:rounded [&_:not(pre)_>_code]:bg-slate-100 [&_:not(pre)_>_code]:px-1.5 [&_:not(pre)_>_code]:py-0.5 [&_:not(pre)_>_code]:font-mono [&_:not(pre)_>_code]:text-xs [&_:not(pre)_>_code]:text-slate-900 dark:[&_:not(pre)_>_code]:bg-slate-900 dark:[&_:not(pre)_>_code]:text-slate-100"
                   data-testid="skill-markdown-preview"
                 >
                   <MarkdownRenderer markdown={selectedSkill.markdown || ''} />
