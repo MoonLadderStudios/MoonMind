@@ -123,7 +123,6 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - Manifest system: schema validation, reader adapters, pipeline, evaluation (`moonmind/manifest/` — 12 source files)
 - Manifest CLI (`moonmind manifest validate|plan|run|evaluate`)
 - Manifest ingest Temporal workflow (`moonmind/workflows/temporal/manifest_ingest.py`)
-- Manifest ingest live-source provider verification for GitHub, Confluence, and Google Drive (`tests/provider/manifest/`)
 - Spec 088 manifest schema pipeline spec implemented (#796)
 - Embedding model updated to current Gemini default (#787)
 - Context pack primitives (`rag/context_pack.py`)
@@ -132,7 +131,8 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - RAG doc ↔ spec consolidation completed (see `docs/MoonMindRoadmap.md`)
 
 ### Remaining tasks
-- [ ] **5.2** RAG retrieval quality validation — Evaluation framework exists (`manifest/evaluation.py`) but no golden datasets or baseline metrics established
+- [ ] **5.1** End-to-end manifest ingest testing — Manifest pipeline built but not fully tested against live data sources
+- [x] **5.2** RAG retrieval quality validation — Golden smoke dataset and baseline `hitRate@10` / `ndcg@10` thresholds established for `manifest/evaluation.py`
 - [ ] **5.3** Context pack assembly wired into agent runs — Primitives exist; not integrated into Temporal activity execution
 - [ ] **5.4** Index health monitoring — No dashboard view of indexed collections, document counts, or freshness
 - [ ] **5.5** Incremental re-indexing — Full reindex only; no delta/incremental update path

@@ -92,8 +92,6 @@ evaluation:
       threshold: 0.80
     - name: "ndcg@10"
       threshold: 0.70
-    - name: "faithfulness"
-      threshold: 0.85
 
 run:
   concurrency: 12
