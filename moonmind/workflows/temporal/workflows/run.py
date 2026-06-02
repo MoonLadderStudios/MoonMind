@@ -7900,6 +7900,7 @@ class MoonMindRunWorkflow:
             runtime_selection["skillId"] = selected_skill
         retrieval_context = None
         memory_proposals = None
+        memory_context = None
         if isinstance(task_payload_for_context, Mapping):
             raw_retrieval_context = (
                 task_payload_for_context.get("attemptRetrieval")
@@ -7922,6 +7923,12 @@ class MoonMindRunWorkflow:
                     for proposal in raw_memory_proposals
                     if isinstance(proposal, Mapping)
                 ]
+            raw_memory_context = (
+                task_payload_for_context.get("memoryContext")
+                or task_payload_for_context.get("memory_context")
+            )
+            if isinstance(raw_memory_context, Mapping):
+                memory_context = raw_memory_context
         attempt_context = build_execution_context_bundle(
             workflow_id=wf_info.workflow_id,
             run_id=wf_info.run_id,
@@ -7931,6 +7938,7 @@ class MoonMindRunWorkflow:
             runtime_selection=runtime_selection,
             retrieval=retrieval_context,
             memory_proposals=memory_proposals,
+            memory_context=memory_context,
         )
         metadata_payload = (
             parameters.get("metadata")

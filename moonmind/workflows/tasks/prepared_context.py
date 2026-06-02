@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from moonmind.config.settings import settings
 from moonmind.memory.context_pack import build_memory_context_pack
 
 TargetKind = Literal["objective", "step"]
@@ -371,7 +372,9 @@ def build_execution_context_bundle(
         memory_candidates = memory_context.get("candidates") or []
         raw_token_budget = memory_context.get("tokenBudget")
         memory_token_budget = (
-            4096 if raw_token_budget is None else int(raw_token_budget)
+            settings.workflow.memory_context_budget_tokens
+            if raw_token_budget is None
+            else int(raw_token_budget)
         )
         memory_context_ref = build_memory_context_pack(
             memory_candidates,

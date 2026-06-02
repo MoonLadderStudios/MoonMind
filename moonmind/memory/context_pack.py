@@ -58,7 +58,10 @@ class MemoryContextCandidate(BaseModel):
     def _validate_provenance_and_content(self) -> "MemoryContextCandidate":
         if not _has_provenance_pointer(self.provenance):
             raise ValueError("memory context items require provenance pointers")
-        _reject_secretish_values(self.model_dump(by_alias=True), path="memoryContext")
+        _reject_secretish_values(
+            self.model_dump(mode="json", by_alias=True),
+            path="memoryContext",
+        )
         return self
 
     def estimated_token_cost(self) -> int:
@@ -126,7 +129,11 @@ def build_memory_context_pack(
             else MemoryContextCandidate.model_validate(raw_candidate)
         )
         token_cost = candidate.estimated_token_cost()
-        payload = candidate.model_dump(by_alias=True, exclude_none=True)
+        payload = candidate.model_dump(
+            mode="json",
+            by_alias=True,
+            exclude_none=True,
+        )
         payload["tokenCost"] = token_cost
         item_ref = f"memory-context-item://{_digest_payload(payload)}"
 
@@ -143,7 +150,8 @@ def build_memory_context_pack(
         "schemaVersion": "v1",
         "builderVersion": builder_version,
         "items": [
-            item.model_dump(by_alias=True, exclude_none=True) for item in accepted
+            item.model_dump(mode="json", by_alias=True, exclude_none=True)
+            for item in accepted
         ],
         "budgets": {"tokens": token_budget},
         "usage": {
@@ -180,17 +188,13 @@ def _digest_payload(payload: Mapping[str, Any]) -> str:
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
-def _has_provenance_pointer(value: Mapping[str, Any]) -> bool:
-    if not isinstance(value, Mapping) or not value:
-        return False
-    for pointer in value.values():
-        if isinstance(pointer, str) and pointer.strip():
-            return True
-        if isinstance(pointer, Sequence) and not isinstance(pointer, str):
-            if any(str(item).strip() for item in pointer):
-                return True
-        if isinstance(pointer, Mapping) and _has_provenance_pointer(pointer):
-            return True
+def _has_provenance_pointer(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, Mapping):
+        return any(_has_provenance_pointer(item) for item in value.values())
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        return any(_has_provenance_pointer(item) for item in value)
     return False
 
 

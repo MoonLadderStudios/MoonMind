@@ -464,6 +464,45 @@ def test_execution_context_records_budgeted_memory_context_ref() -> None:
     )
 
 
+def test_execution_context_uses_configured_default_memory_context_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, int] = {}
+
+    def fake_build_memory_context_pack(
+        candidates: object,
+        *,
+        token_budget: int,
+    ) -> object:
+        observed["token_budget"] = token_budget
+
+        class Pack:
+            memory_context_ref = "memory-context-pack://sha256:configured"
+
+        return Pack()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.tasks.prepared_context.settings.workflow."
+        "memory_context_budget_tokens",
+        1234,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.tasks.prepared_context.build_memory_context_pack",
+        fake_build_memory_context_pack,
+    )
+
+    bundle = build_execution_context_bundle(
+        workflow_id="workflow-1",
+        run_id="run-1",
+        logical_step_id="collect-evidence",
+        execution_ordinal=1,
+        memory_context={"candidates": []},
+    )
+
+    assert observed == {"token_budget": 1234}
+    assert bundle.memory_context_ref == "memory-context-pack://sha256:configured"
+
+
 def test_execution_context_rejects_zero_memory_context_budget() -> None:
     with pytest.raises(ValueError, match="token_budget must be positive"):
         build_execution_context_bundle(

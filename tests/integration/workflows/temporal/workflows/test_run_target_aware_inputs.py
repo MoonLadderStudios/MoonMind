@@ -77,6 +77,61 @@ def test_run_boundary_prepares_objective_and_current_step_context_only() -> None
     assert "preparedInputRefs" not in projection["context"]
 
 
+def test_run_boundary_projects_memory_context_ref() -> None:
+    wf = MoonMindRunWorkflow()
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        return_value=SimpleNamespace(
+            workflow_id="run-memory-context-integration",
+            run_id="run-id-1",
+            namespace="default",
+        ),
+    ):
+        request = wf._build_agent_execution_request(
+            node_inputs={"runtime": {"mode": "codex_cli"}},
+            node_id="first-step",
+            tool_name="codex_cli",
+            workflow_parameters={
+                "task": {
+                    "memoryContext": {
+                        "tokenBudget": 32,
+                        "candidates": [
+                            {
+                                "text": (
+                                    "Prefer the prior remediation pattern when "
+                                    "this error appears."
+                                ),
+                                "source": "run-digest://workflow-previous/run-1",
+                                "plane": "history",
+                                "trustClass": "derived",
+                                "provenance": {
+                                    "workflowId": "workflow-previous",
+                                    "artifactRefs": ["artifact://fix-pattern-1"],
+                                },
+                                "tokenCost": 12,
+                            }
+                        ],
+                    },
+                    "steps": [{"id": "first-step"}],
+                }
+            },
+        )
+
+    moonmind_metadata = request.parameters["metadata"]["moonmind"]
+    attempt_context = moonmind_metadata["executionContext"]
+    projection = moonmind_metadata["stepExecutionManifestProjection"]
+
+    assert attempt_context["memoryContextRef"].startswith(
+        "memory-context-pack://sha256:"
+    )
+    assert projection["context"]["memoryContextRef"] == (
+        attempt_context["memoryContextRef"]
+    )
+    assert projection["context"]["contextBundleRef"] == (
+        attempt_context["contextBundleRef"]
+    )
+
+
 def test_agent_run_child_input_scope_is_parent_selected() -> None:
     wf = MoonMindRunWorkflow()
     with patch(

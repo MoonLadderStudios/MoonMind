@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 from pydantic import ValidationError
 
@@ -32,6 +34,33 @@ def test_memory_context_pack_requires_provenance() -> None:
         ])
 
 
+def test_memory_context_pack_rejects_empty_nested_provenance_containers() -> None:
+    with pytest.raises(ValidationError, match="provenance pointers"):
+        build_memory_context_pack([
+            _candidate(provenance={"artifactRefs": [{}]}),
+        ])
+
+
+def test_memory_context_pack_accepts_nested_provenance_pointer() -> None:
+    pack = build_memory_context_pack(
+        [
+            _candidate(
+                provenance={
+                    "trace": [
+                        {},
+                        {"artifactRef": "artifact://nested-pointer"},
+                    ]
+                }
+            ),
+        ],
+        token_budget=64,
+    )
+
+    assert pack.items[0].provenance["trace"][1]["artifactRef"] == (
+        "artifact://nested-pointer"
+    )
+
+
 def test_memory_context_pack_normalizes_items_and_enforces_token_budget() -> None:
     pack = build_memory_context_pack(
         [
@@ -62,6 +91,22 @@ def test_memory_context_pack_ref_is_deterministic_for_stable_inputs() -> None:
 
     assert first.memory_context_ref == second.memory_context_ref
     assert first.memory_context_ref != changed_budget.memory_context_ref
+
+
+def test_memory_context_pack_hashes_json_safe_provenance_values() -> None:
+    pack = build_memory_context_pack(
+        [
+            _candidate(
+                provenance={
+                    "artifactRefs": ["artifact://digest-1"],
+                    "observedAt": datetime(2026, 6, 1, tzinfo=timezone.utc),
+                },
+            ),
+        ],
+        token_budget=64,
+    )
+
+    assert pack.items[0].provenance["observedAt"] == "2026-06-01T00:00:00Z"
 
 
 def test_memory_context_pack_rejects_secretish_values() -> None:
