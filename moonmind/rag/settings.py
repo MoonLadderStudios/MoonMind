@@ -30,6 +30,7 @@ class RagRuntimeSettings:
     qdrant_port: int
     qdrant_api_key: Optional[str]
     vector_collection: str
+    vector_collections: tuple[str, ...]
     embedding_provider: str
     embedding_model: str
     embedding_dimensions: Optional[int]
@@ -62,6 +63,23 @@ class RagRuntimeSettings:
             )
             or app_settings.vector_store_collection_name
         )
+        vector_collections_raw = _get_env(env, "VECTOR_STORE_COLLECTION_NAMES")
+        if vector_collections_raw:
+            parsed_collections = tuple(
+                item.strip()
+                for item in vector_collections_raw.split(",")
+                if item.strip()
+            )
+            vector_collections = (
+                vector_collection,
+                *(
+                    item
+                    for item in parsed_collections
+                    if item != vector_collection
+                ),
+            )
+        else:
+            vector_collections = (vector_collection,)
         embedding_provider = (
             _get_env(
                 env,
@@ -137,6 +155,7 @@ class RagRuntimeSettings:
             qdrant_port=qdrant_port,
             qdrant_api_key=qdrant_api_key,
             vector_collection=vector_collection,
+            vector_collections=vector_collections,
             embedding_provider=embedding_provider,
             embedding_model=embedding_model,
             embedding_dimensions=embedding_dimensions,

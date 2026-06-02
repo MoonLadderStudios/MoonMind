@@ -250,7 +250,9 @@ class SimpleDirectoryReaderAdapter(_BaseAdapter):
             yield (text, meta)
 
     def state(self) -> Dict[str, Any]:
-        files: list[dict[str, Any]] = []
+        input_dir = self.ds.params.get("inputDir", ".")
+        root = Path(input_dir)
+        files: dict[str, dict[str, Any]] = {}
         for f in self._iter_files():
             try:
                 stat = f.stat()
@@ -258,16 +260,13 @@ class SimpleDirectoryReaderAdapter(_BaseAdapter):
                     digest = hashlib.file_digest(file_obj, "sha256").hexdigest()
             except OSError:
                 continue
-            files.append(
-                {
-                    "path": str(f),
-                    "size": stat.st_size,
-                    "mtime_ns": stat.st_mtime_ns,
-                    "sha256": digest,
-                }
-            )
+            files[str(f.relative_to(root))] = {
+                "size": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+                "sha256": digest,
+            }
         return {
-            "inputDir": self.ds.params.get("inputDir", "."),
+            "inputDir": input_dir,
             "recursive": self.ds.params.get("recursive", False),
             "requiredExts": self.ds.params.get("requiredExts"),
             "files": files,
