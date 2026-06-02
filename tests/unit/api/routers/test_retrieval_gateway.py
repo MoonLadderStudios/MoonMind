@@ -79,6 +79,23 @@ class StubService:
             ],
         )
 
+    def collection_health(self):
+        return {
+            "status": "ok",
+            "collections": [
+                {
+                    "name": "test_collection",
+                    "status": "green",
+                    "points_count": 2,
+                    "vectors_count": 2,
+                    "indexed_vectors_count": 2,
+                    "dimensions": 768,
+                    "freshness": "ready",
+                    "error": None,
+                }
+            ],
+        }
+
 
 def _build_app() -> FastAPI:
     app = FastAPI()
@@ -127,6 +144,20 @@ def test_index_health_returns_collection_counts_and_freshness() -> None:
         "freshnessSource": "indexed_at",
         "freshnessStatus": "known",
     }
+
+
+def test_health_reports_collection_metadata() -> None:
+    app = _build_app()
+
+    with TestClient(app) as client:
+        response = client.get("/retrieval/health")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["collections"][0]["name"] == "test_collection"
+    assert body["collections"][0]["points_count"] == 2
+    assert body["collections"][0]["dimensions"] == 768
 
 
 def test_context_rejects_out_of_scope_repo() -> None:
@@ -201,8 +232,29 @@ def test_context_accepts_scoped_retrieval_token_and_preserves_request_knobs(
             "budgets": {"tokens": 512, "latency_ms": 1000},
             "transport": "direct",
             "initiation_mode": "session",
+            "planning_ref": None,
         }
     ]
+
+
+def test_context_forwards_planning_ref_to_service() -> None:
+    app = _build_app()
+    app.dependency_overrides[authorize_retrieval_request] = _oidc_auth
+    service = StubService()
+    app.dependency_overrides[get_retrieval_service] = lambda: service
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/retrieval/context",
+            json={
+                "query": "q",
+                "filters": {"repo": "moonmind"},
+                "planning_ref": "bd-123",
+            },
+        )
+
+    assert response.status_code == 200
+    assert service.calls[0]["planning_ref"] == "bd-123"
 
 
 @pytest.mark.parametrize(

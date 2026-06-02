@@ -192,6 +192,40 @@ async def test_inject_context_skips_local_fallback_for_explicit_disable_reason(
     assert result.items_count == 0
     assert result.artifact_path is None
 
+
+@patch("moonmind.rag.context_injection.ContextRetrievalService.retrieve")
+def test_retrieve_context_pack_handles_non_dict_parameters(
+    mock_retrieve,
+    mock_request: AgentExecutionRequest,
+) -> None:
+    mock_request.parameters = None  # type: ignore[assignment]
+    mock_request.workspace_spec = {"repository": "workspace-repo"}
+    service = ContextInjectionService(
+        env={
+            "MOONMIND_RAG_AUTO_CONTEXT": "true",
+            "QDRANT_ENABLED": "true",
+            "GOOGLE_API_KEY": "test",
+        }
+    )
+    mock_retrieve.return_value = ContextPack(
+        items=[],
+        filters={},
+        budgets={},
+        usage={},
+        transport="direct",
+        context_text="",
+        retrieved_at="2026-04-24T00:00:00Z",
+        telemetry_id="tid",
+    )
+
+    pack, reason = service._retrieve_context_pack(mock_request)
+
+    assert pack is mock_retrieve.return_value
+    assert reason is None
+    call_kwargs = mock_retrieve.call_args.kwargs
+    assert call_kwargs["filters"]["repo"] == "workspace-repo"
+    assert call_kwargs["planning_ref"] is None
+
 @pytest.mark.asyncio
 @patch("moonmind.rag.context_injection.ContextInjectionService._build_local_fallback_pack")
 @patch("moonmind.rag.context_injection.ContextInjectionService._retrieve_context_pack")

@@ -2771,12 +2771,40 @@ class MoonMindAgentRun:
                                     if not aa_enabled or self._auto_answer_count >= aa_max:
                                         # Opt-out or max cycles exhausted → escalate
                                         self.run_status = "intervention_requested"
+                                        auto_answer_reason = (
+                                            "jules_auto_answer_disabled"
+                                            if not aa_enabled
+                                            else "jules_auto_answer_exhausted"
+                                        )
+                                        self.final_result = self._intervention_result(
+                                            summary=(
+                                                "Jules requested human feedback; "
+                                                "operator intervention is required."
+                                            ),
+                                            request=request,
+                                            metadata={
+                                                "reason": "agent_requested_feedback",
+                                                "julesAutoAnswerReason": auto_answer_reason,
+                                                "julesAutoAnswerCount": self._auto_answer_count,
+                                                "julesAutoAnswerMax": aa_max,
+                                                "resiliencyPolicy": dict(resiliency_policy),
+                                                "lastStatus": status_obj.model_dump(
+                                                    mode="json",
+                                                    by_alias=True,
+                                                ),
+                                            },
+                                        )
                                         self._get_logger().warning(
                                             "Jules auto-answer %s for session %s (count=%d, max=%d)",
                                             "disabled" if not aa_enabled else "exhausted",
                                             self.run_id,
                                             self._auto_answer_count,
                                             aa_max,
+                                        )
+                                        await self._signal_parent_child_state_changed(
+                                            parent_info,
+                                            "intervention_requested",
+                                            "Jules requested human feedback.",
                                         )
                                         break
 

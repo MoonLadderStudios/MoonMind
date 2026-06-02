@@ -6376,6 +6376,8 @@ export interface components {
             budgets?: {
                 [key: string]: number;
             };
+            /** Planning Ref */
+            planning_ref?: string | null;
         };
         /**
          * RetryWorkflowMode
@@ -8713,7 +8715,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        [key: string]: string;
+                        [key: string]: unknown;
                     };
                 };
             };

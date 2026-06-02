@@ -11,6 +11,7 @@ def _settings(**overrides: object) -> RagRuntimeSettings:
         qdrant_port=6333,
         qdrant_api_key=None,
         vector_collection="test_collection",
+        vector_collections=("test_collection",),
         embedding_provider="google",
         embedding_model="test-model",
         embedding_dimensions=768,
@@ -27,6 +28,14 @@ def _settings(**overrides: object) -> RagRuntimeSettings:
         run_id="run-1",
         rag_enabled=True,
         qdrant_enabled=True,
+        memory_enabled=True,
+        memory_planning="off",
+        memory_history="off",
+        memory_long_term="off",
+        memory_fail_open=True,
+        memory_context_budget_tokens=4096,
+        planning_workspace_root=None,
+        beads_command="bd",
     )
     defaults.update(overrides)
     return RagRuntimeSettings(**defaults)
@@ -53,6 +62,27 @@ def test_as_filter_metadata_omits_none_values() -> None:
     settings = _settings(job_id=None, run_id=None)
     meta = settings.as_filter_metadata()
     assert meta == {}
+
+def test_from_env_defaults_vector_collections_to_primary() -> None:
+    settings = RagRuntimeSettings.from_env(
+        {
+            "VECTOR_STORE_COLLECTION_NAME": "primary",
+            "DEFAULT_EMBEDDING_PROVIDER": "google",
+        }
+    )
+    assert settings.vector_collection == "primary"
+    assert settings.vector_collections == ("primary",)
+
+def test_from_env_parses_multiple_vector_collections_with_primary_first() -> None:
+    settings = RagRuntimeSettings.from_env(
+        {
+            "VECTOR_STORE_COLLECTION_NAME": "primary",
+            "VECTOR_STORE_COLLECTION_NAMES": "docs, primary, support",
+            "DEFAULT_EMBEDDING_PROVIDER": "google",
+        }
+    )
+    assert settings.vector_collection == "primary"
+    assert settings.vector_collections == ("primary", "docs", "support")
 
 def test_embedding_provider_supported_recognizes_valid_providers() -> None:
     for provider in ("google", "openai"):
@@ -107,3 +137,63 @@ def test_retrieval_executable_mirrors_reason() -> None:
         {"MOONMIND_RETRIEVAL_TOKEN": "scoped-token"},
         preferred_transport="gateway",
     )
+
+def test_memory_plane_helpers_respect_master_toggle() -> None:
+    settings = _settings(
+        memory_enabled=True,
+        memory_planning="beads",
+        memory_history="digest",
+        memory_long_term="mem0",
+    )
+
+    assert settings.memory_planning_enabled is True
+    assert settings.memory_history_enabled is True
+    assert settings.memory_long_term_enabled is True
+
+    disabled = _settings(
+        memory_enabled=False,
+        memory_planning="beads",
+        memory_history="digest",
+        memory_long_term="mem0",
+    )
+
+    assert disabled.memory_planning_enabled is False
+    assert disabled.memory_history_enabled is False
+    assert disabled.memory_long_term_enabled is False
+
+def test_planning_memory_enabled_requires_global_and_plane_switch() -> None:
+    assert _settings(memory_planning="beads").planning_memory_enabled()
+    assert not _settings(
+        memory_enabled=False,
+        memory_planning="beads",
+    ).planning_memory_enabled()
+    assert not _settings(memory_planning="off").planning_memory_enabled()
+
+
+def test_from_env_reads_memory_planning_controls() -> None:
+    settings = RagRuntimeSettings.from_env(
+        {
+            "MEMORY_ENABLED": "1",
+            "MEMORY_PLANNING": "beads",
+            "MEMORY_FAIL_OPEN": "0",
+            "MEMORY_CONTEXT_BUDGET_TOKENS": "123",
+            "MOONMIND_PLANNING_REPOSITORY_ROOT": "/tmp/repo",
+            "BEADS_COMMAND": "bd-test",
+        }
+    )
+
+    assert settings.planning_memory_enabled()
+    assert settings.memory_fail_open is False
+    assert settings.memory_context_budget_tokens == 123
+    assert settings.planning_workspace_root == "/tmp/repo"
+    assert settings.beads_command == "bd-test"
+
+
+def test_from_env_rejects_unknown_memory_planning_mode() -> None:
+    try:
+        RagRuntimeSettings.from_env({"MEMORY_PLANNING": "unknown"})
+    except ValueError as exc:
+        assert "MEMORY_PLANNING" in str(exc)
+        assert "beads" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")

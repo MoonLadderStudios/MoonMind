@@ -142,6 +142,98 @@ def test_search_uses_query_points_when_search_api_is_unavailable():
         "src/canon_a.py",
     ]
 
+def test_search_queries_multiple_canonical_collections_and_reranks():
+    client = _client()
+    calls: list[str] = []
+
+    class FakeQdrant:
+        def search(self, *, collection_name, **kwargs):
+            _ = kwargs
+            calls.append(collection_name)
+            if collection_name == "repo-main":
+                return [
+                    _point(
+                        score=0.70,
+                        path="src/main.py",
+                        chunk_hash="main",
+                        text="main",
+                    )
+                ]
+            if collection_name == "repo-docs":
+                return [
+                    _point(
+                        score=0.95,
+                        path="docs/rag.md",
+                        chunk_hash="docs",
+                        text="docs",
+                    )
+                ]
+            raise AssertionError("unexpected collection")
+
+    client._client = FakeQdrant()  # type: ignore[assignment]
+    result = client.search(
+        query_vector=[0.1, 0.2],
+        filters={"repo": "moonmind"},
+        top_k=2,
+        overlay_policy="skip",
+        overlay_collection=None,
+        collections=("repo-main", "repo-docs"),
+        trust_overrides=None,
+    )
+
+    assert calls == ["repo-main", "repo-docs"]
+    assert [item.source for item in result.items] == ["docs/rag.md", "src/main.py"]
+
+def test_collection_health_reports_counts_and_dimensions():
+    client = _client()
+
+    class _Vectors:
+        size = 768
+
+    class _Params:
+        vectors = _Vectors()
+
+    class _Config:
+        params = _Params()
+
+    class _Info:
+        status = "green"
+        points_count = 12
+        vectors_count = 12
+        indexed_vectors_count = 10
+        config = _Config()
+
+    class FakeQdrant:
+        def get_collection(self, name):
+            assert name == "repo-main"
+            return _Info()
+
+    client._client = FakeQdrant()  # type: ignore[assignment]
+
+    result = client.collection_health(collection_names=("repo-main",))
+
+    assert result[0].name == "repo-main"
+    assert result[0].status == "green"
+    assert result[0].points_count == 12
+    assert result[0].indexed_vectors_count == 10
+    assert result[0].dimensions == 768
+    assert result[0].freshness == "ready"
+
+def test_collection_health_reports_transport_exceptions_as_unavailable():
+    client = _client()
+
+    class FakeQdrant:
+        def get_collection(self, name):
+            raise TimeoutError(f"{name} timed out")
+
+    client._client = FakeQdrant()  # type: ignore[assignment]
+
+    result = client.collection_health(collection_names=("repo-main",))
+
+    assert result[0].name == "repo-main"
+    assert result[0].status == "unavailable"
+    assert "timed out" in result[0].error
+
 def test_merge_results_skips_expired_overlay_chunks():
     client = _client()
     expired_overlay = _point(
@@ -195,6 +287,7 @@ def test_merge_results_keeps_multiple_chunks_when_hash_missing():
 
     assert len(items) == 2
     assert {item.text for item in items} == {"one", "two"}
+
 
 def test_index_health_lists_collections_counts_and_freshness():
     client = _client()
@@ -370,3 +463,30 @@ def test_collection_freshness_pages_until_latest_timestamp_is_found():
     assert offsets == [None, "next-page"]
     assert freshness_at == "2026-05-04T00:00:00+00:00"
     assert freshness_source == "indexed_at"
+
+
+def test_canonical_vectors_use_supplied_ids_and_delete_by_point_ids():
+    client = _client()
+    calls = []
+
+    class FakeQdrant:
+        def upsert(self, *, collection_name, points):
+            calls.append(("upsert", collection_name, points.ids, points.vectors))
+
+        def delete(self, *, collection_name, points_selector):
+            calls.append(("delete", collection_name, points_selector.points))
+
+    client._client = FakeQdrant()  # type: ignore[assignment]
+
+    client.upsert_canonical_vectors(
+        collection_name="repo-main",
+        ids=["point-a"],
+        vectors=[[0.1, 0.2]],
+        payloads=[{"path": "a.txt"}],
+    )
+    client.delete_vectors(collection_name="repo-main", point_ids=["point-old"])
+
+    assert calls == [
+        ("upsert", "repo-main", ["point-a"], [[0.1, 0.2]]),
+        ("delete", "repo-main", ["point-old"]),
+    ]

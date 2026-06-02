@@ -52,6 +52,7 @@ class RetrievalQuery(BaseModel):
     filters: Dict[str, str] = Field(default_factory=dict)
     overlay_policy: str = Field(default="include", pattern="^(include|skip)$")
     budgets: Dict[str, int] = Field(default_factory=dict)
+    planning_ref: Optional[str] = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def validate_budget_keys(self) -> "RetrievalQuery":
@@ -257,8 +258,14 @@ def _enforce_retrieval_available(service: ContextRetrievalService) -> None:
     )
 
 @router.get("/health")
-def health() -> Dict[str, str]:
-    return {"status": "ok"}
+def health(
+    service: ContextRetrievalService = Depends(get_retrieval_service),
+) -> Dict[str, object]:
+    try:
+        return service.collection_health()
+    except Exception as exc:  # pragma: no cover - defensive runtime probe
+        logger.warning("Retrieval health probe failed: %s", exc)
+        return {"status": "degraded", "collections": []}
 
 @router.get("/index-health", response_model=IndexHealthResponse)
 async def index_health(
@@ -312,6 +319,7 @@ async def retrieve_context_pack(
             budgets=payload.budgets,
             transport="direct",
             initiation_mode="session",
+            planning_ref=payload.planning_ref,
         )
         pack.transport = "gateway"
         return pack.to_dict()

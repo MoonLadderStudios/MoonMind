@@ -6,7 +6,11 @@ T027 (metadata allowlist).
 
 from __future__ import annotations
 
+import sys
 import textwrap
+import types
+from enum import Enum
+from types import SimpleNamespace
 from typing import Any, Dict, Iterator, Tuple
 
 import pytest
@@ -59,6 +63,36 @@ MINIMAL_MANIFEST = textwrap.dedent("""\
         indices: ["idx1"]
 """)
 
+SPLITTER_MANIFEST = textwrap.dedent("""\
+    version: "v0"
+    metadata:
+      name: "adapter-test"
+    embeddings:
+      provider: "openai"
+      model: "text-embedding-3-large"
+    vectorStore:
+      type: "qdrant"
+      indexName: "test"
+    dataSources:
+      - id: "local"
+        type: "SimpleDirectoryReader"
+        params:
+          inputDir: "{input_dir}"
+    transforms:
+      splitter:
+        type: TokenTextSplitter
+        chunkSize: {chunk_size}
+        chunkOverlap: 0
+    indices:
+      - id: "idx1"
+        type: "VectorStoreIndex"
+        sources: ["local"]
+    retrievers:
+      - id: "ret1"
+        type: "Vector"
+        indices: ["idx1"]
+""")
+
 @pytest.fixture(autouse=True)
 def _clean_registry():
     """Re-register built-in adapters for each test."""
@@ -89,6 +123,40 @@ class TestAdapterContracts:
         )
         adapter = GoogleDriveReaderAdapter(ds)
         assert isinstance(adapter, ReaderAdapter)
+
+    def test_google_drive_fetch_uses_service_account_key_path(self, monkeypatch):
+        calls = {}
+
+        class FakeGoogleDriveReader:
+            def __init__(self, **kwargs: Any) -> None:
+                calls.update(kwargs)
+
+            def load_data(self, *, folder_id: str):
+                calls["folder_id"] = folder_id
+                return [SimpleNamespace(text="drive-doc", metadata={})]
+
+        llama_index_module = types.ModuleType("llama_index")
+        readers_module = types.ModuleType("llama_index.readers")
+        google_module = types.ModuleType("llama_index.readers.google")
+        google_module.GoogleDriveReader = FakeGoogleDriveReader
+        monkeypatch.setitem(sys.modules, "llama_index", llama_index_module)
+        monkeypatch.setitem(sys.modules, "llama_index.readers", readers_module)
+        monkeypatch.setitem(sys.modules, "llama_index.readers.google", google_module)
+
+        ds = DataSourceConfig(
+            id="gd",
+            type="GoogleDriveReader",
+            params={"folderId": "abc123"},
+            auth={"serviceAccountKeyPath": "/tmp/service-account.json"},
+        )
+        adapter = GoogleDriveReaderAdapter(ds)
+
+        docs = list(adapter.fetch())
+
+        assert calls["service_account_key_path"] == "/tmp/service-account.json"
+        assert "credentials_path" not in calls
+        assert calls["folder_id"] == "abc123"
+        assert docs == [("drive-doc", {"source_type": "GoogleDriveReader"})]
 
     def test_local_adapter_is_reader(self):
         ds = DataSourceConfig(
@@ -168,6 +236,23 @@ class TestAdapterContracts:
         state = adapter.state()
         assert "inputDir" in state
 
+    def test_local_state_hashes_file_in_chunks(self, tmp_path, monkeypatch):
+        (tmp_path / "file.txt").write_text("hello", encoding="utf-8")
+        monkeypatch.setattr(
+            "pathlib.Path.read_bytes",
+            lambda self: (_ for _ in ()).throw(AssertionError("read_bytes used")),
+        )
+        ds = DataSourceConfig(
+            id="loc", type="SimpleDirectoryReader",
+            params={"inputDir": str(tmp_path)}
+        )
+        adapter = SimpleDirectoryReaderAdapter(ds)
+        state = adapter.state()
+
+        assert state["files"]["file.txt"]["sha256"] == (
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        )
+
     def test_github_state_returns_branch(self):
         ds = DataSourceConfig(
             id="gh", type="GithubRepositoryReader",
@@ -176,6 +261,70 @@ class TestAdapterContracts:
         adapter = GitHubReaderAdapter(ds)
         state = adapter.state()
         assert state["branch"] == "dev"
+
+    def test_github_fetch_uses_reader_filter_type_enum(self, monkeypatch):
+        class FilterType(Enum):
+            INCLUDE = 2
+
+        calls = {}
+
+        class FakeGithubClient:
+            def __init__(self, github_token: str, verbose: bool) -> None:
+                calls["github_token"] = github_token
+                calls["client_verbose"] = verbose
+
+        class FakeGithubRepositoryReader:
+            def __init__(self, **kwargs: Any) -> None:
+                calls.update(kwargs)
+
+            def load_data(self, *, branch: str):
+                calls["branch"] = branch
+                return [SimpleNamespace(text="readme", metadata={})]
+
+        FakeGithubRepositoryReader.FilterType = FilterType
+
+        github_module = pytest.importorskip("llama_index.readers.github")
+        client_module = pytest.importorskip(
+            "llama_index.readers.github.repository.github_client"
+        )
+
+        monkeypatch.setattr(
+            github_module,
+            "GithubRepositoryReader",
+            FakeGithubRepositoryReader,
+        )
+        monkeypatch.setattr(client_module, "GithubClient", FakeGithubClient)
+
+        ds = DataSourceConfig(
+            id="gh",
+            type="GithubRepositoryReader",
+            params={
+                "owner": "owner",
+                "repo": "repo",
+                "branch": "main",
+                "filterExtensions": [".md"],
+            },
+            auth={"githubToken": "${GITHUB_TOKEN}"},
+        )
+        adapter = GitHubReaderAdapter(ds)
+
+        docs = list(adapter.fetch())
+
+        assert docs == [
+            (
+                "readme",
+                {
+                    "source_type": "GithubRepositoryReader",
+                    "owner": "owner",
+                    "repo": "repo",
+                },
+            )
+        ]
+        assert calls["filter_file_extensions"] == (
+            [".md"],
+            FilterType.INCLUDE,
+        )
+        assert calls["branch"] == "main"
 
 # ---------------------------------------------------------------------------
 # T025: Extensibility test — register custom adapter
@@ -195,6 +344,18 @@ class CustomTestAdapter:
 
     def state(self) -> Dict[str, Any]:
         return {"custom_cursor": "v1"}
+
+
+class RecordingIndexWriter:
+    def __init__(self) -> None:
+        self.deleted_batches: list[list[str]] = []
+        self.upsert_batches: list[list[object]] = []
+
+    def delete_points(self, point_ids):
+        self.deleted_batches.append(list(point_ids))
+
+    def upsert_chunks(self, chunks):
+        self.upsert_batches.append(list(chunks))
 
 class TestExtensibility:
     def test_register_custom_adapter(self):
@@ -237,7 +398,7 @@ class TestExtensibility:
         assert plan.dry_run
         assert plan.total_docs == 42
 
-    def test_custom_adapter_runs(self):
+    def test_custom_adapter_runs(self, tmp_path):
         register_adapter("CustomReader", CustomTestAdapter)
         manifest = ManifestV0.from_yaml_string(textwrap.dedent("""\
             version: "v0"
@@ -260,7 +421,7 @@ class TestExtensibility:
                 type: "Vector"
                 indices: ["idx1"]
         """))
-        pipeline = ManifestPipeline(manifest)
+        pipeline = ManifestPipeline(manifest, state_path=tmp_path / "state.json")
         result = pipeline.run()
         assert result.total_docs == 1
         assert result.sources[0].doc_count == 1
@@ -343,16 +504,101 @@ class TestPipelineLocalAdapter:
         assert plan.total_docs == 1
 
     def test_run_with_local_files(self, tmp_path):
-        (tmp_path / "a.txt").write_text("alpha")
-        (tmp_path / "b.txt").write_text("beta")
+        data_dir = tmp_path / "docs"
+        data_dir.mkdir()
+        (data_dir / "a.txt").write_text("alpha")
+        (data_dir / "b.txt").write_text("beta")
         manifest = ManifestV0.from_yaml_string(
-            MINIMAL_MANIFEST.format(input_dir=str(tmp_path))
+            MINIMAL_MANIFEST.format(input_dir=str(data_dir))
         )
-        pipeline = ManifestPipeline(manifest)
+        pipeline = ManifestPipeline(manifest, state_path=tmp_path / "state.json")
         result = pipeline.run()
         assert not result.dry_run
         assert result.total_docs == 2
         assert result.sources[0].doc_count == 2
+        assert result.sources[0].indexed_doc_count == 2
+
+    def test_run_skips_unchanged_local_source(self, tmp_path):
+        data_dir = tmp_path / "docs"
+        data_dir.mkdir()
+        (data_dir / "a.txt").write_text("alpha")
+        manifest = ManifestV0.from_yaml_string(
+            MINIMAL_MANIFEST.format(input_dir=str(data_dir))
+        )
+        state_path = tmp_path / "incremental-state.json"
+
+        first = ManifestPipeline(manifest, state_path=state_path).run()
+        second = ManifestPipeline(manifest, state_path=state_path).run()
+
+        assert first.sources[0].doc_count == 1
+        assert first.sources[0].skipped is False
+        assert second.sources[0].doc_count == 0
+        assert second.sources[0].indexed_doc_count == 0
+        assert second.sources[0].skipped is True
+
+    def test_run_updates_changed_documents_and_deletes_stale_chunks(self, tmp_path):
+        data_dir = tmp_path / "docs"
+        data_dir.mkdir()
+        a_path = data_dir / "a.txt"
+        b_path = data_dir / "b.txt"
+        a_path.write_text("alpha")
+        b_path.write_text("beta")
+        manifest = ManifestV0.from_yaml_string(
+            MINIMAL_MANIFEST.format(input_dir=str(data_dir))
+        )
+        state_path = tmp_path / "incremental-state.json"
+        writer = RecordingIndexWriter()
+
+        first = ManifestPipeline(
+            manifest,
+            state_path=state_path,
+            index_writer=writer,
+        ).run()
+        b_path.unlink()
+        a_path.write_text("alpha changed")
+        second = ManifestPipeline(
+            manifest,
+            state_path=state_path,
+            index_writer=writer,
+        ).run()
+
+        assert first.sources[0].indexed_doc_count == 2
+        assert second.sources[0].doc_count == 1
+        assert second.sources[0].indexed_doc_count == 1
+        assert second.sources[0].deleted_doc_count == 1
+        assert len(writer.upsert_batches[0]) == 2
+        assert len(writer.upsert_batches[1]) == 1
+        assert writer.deleted_batches[1]
+
+    def test_run_reindexes_when_splitter_changes(self, tmp_path):
+        data_dir = tmp_path / "docs"
+        data_dir.mkdir()
+        (data_dir / "a.txt").write_text("alpha beta gamma")
+        state_path = tmp_path / "incremental-state.json"
+        writer = RecordingIndexWriter()
+
+        first_manifest = ManifestV0.from_yaml_string(
+            SPLITTER_MANIFEST.format(input_dir=str(data_dir), chunk_size=8)
+        )
+        second_manifest = ManifestV0.from_yaml_string(
+            SPLITTER_MANIFEST.format(input_dir=str(data_dir), chunk_size=5)
+        )
+
+        first = ManifestPipeline(
+            first_manifest,
+            state_path=state_path,
+            index_writer=writer,
+        ).run()
+        second = ManifestPipeline(
+            second_manifest,
+            state_path=state_path,
+            index_writer=writer,
+        ).run()
+
+        assert first.sources[0].indexed_doc_count == 1
+        assert second.sources[0].skipped is False
+        assert second.sources[0].indexed_doc_count == 1
+        assert writer.deleted_batches[1]
 
     def test_run_unknown_adapter_continues(self, tmp_path):
         yaml_str = textwrap.dedent("""\
@@ -377,7 +623,7 @@ class TestPipelineLocalAdapter:
                 indices: ["idx1"]
         """)
         manifest = ManifestV0.from_yaml_string(yaml_str)
-        pipeline = ManifestPipeline(manifest)
+        pipeline = ManifestPipeline(manifest, state_path=tmp_path / "state.json")
         result = pipeline.run()
         assert result.sources[0].error is not None
         assert "No adapter" in result.sources[0].error
@@ -411,7 +657,7 @@ class TestPipelineLocalAdapter:
               errorPolicy: "stopOnFirstError"
         """.format(input_dir=str(tmp_path)))
         manifest = ManifestV0.from_yaml_string(yaml_str)
-        pipeline = ManifestPipeline(manifest)
+        pipeline = ManifestPipeline(manifest, state_path=tmp_path / "state.json")
         result = pipeline.run()
         # Should stop after first error, not process "good"
         assert len(result.sources) == 1

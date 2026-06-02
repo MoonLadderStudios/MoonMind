@@ -11,6 +11,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from moonmind.memory.procedural import fix_patterns_to_memory_proposals
+
 TargetKind = Literal["objective", "step"]
 MemoryProposalState = Literal[
     "proposed",
@@ -344,6 +346,7 @@ def build_execution_context_bundle(
     runtime_selection: Mapping[str, Any] | None = None,
     retrieval: Mapping[str, Any] | None = None,
     memory_proposals: Sequence[Mapping[str, Any]] | None = None,
+    fix_patterns: Sequence[Mapping[str, Any]] | None = None,
     builder_version: str = EXECUTION_CONTEXT_BUILDER_VERSION,
 ) -> ExecutionContextBundle:
     """Build a compact, digest-addressed execution context bundle."""
@@ -357,10 +360,13 @@ def build_execution_context_bundle(
             build_retrieval_manifest(retrieval).retrieval_manifest_ref
         )
     memory_manifest_ref = None
-    if memory_proposals:
-        memory_manifest_ref = (
-            build_memory_manifest(memory_proposals).memory_manifest_ref
-        )
+    effective_memory_proposals = list(memory_proposals or [])
+    if fix_patterns:
+        effective_memory_proposals.extend(fix_patterns_to_memory_proposals(fix_patterns))
+    if effective_memory_proposals:
+        memory_manifest_ref = build_memory_manifest(
+            effective_memory_proposals
+        ).memory_manifest_ref
 
     base_payload = {
         "schemaVersion": "v1",
