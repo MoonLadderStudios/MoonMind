@@ -201,13 +201,13 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 
 ### What's shipped
 - MCP server endpoint (`/context` — `context_protocol.py`)
-- MCP tools wrapper (`mcp_tools.py`)
+- MCP resource and tools wrapper (`mcp_tools.py`)
 - OpenAI-compatible chat API (`chat.py`)
 - Operator doc [`docs/ModelContextProtocol.md`](../ModelContextProtocol.md) (context endpoint + `/mcp` HTTP tools; supersedes removed `CodexMcpToolsAdapter.md`)
 
 ### Remaining tasks
 - [ ] **8.1** MCP Streamable HTTP Transport (2025 spec) — Current `/context` is REST-style; modern MCP uses streamable HTTP
-- [ ] **8.2** MCP resource & tool discovery — Clients can't discover what MoonMind offers via MCP
+- [x] **8.2** MCP resource & tool discovery — Clients can list MoonMind MCP resources and tools
 - [x] **8.3** Webhook / callback API for external agents — Generic integration callback receiver, correlation lookup, callback URL provisioning, and polling fallback are available for external agents that advertise callback support (MM-779)
 - [ ] **8.4** OpenAI Responses API compatibility — Only Chat Completions format supported
 
