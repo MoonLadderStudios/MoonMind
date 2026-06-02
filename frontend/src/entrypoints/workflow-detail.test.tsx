@@ -530,6 +530,13 @@ describe('Workflow Detail Entrypoint', () => {
                 status: 'complete',
                 metadata: { filename: 'fix.patch' },
               },
+              {
+                artifactId: 'art-report-by-type',
+                contentType: 'text/plain',
+                sizeBytes: 256,
+                status: 'complete',
+                metadata: { filename: 'output.txt', artifact_type: 'report.primary' },
+              },
             ],
           }),
         } as Response);
@@ -547,6 +554,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByText(/Artifact Browser/)).toBeTruthy();
       expect(screen.getByText('runtime.log')).toBeTruthy();
       expect(screen.getByText('fix.patch')).toBeTruthy();
+      expect(screen.getByText('output.txt').closest('tr')?.textContent).toContain('reports');
       expect(screen.getByText('Operator sent guidance.')).toBeTruthy();
       expect(screen.getAllByText((_, element) => element?.textContent?.includes('Verify tests: ready') ?? false).length).toBeGreaterThan(0);
     });

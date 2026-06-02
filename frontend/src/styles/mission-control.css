@@ -2869,6 +2869,12 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   display: none;
 }
 
+@media (max-width: 720px) {
+  .step-dag-node::after {
+    display: none;
+  }
+}
+
 .step-dag-node-header {
   display: flex;
   flex-wrap: wrap;

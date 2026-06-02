@@ -1993,6 +1993,16 @@ function metadataString(metadata: Record<string, unknown>, ...keys: string[]): s
   return '';
 }
 
+function metadataStrings(metadata: Record<string, unknown>, ...keys: string[]): string {
+  return keys
+    .map((key) => {
+      const value = metadata[key];
+      return typeof value === 'string' ? value.trim() : '';
+    })
+    .filter(Boolean)
+    .join(' ');
+}
+
 function artifactReportLinkType(
   artifact: z.infer<typeof ArtifactSummarySchema>,
 ): string | null {
@@ -4034,7 +4044,7 @@ function artifactBrowserCategory(artifact: z.infer<typeof ArtifactSummarySchema>
   const searchText = [
     artifact.artifactId,
     artifact.contentType,
-    metadataString(metadata, 'filename', 'name', 'label', 'artifact_type', 'artifactType', 'render_hint', 'renderHint'),
+    metadataStrings(metadata, 'filename', 'name', 'label', 'artifact_type', 'artifactType', 'render_hint', 'renderHint'),
     artifact.links.map((link) => `${link.linkType} ${link.label || ''}`).join(' '),
   ]
     .join(' ')
@@ -4254,7 +4264,7 @@ function AuditTrailPanel({
           </thead>
           <tbody>
             {rows.map((row, index) => (
-              <tr key={`${row.stage}-${row.timestamp || index}`}>
+              <tr key={`${row.stage}-${row.timestamp || ''}-${index}`}>
                 <td>{row.stage}</td>
                 <td>{formatWhen(row.timestamp)}</td>
                 <td>{row.detail}</td>

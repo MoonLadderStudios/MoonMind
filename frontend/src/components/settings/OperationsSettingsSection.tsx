@@ -1094,7 +1094,7 @@ export function OperationsSettingsSection({
                     Metrics source
                   </div>
                   <div className="mt-1 text-base font-semibold text-slate-900 dark:text-white">
-                    {String((metrics as Record<string, unknown>).metricsSource || 'temporal')}
+                    {metrics.metricsSource || 'temporal'}
                   </div>
                 </div>
                 <div className="rounded-2xl bg-slate-50 dark:bg-slate-800/50 p-4">
