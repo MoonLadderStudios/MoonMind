@@ -46,7 +46,9 @@ agent_jobs/
 /artifacts/
 /artifacts.retrieved-context/
 /artifacts.root-owned/
+/artifacts.root-owned.*/
 /artifacts.root-readonly/
+/artifacts.root-readonly.*/
 /specs/
 /deploy/state/.env.deploy
 /deploy/state/desired-state.json
