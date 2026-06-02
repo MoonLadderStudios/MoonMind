@@ -14,11 +14,14 @@ from moonmind.manifest.evaluation import (
     EvaluationResult,
     MetricScore,
     _baseline_retrieved_ids,
+    _build_service_retriever,
+    _score_metric,
+    evaluate_manifest,
     hit_rate_at_k,
     ndcg_at_k,
     _load_dataset,
-    _score_metric,
 )
+from moonmind.schemas.manifest_v0_models import ManifestV0
 
 # ---------------------------------------------------------------------------
 # hitRate@k
@@ -112,6 +115,116 @@ class TestEvaluationResult:
         assert d["manifest"] == "test"
         assert d["passed"] is True
         assert len(d["datasets"]) == 1
+
+    def test_evaluate_manifest_uses_retriever_for_scores(self, tmp_path):
+        dataset = tmp_path / "golden.jsonl"
+        dataset.write_text(
+            json.dumps({"query": "where is rag?", "relevant_ids": ["docs/rag.md"]})
+            + "\n"
+            + json.dumps({"query": "where is jira?", "relevant_ids": ["docs/jira.md"]})
+            + "\n"
+        )
+        manifest = ManifestV0.from_yaml_string(
+            f"""
+version: "v0"
+metadata:
+  name: "eval-test"
+embeddings:
+  provider: "openai"
+  model: "text-embedding-3-large"
+vectorStore:
+  type: "qdrant"
+  indexName: "test"
+dataSources:
+  - id: "local"
+    type: "SimpleDirectoryReader"
+indices:
+  - id: "idx"
+    sources: ["local"]
+retrievers:
+  - id: "ret"
+    type: "Vector"
+    indices: ["idx"]
+    params:
+      topK: 2
+evaluation:
+  datasets:
+    - name: "smoke"
+      path: "{dataset}"
+  metrics:
+    - name: "hitRate@1"
+      threshold: 1.0
+    - name: "ndcg@2"
+      threshold: 1.0
+"""
+        )
+
+        def retriever(query: str, top_k: int) -> list[str]:
+            assert top_k == 2
+            if "rag" in query:
+                return ["docs/rag.md", "docs/other.md"]
+            return ["docs/other.md", "docs/jira.md"]
+
+        result = evaluate_manifest(manifest, retriever=retriever)
+
+        metrics = result["datasets"][0]["metrics"]
+        assert metrics[0]["name"] == "hitRate@1"
+        assert metrics[0]["score"] == 0.5
+        assert metrics[0]["passed"] is False
+        assert metrics[1]["name"] == "ndcg@2"
+        assert metrics[1]["score"] == 0.8155
+        assert metrics[1]["passed"] is False
+
+    def test_service_retriever_uses_manifest_vector_store(self, monkeypatch):
+        captured = {}
+
+        class FakePack:
+            items = [type("Item", (), {"payload": {"doc_id": "docs/rag.md"}})()]
+
+        class FakeService:
+            def __init__(self, *, settings):
+                captured["settings"] = settings
+
+            def retrieve(self, **kwargs):
+                captured["retrieve_kwargs"] = kwargs
+                return FakePack()
+
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        monkeypatch.setenv("VECTOR_STORE_COLLECTION_NAME", "env-collection")
+        monkeypatch.setattr(
+            "moonmind.rag.service.ContextRetrievalService", FakeService
+        )
+        manifest = ManifestV0.from_yaml_string(
+            """
+version: "v0"
+metadata:
+  name: "eval-test"
+embeddings:
+  provider: "openai"
+  model: "text-embedding-3-large"
+vectorStore:
+  type: "qdrant"
+  indexName: "manifest-collection"
+dataSources:
+  - id: "local"
+    type: "SimpleDirectoryReader"
+indices:
+  - id: "idx"
+    sources: ["local"]
+retrievers:
+  - id: "ret"
+    type: "Vector"
+    indices: ["idx"]
+"""
+        )
+
+        retriever = _build_service_retriever(manifest)
+
+        assert retriever("where is rag?", 1) == ["docs/rag.md"]
+        assert captured["settings"].vector_collection == "manifest-collection"
+        assert captured["settings"].vector_collections == ("manifest-collection",)
+        assert captured["settings"].embedding_provider == "openai"
+        assert captured["settings"].embedding_model == "text-embedding-3-large"
 
 # ---------------------------------------------------------------------------
 # Dataset loading

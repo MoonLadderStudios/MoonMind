@@ -9,13 +9,15 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+RetrieverFn = Callable[[str, int], List[str]]
 _METRIC_NAME_RE = re.compile(r"^(?P<name>[A-Za-z0-9_\-]+)@(?P<k>[1-9][0-9]*)$")
 
 @dataclass
@@ -205,12 +207,20 @@ def _load_dataset(path: str) -> List[Dict[str, Any]]:
 
     return entries
 
-def _metric_name_and_k(metric_name: str) -> tuple[str, int]:
+def _metric_name_and_k(metric_name: str, default: int = 10) -> tuple[str, int]:
     """Parse metric names like ``hitRate@10`` and ``ndcg@10``."""
     match = _METRIC_NAME_RE.match(metric_name)
     if match is None:
-        return metric_name, 10
+        return metric_name, default
     return match.group("name"), int(match.group("k"))
+
+def _metric_cutoff(metric_name: str, default: int) -> int:
+    _, cutoff = _metric_name_and_k(metric_name, default)
+    return cutoff
+
+def _metric_family(metric_name: str) -> str:
+    family, _ = _metric_name_and_k(metric_name)
+    return family.lower().replace("_", "").replace("-", "")
 
 def _baseline_retrieved_ids(entries: List[Dict[str, Any]]) -> List[List[str]] | None:
     """Return committed baseline retrieval IDs when every entry provides them."""
@@ -226,12 +236,6 @@ def _baseline_retrieved_ids(entries: List[Dict[str, Any]]) -> List[List[str]] | 
                 "Inconsistent dataset: 'retrieved_ids' is provided in some entries "
                 "but missing in others."
             )
-        if not isinstance(raw_ids, list) or not all(
-            isinstance(doc_id, str) and doc_id for doc_id in raw_ids
-        ):
-            raise ValueError(
-                "Field 'retrieved_ids' must be a string list when provided"
-            )
         retrieved.append(raw_ids)
     return retrieved
 
@@ -239,29 +243,107 @@ def _score_metric(
     metric_name: str,
     entries: List[Dict[str, Any]],
     retrieved: List[List[str]] | None,
+    *,
+    default_top_k: int = 10,
 ) -> float:
     """Compute supported retrieval metrics for a loaded golden dataset."""
     if retrieved is None:
         return 0.0
 
-    family, k = _metric_name_and_k(metric_name)
-    normalized = family.lower().replace("_", "").replace("-", "")
-    if normalized == "hitrate":
-        return hit_rate_at_k(entries, retrieved, k=k)
-    if normalized == "ndcg":
-        return ndcg_at_k(entries, retrieved, k=k)
+    family = _metric_family(metric_name)
+    cutoff = _metric_cutoff(metric_name, default_top_k)
+    if family == "hitrate":
+        return hit_rate_at_k(entries, retrieved, k=cutoff)
+    if family == "ndcg":
+        return ndcg_at_k(entries, retrieved, k=cutoff)
     logger.warning("Unsupported evaluation metric '%s'; reporting 0.0", metric_name)
     return 0.0
+
+def _doc_id_from_item(item: Any) -> str:
+    payload = getattr(item, "payload", None)
+    if isinstance(payload, dict):
+        for key in ("id", "doc_id", "document_id", "source", "path", "file_path"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    for attr in ("source", "chunk_hash"):
+        value = getattr(item, attr, None)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return str(item)
+
+def _default_top_k(manifest: Any) -> int:
+    try:
+        retriever = manifest.retrievers[0]
+    except (AttributeError, IndexError):
+        return 10
+    params = getattr(retriever, "params", None)
+    top_k = getattr(params, "topK", None)
+    return int(top_k or 10)
+
+def _settings_overrides_from_manifest(manifest: Any) -> Dict[str, str]:
+    overrides: Dict[str, str] = {}
+
+    vector_store = getattr(manifest, "vectorStore", None)
+    index_name = getattr(vector_store, "indexName", None)
+    if isinstance(index_name, str) and index_name.strip():
+        overrides["VECTOR_STORE_COLLECTION_NAME"] = index_name.strip()
+        overrides["VECTOR_STORE_COLLECTION_NAMES"] = index_name.strip()
+
+    embeddings = getattr(manifest, "embeddings", None)
+    provider = getattr(embeddings, "provider", None)
+    if isinstance(provider, str) and provider.strip():
+        normalized_provider = provider.strip().lower()
+        overrides["DEFAULT_EMBEDDING_PROVIDER"] = normalized_provider
+        model = getattr(embeddings, "model", None)
+        if isinstance(model, str) and model.strip():
+            if normalized_provider == "google":
+                overrides["GOOGLE_EMBEDDING_MODEL"] = model.strip()
+            elif normalized_provider == "openai":
+                overrides["OPENAI_EMBEDDING_MODEL"] = model.strip()
+
+    return overrides
+
+def _build_service_retriever(manifest: Any) -> RetrieverFn:
+    from moonmind.rag.service import ContextRetrievalService
+    from moonmind.rag.settings import RagRuntimeSettings
+
+    settings_source = dict(os.environ)
+    settings_source.update(_settings_overrides_from_manifest(manifest))
+    settings = RagRuntimeSettings.from_env(settings_source)
+    executable, reason = settings.retrieval_execution_reason(None)
+    if not executable:
+        raise RuntimeError(
+            "Retrieval evaluation requires executable RAG settings "
+            f"(reason: {reason})."
+        )
+    service = ContextRetrievalService(settings=settings)
+    filters = settings.as_filter_metadata()
+
+    def retrieve(query: str, top_k: int) -> List[str]:
+        pack = service.retrieve(
+            query=query,
+            filters=filters,
+            top_k=top_k,
+            overlay_policy="skip",
+            budgets={},
+            transport=settings.resolved_transport(None),
+            initiation_mode="evaluation",
+        )
+        return [_doc_id_from_item(item) for item in pack.items]
+
+    return retrieve
 
 def evaluate_manifest(
     manifest: Any,  # ManifestV0 — Any to avoid circular imports
     dataset_filter: Optional[str] = None,
+    retriever: RetrieverFn | None = None,
 ) -> dict:
     """Run evaluation for a manifest's configured datasets and metrics.
 
-    This is a stub that computes metrics against loaded datasets.
-    Full retrieval integration (actually querying Qdrant) requires Phase 4.
-    For now, returns the dataset structure and metric definitions.
+    The retriever returns ordered document ids for one query. Tests and local
+    smoke checks can inject a deterministic retriever; CLI callers use the
+    configured RAG retrieval service.
 
     Returns:
         Dict representation of :class:`EvaluationResult`.
@@ -271,6 +353,8 @@ def evaluate_manifest(
         return {"manifest": manifest.metadata.name, "passed": True, "datasets": []}
 
     result = EvaluationResult(manifest_name=manifest.metadata.name)
+    active_retriever = retriever
+    default_top_k = _default_top_k(manifest)
 
     for ds_cfg in eval_config.datasets:
         if dataset_filter and ds_cfg.name != dataset_filter:
@@ -282,12 +366,6 @@ def evaluate_manifest(
         try:
             entries = _load_dataset(ds_cfg.path)
             retrieved = _baseline_retrieved_ids(entries)
-            if retrieved is None:
-                logger.info(
-                    "Dataset '%s' does not contain committed 'retrieved_ids'. "
-                    "Scoring 0.0 as live retriever is not yet integrated.",
-                    ds_cfg.name,
-                )
         except (FileNotFoundError, ValueError) as exc:
             logger.warning("Could not load dataset '%s': %s", ds_cfg.name, exc)
             for metric_cfg in eval_config.metrics:
@@ -301,8 +379,30 @@ def evaluate_manifest(
             result.datasets.append(ds_eval)
             continue
 
+        metric_cutoffs = [
+            _metric_cutoff(metric_cfg.name, default_top_k)
+            for metric_cfg in eval_config.metrics
+        ]
+        max_top_k = max(metric_cutoffs, default=default_top_k)
+        if retrieved is None:
+            logger.info(
+                "Dataset '%s' does not contain committed 'retrieved_ids'. "
+                "Using live retriever-backed evaluation.",
+                ds_cfg.name,
+            )
+            if active_retriever is None:
+                active_retriever = _build_service_retriever(manifest)
+            retrieved = [
+                active_retriever(str(entry["query"]), max_top_k)
+                for entry in entries
+            ]
         for metric_cfg in eval_config.metrics:
-            score = _score_metric(metric_cfg.name, entries, retrieved)
+            score = _score_metric(
+                metric_cfg.name,
+                entries,
+                retrieved,
+                default_top_k=default_top_k,
+            )
             ds_eval.metrics.append(
                 MetricScore(
                     name=metric_cfg.name,
