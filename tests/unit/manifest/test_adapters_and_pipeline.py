@@ -6,7 +6,9 @@ T027 (metadata allowlist).
 
 from __future__ import annotations
 
+import sys
 import textwrap
+import types
 from enum import Enum
 from types import SimpleNamespace
 from typing import Any, Dict, Iterator, Tuple
@@ -91,6 +93,40 @@ class TestAdapterContracts:
         )
         adapter = GoogleDriveReaderAdapter(ds)
         assert isinstance(adapter, ReaderAdapter)
+
+    def test_google_drive_fetch_uses_service_account_key_path(self, monkeypatch):
+        calls = {}
+
+        class FakeGoogleDriveReader:
+            def __init__(self, **kwargs: Any) -> None:
+                calls.update(kwargs)
+
+            def load_data(self, *, folder_id: str):
+                calls["folder_id"] = folder_id
+                return [SimpleNamespace(text="drive-doc", metadata={})]
+
+        llama_index_module = types.ModuleType("llama_index")
+        readers_module = types.ModuleType("llama_index.readers")
+        google_module = types.ModuleType("llama_index.readers.google")
+        google_module.GoogleDriveReader = FakeGoogleDriveReader
+        monkeypatch.setitem(sys.modules, "llama_index", llama_index_module)
+        monkeypatch.setitem(sys.modules, "llama_index.readers", readers_module)
+        monkeypatch.setitem(sys.modules, "llama_index.readers.google", google_module)
+
+        ds = DataSourceConfig(
+            id="gd",
+            type="GoogleDriveReader",
+            params={"folderId": "abc123"},
+            auth={"serviceAccountKeyPath": "/tmp/service-account.json"},
+        )
+        adapter = GoogleDriveReaderAdapter(ds)
+
+        docs = list(adapter.fetch())
+
+        assert calls["service_account_key_path"] == "/tmp/service-account.json"
+        assert "credentials_path" not in calls
+        assert calls["folder_id"] == "abc123"
+        assert docs == [("drive-doc", {"source_type": "GoogleDriveReader"})]
 
     def test_local_adapter_is_reader(self):
         ds = DataSourceConfig(
@@ -200,8 +236,10 @@ class TestAdapterContracts:
 
         FakeGithubRepositoryReader.FilterType = FilterType
 
-        import llama_index.readers.github as github_module
-        import llama_index.readers.github.repository.github_client as client_module
+        github_module = pytest.importorskip("llama_index.readers.github")
+        client_module = pytest.importorskip(
+            "llama_index.readers.github.repository.github_client"
+        )
 
         monkeypatch.setattr(
             github_module,

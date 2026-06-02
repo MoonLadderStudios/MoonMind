@@ -162,7 +162,7 @@ class GoogleDriveReaderAdapter(_BaseAdapter):
                 creds_path = self._resolve(raw)
 
         try:
-            reader = GoogleDriveReader(credentials_path=creds_path)
+            reader = GoogleDriveReader(service_account_key_path=creds_path)
             if file_ids:
                 docs = reader.load_data(file_ids=file_ids)
             elif folder_id:
