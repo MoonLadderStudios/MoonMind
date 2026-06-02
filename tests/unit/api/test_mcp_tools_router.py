@@ -274,6 +274,36 @@ async def test_streamable_http_tools_call_maps_execution_failures_to_tool_result
     assert "Access denied" in result["content"][0]["text"]
 
 
+async def test_streamable_http_tools_call_preserves_string_result_text(
+    router_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def dispatch_tool(payload: Any, user: Any) -> str:
+        return "success"
+
+    monkeypatch.setattr(mcp_tools_router, "_dispatch_tool_call", dispatch_tool)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/mcp",
+            headers=_mcp_headers(),
+            json={
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {"name": "jira.get_issue", "arguments": {}},
+            },
+        )
+
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert result["content"][0]["text"] == "success"
+    assert result["structuredContent"] == "success"
+
+
 async def test_streamable_http_notifications_return_accepted(
     router_app: FastAPI,
 ) -> None:
@@ -284,7 +314,11 @@ async def test_streamable_http_notifications_return_accepted(
         response = await client.post(
             "/api/mcp",
             headers=_mcp_headers(),
-            json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+            json={
+                "jsonrpc": "2.0",
+                "id": None,
+                "method": "notifications/initialized",
+            },
         )
 
     assert response.status_code == 202

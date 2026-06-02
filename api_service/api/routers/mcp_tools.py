@@ -251,7 +251,7 @@ def _is_json_rpc_notification(message: Any) -> bool:
     return (
         isinstance(message, dict)
         and message.get("jsonrpc") == "2.0"
-        and "id" not in message
+        and ("id" not in message or message.get("id") is None)
         and isinstance(message.get("method"), str)
     )
 
@@ -269,7 +269,7 @@ def _is_json_rpc_response(message: Any) -> bool:
 def _tool_result_payload(result: Any) -> dict[str, Any]:
     if isinstance(result, str):
         text = result
-        structured_content: Any = {"result": result}
+        structured_content: Any = result
     else:
         text = json.dumps(result, sort_keys=True, default=str)
         structured_content = result if isinstance(result, dict) else {"result": result}
