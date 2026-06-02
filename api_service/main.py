@@ -30,7 +30,7 @@ from api_service.api.routers import (
     summarization as summarization_router,  # Added import for summarization router
 )
 from api_service.api.routers.provider_profiles import router as provider_profiles_router
-from api_service.api.routers.chat import router as chat_router
+from api_service.api.routers.chat import responses_router, router as chat_router
 from api_service.api.routers.context_protocol import router as context_protocol_router
 from api_service.api.routers.deployment_operations import (
     router as deployment_operations_router,
@@ -423,6 +423,7 @@ app.include_router(health_router, tags=["health"])
 
 # Include all routers
 app.include_router(chat_router, prefix="/v1/chat", tags=["Chat"])
+app.include_router(responses_router, prefix="/v1", tags=["Responses"])
 app.include_router(models_router, prefix="/v1/models", tags=["Models"])
 app.include_router(documents_router, prefix="/v1/documents", tags=["Documents"])
 app.include_router(

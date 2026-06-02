@@ -1,10 +1,11 @@
 import logging
 import time
-from typing import List, Optional
+from typing import Any, List, Optional
 from uuid import uuid4
 
 # Multi-provider imports from main branch
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.encoders import jsonable_encoder
 
 # RAG imports from feat/rag branch
 from llama_index.core import Settings as LlamaSettings
@@ -29,10 +30,17 @@ from moonmind.schemas.chat_models import (
     ChatCompletionResponse,
     Choice,
     ChoiceMessage,
+    Message,
+    ResponseCreateRequest,
+    ResponseCreateResponse,
+    ResponseOutputMessage,
+    ResponseOutputText,
+    ResponseUsage,
     Usage,
 )
 
 router = APIRouter()
+responses_router = APIRouter()
 logger = logging.getLogger(__name__)
 
 def format_context_for_prompt(retrieved_nodes: List[NodeWithScore]) -> str:
@@ -184,6 +192,145 @@ async def get_user_api_key(
 
     return env_api_key
 
+def _response_content_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                item_type = str(item.get("type") or "")
+                if item_type in {"input_text", "output_text", "text"}:
+                    text = item.get("text")
+                    parts.append(str(text) if text is not None else "")
+        return "\n".join(part for part in parts if part)
+    return str(content) if content is not None else ""
+
+def _messages_from_response_input(request: ResponseCreateRequest) -> list[Message]:
+    messages: list[Message] = []
+    if request.instructions:
+        messages.append(Message(role="system", content=request.instructions))
+
+    if isinstance(request.input, str):
+        messages.append(Message(role="user", content=request.input))
+        return messages
+
+    for item in request.input:
+        if isinstance(item, str):
+            messages.append(Message(role="user", content=item))
+            continue
+        if not isinstance(item, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="Responses input items must be strings or objects.",
+            )
+        item_type = str(item.get("type") or "message")
+        if item_type != "message":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported Responses input item type: {item_type}",
+            )
+        role = str(item.get("role") or "user")
+        if role == "developer":
+            role = "system"
+        if role not in {"system", "user", "assistant"}:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported Responses input role: {role}",
+            )
+        content = _response_content_to_text(item.get("content"))
+        if content:
+            messages.append(Message(role=role, content=content))
+
+    if not any(message.role == "user" for message in messages):
+        raise HTTPException(
+            status_code=400,
+            detail="Responses input must include at least one user message.",
+        )
+    return messages
+
+def _usage_from_chat_usage(usage: Usage | None) -> ResponseUsage | None:
+    if usage is None:
+        return None
+    return ResponseUsage(
+        input_tokens=usage.prompt_tokens,
+        output_tokens=usage.completion_tokens,
+        total_tokens=usage.total_tokens,
+    )
+
+def _responses_payload_from_chat(
+    chat_response: ChatCompletionResponse,
+    *,
+    metadata: dict[str, Any],
+) -> ResponseCreateResponse:
+    text = ""
+    if chat_response.choices:
+        text = chat_response.choices[0].message.content
+    return ResponseCreateResponse(
+        id=f"resp-{uuid4().hex}",
+        created_at=int(time.time()),
+        model=chat_response.model,
+        output=[
+            ResponseOutputMessage(
+                id=f"msg-{uuid4().hex}",
+                content=[ResponseOutputText(text=text)],
+            )
+        ],
+        output_text=text,
+        usage=_usage_from_chat_usage(chat_response.usage),
+        metadata=metadata,
+    )
+
+def _extract_openai_response_text(payload: dict[str, Any]) -> str:
+    output_text = payload.get("output_text")
+    if isinstance(output_text, str):
+        return output_text
+    parts: list[str] = []
+    for output_item in payload.get("output") or []:
+        if not isinstance(output_item, dict):
+            continue
+        for content_item in output_item.get("content") or []:
+            if (
+                isinstance(content_item, dict)
+                and content_item.get("type") in {"output_text", "text"}
+            ):
+                parts.append(str(content_item.get("text") or ""))
+    return "\n".join(part for part in parts if part)
+
+def _normalize_openai_response_payload(
+    raw_response: Any,
+    *,
+    fallback_model: str,
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    if hasattr(raw_response, "model_dump"):
+        payload = raw_response.model_dump(by_alias=True, exclude_none=True)
+    else:
+        payload = jsonable_encoder(raw_response)
+    if not isinstance(payload, dict):
+        payload = {}
+
+    text = _extract_openai_response_text(payload)
+    payload.setdefault("id", f"resp-{uuid4().hex}")
+    payload.setdefault("object", "response")
+    payload.setdefault("created_at", int(time.time()))
+    payload.setdefault("status", "completed")
+    payload.setdefault("model", fallback_model)
+    payload.setdefault(
+        "output",
+        [
+            ResponseOutputMessage(
+                id=f"msg-{uuid4().hex}",
+                content=[ResponseOutputText(text=text)],
+            ).model_dump()
+        ],
+    )
+    payload["output_text"] = text
+    payload.setdefault("metadata", metadata)
+    return payload
+
 @router.post("/completions", response_model=ChatCompletionResponse)
 async def chat_completions(
     request: ChatCompletionRequest,
@@ -284,6 +431,126 @@ async def chat_completions(
         raise HTTPException(
             status_code=500, detail=f"An internal server error occurred: {str(e)}"
         )
+
+@responses_router.post("/responses")
+async def create_response(
+    request: ResponseCreateRequest,
+    vector_index: Optional[VectorStoreIndex] = Depends(get_vector_index),
+    llama_settings: LlamaSettings = Depends(get_service_context),
+    db: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+):
+    if request.stream:
+        raise HTTPException(
+            status_code=400,
+            detail="Streaming Responses API requests are not supported.",
+        )
+    if request.tools:
+        raise HTTPException(
+            status_code=400,
+            detail="Responses API tool calls are not supported by this route.",
+        )
+    if request.conversation is not None or request.previous_response_id is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Responses API conversation state is not supported by this route.",
+        )
+    if request.background:
+        raise HTTPException(
+            status_code=400,
+            detail="Background Responses API requests are not supported.",
+        )
+
+    messages = _messages_from_response_input(request)
+    user_query = next(
+        (message.content for message in reversed(messages) if message.role == "user"),
+        "",
+    )
+    retrieved_context_str = await get_rag_context(
+        user_query, vector_index, llama_settings
+    )
+    processed_messages = inject_rag_context(messages, retrieved_context_str, user_query)
+
+    model_to_use = request.model or settings.get_default_chat_model()
+    provider = model_cache.get_model_provider(model_to_use)
+    if provider is None:
+        model_cache.refresh_models_sync()
+        provider = model_cache.get_model_provider(model_to_use)
+    if provider is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Model '{model_to_use}' not found or provider unknown.",
+        )
+
+    user_api_key = await get_user_api_key(user, provider, db)
+    if not user_api_key:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"API key for {provider} not found. "
+                "Provide a key in your profile or system settings."
+            ),
+        )
+
+    if provider == "OpenAI":
+        if (
+            not settings.is_provider_enabled("openai")
+            and not settings.openai.openai_enabled
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="OpenAI provider is disabled on the server.",
+            )
+        openai_model_name = get_openai_model(model_to_use)
+        client = AsyncOpenAI(api_key=user_api_key)
+        openai_input = [
+            {"role": msg.role, "content": msg.content}
+            for msg in processed_messages
+            if msg.role != "system"
+        ]
+        openai_instructions = next(
+            (msg.content for msg in processed_messages if msg.role == "system"),
+            None,
+        )
+        try:
+            raw_response = await client.responses.create(
+                model=openai_model_name,
+                input=openai_input,
+                instructions=openai_instructions,
+                max_output_tokens=request.max_output_tokens,
+                temperature=request.temperature,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"OpenAI Responses API error: {str(exc)}",
+            ) from exc
+        return _normalize_openai_response_payload(
+            raw_response,
+            fallback_model=openai_model_name,
+            metadata=request.metadata,
+        )
+
+    chat_request = ChatCompletionRequest(
+        model=model_to_use,
+        messages=processed_messages,
+        temperature=request.temperature,
+        max_tokens=request.max_output_tokens,
+    )
+    if provider == "Google":
+        chat_response = await handle_google_request(
+            chat_request, processed_messages, model_to_use, user_api_key
+        )
+    elif provider == "Anthropic":
+        chat_response = await handle_anthropic_request(
+            chat_request, processed_messages, model_to_use, user_api_key
+        )
+    else:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Model '{model_to_use}' not found or provider unknown.",
+        )
+    return _responses_payload_from_chat(chat_response, metadata=request.metadata)
 
 async def handle_openai_request(
     request: ChatCompletionRequest, messages: List, model_to_use: str, api_key: str

@@ -41,6 +41,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/responses": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Response */
+        post: operations["create_response_v1_responses_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/models/": {
         parameters: {
             query?: never;
@@ -1630,6 +1647,26 @@ export interface paths {
         put?: never;
         /** Recover Execution From Failed Step */
         post: operations["recover_execution_from_failed_step_api_executions__workflow_id__recover_from_failed_step_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/callbacks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Describe Integration Callbacks
+         * @description Return the generic external-agent callback contract.
+         */
+        get: operations["describe_integration_callbacks_api_integrations_callbacks_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -6424,6 +6461,69 @@ export interface components {
             /** Mimetype */
             mimeType?: string | null;
         };
+        /**
+         * ResponseCreateRequest
+         * @description Supported subset of OpenAI's Responses API create request.
+         */
+        ResponseCreateRequest: {
+            /**
+             * Model
+             * @description The model to use. If omitted, MoonMind's default chat model is used.
+             */
+            model?: string | null;
+            /**
+             * Input
+             * @description Text input or Responses-style message input items.
+             */
+            input: string | unknown[];
+            /**
+             * Instructions
+             * @description Optional system/developer instructions prepended to the input.
+             */
+            instructions?: string | null;
+            /**
+             * Temperature
+             * @description Sampling temperature, between 0 and 2.
+             * @default 1
+             */
+            temperature: number | null;
+            /**
+             * Max Output Tokens
+             * @description Maximum output tokens to generate.
+             */
+            max_output_tokens?: number | null;
+            /**
+             * Stream
+             * @description Streaming is not supported by MoonMind's compatibility route.
+             * @default false
+             */
+            stream: boolean;
+            /**
+             * Tools
+             * @description Tool use is not supported by MoonMind's compatibility route.
+             */
+            tools?: unknown[] | null;
+            /**
+             * Conversation
+             * @description Conversation state is not supported by MoonMind's compatibility route.
+             */
+            conversation?: unknown | null;
+            /**
+             * Previous Response Id
+             * @description Previous response state is not supported by MoonMind's compatibility route.
+             */
+            previous_response_id?: string | null;
+            /**
+             * Background
+             * @description Background responses are not supported by MoonMind's compatibility route.
+             * @default false
+             */
+            background: boolean;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
+        };
         /** ResumeExecutionRefModel */
         ResumeExecutionRefModel: {
             /** Workflowid */
@@ -8506,6 +8606,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChatCompletionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_response_v1_responses_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResponseCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -11798,6 +11931,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    describe_integration_callbacks_api_integrations_callbacks_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };

@@ -146,6 +146,22 @@ def _shared_client(shared_user_id):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
+async def test_callback_discovery_describes_generic_contract():
+    shared_user_id = uuid4()
+
+    async with _shared_client(shared_user_id) as client:
+        response = await client.get("/api/integrations/callbacks")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert (
+        payload["endpointTemplate"]
+        == "/api/integrations/{integrationName}/callbacks/{callbackCorrelationKey}"
+    )
+    assert payload["payloadSchema"] == "IntegrationCallbackRequest"
+    assert payload["defaults"]["maxPayloadBytes"] > 0
+
+@pytest.mark.asyncio
 async def test_callback_rejects_missing_configured_token(monkeypatch):
     shared_user_id = uuid4()
     monkeypatch.setattr(settings.jules, "jules_callback_token", "callback-secret")

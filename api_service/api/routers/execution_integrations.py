@@ -206,6 +206,33 @@ async def _get_service(
         ),
     )
 
+@router.get("/callbacks")
+async def describe_integration_callbacks() -> dict[str, object]:
+    """Return the generic external-agent callback contract."""
+    return {
+        "endpointTemplate": (
+            "/api/integrations/{integrationName}/callbacks/"
+            "{callbackCorrelationKey}"
+        ),
+        "method": "POST",
+        "payloadSchema": "IntegrationCallbackRequest",
+        "authHeaders": [
+            "X-MoonMind-Integration-Token",
+            "Authorization: Bearer <token>",
+        ],
+        "defaults": {
+            "maxPayloadBytes": _DEFAULT_CALLBACK_MAX_PAYLOAD_BYTES,
+            "rateLimitPerWindow": _DEFAULT_CALLBACK_RATE_LIMIT,
+            "rateLimitWindowSeconds": _DEFAULT_CALLBACK_RATE_LIMIT_WINDOW_SECONDS,
+        },
+        "providerOverrides": {
+            "jules": {
+                "tokenSetting": "JULES_CALLBACK_TOKEN",
+                "artifactCaptureSetting": "JULES_CALLBACK_ARTIFACT_CAPTURE_ENABLED",
+            }
+        },
+    }
+
 @router.post(
     "/{integration_name}/callbacks/{callback_correlation_key}",
     response_model=ExecutionModel,
