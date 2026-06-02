@@ -16,6 +16,7 @@ def _settings(**overrides: object) -> RagRuntimeSettings:
         qdrant_port=6333,
         qdrant_api_key=None,
         vector_collection="test_collection",
+        vector_collections=("test_collection",),
         embedding_provider="google",
         embedding_model="test-model",
         embedding_dimensions=768,
@@ -38,6 +39,8 @@ def _settings(**overrides: object) -> RagRuntimeSettings:
         memory_long_term="off",
         memory_fail_open=True,
         memory_context_budget_tokens=4096,
+        planning_workspace_root=None,
+        beads_command="bd",
     )
     defaults.update(overrides)
     return RagRuntimeSettings(**defaults)

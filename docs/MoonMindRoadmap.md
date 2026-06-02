@@ -132,7 +132,7 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 
 ### Remaining tasks
 - [ ] **5.1** End-to-end manifest ingest testing — Manifest pipeline built but not fully tested against live data sources
-- [ ] **5.2** RAG retrieval quality validation — Evaluation framework exists (`manifest/evaluation.py`) but no golden datasets or baseline metrics established
+- [x] **5.2** RAG retrieval quality validation — Golden smoke dataset and baseline `hitRate@10` / `ndcg@10` thresholds established for `manifest/evaluation.py`
 - [ ] **5.3** Context pack assembly wired into agent runs — Primitives exist; not integrated into Temporal activity execution
 - [ ] **5.4** Index health monitoring — No dashboard view of indexed collections, document counts, or freshness
 - [ ] **5.5** Incremental re-indexing — Full reindex only; no delta/incremental update path
@@ -147,14 +147,17 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 ### What's shipped
 - Memory architecture design doc (`docs/Memory/MemoryArchitecture.md` — "Desired State")
 - Memory runtime feature flags (`MEMORY_ENABLED`, `MEMORY_PLANNING`, `MEMORY_HISTORY`, `MEMORY_LONG_TERM`, `MEMORY_FAIL_OPEN`, `MEMORY_CONTEXT_BUDGET_TOKENS`) are exposed through settings and worker runtime configuration.
+- Fix Patterns / Error Signatures procedural memory primitive
+  (`moonmind/memory/procedural.py`) with compact evidence-backed JSONL
+  storage and prepared-context projection
+- Planning Memory (Beads / Plane A) runtime adapter with optional context-pack prefetch
 
 ### Remaining tasks
 - [ ] **6.1** Run Digests (Plane B — task history summaries) — Architecture defined, no implementation
-- [ ] **6.2** Fix Patterns / Error Signatures (procedural memory) — Architecture defined, no implementation
 - [ ] **6.3** Long-Term Memory integration (Mem0 / Plane C) — Architecture defined, no integration
-- [ ] **6.4** Planning Memory (Beads / Plane A) — Architecture defined, no integration
-- [ ] **6.5** Token budgeting & provenance tracking — Designed in memory arch, not implemented
 - [x] **6.6** Memory feature flags (`MEMORY_ENABLED`, etc.) — Settings and runtime gates implemented (MM-767)
+- [x] **6.4** Planning Memory (Beads / Plane A) — Runtime adapter and optional context-pack prefetch integrated (MM-765)
+- [ ] **6.5** Token budgeting & provenance tracking — Designed in memory arch; Planning Memory includes bounded context and provenance, broader memory planes remain pending
 
 ---
 

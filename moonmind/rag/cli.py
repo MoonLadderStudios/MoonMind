@@ -58,6 +58,7 @@ def run_search(
     overlay_policy: str,
     transport: str | None,
     output_file: Path | None,
+    planning_ref: str | None = None,
 ) -> ContextPack:
     if not query.strip():
         raise CliError("Query text cannot be empty")
@@ -85,6 +86,7 @@ def run_search(
             overlay_policy=overlay_policy,
             budgets=budgets,
             transport=resolved_transport,
+            planning_ref=planning_ref,
         )
     except (EmbeddingError, RetrievalBudgetExceededError, RuntimeError) as exc:
         raise CliError(str(exc)) from exc

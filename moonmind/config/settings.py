@@ -2129,7 +2129,7 @@ class ExecutionNotificationSettings(BaseSettings):
     enabled: bool = Field(
         False,
         alias="MOONMIND_EXECUTION_NOTIFICATIONS_ENABLED",
-        description="Emit webhook notifications when an agent run reaches a terminal result.",
+        description="Emit notifications when an agent run reaches a terminal result.",
     )
     webhook_url: Optional[str] = Field(
         None,
@@ -2146,6 +2146,48 @@ class ExecutionNotificationSettings(BaseSettings):
         alias="MOONMIND_EXECUTION_NOTIFICATIONS_TIMEOUT_SECONDS",
         description="Webhook timeout in seconds.",
         gt=0,
+    )
+    email_to: Optional[str] = Field(
+        None,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_EMAIL_TO",
+        description="Comma-separated recipient list for completion notification email.",
+    )
+    email_from: Optional[str] = Field(
+        None,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_EMAIL_FROM",
+        description="Sender address for completion notification email.",
+    )
+    smtp_host: Optional[str] = Field(
+        None,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_SMTP_HOST",
+        description="SMTP host used for completion notification email.",
+    )
+    smtp_port: int = Field(
+        587,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_SMTP_PORT",
+        description="SMTP port used for completion notification email.",
+        gt=0,
+    )
+    smtp_username: Optional[str] = Field(
+        None,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_SMTP_USERNAME",
+        description="Optional SMTP username for completion notification email.",
+    )
+    smtp_password: Optional[str] = Field(
+        None,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_SMTP_PASSWORD",
+        description="Optional SMTP password for completion notification email.",
+        exclude=True,
+    )
+    smtp_use_tls: bool = Field(
+        True,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_SMTP_USE_TLS",
+        description="Use STARTTLS for completion notification email.",
+    )
+    smtp_use_ssl: bool = Field(
+        False,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_SMTP_USE_SSL",
+        description="Use implicit TLS for completion notification email.",
     )
 
     model_config = SettingsConfigDict(
