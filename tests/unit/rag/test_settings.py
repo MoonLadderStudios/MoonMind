@@ -30,8 +30,10 @@ def _settings(**overrides: object) -> RagRuntimeSettings:
         qdrant_enabled=True,
         memory_enabled=True,
         memory_planning="off",
+        memory_history="off",
+        memory_long_term="off",
         memory_fail_open=True,
-        memory_context_budget_tokens=None,
+        memory_context_budget_tokens=4096,
         planning_workspace_root=None,
         beads_command="bd",
     )
@@ -136,6 +138,28 @@ def test_retrieval_executable_mirrors_reason() -> None:
         preferred_transport="gateway",
     )
 
+def test_memory_plane_helpers_respect_master_toggle() -> None:
+    settings = _settings(
+        memory_enabled=True,
+        memory_planning="beads",
+        memory_history="digest",
+        memory_long_term="mem0",
+    )
+
+    assert settings.memory_planning_enabled is True
+    assert settings.memory_history_enabled is True
+    assert settings.memory_long_term_enabled is True
+
+    disabled = _settings(
+        memory_enabled=False,
+        memory_planning="beads",
+        memory_history="digest",
+        memory_long_term="mem0",
+    )
+
+    assert disabled.memory_planning_enabled is False
+    assert disabled.memory_history_enabled is False
+    assert disabled.memory_long_term_enabled is False
 
 def test_planning_memory_enabled_requires_global_and_plane_switch() -> None:
     assert _settings(memory_planning="beads").planning_memory_enabled()

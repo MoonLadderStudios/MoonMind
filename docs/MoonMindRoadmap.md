@@ -146,6 +146,7 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 
 ### What's shipped
 - Memory architecture design doc (`docs/Memory/MemoryArchitecture.md` — "Desired State")
+- Memory runtime feature flags (`MEMORY_ENABLED`, `MEMORY_PLANNING`, `MEMORY_HISTORY`, `MEMORY_LONG_TERM`, `MEMORY_FAIL_OPEN`, `MEMORY_CONTEXT_BUDGET_TOKENS`) are exposed through settings and worker runtime configuration.
 - Fix Patterns / Error Signatures procedural memory primitive
   (`moonmind/memory/procedural.py`) with compact evidence-backed JSONL
   storage and prepared-context projection
@@ -154,9 +155,9 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 ### Remaining tasks
 - [ ] **6.1** Run Digests (Plane B — task history summaries) — Architecture defined, no implementation
 - [ ] **6.3** Long-Term Memory integration (Mem0 / Plane C) — Architecture defined, no integration
+- [x] **6.6** Memory feature flags (`MEMORY_ENABLED`, etc.) — Settings and runtime gates implemented (MM-767)
 - [x] **6.4** Planning Memory (Beads / Plane A) — Runtime adapter and optional context-pack prefetch integrated (MM-765)
 - [ ] **6.5** Token budgeting & provenance tracking — Designed in memory arch; Planning Memory includes bounded context and provenance, broader memory planes remain pending
-- [ ] **6.6** Memory feature flags (`MEMORY_ENABLED`, etc.) — Planning Memory flags implemented; broader Plane B/C flags remain pending
 
 ---
 

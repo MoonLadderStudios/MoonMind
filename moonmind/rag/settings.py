@@ -13,6 +13,8 @@ from moonmind.utils.env_bool import env_to_bool
 
 _SUPPORTED_EMBEDDING_PROVIDERS = frozenset({"google", "openai"})
 _SUPPORTED_MEMORY_PLANNING = frozenset({"off", "beads"})
+_SUPPORTED_MEMORY_HISTORY = frozenset({"off", "digest"})
+_SUPPORTED_MEMORY_LONG_TERM = frozenset({"off", "mem0"})
 
 def _get_env(
     source: Mapping[str, str] | None, key: str, default: str | None = None
@@ -51,8 +53,10 @@ class RagRuntimeSettings:
     qdrant_enabled: bool
     memory_enabled: bool
     memory_planning: str
+    memory_history: str
+    memory_long_term: str
     memory_fail_open: bool
-    memory_context_budget_tokens: Optional[int]
+    memory_context_budget_tokens: int
     planning_workspace_root: Optional[str]
     beads_command: str
 
@@ -157,28 +161,51 @@ class RagRuntimeSettings:
             _get_env(env, "QDRANT_ENABLED", "true"), default=True
         )
         memory_enabled = env_to_bool(
-            _get_env(env, "MEMORY_ENABLED", "true"), default=True
+            _get_env(env, "MEMORY_ENABLED", str(app_settings.memory.enabled)),
+            default=app_settings.memory.enabled,
         )
         memory_planning = (
-            _get_env(env, "MEMORY_PLANNING", "off") or "off"
+            _get_env(env, "MEMORY_PLANNING", app_settings.memory.planning)
+            or app_settings.memory.planning
         ).strip().lower()
+        memory_history = (
+            _get_env(env, "MEMORY_HISTORY", app_settings.memory.history)
+            or app_settings.memory.history
+        ).strip().lower()
+        memory_long_term = (
+            _get_env(env, "MEMORY_LONG_TERM", app_settings.memory.long_term)
+            or app_settings.memory.long_term
+        ).strip().lower()
+        memory_fail_open = env_to_bool(
+            _get_env(env, "MEMORY_FAIL_OPEN", str(app_settings.memory.fail_open)),
+            default=app_settings.memory.fail_open,
+        )
+        memory_context_budget_tokens = int(
+            _get_env(
+                env,
+                "MEMORY_CONTEXT_BUDGET_TOKENS",
+                str(app_settings.memory.context_budget_tokens),
+            )
+            or app_settings.memory.context_budget_tokens
+        )
         if memory_planning not in _SUPPORTED_MEMORY_PLANNING:
             supported = ", ".join(sorted(_SUPPORTED_MEMORY_PLANNING))
             raise ValueError(
                 f"MEMORY_PLANNING must be one of: {supported}; got {memory_planning!r}"
             )
-        memory_fail_open = env_to_bool(
-            _get_env(env, "MEMORY_FAIL_OPEN", "true"), default=True
-        )
-        budget_raw = _get_env(env, "MEMORY_CONTEXT_BUDGET_TOKENS")
-        memory_context_budget_tokens = None
-        if budget_raw:
-            try:
-                parsed_budget = int(budget_raw)
-            except ValueError:
-                parsed_budget = 0
-            if parsed_budget > 0:
-                memory_context_budget_tokens = parsed_budget
+        if memory_history not in _SUPPORTED_MEMORY_HISTORY:
+            supported = ", ".join(sorted(_SUPPORTED_MEMORY_HISTORY))
+            raise ValueError(
+                f"MEMORY_HISTORY must be one of: {supported}; got {memory_history!r}"
+            )
+        if memory_long_term not in _SUPPORTED_MEMORY_LONG_TERM:
+            supported = ", ".join(sorted(_SUPPORTED_MEMORY_LONG_TERM))
+            raise ValueError(
+                "MEMORY_LONG_TERM must be one of: "
+                f"{supported}; got {memory_long_term!r}"
+            )
+        if memory_context_budget_tokens <= 0:
+            raise ValueError("MEMORY_CONTEXT_BUDGET_TOKENS must be greater than 0")
         planning_workspace_root = (
             _get_env(env, "MOONMIND_PLANNING_REPOSITORY_ROOT")
             or _get_env(env, "MOONMIND_REPOSITORY_ROOT")
@@ -213,6 +240,8 @@ class RagRuntimeSettings:
             qdrant_enabled=qdrant_enabled,
             memory_enabled=memory_enabled,
             memory_planning=memory_planning,
+            memory_history=memory_history,
+            memory_long_term=memory_long_term,
             memory_fail_open=memory_fail_open,
             memory_context_budget_tokens=memory_context_budget_tokens,
             planning_workspace_root=planning_workspace_root,
@@ -255,6 +284,24 @@ class RagRuntimeSettings:
         """Return whether the configured embedding provider is recognized."""
 
         return self.embedding_provider.lower() in _SUPPORTED_EMBEDDING_PROVIDERS
+
+    @property
+    def memory_planning_enabled(self) -> bool:
+        """Return whether planning-memory retrieval should run."""
+
+        return self.memory_enabled and self.memory_planning != "off"
+
+    @property
+    def memory_history_enabled(self) -> bool:
+        """Return whether task-history memory should run."""
+
+        return self.memory_enabled and self.memory_history != "off"
+
+    @property
+    def memory_long_term_enabled(self) -> bool:
+        """Return whether long-term memory should run."""
+
+        return self.memory_enabled and self.memory_long_term != "off"
 
     def embedding_provider_configured(
         self, source: Mapping[str, str] | None = None

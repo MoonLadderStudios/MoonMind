@@ -1,3 +1,5 @@
+import pytest
+
 from moonmind.rag.settings import RagRuntimeSettings
 
 def test_runtime_settings_from_env_overrides_defaults():
@@ -17,6 +19,49 @@ def test_runtime_settings_from_env_overrides_defaults():
         "repo-main__overlay__run-123"
     )
     assert settings.resolved_transport(None) == "direct"
+
+def test_runtime_settings_from_env_reads_memory_flags():
+    env = {
+        "MEMORY_ENABLED": "1",
+        "MEMORY_PLANNING": "beads",
+        "MEMORY_HISTORY": "digest",
+        "MEMORY_LONG_TERM": "mem0",
+        "MEMORY_FAIL_OPEN": "0",
+        "MEMORY_CONTEXT_BUDGET_TOKENS": "2048",
+    }
+    settings = RagRuntimeSettings.from_env(env)
+
+    assert settings.memory_enabled is True
+    assert settings.memory_planning == "beads"
+    assert settings.memory_history == "digest"
+    assert settings.memory_long_term == "mem0"
+    assert settings.memory_fail_open is False
+    assert settings.memory_context_budget_tokens == 2048
+    assert settings.memory_planning_enabled is True
+    assert settings.memory_history_enabled is True
+    assert settings.memory_long_term_enabled is True
+
+def test_runtime_settings_memory_master_toggle_disables_planes():
+    env = {
+        "MEMORY_ENABLED": "false",
+        "MEMORY_PLANNING": "beads",
+        "MEMORY_HISTORY": "digest",
+        "MEMORY_LONG_TERM": "mem0",
+    }
+    settings = RagRuntimeSettings.from_env(env)
+
+    assert settings.memory_enabled is False
+    assert settings.memory_planning_enabled is False
+    assert settings.memory_history_enabled is False
+    assert settings.memory_long_term_enabled is False
+
+def test_runtime_settings_rejects_unknown_memory_modes():
+    with pytest.raises(ValueError, match="MEMORY_HISTORY"):
+        RagRuntimeSettings.from_env({"MEMORY_HISTORY": "unknown"})
+
+def test_runtime_settings_rejects_non_positive_memory_budget():
+    with pytest.raises(ValueError, match="MEMORY_CONTEXT_BUDGET_TOKENS"):
+        RagRuntimeSettings.from_env({"MEMORY_CONTEXT_BUDGET_TOKENS": "0"})
 
 def test_retrieval_executable_gateway_uses_scoped_token_not_embedding_keys():
     env = {
