@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 _CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 _PREVIEW_MAX_BYTES = 16 * 1024
 _STREAM_CHUNK_BYTES = 64 * 1024
+_RUN_DIGEST_INDEXING_TIMEOUT_SECONDS = 10
 _SINGLE_PUT_READ_RETRY_DELAYS_SECONDS = (0.1, 0.2, 0.4, 0.8, 1.6)
 _SINGLE_PUT_READ_RETRYABLE_S3_ERROR_CODES = {"404", "NoSuchKey", "NotFound"}
 _TASK_INPUT_ATTACHMENT_SOURCES = frozenset(
@@ -2640,7 +2641,14 @@ class TemporalArtifactActivities:
                 qdrant_client=retrieval_service.qdrant_client,
                 embedding_provider=retrieval_service.embedding_client,
             )
-            history_service.build_and_upsert_run_digest(record)
+            await asyncio.wait_for(
+                asyncio.get_running_loop().run_in_executor(
+                    None,
+                    history_service.build_and_upsert_run_digest,
+                    record,
+                ),
+                timeout=_RUN_DIGEST_INDEXING_TIMEOUT_SECONDS,
+            )
         except Exception as exc:
             logger.warning(
                 "Run digest indexing failed for %s: %s",

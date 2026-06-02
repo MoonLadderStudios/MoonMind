@@ -15,6 +15,12 @@ _MAX_TEXT = 500
 _MAX_LIST_ITEMS = 8
 
 
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace(
+        "+00:00", "Z"
+    )
+
+
 class RunDigestEvidence(BaseModel):
     """Evidence pointers retained with a derived run digest."""
 
@@ -54,7 +60,7 @@ class RunDigest(BaseModel):
     gotchas: tuple[str, ...] = Field(default_factory=tuple)
     next_steps: tuple[str, ...] = Field(default_factory=tuple, alias="nextSteps")
     evidence: RunDigestEvidence
-    created_at: str = Field(default_factory=lambda: _utc_now(), alias="createdAt")
+    created_at: str = Field(default_factory=_utc_now, alias="createdAt")
 
     def to_context_text(self) -> str:
         """Render a compact, retrievable text body for vector search."""
@@ -106,13 +112,15 @@ class VectorIndex(Protocol):
         payloads: list[MutableMapping[str, Any]],
         ids: list[str],
         collection_name: str | None = None,
-    ) -> None: ...
+    ) -> None:
+        raise NotImplementedError
 
 
 class EmbeddingProvider(Protocol):
     """Embedding provider protocol used by run-digest indexing."""
 
-    def embed(self, text: str) -> Sequence[float]: ...
+    def embed(self, text: str) -> Sequence[float]:
+        raise NotImplementedError
 
 
 class TaskHistoryService:
@@ -357,12 +365,6 @@ class TaskHistoryService:
         if artifact_refs:
             return ("Review produced artifacts for follow-up work.",)
         return (f"No follow-up recorded for terminal status {close_status or state}.",)
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace(
-        "+00:00", "Z"
-    )
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:

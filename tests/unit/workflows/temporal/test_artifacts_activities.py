@@ -1,4 +1,5 @@
 import pytest
+import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -167,6 +168,100 @@ async def test_execution_record_terminal_state_indexes_run_digest_best_effort(
         "state": "completed",
         "closeStatus": "completed",
     }
+
+
+@pytest.mark.asyncio
+async def test_write_run_digest_best_effort_runs_sync_indexing_in_executor(
+    activities,
+    monkeypatch,
+):
+    import moonmind.memory as memory_module
+    import moonmind.rag.service as rag_service
+    import moonmind.rag.settings as rag_settings
+
+    event_loop_thread = threading.get_ident()
+    indexing_threads: list[int] = []
+
+    class _Settings:
+        def retrieval_execution_reason(self, _environ, *, preferred_transport):
+            return True, "enabled"
+
+    class _RetrievalService:
+        qdrant_client = object()
+        embedding_client = object()
+
+        def __init__(self, *, settings):
+            self.settings = settings
+
+    class _TaskHistoryService:
+        def __init__(self, *, qdrant_client, embedding_provider):
+            self.qdrant_client = qdrant_client
+            self.embedding_provider = embedding_provider
+
+        def build_and_upsert_run_digest(self, record):
+            indexing_threads.append(threading.get_ident())
+            return {"workflowId": record.workflow_id}
+
+    monkeypatch.setattr(
+        rag_settings.RagRuntimeSettings,
+        "from_env",
+        lambda _env: _Settings(),
+    )
+    monkeypatch.setattr(rag_service, "ContextRetrievalService", _RetrievalService)
+    monkeypatch.setattr(memory_module, "TaskHistoryService", _TaskHistoryService)
+
+    await activities._write_run_digest_best_effort(
+        SimpleNamespace(workflow_id="mm:run:123")
+    )
+
+    assert indexing_threads
+    assert indexing_threads[0] != event_loop_thread
+
+
+@pytest.mark.asyncio
+async def test_write_run_digest_best_effort_timeout_fails_open(
+    activities,
+    monkeypatch,
+):
+    import moonmind.memory as memory_module
+    import moonmind.rag.service as rag_service
+    import moonmind.rag.settings as rag_settings
+    import moonmind.workflows.temporal.artifacts as artifacts_module
+
+    class _Settings:
+        def retrieval_execution_reason(self, _environ, *, preferred_transport):
+            return True, "enabled"
+
+    class _RetrievalService:
+        qdrant_client = object()
+        embedding_client = object()
+
+        def __init__(self, *, settings):
+            self.settings = settings
+
+    class _TaskHistoryService:
+        def __init__(self, *, qdrant_client, embedding_provider):
+            pass
+
+        def build_and_upsert_run_digest(self, record):
+            return {"workflowId": record.workflow_id}
+
+    async def _raise_timeout(awaitable, *, timeout):
+        awaitable.cancel()
+        raise TimeoutError("digest write timed out")
+
+    monkeypatch.setattr(
+        rag_settings.RagRuntimeSettings,
+        "from_env",
+        lambda _env: _Settings(),
+    )
+    monkeypatch.setattr(rag_service, "ContextRetrievalService", _RetrievalService)
+    monkeypatch.setattr(memory_module, "TaskHistoryService", _TaskHistoryService)
+    monkeypatch.setattr(artifacts_module.asyncio, "wait_for", _raise_timeout)
+
+    await activities._write_run_digest_best_effort(
+        SimpleNamespace(workflow_id="mm:run:123")
+    )
 
 @pytest.mark.asyncio
 async def test_artifact_publish_report_bundle_delegates_to_service(
