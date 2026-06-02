@@ -1716,6 +1716,22 @@ class RAGSettings(BaseSettings):
 
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
+class MemorySettings(BaseSettings):
+    """Memory and procedural-learning runtime controls."""
+
+    enabled: bool = Field(True, alias="MEMORY_ENABLED")
+    planning: Literal["off", "beads"] = Field("off", alias="MEMORY_PLANNING")
+    history: Literal["off", "digest"] = Field("digest", alias="MEMORY_HISTORY")
+    long_term: Literal["off", "mem0"] = Field("off", alias="MEMORY_LONG_TERM")
+    fail_open: bool = Field(True, alias="MEMORY_FAIL_OPEN")
+    context_budget_tokens: int = Field(
+        4000,
+        alias="MEMORY_CONTEXT_BUDGET_TOKENS",
+        ge=1,
+    )
+
+    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
+
 class LocalDataSettings(BaseSettings):
     """Settings for local data indexing"""
 
@@ -2105,6 +2121,7 @@ class AppSettings(BaseSettings):
     google_drive: GoogleDriveSettings = Field(default_factory=GoogleDriveSettings)
     qdrant: QdrantSettings = Field(default_factory=QdrantSettings)
     rag: RAGSettings = Field(default_factory=RAGSettings)
+    memory: MemorySettings = Field(default_factory=MemorySettings)
     atlassian: AtlassianSettings = Field(default_factory=AtlassianSettings)
     local_data: LocalDataSettings = Field(default_factory=LocalDataSettings)
     oidc: OIDCSettings = Field(default_factory=OIDCSettings)
