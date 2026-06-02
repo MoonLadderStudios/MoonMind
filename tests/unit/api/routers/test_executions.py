@@ -24,6 +24,7 @@ from api_service.api.routers.executions import (
     _artifact_id_from_ref,
     _build_original_task_input_snapshot_payload,
     _expand_goal_preset_for_task_submission,
+    _hydrate_related_run_metadata,
     _merge_task_preserving_artifact_instructions,
     _recovery_not_available_reason,
     _reuse_original_task_input_snapshot_from_source,
@@ -38,6 +39,7 @@ from api_service.db.base import get_async_session
 from api_service.db.models import (
     Base,
     MoonMindWorkflowState,
+    TemporalExecutionCloseStatus,
     TemporalArtifact,
     TemporalArtifactEncryption,
     TemporalArtifactRedactionLevel,
@@ -8942,6 +8944,78 @@ def test_failed_step_recovery_request_rejects_edited_task_payload_fields(
     body = response.json()["detail"]
     assert body["code"] == "recovery_payload_not_allowed"
     assert body["fields"] == expected_fields
+
+
+def test_mm773_serialize_execution_surfaces_comparison_source_related_run() -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.COMPLETED)
+    record.parameters = {
+        "targetRuntime": "codex_cli",
+        "model": "gpt-5.4",
+        "task": {
+            "runtime": {"mode": "codex_cli", "model": "gpt-5.4"},
+            "comparison": {
+                "kind": "model_runtime_comparison",
+                "sourceWorkflowId": "mm:source-run",
+                "sourceRunId": "run-source",
+            },
+        },
+    }
+
+    payload = _serialize_execution(record).model_dump(by_alias=True)
+
+    assert payload["relatedRuns"] == [
+        {
+            "workflowId": "mm:source-run",
+            "runId": "run-source",
+            "relationship": "Comparison source",
+            "status": None,
+            "targetRuntime": None,
+            "model": None,
+            "requestedModel": None,
+            "resolvedModel": None,
+            "effort": None,
+            "createdAt": None,
+            "href": "/workflows/mm%3Asource-run?source=temporal",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_mm773_hydrates_related_run_runtime_model_metadata() -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.COMPLETED)
+    record.parameters = {
+        "task": {
+            "comparison": {
+                "kind": "model_runtime_comparison",
+                "sourceWorkflowId": "mm:source-run",
+                "sourceRunId": "run-source",
+            },
+        },
+    }
+    execution = _serialize_execution(record)
+    source = _build_execution_record(state=MoonMindWorkflowState.COMPLETED)
+    source.workflow_id = "mm:source-run"
+    source.run_id = "run-source"
+    source.close_status = TemporalExecutionCloseStatus.COMPLETED
+    source.parameters = {
+        "targetRuntime": "gemini_cli",
+        "model": "gemini-2.5-pro",
+        "requestedModel": "gemini-2.5-pro",
+        "effort": "medium",
+        "task": {"runtime": {"mode": "gemini_cli", "effort": "medium"}},
+    }
+    session = SimpleNamespace(get=AsyncMock(return_value=source))
+
+    hydrated = await _hydrate_related_run_metadata(execution, session=session)
+    related = hydrated.model_dump(by_alias=True)["relatedRuns"][0]
+
+    assert related["workflowId"] == "mm:source-run"
+    assert related["runId"] == "run-source"
+    assert related["status"] == "completed"
+    assert related["targetRuntime"] == "gemini_cli"
+    assert related["model"] == "gemini-2.5-pro"
+    assert related["requestedModel"] == "gemini-2.5-pro"
+    assert related["effort"] == "medium"
 
 
 def test_failed_step_recovery_hydrates_checkpoint_artifact(
