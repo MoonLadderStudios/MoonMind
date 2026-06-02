@@ -4374,8 +4374,8 @@ function ExecutionHistoryPanel({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
-              <tr key={`${row.relationship}-${row.workflowId}-${row.runId}`}>
+            {rows.map((row, index) => (
+              <tr key={`${row.relationship}-${row.workflowId}-${row.runId}-${index}`}>
                 <td>{formatStatusLabel(row.relationship)}</td>
                 <td>
                   {row.href ? (

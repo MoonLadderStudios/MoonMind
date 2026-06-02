@@ -4509,6 +4509,71 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
+  it('MM-772 renders duplicate related runs without duplicate React keys', async () => {
+    window.history.pushState({}, 'Runs Test', '/workflows/test-123/runs?source=temporal');
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'History task',
+      summary: 'Audit history',
+      status: 'completed',
+      state: 'completed',
+      rawState: 'completed',
+      targetRuntime: 'codex_cli',
+      model: 'gpt-5',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {},
+      relatedRuns: [
+        {
+          workflowId: 'duplicate-workflow',
+          relationship: 'rerun',
+          status: 'failed',
+          href: '/workflows/duplicate-workflow/runs?source=temporal',
+        },
+        {
+          workflowId: 'duplicate-workflow',
+          relationship: 'rerun',
+          status: 'completed',
+          href: '/workflows/duplicate-workflow/runs?source=temporal',
+        },
+      ],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText('duplicate-workflow').length).toBeGreaterThanOrEqual(2);
+    });
+    const duplicateKeyWarnings = consoleErrorSpy.mock.calls.filter(([message]) =>
+      String(message).includes('Encountered two children with the same key'),
+    );
+    expect(duplicateKeyWarnings).toHaveLength(0);
+  });
+
   it('routes Pause through the explicit signal endpoint without requiring live log fetches', async () => {
     const actionPayload: BootPayload = {
       ...mockPayload,
