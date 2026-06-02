@@ -33,6 +33,14 @@ def _settings(**overrides: object) -> RagRuntimeSettings:
         run_id=None,
         rag_enabled=True,
         qdrant_enabled=True,
+        memory_enabled=True,
+        memory_planning="off",
+        memory_history="off",
+        memory_long_term="off",
+        memory_fail_open=True,
+        memory_context_budget_tokens=4096,
+        planning_workspace_root=None,
+        beads_command="bd",
     )
     defaults.update(overrides)
     return RagRuntimeSettings(**defaults)
@@ -127,6 +135,9 @@ class _StubQdrant:
     def ensure_collection_ready(self, collection_name=None) -> None:
         self.ensured.append(collection_name)
 
+    def collection_health(self, **kwargs):
+        return []
+
     def search(self, **kwargs):
         self.calls.append(kwargs)
         item = ContextItem(score=0.8, source="src/file.py", text="snippet")
@@ -157,11 +168,38 @@ def test_retrieve_direct_flow_uses_embedding_and_qdrant_search() -> None:
     assert embedder.calls == ["How to integrate RAG?"]
     assert qdrant.ensured == ["test_collection"]
     assert len(qdrant.calls) == 1
+    assert qdrant.calls[0]["collections"] == ("test_collection",)
     assert pack.transport == "direct"
     assert pack.initiation_mode == "session"
     assert pack.truncated is False
     assert pack.items
     assert "Retrieved Context" in pack.context_text
+
+
+def test_retrieve_direct_flow_passes_multiple_collections() -> None:
+    embedder = _StubEmbedder()
+    qdrant = _StubQdrant()
+    settings = _settings(
+        vector_collection="primary",
+        vector_collections=("primary", "docs", "support"),
+    )
+    service = ContextRetrievalService(
+        settings=settings,
+        env={"GOOGLE_API_KEY": "test"},
+        embedding_client=embedder,
+        qdrant_client=qdrant,
+    )
+
+    service.retrieve(
+        query="How to integrate RAG?",
+        filters={"repo": "moonmind"},
+        top_k=3,
+        overlay_policy="skip",
+        budgets={},
+        transport="direct",
+    )
+
+    assert qdrant.calls[0]["collections"] == ("primary", "docs", "support")
 
 
 def test_retrieve_gateway_flow_skips_embedding_and_preserves_contract_shape(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -251,6 +289,157 @@ def test_retrieve_gateway_flow_skips_embedding_and_preserves_contract_shape(monk
     assert pack.usage == {"tokens": 8, "latency_ms": 4}
     assert pack.items[0].source == "docs/spec.md"
     assert "Retrieved Context" in pack.context_text
+
+
+class _StubPlanningAdapter:
+    def __init__(self) -> None:
+        self.refs: list[str] = []
+
+    def prefetch(self, planning_ref: str) -> ContextItem:
+        self.refs.append(planning_ref)
+        return ContextItem(
+            score=1.0,
+            source=f"beads:{planning_ref}",
+            text="Planning Memory (Beads)\nid: bd-123\ntitle: Implement Plane A",
+            trust_class="planning",
+            payload={"record_kind": "planning", "planning_ref": planning_ref},
+        )
+
+
+class _FailingPlanningAdapter:
+    def prefetch(self, planning_ref: str) -> ContextItem:
+        raise KeyError(planning_ref)
+
+
+def test_retrieve_direct_flow_prefetches_planning_memory_when_enabled() -> None:
+    embedder = _StubEmbedder()
+    qdrant = _StubQdrant()
+    planning = _StubPlanningAdapter()
+    service = ContextRetrievalService(
+        settings=_settings(memory_planning="beads"),
+        env={"GOOGLE_API_KEY": "test"},
+        embedding_client=embedder,
+        qdrant_client=qdrant,
+        planning_adapter=planning,
+    )
+
+    pack = service.retrieve(
+        query="How to integrate Planning Memory?",
+        filters={"repo": "moonmind"},
+        top_k=3,
+        overlay_policy="skip",
+        budgets={},
+        transport="direct",
+        planning_ref="bd-123",
+    )
+
+    assert planning.refs == ["bd-123"]
+    assert pack.items[0].source == "beads:bd-123"
+    assert pack.items[0].trust_class == "planning"
+    assert pack.items[1].source == "src/file.py"
+    assert "Planning Memory (Beads)" in pack.context_text
+
+
+def test_prefetch_planning_context_fails_open_for_unexpected_adapter_error() -> None:
+    service = ContextRetrievalService(
+        settings=_settings(memory_planning="beads", memory_fail_open=True),
+        env={"GOOGLE_API_KEY": "test"},
+        qdrant_client=_StubQdrant(),
+        planning_adapter=_FailingPlanningAdapter(),
+    )
+
+    assert service._prefetch_planning_context("bd-123") == []
+
+
+def test_prefetch_planning_context_raises_unexpected_error_when_fail_closed() -> None:
+    service = ContextRetrievalService(
+        settings=_settings(memory_planning="beads", memory_fail_open=False),
+        env={"GOOGLE_API_KEY": "test"},
+        qdrant_client=_StubQdrant(),
+        planning_adapter=_FailingPlanningAdapter(),
+    )
+
+    with pytest.raises(KeyError):
+        service._prefetch_planning_context("bd-123")
+
+
+def test_cap_planning_item_handles_nullable_payload() -> None:
+    service = ContextRetrievalService(
+        settings=_settings(memory_context_budget_tokens=1),
+        env={"GOOGLE_API_KEY": "test"},
+        qdrant_client=_StubQdrant(),
+    )
+    item = ContextItem(
+        score=1.0,
+        source="beads:bd-123",
+        text="Planning context that exceeds the tiny budget",
+        trust_class="planning",
+    )
+    item.payload = None  # type: ignore[assignment]
+
+    capped = service._cap_planning_item(item)
+
+    assert capped.payload == {}
+    assert capped.text.endswith("[Planning context truncated]")
+
+
+def test_retrieve_gateway_flow_forwards_planning_ref(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(retrieval_gateway_url="http://gw:8000")
+
+    class _GatewayResponse:
+        def json(self):
+            return {
+                "items": [],
+                "filters": {"repo": "moonmind"},
+                "budgets": {},
+                "usage": {},
+                "context_text": "",
+                "retrieved_at": "2026-04-24T00:00:00Z",
+                "telemetry_id": "tid",
+            }
+
+        def raise_for_status(self):
+            return None
+
+    class _GatewayClient:
+        last_instance = None
+
+        def __init__(self, *args, **kwargs):
+            self.calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+            _GatewayClient.last_instance = self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+            return _GatewayResponse()
+
+    monkeypatch.setattr("moonmind.rag.service.httpx.Client", _GatewayClient)
+    service = ContextRetrievalService(
+        settings=settings,
+        env={"MOONMIND_RETRIEVAL_TOKEN": "scoped-retrieval-token"},
+        qdrant_client=_StubQdrant(),
+    )
+
+    service.retrieve(
+        query="gateway query",
+        filters={"repo": "moonmind"},
+        top_k=3,
+        overlay_policy="skip",
+        budgets={},
+        transport="gateway",
+        planning_ref="bd-123",
+    )
+
+    assert _GatewayClient.last_instance is not None
+    request_kwargs = _GatewayClient.last_instance.calls[0][1]
+    assert request_kwargs["json"]["planning_ref"] == "bd-123"
 
 
 

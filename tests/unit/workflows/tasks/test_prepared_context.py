@@ -3,6 +3,11 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from moonmind.memory.procedural import (
+    EvidenceRun,
+    FixPattern,
+    extract_error_signature,
+)
 from moonmind.workflows.tasks.prepared_context import (
     PreparedContextFailure,
     PreparedInputEntry,
@@ -430,6 +435,38 @@ def test_execution_context_records_retrieval_and_memory_manifest_refs() -> None:
     assert memory.memory_manifest_ref.startswith("attempt-memory-manifest://sha256:")
     assert bundle.retrieval_manifest_ref == retrieval.retrieval_manifest_ref
     assert bundle.memory_manifest_ref == memory.memory_manifest_ref
+
+
+def test_execution_context_projects_fix_patterns_into_memory_manifest() -> None:
+    signature = extract_error_signature("RuntimeError: missing qdrant collection")
+    assert signature is not None
+    fix_pattern = FixPattern.from_successful_run(
+        signature=signature,
+        summary="Create the Qdrant collection before indexing.",
+        steps=["Run namespace bootstrap before the retrieval write."],
+        evidence=EvidenceRun(workflowId="workflow-1", outcome="succeeded"),
+    )
+    expected_memory = build_memory_manifest(
+        [
+            {
+                "proposalRef": fix_pattern.pattern_ref,
+                "state": "accepted_for_run_context",
+                "summary": (
+                    "Create the Qdrant collection before indexing. Steps: "
+                    "Run namespace bootstrap before the retrieval write."
+                ),
+            }
+        ]
+    )
+
+    bundle = build_execution_context_bundle(
+        workflow_id="workflow-1",
+        run_id="run-1",
+        logical_step_id="collect-evidence",
+        fix_patterns=[fix_pattern.model_dump(by_alias=True)],
+    )
+
+    assert bundle.memory_manifest_ref == expected_memory.memory_manifest_ref
 
 
 def test_retrieval_manifest_accepts_documented_retrieved_refs_key() -> None:

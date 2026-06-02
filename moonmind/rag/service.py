@@ -5,15 +5,23 @@ from __future__ import annotations
 import os
 import time
 import uuid
-from typing import Any, Mapping, Sequence
+import logging
+from typing import Any, Mapping, Protocol, Sequence
 
 import httpx
 
 from moonmind.rag.context_pack import ContextItem, ContextPack, build_context_pack
 from moonmind.rag.embedding import EmbeddingClient, EmbeddingConfig
 from moonmind.rag.qdrant_client import RagQdrantClient
+from moonmind.rag.planning import BeadsPlanningAdapter
 from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.rag.telemetry import VectorTelemetry
+
+logger = logging.getLogger(__name__)
+
+class PlanningAdapter(Protocol):
+    def prefetch(self, planning_ref: str) -> ContextItem | None:
+        pass
 
 class RetrievalBudgetExceededError(RuntimeError):
     """Raised when retrieval budgets are exceeded."""
@@ -33,6 +41,7 @@ class ContextRetrievalService:
         env: Mapping[str, str] | None = None,
         embedding_client: EmbeddingClient | None = None,
         qdrant_client: RagQdrantClient | None = None,
+        planning_adapter: PlanningAdapter | None = None,
     ) -> None:
         self._settings = settings
         self._env = env or os.environ
@@ -56,6 +65,7 @@ class ContextRetrievalService:
             overlay_chunk_overlap=settings.overlay_chunk_overlap,
             embedding_dimensions=settings.embedding_dimensions,
         )
+        self._planning_adapter = planning_adapter
 
     @property
     def embedding_client(self) -> EmbeddingClient:
@@ -89,6 +99,7 @@ class ContextRetrievalService:
         transport: str,
         collections: Sequence[str] | None = None,
         initiation_mode: str = "automatic",
+        planning_ref: str | None = None,
     ) -> ContextPack:
         normalized_budgets = self._normalize_budgets(budgets)
         self._enforce_token_budget(query=query, top_k=top_k, budgets=normalized_budgets)
@@ -103,6 +114,7 @@ class ContextRetrievalService:
                 budgets=normalized_budgets,
                 collections=target_collections,
                 initiation_mode=initiation_mode,
+                planning_ref=planning_ref,
             )
         for collection_name in target_collections:
             if collection_name not in self._verified_collections:
@@ -129,9 +141,11 @@ class ContextRetrievalService:
                 overlay_collection=overlay_collection,
                 trust_overrides=None,
             )
+        planning_items = self._prefetch_planning_context(planning_ref)
+        items = [*planning_items, *result.items]
         usage = {
             "tokens": _estimate_tokens(query)
-            + sum(_estimate_tokens(item.text) for item in result.items),
+            + sum(_estimate_tokens(item.text) for item in items),
             "latency_ms": round(result.latency_ms, 2),
         }
         self._enforce_latency_budget(
@@ -139,7 +153,7 @@ class ContextRetrievalService:
         )
         telemetry_id = uuid.uuid4().hex
         return build_context_pack(
-            items=result.items,
+            items=items,
             filters=filters,
             budgets=normalized_budgets,
             usage=usage,
@@ -159,6 +173,7 @@ class ContextRetrievalService:
         budgets: Mapping[str, Any],
         collections: Sequence[str],
         initiation_mode: str,
+        planning_ref: str | None,
     ) -> ContextPack:
         if not self._settings.retrieval_gateway_url:
             raise RuntimeError("RetrievalGateway URL is not configured")
@@ -170,6 +185,8 @@ class ContextRetrievalService:
             "budgets": dict(budgets),
             "collections": list(collections),
         }
+        if planning_ref:
+            payload["planning_ref"] = planning_ref
         url = self._settings.retrieval_gateway_url.rstrip("/") + "/context"
         headers: dict[str, str] = {}
         if self._retrieval_token:
@@ -218,6 +235,56 @@ class ContextRetrievalService:
             initiation_mode=str(data.get("initiation_mode") or initiation_mode),
             truncated=bool(data.get("truncated", False)),
         )
+
+    def _prefetch_planning_context(self, planning_ref: str | None) -> list[ContextItem]:
+        if not planning_ref or not self._settings.planning_memory_enabled():
+            return []
+        adapter = self._planning_adapter or BeadsPlanningAdapter(
+            repo_root=self._settings.resolved_planning_workspace_root(),
+            command=self._settings.beads_command,
+        )
+        try:
+            item = adapter.prefetch(planning_ref)
+        except Exception as exc:
+            if self._settings.memory_fail_open:
+                logger.info("[memory] planning prefetch skipped: %s", exc)
+                return []
+            raise
+        if item is None:
+            return []
+        return [self._cap_planning_item(item)]
+
+    def _cap_planning_item(self, item: ContextItem) -> ContextItem:
+        budget = self._settings.memory_context_budget_tokens
+        if not budget:
+            return item
+        max_chars = budget * 4
+        if len(item.text) <= max_chars:
+            return item
+        return ContextItem(
+            score=item.score,
+            source=item.source,
+            text=item.text[:max_chars].rstrip() + "\n[Planning context truncated]",
+            offset_start=item.offset_start,
+            offset_end=item.offset_end,
+            trust_class=item.trust_class,
+            chunk_hash=item.chunk_hash,
+            payload=dict(item.payload) if item.payload is not None else {},
+        )
+
+    def collection_health(self) -> dict[str, Any]:
+        collections = self._qdrant.collection_health(
+            collection_names=self._settings.vector_collections
+        )
+        ready = [
+            item
+            for item in collections
+            if item.status.lower() not in {"unavailable", "missing", "error"}
+        ]
+        return {
+            "status": "ok" if len(ready) == len(collections) else "degraded",
+            "collections": [item.to_dict() for item in collections],
+        }
 
     @staticmethod
     def _normalize_budgets(budgets: Mapping[str, Any]) -> dict[str, int]:

@@ -85,6 +85,7 @@ def test_context_retrieval_service_uses_configured_collection_set():
         "QDRANT_HOST": "localhost",
         "QDRANT_PORT": "6333",
         "GOOGLE_EMBEDDING_DIMENSIONS": "2",
+        "VECTOR_STORE_COLLECTION_NAME": "repo-main",
         "VECTOR_STORE_COLLECTION_NAMES": "repo-main,docs-main",
     }
     settings = RagRuntimeSettings.from_env(env)
@@ -113,6 +114,7 @@ def test_context_retrieval_service_honors_requested_collections():
         "QDRANT_HOST": "localhost",
         "QDRANT_PORT": "6333",
         "GOOGLE_EMBEDDING_DIMENSIONS": "2",
+        "VECTOR_STORE_COLLECTION_NAME": "repo-main",
         "VECTOR_STORE_COLLECTION_NAMES": "repo-main,docs-main",
     }
     settings = RagRuntimeSettings.from_env(env)
@@ -142,6 +144,7 @@ def test_context_retrieval_service_caches_verified_collections():
         "QDRANT_HOST": "localhost",
         "QDRANT_PORT": "6333",
         "GOOGLE_EMBEDDING_DIMENSIONS": "2",
+        "VECTOR_STORE_COLLECTION_NAME": "repo-main",
         "VECTOR_STORE_COLLECTION_NAMES": "repo-main,docs-main",
     }
     settings = RagRuntimeSettings.from_env(env)

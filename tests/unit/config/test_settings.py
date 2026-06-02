@@ -6,6 +6,7 @@ from moonmind.config.settings import (
     AtlassianSettings,
     FeatureFlagsSettings,
     GoogleSettings,
+    MemorySettings,
     OIDCSettings,
     OpenAISettings,
     WorkflowSettings,
@@ -359,6 +360,97 @@ class TestFeatureFlagsSettings:
 
         assert settings.jira_create_page_default_project_key == "ENG"
         assert settings.jira_create_page_default_board_id == "42"
+
+class TestMemorySettings:
+    def test_memory_flags_default_fail_open_and_planes_off(self, monkeypatch):
+        for key in (
+            "MEMORY_ENABLED",
+            "MEMORY_PLANNING",
+            "MEMORY_HISTORY",
+            "MEMORY_LONG_TERM",
+            "MEMORY_FAIL_OPEN",
+            "MEMORY_CONTEXT_BUDGET_TOKENS",
+        ):
+            monkeypatch.delenv(key, raising=False)
+
+        settings = MemorySettings(_env_file=None)
+
+        assert settings.enabled is True
+        assert settings.planning == "off"
+        assert settings.history == "off"
+        assert settings.long_term == "off"
+        assert settings.fail_open is True
+        assert settings.context_budget_tokens == 4096
+        assert settings.planning_enabled is False
+        assert settings.history_enabled is False
+        assert settings.long_term_enabled is False
+
+    def test_memory_flags_accept_documented_env_values(self, monkeypatch):
+        monkeypatch.setenv("MEMORY_ENABLED", "true")
+        monkeypatch.setenv("MEMORY_PLANNING", "beads")
+        monkeypatch.setenv("MEMORY_HISTORY", "digest")
+        monkeypatch.setenv("MEMORY_LONG_TERM", "mem0")
+        monkeypatch.setenv("MEMORY_FAIL_OPEN", "false")
+        monkeypatch.setenv("MEMORY_CONTEXT_BUDGET_TOKENS", "8192")
+
+        settings = MemorySettings(_env_file=None)
+
+        assert settings.enabled is True
+        assert settings.planning == "beads"
+        assert settings.history == "digest"
+        assert settings.long_term == "mem0"
+        assert settings.fail_open is False
+        assert settings.context_budget_tokens == 8192
+        assert settings.planning_enabled is True
+        assert settings.history_enabled is True
+        assert settings.long_term_enabled is True
+
+    def test_memory_flags_ignore_generic_env_names(self, monkeypatch):
+        monkeypatch.setenv("ENABLED", "false")
+        monkeypatch.setenv("FAIL_OPEN", "false")
+        monkeypatch.setenv("CONTEXT_BUDGET_TOKENS", "1")
+
+        settings = MemorySettings(_env_file=None)
+
+        assert settings.enabled is True
+        assert settings.fail_open is True
+        assert settings.context_budget_tokens == 4096
+
+    def test_memory_provider_values_are_normalized(self, monkeypatch):
+        monkeypatch.setenv("MEMORY_PLANNING", " BEADS ")
+        monkeypatch.setenv("MEMORY_HISTORY", " Digest ")
+        monkeypatch.setenv("MEMORY_LONG_TERM", " MEM0 ")
+
+        settings = MemorySettings(_env_file=None)
+
+        assert settings.planning == "beads"
+        assert settings.history == "digest"
+        assert settings.long_term == "mem0"
+
+    def test_memory_enabled_master_gate_disables_planes(self, monkeypatch):
+        monkeypatch.setenv("MEMORY_ENABLED", "false")
+        monkeypatch.setenv("MEMORY_PLANNING", "beads")
+        monkeypatch.setenv("MEMORY_HISTORY", "digest")
+        monkeypatch.setenv("MEMORY_LONG_TERM", "mem0")
+
+        settings = MemorySettings(_env_file=None)
+
+        assert settings.enabled is False
+        assert settings.planning_enabled is False
+        assert settings.history_enabled is False
+        assert settings.long_term_enabled is False
+
+    def test_memory_flags_reject_unknown_providers(self, monkeypatch):
+        monkeypatch.setenv("MEMORY_PLANNING", "unknown")
+
+        with pytest.raises(ValidationError):
+            MemorySettings(_env_file=None)
+
+    def test_memory_context_budget_requires_positive_value(self, monkeypatch):
+        monkeypatch.setenv("MEMORY_CONTEXT_BUDGET_TOKENS", "0")
+
+        with pytest.raises(ValidationError):
+            MemorySettings(_env_file=None)
 
 class TestWorkflowSettings:
     @pytest.fixture(autouse=True)
