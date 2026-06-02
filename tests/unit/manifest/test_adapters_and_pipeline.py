@@ -6,7 +6,11 @@ T027 (metadata allowlist).
 
 from __future__ import annotations
 
+import sys
 import textwrap
+import types
+from enum import Enum
+from types import SimpleNamespace
 from typing import Any, Dict, Iterator, Tuple
 
 import pytest
@@ -89,6 +93,40 @@ class TestAdapterContracts:
         )
         adapter = GoogleDriveReaderAdapter(ds)
         assert isinstance(adapter, ReaderAdapter)
+
+    def test_google_drive_fetch_uses_service_account_key_path(self, monkeypatch):
+        calls = {}
+
+        class FakeGoogleDriveReader:
+            def __init__(self, **kwargs: Any) -> None:
+                calls.update(kwargs)
+
+            def load_data(self, *, folder_id: str):
+                calls["folder_id"] = folder_id
+                return [SimpleNamespace(text="drive-doc", metadata={})]
+
+        llama_index_module = types.ModuleType("llama_index")
+        readers_module = types.ModuleType("llama_index.readers")
+        google_module = types.ModuleType("llama_index.readers.google")
+        google_module.GoogleDriveReader = FakeGoogleDriveReader
+        monkeypatch.setitem(sys.modules, "llama_index", llama_index_module)
+        monkeypatch.setitem(sys.modules, "llama_index.readers", readers_module)
+        monkeypatch.setitem(sys.modules, "llama_index.readers.google", google_module)
+
+        ds = DataSourceConfig(
+            id="gd",
+            type="GoogleDriveReader",
+            params={"folderId": "abc123"},
+            auth={"serviceAccountKeyPath": "/tmp/service-account.json"},
+        )
+        adapter = GoogleDriveReaderAdapter(ds)
+
+        docs = list(adapter.fetch())
+
+        assert calls["service_account_key_path"] == "/tmp/service-account.json"
+        assert "credentials_path" not in calls
+        assert calls["folder_id"] == "abc123"
+        assert docs == [("drive-doc", {"source_type": "GoogleDriveReader"})]
 
     def test_local_adapter_is_reader(self):
         ds = DataSourceConfig(
@@ -176,6 +214,70 @@ class TestAdapterContracts:
         adapter = GitHubReaderAdapter(ds)
         state = adapter.state()
         assert state["branch"] == "dev"
+
+    def test_github_fetch_uses_reader_filter_type_enum(self, monkeypatch):
+        class FilterType(Enum):
+            INCLUDE = 2
+
+        calls = {}
+
+        class FakeGithubClient:
+            def __init__(self, github_token: str, verbose: bool) -> None:
+                calls["github_token"] = github_token
+                calls["client_verbose"] = verbose
+
+        class FakeGithubRepositoryReader:
+            def __init__(self, **kwargs: Any) -> None:
+                calls.update(kwargs)
+
+            def load_data(self, *, branch: str):
+                calls["branch"] = branch
+                return [SimpleNamespace(text="readme", metadata={})]
+
+        FakeGithubRepositoryReader.FilterType = FilterType
+
+        github_module = pytest.importorskip("llama_index.readers.github")
+        client_module = pytest.importorskip(
+            "llama_index.readers.github.repository.github_client"
+        )
+
+        monkeypatch.setattr(
+            github_module,
+            "GithubRepositoryReader",
+            FakeGithubRepositoryReader,
+        )
+        monkeypatch.setattr(client_module, "GithubClient", FakeGithubClient)
+
+        ds = DataSourceConfig(
+            id="gh",
+            type="GithubRepositoryReader",
+            params={
+                "owner": "owner",
+                "repo": "repo",
+                "branch": "main",
+                "filterExtensions": [".md"],
+            },
+            auth={"githubToken": "${GITHUB_TOKEN}"},
+        )
+        adapter = GitHubReaderAdapter(ds)
+
+        docs = list(adapter.fetch())
+
+        assert docs == [
+            (
+                "readme",
+                {
+                    "source_type": "GithubRepositoryReader",
+                    "owner": "owner",
+                    "repo": "repo",
+                },
+            )
+        ]
+        assert calls["filter_file_extensions"] == (
+            [".md"],
+            FilterType.INCLUDE,
+        )
+        assert calls["branch"] == "main"
 
 # ---------------------------------------------------------------------------
 # T025: Extensibility test — register custom adapter
