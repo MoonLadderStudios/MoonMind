@@ -157,6 +157,7 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
   (`moonmind/memory/procedural.py`) with compact evidence-backed JSONL
   storage and prepared-context projection
 - Planning Memory (Beads / Plane A) runtime adapter with optional context-pack prefetch
+- **MM-762 / 6.1** Run Digests (Plane B — task history summaries) — terminal execution summaries are derived from execution records and indexed as retrieval memory
 
 ### Remaining tasks
 - [x] **6.1** Run Digests (Plane B — task history summaries) — MM-761 foundation implemented
