@@ -39,7 +39,7 @@ class BeadsPlanningAdapter:
     def prefetch(self, planning_ref: str) -> ContextItem | None:
         issue_id = self._require_ref(planning_ref)
         if not self.available():
-            return None
+            raise PlanningAdapterError("Beads is not available for this repository.")
 
         issue = self._run_json("show", issue_id)
         ready = self._run_json("ready")
@@ -86,8 +86,9 @@ class BeadsPlanningAdapter:
             if not title:
                 continue
             args = ["create", title, "--type", followup.issue_type or "task"]
-            if followup.description.strip():
-                args.extend(["--description", followup.description.strip()])
+            description = str(followup.description or "").strip()
+            if description:
+                args.extend(["--description", description])
             if followup.priority is not None:
                 args.extend(["--priority", str(followup.priority)])
             args.extend(["--deps", f"discovered-from:{parent_id}"])
@@ -159,7 +160,7 @@ class BeadsPlanningAdapter:
 
 
 def _first_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
-    if "items" in value:
+    if "items" in value or "issues" in value:
         items = _items(value)
         return items[0] if items else {}
     return value

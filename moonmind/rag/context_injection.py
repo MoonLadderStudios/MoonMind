@@ -210,8 +210,9 @@ class ContextInjectionService:
         transport = settings.resolved_transport(None)
 
         filters = settings.as_filter_metadata()
+        parameters = request.parameters if isinstance(request.parameters, dict) else {}
         repo_filter = self._repository_filter_value(
-            request.parameters.get("repository", "")
+            parameters.get("repository", "")
             or request.workspace_spec.get("repository", "")
         )
         if repo_filter:
@@ -220,10 +221,10 @@ class ContextInjectionService:
 
         service = ContextRetrievalService(settings=settings, env=self._env)
         planning_ref = (
-            request.parameters.get("planning_ref")
-            or request.parameters.get("planningRef")
-            or request.parameters.get("beads_id")
-            or request.parameters.get("beadsId")
+            parameters.get("planning_ref")
+            or parameters.get("planningRef")
+            or parameters.get("beads_id")
+            or parameters.get("beadsId")
         )
         return (
             service.retrieve(
@@ -251,7 +252,8 @@ class ContextInjectionService:
         context_dir.mkdir(parents=True, exist_ok=True)
 
         job_id = request.correlation_id
-        repo = request.parameters.get("repository", "")
+        parameters = request.parameters if isinstance(request.parameters, dict) else {}
+        repo = parameters.get("repository", "")
         instruction = request.instruction_ref or ""
 
         digest_input = f"{job_id}:{repo}:{instruction}".encode(

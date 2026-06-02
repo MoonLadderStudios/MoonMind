@@ -272,6 +272,11 @@ class _StubPlanningAdapter:
         )
 
 
+class _FailingPlanningAdapter:
+    def prefetch(self, planning_ref: str) -> ContextItem:
+        raise KeyError(planning_ref)
+
+
 def test_retrieve_direct_flow_prefetches_planning_memory_when_enabled() -> None:
     embedder = _StubEmbedder()
     qdrant = _StubQdrant()
@@ -299,6 +304,49 @@ def test_retrieve_direct_flow_prefetches_planning_memory_when_enabled() -> None:
     assert pack.items[0].trust_class == "planning"
     assert pack.items[1].source == "src/file.py"
     assert "Planning Memory (Beads)" in pack.context_text
+
+
+def test_prefetch_planning_context_fails_open_for_unexpected_adapter_error() -> None:
+    service = ContextRetrievalService(
+        settings=_settings(memory_planning="beads", memory_fail_open=True),
+        env={"GOOGLE_API_KEY": "test"},
+        qdrant_client=_StubQdrant(),
+        planning_adapter=_FailingPlanningAdapter(),
+    )
+
+    assert service._prefetch_planning_context("bd-123") == []
+
+
+def test_prefetch_planning_context_raises_unexpected_error_when_fail_closed() -> None:
+    service = ContextRetrievalService(
+        settings=_settings(memory_planning="beads", memory_fail_open=False),
+        env={"GOOGLE_API_KEY": "test"},
+        qdrant_client=_StubQdrant(),
+        planning_adapter=_FailingPlanningAdapter(),
+    )
+
+    with pytest.raises(KeyError):
+        service._prefetch_planning_context("bd-123")
+
+
+def test_cap_planning_item_handles_nullable_payload() -> None:
+    service = ContextRetrievalService(
+        settings=_settings(memory_context_budget_tokens=1),
+        env={"GOOGLE_API_KEY": "test"},
+        qdrant_client=_StubQdrant(),
+    )
+    item = ContextItem(
+        score=1.0,
+        source="beads:bd-123",
+        text="Planning context that exceeds the tiny budget",
+        trust_class="planning",
+    )
+    item.payload = None  # type: ignore[assignment]
+
+    capped = service._cap_planning_item(item)
+
+    assert capped.payload == {}
+    assert capped.text.endswith("[Planning context truncated]")
 
 
 def test_retrieve_gateway_flow_forwards_planning_ref(

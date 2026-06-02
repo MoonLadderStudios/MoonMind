@@ -13,7 +13,7 @@ import httpx
 from moonmind.rag.context_pack import ContextItem, ContextPack, build_context_pack
 from moonmind.rag.embedding import EmbeddingClient, EmbeddingConfig
 from moonmind.rag.qdrant_client import RagQdrantClient
-from moonmind.rag.planning import BeadsPlanningAdapter, PlanningAdapterError
+from moonmind.rag.planning import BeadsPlanningAdapter
 from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.rag.telemetry import VectorTelemetry
 
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 class PlanningAdapter(Protocol):
     def prefetch(self, planning_ref: str) -> ContextItem | None:
-        ...
+        pass
 
 class RetrievalBudgetExceededError(RuntimeError):
     """Raised when retrieval budgets are exceeded."""
@@ -235,7 +235,7 @@ class ContextRetrievalService:
         )
         try:
             item = adapter.prefetch(planning_ref)
-        except PlanningAdapterError as exc:
+        except Exception as exc:
             if self._settings.memory_fail_open:
                 logger.info("[memory] planning prefetch skipped: %s", exc)
                 return []
@@ -259,7 +259,7 @@ class ContextRetrievalService:
             offset_end=item.offset_end,
             trust_class=item.trust_class,
             chunk_hash=item.chunk_hash,
-            payload=dict(item.payload),
+            payload=dict(item.payload) if item.payload is not None else {},
         )
 
     @staticmethod

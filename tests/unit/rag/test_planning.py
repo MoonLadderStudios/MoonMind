@@ -125,14 +125,77 @@ def test_beads_planning_adapter_writeback_commands(
     ]
 
 
-def test_beads_planning_adapter_returns_none_when_repo_has_no_beads(
+def test_beads_planning_adapter_raises_when_repo_has_no_beads(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("moonmind.rag.planning.shutil.which", lambda command: command)
     adapter = BeadsPlanningAdapter(repo_root=tmp_path)
 
-    assert adapter.prefetch("bd-123") is None
+    with pytest.raises(PlanningAdapterError, match="not available"):
+        adapter.prefetch("bd-123")
+
+
+def test_beads_planning_adapter_prefetch_formats_issues_container(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / ".beads").mkdir()
+
+    def _run(command, **kwargs):
+        if command[-2:] == ["show", "bd-123"]:
+            return SimpleNamespace(
+                stdout=json.dumps(
+                    {
+                        "issues": [
+                            {
+                                "id": "bd-123",
+                                "title": "Issue from issues key",
+                                "status": "open",
+                            }
+                        ]
+                    }
+                )
+            )
+        return SimpleNamespace(stdout=json.dumps({"items": []}))
+
+    monkeypatch.setattr("moonmind.rag.planning.shutil.which", lambda command: command)
+    monkeypatch.setattr("moonmind.rag.planning.subprocess.run", _run)
+
+    adapter = BeadsPlanningAdapter(repo_root=tmp_path)
+    item = adapter.prefetch("bd-123")
+
+    assert item is not None
+    assert "id: bd-123" in item.text
+    assert "Issue from issues key" in item.text
+
+
+def test_beads_planning_adapter_skips_empty_nullable_followup_description(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / ".beads").mkdir()
+    calls: list[list[str]] = []
+
+    def _run(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(stdout=json.dumps({"ok": True}))
+
+    monkeypatch.setattr("moonmind.rag.planning.shutil.which", lambda command: command)
+    monkeypatch.setattr("moonmind.rag.planning.subprocess.run", _run)
+
+    adapter = BeadsPlanningAdapter(repo_root=tmp_path)
+    adapter.create_followups(
+        planning_ref="bd-123",
+        followups=[
+            PlanningFollowup(  # type: ignore[arg-type]
+                title="Nullable description",
+                description=None,
+            )
+        ],
+    )
+
+    assert "--description" not in calls[0]
 
 
 def test_beads_planning_adapter_raises_for_invalid_json(
