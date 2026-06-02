@@ -38,9 +38,16 @@ def router_app(
     app.include_router(mcp_tools_router.router, prefix="/api")
     app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(id=None)
     monkeypatch.setattr(mcp_tools_router, "_queue_registry", QueueToolRegistry())
+    monkeypatch.setattr(mcp_tools_router, "_jira_registry", None)
+    monkeypatch.setattr(mcp_tools_router, "_jira_service", None)
     monkeypatch.setattr(mcp_tools_router, "_jules_registry", None)
     monkeypatch.setattr(mcp_tools_router, "_jules_client", None)
     return app
+
+
+def _mcp_headers() -> dict[str, str]:
+    return {"Accept": "application/json, text/event-stream"}
+
 
 async def test_list_tools_includes_enabled_jira_tools(
     router_app: FastAPI,
@@ -62,6 +69,241 @@ async def test_list_tools_includes_enabled_jira_tools(
     assert response.status_code == 200
     names = {tool["name"] for tool in response.json()["tools"]}
     assert {"jira.get_issue", "jira.verify_connection"}.issubset(names)
+
+
+async def test_streamable_http_initialize_returns_mcp_capabilities(
+    router_app: FastAPI,
+) -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/mcp",
+            headers=_mcp_headers(),
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {},
+                    "clientInfo": {"name": "unit-test", "version": "1.0"},
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["jsonrpc"] == "2.0"
+    assert payload["id"] == 1
+    assert payload["result"]["protocolVersion"] == "2025-03-26"
+    assert payload["result"]["capabilities"] == {"tools": {"listChanged": False}}
+    assert payload["result"]["serverInfo"]["name"] == "moonmind"
+
+
+async def test_streamable_http_accepts_standard_json_accept_header(
+    router_app: FastAPI,
+) -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/mcp",
+            headers={"Accept": "application/json"},
+            json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["result"] == {}
+
+
+async def test_streamable_http_allows_cross_origin_requests(
+    router_app: FastAPI,
+) -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/mcp",
+            headers={**_mcp_headers(), "Origin": "http://evil.example"},
+            json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["result"] == {}
+
+
+async def test_streamable_http_rejects_batched_initialize(
+    router_app: FastAPI,
+) -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/mcp",
+            headers=_mcp_headers(),
+            json=[
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {"protocolVersion": "2025-03-26"},
+                }
+            ],
+        )
+
+    assert response.status_code == 400
+    assert "must not be batched" in response.json()["error"]["message"]
+
+
+async def test_streamable_http_tools_list_uses_callable_tools(
+    router_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        mcp_tools_router,
+        "_jira_registry",
+        JiraToolRegistry(enabled_actions={"get_issue"}),
+    )
+    monkeypatch.setattr(mcp_tools_router, "_jira_service", _FakeJiraService())
+
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/mcp",
+            headers=_mcp_headers(),
+            json={"jsonrpc": "2.0", "id": "tools", "method": "tools/list"},
+        )
+
+    assert response.status_code == 200
+    tools = response.json()["result"]["tools"]
+    names = {tool["name"] for tool in tools}
+    assert "jira.get_issue" in names
+    assert "security.pentest.run" not in names
+
+
+async def test_streamable_http_tools_call_dispatches_to_trusted_tool(
+    router_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _FakeJiraService()
+    monkeypatch.setattr(
+        mcp_tools_router,
+        "_jira_registry",
+        JiraToolRegistry(enabled_actions={"get_issue"}),
+    )
+    monkeypatch.setattr(mcp_tools_router, "_jira_service", service)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/mcp",
+            headers=_mcp_headers(),
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "jira.get_issue",
+                    "arguments": {"issueKey": "MM-777"},
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert result["isError"] is False
+    assert result["structuredContent"] == {
+        "issueKey": "MM-777",
+        "summary": "Example",
+    }
+    assert result["content"][0]["type"] == "text"
+    assert service.calls[0][0] == "get_issue"
+
+
+async def test_streamable_http_tools_call_maps_execution_failures_to_tool_result(
+    router_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _FakeJiraService()
+    service.raise_on_get_issue = JiraToolError(
+        "Access denied",
+        code="jira_policy_denied",
+        status_code=403,
+        action="get_issue",
+    )
+    monkeypatch.setattr(
+        mcp_tools_router,
+        "_jira_registry",
+        JiraToolRegistry(enabled_actions={"get_issue"}),
+    )
+    monkeypatch.setattr(mcp_tools_router, "_jira_service", service)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/mcp",
+            headers=_mcp_headers(),
+            json={
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "jira.get_issue",
+                    "arguments": {"issueKey": "MM-777"},
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "error" not in payload
+    result = payload["result"]
+    assert result["isError"] is True
+    assert result["structuredContent"]["code"] == "jira_policy_denied"
+    assert "Access denied" in result["content"][0]["text"]
+
+
+async def test_streamable_http_notifications_return_accepted(
+    router_app: FastAPI,
+) -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/mcp",
+            headers=_mcp_headers(),
+            json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+        )
+
+    assert response.status_code == 202
+    assert response.content == b""
+
+
+async def test_streamable_http_get_reports_sse_not_available(
+    router_app: FastAPI,
+) -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get(
+            "/api/mcp",
+            headers={"Accept": "text/event-stream"},
+        )
+
+    assert response.status_code == 405
 
 async def test_list_tools_includes_curated_pentest_execution_tool(
     router_app: FastAPI,
