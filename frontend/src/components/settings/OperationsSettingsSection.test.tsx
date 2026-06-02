@@ -251,13 +251,14 @@ describe('OperationsSettingsSection deployment update card', () => {
     confirmSpy.mockRestore();
   });
 
-  function renderOperations() {
+  function renderOperations(options: { includeShardHealth?: boolean } = {}) {
+    const { includeShardHealth = true } = options;
     renderWithClient(
       <OperationsSettingsSection
         workerPauseConfig={{
           get: '/api/workers',
           post: '/api/worker-action',
-          shardHealth: '/api/workflows/codex/shards',
+          ...(includeShardHealth ? { shardHealth: '/api/workflows/codex/shards' } : {}),
           pollIntervalMs: 60_000,
         }}
       />,
@@ -320,6 +321,18 @@ describe('OperationsSettingsSection deployment update card', () => {
     expect(within(workerCard).getByText(/result: succeeded/i)).toBeTruthy();
     expect(within(workerCard).getByText(/actor: 00000000-0000-0000-0000-000000000001/i)).toBeTruthy();
     expect(within(workerCard).getByText(/idempotency: previous-key/i)).toBeTruthy();
+  });
+
+  it('hides per-worker health when shard health is not configured', async () => {
+    renderOperations({ includeShardHealth: false });
+
+    const workerCard = await screen.findByRole('region', { name: /worker operations/i });
+    expect(await within(workerCard).findByRole('heading', { name: /worker fleet health/i })).toBeTruthy();
+    expect(within(workerCard).queryByRole('heading', { name: /per-worker health/i })).toBeNull();
+    expect(within(workerCard).queryByText(/no worker shards registered/i)).toBeNull();
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === '/api/workflows/codex/shards'),
+    ).toBe(false);
   });
 
   it('renders deployment state inside Operations without top-level deployment navigation', async () => {
