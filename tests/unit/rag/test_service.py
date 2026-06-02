@@ -35,8 +35,10 @@ def _settings(**overrides: object) -> RagRuntimeSettings:
         qdrant_enabled=True,
         memory_enabled=True,
         memory_planning="off",
+        memory_history="off",
+        memory_long_term="off",
         memory_fail_open=True,
-        memory_context_budget_tokens=None,
+        memory_context_budget_tokens=4096,
         planning_workspace_root=None,
         beads_command="bd",
     )
