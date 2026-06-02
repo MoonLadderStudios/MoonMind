@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -86,6 +87,73 @@ async def test_list_tools_includes_curated_pentest_execution_tool(
         pentest["inputSchema"]["x-moonmind-invocation"]
         == "temporal_task_submission"
     )
+
+async def test_list_resources_includes_callback_and_tool_catalog(
+    router_app: FastAPI,
+) -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get("/api/mcp/resources")
+
+    assert response.status_code == 200
+    resources = {resource["uri"]: resource for resource in response.json()["resources"]}
+    assert "moonmind://mcp/tools" in resources
+    assert "moonmind://integrations/callbacks" in resources
+
+async def test_streamable_http_initialize_and_resources_list(
+    router_app: FastAPI,
+) -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app),
+        base_url="http://testserver",
+    ) as client:
+        initialize = await client.post(
+            "/api/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+            headers={
+                "Accept": "application/json, text/event-stream",
+                "MCP-Protocol-Version": "2025-06-18",
+            },
+        )
+        resources = await client.post(
+            "/api/mcp",
+            json={"jsonrpc": "2.0", "id": 2, "method": "resources/list"},
+            headers={
+                "Accept": "application/json, text/event-stream",
+                "MCP-Protocol-Version": "2025-06-18",
+            },
+        )
+
+    assert initialize.status_code == 200
+    assert initialize.headers["MCP-Protocol-Version"] == "2025-06-18"
+    assert initialize.json()["result"]["capabilities"]["resources"]
+    assert resources.status_code == 200
+    uris = {item["uri"] for item in resources.json()["result"]["resources"]}
+    assert "moonmind://mcp/tools" in uris
+
+async def test_streamable_http_reads_tool_catalog_resource(
+    router_app: FastAPI,
+) -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": "read-tools",
+                "method": "resources/read",
+                "params": {"uri": "moonmind://mcp/tools"},
+            },
+        )
+
+    assert response.status_code == 200
+    content = response.json()["result"]["contents"][0]
+    parsed = json.loads(content["text"])
+    assert "tools" in parsed
 
 async def test_call_curated_execution_tool_requires_task_submission(
     router_app: FastAPI,

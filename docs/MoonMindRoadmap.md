@@ -202,14 +202,17 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 ### What's shipped
 - MCP server endpoint (`/context` — `context_protocol.py`)
 - MCP tools wrapper (`mcp_tools.py`)
+- MCP Streamable HTTP JSON-RPC endpoint (`/mcp`) with tool and resource discovery
 - OpenAI-compatible chat API (`chat.py`)
+- OpenAI-compatible Responses API (`/v1/responses`) for text responses
+- Generic external-agent callback receiver and discovery endpoint (`/api/integrations/callbacks`)
 - Operator doc [`docs/ModelContextProtocol.md`](../ModelContextProtocol.md) (context endpoint + `/mcp` HTTP tools; supersedes removed `CodexMcpToolsAdapter.md`)
 
 ### Remaining tasks
-- [ ] **8.1** MCP Streamable HTTP Transport (2025 spec) — Current `/context` is REST-style; modern MCP uses streamable HTTP
-- [ ] **8.2** MCP resource & tool discovery — Clients can't discover what MoonMind offers via MCP
-- [ ] **8.3** Webhook / callback API for external agents — Jules external events started, no generic webhook receiver
-- [ ] **8.4** OpenAI Responses API compatibility — Only Chat Completions format supported
+- [x] **8.1** MCP Streamable HTTP Transport (2025 spec) — `/mcp` accepts JSON-RPC over Streamable HTTP-style POST and exposes a GET event stream
+- [x] **8.2** MCP resource & tool discovery — `/mcp` supports `tools/list`, `resources/list`, and `resources/read`; REST discovery remains at `/mcp/tools` and `/mcp/resources`
+- [x] **8.3** Webhook / callback API for external agents — Generic callback contract is discoverable at `/api/integrations/callbacks` and accepted at `/api/integrations/{integrationName}/callbacks/{callbackCorrelationKey}`
+- [x] **8.4** OpenAI Responses API compatibility — `/v1/responses` supports text-focused Responses API creation and fails fast for unsupported streaming, tool, background, and conversation-state features
 
 ---
 

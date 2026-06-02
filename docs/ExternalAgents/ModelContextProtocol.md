@@ -1,16 +1,19 @@
 # Model Context Protocol in MoonMind
 
-This document describes how MoonMind exposes **agent-facing HTTP surfaces** related to the Model Context Protocol (MCP) ecosystem: a **context-style chat completion** endpoint and a small **MCP tool HTTP API** for discovery and invocation. Together they replace the older standalone `docs/CodexMcpToolsAdapter.md` guide; operational detail for Jules-specific behavior lives in [`docs/ExternalAgents/JulesAdapter.md`](JulesAdapter.md) (§ MCP tooling posture).
+This document describes how MoonMind exposes **agent-facing HTTP surfaces** related to the Model Context Protocol (MCP) ecosystem: a **context-style chat completion** endpoint, a Streamable HTTP-style MCP JSON-RPC endpoint, and small REST discovery helpers for clients that are not full MCP transports. Together they replace the older standalone `docs/CodexMcpToolsAdapter.md` guide; operational detail for Jules-specific behavior lives in [`docs/ExternalAgents/JulesAdapter.md`](JulesAdapter.md) (§ MCP tooling posture).
 
-MoonMind does **not** implement the full MCP streamable-HTTP or JSON-RPC transport on `/context`; that route is a **REST JSON** contract documented below. Tooling uses **JSON over HTTP** at `/mcp/*`, which clients such as Codex CLI can configure as an HTTP MCP tool server.
+MoonMind keeps `/context` as a **REST JSON** context-completion contract. The MCP transport endpoint is `/mcp`, which accepts JSON-RPC requests over HTTP POST and exposes a GET event stream for Streamable HTTP clients. REST helper routes under `/mcp/*` remain available for simple HTTP clients.
 
 ## Surfaces at a glance
 
 | Surface | Method and path | Purpose |
 | -------- | ---------------- | ------- |
 | Context completion | `POST /context` | Chat-style generation with optional RAG; backed by **Google Gemini** in the current implementation. |
-| Tool discovery | `GET /mcp/tools` | Lists tool names, descriptions, and JSON Schemas (`inputSchema`). |
-| Tool invocation | `POST /mcp/tools/call` | Dispatches one tool by name with a JSON `arguments` object. |
+| MCP transport | `POST /mcp` | Streamable HTTP-style JSON-RPC endpoint for `initialize`, `tools/list`, `tools/call`, `resources/list`, and `resources/read`. |
+| MCP event stream | `GET /mcp` | Opens the GET side of the Streamable HTTP transport using `text/event-stream`. |
+| Tool discovery helper | `GET /mcp/tools` | Lists tool names, descriptions, and JSON Schemas (`inputSchema`). |
+| Resource discovery helper | `GET /mcp/resources` | Lists MoonMind MCP resource URIs and descriptions. |
+| Tool invocation helper | `POST /mcp/tools/call` | Dispatches one tool by name with a JSON `arguments` object. |
 
 Implementation: [`api_service/api/routers/context_protocol.py`](../api_service/api/routers/context_protocol.py), [`api_service/api/routers/mcp_tools.py`](../api_service/api/routers/mcp_tools.py).
 
@@ -84,9 +87,40 @@ Optional **RAG**: when RAG is enabled and a vector index is available, the **las
 
 Token counts in `usage` are **estimates** (word-split based) for observability, not billing-grade provider totals.
 
-## `GET /mcp/tools` and `POST /mcp/tools/call` — HTTP MCP tools
+## `POST /mcp` and `GET /mcp` — MCP Streamable HTTP
 
-These routes provide a minimal **list-tools / call-tool** pair over HTTPS. They are suitable for agents and CLIs that can target a **base URL** plus paths, with JSON request and response bodies.
+`/mcp` is the canonical MCP transport endpoint. Clients send JSON-RPC requests with `POST /mcp`; the server returns JSON-RPC responses with the negotiated `MCP-Protocol-Version` header. `GET /mcp` opens a `text/event-stream` response for clients that expect the GET side of Streamable HTTP.
+
+Supported JSON-RPC methods:
+
+- `initialize`
+- `ping`
+- `tools/list`
+- `tools/call`
+- `resources/list`
+- `resources/read`
+
+Example initialization request:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "initialize",
+  "params": {
+    "protocolVersion": "2025-06-18",
+    "capabilities": {},
+    "clientInfo": {
+      "name": "example-client",
+      "version": "1.0.0"
+    }
+  }
+}
+```
+
+## `GET /mcp/tools`, `GET /mcp/resources`, and `POST /mcp/tools/call` — REST helpers
+
+These routes provide simple REST-style discovery and invocation helpers. They are suitable for agents and CLIs that can target a **base URL** plus paths, with JSON request and response bodies, but do not implement MCP JSON-RPC directly.
 
 ### Discovery: `GET /mcp/tools`
 
@@ -105,6 +139,25 @@ Returns:
 ```
 
 Field names match the Pydantic models in [`moonmind/mcp/tool_registry.py`](../moonmind/mcp/tool_registry.py) (`name`, `description`, `inputSchema`).
+
+### Resource discovery: `GET /mcp/resources`
+
+Returns:
+
+```json
+{
+  "resources": [
+    {
+      "uri": "moonmind://mcp/tools",
+      "name": "MoonMind MCP tool catalog",
+      "description": "Registered tool names, descriptions, and JSON Schemas.",
+      "mimeType": "application/json"
+    }
+  ]
+}
+```
+
+The same catalog is available to MCP clients through JSON-RPC `resources/list` and `resources/read`.
 
 **What is registered today**
 
