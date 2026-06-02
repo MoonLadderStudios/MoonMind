@@ -20,6 +20,7 @@ from moonmind.manifest.incremental import (
     build_changeset,
     default_state_path,
     source_documents,
+    splitter_hash,
     state_hash,
 )
 from moonmind.manifest.reader_adapter import get_adapter
@@ -206,7 +207,8 @@ class ManifestPipeline:
                 continue
 
             try:
-                source_cursor = adapter.state()
+                source_cursor = dict(adapter.state())
+                source_cursor["splitter_hash"] = splitter_hash(splitter)
                 previous_snapshot = index_state.sources.get(ds.id)
                 current_state_hash = state_hash(source_cursor)
                 if (
@@ -245,6 +247,7 @@ class ManifestPipeline:
                     self._index_writer.upsert_chunks(changeset.chunks)
 
                 index_state.sources[ds.id] = changeset.next_snapshot
+                index_state.save(state_path)
 
                 src_result = SourceResult(
                     source_id=ds.id,

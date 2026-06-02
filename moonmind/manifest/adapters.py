@@ -250,7 +250,8 @@ class SimpleDirectoryReaderAdapter(_BaseAdapter):
         for f in self._iter_files():
             try:
                 stat = f.stat()
-                digest = hashlib.sha256(f.read_bytes()).hexdigest()
+                with f.open("rb") as file_obj:
+                    digest = hashlib.file_digest(file_obj, "sha256").hexdigest()
             except OSError:
                 continue
             files.append(

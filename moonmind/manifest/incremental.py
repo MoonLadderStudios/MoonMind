@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Protocol, Sequence
@@ -159,10 +160,10 @@ class IncrementalChangeSet:
 
 class IncrementalIndexWriter(Protocol):
     def delete_points(self, point_ids: Sequence[str]) -> None:
-        ...
+        raise NotImplementedError
 
     def upsert_chunks(self, chunks: Sequence[IndexedChunk]) -> None:
-        ...
+        raise NotImplementedError
 
 
 def default_state_path(*, manifest_name: str, index_name: str) -> Path:
@@ -175,6 +176,23 @@ def default_state_path(*, manifest_name: str, index_name: str) -> Path:
 
 def state_hash(cursor: Mapping[str, Any]) -> str:
     return _sha256_text(_stable_json(cursor))
+
+
+def splitter_hash(splitter: SplitterConfig | None) -> str:
+    if splitter is None:
+        return _sha256_text("default")
+    return _sha256_text(_stable_json(splitter.model_dump(mode="json")))
+
+
+def _document_hash(document: SourceDocument, splitter: SplitterConfig | None) -> str:
+    return _sha256_text(
+        _stable_json(
+            {
+                "content_hash": document.content_hash,
+                "splitter_hash": splitter_hash(splitter),
+            }
+        )
+    )
 
 
 def document_id_for(
@@ -253,7 +271,7 @@ def chunk_document(
         )
         chunks.append(
             IndexedChunk(
-                point_id=_sha256_text(point_seed),
+                point_id=str(uuid.uuid5(uuid.NAMESPACE_URL, point_seed)),
                 source_id=document.source_id,
                 document_id=document.document_id,
                 chunk_hash=chunk_hash,
@@ -281,14 +299,14 @@ def build_changeset(
     previous_documents = previous.documents if previous else {}
     current_documents = {document.document_id: document for document in documents}
     current_hashes = {
-        document_id: document.content_hash
+        document_id: _document_hash(document, splitter)
         for document_id, document in current_documents.items()
     }
 
     changed_documents = [
         document
         for document_id, document in current_documents.items()
-        if previous_documents.get(document_id) != document.content_hash
+        if previous_documents.get(document_id) != current_hashes[document_id]
     ]
     unchanged_document_ids = sorted(
         document_id
@@ -357,13 +375,19 @@ class QdrantIncrementalIndexWriter:
             point_ids=list(point_ids),
         )
 
-    def upsert_chunks(self, chunks: Sequence[IndexedChunk]) -> None:
+    def upsert_chunks(
+        self,
+        chunks: Sequence[IndexedChunk],
+        batch_size: int = 128,
+    ) -> None:
         if not chunks:
             return
-        vectors = [self._embedder.embed(chunk.text) for chunk in chunks]
-        self._qdrant.upsert_canonical_vectors(
-            collection_name=self._collection_name,
-            ids=[chunk.point_id for chunk in chunks],
-            vectors=vectors,
-            payloads=[chunk.payload() for chunk in chunks],
-        )
+        for start in range(0, len(chunks), batch_size):
+            batch = chunks[start : start + batch_size]
+            vectors = [self._embedder.embed(chunk.text) for chunk in batch]
+            self._qdrant.upsert_canonical_vectors(
+                collection_name=self._collection_name,
+                ids=[chunk.point_id for chunk in batch],
+                vectors=vectors,
+                payloads=[chunk.payload() for chunk in batch],
+            )

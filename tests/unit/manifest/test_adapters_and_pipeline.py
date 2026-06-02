@@ -59,6 +59,36 @@ MINIMAL_MANIFEST = textwrap.dedent("""\
         indices: ["idx1"]
 """)
 
+SPLITTER_MANIFEST = textwrap.dedent("""\
+    version: "v0"
+    metadata:
+      name: "adapter-test"
+    embeddings:
+      provider: "openai"
+      model: "text-embedding-3-large"
+    vectorStore:
+      type: "qdrant"
+      indexName: "test"
+    dataSources:
+      - id: "local"
+        type: "SimpleDirectoryReader"
+        params:
+          inputDir: "{input_dir}"
+    transforms:
+      splitter:
+        type: TokenTextSplitter
+        chunkSize: {chunk_size}
+        chunkOverlap: 0
+    indices:
+      - id: "idx1"
+        type: "VectorStoreIndex"
+        sources: ["local"]
+    retrievers:
+      - id: "ret1"
+        type: "Vector"
+        indices: ["idx1"]
+""")
+
 @pytest.fixture(autouse=True)
 def _clean_registry():
     """Re-register built-in adapters for each test."""
@@ -419,6 +449,36 @@ class TestPipelineLocalAdapter:
         assert second.sources[0].deleted_doc_count == 1
         assert len(writer.upsert_batches[0]) == 2
         assert len(writer.upsert_batches[1]) == 1
+        assert writer.deleted_batches[1]
+
+    def test_run_reindexes_when_splitter_changes(self, tmp_path):
+        data_dir = tmp_path / "docs"
+        data_dir.mkdir()
+        (data_dir / "a.txt").write_text("alpha beta gamma")
+        state_path = tmp_path / "incremental-state.json"
+        writer = RecordingIndexWriter()
+
+        first_manifest = ManifestV0.from_yaml_string(
+            SPLITTER_MANIFEST.format(input_dir=str(data_dir), chunk_size=8)
+        )
+        second_manifest = ManifestV0.from_yaml_string(
+            SPLITTER_MANIFEST.format(input_dir=str(data_dir), chunk_size=5)
+        )
+
+        first = ManifestPipeline(
+            first_manifest,
+            state_path=state_path,
+            index_writer=writer,
+        ).run()
+        second = ManifestPipeline(
+            second_manifest,
+            state_path=state_path,
+            index_writer=writer,
+        ).run()
+
+        assert first.sources[0].indexed_doc_count == 1
+        assert second.sources[0].skipped is False
+        assert second.sources[0].indexed_doc_count == 1
         assert writer.deleted_batches[1]
 
     def test_run_unknown_adapter_continues(self, tmp_path):
