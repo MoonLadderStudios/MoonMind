@@ -202,7 +202,7 @@ Configure whatever fields your client uses for **authentication headers** so req
 
 ## Docker labels and environment
 
-The API container advertises the context endpoint for discovery. In `docker-compose.yaml` the `api` service sets:
+The API container advertises the MCP Streamable HTTP endpoint for discovery. In `docker-compose.yaml` the `api` service sets:
 
 ```yaml
 environment:
@@ -210,11 +210,11 @@ environment:
   - MODEL_CONTEXT_PROTOCOL_PORT=8000
   - MODEL_CONTEXT_PROTOCOL_HOST=0.0.0.0
 labels:
-  - "ai.model.context.protocol.version=0.1"
-  - "ai.model.context.protocol.endpoint=/context"
+  - "ai.model.context.protocol.version=2025-03-26"
+  - "ai.model.context.protocol.endpoint=/mcp"
 ```
 
-Those variables describe the **context** surface; the MCP tool paths are always under **`/mcp`** on the same HTTP server.
+Those labels describe the MCP transport surface. The legacy `/context` route remains available on the same HTTP server for REST-style context completion.
 
 ## Example client (`examples/context_protocol_client.py`)
 
