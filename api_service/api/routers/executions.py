@@ -1926,7 +1926,7 @@ def _serialize_execution(
         else None
     )
     resume_summary = _build_recovery_summary(record, actions=actions)
-    related_runs = _build_recovery_related_runs(record, params=params)
+    related_runs = _build_related_runs(record, params=params)
     target_diagnostics = _build_target_diagnostics(
         record,
         params=params,
@@ -2302,35 +2302,152 @@ def _build_recovery_summary(
         disabledReason=actions.disabled_reasons.get("canRecoverFromFailedStep"),
     )
 
-def _build_recovery_related_runs(
+def _related_run_href(workflow_id: str) -> str:
+    return f"/workflows/{quote(workflow_id, safe='')}?source=temporal"
+
+
+def _build_related_runs(
     record,
     *,
     params: Mapping[str, Any],
 ) -> list[ExecutionRelatedRunModel]:
+    related_runs: list[ExecutionRelatedRunModel] = []
     recovery_source = params.get("recoverySource")
     if not isinstance(recovery_source, Mapping):
         recovery_source = params.get("recovery_source")
-    if not isinstance(recovery_source, Mapping):
-        return []
-    source_workflow_id = str(
-        recovery_source.get("sourceWorkflowId")
-        or recovery_source.get("source_workflow_id")
-        or ""
-    ).strip()
-    if not source_workflow_id:
-        return []
-    source_run_id = str(
-        recovery_source.get("sourceRunId") or recovery_source.get("source_run_id") or ""
-    ).strip() or None
-    return [
-        ExecutionRelatedRunModel(
-            workflowId=source_workflow_id,
-            runId=source_run_id,
-            relationship="Recovered from failed step",
-            status="failed",
-            href=f"/workflows/{source_workflow_id}",
+    if isinstance(recovery_source, Mapping):
+        source_workflow_id = str(
+            recovery_source.get("sourceWorkflowId")
+            or recovery_source.get("source_workflow_id")
+            or ""
+        ).strip()
+        if source_workflow_id:
+            source_run_id = str(
+                recovery_source.get("sourceRunId")
+                or recovery_source.get("source_run_id")
+                or ""
+            ).strip() or None
+            related_runs.append(
+                ExecutionRelatedRunModel(
+                    workflowId=source_workflow_id,
+                    runId=source_run_id,
+                    relationship="Recovered from failed step",
+                    status="failed",
+                    href=_related_run_href(source_workflow_id),
+                )
+            )
+
+    task_payload = params.get("task") if isinstance(params.get("task"), Mapping) else {}
+    comparison_source = task_payload.get("comparison")
+    if isinstance(comparison_source, Mapping):
+        source_workflow_id = str(
+            comparison_source.get("sourceWorkflowId")
+            or comparison_source.get("source_workflow_id")
+            or ""
+        ).strip()
+        if source_workflow_id:
+            source_run_id = str(
+                comparison_source.get("sourceRunId")
+                or comparison_source.get("source_run_id")
+                or ""
+            ).strip() or None
+            related_runs.append(
+                ExecutionRelatedRunModel(
+                    workflowId=source_workflow_id,
+                    runId=source_run_id,
+                    relationship="Comparison source",
+                    href=_related_run_href(source_workflow_id),
+                )
+            )
+
+    return related_runs
+
+
+def _execution_related_run_metadata(record: TemporalExecutionRecord) -> dict[str, Any]:
+    params = record.parameters if isinstance(record.parameters, Mapping) else {}
+    task_payload = params.get("task") if isinstance(params.get("task"), Mapping) else {}
+    runtime_payload = task_payload.get("runtime")
+    if not isinstance(runtime_payload, Mapping):
+        runtime_payload = {}
+    state_value = _enum_value(getattr(record, "state", None)) or None
+    close_status = _enum_value(getattr(record, "close_status", None)) or None
+    return {
+        "run_id": str(getattr(record, "run_id", "") or "").strip() or None,
+        "status": close_status or state_value,
+        "target_runtime": (
+            _coerce_temporal_scalar(params.get("targetRuntime"))
+            or _coerce_temporal_scalar(runtime_payload.get("mode"))
+            or None
+        ),
+        "model": _coerce_temporal_scalar(params.get("model")) or None,
+        "requested_model": _coerce_temporal_scalar(params.get("requestedModel")) or None,
+        "resolved_model": _coerce_temporal_scalar(params.get("resolvedModel")) or None,
+        "effort": (
+            _coerce_temporal_scalar(params.get("effort"))
+            or _coerce_temporal_scalar(runtime_payload.get("effort"))
+            or None
+        ),
+        "created_at": getattr(record, "created_at", None),
+    }
+
+
+def _execution_record_visible_to_user(
+    record: TemporalExecutionRecord,
+    user: User,
+) -> bool:
+    search_attributes = dict(getattr(record, "search_attributes", None) or {})
+    record_owner_type = _enum_value(getattr(record, "owner_type", None))
+    if record_owner_type is None:
+        record_owner_type = _normalize_owner_type(record, search_attributes)
+    record_owner_id = str(getattr(record, "owner_id", "") or "").strip()
+    if not record_owner_id:
+        record_owner_id = _coerce_temporal_scalar(search_attributes.get("mm_owner_id"))
+    return record_owner_type == "user" and record_owner_id == _owner_id(user)
+
+
+async def _hydrate_related_run_metadata(
+    execution: ExecutionModel,
+    *,
+    session: AsyncSession | None,
+    user: User | None = None,
+) -> ExecutionModel:
+    if session is None or not execution.related_runs:
+        return execution
+    hydrated: list[ExecutionRelatedRunModel] = []
+    for related_run in execution.related_runs:
+        try:
+            record = await session.get(TemporalExecutionRecord, related_run.workflow_id)
+        except Exception as exc:
+            logger.warning(
+                "Failed to hydrate related run %s for execution %s: %s",
+                related_run.workflow_id,
+                execution.workflow_id,
+                exc,
+                exc_info=True,
+            )
+            hydrated.append(related_run)
+            continue
+        if record is None:
+            hydrated.append(related_run)
+            continue
+        if (
+            user is not None
+            and not _is_execution_admin(user)
+            and not _execution_record_visible_to_user(record, user)
+        ):
+            hydrated.append(related_run)
+            continue
+        metadata = _execution_related_run_metadata(record)
+        hydrated.append(
+            related_run.model_copy(
+                update={
+                    key: value
+                    for key, value in metadata.items()
+                    if value is not None
+                }
+            )
         )
-    ]
+    return execution.model_copy(update={"related_runs": hydrated})
 
 def _target_diagnostics_block(
     *,
@@ -7421,6 +7538,11 @@ async def describe_execution(
         )
     execution = _serialize_execution(record, user=user)
     execution = await _enrich_execution_dependencies(execution, service=service)
+    execution = await _hydrate_related_run_metadata(
+        execution,
+        session=session,
+        user=user,
+    )
     execution = await _hydrate_provider_profile_metadata(execution, session)
     if execution.workflow_type == "MoonMind.Run":
         if _execution_uses_live_workflow_queries(execution):

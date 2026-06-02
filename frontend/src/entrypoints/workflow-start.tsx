@@ -7859,7 +7859,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         );
       }
       const editParametersPatch =
-        temporalDraftData
+        temporalDraftData && pageMode.intent !== "comparison"
           ? buildEditParametersPatch({
               execution: temporalDraftData.execution,
               artifactInput: temporalDraftData.artifactInput,
@@ -7895,6 +7895,35 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         };
         delete editedTaskPayload.resume;
         artifactPayload.task = editedTaskPayload;
+      }
+      if (
+        pageMode.intent === "comparison" &&
+        pageMode.executionId &&
+        temporalDraftData?.execution
+      ) {
+        const sourceWorkflowId = String(pageMode.executionId).trim();
+        const sourceRunId = String(
+          temporalDraftData.execution.runId ||
+            temporalDraftData.execution.temporalRunId ||
+            "",
+        ).trim();
+        if (!sourceWorkflowId || !sourceRunId) {
+          throw new Error(
+            "Cannot start comparison because the source execution identity is missing.",
+          );
+        }
+        const comparisonTaskPayload: Record<string, unknown> = {
+          ...recordValue(artifactPayload.task ?? taskPayload),
+          comparison: {
+            kind: "model_runtime_comparison",
+            sourceWorkflowId,
+            sourceRunId,
+          },
+        };
+        delete comparisonTaskPayload.recovery;
+        delete comparisonTaskPayload.resume;
+        artifactPayload.task = comparisonTaskPayload;
+        requestBody.payload = artifactPayload;
       }
       const rerunDraft = temporalDraftData?.draft;
       const rerunFormChanged = isExactRerunRequest
@@ -7956,7 +7985,10 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         stripOversizedInlineInstructions({ payload: artifactPayload });
       }
 
-      if (pageMode.mode === "edit" || pageMode.mode === "rerun") {
+      if (
+        pageMode.mode === "edit" ||
+        (pageMode.mode === "rerun" && pageMode.intent !== "comparison")
+      ) {
         const workflowId = String(pageMode.executionId || "").trim();
         if (!workflowId) {
           throw new Error(
@@ -8056,13 +8088,17 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   }
 
   const pageTitle =
-    pageMode.intent === "edit" || pageMode.intent === "edit-for-rerun"
-      ? "Edit Workflow"
-      : pageMode.mode === "rerun"
-        ? "Start New Run"
-        : "Start Workflow";
+    pageMode.intent === "comparison"
+      ? "Compare Workflow"
+      : pageMode.intent === "edit" || pageMode.intent === "edit-for-rerun"
+        ? "Edit Workflow"
+        : pageMode.mode === "rerun"
+          ? "Start New Run"
+          : "Start Workflow";
   const primaryCta =
-    pageMode.intent === "edit"
+    pageMode.intent === "comparison"
+      ? "Start Comparison Run"
+      : pageMode.intent === "edit"
       ? "Save Changes"
       : pageMode.intent === "edit-for-rerun"
         ? "Run edited workflow"
@@ -8071,7 +8107,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         : "Create";
   const showPrimaryCtaArrow = true;
   const primaryCtaTooltip =
-    pageMode.intent === "edit"
+    pageMode.intent === "comparison"
+      ? "Start a new comparison run from this task draft"
+      : pageMode.intent === "edit"
       ? "Save changes to this workflow draft"
       : pageMode.intent === "edit-for-rerun"
         ? "Start a new run from this edited task draft"
@@ -8169,6 +8207,13 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         <p className="notice" role="status">
           You are editing a previous task. Your changes will create a new run.
           The original run will remain unchanged.
+        </p>
+      ) : null}
+
+      {pageMode.intent === "comparison" && !modeLoadError ? (
+        <p className="notice" role="status">
+          You are starting a comparison run. Choose a different runtime or model
+          to compare results with the source run.
         </p>
       ) : null}
 

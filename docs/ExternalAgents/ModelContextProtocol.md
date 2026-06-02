@@ -1,6 +1,6 @@
 # Model Context Protocol in MoonMind
 
-This document describes how MoonMind exposes **agent-facing HTTP surfaces** related to the Model Context Protocol (MCP) ecosystem: the 2025 **MCP Streamable HTTP** endpoint, a legacy **context-style chat completion** endpoint, and a small JSON helper API for discovery and invocation. Together they replace the older standalone `docs/CodexMcpToolsAdapter.md` guide; operational detail for Jules-specific behavior lives in [`docs/ExternalAgents/JulesAdapter.md`](JulesAdapter.md) (§ MCP tooling posture).
+This document describes how MoonMind exposes **agent-facing HTTP surfaces** related to the Model Context Protocol (MCP) ecosystem: the 2025 **MCP Streamable HTTP** endpoint, a legacy **context-style chat completion** endpoint, and a small JSON helper API for resource discovery, tool discovery, and invocation. Together they replace the older standalone `docs/CodexMcpToolsAdapter.md` guide; operational detail for Jules-specific behavior lives in [`docs/ExternalAgents/JulesAdapter.md`](JulesAdapter.md) (§ MCP tooling posture).
 
 The canonical MCP transport is now the single `/mcp` endpoint. It accepts JSON-RPC 2.0 messages over HTTP POST using the 2025 Streamable HTTP transport shape. The older `/context` route remains a REST JSON chat-style completion contract and is not the MCP transport.
 
@@ -11,6 +11,7 @@ The canonical MCP transport is now the single `/mcp` endpoint. It accepts JSON-R
 | MCP Streamable HTTP | `POST /mcp` | JSON-RPC 2.0 MCP endpoint for `initialize`, `ping`, `tools/list`, and `tools/call`. |
 | MCP server stream probe | `GET /mcp` | Returns `405 Method Not Allowed` because MoonMind does not currently emit server-initiated SSE messages. |
 | Context completion | `POST /context` | Legacy chat-style generation with optional RAG; backed by **Google Gemini** in the current implementation. |
+| Resource discovery | `GET /mcp/resources` | Lists MoonMind MCP-facing resources with stable URIs, descriptions, and MIME types. |
 | JSON tool discovery helper | `GET /mcp/tools` | Lists tool names, descriptions, and JSON Schemas (`inputSchema`) for non-MCP helper clients. |
 | JSON tool invocation helper | `POST /mcp/tools/call` | Dispatches one tool by name with a JSON `arguments` object for non-MCP helper clients. |
 
@@ -27,7 +28,7 @@ The example script under `examples/context_protocol_client.py` does not attach a
 
 ## `POST /mcp` — MCP Streamable HTTP
 
-`POST /mcp` is the standards-oriented MCP endpoint. Clients send one JSON-RPC 2.0 message, or a 2025-03-26 JSON-RPC batch, per HTTP POST. The request `Accept` header must include both `application/json` and `text/event-stream`, matching the 2025 Streamable HTTP transport. MoonMind responds with JSON for request messages and returns `202 Accepted` with an empty body when the input is only notifications or client-side JSON-RPC responses.
+`POST /mcp` is the standards-oriented MCP endpoint. Clients send one JSON-RPC 2.0 message, or a 2025-03-26 JSON-RPC batch, per HTTP POST. The request `Accept` header must allow `application/json`; standard POST clients may send only `application/json`, a wildcard, or no explicit `Accept` header. MoonMind responds with JSON for request messages and returns `202 Accepted` with an empty body when the input is only notifications or client-side JSON-RPC responses.
 
 MoonMind supports the `2025-03-26` MCP protocol version and accepts `2025-06-18` clients for the overlapping lifecycle/tool methods implemented here. If an `MCP-Protocol-Version` header is present, it must be one of those supported versions.
 
@@ -36,8 +37,8 @@ Supported methods:
 - `initialize` — negotiates protocol version and declares the `tools` capability.
 - `notifications/initialized` — accepted as a notification after initialization.
 - `ping` — returns an empty result object.
-- `tools/list` — returns the same trusted tool catalog exposed by the helper discovery route.
-- `tools/call` — invokes the same trusted tool dispatch path as the helper invocation route, returning MCP tool content plus `structuredContent`.
+- `tools/list` — returns immediately callable trusted tools; task-submission-only Temporal executable tools are excluded from this transport list.
+- `tools/call` — invokes the same trusted immediate-call dispatch path as the helper invocation route, returning MCP tool content plus `structuredContent`. Tool execution failures are returned as successful JSON-RPC responses with `isError: true` in the result payload.
 
 MoonMind does not currently send server-initiated JSON-RPC messages, so `GET /mcp` returns `405 Method Not Allowed` for SSE stream attempts. This is allowed by the Streamable HTTP transport when a server does not offer an SSE stream.
 
@@ -136,6 +137,33 @@ Optional **RAG**: when RAG is enabled and a vector index is available, the **las
 
 Token counts in `usage` are **estimates** (word-split based) for observability, not billing-grade provider totals.
 
+## `GET /mcp/resources` — HTTP MCP resources
+
+This route provides a minimal resource catalog so clients can discover MoonMind's MCP-facing resources before deciding which surface to use.
+
+Returns:
+
+```json
+{
+  "resources": [
+    {
+      "uri": "moonmind://context",
+      "name": "context-completion",
+      "description": "Chat-style context completion endpoint with optional RAG, available through POST /context.",
+      "mimeType": "application/json"
+    },
+    {
+      "uri": "moonmind://mcp/tools",
+      "name": "tool-catalog",
+      "description": "Registered MoonMind tool catalog, available through GET /mcp/tools.",
+      "mimeType": "application/json"
+    }
+  ]
+}
+```
+
+Field names match the Pydantic models in [`moonmind/mcp/tool_registry.py`](../moonmind/mcp/tool_registry.py) (`uri`, `name`, `description`, `mimeType`).
+
 ## `GET /mcp/tools` and `POST /mcp/tools/call` — HTTP MCP tools
 
 These routes provide a minimal **list-tools / call-tool** pair over HTTPS. They are suitable for agents and CLIs that can target a **base URL** plus paths, with JSON request and response bodies.
@@ -196,6 +224,7 @@ The shape of `result` is tool-specific (for Jules tools, task payloads are JSON-
 Point your tool server at the **MoonMind API base** (for example `http://localhost:8000` from the host, or `http://api:8000` from another compose service). Use:
 
 - **List tools**: `GET {base}/mcp/tools`
+- **List resources**: `GET {base}/mcp/resources`
 - **Call tool**: `POST {base}/mcp/tools/call` with `Content-Type: application/json`
 
 Configure whatever fields your client uses for **authentication headers** so requests match your `AUTH_PROVIDER` setup. Exact config keys depend on the Codex (or other) release; this repository previously documented Codex-specific filenames in `CodexMcpToolsAdapter.md` — that file was removed in favor of this section plus upstream client docs.

@@ -26,6 +26,8 @@ from moonmind.mcp.jules_tool_registry import (
 from moonmind.mcp.tool_registry import (
     QueueToolExecutionContext,
     QueueToolRegistry,
+    ResourceListResponse,
+    ResourceMetadata,
     ToolArgumentsValidationError,
     ToolCallRequest,
     ToolCallResponse,
@@ -47,6 +49,26 @@ _jira_registry: JiraToolRegistry | None = None
 _jira_service: JiraToolService | None = None
 _jules_registry: JulesToolRegistry | None = None
 _jules_client: JulesClient | None = None
+
+_resources = (
+    ResourceMetadata(
+        uri="moonmind://context",
+        name="context-completion",
+        description=(
+            "Chat-style context completion endpoint with optional RAG, available "
+            "through POST /context."
+        ),
+        mime_type="application/json",
+    ),
+    ResourceMetadata(
+        uri="moonmind://mcp/tools",
+        name="tool-catalog",
+        description=(
+            "Registered MoonMind tool catalog, available through GET /mcp/tools."
+        ),
+        mime_type="application/json",
+    ),
+)
 
 if settings.atlassian.jira.jira_tool_enabled:
     _jira_service = JiraToolService(atlassian_settings=settings.atlassian)
@@ -452,6 +474,14 @@ async def handle_streamable_http_get(request: Request) -> Response:
             },
         )
     return Response(status_code=status.HTTP_405_METHOD_NOT_ALLOWED)
+
+
+@router.get("/resources", response_model=ResourceListResponse)
+async def list_resources(
+    _user: User = Depends(get_current_user()),
+) -> ResourceListResponse:
+    """Return MoonMind MCP resource definitions."""
+    return ResourceListResponse(resources=_resources)
 
 
 @router.get("/tools", response_model=ToolListResponse)

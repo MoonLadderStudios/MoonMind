@@ -142,6 +142,8 @@ class JulesAgentAdapter(BaseExternalAgentAdapter):
             provider_status=provider_status,
             normalized_status=normalized_status,
             external_url=_preferred_external_url(response),
+            callback_supported=False,
+            callback_correlation_key=None,
         )
         if response.pull_request_url:
             metadata = dict(handle.metadata)

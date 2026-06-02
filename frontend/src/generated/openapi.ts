@@ -248,6 +248,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/mcp/resources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Resources
+         * @description Return MoonMind MCP resource definitions.
+         */
+        get: operations["list_resources_mcp_resources_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/mcp/tools": {
         parameters: {
             query?: never;
@@ -4608,6 +4628,16 @@ export interface components {
             relationship: string;
             /** Status */
             status?: string | null;
+            /** Targetruntime */
+            targetRuntime?: string | null;
+            /** Model */
+            model?: string | null;
+            /** Requestedmodel */
+            requestedModel?: string | null;
+            /** Resolvedmodel */
+            resolvedModel?: string | null;
+            /** Effort */
+            effort?: string | null;
             /** Createdat */
             createdAt?: string | null;
             /** Href */
@@ -6347,6 +6377,28 @@ export interface components {
              * Format: date-time
              */
             scheduledFor: string;
+        };
+        /**
+         * ResourceListResponse
+         * @description Resource discovery response envelope.
+         */
+        ResourceListResponse: {
+            /** Resources */
+            resources?: components["schemas"]["ResourceMetadata"][];
+        };
+        /**
+         * ResourceMetadata
+         * @description Resource definition payload returned by discovery endpoint.
+         */
+        ResourceMetadata: {
+            /** Uri */
+            uri: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+            /** Mimetype */
+            mimeType?: string | null;
         };
         /** ResumeExecutionRefModel */
         ResumeExecutionRefModel: {
@@ -8778,6 +8830,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_resources_mcp_resources_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceListResponse"];
                 };
             };
         };

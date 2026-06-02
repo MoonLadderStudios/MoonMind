@@ -111,11 +111,24 @@ def _callback_profile(integration_name: str) -> _CallbackProfile:
         )
     return _CallbackProfile(
         normalized_name=normalized,
-        expected_token=None,
-        max_payload_bytes=_DEFAULT_CALLBACK_MAX_PAYLOAD_BYTES,
-        rate_limit_per_window=_DEFAULT_CALLBACK_RATE_LIMIT,
-        rate_limit_window_seconds=_DEFAULT_CALLBACK_RATE_LIMIT_WINDOW_SECONDS,
-        capture_artifacts=False,
+        expected_token=(
+            str(settings.integration_callbacks.callback_token or "").strip() or None
+        ),
+        max_payload_bytes=int(
+            settings.integration_callbacks.max_payload_bytes
+            or _DEFAULT_CALLBACK_MAX_PAYLOAD_BYTES
+        ),
+        rate_limit_per_window=int(
+            settings.integration_callbacks.rate_limit_per_window
+            or _DEFAULT_CALLBACK_RATE_LIMIT
+        ),
+        rate_limit_window_seconds=int(
+            settings.integration_callbacks.rate_limit_window_seconds
+            or _DEFAULT_CALLBACK_RATE_LIMIT_WINDOW_SECONDS
+        ),
+        capture_artifacts=bool(
+            settings.integration_callbacks.artifact_capture_enabled
+        ),
     )
 
 async def _validate_callback_request(
