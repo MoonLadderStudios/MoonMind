@@ -146,14 +146,15 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 
 ### What's shipped
 - Memory architecture design doc (`docs/Memory/MemoryArchitecture.md` — "Desired State")
+- Planning Memory (Beads / Plane A) runtime adapter with optional context-pack prefetch
 
 ### Remaining tasks
 - [ ] **6.1** Run Digests (Plane B — task history summaries) — Architecture defined, no implementation
 - [ ] **6.2** Fix Patterns / Error Signatures (procedural memory) — Architecture defined, no implementation
 - [ ] **6.3** Long-Term Memory integration (Mem0 / Plane C) — Architecture defined, no integration
-- [ ] **6.4** Planning Memory (Beads / Plane A) — Architecture defined, no integration
-- [ ] **6.5** Token budgeting & provenance tracking — Designed in memory arch, not implemented
-- [ ] **6.6** Memory feature flags (`MEMORY_ENABLED`, etc.) — Defined in spec, not in codebase
+- [x] **6.4** Planning Memory (Beads / Plane A) — Runtime adapter and optional context-pack prefetch integrated (MM-765)
+- [ ] **6.5** Token budgeting & provenance tracking — Designed in memory arch; Planning Memory includes bounded context and provenance, broader memory planes remain pending
+- [ ] **6.6** Memory feature flags (`MEMORY_ENABLED`, etc.) — Planning Memory flags implemented; broader Plane B/C flags remain pending
 
 ---
 

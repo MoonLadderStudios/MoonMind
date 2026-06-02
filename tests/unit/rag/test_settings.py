@@ -27,6 +27,12 @@ def _settings(**overrides: object) -> RagRuntimeSettings:
         run_id="run-1",
         rag_enabled=True,
         qdrant_enabled=True,
+        memory_enabled=True,
+        memory_planning="off",
+        memory_fail_open=True,
+        memory_context_budget_tokens=None,
+        planning_workspace_root=None,
+        beads_command="bd",
     )
     defaults.update(overrides)
     return RagRuntimeSettings(**defaults)
@@ -107,3 +113,41 @@ def test_retrieval_executable_mirrors_reason() -> None:
         {"MOONMIND_RETRIEVAL_TOKEN": "scoped-token"},
         preferred_transport="gateway",
     )
+
+
+def test_planning_memory_enabled_requires_global_and_plane_switch() -> None:
+    assert _settings(memory_planning="beads").planning_memory_enabled()
+    assert not _settings(
+        memory_enabled=False,
+        memory_planning="beads",
+    ).planning_memory_enabled()
+    assert not _settings(memory_planning="off").planning_memory_enabled()
+
+
+def test_from_env_reads_memory_planning_controls() -> None:
+    settings = RagRuntimeSettings.from_env(
+        {
+            "MEMORY_ENABLED": "1",
+            "MEMORY_PLANNING": "beads",
+            "MEMORY_FAIL_OPEN": "0",
+            "MEMORY_CONTEXT_BUDGET_TOKENS": "123",
+            "MOONMIND_PLANNING_REPOSITORY_ROOT": "/tmp/repo",
+            "BEADS_COMMAND": "bd-test",
+        }
+    )
+
+    assert settings.planning_memory_enabled()
+    assert settings.memory_fail_open is False
+    assert settings.memory_context_budget_tokens == 123
+    assert settings.planning_workspace_root == "/tmp/repo"
+    assert settings.beads_command == "bd-test"
+
+
+def test_from_env_rejects_unknown_memory_planning_mode() -> None:
+    try:
+        RagRuntimeSettings.from_env({"MEMORY_PLANNING": "unknown"})
+    except ValueError as exc:
+        assert "MEMORY_PLANNING" in str(exc)
+        assert "beads" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")

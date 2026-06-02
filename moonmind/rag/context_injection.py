@@ -219,6 +219,12 @@ class ContextInjectionService:
             filters.setdefault("repository", repo_filter)
 
         service = ContextRetrievalService(settings=settings, env=self._env)
+        planning_ref = (
+            request.parameters.get("planning_ref")
+            or request.parameters.get("planningRef")
+            or request.parameters.get("beads_id")
+            or request.parameters.get("beadsId")
+        )
         return (
             service.retrieve(
                 query=request.instruction_ref or "",
@@ -228,6 +234,7 @@ class ContextInjectionService:
                 budgets=self._resolve_rag_budgets(),
                 transport=transport,
                 initiation_mode="automatic",
+                planning_ref=str(planning_ref) if planning_ref else None,
             ),
             None,
         )

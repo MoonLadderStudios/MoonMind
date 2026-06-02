@@ -5,12 +5,14 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Mapping, MutableMapping, Optional
 
 from moonmind.config.settings import settings as app_settings
 from moonmind.utils.env_bool import env_to_bool
 
 _SUPPORTED_EMBEDDING_PROVIDERS = frozenset({"google", "openai"})
+_SUPPORTED_MEMORY_PLANNING = frozenset({"off", "beads"})
 
 def _get_env(
     source: Mapping[str, str] | None, key: str, default: str | None = None
@@ -46,6 +48,12 @@ class RagRuntimeSettings:
     run_id: Optional[str]
     rag_enabled: bool
     qdrant_enabled: bool
+    memory_enabled: bool
+    memory_planning: str
+    memory_fail_open: bool
+    memory_context_budget_tokens: Optional[int]
+    planning_workspace_root: Optional[str]
+    beads_command: str
 
     @classmethod
     def from_env(cls, source: Mapping[str, str] | None = None) -> "RagRuntimeSettings":
@@ -130,6 +138,37 @@ class RagRuntimeSettings:
         qdrant_enabled = env_to_bool(
             _get_env(env, "QDRANT_ENABLED", "true"), default=True
         )
+        memory_enabled = env_to_bool(
+            _get_env(env, "MEMORY_ENABLED", "true"), default=True
+        )
+        memory_planning = (
+            _get_env(env, "MEMORY_PLANNING", "off") or "off"
+        ).strip().lower()
+        if memory_planning not in _SUPPORTED_MEMORY_PLANNING:
+            supported = ", ".join(sorted(_SUPPORTED_MEMORY_PLANNING))
+            raise ValueError(
+                f"MEMORY_PLANNING must be one of: {supported}; got {memory_planning!r}"
+            )
+        memory_fail_open = env_to_bool(
+            _get_env(env, "MEMORY_FAIL_OPEN", "true"), default=True
+        )
+        budget_raw = _get_env(env, "MEMORY_CONTEXT_BUDGET_TOKENS")
+        memory_context_budget_tokens = None
+        if budget_raw:
+            try:
+                parsed_budget = int(budget_raw)
+            except ValueError:
+                parsed_budget = 0
+            if parsed_budget > 0:
+                memory_context_budget_tokens = parsed_budget
+        planning_workspace_root = (
+            _get_env(env, "MOONMIND_PLANNING_REPOSITORY_ROOT")
+            or _get_env(env, "MOONMIND_REPOSITORY_ROOT")
+            or _get_env(env, "WORKSPACE_PATH")
+            or _get_env(env, "PWD")
+            or None
+        )
+        beads_command = _get_env(env, "BEADS_COMMAND", "bd") or "bd"
 
         return cls(
             qdrant_url=qdrant_url,
@@ -153,6 +192,12 @@ class RagRuntimeSettings:
             run_id=run_id,
             rag_enabled=rag_enabled,
             qdrant_enabled=qdrant_enabled,
+            memory_enabled=memory_enabled,
+            memory_planning=memory_planning,
+            memory_fail_open=memory_fail_open,
+            memory_context_budget_tokens=memory_context_budget_tokens,
+            planning_workspace_root=planning_workspace_root,
+            beads_command=beads_command,
         )
 
     def resolved_transport(self, preferred: Optional[str]) -> str:
@@ -253,3 +298,10 @@ class RagRuntimeSettings:
             source, preferred_transport=preferred_transport
         )
         return executable
+
+    def planning_memory_enabled(self) -> bool:
+        return self.memory_enabled and self.memory_planning == "beads"
+
+    def resolved_planning_workspace_root(self) -> Path:
+        root = self.planning_workspace_root or os.getcwd()
+        return Path(root).resolve()

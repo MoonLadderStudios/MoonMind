@@ -141,8 +141,29 @@ def test_context_accepts_scoped_retrieval_token_and_preserves_request_knobs(
             "budgets": {"tokens": 512, "latency_ms": 1000},
             "transport": "direct",
             "initiation_mode": "session",
+            "planning_ref": None,
         }
     ]
+
+
+def test_context_forwards_planning_ref_to_service() -> None:
+    app = _build_app()
+    app.dependency_overrides[authorize_retrieval_request] = _oidc_auth
+    service = StubService()
+    app.dependency_overrides[get_retrieval_service] = lambda: service
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/retrieval/context",
+            json={
+                "query": "q",
+                "filters": {"repo": "moonmind"},
+                "planning_ref": "bd-123",
+            },
+        )
+
+    assert response.status_code == 200
+    assert service.calls[0]["planning_ref"] == "bd-123"
 
 
 @pytest.mark.parametrize(
