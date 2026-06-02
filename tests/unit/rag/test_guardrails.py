@@ -41,6 +41,9 @@ def _settings(**overrides: object) -> RagRuntimeSettings:
         memory_context_budget_tokens=4096,
         planning_workspace_root=None,
         beads_command="bd",
+        memory_namespace_id="default",
+        mem0_api_key=None,
+        mem0_user_id=None,
     )
     defaults.update(overrides)
     return RagRuntimeSettings(**defaults)

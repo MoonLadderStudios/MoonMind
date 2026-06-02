@@ -462,6 +462,18 @@ files = [
 ]
 
 [[package]]
+name = "backoff"
+version = "2.2.1"
+description = "Function decoration for backoff and retry"
+optional = false
+python-versions = ">=3.7,<4.0"
+groups = ["main"]
+files = [
+    {file = "backoff-2.2.1-py3-none-any.whl", hash = "sha256:63579f9a0628e06278f7e47b7d7d5b6ce20dc65c5e96a6f3ca99a6adca0396e8"},
+    {file = "backoff-2.2.1.tar.gz", hash = "sha256:03f829f5bb1923180821643f8753b0502c3b682293992485b0eef2807afa5cba"},
+]
+
+[[package]]
 name = "backports-asyncio-runner"
 version = "1.2.0"
 description = "Backport of asyncio.Runner, a context manager that controls event loop life cycle."
@@ -3027,6 +3039,35 @@ files = [
 ]
 
 [[package]]
+name = "mem0ai"
+version = "2.0.4"
+description = "Long-term memory for AI Agents"
+optional = false
+python-versions = "<4.0,>=3.10"
+groups = ["main"]
+files = [
+    {file = "mem0ai-2.0.4-py3-none-any.whl", hash = "sha256:920a39474bf4c2a5a7d4bb814e237aacd699c435d8e20db257c3b43568e7175e"},
+    {file = "mem0ai-2.0.4.tar.gz", hash = "sha256:0cffdbdaa961aa4371c707e5f90f25961ae0cf170169abf6aaf6adba14c6bca1"},
+]
+
+[package.dependencies]
+openai = ">=1.90.0"
+posthog = ">=4.5.0"
+protobuf = ">=5.29.6,<7.0.0"
+pydantic = ">=2.7.3"
+pytz = ">=2024.1"
+qdrant-client = ">=1.12.0"
+sqlalchemy = ">=2.0.31"
+
+[package.extras]
+dev = ["isort (>=5.13.2)", "pytest (>=8.2.2)", "ruff (>=0.6.5)"]
+extras = ["boto3 (>=1.34.0)", "elasticsearch (>=8.0.0,<9.0.0)", "fastembed (>=0.3.1)", "langchain (>=0.3.30,<1.0.0)", "langchain-community (>=0.3.27,<1.0.0)", "langchain-core (>=0.3.85,<1.0.0)", "opensearch-py (>=2.0.0)", "sentence-transformers (>=5.0.0)"]
+llms = ["google-genai (>=1.0.0)", "google-generativeai (>=0.3.0)", "groq (>=0.3.0)", "litellm (>=1.83.7)", "ollama (>=0.3.0)", "openai (>=1.90.0)", "together (>=0.2.10)", "vertexai (>=0.1.0)"]
+nlp = ["spacy (>=3.7.0)"]
+test = ["pytest (>=8.2.2)", "pytest-asyncio (>=0.23.7)", "pytest-mock (>=3.14.0)"]
+vector-stores = ["azure-identity (>=1.24.0)", "azure-search-documents (>=11.4.0b8)", "cassandra-driver (>=3.29.0)", "chromadb (>=0.4.24)", "databricks-sdk (>=0.63.0)", "dbutils (>=3.0.3)", "elasticsearch (>=8.0.0,<9.0.0)", "faiss-cpu (>=1.7.4)", "langchain-aws (>=0.2.23,<0.3.0)", "pinecone (<=7.3.0)", "pinecone-text (>=0.10.0)", "psycopg (>=3.2.8)", "psycopg-pool (>=3.2.6,<4.0.0)", "pymilvus (>=2.4.0,<2.6.0)", "pymochow (>=2.2.9)", "pymongo (>=4.13.2)", "pymysql (>=1.1.0)", "redis (>=5.0.0,<6.0.0)", "redisvl (>=0.1.0,<1.0.0)", "upstash-vector (>=0.6.0)", "valkey (>=6.0.0)", "vecs (>=0.4.0)", "weaviate-client (>=4.15.4,<5.0.0)"]
+
+[[package]]
 name = "multidict"
 version = "6.7.1"
 description = "multidict implementation"
@@ -3947,6 +3988,30 @@ pywin32 = {version = ">=226", markers = "platform_system == \"Windows\""}
 docs = ["portalocker[tests]"]
 redis = ["redis"]
 tests = ["coverage-conditional-plugin (>=0.9.0)", "portalocker[redis]", "pytest (>=5.4.1)", "pytest-cov (>=2.8.1)", "pytest-mypy (>=0.8.0)", "pytest-rerunfailures (>=15.0)", "pytest-timeout (>=2.1.0)", "sphinx (>=6.0.0)", "types-pywin32 (>=310.0.0.20250429)", "types-redis"]
+
+[[package]]
+name = "posthog"
+version = "7.16.3"
+description = "Integrate PostHog into any python application."
+optional = false
+python-versions = ">=3.10"
+groups = ["main"]
+files = [
+    {file = "posthog-7.16.3-py3-none-any.whl", hash = "sha256:f0cbaf25ac06211b87c0a43500673fa2d8de86eb1edb75b8bf688f1b884878ce"},
+    {file = "posthog-7.16.3.tar.gz", hash = "sha256:ff8972813c836ae4fcb634b499cf06d643bc3c4f49931218fe142e7aa8a39810"},
+]
+
+[package.dependencies]
+backoff = ">=1.10.0"
+distro = ">=1.5.0"
+requests = ">=2.7,<3.0"
+typing-extensions = ">=4.2.0"
+
+[package.extras]
+dev = ["django-stubs", "lxml", "mypy", "mypy-baseline", "packaging", "pre-commit", "pydantic (>=2.12.0)", "ruff", "setuptools", "tomli", "tomli_w", "twine", "types-requests", "types-setuptools", "wheel"]
+langchain = ["langchain (>=0.2.0)"]
+otel = ["opentelemetry-exporter-otlp-proto-http (>=1.20.0)", "opentelemetry-sdk (>=1.20.0)"]
+test = ["anthropic (>=0.72)", "claude-agent-sdk", "coverage", "django (>=5.2.8,<6.0)", "freezegun (==1.5.1)", "google-genai", "langchain-anthropic (>=1.0)", "langchain-community (>=0.4)", "langchain-core (>=1.0)", "langchain-openai (>=1.0)", "langgraph (>=1.0)", "langgraph-checkpoint (>=3.0.1)", "openai (>=2.0)", "opentelemetry-exporter-otlp-proto-http (>=1.20.0)", "opentelemetry-sdk (>=1.20.0)", "parameterized (>=0.8.1)", "pydantic (>=2.12.0)", "pytest", "pytest-asyncio", "pytest-bdd (>=8.1.0)", "pytest-timeout", "python-dateutil (>=2.9.0.post0)", "tiktoken (>=0.12.0)", "tzdata"]
 
 [[package]]
 name = "propcache"
@@ -4890,7 +4955,7 @@ description = "Python for Window Extensions"
 optional = false
 python-versions = "*"
 groups = ["main"]
-markers = "sys_platform == \"win32\" or platform_system == \"Windows\""
+markers = "platform_system == \"Windows\" or sys_platform == \"win32\""
 files = [
     {file = "pywin32-311-cp310-cp310-win32.whl", hash = "sha256:d03ff496d2a0cd4a5893504789d4a15399133fe82517455e78bad62efbb7f0a3"},
     {file = "pywin32-311-cp310-cp310-win_amd64.whl", hash = "sha256:797c2772017851984b97180b0bebe4b620bb86328e8a884bb626156295a63b3b"},
@@ -6441,4 +6506,4 @@ tests = ["pytest", "pytest-asyncio", "pytest-mock", "pytest-timeout", "pytest-xd
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "be6087dfbde98749464f82e0ce070b9d812e100210e03d2a6238ad8d6067283a"
+content-hash = "10b19bf0fcb00863b725337e9f8ba0276ce0e191098f73654ed05b013d32688f"

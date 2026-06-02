@@ -70,6 +70,9 @@ class RagRuntimeSettings:
     memory_context_budget_tokens: int
     planning_workspace_root: Optional[str]
     beads_command: str
+    memory_namespace_id: str
+    mem0_api_key: Optional[str]
+    mem0_user_id: Optional[str]
 
     @classmethod
     def from_env(cls, source: Mapping[str, str] | None = None) -> "RagRuntimeSettings":
@@ -205,12 +208,6 @@ class RagRuntimeSettings:
             raise ValueError(
                 f"MEMORY_HISTORY must be one of: {supported}; got {memory_history!r}"
             )
-        if memory_long_term not in _SUPPORTED_MEMORY_LONG_TERM:
-            supported = ", ".join(sorted(_SUPPORTED_MEMORY_LONG_TERM))
-            raise ValueError(
-                "MEMORY_LONG_TERM must be one of: "
-                f"{supported}; got {memory_long_term!r}"
-            )
         if memory_context_budget_tokens <= 0:
             raise ValueError("MEMORY_CONTEXT_BUDGET_TOKENS must be greater than 0")
         planning_workspace_root = (
@@ -221,6 +218,16 @@ class RagRuntimeSettings:
             or None
         )
         beads_command = _get_env(env, "BEADS_COMMAND", "bd") or "bd"
+        memory_namespace_id = (
+            _get_env(
+                env,
+                "MEMORY_NAMESPACE_ID",
+                _get_env(env, "MOONMIND_NAMESPACE_ID", "default"),
+            )
+            or "default"
+        ).strip() or "default"
+        mem0_api_key = _get_env(env, "MEM0_API_KEY") or None
+        mem0_user_id = _get_env(env, "MEM0_USER_ID") or None
 
         return cls(
             qdrant_url=qdrant_url,
@@ -253,6 +260,9 @@ class RagRuntimeSettings:
             memory_context_budget_tokens=memory_context_budget_tokens,
             planning_workspace_root=planning_workspace_root,
             beads_command=beads_command,
+            memory_namespace_id=memory_namespace_id,
+            mem0_api_key=mem0_api_key,
+            mem0_user_id=mem0_user_id,
         )
 
     def resolved_transport(self, preferred: Optional[str]) -> str:
@@ -404,3 +414,21 @@ class RagRuntimeSettings:
     def resolved_planning_workspace_root(self) -> Path:
         root = self.planning_workspace_root or os.getcwd()
         return Path(root).resolve()
+
+    def long_term_memory_enabled(self) -> bool:
+        """Return whether Plane C Mem0 retrieval/writeback should run."""
+
+        return self.memory_enabled and self.memory_long_term == "mem0"
+
+    def long_term_memory_execution_reason(self) -> tuple[bool, str]:
+        """Return long-term memory execution status and a non-secret reason."""
+
+        if not self.memory_enabled:
+            return False, "memory_disabled"
+        if self.memory_long_term == "off":
+            return False, "long_term_memory_disabled"
+        if self.memory_long_term != "mem0":
+            return False, "long_term_memory_unsupported"
+        if not self.mem0_api_key:
+            return False, "mem0_api_key_missing"
+        return True, "ok"
