@@ -244,7 +244,6 @@ export function OperationsSettingsSection({
   const [runSmokeCheck, setRunSmokeCheck] = useState(false);
   const [pauseWork, setPauseWork] = useState(false);
   const [pruneOldImages, setPruneOldImages] = useState(false);
-  const [deploymentReason, setDeploymentReason] = useState('');
 
   const {
     data: snapshot,
@@ -419,7 +418,6 @@ export function OperationsSettingsSection({
     mutationFn: async () => {
       const repository = targetRepository || activeTargetRepository?.repository || '';
       const reference = targetReference.trim();
-      const reason = deploymentReason.trim();
       if (!repository || !reference) {
         throw new Error('Target image is required.');
       }
@@ -462,7 +460,6 @@ export function OperationsSettingsSection({
           runSmokeCheck,
           pauseWork,
           pruneOldImages,
-          ...(reason ? { reason } : {}),
         }),
       });
       if (!response.ok) {
@@ -485,7 +482,6 @@ export function OperationsSettingsSection({
         level: 'ok',
         text: `Deployment update queued: ${result.deploymentUpdateRunId}`,
       });
-      setDeploymentReason('');
       queryClient.invalidateQueries({ queryKey: ['deployment-stack', DEPLOYMENT_STACK] });
     },
     onError: (mutationError: Error) => {
@@ -983,17 +979,6 @@ export function OperationsSettingsSection({
                   Prune old images after success
                 </label>
               </fieldset>
-
-              <label className="block space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>Reason (optional)</span>
-                <input
-                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                  type="text"
-                  maxLength={200}
-                  value={deploymentReason}
-                  onChange={(event) => setDeploymentReason(event.target.value)}
-                />
-              </label>
 
               <button
                 type="submit"
