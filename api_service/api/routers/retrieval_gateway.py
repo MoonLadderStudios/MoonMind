@@ -6,7 +6,7 @@ import logging
 import os
 import secrets
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
@@ -49,6 +49,7 @@ class RetrievalAuthContext:
 class RetrievalQuery(BaseModel):
     query: str = Field(..., min_length=1)
     top_k: Optional[int] = Field(default=None, ge=1, le=50)
+    collections: List[str] = Field(default_factory=list, max_length=16)
     filters: Dict[str, str] = Field(default_factory=dict)
     overlay_policy: str = Field(default="include", pattern="^(include|skip)$")
     budgets: Dict[str, int] = Field(default_factory=dict)
@@ -63,6 +64,18 @@ class RetrievalQuery(BaseModel):
             raise ValueError(
                 f"Unsupported retrieval budget keys: {joined}. Allowed keys: latency_ms, tokens."
             )
+
+        normalized_collections: list[str] = []
+        seen_collections: set[str] = set()
+        for collection in self.collections:
+            value = str(collection).strip()
+            if not value:
+                raise ValueError("Retrieval collection names cannot be blank.")
+            if value in seen_collections:
+                continue
+            seen_collections.add(value)
+            normalized_collections.append(value)
+        self.collections = normalized_collections
 
         unsupported_filters = sorted(set(self.filters) - SESSION_SCOPE_FILTER_KEYS)
         if unsupported_filters:
@@ -317,6 +330,7 @@ async def retrieve_context_pack(
             top_k=payload.top_k or service.settings.similarity_top_k,
             overlay_policy=payload.overlay_policy,
             budgets=payload.budgets,
+            collections=payload.collections or None,
             transport="direct",
             initiation_mode="session",
             planning_ref=payload.planning_ref,

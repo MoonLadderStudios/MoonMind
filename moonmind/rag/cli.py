@@ -58,6 +58,7 @@ def run_search(
     overlay_policy: str,
     transport: str | None,
     output_file: Path | None,
+    collection_args: Sequence[str] | None = None,
     planning_ref: str | None = None,
 ) -> ContextPack:
     if not query.strip():
@@ -85,6 +86,7 @@ def run_search(
             top_k=top_k or settings.similarity_top_k,
             overlay_policy=overlay_policy,
             budgets=budgets,
+            collections=collection_args,
             transport=resolved_transport,
             planning_ref=planning_ref,
         )

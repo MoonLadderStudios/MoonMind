@@ -6,7 +6,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, MutableMapping, Optional
+from typing import Mapping, MutableMapping, Optional, Sequence
 
 from moonmind.config.settings import settings as app_settings
 from moonmind.utils.env_bool import env_to_bool
@@ -24,6 +24,17 @@ def _get_env(
             return str(source[key])
         return default
     return os.getenv(key, default)
+
+def _parse_collection_names(raw: str | None) -> tuple[str, ...]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for item in str(raw or "").split(","):
+        name = item.strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+    return tuple(names)
 
 @dataclass(slots=True)
 class RagRuntimeSettings:
@@ -77,11 +88,7 @@ class RagRuntimeSettings:
         )
         vector_collections_raw = _get_env(env, "VECTOR_STORE_COLLECTION_NAMES")
         if vector_collections_raw:
-            parsed_collections = tuple(
-                item.strip()
-                for item in vector_collections_raw.split(",")
-                if item.strip()
-            )
+            parsed_collections = _parse_collection_names(vector_collections_raw)
             vector_collections = (
                 vector_collection,
                 *(
@@ -254,6 +261,32 @@ class RagRuntimeSettings:
         if self.retrieval_gateway_url:
             return "gateway"
         return "direct"
+
+    def resolve_collections(
+        self, requested: Sequence[str] | None = None
+    ) -> tuple[str, ...]:
+        """Return explicit collections or the configured retrieval collection set."""
+
+        names: list[str] = []
+        seen: set[str] = set()
+        for item in requested or self.vector_collections:
+            name = str(item).strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            names.append(name)
+        if not names:
+            raise ValueError("At least one retrieval collection is required.")
+        allowed = set(self.vector_collections)
+        outside_allowed = [name for name in names if name not in allowed]
+        if outside_allowed:
+            allowed_list = ", ".join(self.vector_collections)
+            requested_list = ", ".join(outside_allowed)
+            raise ValueError(
+                "Requested retrieval collections are not configured: "
+                f"{requested_list}. Allowed collections: {allowed_list}."
+            )
+        return tuple(names)
 
     @staticmethod
     def retrieval_gateway_auth_configured(

@@ -129,11 +129,11 @@ class _StubEmbedder:
 
 class _StubQdrant:
     def __init__(self) -> None:
-        self.ensured = False
+        self.ensured: list[str | None] = []
         self.calls: list[dict[str, object]] = []
 
-    def ensure_collection_ready(self) -> None:
-        self.ensured = True
+    def ensure_collection_ready(self, collection_name=None) -> None:
+        self.ensured.append(collection_name)
 
     def collection_health(self, **kwargs):
         return []
@@ -166,7 +166,7 @@ def test_retrieve_direct_flow_uses_embedding_and_qdrant_search() -> None:
     )
 
     assert embedder.calls == ["How to integrate RAG?"]
-    assert qdrant.ensured is True
+    assert qdrant.ensured == ["test_collection"]
     assert len(qdrant.calls) == 1
     assert qdrant.calls[0]["collections"] == ("test_collection",)
     assert pack.transport == "direct"
@@ -277,6 +277,7 @@ def test_retrieve_gateway_flow_skips_embedding_and_preserves_contract_shape(monk
         "top_k": 3,
         "overlay_policy": "skip",
         "budgets": {"tokens": 5000},
+        "collections": ["test_collection"],
     }
     assert request_kwargs["headers"] == {
         "X-MoonMind-Retrieval-Token": "scoped-retrieval-token"

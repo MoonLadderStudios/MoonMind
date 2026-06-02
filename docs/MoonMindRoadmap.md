@@ -137,7 +137,7 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - [ ] **5.3** Context pack assembly wired into agent runs — Primitives exist; not integrated into Temporal activity execution
 - [x] **5.4** Index health monitoring — Mission Control shows indexed collections, document counts, and freshness
 - [ ] **5.5** Incremental re-indexing — Full reindex only; no delta/incremental update path
-- [ ] **5.6** Multi-collection retrieval — Single-collection queries; no cross-collection or federated search
+- [x] **5.6** Multi-collection retrieval — Federated retrieval supports configured and request-selected collection sets
 
 ---
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable, List, Mapping, MutableMapping, Optional, Sequence
@@ -327,7 +328,9 @@ class RagQdrantClient:
 
     @classmethod
     def _vector_config_summary(cls, info: Any) -> tuple[int | None, str | None]:
-        vectors = getattr(getattr(getattr(info, "config", None), "params", None), "vectors", None)
+        vectors = getattr(
+            getattr(getattr(info, "config", None), "params", None), "vectors", None
+        )
         if isinstance(vectors, Mapping):
             first = next(iter(vectors.values()), None)
             return cls._vector_params_summary(first)
@@ -347,36 +350,29 @@ class RagQdrantClient:
         query_vector: Sequence[float],
         filters: Mapping[str, Any],
         top_k: int,
+        collections: Sequence[str] | None = None,
         overlay_policy: str,
         overlay_collection: Optional[str],
-        collections: Sequence[str] | None = None,
         trust_overrides: Optional[Mapping[str, str]] = None,
     ) -> SearchResult:
         start = time.perf_counter()
         filter_obj = self._build_filter(filters)
-        canonical = []
-        target_collections = tuple(collections or (self.collection,))
-        for collection_name in target_collections:
-            canonical.extend(
-                self._search_points(
-                    collection_name=collection_name,
-                    query_vector=query_vector,
-                    limit=top_k,
-                    with_payload=True,
-                    with_vectors=False,
-                    query_filter=filter_obj,
-                )
-            )
+        target_collections = self._resolve_collections(collections)
+        canonical = self._search_canonical_collections(
+            collection_names=target_collections,
+            query_vector=query_vector,
+            limit=top_k,
+            query_filter=filter_obj,
+        )
+        canonical = self._rank_points(canonical)
         overlay_points = []
         if overlay_policy == "include" and overlay_collection:
             try:
                 overlay_filter = self._build_filter(filters)
-                overlay_points = self._search_points(
+                overlay_points = self._search_collection_points(
                     collection_name=overlay_collection,
                     query_vector=query_vector,
                     limit=top_k,
-                    with_payload=True,
-                    with_vectors=False,
                     query_filter=overlay_filter,
                 )
             except UnexpectedResponse:
@@ -385,6 +381,77 @@ class RagQdrantClient:
         merge.sort(key=lambda item: item.score, reverse=True)
         latency_ms = (time.perf_counter() - start) * 1000
         return SearchResult(items=merge[:top_k], latency_ms=latency_ms)
+
+    def _resolve_collections(self, collections: Sequence[str] | None) -> tuple[str, ...]:
+        names: list[str] = []
+        seen: set[str] = set()
+        for item in collections or (self.collection,):
+            name = str(item).strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            names.append(name)
+        if not names:
+            raise RuntimeError("At least one Qdrant collection is required.")
+        return tuple(names)
+
+    def _search_canonical_collections(
+        self,
+        *,
+        collection_names: Sequence[str],
+        query_vector: Sequence[float],
+        limit: int,
+        query_filter: qmodels.Filter | None,
+    ) -> list[qmodels.ScoredPoint]:
+        if len(collection_names) == 1:
+            return self._search_collection_points(
+                collection_name=collection_names[0],
+                query_vector=query_vector,
+                limit=limit,
+                query_filter=query_filter,
+            )
+
+        canonical: list[qmodels.ScoredPoint] = []
+        with ThreadPoolExecutor(max_workers=len(collection_names)) as executor:
+            futures = [
+                executor.submit(
+                    self._search_collection_points,
+                    collection_name=collection_name,
+                    query_vector=query_vector,
+                    limit=limit,
+                    query_filter=query_filter,
+                )
+                for collection_name in collection_names
+            ]
+            for future in futures:
+                canonical.extend(future.result())
+        return canonical
+
+    def _search_collection_points(
+        self,
+        *,
+        collection_name: str,
+        query_vector: Sequence[float],
+        limit: int,
+        query_filter: qmodels.Filter | None,
+    ) -> list[qmodels.ScoredPoint]:
+        points = self._search_points(
+            collection_name=collection_name,
+            query_vector=query_vector,
+            limit=limit,
+            with_payload=True,
+            with_vectors=False,
+            query_filter=query_filter,
+        )
+        for point in points:
+            payload = point.payload or {}
+            payload.setdefault("collection", collection_name)
+            point.payload = payload
+        return points
+
+    @staticmethod
+    def _rank_points(points: Iterable[qmodels.ScoredPoint]) -> list[qmodels.ScoredPoint]:
+        return sorted(points, key=lambda point: float(point.score or 0.0), reverse=True)
 
     def _search_points(
         self,
