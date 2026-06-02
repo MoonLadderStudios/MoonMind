@@ -763,6 +763,7 @@ async def task_settings_route(
         "workerPause": {
             "get": "/api/system/worker-pause",
             "post": "/api/system/worker-pause",
+            "shardHealth": "/api/workflows/codex/shards",
         },
         "runtimeConfig": runtime_config,
         "settingsPermissions": sorted(settings_permissions_for_user(_user)),

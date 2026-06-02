@@ -61,6 +61,32 @@ const WorkerSnapshotSchema = z.object({
 
 type WorkerSnapshot = z.infer<typeof WorkerSnapshotSchema>;
 
+const WorkerShardHealthSchema = z.object({
+  shards: z
+    .array(
+      z.object({
+        queueName: z.string(),
+        status: z.string(),
+        hashModulo: z.number().optional(),
+        workerHostname: z.string().nullable().optional(),
+        volumeName: z.string().nullable().optional(),
+        volumeStatus: z.string().nullable().optional(),
+        volumeLastVerifiedAt: z.string().nullable().optional(),
+        volumeWorkerAffinity: z.string().nullable().optional(),
+        volumeNotes: z.string().nullable().optional(),
+        latestRunId: z.string().nullable().optional(),
+        latestRunStatus: z.string().nullable().optional(),
+        latestPreflightStatus: z.string().nullable().optional(),
+        latestPreflightMessage: z.string().nullable().optional(),
+        latestPreflightCheckedAt: z.string().nullable().optional(),
+      }),
+    )
+    .default([]),
+});
+
+type WorkerShardHealth = z.infer<typeof WorkerShardHealthSchema>;
+type WorkerShard = WorkerShardHealth['shards'][number];
+
 const DeploymentStackStateSchema = z
   .object({
     stack: z.string(),
@@ -159,6 +185,7 @@ type DeploymentAction = DeploymentStackState['recentActions'][number];
 export interface WorkerPauseConfig {
   get: string;
   post: string;
+  shardHealth?: string;
   pollIntervalMs?: number;
 }
 
@@ -220,6 +247,21 @@ function operationIdempotencyKey(action: string): string {
   return `worker-${action}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function workerStatusTone(status: string | null | undefined): string {
+  const normalized = String(status || '').toLowerCase();
+  if (normalized === 'active' || normalized === 'healthy' || normalized === 'passed') {
+    return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300';
+  }
+  if (normalized === 'offline' || normalized === 'failed' || normalized === 'error') {
+    return 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300';
+  }
+  return 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300';
+}
+
+function workerDisplayName(shard: WorkerShard): string {
+  return shard.workerHostname || shard.queueName;
+}
+
 export function OperationsSettingsSection({
   workerPauseConfig,
 }: {
@@ -267,6 +309,32 @@ export function OperationsSettingsSection({
     enabled: workerPauseConfig !== null,
     refetchInterval:
       workerPauseConfig !== null
+        ? Math.max(1000, Number(workerPauseConfig.pollIntervalMs) || 5000)
+        : false,
+  });
+
+  const {
+    data: shardHealth,
+    isLoading: isShardHealthLoading,
+    isError: isShardHealthError,
+    error: shardHealthError,
+  } = useQuery<WorkerShardHealth>({
+    queryKey: ['worker-shard-health'],
+    queryFn: async () => {
+      if (!workerPauseConfig?.shardHealth) {
+        throw new Error('Worker shard health is not configured for this deployment.');
+      }
+      const response = await fetch(workerPauseConfig.shardHealth, {
+        headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to fetch worker shard health: ${response.statusText}`);
+      }
+      return WorkerShardHealthSchema.parse(await response.json());
+    },
+    enabled: Boolean(workerPauseConfig?.shardHealth),
+    refetchInterval:
+      workerPauseConfig?.shardHealth
         ? Math.max(1000, Number(workerPauseConfig.pollIntervalMs) || 5000)
         : false,
   });
@@ -631,13 +699,21 @@ export function OperationsSettingsSection({
   const system = snapshot?.system ?? {};
   const metrics = snapshot?.metrics ?? {};
   const commands = snapshot?.commands ?? [];
+  const hasShardHealthConfig = Boolean(workerPauseConfig?.shardHealth);
+  const workerShards = shardHealth?.shards ?? [];
   const unavailableCommands = commands.filter((command) => !command.available);
   const commandTargets = uniqueStrings(commands.map((command) => command.target || 'workers'));
-  const fleetHealthStatus = metrics.staleRunning && metrics.staleRunning > 0
-    ? 'Attention required'
-    : isError
-      ? 'Unavailable'
-      : 'Healthy';
+  const hasUnavailableWorker = workerShards.some((shard) => {
+    const status = String(shard.status || '').toLowerCase();
+    const preflightStatus = String(shard.latestPreflightStatus || '').toLowerCase();
+    return status === 'offline' || preflightStatus === 'failed';
+  });
+  const fleetHealthStatus =
+    (metrics.staleRunning && metrics.staleRunning > 0) || hasUnavailableWorker
+      ? 'Attention required'
+      : isError || isShardHealthError
+        ? 'Unavailable'
+        : 'Healthy';
   const isPaused = Boolean(system.workersPaused);
   const stateLabel = isPaused
     ? system.mode === 'quiesce'
@@ -1099,6 +1175,102 @@ export function OperationsSettingsSection({
                   </div>
                 </div>
               </div>
+              {hasShardHealthConfig ? (
+                <div className="mt-5">
+                  <h5 className="text-sm font-semibold text-slate-900 dark:text-white">
+                    Per-worker health
+                  </h5>
+                  {isShardHealthLoading ? (
+                    <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">
+                      Loading per-worker health...
+                    </p>
+                  ) : isShardHealthError ? (
+                    <p className="mt-3 text-sm text-rose-700 dark:text-rose-400">
+                      {(shardHealthError as Error).message}
+                    </p>
+                  ) : workerShards.length > 0 ? (
+                    <div className="mt-3 overflow-x-auto">
+                      <table className="min-w-full divide-y divide-slate-200 text-left text-sm dark:divide-slate-800">
+                        <thead className="text-xs uppercase text-slate-500 dark:text-slate-400">
+                          <tr>
+                            <th scope="col" className="px-3 py-2 font-semibold">
+                              Worker
+                            </th>
+                            <th scope="col" className="px-3 py-2 font-semibold">
+                              Status
+                            </th>
+                            <th scope="col" className="px-3 py-2 font-semibold">
+                              Queue
+                            </th>
+                            <th scope="col" className="px-3 py-2 font-semibold">
+                              Auth volume
+                            </th>
+                            <th scope="col" className="px-3 py-2 font-semibold">
+                              Latest run
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                          {workerShards.map((shard) => (
+                            <tr key={shard.queueName}>
+                              <td className="px-3 py-3 align-top font-medium text-slate-900 dark:text-white">
+                                {workerDisplayName(shard)}
+                              </td>
+                              <td className="px-3 py-3 align-top">
+                                <span
+                                  className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${workerStatusTone(
+                                    shard.status,
+                                  )}`}
+                                >
+                                  {formatStatusLabel(shard.status)}
+                                </span>
+                              </td>
+                              <td className="px-3 py-3 align-top text-slate-600 dark:text-slate-300">
+                                <div>{shard.queueName}</div>
+                                {shard.hashModulo ? (
+                                  <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                    Hash modulo {shard.hashModulo}
+                                  </div>
+                                ) : null}
+                              </td>
+                              <td className="px-3 py-3 align-top text-slate-600 dark:text-slate-300">
+                                <div>{shard.volumeName || 'No auth volume'}</div>
+                                {shard.volumeStatus ? (
+                                  <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                    {formatStatusLabel(shard.volumeStatus)}
+                                    {shard.volumeLastVerifiedAt
+                                      ? ` | Verified ${shard.volumeLastVerifiedAt}`
+                                      : ''}
+                                  </div>
+                                ) : null}
+                              </td>
+                              <td className="px-3 py-3 align-top text-slate-600 dark:text-slate-300">
+                                <div>
+                                  {shard.latestRunStatus
+                                    ? formatStatusLabel(shard.latestRunStatus)
+                                    : 'No runs'}
+                                </div>
+                                {shard.latestPreflightStatus ? (
+                                  <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                    Preflight {formatStatusLabel(shard.latestPreflightStatus)}
+                                    {shard.latestPreflightMessage
+                                      ? ` | ${shard.latestPreflightMessage}`
+                                      : ''}
+                                  </div>
+                                ) : null}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">
+                      No worker shards registered.
+                    </p>
+                  )}
+                </div>
+              ) : null}
             </section>
 
             <div className="grid gap-6 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
