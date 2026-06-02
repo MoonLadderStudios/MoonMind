@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any
-from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
@@ -122,6 +121,15 @@ def _list_registered_tools() -> list[Any]:
     return tools
 
 
+def _list_streamable_callable_tools() -> list[Any]:
+    tools = _queue_registry.list_tools()
+    if _jira_registry is not None:
+        tools = tools + _jira_registry.list_tools()
+    if _jules_registry is not None:
+        tools = tools + _jules_registry.list_tools()
+    return tools
+
+
 async def _dispatch_tool_call(payload: ToolCallRequest, user: User) -> Any:
     if _execution_tool_registry.has_tool(payload.tool):
         raise HTTPException(
@@ -184,14 +192,22 @@ def _json_rpc_error(
 
 def _validate_streamable_accept_header(request: Request) -> None:
     accept = request.headers.get("accept", "")
-    if "application/json" not in accept or "text/event-stream" not in accept:
+    accepted_types = [
+        value.split(";", maxsplit=1)[0].strip()
+        for value in accept.split(",")
+        if value.strip()
+    ]
+    if accepted_types and not any(
+        value in {"application/json", "*/*"} or value.endswith("/*")
+        for value in accepted_types
+    ):
         raise HTTPException(
             status_code=status.HTTP_406_NOT_ACCEPTABLE,
             detail={
                 "code": "mcp_accept_header_required",
                 "message": (
                     "MCP Streamable HTTP clients must send an Accept header "
-                    "containing application/json and text/event-stream."
+                    "that allows application/json."
                 ),
             },
         )
@@ -205,22 +221,6 @@ def _validate_protocol_version_header(request: Request) -> None:
             detail={
                 "code": "unsupported_mcp_protocol_version",
                 "message": f"Unsupported MCP protocol version: {version}",
-            },
-        )
-
-
-def _validate_origin_header(request: Request) -> None:
-    origin = request.headers.get("origin")
-    if not origin:
-        return
-    parsed = urlparse(origin)
-    request_host = request.headers.get("host", "")
-    if parsed.scheme not in {"http", "https"} or parsed.netloc != request_host:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "mcp_origin_not_allowed",
-                "message": "MCP Streamable HTTP Origin header is not allowed.",
             },
         )
 
@@ -255,6 +255,20 @@ def _tool_result_payload(result: Any) -> dict[str, Any]:
         "content": [{"type": "text", "text": text}],
         "structuredContent": structured_content,
         "isError": False,
+    }
+
+
+def _tool_error_payload(detail: Any) -> dict[str, Any]:
+    if isinstance(detail, dict):
+        text = str(detail.get("message") or detail.get("code") or detail)
+        structured_content = detail
+    else:
+        text = str(detail)
+        structured_content = {"message": text}
+    return {
+        "content": [{"type": "text", "text": text}],
+        "structuredContent": structured_content,
+        "isError": True,
     }
 
 
@@ -311,7 +325,8 @@ async def _handle_json_rpc_request(message: Any, user: User) -> dict[str, Any] |
             return _json_rpc_result(request_id, {})
         if method == "tools/list":
             tools = [
-                tool.model_dump(by_alias=True) for tool in _list_registered_tools()
+                tool.model_dump(by_alias=True)
+                for tool in _list_streamable_callable_tools()
             ]
             return _json_rpc_result(request_id, {"tools": tools})
         if method == "tools/call":
@@ -335,6 +350,8 @@ async def _handle_json_rpc_request(message: Any, user: User) -> dict[str, Any] |
             )
             return _json_rpc_result(request_id, _tool_result_payload(result))
     except HTTPException as exc:
+        if method == "tools/call":
+            return _json_rpc_result(request_id, _tool_error_payload(exc.detail))
         return _json_rpc_error(
             request_id,
             code=-32000,
@@ -342,9 +359,13 @@ async def _handle_json_rpc_request(message: Any, user: User) -> dict[str, Any] |
             data=exc.detail,
         )
     except (ToolNotFoundError, ToolArgumentsValidationError) as exc:
+        if method == "tools/call":
+            return _json_rpc_result(request_id, _tool_error_payload(str(exc)))
         return _json_rpc_error(request_id, code=-32602, message=str(exc))
     except (JiraToolError, JulesClientError) as exc:
         mapped = _to_http_exception(exc)
+        if method == "tools/call":
+            return _json_rpc_result(request_id, _tool_error_payload(mapped.detail))
         return _json_rpc_error(
             request_id,
             code=-32000,
@@ -373,7 +394,6 @@ async def handle_streamable_http_post(
 
     _validate_streamable_accept_header(request)
     _validate_protocol_version_header(request)
-    _validate_origin_header(request)
     try:
         payload = await request.json()
     except Exception:
