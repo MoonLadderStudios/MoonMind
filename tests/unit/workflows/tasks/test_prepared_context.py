@@ -432,6 +432,51 @@ def test_execution_context_records_retrieval_and_memory_manifest_refs() -> None:
     assert bundle.memory_manifest_ref == memory.memory_manifest_ref
 
 
+def test_execution_context_records_budgeted_memory_context_ref() -> None:
+    bundle = build_execution_context_bundle(
+        workflow_id="workflow-1",
+        run_id="run-1",
+        logical_step_id="collect-evidence",
+        execution_ordinal=1,
+        memory_context={
+            "tokenBudget": 32,
+            "candidates": [
+                {
+                    "text": "Prefer the proven fix pattern for this error.",
+                    "source": "fix-pattern://signature-1",
+                    "plane": "history",
+                    "trustClass": "derived",
+                    "provenance": {
+                        "workflowId": "workflow-previous",
+                        "artifactRefs": ["artifact://fix-pattern-1"],
+                    },
+                    "recency": "2026-06-01T12:00:00Z",
+                    "tokenCost": 10,
+                }
+            ],
+        },
+    )
+
+    assert bundle.memory_context_ref is not None
+    assert bundle.memory_context_ref.startswith("memory-context-pack://sha256:")
+    assert bundle.to_manifest_projection()["context"]["memoryContextRef"] == (
+        bundle.memory_context_ref
+    )
+
+
+def test_execution_context_rejects_zero_memory_context_budget() -> None:
+    with pytest.raises(ValueError, match="token_budget must be positive"):
+        build_execution_context_bundle(
+            workflow_id="workflow-1",
+            run_id="run-1",
+            logical_step_id="collect-evidence",
+            memory_context={
+                "tokenBudget": 0,
+                "candidates": [],
+            },
+        )
+
+
 def test_retrieval_manifest_accepts_documented_retrieved_refs_key() -> None:
     retrieval = build_retrieval_manifest(
         {
