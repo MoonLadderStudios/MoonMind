@@ -53,10 +53,7 @@ from moonmind.workflows.skills.resolver import (
 from api_service.ui_boot import generate_boot_payload
 from api_service.ui_assets import MissionControlUIAssetsError, ui_assets
 
-from moonmind.workflows.temporal import (
-    TemporalExecutionNotFoundError,
-    TemporalExecutionService,
-)
+from moonmind.workflows.temporal import TemporalExecutionService
 
 router = APIRouter(prefix="", tags=["workflow-console"])
 
