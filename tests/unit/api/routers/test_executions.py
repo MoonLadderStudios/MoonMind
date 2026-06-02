@@ -9018,6 +9018,75 @@ async def test_mm773_hydrates_related_run_runtime_model_metadata() -> None:
     assert related["effort"] == "medium"
 
 
+@pytest.mark.asyncio
+async def test_mm773_hydrates_related_run_metadata_for_same_owner() -> None:
+    user = SimpleNamespace(id=uuid4(), is_superuser=False)
+    record = _build_execution_record(owner_id=str(user.id))
+    record.parameters = {
+        "task": {
+            "comparison": {
+                "kind": "model_runtime_comparison",
+                "sourceWorkflowId": "mm:source-run",
+            },
+        },
+    }
+    execution = _serialize_execution(record, user=user)
+    source = _build_execution_record(
+        state=MoonMindWorkflowState.COMPLETED,
+        owner_id=str(user.id),
+    )
+    source.workflow_id = "mm:source-run"
+    source.close_status = TemporalExecutionCloseStatus.COMPLETED
+    source.parameters = {"targetRuntime": "codex_cli", "model": "gpt-5.4"}
+    session = SimpleNamespace(get=AsyncMock(return_value=source))
+
+    hydrated = await _hydrate_related_run_metadata(
+        execution,
+        session=session,
+        user=user,
+    )
+    related = hydrated.model_dump(by_alias=True)["relatedRuns"][0]
+
+    assert related["status"] == "completed"
+    assert related["targetRuntime"] == "codex_cli"
+    assert related["model"] == "gpt-5.4"
+
+
+@pytest.mark.asyncio
+async def test_mm773_skips_related_run_metadata_for_foreign_owner() -> None:
+    user = SimpleNamespace(id=uuid4(), is_superuser=False)
+    record = _build_execution_record(owner_id=str(user.id))
+    record.parameters = {
+        "task": {
+            "comparison": {
+                "kind": "model_runtime_comparison",
+                "sourceWorkflowId": "mm:source-run",
+            },
+        },
+    }
+    execution = _serialize_execution(record, user=user)
+    source = _build_execution_record(
+        state=MoonMindWorkflowState.COMPLETED,
+        owner_id=str(uuid4()),
+    )
+    source.workflow_id = "mm:source-run"
+    source.close_status = TemporalExecutionCloseStatus.COMPLETED
+    source.parameters = {"targetRuntime": "codex_cli", "model": "gpt-5.4"}
+    session = SimpleNamespace(get=AsyncMock(return_value=source))
+
+    hydrated = await _hydrate_related_run_metadata(
+        execution,
+        session=session,
+        user=user,
+    )
+    related = hydrated.model_dump(by_alias=True)["relatedRuns"][0]
+
+    assert related["workflowId"] == "mm:source-run"
+    assert related["status"] is None
+    assert related["targetRuntime"] is None
+    assert related["model"] is None
+
+
 def test_failed_step_recovery_hydrates_checkpoint_artifact(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

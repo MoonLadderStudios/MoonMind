@@ -2338,9 +2338,7 @@ def _build_related_runs(
             )
 
     task_payload = params.get("task") if isinstance(params.get("task"), Mapping) else {}
-    comparison_source = (
-        task_payload.get("comparison") if isinstance(task_payload, Mapping) else None
-    )
+    comparison_source = task_payload.get("comparison")
     if isinstance(comparison_source, Mapping):
         source_workflow_id = str(
             comparison_source.get("sourceWorkflowId")
@@ -2368,9 +2366,7 @@ def _build_related_runs(
 def _execution_related_run_metadata(record: TemporalExecutionRecord) -> dict[str, Any]:
     params = record.parameters if isinstance(record.parameters, Mapping) else {}
     task_payload = params.get("task") if isinstance(params.get("task"), Mapping) else {}
-    runtime_payload = (
-        task_payload.get("runtime") if isinstance(task_payload, Mapping) else None
-    )
+    runtime_payload = task_payload.get("runtime")
     if not isinstance(runtime_payload, Mapping):
         runtime_payload = {}
     state_value = _enum_value(getattr(record, "state", None)) or None
@@ -2395,10 +2391,25 @@ def _execution_related_run_metadata(record: TemporalExecutionRecord) -> dict[str
     }
 
 
+def _execution_record_visible_to_user(
+    record: TemporalExecutionRecord,
+    user: User,
+) -> bool:
+    search_attributes = dict(getattr(record, "search_attributes", None) or {})
+    record_owner_type = _enum_value(getattr(record, "owner_type", None))
+    if record_owner_type is None:
+        record_owner_type = _normalize_owner_type(record, search_attributes)
+    record_owner_id = str(getattr(record, "owner_id", "") or "").strip()
+    if not record_owner_id:
+        record_owner_id = _coerce_temporal_scalar(search_attributes.get("mm_owner_id"))
+    return record_owner_type == "user" and record_owner_id == _owner_id(user)
+
+
 async def _hydrate_related_run_metadata(
     execution: ExecutionModel,
     *,
     session: AsyncSession | None,
+    user: User | None = None,
 ) -> ExecutionModel:
     if session is None or not execution.related_runs:
         return execution
@@ -2417,6 +2428,13 @@ async def _hydrate_related_run_metadata(
             hydrated.append(related_run)
             continue
         if record is None:
+            hydrated.append(related_run)
+            continue
+        if (
+            user is not None
+            and not _is_execution_admin(user)
+            and not _execution_record_visible_to_user(record, user)
+        ):
             hydrated.append(related_run)
             continue
         metadata = _execution_related_run_metadata(record)
@@ -7520,7 +7538,11 @@ async def describe_execution(
         )
     execution = _serialize_execution(record, user=user)
     execution = await _enrich_execution_dependencies(execution, service=service)
-    execution = await _hydrate_related_run_metadata(execution, session=session)
+    execution = await _hydrate_related_run_metadata(
+        execution,
+        session=session,
+        user=user,
+    )
     execution = await _hydrate_provider_profile_metadata(execution, session)
     if execution.workflow_type == "MoonMind.Run":
         if _execution_uses_live_workflow_queries(execution):
