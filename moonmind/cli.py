@@ -60,6 +60,11 @@ def rag_search(
         "--json",
         help="Print full ContextPack JSON to stdout instead of markdown context text.",
     ),
+    planning_ref: Optional[str] = typer.Option(
+        None,
+        "--planning-ref",
+        help="Optional Beads work-item id for Planning Memory prefetch.",
+    ),
 ) -> None:
     try:
         pack = rag_cli.run_search(
@@ -70,6 +75,7 @@ def rag_search(
             overlay_policy=overlay.lower(),
             transport=transport.lower() if transport else None,
             output_file=output_file,
+            planning_ref=planning_ref,
         )
     except rag_cli.CliError as exc:
         typer.secho(f"Error: {exc}", fg=typer.colors.RED)
@@ -176,4 +182,3 @@ def main() -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     main()
-

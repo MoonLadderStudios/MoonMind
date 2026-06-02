@@ -425,7 +425,7 @@ postprocessors:
 evaluation:
  datasets:
  - name: "smoke"
- path: "./eval/smoke.jsonl"
+ path: "./examples/eval/smoke.jsonl"
  metrics:
  - name: "hitRate@10"
  threshold: 0.8
@@ -463,6 +463,12 @@ moonmind manifest run -f examples/readers-full-example.yaml
 # Evaluate a manifest's retriever against a dataset
 moonmind manifest evaluate -f examples/readers-full-example.yaml --dataset smoke
 ```
+
+The shipped `examples/eval/smoke.jsonl` dataset is the baseline golden set for
+MM-756. Each JSONL row declares the query, `relevant_ids`, and the committed
+`retrieved_ids` order used for deterministic baseline scoring. The evaluator
+computes `hitRate@k` and `ndcg@k` from those values and compares them with the
+manifest thresholds.
 
 **Temporal submission (API)**
 

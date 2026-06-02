@@ -132,7 +132,7 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 
 ### Remaining tasks
 - [ ] **5.1** End-to-end manifest ingest testing — Manifest pipeline built but not fully tested against live data sources
-- [ ] **5.2** RAG retrieval quality validation — Evaluation framework exists (`manifest/evaluation.py`) but no golden datasets or baseline metrics established
+- [x] **5.2** RAG retrieval quality validation — Golden smoke dataset and baseline `hitRate@10` / `ndcg@10` thresholds established for `manifest/evaluation.py`
 - [ ] **5.3** Context pack assembly wired into agent runs — Primitives exist; not integrated into Temporal activity execution
 - [ ] **5.4** Index health monitoring — No dashboard view of indexed collections, document counts, or freshness
 - [ ] **5.5** Incremental re-indexing — Full reindex only; no delta/incremental update path
@@ -149,13 +149,14 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - Fix Patterns / Error Signatures procedural memory primitive
   (`moonmind/memory/procedural.py`) with compact evidence-backed JSONL
   storage and prepared-context projection
+- Planning Memory (Beads / Plane A) runtime adapter with optional context-pack prefetch
 
 ### Remaining tasks
 - [ ] **6.1** Run Digests (Plane B — task history summaries) — Architecture defined, no implementation
 - [ ] **6.3** Long-Term Memory integration (Mem0 / Plane C) — Architecture defined, no integration
-- [ ] **6.4** Planning Memory (Beads / Plane A) — Architecture defined, no integration
-- [ ] **6.5** Token budgeting & provenance tracking — Designed in memory arch, not implemented
-- [ ] **6.6** Memory feature flags (`MEMORY_ENABLED`, etc.) — Defined in spec, not in codebase
+- [x] **6.4** Planning Memory (Beads / Plane A) — Runtime adapter and optional context-pack prefetch integrated (MM-765)
+- [ ] **6.5** Token budgeting & provenance tracking — Designed in memory arch; Planning Memory includes bounded context and provenance, broader memory planes remain pending
+- [ ] **6.6** Memory feature flags (`MEMORY_ENABLED`, etc.) — Planning Memory flags implemented; broader Plane B/C flags remain pending
 
 ---
 
