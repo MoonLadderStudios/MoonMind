@@ -737,26 +737,13 @@ export function OperationsSettingsSection({
         className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm"
         aria-label="Deployment Update"
       >
-        <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
-          <div className="space-y-2">
-            <h4 className="text-lg font-semibold text-slate-900 dark:text-white">
-              Deployment Update
-            </h4>
-            <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-400">
-              Update the configured MoonMind image for the allowlisted Compose stack.
-            </p>
-          </div>
-          {deploymentNotice ? (
-            <div
-              className={`rounded-2xl border px-4 py-3 text-sm ${
-                deploymentNotice.level === 'error'
-                  ? 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-400'
-                  : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-400'
-              }`}
-            >
-              {deploymentNotice.text}
-            </div>
-          ) : null}
+        <div className="space-y-2">
+          <h4 className="text-lg font-semibold text-slate-900 dark:text-white">
+            Deployment Update
+          </h4>
+          <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-400">
+            Update the configured MoonMind image for the allowlisted Compose stack.
+          </p>
         </div>
 
         {isDeploymentStateLoading || areImageTargetsLoading ? (
@@ -1063,6 +1050,18 @@ export function OperationsSettingsSection({
               >
                 Submit deployment update
               </button>
+
+              {deploymentNotice ? (
+                <div
+                  className={`rounded-2xl border px-4 py-3 text-sm ${
+                    deploymentNotice.level === 'error'
+                      ? 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-400'
+                      : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-400'
+                  }`}
+                >
+                  {deploymentNotice.text}
+                </div>
+              ) : null}
             </form>
           </div>
         )}
