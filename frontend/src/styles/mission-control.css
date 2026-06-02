@@ -5370,7 +5370,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   font-family: var(--mm-font-mono);
   margin: 0;
   overflow-wrap: anywhere;
-  word-break: break-word;
 }
 
 .td-hero .meta-inline .dot {
