@@ -9,11 +9,14 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+_METRIC_NAME_RE = re.compile(r"^(?P<name>[A-Za-z]+)@(?P<k>[1-9][0-9]*)$")
 
 @dataclass
 class MetricScore:
@@ -156,7 +159,7 @@ def _load_dataset(path: str) -> List[Dict[str, Any]]:
 
     Each line must be a JSON object with at least:
     - ``query``: the search query string
-    - ``relevant_ids``: list of relevant document IDs
+    - ``relevant_ids`` or ``gold``: list of relevant document IDs
     """
     p = Path(path)
     if not p.exists():
@@ -175,9 +178,64 @@ def _load_dataset(path: str) -> List[Dict[str, Any]]:
             ) from exc
         if "query" not in entry:
             raise ValueError(f"Missing 'query' field on line {line_num} of {p}")
+        if "relevant_ids" not in entry:
+            if "gold" in entry:
+                entry["relevant_ids"] = entry["gold"]
+            else:
+                raise ValueError(
+                    f"Missing 'relevant_ids' field on line {line_num} of {p}"
+                )
+        if not isinstance(entry["relevant_ids"], list) or not all(
+            isinstance(doc_id, str) and doc_id for doc_id in entry["relevant_ids"]
+        ):
+            raise ValueError(
+                f"Field 'relevant_ids' must be a non-empty string list on line "
+                f"{line_num} of {p}"
+            )
         entries.append(entry)
 
     return entries
+
+def _metric_name_and_k(metric_name: str) -> tuple[str, int]:
+    """Parse metric names like ``hitRate@10`` and ``ndcg@10``."""
+    match = _METRIC_NAME_RE.match(metric_name)
+    if match is None:
+        return metric_name, 10
+    return match.group("name"), int(match.group("k"))
+
+def _baseline_retrieved_ids(entries: List[Dict[str, Any]]) -> List[List[str]] | None:
+    """Return committed baseline retrieval IDs when every entry provides them."""
+    retrieved: List[List[str]] = []
+    for entry in entries:
+        raw_ids = entry.get("retrieved_ids")
+        if raw_ids is None:
+            return None
+        if not isinstance(raw_ids, list) or not all(
+            isinstance(doc_id, str) and doc_id for doc_id in raw_ids
+        ):
+            raise ValueError(
+                "Field 'retrieved_ids' must be a string list when provided"
+            )
+        retrieved.append(raw_ids)
+    return retrieved
+
+def _score_metric(
+    metric_name: str,
+    entries: List[Dict[str, Any]],
+    retrieved: List[List[str]] | None,
+) -> float:
+    """Compute supported retrieval metrics for a loaded golden dataset."""
+    if retrieved is None:
+        return 0.0
+
+    family, k = _metric_name_and_k(metric_name)
+    normalized = family.lower()
+    if normalized == "hitrate":
+        return hit_rate_at_k(entries, retrieved, k=k)
+    if normalized == "ndcg":
+        return ndcg_at_k(entries, retrieved, k=k)
+    logger.warning("Unsupported evaluation metric '%s'; reporting 0.0", metric_name)
+    return 0.0
 
 def evaluate_manifest(
     manifest: Any,  # ManifestV0 — Any to avoid circular imports
@@ -206,7 +264,8 @@ def evaluate_manifest(
 
         # Try loading dataset (non-fatal if not found for now)
         try:
-            _entries = _load_dataset(ds_cfg.path)  # noqa: F841 — validated, retrieval in T019
+            entries = _load_dataset(ds_cfg.path)
+            retrieved = _baseline_retrieved_ids(entries)
         except (FileNotFoundError, ValueError) as exc:
             logger.warning("Could not load dataset '%s': %s", ds_cfg.name, exc)
             for metric_cfg in eval_config.metrics:
@@ -220,13 +279,12 @@ def evaluate_manifest(
             result.datasets.append(ds_eval)
             continue
 
-        # Placeholder: in full implementation, we'd query the retriever
-        # For now, report 0.0 scores to show the framework works
         for metric_cfg in eval_config.metrics:
+            score = _score_metric(metric_cfg.name, entries, retrieved)
             ds_eval.metrics.append(
                 MetricScore(
                     name=metric_cfg.name,
-                    score=0.0,  # Will be computed when retriever is wired
+                    score=score,
                     threshold=metric_cfg.threshold,
                 )
             )

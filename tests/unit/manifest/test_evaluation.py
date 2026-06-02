@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import math
+from pathlib import Path
 
 import pytest
 
+from moonmind.manifest.manifest_cli import run_evaluate
 from moonmind.manifest.evaluation import (
     DatasetEvaluation,
     EvaluationResult,
@@ -122,6 +124,15 @@ class TestLoadDataset:
         )
         entries = _load_dataset(str(f))
         assert len(entries) == 2
+        assert entries[0]["relevant_ids"] == ["d1"]
+
+    def test_gold_alias_normalizes_to_relevant_ids(self, tmp_path):
+        f = tmp_path / "test.jsonl"
+        f.write_text(json.dumps({"query": "what is X?", "gold": ["d1"]}) + "\n")
+        entries = _load_dataset(str(f))
+        assert entries == [
+            {"query": "what is X?", "gold": ["d1"], "relevant_ids": ["d1"]}
+        ]
 
     def test_missing_file(self):
         with pytest.raises(FileNotFoundError):
@@ -138,3 +149,39 @@ class TestLoadDataset:
         f.write_text(json.dumps({"relevant_ids": ["d1"]}) + "\n")
         with pytest.raises(ValueError, match="Missing 'query'"):
             _load_dataset(str(f))
+
+    def test_missing_relevance_field(self, tmp_path):
+        f = tmp_path / "no_relevance.jsonl"
+        f.write_text(json.dumps({"query": "what is X?"}) + "\n")
+        with pytest.raises(ValueError, match="Missing 'relevant_ids'"):
+            _load_dataset(str(f))
+
+# ---------------------------------------------------------------------------
+# Committed baseline
+# ---------------------------------------------------------------------------
+
+class TestCommittedBaseline:
+    def test_mm756_smoke_baseline_passes_manifest_thresholds(self):
+        manifest_path = Path("examples/readers-full-example.yaml")
+        result = run_evaluate(manifest_path=str(manifest_path), dataset="smoke")
+        assert result["passed"] is True
+        assert result["datasets"] == [
+            {
+                "name": "smoke",
+                "passed": True,
+                "metrics": [
+                    {
+                        "name": "hitRate@10",
+                        "score": 1.0,
+                        "threshold": 0.8,
+                        "passed": True,
+                    },
+                    {
+                        "name": "ndcg@10",
+                        "score": 0.877,
+                        "threshold": 0.7,
+                        "passed": True,
+                    },
+                ],
+            }
+        ]
