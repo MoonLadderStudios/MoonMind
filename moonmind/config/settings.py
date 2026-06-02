@@ -1721,37 +1721,38 @@ class MemorySettings(BaseSettings):
 
     enabled: bool = Field(
         True,
-        validation_alias=AliasChoices("MEMORY_ENABLED"),
         description="Master toggle for MoonMind memory context and writeback surfaces.",
     )
     planning: Literal["off", "beads"] = Field(
         "off",
-        validation_alias=AliasChoices("MEMORY_PLANNING"),
         description="Planning-memory provider. Allowed values: off, beads.",
     )
     history: Literal["off", "digest"] = Field(
         "off",
-        validation_alias=AliasChoices("MEMORY_HISTORY"),
         description="Task-history memory provider. Allowed values: off, digest.",
     )
     long_term: Literal["off", "mem0"] = Field(
         "off",
-        validation_alias=AliasChoices("MEMORY_LONG_TERM"),
         description="Long-term memory provider. Allowed values: off, mem0.",
     )
     fail_open: bool = Field(
         True,
-        validation_alias=AliasChoices("MEMORY_FAIL_OPEN"),
         description=(
             "Allow chat and task execution to continue when memory providers fail."
         ),
     )
     context_budget_tokens: int = Field(
         4096,
-        validation_alias=AliasChoices("MEMORY_CONTEXT_BUDGET_TOKENS"),
         gt=0,
         description="Maximum token budget for memory context packed into a request.",
     )
+
+    @field_validator("planning", "history", "long_term", mode="before")
+    @classmethod
+    def _normalize_provider(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
 
     @property
     def planning_enabled(self) -> bool:
@@ -1773,7 +1774,7 @@ class MemorySettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         populate_by_name=True,
-        env_prefix="",
+        env_prefix="MEMORY_",
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
         extra="ignore",

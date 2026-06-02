@@ -405,6 +405,28 @@ class TestMemorySettings:
         assert settings.history_enabled is True
         assert settings.long_term_enabled is True
 
+    def test_memory_flags_ignore_generic_env_names(self, monkeypatch):
+        monkeypatch.setenv("ENABLED", "false")
+        monkeypatch.setenv("FAIL_OPEN", "false")
+        monkeypatch.setenv("CONTEXT_BUDGET_TOKENS", "1")
+
+        settings = MemorySettings(_env_file=None)
+
+        assert settings.enabled is True
+        assert settings.fail_open is True
+        assert settings.context_budget_tokens == 4096
+
+    def test_memory_provider_values_are_normalized(self, monkeypatch):
+        monkeypatch.setenv("MEMORY_PLANNING", " BEADS ")
+        monkeypatch.setenv("MEMORY_HISTORY", " Digest ")
+        monkeypatch.setenv("MEMORY_LONG_TERM", " MEM0 ")
+
+        settings = MemorySettings(_env_file=None)
+
+        assert settings.planning == "beads"
+        assert settings.history == "digest"
+        assert settings.long_term == "mem0"
+
     def test_memory_enabled_master_gate_disables_planes(self, monkeypatch):
         monkeypatch.setenv("MEMORY_ENABLED", "false")
         monkeypatch.setenv("MEMORY_PLANNING", "beads")
