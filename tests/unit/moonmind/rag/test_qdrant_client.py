@@ -331,6 +331,43 @@ def test_merge_results_keeps_multiple_chunks_when_hash_missing():
     assert {item.text for item in items} == {"one", "two"}
 
 
+def test_upsert_memory_vectors_targets_canonical_collection_with_supplied_ids():
+    client = _client()
+    calls: list[dict[str, object]] = []
+
+    class FakeQdrant:
+        def upsert(self, *, collection_name, points):
+            calls.append({"collection_name": collection_name, "points": points})
+
+    client._client = FakeQdrant()  # type: ignore[assignment]
+
+    client.upsert_memory_vectors(
+        vectors=[[0.1, 0.2]],
+        payloads=[{"record_kind": "run_digest", "text": "digest"}],
+        ids=["1f0d3e0c-d534-54f5-9a4f-15b5bd3e61c4"],
+    )
+
+    assert calls[0]["collection_name"] == "repo-main"
+    batch = calls[0]["points"]
+    assert batch.ids == ["1f0d3e0c-d534-54f5-9a4f-15b5bd3e61c4"]
+    assert batch.payloads == [{"record_kind": "run_digest", "text": "digest"}]
+
+
+def test_upsert_memory_vectors_rejects_mismatched_batches():
+    client = _client()
+
+    try:
+        client.upsert_memory_vectors(
+            vectors=[[0.1, 0.2]],
+            payloads=[],
+            ids=["1f0d3e0c-d534-54f5-9a4f-15b5bd3e61c4"],
+        )
+    except ValueError as exc:
+        assert "matching lengths" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+
 def test_index_health_lists_collections_counts_and_freshness():
     client = _client()
 
