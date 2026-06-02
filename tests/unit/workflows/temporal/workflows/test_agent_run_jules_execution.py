@@ -169,6 +169,34 @@ async def test_agent_run_provisions_external_callback_url_before_start(
     assert result.failure_class is None
 
 
+async def test_external_callback_ingress_strips_candidates_before_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = MoonMindAgentRun()
+    _configure_workflow_runtime(monkeypatch)
+
+    request = _request(
+        callbackPolicy={
+            "callbackUrl": "   ",
+            "url": " https://moonmind.example.test/explicit-callback ",
+            "callbackCorrelationKey": "   ",
+        },
+        callbackCorrelationKey=" request-key ",
+    )
+
+    updated = run._with_external_callback_ingress(
+        request,
+        integration_name="jules",
+        supports_callbacks=True,
+        callback_base_url="https://moonmind.example.test",
+    )
+
+    assert updated.callback_url == "https://moonmind.example.test/explicit-callback"
+    assert updated.callback_correlation_key == "request-key"
+    assert updated.callback_policy["callbackUrl"] == updated.callback_url
+    assert updated.callback_policy["callbackCorrelationKey"] == "request-key"
+
+
 async def test_agent_run_jules_branch_publish_failure_maps_to_non_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

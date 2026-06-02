@@ -98,7 +98,8 @@ class BaseExternalAgentAdapter(abc.ABC):
         metadata = self._inject_correlation_metadata(
             metadata, request.correlation_id, request.idempotency_key
         )
-        metadata = self._inject_callback_metadata(metadata, request)
+        if self.provider_capability.supports_callbacks:
+            metadata = self._inject_callback_metadata(metadata, request)
 
         handle = await self.do_start(request, title, description, metadata)
 

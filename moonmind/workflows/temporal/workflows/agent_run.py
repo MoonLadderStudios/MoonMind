@@ -412,14 +412,15 @@ class MoonMindAgentRun:
         if policy.get("enabled") is False:
             return request
 
-        explicit_url = str(
-            policy.get("callbackUrl") or policy.get("url") or request.callback_url or ""
-        ).strip()
-        explicit_key = str(
-            policy.get("callbackCorrelationKey")
-            or request.callback_correlation_key
-            or ""
-        ).strip()
+        explicit_url = (
+            str(policy.get("callbackUrl") or "").strip()
+            or str(policy.get("url") or "").strip()
+            or str(request.callback_url or "").strip()
+        )
+        explicit_key = (
+            str(policy.get("callbackCorrelationKey") or "").strip()
+            or str(request.callback_correlation_key or "").strip()
+        )
         key = explicit_key or self._safe_callback_key(
             workflow.info().workflow_id,
             integration_name,

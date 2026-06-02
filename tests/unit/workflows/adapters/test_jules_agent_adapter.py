@@ -100,7 +100,7 @@ async def test_start_returns_canonical_handle_and_reuses_idempotency_key():
     assert len(client.created) == 1
 
 
-async def test_start_marks_callback_supported_when_callback_ingress_is_provisioned():
+async def test_start_keeps_callback_unsupported_for_polling_only_jules():
     client = _FakeJulesAdapterClient()
     adapter = JulesAgentAdapter(client_factory=lambda: client)
 
@@ -113,14 +113,12 @@ async def test_start_marks_callback_supported_when_callback_ingress_is_provision
         )
     )
 
-    assert adapter.provider_capability.supports_callbacks is True
-    assert handle.metadata["callbackSupported"] is True
-    assert handle.metadata["callbackCorrelationKey"] == "cb-1"
+    assert adapter.provider_capability.supports_callbacks is False
+    assert handle.metadata["callbackSupported"] is False
+    assert "callbackCorrelationKey" not in handle.metadata
     create_req = client.created[0]
-    assert create_req.metadata["moonmind"]["callbackCorrelationKey"] == "cb-1"
-    assert create_req.metadata["moonmind"]["callbackUrl"].endswith(
-        "/api/integrations/jules/callbacks/cb-1"
-    )
+    assert "callbackCorrelationKey" not in create_req.metadata["moonmind"]
+    assert "callbackUrl" not in create_req.metadata["moonmind"]
 
 
 async def test_status_and_fetch_result_normalize_provider_states():

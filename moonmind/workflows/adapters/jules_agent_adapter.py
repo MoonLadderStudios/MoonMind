@@ -58,7 +58,7 @@ def _preferred_external_url(response: JulesTaskResponse) -> str | None:
 
 _JULES_CAPABILITY = ProviderCapabilityDescriptor(
     providerName="jules",
-    supportsCallbacks=True,
+    supportsCallbacks=False,
     supportsCancel=True,
     supportsResultFetch=True,
     defaultPollHintSeconds=15,
@@ -142,8 +142,8 @@ class JulesAgentAdapter(BaseExternalAgentAdapter):
             provider_status=provider_status,
             normalized_status=normalized_status,
             external_url=_preferred_external_url(response),
-            callback_supported=bool(request.callback_url),
-            callback_correlation_key=request.callback_correlation_key,
+            callback_supported=False,
+            callback_correlation_key=None,
         )
         if response.pull_request_url:
             metadata = dict(handle.metadata)
