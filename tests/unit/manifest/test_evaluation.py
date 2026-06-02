@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import json
 import math
+from pathlib import Path
 
 import pytest
 
+from moonmind.manifest.manifest_cli import run_evaluate
 from moonmind.manifest.evaluation import (
     DatasetEvaluation,
     EvaluationResult,
     MetricScore,
+    _baseline_retrieved_ids,
     _build_service_retriever,
+    _score_metric,
     evaluate_manifest,
     hit_rate_at_k,
     ndcg_at_k,
@@ -235,6 +239,15 @@ class TestLoadDataset:
         )
         entries = _load_dataset(str(f))
         assert len(entries) == 2
+        assert entries[0]["relevant_ids"] == ["d1"]
+
+    def test_gold_alias_normalizes_to_relevant_ids(self, tmp_path):
+        f = tmp_path / "test.jsonl"
+        f.write_text(json.dumps({"query": "what is X?", "gold": ["d1"]}) + "\n")
+        entries = _load_dataset(str(f))
+        assert entries == [
+            {"query": "what is X?", "gold": ["d1"], "relevant_ids": ["d1"]}
+        ]
 
     def test_missing_file(self):
         with pytest.raises(FileNotFoundError):
@@ -251,3 +264,95 @@ class TestLoadDataset:
         f.write_text(json.dumps({"relevant_ids": ["d1"]}) + "\n")
         with pytest.raises(ValueError, match="Missing 'query'"):
             _load_dataset(str(f))
+
+    def test_missing_relevance_field(self, tmp_path):
+        f = tmp_path / "no_relevance.jsonl"
+        f.write_text(json.dumps({"query": "what is X?"}) + "\n")
+        with pytest.raises(ValueError, match="Missing 'relevant_ids'"):
+            _load_dataset(str(f))
+
+    def test_invalid_retrieved_ids_field(self, tmp_path):
+        f = tmp_path / "bad_retrieved.jsonl"
+        f.write_text(
+            json.dumps(
+                {
+                    "query": "what is X?",
+                    "relevant_ids": ["d1"],
+                    "retrieved_ids": "not-a-list",
+                }
+            )
+            + "\n"
+        )
+        with pytest.raises(
+            ValueError,
+            match="Field 'retrieved_ids' must be a non-empty string list",
+        ):
+            _load_dataset(str(f))
+
+    def test_invalid_retrieved_ids_item_reports_line_number(self, tmp_path):
+        f = tmp_path / "bad_retrieved_item.jsonl"
+        f.write_text(
+            json.dumps({"query": "what is X?", "relevant_ids": ["d1"]}) + "\n"
+            + json.dumps(
+                {
+                    "query": "what is Y?",
+                    "relevant_ids": ["d2"],
+                    "retrieved_ids": ["d2", ""],
+                }
+            )
+            + "\n"
+        )
+        with pytest.raises(
+            ValueError,
+            match=r"Field 'retrieved_ids' must be a non-empty string list on line 2",
+        ):
+            _load_dataset(str(f))
+
+# ---------------------------------------------------------------------------
+# Committed baseline
+# ---------------------------------------------------------------------------
+
+class TestCommittedBaseline:
+    def test_baseline_retrieved_ids_returns_none_when_absent(self):
+        assert _baseline_retrieved_ids([{"relevant_ids": ["d1"]}]) is None
+
+    def test_baseline_retrieved_ids_rejects_inconsistent_entries(self):
+        with pytest.raises(ValueError, match="Inconsistent dataset"):
+            _baseline_retrieved_ids(
+                [
+                    {"relevant_ids": ["d1"], "retrieved_ids": ["d1"]},
+                    {"relevant_ids": ["d2"]},
+                ]
+            )
+
+    def test_metric_name_accepts_separator_variants(self):
+        entries = [{"relevant_ids": ["d1"]}]
+        retrieved = [["d1"]]
+        assert _score_metric("hit_rate@10", entries, retrieved) == 1.0
+        assert _score_metric("hit-rate@10", entries, retrieved) == 1.0
+        assert _score_metric("hitRate@10", entries, retrieved) == 1.0
+
+    def test_mm756_smoke_baseline_passes_manifest_thresholds(self):
+        manifest_path = Path("examples/readers-full-example.yaml")
+        result = run_evaluate(manifest_path=str(manifest_path), dataset="smoke")
+        assert result["passed"] is True
+        assert result["datasets"] == [
+            {
+                "name": "smoke",
+                "passed": True,
+                "metrics": [
+                    {
+                        "name": "hitRate@10",
+                        "score": 1.0,
+                        "threshold": 0.8,
+                        "passed": True,
+                    },
+                    {
+                        "name": "ndcg@10",
+                        "score": 0.877,
+                        "threshold": 0.7,
+                        "passed": True,
+                    },
+                ],
+            }
+        ]
