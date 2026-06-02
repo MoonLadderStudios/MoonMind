@@ -35,6 +35,21 @@ def test_runtime_settings_from_env_accepts_multiple_vector_collections():
         "repo-main",
     )
 
+def test_runtime_settings_rejects_requested_collections_outside_configured_set():
+    env = {
+        "VECTOR_STORE_COLLECTION_NAME": "repo-main",
+        "VECTOR_STORE_COLLECTION_NAMES": "repo-main, docs-main",
+    }
+    settings = RagRuntimeSettings.from_env(env)
+
+    try:
+        settings.resolve_collections(["docs-main", "private-corpus"])
+    except ValueError as exc:
+        assert "private-corpus" in str(exc)
+        assert "repo-main, docs-main" in str(exc)
+    else:
+        raise AssertionError("expected unconfigured collection to be rejected")
+
 def test_retrieval_executable_gateway_uses_scoped_token_not_embedding_keys():
     env = {
         "RAG_ENABLED": "1",

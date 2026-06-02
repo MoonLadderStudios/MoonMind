@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable, List, Mapping, MutableMapping, Optional, Sequence
@@ -101,16 +102,12 @@ class RagQdrantClient:
         start = time.perf_counter()
         filter_obj = self._build_filter(filters)
         target_collections = self._resolve_collections(collections)
-        canonical = []
-        for collection_name in target_collections:
-            canonical.extend(
-                self._search_collection_points(
-                    collection_name=collection_name,
-                    query_vector=query_vector,
-                    limit=top_k,
-                    query_filter=filter_obj,
-                )
-            )
+        canonical = self._search_canonical_collections(
+            collection_names=target_collections,
+            query_vector=query_vector,
+            limit=top_k,
+            query_filter=filter_obj,
+        )
         canonical = self._rank_points(canonical)
         overlay_points = []
         if overlay_policy == "include" and overlay_collection:
@@ -140,6 +137,38 @@ class RagQdrantClient:
         if not names:
             raise RuntimeError("At least one Qdrant collection is required.")
         return tuple(names)
+
+    def _search_canonical_collections(
+        self,
+        *,
+        collection_names: Sequence[str],
+        query_vector: Sequence[float],
+        limit: int,
+        query_filter: qmodels.Filter | None,
+    ) -> list[qmodels.ScoredPoint]:
+        if len(collection_names) == 1:
+            return self._search_collection_points(
+                collection_name=collection_names[0],
+                query_vector=query_vector,
+                limit=limit,
+                query_filter=query_filter,
+            )
+
+        canonical: list[qmodels.ScoredPoint] = []
+        with ThreadPoolExecutor(max_workers=len(collection_names)) as executor:
+            futures = [
+                executor.submit(
+                    self._search_collection_points,
+                    collection_name=collection_name,
+                    query_vector=query_vector,
+                    limit=limit,
+                    query_filter=query_filter,
+                )
+                for collection_name in collection_names
+            ]
+            for future in futures:
+                canonical.extend(future.result())
+        return canonical
 
     def _search_collection_points(
         self,

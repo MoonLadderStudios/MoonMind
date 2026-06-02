@@ -1,3 +1,5 @@
+import threading
+
 from qdrant_client.http import models as qmodels
 
 from moonmind.rag.qdrant_client import RagQdrantClient
@@ -179,12 +181,49 @@ def test_search_federates_multiple_canonical_collections_by_score():
         trust_overrides=None,
     )
 
-    assert calls == ["repo-main", "docs-main"]
+    assert set(calls) == {"repo-main", "docs-main"}
     assert [item.source for item in result.items] == ["docs/rag.md", "src/repo.py"]
     assert [item.payload["collection"] for item in result.items] == [
         "docs-main",
         "repo-main",
     ]
+
+def test_search_runs_multiple_canonical_collections_concurrently():
+    client = _client()
+    started: list[str] = []
+    started_lock = threading.Lock()
+    both_started = threading.Event()
+
+    def search_collection_points(*, collection_name, **kwargs):
+        _ = kwargs
+        with started_lock:
+            started.append(collection_name)
+            if len(started) == 2:
+                both_started.set()
+        assert both_started.wait(timeout=1.0)
+        return [
+            _point(
+                score=0.8,
+                path=f"src/{collection_name}.py",
+                chunk_hash=collection_name,
+                text=collection_name,
+            )
+        ]
+
+    client._search_collection_points = search_collection_points  # type: ignore[method-assign]
+
+    result = client.search(
+        query_vector=[0.1, 0.2],
+        filters={"repo": "moonmind"},
+        top_k=2,
+        collections=["repo-main", "docs-main"],
+        overlay_policy="skip",
+        overlay_collection=None,
+        trust_overrides=None,
+    )
+
+    assert set(started) == {"repo-main", "docs-main"}
+    assert len(result.items) == 2
 
 def test_merge_results_skips_expired_overlay_chunks():
     client = _client()

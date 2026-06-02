@@ -193,6 +193,15 @@ class RagRuntimeSettings:
             names.append(name)
         if not names:
             raise ValueError("At least one retrieval collection is required.")
+        allowed = set(self.vector_collections)
+        outside_allowed = [name for name in names if name not in allowed]
+        if outside_allowed:
+            allowed_list = ", ".join(self.vector_collections)
+            requested_list = ", ".join(outside_allowed)
+            raise ValueError(
+                "Requested retrieval collections are not configured: "
+                f"{requested_list}. Allowed collections: {allowed_list}."
+            )
         return tuple(names)
 
     @staticmethod

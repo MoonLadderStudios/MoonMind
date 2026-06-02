@@ -137,6 +137,39 @@ def test_context_retrieval_service_honors_requested_collections():
     assert qdrant.ensured == ["docs-main"]
     assert qdrant.calls[0]["collections"] == ("docs-main",)
 
+def test_context_retrieval_service_caches_verified_collections():
+    env = {
+        "QDRANT_HOST": "localhost",
+        "QDRANT_PORT": "6333",
+        "GOOGLE_EMBEDDING_DIMENSIONS": "2",
+        "VECTOR_STORE_COLLECTION_NAMES": "repo-main,docs-main",
+    }
+    settings = RagRuntimeSettings.from_env(env)
+    qdrant = StubQdrant()
+    service = ContextRetrievalService(
+        settings=settings,
+        env=env,
+        embedding_client=StubEmbedder(),
+        qdrant_client=qdrant,
+    )
+
+    for _ in range(2):
+        service.retrieve(
+            query="cached readiness",
+            filters={"repo": "moonmind"},
+            top_k=2,
+            overlay_policy="skip",
+            budgets={},
+            collections=["docs-main"],
+            transport="direct",
+        )
+
+    assert qdrant.ensured == ["docs-main"]
+    assert [call["collections"] for call in qdrant.calls] == [
+        ("docs-main",),
+        ("docs-main",),
+    ]
+
 def test_context_retrieval_service_enforces_token_budget():
     env = {
         "QDRANT_HOST": "localhost",

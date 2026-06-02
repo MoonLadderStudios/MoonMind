@@ -42,6 +42,7 @@ class ContextRetrievalService:
         self._telemetry = VectorTelemetry(
             run_id=settings.run_id, job_id=settings.job_id
         )
+        self._verified_collections: set[str] = set()
         self._embedding = embedding_client
         self._qdrant = qdrant_client or RagQdrantClient(
             host=settings.qdrant_host,
@@ -104,7 +105,9 @@ class ContextRetrievalService:
                 initiation_mode=initiation_mode,
             )
         for collection_name in target_collections:
-            self._qdrant.ensure_collection_ready(collection_name)
+            if collection_name not in self._verified_collections:
+                self._qdrant.ensure_collection_ready(collection_name)
+                self._verified_collections.add(collection_name)
         with self._telemetry.timer("embedding"):
             vector = self.embedding_client.embed(query)
         overlay_collection = None
