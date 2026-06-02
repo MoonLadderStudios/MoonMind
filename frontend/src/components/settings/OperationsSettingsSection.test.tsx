@@ -16,6 +16,7 @@ const workerSnapshot = {
     running: 2,
     staleRunning: 0,
     isDrained: true,
+    metricsSource: 'temporal',
   },
   commands: [
     {
@@ -259,6 +260,11 @@ describe('OperationsSettingsSection deployment update card', () => {
     renderOperations();
 
     const workerCard = await screen.findByRole('region', { name: /worker operations/i });
+    expect(await within(workerCard).findByRole('heading', { name: /worker fleet health/i })).toBeTruthy();
+    expect(within(workerCard).getByText('Healthy')).toBeTruthy();
+    expect(within(workerCard).getByText('temporal')).toBeTruthy();
+    expect(within(workerCard).getByText(/workers, scheduler/i)).toBeTruthy();
+    expect(within(workerCard).getAllByText('1').length).toBeGreaterThan(0);
     expect(await within(workerCard).findByText('Pause Workers')).toBeTruthy();
     expect(within(workerCard).getByText('Resume Workers')).toBeTruthy();
     expect(within(workerCard).getByText('Enable Maintenance Mode')).toBeTruthy();
