@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. docs/Tasks/SkillAndPlanEvolution.md (score: 1.000, trust: canonical)\n    line 5: **Executive Summary:** The MoonMind system uses **tools** and **plans** atop Temporal to manage agent tasks. A *Tool* (`ToolDefinition`) is a named capability with input/output schemas, execution bindings, retries, etc. (not a workflow). A *Plan* is a DAG of tool invocations (Steps) with explicit dependencies and policies. This design leverages Temporal's deterministic workflows (orchestration) vs activities (side-effects). The codebase has completed a rename from `Skill*` to `Tool*` for Temporal contract objects; the term \"Skill\" is now reserved for agent instruction bundles (`.agents/skills/SKILL.md` files).\n2. docs/ReleaseNotes/MM-730-hard-switch-cutover.md (score: 1.000, trust: canonical)\n    line 5: This is a breaking release. Compatibility redirects and task-shaped aliases are not kept after the cutover boundary. Operators must keep the previous worker build draining on the legacy Task Queue for in-flight `MoonMind.Run` histories, or record an explicit pause/resume or terminate/restart decision before enabling `TEMPORAL_USER_WORKFLOW_CONTRACT_MODE=renamed_contract`.\n3. moonmind/integrations/jira/client.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Low-level Jira REST client with bounded retries and sanitized errors.\"\"\"\n4. moonmind/integrations/jira/adf.py (score: 1.000, trust: canonical)\n    line 27: \"\"\"Return an ADF document for one Jira rich-text field value.\"\"\"\n5. moonmind/integrations/jira/auth.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Trusted Jira auth resolution for managed-agent tool execution.\"\"\"\n6. moonmind/integrations/jira/__init__.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Trusted Jira integration primitives for managed-agent tools.\"\"\"\n7. moonmind/integrations/jira/models.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Strict request models for Jira MCP tools.\"\"\"\n8. moonmind/integrations/jira/errors.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Sanitized Jira integration error types.\"\"\"",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "docs/Tasks/SkillAndPlanEvolution.md",
+      "text": "line 5: **Executive Summary:** The MoonMind system uses **tools** and **plans** atop Temporal to manage agent tasks. A *Tool* (`ToolDefinition`) is a named capability with input/output schemas, execution bindings, retries, etc. (not a workflow). A *Plan* is a DAG of tool invocations (Steps) with explicit dependencies and policies. This design leverages Temporal's deterministic workflows (orchestration) vs activities (side-effects). The codebase has completed a rename from `Skill*` to `Tool*` for Temporal contract objects; the term \"Skill\" is now reserved for agent instruction bundles (`.agents/skills/SKILL.md` files).",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 5,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ReleaseNotes/MM-730-hard-switch-cutover.md",
+      "text": "line 5: This is a breaking release. Compatibility redirects and task-shaped aliases are not kept after the cutover boundary. Operators must keep the previous worker build draining on the legacy Task Queue for in-flight `MoonMind.Run` histories, or record an explicit pause/resume or terminate/restart decision before enabling `TEMPORAL_USER_WORKFLOW_CONTRACT_MODE=renamed_contract`.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 5,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/integrations/jira/client.py",
+      "text": "line 1: \"\"\"Low-level Jira REST client with bounded retries and sanitized errors.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/integrations/jira/adf.py",
+      "text": "line 27: \"\"\"Return an ADF document for one Jira rich-text field value.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 27,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/integrations/jira/auth.py",
+      "text": "line 1: \"\"\"Trusted Jira auth resolution for managed-agent tool execution.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/integrations/jira/__init__.py",
+      "text": "line 1: \"\"\"Trusted Jira integration primitives for managed-agent tools.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/integrations/jira/models.py",
+      "text": "line 1: \"\"\"Strict request models for Jira MCP tools.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/integrations/jira/errors.py",
+      "text": "line 1: \"\"\"Sanitized Jira integration error types.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-06-02T00:47:15Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}

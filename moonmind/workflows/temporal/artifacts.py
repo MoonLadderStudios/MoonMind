@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 _CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 _PREVIEW_MAX_BYTES = 16 * 1024
 _STREAM_CHUNK_BYTES = 64 * 1024
+_RUN_DIGEST_INDEXING_TIMEOUT_SECONDS = 10
 _SINGLE_PUT_READ_RETRY_DELAYS_SECONDS = (0.1, 0.2, 0.4, 0.8, 1.6)
 _SINGLE_PUT_READ_RETRYABLE_S3_ERROR_CODES = {"404", "NoSuchKey", "NotFound"}
 _TASK_INPUT_ATTACHMENT_SOURCES = frozenset(
@@ -2600,6 +2601,8 @@ class TemporalArtifactActivities:
                 error_category=model.error_category,
             )
 
+        await self._write_run_digest_best_effort(record)
+
         return {
             "workflowId": record.workflow_id,
             "state": getattr(getattr(record, "state", None), "value", record.state),
@@ -2609,6 +2612,49 @@ class TemporalArtifactActivities:
                 record.close_status,
             ),
         }
+
+    async def _write_run_digest_best_effort(self, record: Any) -> None:
+        """Index a Plane B run digest without making terminal state recording fail."""
+
+        try:
+            import os
+
+            from moonmind.memory.run_digest import TaskHistoryService
+            from moonmind.rag.service import ContextRetrievalService
+            from moonmind.rag.settings import RagRuntimeSettings
+
+            settings = RagRuntimeSettings.from_env(os.environ)
+            executable, reason = settings.retrieval_execution_reason(
+                os.environ,
+                preferred_transport="direct",
+            )
+            if not executable:
+                logger.info(
+                    "Skipping run digest indexing for %s: %s",
+                    getattr(record, "workflow_id", "unknown"),
+                    reason,
+                )
+                return
+
+            retrieval_service = ContextRetrievalService(settings=settings)
+            history_service = TaskHistoryService(
+                qdrant_client=retrieval_service.qdrant_client,
+                embedding_provider=retrieval_service.embedding_client,
+            )
+            await asyncio.wait_for(
+                asyncio.get_running_loop().run_in_executor(
+                    None,
+                    history_service.build_and_upsert_run_digest,
+                    record,
+                ),
+                timeout=_RUN_DIGEST_INDEXING_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Run digest indexing failed for %s: %s",
+                getattr(record, "workflow_id", "unknown"),
+                exc,
+            )
 
     async def artifact_list_for_execution(
         self,

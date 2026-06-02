@@ -3,6 +3,11 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from moonmind.memory.procedural import (
+    EvidenceRun,
+    FixPattern,
+    extract_error_signature,
+)
 from moonmind.workflows.tasks.prepared_context import (
     PreparedContextFailure,
     PreparedInputEntry,
@@ -430,6 +435,122 @@ def test_execution_context_records_retrieval_and_memory_manifest_refs() -> None:
     assert memory.memory_manifest_ref.startswith("attempt-memory-manifest://sha256:")
     assert bundle.retrieval_manifest_ref == retrieval.retrieval_manifest_ref
     assert bundle.memory_manifest_ref == memory.memory_manifest_ref
+
+
+def test_execution_context_records_budgeted_memory_context_ref() -> None:
+    bundle = build_execution_context_bundle(
+        workflow_id="workflow-1",
+        run_id="run-1",
+        logical_step_id="collect-evidence",
+        execution_ordinal=1,
+        memory_context={
+            "tokenBudget": 32,
+            "candidates": [
+                {
+                    "text": "Prefer the proven fix pattern for this error.",
+                    "source": "fix-pattern://signature-1",
+                    "plane": "history",
+                    "trustClass": "derived",
+                    "provenance": {
+                        "workflowId": "workflow-previous",
+                        "artifactRefs": ["artifact://fix-pattern-1"],
+                    },
+                    "recency": "2026-06-01T12:00:00Z",
+                    "tokenCost": 10,
+                }
+            ],
+        },
+    )
+
+    assert bundle.memory_context_ref is not None
+    assert bundle.memory_context_ref.startswith("memory-context-pack://sha256:")
+    assert bundle.to_manifest_projection()["context"]["memoryContextRef"] == (
+        bundle.memory_context_ref
+    )
+
+
+def test_execution_context_uses_configured_default_memory_context_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, int] = {}
+
+    def fake_build_memory_context_pack(
+        candidates: object,
+        *,
+        token_budget: int,
+    ) -> object:
+        observed["token_budget"] = token_budget
+
+        class Pack:
+            memory_context_ref = "memory-context-pack://sha256:configured"
+
+        return Pack()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.tasks.prepared_context.settings.workflow."
+        "memory_context_budget_tokens",
+        1234,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.tasks.prepared_context.build_memory_context_pack",
+        fake_build_memory_context_pack,
+    )
+
+    bundle = build_execution_context_bundle(
+        workflow_id="workflow-1",
+        run_id="run-1",
+        logical_step_id="collect-evidence",
+        execution_ordinal=1,
+        memory_context={"candidates": []},
+    )
+
+    assert observed == {"token_budget": 1234}
+    assert bundle.memory_context_ref == "memory-context-pack://sha256:configured"
+
+
+def test_execution_context_rejects_zero_memory_context_budget() -> None:
+    with pytest.raises(ValueError, match="token_budget must be positive"):
+        build_execution_context_bundle(
+            workflow_id="workflow-1",
+            run_id="run-1",
+            logical_step_id="collect-evidence",
+            memory_context={
+                "tokenBudget": 0,
+                "candidates": [],
+            },
+        )
+
+
+def test_execution_context_projects_fix_patterns_into_memory_manifest() -> None:
+    signature = extract_error_signature("RuntimeError: missing qdrant collection")
+    assert signature is not None
+    fix_pattern = FixPattern.from_successful_run(
+        signature=signature,
+        summary="Create the Qdrant collection before indexing.",
+        steps=["Run namespace bootstrap before the retrieval write."],
+        evidence=EvidenceRun(workflowId="workflow-1", outcome="succeeded"),
+    )
+    expected_memory = build_memory_manifest(
+        [
+            {
+                "proposalRef": fix_pattern.pattern_ref,
+                "state": "accepted_for_run_context",
+                "summary": (
+                    "Create the Qdrant collection before indexing. Steps: "
+                    "Run namespace bootstrap before the retrieval write."
+                ),
+            }
+        ]
+    )
+
+    bundle = build_execution_context_bundle(
+        workflow_id="workflow-1",
+        run_id="run-1",
+        logical_step_id="collect-evidence",
+        fix_patterns=[fix_pattern.model_dump(by_alias=True)],
+    )
+
+    assert bundle.memory_manifest_ref == expected_memory.memory_manifest_ref
 
 
 def test_retrieval_manifest_accepts_documented_retrieved_refs_key() -> None:

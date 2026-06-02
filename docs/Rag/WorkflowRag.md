@@ -41,7 +41,7 @@ This document covers:
 - embedding-model-assisted semantic search against Qdrant,
 - `ContextPack` publication and prompt/context delivery,
 - direct and gateway retrieval transport,
-- workspace overlay retrieval,
+- multi-collection and workspace overlay retrieval,
 - retrieval budgeting, filtering, and observability,
 - the relationship between RAG configuration and Provider Profiles.
 
@@ -86,7 +86,7 @@ The primary managed-session RAG flow is:
 1. MoonMind receives the task or step instruction.
 2. MoonMind resolves retrieval settings and retrieval scope.
 3. MoonMind embeds the instruction or derived retrieval query.
-4. MoonMind searches the vector index.
+4. MoonMind searches the configured vector collection set.
 5. MoonMind builds a `ContextPack`.
 6. MoonMind persists the pack as an artifact and/or publishes a ref.
 7. MoonMind injects the retrieved context into the managed runtime’s next input surface.
@@ -130,7 +130,9 @@ The current lean retrieval layer lives under `moonmind/rag/`.
 The retrieval path is:
 
 1. `ContextRetrievalService` embeds the query using the configured embedding provider.
-2. Qdrant is queried through the lean RAG client.
+2. Qdrant is queried through the lean RAG client. Retrieval may fan out across
+   multiple configured or request-selected collections and merge the highest
+   scoring canonical results.
 3. Results are formatted into a `ContextPack`.
 4. `ContextPack.context_text` is published for injection into runtime input.
 
@@ -158,6 +160,15 @@ Two retrieval transports exist today:
 Workflow RAG supports workspace overlay retrieval so a managed run can retrieve content that has changed during the run and has not yet been folded into the canonical index.
 
 Overlay data remains part of the retrieval plane, not a separate ad hoc runtime memory system.
+
+### 5.5 Multi-collection retrieval
+
+Workflow RAG supports federated retrieval across multiple canonical Qdrant
+collections. Operators can configure a default collection set, and callers can
+request a narrower explicit collection list for a single retrieval operation.
+Results from canonical collections are merged by score before the final
+`top_k` cap is applied. Run-scoped overlay results remain governed by
+`overlay_policy` and are merged through the same `ContextPack` path.
 
 ---
 
@@ -404,6 +415,13 @@ Workflow RAG should expose simple, high-value levers for retrieval amount and sc
   tenant-equivalent filters are applied when supplied by the session or by
   deployment-specific indexed metadata.
 
+- **collections / `VECTOR_STORE_COLLECTION_NAMES`**
+  - optional canonical Qdrant collection set for federated search.
+  - when unset, retrieval uses `VECTOR_STORE_COLLECTION_NAME`.
+  - session-issued RetrievalGateway requests may include `collections` to target
+    an explicit subset for that request.
+  - CLI callers may repeat `--collection` with `moonmind rag search`.
+
 ### 11.2 Budget knobs
 
 - **token budget**
@@ -535,7 +553,8 @@ The exact configuration surface may evolve, but the current retrieval settings i
 | provider-specific embedding model setting | Select embedding model |
 | `QDRANT_HOST` / `QDRANT_PORT` / `QDRANT_URL` | Vector store location |
 | `QDRANT_API_KEY` | Vector store auth when required |
-| `VECTOR_STORE_COLLECTION_NAME` | Retrieval collection |
+| `VECTOR_STORE_COLLECTION_NAME` | Primary retrieval collection and single-collection default |
+| `VECTOR_STORE_COLLECTION_NAMES` | Optional comma-separated collection set for federated retrieval |
 | `RAG_SIMILARITY_TOP_K` | Default retrieval count |
 | `RAG_MAX_CONTEXT_LENGTH_CHARS` | Injected context size cap |
 | `RAG_OVERLAY_MODE` | Overlay storage mode |

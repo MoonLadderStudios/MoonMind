@@ -5,12 +5,16 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
-from typing import Mapping, MutableMapping, Optional
+from pathlib import Path
+from typing import Mapping, MutableMapping, Optional, Sequence
 
 from moonmind.config.settings import settings as app_settings
 from moonmind.utils.env_bool import env_to_bool
 
 _SUPPORTED_EMBEDDING_PROVIDERS = frozenset({"google", "openai"})
+_SUPPORTED_MEMORY_PLANNING = frozenset({"off", "beads"})
+_SUPPORTED_MEMORY_HISTORY = frozenset({"off", "digest"})
+_SUPPORTED_MEMORY_LONG_TERM = frozenset({"off", "mem0"})
 
 def _get_env(
     source: Mapping[str, str] | None, key: str, default: str | None = None
@@ -21,6 +25,17 @@ def _get_env(
         return default
     return os.getenv(key, default)
 
+def _parse_collection_names(raw: str | None) -> tuple[str, ...]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for item in str(raw or "").split(","):
+        name = item.strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+    return tuple(names)
+
 @dataclass(slots=True)
 class RagRuntimeSettings:
     """Normalized settings consumed by CLI, worker doctor, and gateway flows."""
@@ -30,6 +45,7 @@ class RagRuntimeSettings:
     qdrant_port: int
     qdrant_api_key: Optional[str]
     vector_collection: str
+    vector_collections: tuple[str, ...]
     embedding_provider: str
     embedding_model: str
     embedding_dimensions: Optional[int]
@@ -47,9 +63,13 @@ class RagRuntimeSettings:
     rag_enabled: bool
     qdrant_enabled: bool
     memory_enabled: bool
+    memory_planning: str
+    memory_history: str
     memory_long_term: str
     memory_fail_open: bool
-    memory_context_budget_tokens: Optional[int]
+    memory_context_budget_tokens: int
+    planning_workspace_root: Optional[str]
+    beads_command: str
     memory_namespace_id: str
     mem0_api_key: Optional[str]
     mem0_user_id: Optional[str]
@@ -69,6 +89,19 @@ class RagRuntimeSettings:
             )
             or app_settings.vector_store_collection_name
         )
+        vector_collections_raw = _get_env(env, "VECTOR_STORE_COLLECTION_NAMES")
+        if vector_collections_raw:
+            parsed_collections = _parse_collection_names(vector_collections_raw)
+            vector_collections = (
+                vector_collection,
+                *(
+                    item
+                    for item in parsed_collections
+                    if item != vector_collection
+                ),
+            )
+        else:
+            vector_collections = (vector_collection,)
         embedding_provider = (
             _get_env(
                 env,
@@ -138,26 +171,53 @@ class RagRuntimeSettings:
             _get_env(env, "QDRANT_ENABLED", "true"), default=True
         )
         memory_enabled = env_to_bool(
-            _get_env(env, "MEMORY_ENABLED", "false"), default=False
+            _get_env(env, "MEMORY_ENABLED", str(app_settings.memory.enabled)),
+            default=app_settings.memory.enabled,
         )
+        memory_planning = (
+            _get_env(env, "MEMORY_PLANNING", app_settings.memory.planning)
+            or app_settings.memory.planning
+        ).strip().lower()
+        memory_history = (
+            _get_env(env, "MEMORY_HISTORY", app_settings.memory.history)
+            or app_settings.memory.history
+        ).strip().lower()
         memory_long_term = (
-            _get_env(env, "MEMORY_LONG_TERM", "off") or "off"
+            _get_env(env, "MEMORY_LONG_TERM", app_settings.memory.long_term)
+            or app_settings.memory.long_term
         ).strip().lower()
         memory_fail_open = env_to_bool(
-            _get_env(env, "MEMORY_FAIL_OPEN", "true"), default=True
+            _get_env(env, "MEMORY_FAIL_OPEN", str(app_settings.memory.fail_open)),
+            default=app_settings.memory.fail_open,
         )
-        memory_budget_raw = _get_env(env, "MEMORY_CONTEXT_BUDGET_TOKENS")
-        memory_context_budget_tokens = None
-        if memory_budget_raw:
-            try:
-                memory_context_budget_tokens = int(memory_budget_raw)
-            except ValueError:
-                memory_context_budget_tokens = None
-            if (
-                memory_context_budget_tokens is not None
-                and memory_context_budget_tokens <= 0
-            ):
-                memory_context_budget_tokens = None
+        memory_context_budget_tokens = int(
+            _get_env(
+                env,
+                "MEMORY_CONTEXT_BUDGET_TOKENS",
+                str(app_settings.memory.context_budget_tokens),
+            )
+            or app_settings.memory.context_budget_tokens
+        )
+        if memory_planning not in _SUPPORTED_MEMORY_PLANNING:
+            supported = ", ".join(sorted(_SUPPORTED_MEMORY_PLANNING))
+            raise ValueError(
+                f"MEMORY_PLANNING must be one of: {supported}; got {memory_planning!r}"
+            )
+        if memory_history not in _SUPPORTED_MEMORY_HISTORY:
+            supported = ", ".join(sorted(_SUPPORTED_MEMORY_HISTORY))
+            raise ValueError(
+                f"MEMORY_HISTORY must be one of: {supported}; got {memory_history!r}"
+            )
+        if memory_context_budget_tokens <= 0:
+            raise ValueError("MEMORY_CONTEXT_BUDGET_TOKENS must be greater than 0")
+        planning_workspace_root = (
+            _get_env(env, "MOONMIND_PLANNING_REPOSITORY_ROOT")
+            or _get_env(env, "MOONMIND_REPOSITORY_ROOT")
+            or _get_env(env, "WORKSPACE_PATH")
+            or _get_env(env, "PWD")
+            or None
+        )
+        beads_command = _get_env(env, "BEADS_COMMAND", "bd") or "bd"
         memory_namespace_id = (
             _get_env(
                 env,
@@ -175,6 +235,7 @@ class RagRuntimeSettings:
             qdrant_port=qdrant_port,
             qdrant_api_key=qdrant_api_key,
             vector_collection=vector_collection,
+            vector_collections=vector_collections,
             embedding_provider=embedding_provider,
             embedding_model=embedding_model,
             embedding_dimensions=embedding_dimensions,
@@ -192,9 +253,13 @@ class RagRuntimeSettings:
             rag_enabled=rag_enabled,
             qdrant_enabled=qdrant_enabled,
             memory_enabled=memory_enabled,
+            memory_planning=memory_planning,
+            memory_history=memory_history,
             memory_long_term=memory_long_term,
             memory_fail_open=memory_fail_open,
             memory_context_budget_tokens=memory_context_budget_tokens,
+            planning_workspace_root=planning_workspace_root,
+            beads_command=beads_command,
             memory_namespace_id=memory_namespace_id,
             mem0_api_key=mem0_api_key,
             mem0_user_id=mem0_user_id,
@@ -206,6 +271,32 @@ class RagRuntimeSettings:
         if self.retrieval_gateway_url:
             return "gateway"
         return "direct"
+
+    def resolve_collections(
+        self, requested: Sequence[str] | None = None
+    ) -> tuple[str, ...]:
+        """Return explicit collections or the configured retrieval collection set."""
+
+        names: list[str] = []
+        seen: set[str] = set()
+        for item in requested or self.vector_collections:
+            name = str(item).strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            names.append(name)
+        if not names:
+            raise ValueError("At least one retrieval collection is required.")
+        allowed = set(self.vector_collections)
+        outside_allowed = [name for name in names if name not in allowed]
+        if outside_allowed:
+            allowed_list = ", ".join(self.vector_collections)
+            requested_list = ", ".join(outside_allowed)
+            raise ValueError(
+                "Requested retrieval collections are not configured: "
+                f"{requested_list}. Allowed collections: {allowed_list}."
+            )
+        return tuple(names)
 
     @staticmethod
     def retrieval_gateway_auth_configured(
@@ -236,6 +327,24 @@ class RagRuntimeSettings:
         """Return whether the configured embedding provider is recognized."""
 
         return self.embedding_provider.lower() in _SUPPORTED_EMBEDDING_PROVIDERS
+
+    @property
+    def memory_planning_enabled(self) -> bool:
+        """Return whether planning-memory retrieval should run."""
+
+        return self.memory_enabled and self.memory_planning != "off"
+
+    @property
+    def memory_history_enabled(self) -> bool:
+        """Return whether task-history memory should run."""
+
+        return self.memory_enabled and self.memory_history != "off"
+
+    @property
+    def memory_long_term_enabled(self) -> bool:
+        """Return whether long-term memory should run."""
+
+        return self.memory_enabled and self.memory_long_term != "off"
 
     def embedding_provider_configured(
         self, source: Mapping[str, str] | None = None
@@ -298,6 +407,13 @@ class RagRuntimeSettings:
             source, preferred_transport=preferred_transport
         )
         return executable
+
+    def planning_memory_enabled(self) -> bool:
+        return self.memory_enabled and self.memory_planning == "beads"
+
+    def resolved_planning_workspace_root(self) -> Path:
+        root = self.planning_workspace_root or os.getcwd()
+        return Path(root).resolve()
 
     def long_term_memory_enabled(self) -> bool:
         """Return whether Plane C Mem0 retrieval/writeback should run."""

@@ -211,6 +211,7 @@ def test_static_sub_routes_render_react_shell(client: TestClient) -> None:
     for path in (
         "/workflows",
         "/manifests",
+        "/index-health",
         "/schedules",
         "/settings",
         "/proposals",
@@ -224,6 +225,14 @@ def test_static_sub_routes_render_react_shell(client: TestClient) -> None:
         assert 'id="dashboard-alerts-root"' not in response.text
         assert "marked.min.js" not in response.text
         assert "__moonmind_customElementsDefineGuard" not in response.text
+
+def test_index_health_route_uses_index_health_boot_payload(client: TestClient) -> None:
+    response = client.get("/index-health")
+
+    assert response.status_code == 200
+    boot_payload = _extract_boot_payload(response.text)
+    assert boot_payload["page"] == "index-health"
+    assert boot_payload["initialData"]["layout"]["dataWidePanel"] is True
 
 def test_mission_control_logo_asset_exists() -> None:
     asset_path = Path("api_service/static/workflow_console/moonmindlogo.webp")

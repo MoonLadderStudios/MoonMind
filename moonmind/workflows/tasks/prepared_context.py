@@ -11,6 +11,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from moonmind.config.settings import settings
+from moonmind.memory.context_pack import build_memory_context_pack
+from moonmind.memory.procedural import fix_patterns_to_memory_proposals
+
 TargetKind = Literal["objective", "step"]
 MemoryProposalState = Literal[
     "proposed",
@@ -203,6 +207,7 @@ class ExecutionContextBundle(BaseModel):
         alias="retrievalManifestRef",
     )
     memory_manifest_ref: str | None = Field(default=None, alias="memoryManifestRef")
+    memory_context_ref: str | None = Field(default=None, alias="memoryContextRef")
     runtime_selection: dict[str, Any] = Field(
         default_factory=dict,
         alias="runtimeSelection",
@@ -239,6 +244,7 @@ class ExecutionContextBundle(BaseModel):
                 "builderVersion": self.builder_version,
                 "retrievalManifestRef": self.retrieval_manifest_ref,
                 "memoryManifestRef": self.memory_manifest_ref,
+                "memoryContextRef": self.memory_context_ref,
             }
         }
 
@@ -344,6 +350,8 @@ def build_execution_context_bundle(
     runtime_selection: Mapping[str, Any] | None = None,
     retrieval: Mapping[str, Any] | None = None,
     memory_proposals: Sequence[Mapping[str, Any]] | None = None,
+    memory_context: Mapping[str, Any] | None = None,
+    fix_patterns: Sequence[Mapping[str, Any]] | None = None,
     builder_version: str = EXECUTION_CONTEXT_BUILDER_VERSION,
 ) -> ExecutionContextBundle:
     """Build a compact, digest-addressed execution context bundle."""
@@ -357,10 +365,28 @@ def build_execution_context_bundle(
             build_retrieval_manifest(retrieval).retrieval_manifest_ref
         )
     memory_manifest_ref = None
-    if memory_proposals:
-        memory_manifest_ref = (
-            build_memory_manifest(memory_proposals).memory_manifest_ref
+    effective_memory_proposals = list(memory_proposals or [])
+    if fix_patterns:
+        effective_memory_proposals.extend(
+            fix_patterns_to_memory_proposals(fix_patterns)
         )
+    if effective_memory_proposals:
+        memory_manifest_ref = build_memory_manifest(
+            effective_memory_proposals
+        ).memory_manifest_ref
+    memory_context_ref = None
+    if isinstance(memory_context, Mapping) and memory_context:
+        memory_candidates = memory_context.get("candidates") or []
+        raw_token_budget = memory_context.get("tokenBudget")
+        memory_token_budget = (
+            settings.workflow.memory_context_budget_tokens
+            if raw_token_budget is None
+            else int(raw_token_budget)
+        )
+        memory_context_ref = build_memory_context_pack(
+            memory_candidates,
+            token_budget=memory_token_budget,
+        ).memory_context_ref
 
     base_payload = {
         "schemaVersion": "v1",
@@ -372,6 +398,7 @@ def build_execution_context_bundle(
         "preparedInputRefs": list(prepared_input_refs),
         "retrievalManifestRef": retrieval_manifest_ref,
         "memoryManifestRef": memory_manifest_ref,
+        "memoryContextRef": memory_context_ref,
         "runtimeSelection": dict(runtime_selection or {}),
         "builderVersion": builder_version,
     }
