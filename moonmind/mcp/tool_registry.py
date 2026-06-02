@@ -61,22 +61,25 @@ class ToolListResponse(BaseModel):
 
     tools: list[ToolMetadata] = Field(default_factory=list, alias="tools")
 
+
 class ResourceMetadata(BaseModel):
-    """Resource definition payload returned by MCP resource discovery."""
+    """Resource definition payload returned by discovery endpoint."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     uri: str = Field(..., alias="uri")
     name: str = Field(..., alias="name")
-    description: str | None = Field(default=None, alias="description")
-    mime_type: str = Field(default="application/json", alias="mimeType")
+    description: str | None = Field(None, alias="description")
+    mime_type: str | None = Field(None, alias="mimeType")
+
 
 class ResourceListResponse(BaseModel):
-    """MCP resource discovery response envelope."""
+    """Resource discovery response envelope."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     resources: list[ResourceMetadata] = Field(default_factory=list, alias="resources")
+
 
 @dataclass(frozen=True, slots=True)
 class QueueToolExecutionContext:

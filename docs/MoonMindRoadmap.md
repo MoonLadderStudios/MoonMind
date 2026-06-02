@@ -188,10 +188,10 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - [ ] **7.1** Migrate settings page to Mission Control — Settings currently in separate profile page, should be unified
 - [ ] **7.2** Artifact browsing UI (files/logs/patches) — API exists (`temporal_artifacts.py`), dashboard integration partial
 - [x] **7.3** Intervention request monitoring — Agent requests for human help surface through `intervention_requested` run status monitoring
-- [ ] **7.4** Execution history / audit trail view — Spec 067 (`run-history-rerun`), API exists, UI incomplete
+- [x] **7.4** Execution history / audit trail view — Spec 067 (`run-history-rerun`), `/workflows/{workflowId}/runs` now exposes the Mission Control execution history/audit view (MM-772)
 - [ ] **7.5** Side-by-side comparison view — README promises "run the same task with different models and runtimes to compare results"
 - [ ] **7.6** Multi-step / step DAG visualization — Steps are tracked but no graphical visualization
-- [ ] **7.7** Worker fleet health dashboard — No per-worker health view
+- [x] **7.7** Worker fleet health dashboard — Per-worker Codex shard health view in Settings Operations (MM-775)
 
 ---
 
@@ -200,19 +200,18 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 **README claim:** *"Connect any agent through MCP or standard API endpoints."*
 
 ### What's shipped
-- MCP server endpoint (`/context` — `context_protocol.py`)
-- MCP tools wrapper (`mcp_tools.py`)
-- MCP Streamable HTTP JSON-RPC endpoint (`/mcp`) with tool and resource discovery
+- MCP Streamable HTTP endpoint (`/mcp` — `mcp_tools.py`, MM-777)
+- Legacy context completion endpoint (`/context` — `context_protocol.py`)
+- MCP resource and tools wrapper (`mcp_tools.py`)
+- MCP JSON helper routes (`/mcp/tools`, `/mcp/tools/call`)
 - OpenAI-compatible chat API (`chat.py`)
-- OpenAI-compatible Responses API (`/v1/responses`) for text responses
-- Generic external-agent callback receiver and discovery endpoint (`/api/integrations/callbacks`)
-- Operator doc [`docs/ModelContextProtocol.md`](../ModelContextProtocol.md) (context endpoint + `/mcp` HTTP tools; supersedes removed `CodexMcpToolsAdapter.md`)
+- Operator doc [`docs/ExternalAgents/ModelContextProtocol.md`](ExternalAgents/ModelContextProtocol.md) (`/mcp` Streamable HTTP endpoint, legacy `/context`, and JSON helper routes; supersedes removed `CodexMcpToolsAdapter.md`)
 
 ### Remaining tasks
-- [x] **8.1** MCP Streamable HTTP Transport (2025 spec) — `/mcp` accepts JSON-RPC over Streamable HTTP-style POST and exposes a GET event stream
-- [x] **8.2** MCP resource & tool discovery — `/mcp` supports `tools/list`, `resources/list`, and `resources/read`; REST discovery remains at `/mcp/tools` and `/mcp/resources`
-- [x] **8.3** Webhook / callback API for external agents — Generic callback contract is discoverable at `/api/integrations/callbacks` and accepted at `/api/integrations/{integrationName}/callbacks/{callbackCorrelationKey}`
-- [x] **8.4** OpenAI Responses API compatibility — `/v1/responses` supports text-focused Responses API creation and fails fast for unsupported streaming, tool, background, and conversation-state features
+- [x] **8.1** MCP Streamable HTTP Transport (2025 spec) — `/mcp` accepts JSON-RPC over the 2025 Streamable HTTP transport shape (MM-777)
+- [x] **8.2** MCP resource & tool discovery — Clients can list MoonMind MCP resources and tools
+- [x] **8.3** Webhook / callback API for external agents — Generic integration callback receiver, correlation lookup, callback URL provisioning, and polling fallback are available for external agents that advertise callback support (MM-779)
+- [ ] **8.4** OpenAI Responses API compatibility — Only Chat Completions format supported
 
 ---
 

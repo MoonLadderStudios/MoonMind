@@ -11,6 +11,8 @@ from moonmind.mcp.jules_tool_registry import (
 from moonmind.mcp.tool_registry import (
     QueueToolExecutionContext,
     QueueToolRegistry,
+    ResourceListResponse,
+    ResourceMetadata,
     ToolArgumentsValidationError,
     ToolCallRequest,
     ToolCallResponse,
@@ -26,6 +28,8 @@ __all__ = [
     "JulesToolRegistry",
     "QueueToolExecutionContext",
     "QueueToolRegistry",
+    "ResourceListResponse",
+    "ResourceMetadata",
     "ToolArgumentsValidationError",
     "ToolCallRequest",
     "ToolCallResponse",

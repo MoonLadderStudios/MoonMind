@@ -265,7 +265,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/mcp/tools": {
+    "/mcp": {
         parameters: {
             query?: never;
             header?: never;
@@ -273,12 +273,16 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List Tools
-         * @description Return all registered MCP tool definitions.
+         * Handle Streamable Http Get
+         * @description Return 405 because MoonMind does not emit server-initiated SSE messages.
          */
-        get: operations["list_tools_mcp_tools_get"];
+        get: operations["handle_streamable_http_get_mcp_get"];
         put?: never;
-        post?: never;
+        /**
+         * Handle Streamable Http Post
+         * @description Handle MCP Streamable HTTP JSON-RPC messages at the single MCP endpoint.
+         */
+        post: operations["handle_streamable_http_post_mcp_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -294,9 +298,29 @@ export interface paths {
         };
         /**
          * List Resources
-         * @description Return MCP resource definitions exposed by MoonMind.
+         * @description Return MoonMind MCP resource definitions.
          */
         get: operations["list_resources_mcp_resources_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mcp/tools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Tools
+         * @description Return all registered MCP tool definitions.
+         */
+        get: operations["list_tools_mcp_tools_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -319,30 +343,6 @@ export interface paths {
          * @description Dispatch one MCP tool invocation.
          */
         post: operations["call_tool_mcp_tools_call_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/mcp": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Open Streamable Http Channel
-         * @description Open the GET side of the MCP Streamable HTTP transport.
-         */
-        get: operations["open_streamable_http_channel_mcp_get"];
-        put?: never;
-        /**
-         * Streamable Http Rpc
-         * @description Handle MCP Streamable HTTP JSON-RPC requests on the canonical endpoint.
-         */
-        post: operations["streamable_http_rpc_mcp_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4689,6 +4689,16 @@ export interface components {
             relationship: string;
             /** Status */
             status?: string | null;
+            /** Targetruntime */
+            targetRuntime?: string | null;
+            /** Model */
+            model?: string | null;
+            /** Requestedmodel */
+            requestedModel?: string | null;
+            /** Resolvedmodel */
+            resolvedModel?: string | null;
+            /** Effort */
+            effort?: string | null;
             /** Createdat */
             createdAt?: string | null;
             /** Href */
@@ -6431,7 +6441,7 @@ export interface components {
         };
         /**
          * ResourceListResponse
-         * @description MCP resource discovery response envelope.
+         * @description Resource discovery response envelope.
          */
         ResourceListResponse: {
             /** Resources */
@@ -6439,7 +6449,7 @@ export interface components {
         };
         /**
          * ResourceMetadata
-         * @description Resource definition payload returned by MCP resource discovery.
+         * @description Resource definition payload returned by discovery endpoint.
          */
         ResourceMetadata: {
             /** Uri */
@@ -6448,11 +6458,8 @@ export interface components {
             name: string;
             /** Description */
             description?: string | null;
-            /**
-             * Mimetype
-             * @default application/json
-             */
-            mimeType: string;
+            /** Mimetype */
+            mimeType?: string | null;
         };
         /**
          * ResponseCreateRequest
@@ -8984,7 +8991,7 @@ export interface operations {
             };
         };
     };
-    list_tools_mcp_tools_get: {
+    handle_streamable_http_get_mcp_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -8999,7 +9006,27 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ToolListResponse"];
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    handle_streamable_http_post_mcp_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };
@@ -9020,6 +9047,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResourceListResponse"];
+                };
+            };
+        };
+    };
+    list_tools_mcp_tools_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ToolListResponse"];
                 };
             };
         };
@@ -9053,46 +9100,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    open_streamable_http_channel_mcp_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
-    streamable_http_rpc_mcp_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
                 };
             };
         };

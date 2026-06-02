@@ -1,4 +1,4 @@
-"""HTTP MCP discovery, tool-wrapper, and streamable transport endpoints."""
+"""MCP Streamable HTTP and helper tool endpoints."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 
 from api_service.auth_providers import get_current_user
 from api_service.db.models import User
@@ -39,7 +39,9 @@ from moonmind.workflows.adapters.jules_client import JulesClient, JulesClientErr
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/mcp", tags=["mcp-tools"])
-_MCP_PROTOCOL_VERSION = "2025-06-18"
+MCP_PROTOCOL_VERSION = "2025-03-26"
+SUPPORTED_MCP_PROTOCOL_VERSIONS = {MCP_PROTOCOL_VERSION, "2025-06-18"}
+MCP_SERVER_INFO = {"name": "moonmind", "version": "0.1.0"}
 
 _queue_registry = QueueToolRegistry()
 _execution_tool_registry = ExecutableToolDiscoveryRegistry()
@@ -47,6 +49,26 @@ _jira_registry: JiraToolRegistry | None = None
 _jira_service: JiraToolService | None = None
 _jules_registry: JulesToolRegistry | None = None
 _jules_client: JulesClient | None = None
+
+_resources = (
+    ResourceMetadata(
+        uri="moonmind://context",
+        name="context-completion",
+        description=(
+            "Chat-style context completion endpoint with optional RAG, available "
+            "through POST /context."
+        ),
+        mime_type="application/json",
+    ),
+    ResourceMetadata(
+        uri="moonmind://mcp/tools",
+        name="tool-catalog",
+        description=(
+            "Registered MoonMind tool catalog, available through GET /mcp/tools."
+        ),
+        mime_type="application/json",
+    ),
+)
 
 if settings.atlassian.jira.jira_tool_enabled:
     _jira_service = JiraToolService(atlassian_settings=settings.atlassian)
@@ -72,85 +94,6 @@ if settings.jules.jules_enabled:
             "JULES_ENABLED is true but JULES_API_URL or JULES_API_KEY is missing; "
             "Jules tools will not be registered"
         )
-
-def _list_all_tools() -> list:
-    tools = _queue_registry.list_tools() + _execution_tool_registry.list_tools()
-    if _jira_registry is not None:
-        tools = tools + _jira_registry.list_tools()
-    if _jules_registry is not None:
-        tools = tools + _jules_registry.list_tools()
-    return tools
-
-def _list_resources() -> list[ResourceMetadata]:
-    return [
-        ResourceMetadata(
-            uri="moonmind://mcp/tools",
-            name="MoonMind MCP tool catalog",
-            description="Registered tool names, descriptions, and JSON Schemas.",
-            mimeType="application/json",
-        ),
-        ResourceMetadata(
-            uri="moonmind://integrations/callbacks",
-            name="MoonMind integration callback API",
-            description=(
-                "Generic external-agent callback receiver contract and defaults."
-            ),
-            mimeType="application/json",
-        ),
-        ResourceMetadata(
-            uri="moonmind://context",
-            name="MoonMind context completion API",
-            description="Context-style completion endpoint with optional RAG.",
-            mimeType="application/json",
-        ),
-    ]
-
-def _read_resource(uri: str) -> dict[str, Any]:
-    if uri == "moonmind://mcp/tools":
-        return {
-            "uri": uri,
-            "mimeType": "application/json",
-            "text": json.dumps(
-                ToolListResponse(tools=_list_all_tools()).model_dump(by_alias=True),
-                sort_keys=True,
-            ),
-        }
-    if uri == "moonmind://integrations/callbacks":
-        return {
-            "uri": uri,
-            "mimeType": "application/json",
-            "text": json.dumps(
-                {
-                    "endpointTemplate": (
-                        "/api/integrations/{integrationName}/callbacks/"
-                        "{callbackCorrelationKey}"
-                    ),
-                    "method": "POST",
-                    "auth": [
-                        "X-MoonMind-Integration-Token",
-                        "Authorization: Bearer <token>",
-                    ],
-                    "payload": "IntegrationCallbackRequest",
-                    "genericIntegrationNames": True,
-                },
-                sort_keys=True,
-            ),
-        }
-    if uri == "moonmind://context":
-        return {
-            "uri": uri,
-            "mimeType": "application/json",
-            "text": json.dumps(
-                {
-                    "endpoint": "/context",
-                    "method": "POST",
-                    "contract": "ContextRequest",
-                    "ragSupported": True,
-                },
-                sort_keys=True,
-            ),
-        }
-    raise ToolNotFoundError(uri)
 
 def _to_http_exception(exc: Exception) -> HTTPException:
     if isinstance(exc, ToolNotFoundError):
@@ -190,10 +133,26 @@ def _to_http_exception(exc: Exception) -> HTTPException:
         },
     )
 
-async def _dispatch_tool(
-    payload: ToolCallRequest,
-    user: User,
-) -> Any:
+
+def _list_registered_tools() -> list[Any]:
+    tools = _queue_registry.list_tools() + _execution_tool_registry.list_tools()
+    if _jira_registry is not None:
+        tools = tools + _jira_registry.list_tools()
+    if _jules_registry is not None:
+        tools = tools + _jules_registry.list_tools()
+    return tools
+
+
+def _list_streamable_callable_tools() -> list[Any]:
+    tools = _queue_registry.list_tools()
+    if _jira_registry is not None:
+        tools = tools + _jira_registry.list_tools()
+    if _jules_registry is not None:
+        tools = tools + _jules_registry.list_tools()
+    return tools
+
+
+async def _dispatch_tool_call(payload: ToolCallRequest, user: User) -> Any:
     if _execution_tool_registry.has_tool(payload.tool):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -224,6 +183,7 @@ async def _dispatch_tool(
             arguments=payload.arguments,
             context=jules_context,
         )
+
     queue_context = QueueToolExecutionContext(
         service=None,
         user_id=getattr(user, "id", None),
@@ -234,19 +194,302 @@ async def _dispatch_tool(
         context=queue_context,
     )
 
-@router.get("/tools", response_model=ToolListResponse)
-async def list_tools(
-    _user: User = Depends(get_current_user()),
-) -> ToolListResponse:
-    """Return all registered MCP tool definitions."""
-    return ToolListResponse(tools=_list_all_tools())
+
+def _json_rpc_result(request_id: str | int, result: dict[str, Any]) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": request_id, "result": result}
+
+
+def _json_rpc_error(
+    request_id: str | int | None,
+    *,
+    code: int,
+    message: str,
+    data: Any | None = None,
+) -> dict[str, Any]:
+    error: dict[str, Any] = {"code": code, "message": message}
+    if data is not None:
+        error["data"] = data
+    return {"jsonrpc": "2.0", "id": request_id, "error": error}
+
+
+def _validate_streamable_accept_header(request: Request) -> None:
+    accept = request.headers.get("accept", "")
+    accepted_types = [
+        value.split(";", maxsplit=1)[0].strip()
+        for value in accept.split(",")
+        if value.strip()
+    ]
+    if accepted_types and not any(
+        value in {"application/json", "*/*"} or value.endswith("/*")
+        for value in accepted_types
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_406_NOT_ACCEPTABLE,
+            detail={
+                "code": "mcp_accept_header_required",
+                "message": (
+                    "MCP Streamable HTTP clients must send an Accept header "
+                    "that allows application/json."
+                ),
+            },
+        )
+
+
+def _validate_protocol_version_header(request: Request) -> None:
+    version = request.headers.get("MCP-Protocol-Version")
+    if version and version not in SUPPORTED_MCP_PROTOCOL_VERSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "unsupported_mcp_protocol_version",
+                "message": f"Unsupported MCP protocol version: {version}",
+            },
+        )
+
+
+def _is_json_rpc_notification(message: Any) -> bool:
+    return (
+        isinstance(message, dict)
+        and message.get("jsonrpc") == "2.0"
+        and ("id" not in message or message.get("id") is None)
+        and isinstance(message.get("method"), str)
+    )
+
+
+def _is_json_rpc_response(message: Any) -> bool:
+    return (
+        isinstance(message, dict)
+        and message.get("jsonrpc") == "2.0"
+        and "method" not in message
+        and "id" in message
+        and ("result" in message or "error" in message)
+    )
+
+
+def _tool_result_payload(result: Any) -> dict[str, Any]:
+    if isinstance(result, str):
+        text = result
+        structured_content: Any = result
+    else:
+        text = json.dumps(result, sort_keys=True, default=str)
+        structured_content = result if isinstance(result, dict) else {"result": result}
+    return {
+        "content": [{"type": "text", "text": text}],
+        "structuredContent": structured_content,
+        "isError": False,
+    }
+
+
+def _tool_error_payload(detail: Any) -> dict[str, Any]:
+    if isinstance(detail, dict):
+        text = str(detail.get("message") or detail.get("code") or detail)
+        structured_content = detail
+    else:
+        text = str(detail)
+        structured_content = {"message": text}
+    return {
+        "content": [{"type": "text", "text": text}],
+        "structuredContent": structured_content,
+        "isError": True,
+    }
+
+
+async def _handle_json_rpc_request(message: Any, user: User) -> dict[str, Any] | None:
+    if _is_json_rpc_notification(message) or _is_json_rpc_response(message):
+        return None
+    if not isinstance(message, dict):
+        return _json_rpc_error(
+            None, code=-32600, message="Invalid JSON-RPC request payload."
+        )
+    request_id = message.get("id")
+    method = message.get("method")
+    if message.get("jsonrpc") != "2.0" or request_id is None or not isinstance(
+        method, str
+    ):
+        return _json_rpc_error(
+            request_id if isinstance(request_id, (str, int)) else None,
+            code=-32600,
+            message="Invalid JSON-RPC request.",
+        )
+    if not isinstance(request_id, (str, int)):
+        return _json_rpc_error(
+            None,
+            code=-32600,
+            message="JSON-RPC request id must be a string or integer.",
+        )
+    params = message.get("params") or {}
+    if params is not None and not isinstance(params, dict):
+        return _json_rpc_error(
+            request_id, code=-32602, message="JSON-RPC params must be an object."
+        )
+
+    try:
+        if method == "initialize":
+            requested_version = str(params.get("protocolVersion") or "")
+            protocol_version = (
+                requested_version
+                if requested_version in SUPPORTED_MCP_PROTOCOL_VERSIONS
+                else MCP_PROTOCOL_VERSION
+            )
+            return _json_rpc_result(
+                request_id,
+                {
+                    "protocolVersion": protocol_version,
+                    "capabilities": {"tools": {"listChanged": False}},
+                    "serverInfo": MCP_SERVER_INFO,
+                    "instructions": (
+                        "MoonMind MCP exposes trusted tools through the "
+                        "Streamable HTTP transport. Use tools/list and tools/call."
+                    ),
+                },
+            )
+        if method == "ping":
+            return _json_rpc_result(request_id, {})
+        if method == "tools/list":
+            tools = [
+                tool.model_dump(by_alias=True)
+                for tool in _list_streamable_callable_tools()
+            ]
+            return _json_rpc_result(request_id, {"tools": tools})
+        if method == "tools/call":
+            tool_name = params.get("name")
+            if not isinstance(tool_name, str) or not tool_name:
+                return _json_rpc_error(
+                    request_id,
+                    code=-32602,
+                    message="tools/call requires params.name.",
+                )
+            arguments = params.get("arguments") or {}
+            if not isinstance(arguments, dict):
+                return _json_rpc_error(
+                    request_id,
+                    code=-32602,
+                    message="tools/call params.arguments must be an object.",
+                )
+            result = await _dispatch_tool_call(
+                ToolCallRequest(tool=tool_name, arguments=arguments),
+                user,
+            )
+            return _json_rpc_result(request_id, _tool_result_payload(result))
+    except HTTPException as exc:
+        if method == "tools/call":
+            return _json_rpc_result(request_id, _tool_error_payload(exc.detail))
+        return _json_rpc_error(
+            request_id,
+            code=-32000,
+            message="MCP tool request failed.",
+            data=exc.detail,
+        )
+    except (ToolNotFoundError, ToolArgumentsValidationError) as exc:
+        if method == "tools/call":
+            return _json_rpc_result(request_id, _tool_error_payload(str(exc)))
+        return _json_rpc_error(request_id, code=-32602, message=str(exc))
+    except (JiraToolError, JulesClientError) as exc:
+        mapped = _to_http_exception(exc)
+        if method == "tools/call":
+            return _json_rpc_result(request_id, _tool_error_payload(mapped.detail))
+        return _json_rpc_error(
+            request_id,
+            code=-32000,
+            message="MCP tool request failed.",
+            data=mapped.detail,
+        )
+    except Exception:
+        logger.exception("mcp_streamable_http_request_failed method=%s", method)
+        return _json_rpc_error(
+            request_id,
+            code=-32603,
+            message="An unexpected MCP request error occurred.",
+        )
+
+    return _json_rpc_error(
+        request_id, code=-32601, message=f"Unsupported MCP method: {method}"
+    )
+
+
+@router.post("")
+async def handle_streamable_http_post(
+    request: Request,
+    user: User = Depends(get_current_user()),
+) -> Response:
+    """Handle MCP Streamable HTTP JSON-RPC messages at the single MCP endpoint."""
+
+    _validate_streamable_accept_header(request)
+    _validate_protocol_version_header(request)
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse(
+            _json_rpc_error(None, code=-32700, message="Parse error."),
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if isinstance(payload, list):
+        if not payload:
+            return JSONResponse(
+                _json_rpc_error(None, code=-32600, message="Empty JSON-RPC batch."),
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        has_batched_initialize = any(
+            isinstance(message, dict) and message.get("method") == "initialize"
+            for message in payload
+        )
+        if has_batched_initialize:
+            return JSONResponse(
+                _json_rpc_error(
+                    None,
+                    code=-32600,
+                    message="MCP initialize requests must not be batched.",
+                ),
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        responses = [
+            response
+            for response in [
+                await _handle_json_rpc_request(message, user) for message in payload
+            ]
+            if response is not None
+        ]
+        if not responses:
+            return Response(status_code=status.HTTP_202_ACCEPTED)
+        return JSONResponse(responses)
+
+    response = await _handle_json_rpc_request(payload, user)
+    if response is None:
+        return Response(status_code=status.HTTP_202_ACCEPTED)
+    return JSONResponse(response)
+
+
+@router.get("")
+async def handle_streamable_http_get(request: Request) -> Response:
+    """Return 405 because MoonMind does not emit server-initiated SSE messages."""
+
+    accept = request.headers.get("accept", "")
+    if "text/event-stream" not in accept:
+        raise HTTPException(
+            status_code=status.HTTP_406_NOT_ACCEPTABLE,
+            detail={
+                "code": "mcp_sse_accept_header_required",
+                "message": "MCP Streamable HTTP GET requires text/event-stream.",
+            },
+        )
+    return Response(status_code=status.HTTP_405_METHOD_NOT_ALLOWED)
+
 
 @router.get("/resources", response_model=ResourceListResponse)
 async def list_resources(
     _user: User = Depends(get_current_user()),
 ) -> ResourceListResponse:
-    """Return MCP resource definitions exposed by MoonMind."""
-    return ResourceListResponse(resources=_list_resources())
+    """Return MoonMind MCP resource definitions."""
+    return ResourceListResponse(resources=_resources)
+
+
+@router.get("/tools", response_model=ToolListResponse)
+async def list_tools(
+    _user: User = Depends(get_current_user()),
+) -> ToolListResponse:
+    """Return all registered MCP tool definitions."""
+    return ToolListResponse(tools=_list_registered_tools())
 
 @router.post("/tools/call", response_model=ToolCallResponse)
 async def call_tool(
@@ -256,7 +499,7 @@ async def call_tool(
     """Dispatch one MCP tool invocation."""
 
     try:
-        result = await _dispatch_tool(payload, user)
+        result = await _dispatch_tool_call(payload, user)
     except HTTPException:
         raise
     except JiraToolError as exc:
@@ -264,150 +507,3 @@ async def call_tool(
     except Exception as exc:  # pragma: no cover - mapping layer
         raise _to_http_exception(exc) from exc
     return ToolCallResponse(result=result)
-
-def _jsonrpc_response(
-    *,
-    request_id: Any,
-    result: Any | None = None,
-    error: dict[str, Any] | None = None,
-) -> JSONResponse:
-    content: dict[str, Any] = {"jsonrpc": "2.0", "id": request_id}
-    if error is not None:
-        content["error"] = error
-    else:
-        content["result"] = result
-    return JSONResponse(
-        content=content,
-        headers={"MCP-Protocol-Version": _MCP_PROTOCOL_VERSION},
-    )
-
-def _jsonrpc_error(
-    *,
-    request_id: Any,
-    code: int,
-    message: str,
-    data: Any | None = None,
-) -> JSONResponse:
-    error: dict[str, Any] = {"code": code, "message": message}
-    if data is not None:
-        error["data"] = data
-    return _jsonrpc_response(request_id=request_id, error=error)
-
-@router.get("")
-async def open_streamable_http_channel(
-    _request: Request,
-    _user: User = Depends(get_current_user()),
-) -> StreamingResponse:
-    """Open the GET side of the MCP Streamable HTTP transport."""
-    return StreamingResponse(
-        iter((b": moonmind mcp stream\n\n",)),
-        media_type="text/event-stream",
-        headers={"MCP-Protocol-Version": _MCP_PROTOCOL_VERSION},
-    )
-
-@router.post("")
-async def streamable_http_rpc(
-    request: Request,
-    user: User = Depends(get_current_user()),
-) -> Response:
-    """Handle MCP Streamable HTTP JSON-RPC requests on the canonical endpoint."""
-    payload = await request.json()
-    if not isinstance(payload, dict) or payload.get("jsonrpc") != "2.0":
-        return _jsonrpc_error(
-            request_id=payload.get("id") if isinstance(payload, dict) else None,
-            code=-32600,
-            message="Invalid JSON-RPC request.",
-        )
-
-    request_id = payload.get("id")
-    method = str(payload.get("method") or "")
-    raw_params = payload.get("params")
-    params = raw_params if isinstance(raw_params, dict) else {}
-
-    if request_id is None:
-        return Response(
-            status_code=status.HTTP_202_ACCEPTED,
-            headers={"MCP-Protocol-Version": _MCP_PROTOCOL_VERSION},
-        )
-
-    try:
-        if method == "initialize":
-            result = {
-                "protocolVersion": _MCP_PROTOCOL_VERSION,
-                "capabilities": {
-                    "tools": {"listChanged": False},
-                    "resources": {"listChanged": False},
-                },
-                "serverInfo": {"name": "moonmind", "version": "0.1.0"},
-            }
-        elif method == "ping":
-            result = {}
-        elif method == "tools/list":
-            result = ToolListResponse(tools=_list_all_tools()).model_dump(
-                by_alias=True
-            )
-        elif method == "tools/call":
-            result_payload = await _dispatch_tool(
-                ToolCallRequest(
-                    tool=str(params.get("name") or ""),
-                    arguments=dict(params.get("arguments") or {}),
-                ),
-                user,
-            )
-            tool_text = (
-                result_payload
-                if isinstance(result_payload, str)
-                else json.dumps(result_payload, sort_keys=True)
-            )
-            result = {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": tool_text,
-                    }
-                ],
-                "structuredContent": result_payload,
-                "isError": False,
-            }
-        elif method == "resources/list":
-            result = ResourceListResponse(resources=_list_resources()).model_dump(
-                by_alias=True
-            )
-        elif method == "resources/read":
-            result = {"contents": [_read_resource(str(params.get("uri") or ""))]}
-        else:
-            return _jsonrpc_error(
-                request_id=request_id,
-                code=-32601,
-                message=f"Method '{method}' is not supported.",
-            )
-    except HTTPException as exc:
-        return _jsonrpc_error(
-            request_id=request_id,
-            code=-32000,
-            message="MCP request failed.",
-            data=exc.detail,
-        )
-    except JiraToolError as exc:
-        return _jsonrpc_error(
-            request_id=request_id,
-            code=-32000,
-            message=str(exc),
-            data={"code": exc.code, "statusCode": exc.status_code},
-        )
-    except (ToolNotFoundError, ToolArgumentsValidationError) as exc:
-        return _jsonrpc_error(
-            request_id=request_id,
-            code=-32602,
-            message=str(exc),
-        )
-    except Exception as exc:  # pragma: no cover - defensive mapping
-        logger.exception("Unexpected MCP JSON-RPC error")
-        return _jsonrpc_error(
-            request_id=request_id,
-            code=-32603,
-            message="Internal MCP error.",
-            data={"error": str(exc)},
-        )
-
-    return _jsonrpc_response(request_id=request_id, result=result)
