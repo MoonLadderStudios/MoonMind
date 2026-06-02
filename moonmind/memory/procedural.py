@@ -22,7 +22,9 @@ SignatureSourceKind = Literal["log", "structured_error", "artifact", "manual"]
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 _ERROR_TOKEN_RE = re.compile(
     r"(error|exception|traceback|failed|failure|timeout|"
-    r"modulenotfound|importerror|assertionerror|valueerror|runtimeerror)",
+    r"modulenotfound|importerror|assertionerror|valueerror|runtimeerror|"
+    r"refused|denied|invalid|not found|abort|exit|fatal|critical|unreachable|"
+    r"unhandled)",
     re.IGNORECASE,
 )
 _PATH_RE = re.compile(r"(?<!\w)(?:[A-Za-z]:)?/[^\s:]+")
@@ -37,7 +39,9 @@ _LONG_NUMBER_RE = re.compile(r"\b\d{4,}\b")
 _SPACE_RE = re.compile(r"\s+")
 _SECRETISH_RE = re.compile(
     r"(ghp_|github_pat_|AIza|ATATT|AKIA|"
-    r"-----BEGIN [A-Z ]*PRIVATE KEY-----)",
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----|"
+    r"\b(?:token|password|api[_-]?key|access[_-]?token|auth[_-]?token)"
+    r"\s*[:=]\s*\S+)",
     re.IGNORECASE,
 )
 
@@ -239,7 +243,7 @@ class FileFixPatternStore:
         if not normalized and not signature_id:
             return []
 
-        matches: list[tuple[int, FixPattern]] = []
+        matches: list[tuple[tuple[int, int], FixPattern]] = []
         for pattern in self.list_patterns():
             score = 0
             if signature_id and pattern.signature.signature_id == signature_id:
@@ -252,7 +256,7 @@ class FileFixPatternStore:
             ):
                 score = 50
             if score:
-                matches.append((score + pattern.success_count, pattern))
+                matches.append(((score, pattern.success_count), pattern))
 
         matches.sort(key=lambda item: item[0], reverse=True)
         return [pattern for _, pattern in matches[: max(limit, 0)]]
@@ -355,8 +359,16 @@ def _merge_patterns(existing: FixPattern, incoming: FixPattern) -> FixPattern:
 
 
 def _token_overlap(left: str, right: str) -> float:
-    left_tokens = set(left.split())
-    right_tokens = set(right.split())
+    def _clean_tokens(text: str) -> set[str]:
+        tokens: set[str] = set()
+        for token in text.split():
+            cleaned = re.sub(r"^\W+|\W+$", "", token)
+            if cleaned:
+                tokens.add(cleaned)
+        return tokens
+
+    left_tokens = _clean_tokens(left)
+    right_tokens = _clean_tokens(right)
     if not left_tokens or not right_tokens:
         return 0.0
     return len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
