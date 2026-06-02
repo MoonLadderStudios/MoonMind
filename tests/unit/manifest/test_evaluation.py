@@ -13,9 +13,11 @@ from moonmind.manifest.evaluation import (
     DatasetEvaluation,
     EvaluationResult,
     MetricScore,
+    _baseline_retrieved_ids,
     hit_rate_at_k,
     ndcg_at_k,
     _load_dataset,
+    _score_metric,
 )
 
 # ---------------------------------------------------------------------------
@@ -156,11 +158,67 @@ class TestLoadDataset:
         with pytest.raises(ValueError, match="Missing 'relevant_ids'"):
             _load_dataset(str(f))
 
+    def test_invalid_retrieved_ids_field(self, tmp_path):
+        f = tmp_path / "bad_retrieved.jsonl"
+        f.write_text(
+            json.dumps(
+                {
+                    "query": "what is X?",
+                    "relevant_ids": ["d1"],
+                    "retrieved_ids": "not-a-list",
+                }
+            )
+            + "\n"
+        )
+        with pytest.raises(
+            ValueError,
+            match="Field 'retrieved_ids' must be a non-empty string list",
+        ):
+            _load_dataset(str(f))
+
+    def test_invalid_retrieved_ids_item_reports_line_number(self, tmp_path):
+        f = tmp_path / "bad_retrieved_item.jsonl"
+        f.write_text(
+            json.dumps({"query": "what is X?", "relevant_ids": ["d1"]}) + "\n"
+            + json.dumps(
+                {
+                    "query": "what is Y?",
+                    "relevant_ids": ["d2"],
+                    "retrieved_ids": ["d2", ""],
+                }
+            )
+            + "\n"
+        )
+        with pytest.raises(
+            ValueError,
+            match=r"Field 'retrieved_ids' must be a non-empty string list on line 2",
+        ):
+            _load_dataset(str(f))
+
 # ---------------------------------------------------------------------------
 # Committed baseline
 # ---------------------------------------------------------------------------
 
 class TestCommittedBaseline:
+    def test_baseline_retrieved_ids_returns_none_when_absent(self):
+        assert _baseline_retrieved_ids([{"relevant_ids": ["d1"]}]) is None
+
+    def test_baseline_retrieved_ids_rejects_inconsistent_entries(self):
+        with pytest.raises(ValueError, match="Inconsistent dataset"):
+            _baseline_retrieved_ids(
+                [
+                    {"relevant_ids": ["d1"], "retrieved_ids": ["d1"]},
+                    {"relevant_ids": ["d2"]},
+                ]
+            )
+
+    def test_metric_name_accepts_separator_variants(self):
+        entries = [{"relevant_ids": ["d1"]}]
+        retrieved = [["d1"]]
+        assert _score_metric("hit_rate@10", entries, retrieved) == 1.0
+        assert _score_metric("hit-rate@10", entries, retrieved) == 1.0
+        assert _score_metric("hitRate@10", entries, retrieved) == 1.0
+
     def test_mm756_smoke_baseline_passes_manifest_thresholds(self):
         manifest_path = Path("examples/readers-full-example.yaml")
         result = run_evaluate(manifest_path=str(manifest_path), dataset="smoke")

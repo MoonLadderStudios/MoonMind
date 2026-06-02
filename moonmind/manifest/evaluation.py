@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-_METRIC_NAME_RE = re.compile(r"^(?P<name>[A-Za-z]+)@(?P<k>[1-9][0-9]*)$")
+_METRIC_NAME_RE = re.compile(r"^(?P<name>[A-Za-z0-9_\-]+)@(?P<k>[1-9][0-9]*)$")
 
 @dataclass
 class MetricScore:
@@ -192,6 +192,15 @@ def _load_dataset(path: str) -> List[Dict[str, Any]]:
                 f"Field 'relevant_ids' must be a non-empty string list on line "
                 f"{line_num} of {p}"
             )
+        if "retrieved_ids" in entry:
+            raw_ids = entry["retrieved_ids"]
+            if not isinstance(raw_ids, list) or not all(
+                isinstance(doc_id, str) and doc_id for doc_id in raw_ids
+            ):
+                raise ValueError(
+                    f"Field 'retrieved_ids' must be a non-empty string list on line "
+                    f"{line_num} of {p}"
+                )
         entries.append(entry)
 
     return entries
@@ -205,11 +214,18 @@ def _metric_name_and_k(metric_name: str) -> tuple[str, int]:
 
 def _baseline_retrieved_ids(entries: List[Dict[str, Any]]) -> List[List[str]] | None:
     """Return committed baseline retrieval IDs when every entry provides them."""
+    has_any = any("retrieved_ids" in entry for entry in entries)
+    if not has_any:
+        return None
+
     retrieved: List[List[str]] = []
     for entry in entries:
         raw_ids = entry.get("retrieved_ids")
         if raw_ids is None:
-            return None
+            raise ValueError(
+                "Inconsistent dataset: 'retrieved_ids' is provided in some entries "
+                "but missing in others."
+            )
         if not isinstance(raw_ids, list) or not all(
             isinstance(doc_id, str) and doc_id for doc_id in raw_ids
         ):
@@ -229,7 +245,7 @@ def _score_metric(
         return 0.0
 
     family, k = _metric_name_and_k(metric_name)
-    normalized = family.lower()
+    normalized = family.lower().replace("_", "").replace("-", "")
     if normalized == "hitrate":
         return hit_rate_at_k(entries, retrieved, k=k)
     if normalized == "ndcg":
@@ -266,6 +282,12 @@ def evaluate_manifest(
         try:
             entries = _load_dataset(ds_cfg.path)
             retrieved = _baseline_retrieved_ids(entries)
+            if retrieved is None:
+                logger.info(
+                    "Dataset '%s' does not contain committed 'retrieved_ids'. "
+                    "Scoring 0.0 as live retriever is not yet integrated.",
+                    ds_cfg.name,
+                )
         except (FileNotFoundError, ValueError) as exc:
             logger.warning("Could not load dataset '%s': %s", ds_cfg.name, exc)
             for metric_cfg in eval_config.metrics:
