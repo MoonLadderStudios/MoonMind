@@ -1716,6 +1716,69 @@ class RAGSettings(BaseSettings):
 
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
+class MemorySettings(BaseSettings):
+    """Runtime controls for memory and procedural-learning surfaces."""
+
+    enabled: bool = Field(
+        True,
+        validation_alias=AliasChoices("MEMORY_ENABLED"),
+        description="Master toggle for MoonMind memory context and writeback surfaces.",
+    )
+    planning: Literal["off", "beads"] = Field(
+        "off",
+        validation_alias=AliasChoices("MEMORY_PLANNING"),
+        description="Planning-memory provider. Allowed values: off, beads.",
+    )
+    history: Literal["off", "digest"] = Field(
+        "off",
+        validation_alias=AliasChoices("MEMORY_HISTORY"),
+        description="Task-history memory provider. Allowed values: off, digest.",
+    )
+    long_term: Literal["off", "mem0"] = Field(
+        "off",
+        validation_alias=AliasChoices("MEMORY_LONG_TERM"),
+        description="Long-term memory provider. Allowed values: off, mem0.",
+    )
+    fail_open: bool = Field(
+        True,
+        validation_alias=AliasChoices("MEMORY_FAIL_OPEN"),
+        description=(
+            "Allow chat and task execution to continue when memory providers fail."
+        ),
+    )
+    context_budget_tokens: int = Field(
+        4096,
+        validation_alias=AliasChoices("MEMORY_CONTEXT_BUDGET_TOKENS"),
+        gt=0,
+        description="Maximum token budget for memory context packed into a request.",
+    )
+
+    @property
+    def planning_enabled(self) -> bool:
+        """Return whether planning-memory retrieval should run."""
+
+        return self.enabled and self.planning != "off"
+
+    @property
+    def history_enabled(self) -> bool:
+        """Return whether task-history memory retrieval/writeback should run."""
+
+        return self.enabled and self.history != "off"
+
+    @property
+    def long_term_enabled(self) -> bool:
+        """Return whether long-term memory retrieval/writeback should run."""
+
+        return self.enabled and self.long_term != "off"
+
+    model_config = SettingsConfigDict(
+        populate_by_name=True,
+        env_prefix="",
+        env_file=str(ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
 class LocalDataSettings(BaseSettings):
     """Settings for local data indexing"""
 
@@ -2105,6 +2168,7 @@ class AppSettings(BaseSettings):
     google_drive: GoogleDriveSettings = Field(default_factory=GoogleDriveSettings)
     qdrant: QdrantSettings = Field(default_factory=QdrantSettings)
     rag: RAGSettings = Field(default_factory=RAGSettings)
+    memory: MemorySettings = Field(default_factory=MemorySettings)
     atlassian: AtlassianSettings = Field(default_factory=AtlassianSettings)
     local_data: LocalDataSettings = Field(default_factory=LocalDataSettings)
     oidc: OIDCSettings = Field(default_factory=OIDCSettings)

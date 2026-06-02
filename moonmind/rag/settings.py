@@ -46,6 +46,12 @@ class RagRuntimeSettings:
     run_id: Optional[str]
     rag_enabled: bool
     qdrant_enabled: bool
+    memory_enabled: bool
+    memory_planning: str
+    memory_history: str
+    memory_long_term: str
+    memory_fail_open: bool
+    memory_context_budget_tokens: int
 
     @classmethod
     def from_env(cls, source: Mapping[str, str] | None = None) -> "RagRuntimeSettings":
@@ -130,6 +136,42 @@ class RagRuntimeSettings:
         qdrant_enabled = env_to_bool(
             _get_env(env, "QDRANT_ENABLED", "true"), default=True
         )
+        memory_enabled = env_to_bool(
+            _get_env(env, "MEMORY_ENABLED", str(app_settings.memory.enabled)),
+            default=app_settings.memory.enabled,
+        )
+        memory_planning = (
+            _get_env(env, "MEMORY_PLANNING", app_settings.memory.planning)
+            or app_settings.memory.planning
+        ).strip().lower()
+        memory_history = (
+            _get_env(env, "MEMORY_HISTORY", app_settings.memory.history)
+            or app_settings.memory.history
+        ).strip().lower()
+        memory_long_term = (
+            _get_env(env, "MEMORY_LONG_TERM", app_settings.memory.long_term)
+            or app_settings.memory.long_term
+        ).strip().lower()
+        memory_fail_open = env_to_bool(
+            _get_env(env, "MEMORY_FAIL_OPEN", str(app_settings.memory.fail_open)),
+            default=app_settings.memory.fail_open,
+        )
+        memory_context_budget_tokens = int(
+            _get_env(
+                env,
+                "MEMORY_CONTEXT_BUDGET_TOKENS",
+                str(app_settings.memory.context_budget_tokens),
+            )
+            or app_settings.memory.context_budget_tokens
+        )
+        if memory_planning not in {"off", "beads"}:
+            raise ValueError("MEMORY_PLANNING must be one of: off, beads")
+        if memory_history not in {"off", "digest"}:
+            raise ValueError("MEMORY_HISTORY must be one of: off, digest")
+        if memory_long_term not in {"off", "mem0"}:
+            raise ValueError("MEMORY_LONG_TERM must be one of: off, mem0")
+        if memory_context_budget_tokens <= 0:
+            raise ValueError("MEMORY_CONTEXT_BUDGET_TOKENS must be greater than 0")
 
         return cls(
             qdrant_url=qdrant_url,
@@ -153,6 +195,12 @@ class RagRuntimeSettings:
             run_id=run_id,
             rag_enabled=rag_enabled,
             qdrant_enabled=qdrant_enabled,
+            memory_enabled=memory_enabled,
+            memory_planning=memory_planning,
+            memory_history=memory_history,
+            memory_long_term=memory_long_term,
+            memory_fail_open=memory_fail_open,
+            memory_context_budget_tokens=memory_context_budget_tokens,
         )
 
     def resolved_transport(self, preferred: Optional[str]) -> str:
@@ -191,6 +239,24 @@ class RagRuntimeSettings:
         """Return whether the configured embedding provider is recognized."""
 
         return self.embedding_provider.lower() in _SUPPORTED_EMBEDDING_PROVIDERS
+
+    @property
+    def memory_planning_enabled(self) -> bool:
+        """Return whether planning-memory retrieval should run."""
+
+        return self.memory_enabled and self.memory_planning != "off"
+
+    @property
+    def memory_history_enabled(self) -> bool:
+        """Return whether task-history memory should run."""
+
+        return self.memory_enabled and self.memory_history != "off"
+
+    @property
+    def memory_long_term_enabled(self) -> bool:
+        """Return whether long-term memory should run."""
+
+        return self.memory_enabled and self.memory_long_term != "off"
 
     def embedding_provider_configured(
         self, source: Mapping[str, str] | None = None
