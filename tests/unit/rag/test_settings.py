@@ -36,6 +36,9 @@ def _settings(**overrides: object) -> RagRuntimeSettings:
         memory_context_budget_tokens=4096,
         planning_workspace_root=None,
         beads_command="bd",
+        memory_namespace_id="default",
+        mem0_api_key=None,
+        mem0_user_id=None,
     )
     defaults.update(overrides)
     return RagRuntimeSettings(**defaults)
@@ -137,6 +140,48 @@ def test_retrieval_executable_mirrors_reason() -> None:
         {"MOONMIND_RETRIEVAL_TOKEN": "scoped-token"},
         preferred_transport="gateway",
     )
+
+def test_long_term_memory_disabled_by_default() -> None:
+    settings = RagRuntimeSettings.from_env({"MEMORY_ENABLED": "false"})
+    ok, reason = settings.long_term_memory_execution_reason()
+    assert not ok
+    assert reason == "memory_disabled"
+    assert not settings.long_term_memory_enabled()
+
+def test_long_term_memory_mem0_requires_api_key() -> None:
+    settings = RagRuntimeSettings.from_env(
+        {"MEMORY_ENABLED": "true", "MEMORY_LONG_TERM": "mem0"}
+    )
+    ok, reason = settings.long_term_memory_execution_reason()
+    assert not ok
+    assert reason == "mem0_api_key_missing"
+
+def test_long_term_memory_mem0_enabled_with_api_key() -> None:
+    settings = RagRuntimeSettings.from_env(
+        {
+            "MEMORY_ENABLED": "true",
+            "MEMORY_LONG_TERM": "mem0",
+            "MEM0_API_KEY": "mem0-secret",
+            "MEMORY_CONTEXT_BUDGET_TOKENS": "600",
+            "MEMORY_NAMESPACE_ID": "tenant-a",
+            "MEM0_USER_ID": "mem-user",
+        }
+    )
+    ok, reason = settings.long_term_memory_execution_reason()
+    assert ok
+    assert reason == "ok"
+    assert settings.long_term_memory_enabled()
+    assert settings.memory_context_budget_tokens == 600
+    assert settings.memory_namespace_id == "tenant-a"
+    assert settings.mem0_user_id == "mem-user"
+
+def test_long_term_memory_invalid_mode_fails_with_unsupported_reason() -> None:
+    settings = RagRuntimeSettings.from_env(
+        {"MEMORY_ENABLED": "true", "MEMORY_LONG_TERM": "unsupported"}
+    )
+    ok, reason = settings.long_term_memory_execution_reason()
+    assert not ok
+    assert reason == "long_term_memory_unsupported"
 
 def test_memory_plane_helpers_respect_master_toggle() -> None:
     settings = _settings(
