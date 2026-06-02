@@ -4628,6 +4628,16 @@ export interface components {
             relationship: string;
             /** Status */
             status?: string | null;
+            /** Targetruntime */
+            targetRuntime?: string | null;
+            /** Model */
+            model?: string | null;
+            /** Requestedmodel */
+            requestedModel?: string | null;
+            /** Resolvedmodel */
+            resolvedModel?: string | null;
+            /** Effort */
+            effort?: string | null;
             /** Createdat */
             createdAt?: string | null;
             /** Href */

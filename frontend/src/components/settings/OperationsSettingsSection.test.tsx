@@ -66,6 +66,37 @@ const workerSnapshot = {
   },
 };
 
+const workerShardHealth = {
+  shards: [
+    {
+      queueName: 'codex-shard-0',
+      status: 'active',
+      hashModulo: 4,
+      workerHostname: 'codex-worker-0',
+      volumeName: 'codex-auth-0',
+      volumeStatus: 'verified',
+      volumeLastVerifiedAt: '2026-04-26T00:02:00Z',
+      latestRunId: '00000000-0000-0000-0000-000000000010',
+      latestRunStatus: 'completed',
+      latestPreflightStatus: 'passed',
+      latestPreflightCheckedAt: '2026-04-26T00:02:00Z',
+    },
+    {
+      queueName: 'codex-shard-1',
+      status: 'offline',
+      hashModulo: 4,
+      workerHostname: 'codex-worker-1',
+      volumeName: 'codex-auth-1',
+      volumeStatus: 'missing',
+      latestRunId: '00000000-0000-0000-0000-000000000011',
+      latestRunStatus: 'failed',
+      latestPreflightStatus: 'failed',
+      latestPreflightMessage: 'Auth volume missing',
+      latestPreflightCheckedAt: '2026-04-26T00:03:00Z',
+    },
+  ],
+};
+
 const stackState = {
   stack: 'moonmind',
   projectName: 'moonmind',
@@ -170,6 +201,12 @@ describe('OperationsSettingsSection deployment update card', () => {
           json: async () => workerSnapshot,
         } as Response);
       }
+      if (url === '/api/workflows/codex/shards') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => workerShardHealth,
+        } as Response);
+      }
       if (url === '/api/worker-action') {
         return Promise.resolve({
           ok: true,
@@ -214,12 +251,14 @@ describe('OperationsSettingsSection deployment update card', () => {
     confirmSpy.mockRestore();
   });
 
-  function renderOperations() {
+  function renderOperations(options: { includeShardHealth?: boolean } = {}) {
+    const { includeShardHealth = true } = options;
     renderWithClient(
       <OperationsSettingsSection
         workerPauseConfig={{
           get: '/api/workers',
           post: '/api/worker-action',
+          ...(includeShardHealth ? { shardHealth: '/api/workflows/codex/shards' } : {}),
           pollIntervalMs: 60_000,
         }}
       />,
@@ -261,10 +300,18 @@ describe('OperationsSettingsSection deployment update card', () => {
 
     const workerCard = await screen.findByRole('region', { name: /worker operations/i });
     expect(await within(workerCard).findByRole('heading', { name: /worker fleet health/i })).toBeTruthy();
-    expect(within(workerCard).getByText('Healthy')).toBeTruthy();
+    expect(within(workerCard).getByText('Attention required')).toBeTruthy();
     expect(within(workerCard).getByText('temporal')).toBeTruthy();
     expect(within(workerCard).getByText(/workers, scheduler/i)).toBeTruthy();
     expect(within(workerCard).getAllByText('1').length).toBeGreaterThan(0);
+    expect(within(workerCard).getByRole('heading', { name: /per-worker health/i })).toBeTruthy();
+    expect(await within(workerCard).findByText('codex-worker-0')).toBeTruthy();
+    expect(within(workerCard).getByText('codex-shard-0')).toBeTruthy();
+    expect(within(workerCard).getByText('codex-auth-0')).toBeTruthy();
+    expect(within(workerCard).getByText(/preflight passed/i)).toBeTruthy();
+    expect(within(workerCard).getByText('codex-worker-1')).toBeTruthy();
+    expect(within(workerCard).getByText('codex-shard-1')).toBeTruthy();
+    expect(within(workerCard).getByText(/auth volume missing/i)).toBeTruthy();
     expect(await within(workerCard).findByText('Pause Workers')).toBeTruthy();
     expect(within(workerCard).getByText('Resume Workers')).toBeTruthy();
     expect(within(workerCard).getByText('Enable Maintenance Mode')).toBeTruthy();
@@ -274,6 +321,18 @@ describe('OperationsSettingsSection deployment update card', () => {
     expect(within(workerCard).getByText(/result: succeeded/i)).toBeTruthy();
     expect(within(workerCard).getByText(/actor: 00000000-0000-0000-0000-000000000001/i)).toBeTruthy();
     expect(within(workerCard).getByText(/idempotency: previous-key/i)).toBeTruthy();
+  });
+
+  it('hides per-worker health when shard health is not configured', async () => {
+    renderOperations({ includeShardHealth: false });
+
+    const workerCard = await screen.findByRole('region', { name: /worker operations/i });
+    expect(await within(workerCard).findByRole('heading', { name: /worker fleet health/i })).toBeTruthy();
+    expect(within(workerCard).queryByRole('heading', { name: /per-worker health/i })).toBeNull();
+    expect(within(workerCard).queryByText(/no worker shards registered/i)).toBeNull();
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === '/api/workflows/codex/shards'),
+    ).toBe(false);
   });
 
   it('renders deployment state inside Operations without top-level deployment navigation', async () => {
@@ -312,6 +371,12 @@ describe('OperationsSettingsSection deployment update card', () => {
         return Promise.resolve({
           ok: true,
           json: async () => workerSnapshot,
+        } as Response);
+      }
+      if (url === '/api/workflows/codex/shards') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => workerShardHealth,
         } as Response);
       }
       if (url === '/api/v1/operations/deployment/stacks/moonmind') {
@@ -411,6 +476,9 @@ describe('OperationsSettingsSection deployment update card', () => {
       if (url === '/api/workers') {
         return Promise.resolve({ ok: true, json: async () => workerSnapshot } as Response);
       }
+      if (url === '/api/workflows/codex/shards') {
+        return Promise.resolve({ ok: true, json: async () => workerShardHealth } as Response);
+      }
       if (url === '/api/v1/operations/deployment/stacks/moonmind') {
         return Promise.resolve({
           ok: true,
@@ -436,6 +504,9 @@ describe('OperationsSettingsSection deployment update card', () => {
       const url = String(input);
       if (url === '/api/workers') {
         return Promise.resolve({ ok: true, json: async () => workerSnapshot } as Response);
+      }
+      if (url === '/api/workflows/codex/shards') {
+        return Promise.resolve({ ok: true, json: async () => workerShardHealth } as Response);
       }
       if (url === '/api/v1/operations/deployment/stacks/moonmind') {
         return Promise.resolve({

@@ -188,10 +188,10 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - [ ] **7.1** Migrate settings page to Mission Control — Settings currently in separate profile page, should be unified
 - [ ] **7.2** Artifact browsing UI (files/logs/patches) — API exists (`temporal_artifacts.py`), dashboard integration partial
 - [x] **7.3** Intervention request monitoring — Agent requests for human help surface through `intervention_requested` run status monitoring
-- [ ] **7.4** Execution history / audit trail view — Spec 067 (`run-history-rerun`), API exists, UI incomplete
+- [x] **7.4** Execution history / audit trail view — Spec 067 (`run-history-rerun`), `/workflows/{workflowId}/runs` now exposes the Mission Control execution history/audit view (MM-772)
 - [ ] **7.5** Side-by-side comparison view — README promises "run the same task with different models and runtimes to compare results"
 - [ ] **7.6** Multi-step / step DAG visualization — Steps are tracked but no graphical visualization
-- [ ] **7.7** Worker fleet health dashboard — No per-worker health view
+- [x] **7.7** Worker fleet health dashboard — Per-worker Codex shard health view in Settings Operations (MM-775)
 
 ---
 
@@ -208,7 +208,7 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 ### Remaining tasks
 - [ ] **8.1** MCP Streamable HTTP Transport (2025 spec) — Current `/context` is REST-style; modern MCP uses streamable HTTP
 - [x] **8.2** MCP resource & tool discovery — Clients can list MoonMind MCP resources and tools
-- [ ] **8.3** Webhook / callback API for external agents — Jules external events started, no generic webhook receiver
+- [x] **8.3** Webhook / callback API for external agents — Generic integration callback receiver, correlation lookup, callback URL provisioning, and polling fallback are available for external agents that advertise callback support (MM-779)
 - [ ] **8.4** OpenAI Responses API compatibility — Only Chat Completions format supported
 
 ---

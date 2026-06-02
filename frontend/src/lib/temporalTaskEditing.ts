@@ -3,7 +3,8 @@ export type TaskSubmitPageIntent =
   | 'create'
   | 'edit'
   | 'rerun'
-  | 'edit-for-rerun';
+  | 'edit-for-rerun'
+  | 'comparison';
 
 export type TaskSubmitPageModeResolution = {
   mode: TaskSubmitPageMode;
@@ -146,6 +147,7 @@ export type TemporalTaskEditUpdateName = 'UpdateInputs' | 'RequestRerun';
 
 export type TemporalTaskEditingTelemetryEvent =
   | 'detail_edit_click'
+  | 'detail_compare_click'
   | 'detail_rerun_click'
   | 'draft_reconstruction_success'
   | 'draft_reconstruction_failure'
@@ -274,6 +276,10 @@ export function taskEditForRerunHref(workflowId: string): string {
   return `${taskCreateHref()}?rerunExecutionId=${encodeURIComponent(workflowId)}&mode=edit`;
 }
 
+export function taskCompareHref(workflowId: string): string {
+  return `${taskCreateHref()}?rerunExecutionId=${encodeURIComponent(workflowId)}&mode=compare`;
+}
+
 export function resolveTaskSubmitPageMode(
   search: string | URLSearchParams,
 ): TaskSubmitPageModeResolution {
@@ -281,10 +287,18 @@ export function resolveTaskSubmitPageMode(
     typeof search === 'string' ? new URLSearchParams(search) : search;
   const rerunExecutionId = String(params.get('rerunExecutionId') || '').trim();
   if (rerunExecutionId) {
-    if (String(params.get('mode') || '').trim().toLowerCase() === 'edit') {
+    const mode = String(params.get('mode') || '').trim().toLowerCase();
+    if (mode === 'edit') {
       return {
         mode: 'rerun',
         intent: 'edit-for-rerun',
+        executionId: rerunExecutionId,
+      };
+    }
+    if (mode === 'compare') {
+      return {
+        mode: 'rerun',
+        intent: 'comparison',
         executionId: rerunExecutionId,
       };
     }
