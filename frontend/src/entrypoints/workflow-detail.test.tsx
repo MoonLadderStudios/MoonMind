@@ -10,6 +10,7 @@ import {
   WorkflowDetailPage,
 } from './workflow-detail';
 import {
+  taskCompareHref,
   taskEditForRerunHref,
   taskEditHref,
 } from '../lib/temporalTaskEditing';
@@ -4396,13 +4397,16 @@ describe('Workflow Detail Entrypoint', () => {
       model: 'gpt-5',
       createdAt: '2026-03-28T00:00:00Z',
       updatedAt: '2026-03-28T00:00:02Z',
-      actions: {},
+      actions: { canEditForRerun: true },
       relatedRuns: [
         {
           workflowId: 'test-456',
           runId: '02-run',
-          relationship: 'rerun',
+          relationship: 'Comparison source',
           status: 'failed',
+          targetRuntime: 'gemini_cli',
+          model: 'gemini-2.5-pro',
+          effort: 'high',
           href: '/workflows/test-456?source=temporal',
         },
       ],
@@ -4425,13 +4429,32 @@ describe('Workflow Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+    const comparisonPayload: BootPayload = {
+      ...mockPayload,
+      initialData: {
+        dashboardConfig: {
+          features: {
+            temporalDashboard: {
+              actionsEnabled: true,
+              temporalTaskEditing: true,
+            },
+          },
+        },
+      },
+    };
+
+    renderWithClient(<WorkflowDetailPage payload={comparisonPayload} />);
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Run Comparison' })).toBeTruthy();
       expect(screen.getByText('current')).toBeTruthy();
       expect(screen.getByText('test-456')).toBeTruthy();
       expect(screen.getAllByText('gpt-5').length).toBeGreaterThan(0);
+      expect(screen.getByText('Gemini CLI')).toBeTruthy();
+      expect(screen.getByText('gemini-2.5-pro')).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'Compare run' }).getAttribute('href')).toBe(
+        taskCompareHref('test-123'),
+      );
     });
   });
 

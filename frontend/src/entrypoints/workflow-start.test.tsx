@@ -2616,6 +2616,13 @@ describe.skip("Task Create Entrypoint", () => {
       intent: "edit-for-rerun",
       executionId: "mm:rerun",
     });
+    expect(
+      resolveTaskSubmitPageMode("?rerunExecutionId=mm%3Arerun&mode=compare"),
+    ).toEqual({
+      mode: "rerun",
+      intent: "comparison",
+      executionId: "mm:rerun",
+    });
   });
 
   it("builds the canonical Temporal UpdateInputs payload without mutating historical artifacts", () => {
@@ -4000,6 +4007,51 @@ describe.skip("Task Create Entrypoint", () => {
         },
       },
     });
+  });
+
+  it("submits MM-773 comparison runs as fresh task creations with source lineage", async () => {
+    window.history.pushState(
+      {},
+      "Task Comparison",
+      "/workflows/new?rerunExecutionId=mm%3Acomplex-rerun&mode=compare",
+    );
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Compare Workflow" })).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "You are starting a comparison run. Choose a different runtime or model to compare results with the source run.",
+      ),
+    ).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Runtime"), {
+      target: { value: "gemini_cli" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Comparison Run" }));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+      ).toBe(true);
+    });
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url]) => String(url) === "/api/executions/mm%3Acomplex-rerun/update",
+      ),
+    ).toBe(false);
+    const createCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    const request = JSON.parse(String(createCall?.[1]?.body));
+
+    expect(request.payload.targetRuntime).toBe("gemini_cli");
+    expect(request.payload.task.comparison).toEqual({
+      kind: "model_runtime_comparison",
+      sourceWorkflowId: "mm:complex-rerun",
+      sourceRunId: "run-complex-source",
+    });
+    expect(request.payload.task.recovery).toBeUndefined();
+    expect(request.payload.task.resume).toBeUndefined();
   });
 
   it("reports current preview version drift without mutating source-run command metadata", () => {

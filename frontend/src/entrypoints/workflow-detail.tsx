@@ -10,6 +10,7 @@ import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge'
 import { formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import {
   recordTemporalTaskEditingClientEvent,
+  taskCompareHref,
   taskEditForRerunHref,
   taskEditHref,
 } from '../lib/temporalTaskEditing';
@@ -586,6 +587,11 @@ const ExecutionDetailSchema = z
             runId: z.string().nullable().optional(),
             relationship: z.string(),
             status: z.string().nullable().optional(),
+            targetRuntime: z.string().nullable().optional(),
+            model: z.string().nullable().optional(),
+            requestedModel: z.string().nullable().optional(),
+            resolvedModel: z.string().nullable().optional(),
+            effort: z.string().nullable().optional(),
             href: z.string(),
           })
           .passthrough(),
@@ -4434,8 +4440,8 @@ function RunComparisonPanel({
                 <td><a href={run.href}><code>{run.workflowId}</code></a></td>
                 <td><code>{run.runId || '—'}</code></td>
                 <td>{formatStatusLabel(run.status || 'unknown')}</td>
-                <td>—</td>
-                <td>—</td>
+                <td>{formatRuntimeLabel(run.targetRuntime)}</td>
+                <td>{run.model || run.resolvedModel || run.requestedModel || '—'}</td>
               </tr>
             ))}
           </tbody>
@@ -4909,9 +4915,11 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       ? taskEditForRerunHref(workflowId)
       : taskEditHref(workflowId)
     : '';
+  const compareHref =
+    workflowId && actions?.canEditForRerun ? taskCompareHref(workflowId) : '';
   const onTaskEditingNavigation = (
     event: MouseEvent<HTMLAnchorElement>,
-    telemetryEvent: 'detail_edit_click',
+    telemetryEvent: 'detail_edit_click' | 'detail_compare_click',
   ) => {
     if (busy) {
       event.preventDefault();
@@ -4968,6 +4976,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const hasTaskEditingActions = taskEditingOn && Boolean(
     canShowEditWorkflow ||
       actions?.canRerun ||
+      compareHref ||
       canFailedStepResume ||
       editTaskUnavailableReason ||
       rerunUnavailableReason,
@@ -5585,6 +5594,16 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                     onClick={(event) => onTaskEditingNavigation(event, 'detail_edit_click')}
                   >
                     Edit task
+                  </a>
+                ) : null}
+                {taskEditingOn && compareHref ? (
+                  <a
+                    className="button secondary"
+                    href={compareHref}
+                    aria-disabled={busy}
+                    onClick={(event) => onTaskEditingNavigation(event, 'detail_compare_click')}
+                  >
+                    Compare run
                   </a>
                 ) : null}
                 {taskEditingOn && actions.canRerun ? (

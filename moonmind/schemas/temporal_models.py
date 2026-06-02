@@ -1866,6 +1866,11 @@ class ExecutionRelatedRunModel(BaseModel):
     run_id: Optional[str] = Field(None, alias="runId")
     relationship: str = Field(..., alias="relationship", min_length=1)
     status: Optional[str] = Field(None, alias="status")
+    target_runtime: Optional[str] = Field(None, alias="targetRuntime")
+    model: Optional[str] = Field(None, alias="model")
+    requested_model: Optional[str] = Field(None, alias="requestedModel")
+    resolved_model: Optional[str] = Field(None, alias="resolvedModel")
+    effort: Optional[str] = Field(None, alias="effort")
     created_at: Optional[datetime] = Field(None, alias="createdAt")
     href: str = Field(..., alias="href", min_length=1)
 
