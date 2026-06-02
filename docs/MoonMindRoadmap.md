@@ -223,9 +223,9 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - Docker-socket-proxy (`tecnativa/docker-socket-proxy`) with restricted API endpoints
 - Agent workspace volume isolation
 - Auth-volume separation per runtime
+- File allowlist enforcement for sandbox command and patch activities (`MM-782`)
 
 ### Remaining tasks
-- [ ] **9.1** File allowlist enforcement — Promised in README, no implementation found
 - [ ] **9.2** Credential sanitization from logs — Agent rules prohibit secrets in output; no runtime log scrubber
 - [ ] **9.3** Per-runtime capability routing policy — Proxy limits Docker API endpoints, but not per-runtime policies
 - [ ] **9.4** Network egress policies for sandboxes — No outbound network restrictions on worker containers
