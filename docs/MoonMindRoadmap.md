@@ -146,10 +146,12 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 
 ### What's shipped
 - Memory architecture design doc (`docs/Memory/MemoryArchitecture.md` — "Desired State")
+- Fix Patterns / Error Signatures procedural memory primitive
+  (`moonmind/memory/procedural.py`) with compact evidence-backed JSONL
+  storage and prepared-context projection
 
 ### Remaining tasks
 - [ ] **6.1** Run Digests (Plane B — task history summaries) — Architecture defined, no implementation
-- [ ] **6.2** Fix Patterns / Error Signatures (procedural memory) — Architecture defined, no implementation
 - [ ] **6.3** Long-Term Memory integration (Mem0 / Plane C) — Architecture defined, no integration
 - [ ] **6.4** Planning Memory (Beads / Plane A) — Architecture defined, no integration
 - [ ] **6.5** Token budgeting & provenance tracking — Designed in memory arch, not implemented
