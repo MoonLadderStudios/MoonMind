@@ -46,6 +46,13 @@ class RagRuntimeSettings:
     run_id: Optional[str]
     rag_enabled: bool
     qdrant_enabled: bool
+    memory_enabled: bool
+    memory_long_term: str
+    memory_fail_open: bool
+    memory_context_budget_tokens: Optional[int]
+    memory_namespace_id: str
+    mem0_api_key: Optional[str]
+    mem0_user_id: Optional[str]
 
     @classmethod
     def from_env(cls, source: Mapping[str, str] | None = None) -> "RagRuntimeSettings":
@@ -130,6 +137,39 @@ class RagRuntimeSettings:
         qdrant_enabled = env_to_bool(
             _get_env(env, "QDRANT_ENABLED", "true"), default=True
         )
+        memory_enabled = env_to_bool(
+            _get_env(env, "MEMORY_ENABLED", "false"), default=False
+        )
+        memory_long_term = (
+            _get_env(env, "MEMORY_LONG_TERM", "off") or "off"
+        ).strip().lower()
+        if memory_long_term not in {"off", "mem0"}:
+            memory_long_term = "off"
+        memory_fail_open = env_to_bool(
+            _get_env(env, "MEMORY_FAIL_OPEN", "true"), default=True
+        )
+        memory_budget_raw = _get_env(env, "MEMORY_CONTEXT_BUDGET_TOKENS")
+        memory_context_budget_tokens = None
+        if memory_budget_raw:
+            try:
+                memory_context_budget_tokens = int(memory_budget_raw)
+            except ValueError:
+                memory_context_budget_tokens = None
+            if (
+                memory_context_budget_tokens is not None
+                and memory_context_budget_tokens <= 0
+            ):
+                memory_context_budget_tokens = None
+        memory_namespace_id = (
+            _get_env(
+                env,
+                "MEMORY_NAMESPACE_ID",
+                _get_env(env, "MOONMIND_NAMESPACE_ID", "default"),
+            )
+            or "default"
+        ).strip() or "default"
+        mem0_api_key = _get_env(env, "MEM0_API_KEY") or None
+        mem0_user_id = _get_env(env, "MEM0_USER_ID") or None
 
         return cls(
             qdrant_url=qdrant_url,
@@ -153,6 +193,13 @@ class RagRuntimeSettings:
             run_id=run_id,
             rag_enabled=rag_enabled,
             qdrant_enabled=qdrant_enabled,
+            memory_enabled=memory_enabled,
+            memory_long_term=memory_long_term,
+            memory_fail_open=memory_fail_open,
+            memory_context_budget_tokens=memory_context_budget_tokens,
+            memory_namespace_id=memory_namespace_id,
+            mem0_api_key=mem0_api_key,
+            mem0_user_id=mem0_user_id,
         )
 
     def resolved_transport(self, preferred: Optional[str]) -> str:
@@ -253,3 +300,21 @@ class RagRuntimeSettings:
             source, preferred_transport=preferred_transport
         )
         return executable
+
+    def long_term_memory_enabled(self) -> bool:
+        """Return whether Plane C Mem0 retrieval/writeback should run."""
+
+        return self.memory_enabled and self.memory_long_term == "mem0"
+
+    def long_term_memory_execution_reason(self) -> tuple[bool, str]:
+        """Return long-term memory execution status and a non-secret reason."""
+
+        if not self.memory_enabled:
+            return False, "memory_disabled"
+        if self.memory_long_term == "off":
+            return False, "long_term_memory_disabled"
+        if self.memory_long_term != "mem0":
+            return False, "long_term_memory_unsupported"
+        if not self.mem0_api_key:
+            return False, "mem0_api_key_missing"
+        return True, "ok"

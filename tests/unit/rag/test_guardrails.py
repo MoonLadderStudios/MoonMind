@@ -32,6 +32,13 @@ def _settings(**overrides: object) -> RagRuntimeSettings:
         run_id=None,
         rag_enabled=True,
         qdrant_enabled=True,
+        memory_enabled=False,
+        memory_long_term="off",
+        memory_fail_open=True,
+        memory_context_budget_tokens=None,
+        memory_namespace_id="default",
+        mem0_api_key=None,
+        mem0_user_id=None,
     )
     defaults.update(overrides)
     return RagRuntimeSettings(**defaults)

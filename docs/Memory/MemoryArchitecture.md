@@ -28,6 +28,7 @@ Non-goals:
 MoonMind already has the core primitives we will extend:
 
 - **Document retrieval (RAG)**: LlamaIndex + Qdrant powering chat, `/context`, and related retrieval flows.
+- **Long-term memory (Plane C)**: optional Mem0 adapter support can add approved project memories to direct context-pack retrieval and can promote curated memories with required provenance metadata (`MM-764`). It is disabled unless `MEMORY_ENABLED=true` and `MEMORY_LONG_TERM=mem0`.
 - **Durable execution state**: Temporal-backed workflow executions plus Postgres-backed execution/projection records used by Mission Control and execution APIs.
 - **Durable artifacts and run evidence**: S3-compatible workflow artifacts plus managed-run observability artifacts and workspace-backed log spools.
 - **Background orchestration**: Temporal workflows and activities running across specialized worker fleets.

@@ -11,6 +11,7 @@ import httpx
 
 from moonmind.rag.context_pack import ContextItem, ContextPack, build_context_pack
 from moonmind.rag.embedding import EmbeddingClient, EmbeddingConfig
+from moonmind.rag.long_term_memory import LongTermMemoryError, LongTermMemoryService
 from moonmind.rag.qdrant_client import RagQdrantClient
 from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.rag.telemetry import VectorTelemetry
@@ -33,6 +34,7 @@ class ContextRetrievalService:
         env: Mapping[str, str] | None = None,
         embedding_client: EmbeddingClient | None = None,
         qdrant_client: RagQdrantClient | None = None,
+        long_term_memory_service: LongTermMemoryService | None = None,
     ) -> None:
         self._settings = settings
         self._env = env or os.environ
@@ -43,6 +45,7 @@ class ContextRetrievalService:
             run_id=settings.run_id, job_id=settings.job_id
         )
         self._embedding = embedding_client
+        self._long_term_memory = long_term_memory_service
         self._qdrant = qdrant_client or RagQdrantClient(
             host=settings.qdrant_host,
             port=settings.qdrant_port,
@@ -72,6 +75,12 @@ class ContextRetrievalService:
     @property
     def qdrant_client(self) -> RagQdrantClient:
         return self._qdrant
+
+    @property
+    def long_term_memory_service(self) -> LongTermMemoryService:
+        if self._long_term_memory is None:
+            self._long_term_memory = LongTermMemoryService(settings=self._settings)
+        return self._long_term_memory
 
     @property
     def settings(self) -> RagRuntimeSettings:
@@ -121,17 +130,22 @@ class ContextRetrievalService:
                 overlay_collection=overlay_collection,
                 trust_overrides=None,
             )
+        memory_items, memory_latency_ms = self._retrieve_long_term_memory_items(
+            query=query,
+            filters=filters,
+        )
+        items = [*memory_items, *result.items]
         usage = {
             "tokens": _estimate_tokens(query)
-            + sum(_estimate_tokens(item.text) for item in result.items),
-            "latency_ms": round(result.latency_ms, 2),
+            + sum(_estimate_tokens(item.text) for item in items),
+            "latency_ms": round(result.latency_ms + memory_latency_ms, 2),
         }
         self._enforce_latency_budget(
             started=started, budgets=normalized_budgets, usage=usage
         )
         telemetry_id = uuid.uuid4().hex
         return build_context_pack(
-            items=result.items,
+            items=items,
             filters=filters,
             budgets=normalized_budgets,
             usage=usage,
@@ -208,6 +222,78 @@ class ContextRetrievalService:
             initiation_mode=str(data.get("initiation_mode") or initiation_mode),
             truncated=bool(data.get("truncated", False)),
         )
+
+    def add_or_update_long_term_memory(
+        self,
+        *,
+        text: str,
+        repo: str,
+        scope: str = "project",
+        review_state: str = "draft",
+        provenance: Mapping[str, Any],
+        memory_id: str | None = None,
+    ) -> Any:
+        """Promote a stable learning into Mem0 Plane C memory."""
+
+        executable, reason = self._settings.long_term_memory_execution_reason()
+        if not executable:
+            if self._settings.memory_fail_open:
+                return {"skipped": True, "reason": reason}
+            raise LongTermMemoryError(reason)
+        try:
+            return self.long_term_memory_service.add_or_update(
+                text=text,
+                repo=repo,
+                scope=scope,
+                review_state=review_state,
+                provenance=provenance,
+                memory_id=memory_id,
+            )
+        except LongTermMemoryError:
+            if self._settings.memory_fail_open:
+                return {"skipped": True, "reason": "long_term_memory_unavailable"}
+            raise
+
+    def _retrieve_long_term_memory_items(
+        self,
+        *,
+        query: str,
+        filters: Mapping[str, Any],
+    ) -> tuple[list[ContextItem], float]:
+        executable, reason = self._settings.long_term_memory_execution_reason()
+        if not executable:
+            if self._settings.memory_fail_open:
+                return [], 0.0
+            raise LongTermMemoryError(reason)
+        repo = self._repo_from_filters(filters)
+        try:
+            return self.long_term_memory_service.search(
+                query=query,
+                repo=repo,
+                scope="project",
+                limit=self._memory_top_k(),
+            )
+        except LongTermMemoryError:
+            if self._settings.memory_fail_open:
+                return [], 0.0
+            raise
+
+    def _memory_top_k(self) -> int:
+        if not self._settings.memory_context_budget_tokens:
+            return min(3, self._settings.similarity_top_k)
+        estimated_item_tokens = max(1, self._settings.overlay_chunk_chars // 4)
+        return max(
+            1,
+            self._settings.memory_context_budget_tokens // estimated_item_tokens,
+        )
+
+    @staticmethod
+    def _repo_from_filters(filters: Mapping[str, Any]) -> str | None:
+        for key in ("repo", "repository"):
+            value = str(filters.get(key) or "").strip()
+            if value:
+                return value
+        return None
 
     @staticmethod
     def _normalize_budgets(budgets: Mapping[str, Any]) -> dict[str, int]:
