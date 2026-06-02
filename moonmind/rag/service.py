@@ -6,7 +6,7 @@ import os
 import time
 import uuid
 import logging
-from typing import Any, Mapping, Protocol
+from typing import Any, Mapping, Protocol, Sequence
 
 import httpx
 
@@ -51,6 +51,7 @@ class ContextRetrievalService:
         self._telemetry = VectorTelemetry(
             run_id=settings.run_id, job_id=settings.job_id
         )
+        self._verified_collections: set[str] = set()
         self._embedding = embedding_client
         self._qdrant = qdrant_client or RagQdrantClient(
             host=settings.qdrant_host,
@@ -96,12 +97,14 @@ class ContextRetrievalService:
         overlay_policy: str,
         budgets: Mapping[str, Any],
         transport: str,
+        collections: Sequence[str] | None = None,
         initiation_mode: str = "automatic",
         planning_ref: str | None = None,
     ) -> ContextPack:
         normalized_budgets = self._normalize_budgets(budgets)
         self._enforce_token_budget(query=query, top_k=top_k, budgets=normalized_budgets)
         started = time.perf_counter()
+        target_collections = self._settings.resolve_collections(collections)
         if transport == "gateway":
             return self._retrieve_via_gateway(
                 query=query,
@@ -109,10 +112,14 @@ class ContextRetrievalService:
                 top_k=top_k,
                 overlay_policy=overlay_policy,
                 budgets=normalized_budgets,
+                collections=target_collections,
                 initiation_mode=initiation_mode,
                 planning_ref=planning_ref,
             )
-        self._qdrant.ensure_collection_ready()
+        for collection_name in target_collections:
+            if collection_name not in self._verified_collections:
+                self._qdrant.ensure_collection_ready(collection_name)
+                self._verified_collections.add(collection_name)
         with self._telemetry.timer("embedding"):
             vector = self.embedding_client.embed(query)
         overlay_collection = None
@@ -129,9 +136,9 @@ class ContextRetrievalService:
                 query_vector=vector,
                 filters=filters,
                 top_k=top_k,
+                collections=target_collections,
                 overlay_policy=overlay_policy,
                 overlay_collection=overlay_collection,
-                collections=self._settings.vector_collections,
                 trust_overrides=None,
             )
         planning_items = self._prefetch_planning_context(planning_ref)
@@ -164,6 +171,7 @@ class ContextRetrievalService:
         top_k: int,
         overlay_policy: str,
         budgets: Mapping[str, Any],
+        collections: Sequence[str],
         initiation_mode: str,
         planning_ref: str | None,
     ) -> ContextPack:
@@ -175,6 +183,7 @@ class ContextRetrievalService:
             "top_k": top_k,
             "overlay_policy": overlay_policy,
             "budgets": dict(budgets),
+            "collections": list(collections),
         }
         if planning_ref:
             payload["planning_ref"] = planning_ref

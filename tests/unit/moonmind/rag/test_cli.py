@@ -74,6 +74,62 @@ def test_run_search_returns_context_pack_and_writes_json(
     assert calls[0]["top_k"] == 7
     assert calls[0]["filters"] == {"job_id": "job-123", "repo": "moonmind"}
     assert calls[0]["transport"] == "direct"
+    assert calls[0]["collections"] is None
+
+
+def test_run_search_passes_collection_overrides(monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    class StubSettings:
+        similarity_top_k = 7
+
+        def as_filter_metadata(self):
+            return {}
+
+        def resolved_transport(self, preferred):
+            return preferred or "direct"
+
+        def retrieval_execution_reason(self, source, *, preferred_transport=None):
+            _ = source, preferred_transport
+            return True, "ok"
+
+    pack = build_context_pack(
+        items=[],
+        filters={},
+        budgets={},
+        usage={},
+        transport="direct",
+        telemetry_id="ctx-test",
+        max_chars=1000,
+    )
+
+    class StubService:
+        def __init__(self, *, settings, env):
+            _ = settings, env
+
+        def retrieve(self, **kwargs):
+            calls.append(dict(kwargs))
+            return pack
+
+    monkeypatch.setattr(
+        rag_cli.RagRuntimeSettings,
+        "from_env",
+        classmethod(lambda _cls, _source=None: StubSettings()),
+    )
+    monkeypatch.setattr(rag_cli, "ContextRetrievalService", StubService)
+
+    rag_cli.run_search(
+        query="How does worker retrieval work?",
+        filter_args=[],
+        budget_args=[],
+        top_k=None,
+        overlay_policy="include",
+        transport=None,
+        output_file=None,
+        collection_args=["repo-main", "docs-main"],
+    )
+
+    assert calls[0]["collections"] == ["repo-main", "docs-main"]
 
 
 def test_run_search_wraps_embedding_errors_as_cli_errors(monkeypatch):

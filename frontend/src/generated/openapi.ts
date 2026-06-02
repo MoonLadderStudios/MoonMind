@@ -6363,6 +6363,8 @@ export interface components {
             query: string;
             /** Top K */
             top_k?: number | null;
+            /** Collections */
+            collections?: string[];
             /** Filters */
             filters?: {
                 [key: string]: string;
