@@ -19,14 +19,6 @@ from moonmind.workflows.adapters.base_external_agent_adapter import (
 
 pytestmark = [pytest.mark.asyncio]
 
-_STUB_CAPABILITY = ProviderCapabilityDescriptor(
-    providerName="stub",
-    supportsCallbacks=False,
-    supportsCancel=True,
-    supportsResultFetch=True,
-    defaultPollHintSeconds=10,
-)
-
 class _StubAdapter(BaseExternalAgentAdapter):
     """Concrete stub for testing the base class."""
 
@@ -35,9 +27,11 @@ class _StubAdapter(BaseExternalAgentAdapter):
         *,
         accepted_agent_ids: frozenset[str] = frozenset({"stub"}),
         start_run_id: str = "run-1",
+        supports_callbacks: bool = False,
     ) -> None:
         super().__init__(accepted_agent_ids=accepted_agent_ids)
         self.start_run_id = start_run_id
+        self._supports_callbacks = supports_callbacks
         self.do_start_calls: list[dict[str, Any]] = []
         self.do_status_calls: list[str] = []
         self.do_fetch_result_calls: list[str] = []
@@ -45,7 +39,13 @@ class _StubAdapter(BaseExternalAgentAdapter):
 
     @property
     def provider_capability(self) -> ProviderCapabilityDescriptor:
-        return _STUB_CAPABILITY
+        return ProviderCapabilityDescriptor(
+            providerName="stub",
+            supportsCallbacks=self._supports_callbacks,
+            supportsCancel=True,
+            supportsResultFetch=True,
+            defaultPollHintSeconds=10,
+        )
 
     async def do_start(
         self,
@@ -174,7 +174,7 @@ async def test_start_injects_correlation_metadata():
 
 
 async def test_start_injects_callback_metadata_and_returns_handle_flag():
-    adapter = _StubAdapter()
+    adapter = _StubAdapter(supports_callbacks=True)
     req = _request().model_copy(
         update={
             "callback_url": "https://moonmind.example.test/api/integrations/stub/callbacks/cb-1",
@@ -189,6 +189,23 @@ async def test_start_injects_callback_metadata_and_returns_handle_flag():
     assert moonmind["callbackUrl"].endswith("/api/integrations/stub/callbacks/cb-1")
     assert moonmind["callbackCorrelationKey"] == "cb-1"
     assert handle.metadata["callbackSupported"] is False
+
+
+async def test_start_skips_callback_metadata_when_provider_does_not_support_callbacks():
+    adapter = _StubAdapter(supports_callbacks=False)
+    req = _request().model_copy(
+        update={
+            "callback_url": "https://moonmind.example.test/api/integrations/stub/callbacks/cb-1",
+            "callback_correlation_key": "cb-1",
+        }
+    )
+
+    await adapter.start(req)
+
+    call = adapter.do_start_calls[0]
+    moonmind = call["metadata"].get("moonmind", {})
+    assert "callbackUrl" not in moonmind
+    assert "callbackCorrelationKey" not in moonmind
 
 
 async def test_start_forwards_raw_refs_without_mutating_prepared_context_metadata():
@@ -341,7 +358,7 @@ async def test_start_populates_poll_hint_from_capability():
     the provider hook returns a handle without it."""
     adapter = _StubAdapter()
     handle = await adapter.start(_request())
-    assert handle.poll_hint_seconds == _STUB_CAPABILITY.default_poll_hint_seconds
+    assert handle.poll_hint_seconds == adapter.provider_capability.default_poll_hint_seconds
 
 async def test_start_preserves_explicit_poll_hint():
     """If do_start returns a handle with poll_hint_seconds already set,
