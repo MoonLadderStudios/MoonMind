@@ -5369,6 +5369,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   font-size: 0.82rem;
   font-family: var(--mm-font-mono);
   margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .td-hero .meta-inline .dot {
@@ -5533,5 +5534,17 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
   .td-remediation-list {
     gap: 0.6rem;
+  }
+
+  .td-title-text {
+    font-size: 1.25rem;
+  }
+
+  .td-instructions-panel {
+    padding: 0.7rem 0.8rem;
+  }
+
+  .td-instructions-panel pre {
+    font-size: 0.85rem;
   }
 }
