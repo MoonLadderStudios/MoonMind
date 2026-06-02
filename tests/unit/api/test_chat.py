@@ -9,7 +9,12 @@ from fastapi.testclient import TestClient
 # Assuming the main app's router is imported correctly
 # Ensure the path to chat_router is correct based on your project structure.
 # If chat.py is in api_service.api.routers.chat, this should be fine.
-from api_service.api.routers.chat import responses_router, router as chat_router
+from api_service.api.routers.chat import (
+    _extract_openai_response_text,
+    _response_content_to_text,
+    responses_router,
+    router as chat_router,
+)
 from api_service.api.routers.chat import (
     settings as settings_in_chat_router,  # For patch.object
 )
@@ -690,11 +695,78 @@ def test_responses_endpoint_uses_openai_responses_api(
     mock_async_openai_client.assert_called_once_with(api_key="sk-test-user-key")
     mock_client_instance.responses.create.assert_awaited_once_with(
         model="gpt-4.1",
-        input="Say hello.",
+        input=[{"role": "user", "content": "Say hello."}],
         instructions="Be concise.",
         max_output_tokens=20,
         temperature=0.2,
     )
+
+@patch("api_service.api.routers.chat.get_rag_context", new_callable=AsyncMock)
+@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
+@patch("api_service.api.routers.chat.get_openai_model")
+@patch("api_service.api.routers.chat.AsyncOpenAI")
+def test_responses_endpoint_sends_processed_rag_context_to_openai(
+    mock_async_openai_client,
+    mock_get_openai_model,
+    mock_get_user_api_key_helper,
+    mock_get_provider,
+    mock_get_rag_context,
+):
+    mock_get_provider.return_value = "OpenAI"
+    mock_get_user_api_key_helper.return_value = "sk-test-user-key"
+    mock_get_openai_model.return_value = "gpt-4.1"
+    mock_get_rag_context.return_value = "--- Retrieved Context ---\nKnown fact.\n"
+    mock_client_instance = AsyncMock()
+    mock_client_instance.responses.create = AsyncMock(
+        return_value={"output_text": "response text", "model": "gpt-4.1"}
+    )
+    mock_async_openai_client.return_value = mock_client_instance
+
+    response = client.post(
+        "/responses",
+        json={
+            "model": "gpt-4.1",
+            "instructions": "Be concise.",
+            "input": "Use context.",
+        },
+    )
+
+    assert response.status_code == 200
+    call_kwargs = mock_client_instance.responses.create.await_args.kwargs
+    assert call_kwargs["instructions"] == "Be concise."
+    assert call_kwargs["input"][0]["role"] == "user"
+    assert "--- Retrieved Context ---\nKnown fact." in call_kwargs["input"][0]["content"]
+    assert "User's question: Use context." in call_kwargs["input"][0]["content"]
+
+
+def test_response_content_to_text_preserves_falsy_non_none_values():
+    assert _response_content_to_text(0) == "0"
+    assert _response_content_to_text(False) == "False"
+    assert (
+        _response_content_to_text(
+            [{"type": "input_text", "text": 0}, {"type": "text", "text": False}]
+        )
+        == "0\nFalse"
+    )
+
+
+def test_extract_openai_response_text_accepts_text_content_items():
+    assert (
+        _extract_openai_response_text(
+            {
+                "output": [
+                    {
+                        "content": [
+                            {"type": "text", "text": "plain text response"},
+                        ]
+                    }
+                ]
+            }
+        )
+        == "plain text response"
+    )
+
 
 def test_responses_endpoint_rejects_streaming_requests():
     response = client.post(

@@ -324,7 +324,7 @@ async def streamable_http_rpc(
     raw_params = payload.get("params")
     params = raw_params if isinstance(raw_params, dict) else {}
 
-    if request_id is None and method.startswith("notifications/"):
+    if request_id is None:
         return Response(
             status_code=status.HTTP_202_ACCEPTED,
             headers={"MCP-Protocol-Version": _MCP_PROTOCOL_VERSION},
@@ -354,11 +354,16 @@ async def streamable_http_rpc(
                 ),
                 user,
             )
+            tool_text = (
+                result_payload
+                if isinstance(result_payload, str)
+                else json.dumps(result_payload, sort_keys=True)
+            )
             result = {
                 "content": [
                     {
                         "type": "text",
-                        "text": json.dumps(result_payload, sort_keys=True),
+                        "text": tool_text,
                     }
                 ],
                 "structuredContent": result_payload,

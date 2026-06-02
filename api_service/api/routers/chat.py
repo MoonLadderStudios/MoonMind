@@ -203,9 +203,10 @@ def _response_content_to_text(content: Any) -> str:
             elif isinstance(item, dict):
                 item_type = str(item.get("type") or "")
                 if item_type in {"input_text", "output_text", "text"}:
-                    parts.append(str(item.get("text") or ""))
+                    text = item.get("text")
+                    parts.append(str(text) if text is not None else "")
         return "\n".join(part for part in parts if part)
-    return str(content or "")
+    return str(content) if content is not None else ""
 
 def _messages_from_response_input(request: ResponseCreateRequest) -> list[Message]:
     messages: list[Message] = []
@@ -291,7 +292,10 @@ def _extract_openai_response_text(payload: dict[str, Any]) -> str:
         if not isinstance(output_item, dict):
             continue
         for content_item in output_item.get("content") or []:
-            if isinstance(content_item, dict) and content_item.get("type") == "output_text":
+            if (
+                isinstance(content_item, dict)
+                and content_item.get("type") in {"output_text", "text"}
+            ):
                 parts.append(str(content_item.get("text") or ""))
     return "\n".join(part for part in parts if part)
 
@@ -499,11 +503,20 @@ async def create_response(
             )
         openai_model_name = get_openai_model(model_to_use)
         client = AsyncOpenAI(api_key=user_api_key)
+        openai_input = [
+            {"role": msg.role, "content": msg.content}
+            for msg in processed_messages
+            if msg.role != "system"
+        ]
+        openai_instructions = next(
+            (msg.content for msg in processed_messages if msg.role == "system"),
+            None,
+        )
         try:
             raw_response = await client.responses.create(
                 model=openai_model_name,
-                input=request.input,
-                instructions=request.instructions,
+                input=openai_input,
+                instructions=openai_instructions,
                 max_output_tokens=request.max_output_tokens,
                 temperature=request.temperature,
             )

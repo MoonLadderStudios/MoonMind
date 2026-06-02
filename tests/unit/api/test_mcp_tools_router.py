@@ -133,6 +133,50 @@ async def test_streamable_http_initialize_and_resources_list(
     uris = {item["uri"] for item in resources.json()["result"]["resources"]}
     assert "moonmind://mcp/tools" in uris
 
+async def test_streamable_http_notifications_return_empty_accepted_response(
+    router_app: FastAPI,
+) -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/mcp",
+            json={"jsonrpc": "2.0", "id": None, "method": "ping"},
+        )
+
+    assert response.status_code == 202
+    assert response.content == b""
+    assert response.headers["MCP-Protocol-Version"] == "2025-06-18"
+
+async def test_streamable_http_tool_call_preserves_string_result_text(
+    router_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def dispatch_tool(request: Any, user: Any) -> str:
+        return "success"
+
+    monkeypatch.setattr(mcp_tools_router, "_dispatch_tool", dispatch_tool)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": "call-tool",
+                "method": "tools/call",
+                "params": {"name": "example.tool", "arguments": {}},
+            },
+        )
+
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert result["content"][0]["text"] == "success"
+    assert result["structuredContent"] == "success"
+
 async def test_streamable_http_reads_tool_catalog_resource(
     router_app: FastAPI,
 ) -> None:
