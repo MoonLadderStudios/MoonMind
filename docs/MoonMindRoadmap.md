@@ -147,18 +147,24 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 
 ### What's shipped
 - Memory architecture design doc (`docs/Memory/MemoryArchitecture.md` — "Desired State")
-- Memory runtime feature flags (`MEMORY_ENABLED`, `MEMORY_PLANNING`, `MEMORY_HISTORY`, `MEMORY_LONG_TERM`, `MEMORY_FAIL_OPEN`, `MEMORY_CONTEXT_BUDGET_TOKENS`) are exposed through settings and worker runtime configuration.
+- MM-761 memory foundation contracts and fail-open services:
+  - runtime controls for `MEMORY_ENABLED`, `MEMORY_PLANNING`, `MEMORY_HISTORY`, `MEMORY_LONG_TERM`, `MEMORY_FAIL_OPEN`, and `MEMORY_CONTEXT_BUDGET_TOKENS`
+  - Plane B run digests and error-signature/fix-pattern procedural memory models
+  - Plane C Mem0-compatible long-term memory adapter boundary with approved-memory retrieval
+  - Plane A Beads-compatible planning adapter boundary
+  - provenance-carrying, token-budgeted context-pack assembly
 - Fix Patterns / Error Signatures procedural memory primitive
   (`moonmind/memory/procedural.py`) with compact evidence-backed JSONL
   storage and prepared-context projection
 - Planning Memory (Beads / Plane A) runtime adapter with optional context-pack prefetch
 
 ### Remaining tasks
-- [ ] **6.1** Run Digests (Plane B — task history summaries) — Architecture defined, no implementation
-- [ ] **6.3** Long-Term Memory integration (Mem0 / Plane C) — Architecture defined, no integration
-- [x] **6.6** Memory feature flags (`MEMORY_ENABLED`, etc.) — Settings and runtime gates implemented (MM-767)
-- [x] **6.4** Planning Memory (Beads / Plane A) — Runtime adapter and optional context-pack prefetch integrated (MM-765)
-- [ ] **6.5** Token budgeting & provenance tracking — Designed in memory arch; Planning Memory includes bounded context and provenance, broader memory planes remain pending
+- [x] **6.1** Run Digests (Plane B — task history summaries) — MM-761 foundation implemented
+- [x] **6.2** Fix Patterns / Error Signatures (procedural memory) — MM-761 foundation implemented
+- [x] **6.3** Long-Term Memory integration (Mem0 / Plane C) — MM-761 adapter boundary implemented
+- [x] **6.4** Planning Memory (Beads / Plane A) — Runtime adapter, optional context-pack prefetch, and MM-761 adapter boundary implemented
+- [x] **6.5** Token budgeting & provenance tracking — MM-761 context-pack implementation
+- [x] **6.6** Memory feature flags (`MEMORY_ENABLED`, etc.) — MM-761 runtime settings implemented
 
 ---
 
