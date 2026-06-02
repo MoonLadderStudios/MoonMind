@@ -17,10 +17,34 @@ from moonmind.rag.context_pack import ContextItem
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass(slots=True)
 class SearchResult:
     items: List[ContextItem]
     latency_ms: float
+
+
+@dataclass(frozen=True, slots=True)
+class IndexCollectionHealth:
+    name: str
+    status: str
+    points_count: int | None
+    indexed_vectors_count: int | None
+    segments_count: int | None
+    vector_size: int | None
+    vector_distance: str | None
+    freshness_at: str | None
+    freshness_source: str | None
+    freshness_status: str
+
+
+@dataclass(frozen=True, slots=True)
+class IndexHealthSummary:
+    generated_at: str
+    total_collections: int
+    total_points: int
+    collections: list[IndexCollectionHealth]
+
 
 @dataclass(slots=True)
 class CollectionHealth:
@@ -44,6 +68,7 @@ class CollectionHealth:
             "freshness": self.freshness,
             "error": self.error,
         }
+
 
 class RagQdrantClient:
     """High-level helper that enforces guardrails for vector operations."""
@@ -95,6 +120,86 @@ class RagQdrantClient:
                 f"Qdrant collection '{target}' vector size {size} does not match embedding dimension {self._embedding_dimensions}."
             )
 
+    def index_health(self, *, freshness_sample_limit: int = 256) -> IndexHealthSummary:
+        """Return read-only collection health for Mission Control index monitoring."""
+
+        generated_at = datetime.now(timezone.utc).isoformat()
+        response = self._client.get_collections()
+        collection_names = sorted(
+            str(collection.name)
+            for collection in getattr(response, "collections", [])
+            if str(getattr(collection, "name", "")).strip()
+        )
+        collections: list[IndexCollectionHealth] = []
+
+        for collection_name in collection_names:
+            try:
+                info = self._client.get_collection(collection_name)
+            except Exception:
+                logger.warning(
+                    "Unable to retrieve health for Qdrant collection %s",
+                    collection_name,
+                    exc_info=True,
+                )
+                collections.append(
+                    IndexCollectionHealth(
+                        name=collection_name,
+                        status="unavailable",
+                        points_count=None,
+                        indexed_vectors_count=None,
+                        segments_count=None,
+                        vector_size=None,
+                        vector_distance=None,
+                        freshness_at=None,
+                        freshness_source=None,
+                        freshness_status="unknown",
+                    )
+                )
+                continue
+            vector_size, vector_distance = self._vector_config_summary(info)
+            points_count = self._optional_int(getattr(info, "points_count", None))
+            if points_count and points_count > 0:
+                freshness_at, freshness_source = self._collection_freshness(
+                    collection_name=collection_name,
+                    limit=freshness_sample_limit,
+                )
+            else:
+                freshness_at, freshness_source = None, None
+            collections.append(
+                IndexCollectionHealth(
+                    name=collection_name,
+                    status=self._string_value(getattr(info, "status", "unknown")),
+                    points_count=points_count,
+                    indexed_vectors_count=self._optional_int(
+                        getattr(info, "indexed_vectors_count", None)
+                    ),
+                    segments_count=self._optional_int(
+                        getattr(info, "segments_count", None)
+                    ),
+                    vector_size=vector_size,
+                    vector_distance=vector_distance,
+                    freshness_at=freshness_at,
+                    freshness_source=freshness_source,
+                    freshness_status=(
+                        "empty"
+                        if points_count == 0
+                        else "known"
+                        if freshness_at
+                        else "unknown"
+                    ),
+                )
+            )
+
+        total_points = sum(
+            collection.points_count or 0 for collection in collections
+        )
+        return IndexHealthSummary(
+            generated_at=generated_at,
+            total_collections=len(collections),
+            total_points=total_points,
+            collections=collections,
+        )
+
     def _build_filter(self, filters: Mapping[str, Any]) -> Optional[qmodels.Filter]:
         must: List[qmodels.FieldCondition] = []
         for key, raw_value in filters.items():
@@ -109,6 +214,132 @@ class RagQdrantClient:
         if not must:
             return None
         return qmodels.Filter(must=must)
+
+    def _collection_freshness(
+        self, *, collection_name: str, limit: int
+    ) -> tuple[str | None, str | None]:
+        if limit <= 0 or not hasattr(self._client, "scroll"):
+            return None, None
+        offset: Any = None
+        seen_offsets: set[str] = set()
+        points: list[Any] = []
+        try:
+            while True:
+                kwargs: dict[str, Any] = {
+                    "collection_name": collection_name,
+                    "limit": limit,
+                    "with_payload": True,
+                    "with_vectors": False,
+                }
+                if offset is not None:
+                    kwargs["offset"] = offset
+                page_points, offset = self._client.scroll(**kwargs)
+                points.extend(page_points)
+                if offset is None:
+                    break
+                offset_key = repr(offset)
+                if offset_key in seen_offsets:
+                    logger.warning(
+                        "Qdrant scroll returned repeated offset for collection %s",
+                        collection_name,
+                    )
+                    break
+                seen_offsets.add(offset_key)
+        except Exception:
+            logger.debug(
+                "Unable to sample freshness for collection %s",
+                collection_name,
+                exc_info=True,
+            )
+            return None, None
+
+        latest: datetime | None = None
+        latest_source: str | None = None
+        for point in points:
+            payload = getattr(point, "payload", None) or {}
+            if not isinstance(payload, Mapping):
+                continue
+            timestamp, source = self._payload_freshness(payload)
+            if timestamp is None:
+                continue
+            if latest is None or timestamp > latest:
+                latest = timestamp
+                latest_source = source
+
+        if latest is None:
+            return None, None
+        return latest.isoformat(), latest_source
+
+    @classmethod
+    def _payload_freshness(
+        cls, payload: Mapping[str, Any]
+    ) -> tuple[datetime | None, str | None]:
+        for key in (
+            "indexed_at",
+            "last_indexed_at",
+            "source_updated_at",
+            "updated_at",
+            "modified_at",
+            "created_at",
+        ):
+            timestamp = cls._parse_timestamp(payload.get(key))
+            if timestamp is not None:
+                return timestamp, key
+        metadata = payload.get("metadata")
+        if isinstance(metadata, Mapping):
+            timestamp, source = cls._payload_freshness(metadata)
+            if timestamp is not None and source is not None:
+                return timestamp, f"metadata.{source}"
+        return None, None
+
+    @staticmethod
+    def _parse_timestamp(value: Any) -> datetime | None:
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                return value.replace(tzinfo=timezone.utc)
+            return value.astimezone(timezone.utc)
+        if not isinstance(value, str) or not value.strip():
+            return None
+        normalized = value.strip()
+        if normalized.endswith("Z"):
+            normalized = normalized[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    @staticmethod
+    def _optional_int(value: Any) -> int | None:
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _string_value(cls, value: Any) -> str:
+        raw = getattr(value, "value", value)
+        return str(raw or "unknown")
+
+    @classmethod
+    def _vector_config_summary(cls, info: Any) -> tuple[int | None, str | None]:
+        vectors = getattr(getattr(getattr(info, "config", None), "params", None), "vectors", None)
+        if isinstance(vectors, Mapping):
+            first = next(iter(vectors.values()), None)
+            return cls._vector_params_summary(first)
+        return cls._vector_params_summary(vectors)
+
+    @classmethod
+    def _vector_params_summary(cls, vectors: Any) -> tuple[int | None, str | None]:
+        if vectors is None:
+            return None, None
+        size = cls._optional_int(getattr(vectors, "size", None))
+        distance = getattr(vectors, "distance", None)
+        return size, cls._string_value(distance) if distance is not None else None
 
     def search(
         self,
