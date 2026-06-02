@@ -208,7 +208,7 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 ### Remaining tasks
 - [ ] **8.1** MCP Streamable HTTP Transport (2025 spec) — Current `/context` is REST-style; modern MCP uses streamable HTTP
 - [ ] **8.2** MCP resource & tool discovery — Clients can't discover what MoonMind offers via MCP
-- [ ] **8.3** Webhook / callback API for external agents — Jules external events started, no generic webhook receiver
+- [x] **8.3** Webhook / callback API for external agents — Generic integration callback receiver, correlation lookup, callback URL provisioning, and polling fallback are available for external agents that advertise callback support (MM-779)
 - [ ] **8.4** OpenAI Responses API compatibility — Only Chat Completions format supported
 
 ---

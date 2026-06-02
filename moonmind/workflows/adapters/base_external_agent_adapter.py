@@ -98,6 +98,8 @@ class BaseExternalAgentAdapter(abc.ABC):
         metadata = self._inject_correlation_metadata(
             metadata, request.correlation_id, request.idempotency_key
         )
+        if self.provider_capability.supports_callbacks:
+            metadata = self._inject_callback_metadata(metadata, request)
 
         handle = await self.do_start(request, title, description, metadata)
 
@@ -212,6 +214,27 @@ class BaseExternalAgentAdapter(abc.ABC):
         return metadata
 
     @staticmethod
+    def _inject_callback_metadata(
+        metadata: dict[str, Any],
+        request: AgentExecutionRequest,
+    ) -> dict[str, Any]:
+        """Inject workflow-provisioned callback hints into provider metadata."""
+
+        if not request.callback_url and not request.callback_correlation_key:
+            return metadata
+        moonmind_meta = metadata.setdefault("moonmind", {})
+        if isinstance(moonmind_meta, Mapping):
+            moonmind_payload = dict(moonmind_meta)
+            if request.callback_url:
+                moonmind_payload.setdefault("callbackUrl", request.callback_url)
+            if request.callback_correlation_key:
+                moonmind_payload.setdefault(
+                    "callbackCorrelationKey", request.callback_correlation_key
+                )
+            metadata["moonmind"] = moonmind_payload
+        return metadata
+
+    @staticmethod
     def build_handle(
         *,
         run_id: str,
@@ -220,20 +243,26 @@ class BaseExternalAgentAdapter(abc.ABC):
         provider_status: str,
         normalized_status: str,
         external_url: str | None = None,
+        callback_supported: bool = False,
+        callback_correlation_key: str | None = None,
     ) -> AgentRunHandle:
         """Build a standard ``AgentRunHandle`` with canonical metadata."""
 
+        metadata: dict[str, Any] = {
+            "providerStatus": provider_status,
+            "normalizedStatus": normalized_status,
+            "externalUrl": external_url,
+            "callbackSupported": bool(callback_supported),
+        }
+        if callback_correlation_key:
+            metadata["callbackCorrelationKey"] = callback_correlation_key
         return AgentRunHandle(
             runId=run_id,
             agentKind="external",
             agentId=agent_id,
             status=status,
             startedAt=datetime.now(tz=UTC),
-            metadata={
-                "providerStatus": provider_status,
-                "normalizedStatus": normalized_status,
-                "externalUrl": external_url,
-            },
+            metadata=metadata,
         )
 
     @staticmethod
