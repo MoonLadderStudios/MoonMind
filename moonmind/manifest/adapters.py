@@ -90,7 +90,11 @@ class GitHubReaderAdapter(_BaseAdapter):
 
         try:
             github_client = GithubClient(github_token=token, verbose=False)
-            filter_tuple = (filter_exts, "INCLUDE") if filter_exts else None
+            filter_tuple = (
+                (filter_exts, GithubRepositoryReader.FilterType.INCLUDE)
+                if filter_exts
+                else None
+            )
             reader = GithubRepositoryReader(
                 github_client=github_client,
                 owner=owner,
@@ -158,7 +162,7 @@ class GoogleDriveReaderAdapter(_BaseAdapter):
                 creds_path = self._resolve(raw)
 
         try:
-            reader = GoogleDriveReader(credentials_path=creds_path)
+            reader = GoogleDriveReader(service_account_key_path=creds_path)
             if file_ids:
                 docs = reader.load_data(file_ids=file_ids)
             elif folder_id:
