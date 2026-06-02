@@ -226,7 +226,6 @@ async def test_write_run_digest_best_effort_timeout_fails_open(
     import moonmind.memory.run_digest as run_digest_module
     import moonmind.rag.service as rag_service
     import moonmind.rag.settings as rag_settings
-    import moonmind.workflows.temporal.artifacts as artifacts_module
 
     class _Settings:
         def retrieval_execution_reason(self, _environ, *, preferred_transport):
@@ -257,7 +256,11 @@ async def test_write_run_digest_best_effort_timeout_fails_open(
     )
     monkeypatch.setattr(rag_service, "ContextRetrievalService", _RetrievalService)
     monkeypatch.setattr(run_digest_module, "TaskHistoryService", _TaskHistoryService)
-    monkeypatch.setattr(artifacts_module.asyncio, "wait_for", _raise_timeout)
+    monkeypatch.setattr(
+        TemporalArtifactActivities._write_run_digest_best_effort.__globals__["asyncio"],
+        "wait_for",
+        _raise_timeout,
+    )
 
     await activities._write_run_digest_best_effort(
         SimpleNamespace(workflow_id="mm:run:123")
