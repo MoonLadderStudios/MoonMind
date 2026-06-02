@@ -191,7 +191,7 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - [ ] **7.4** Execution history / audit trail view — Spec 067 (`run-history-rerun`), API exists, UI incomplete
 - [ ] **7.5** Side-by-side comparison view — README promises "run the same task with different models and runtimes to compare results"
 - [ ] **7.6** Multi-step / step DAG visualization — Steps are tracked but no graphical visualization
-- [ ] **7.7** Worker fleet health dashboard — No per-worker health view
+- [x] **7.7** Worker fleet health dashboard — Per-worker Codex shard health view in Settings Operations (MM-775)
 
 ---
 
