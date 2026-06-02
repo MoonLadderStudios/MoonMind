@@ -290,3 +290,83 @@ def test_index_health_reports_unknown_freshness_when_payload_has_no_timestamp():
     assert result.collections[0].freshness_status == "unknown"
     assert result.collections[0].freshness_at is None
     assert result.collections[0].freshness_source is None
+
+
+def test_index_health_keeps_healthy_collections_when_one_collection_fails():
+    client = _client()
+    scroll_calls: list[str] = []
+
+    class FakeQdrant:
+        def get_collections(self):
+            return SimpleNamespace(
+                collections=[
+                    SimpleNamespace(name="broken"),
+                    SimpleNamespace(name="empty"),
+                    SimpleNamespace(name="healthy"),
+                ]
+            )
+
+        def get_collection(self, collection_name):
+            if collection_name == "broken":
+                raise RuntimeError("collection disappeared")
+            points_count = 0 if collection_name == "empty" else 1
+            return SimpleNamespace(
+                status="green",
+                points_count=points_count,
+                indexed_vectors_count=points_count,
+                segments_count=1,
+                config=SimpleNamespace(params=SimpleNamespace(vectors=None)),
+            )
+
+        def scroll(self, *, collection_name, **kwargs):
+            _ = kwargs
+            scroll_calls.append(collection_name)
+            return (
+                [SimpleNamespace(payload={"indexed_at": "2026-05-03T00:00:00Z"})],
+                None,
+            )
+
+    client._client = FakeQdrant()  # type: ignore[assignment]
+
+    result = client.index_health()
+
+    assert [collection.name for collection in result.collections] == [
+        "broken",
+        "empty",
+        "healthy",
+    ]
+    assert result.collections[0].status == "unavailable"
+    assert result.collections[0].freshness_status == "unknown"
+    assert result.collections[1].freshness_status == "empty"
+    assert result.collections[2].freshness_status == "known"
+    assert scroll_calls == ["healthy"]
+
+
+def test_collection_freshness_pages_until_latest_timestamp_is_found():
+    client = _client()
+    offsets: list[object | None] = []
+
+    class FakeQdrant:
+        def scroll(self, *, collection_name, **kwargs):
+            _ = collection_name
+            offsets.append(kwargs.get("offset"))
+            if kwargs.get("offset") is None:
+                return (
+                    [SimpleNamespace(payload={"indexed_at": "2026-05-01T00:00:00Z"})],
+                    "next-page",
+                )
+            return (
+                [SimpleNamespace(payload={"indexed_at": "2026-05-04T00:00:00Z"})],
+                None,
+            )
+
+    client._client = FakeQdrant()  # type: ignore[assignment]
+
+    freshness_at, freshness_source = client._collection_freshness(
+        collection_name="repo-main",
+        limit=1,
+    )
+
+    assert offsets == [None, "next-page"]
+    assert freshness_at == "2026-05-04T00:00:00+00:00"
+    assert freshness_source == "indexed_at"

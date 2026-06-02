@@ -104,4 +104,22 @@ describe('IndexHealthPage', () => {
       );
     });
   });
+
+  it('treats a missing collections array as an empty result', async () => {
+    fetchSpy.mockImplementation(() =>
+      Promise.resolve({
+        ok: true,
+        json: async () => ({
+          generatedAt: '2026-06-01T00:00:00+00:00',
+          totalCollections: 0,
+          totalPoints: 0,
+        }),
+      } as Response),
+    );
+
+    renderWithClient(<IndexHealthPage payload={payload} />);
+
+    expect(await screen.findByText('No indexed collections found.')).toBeTruthy();
+    expect(screen.getByText('Fresh Collections').parentElement?.textContent).toContain('0');
+  });
 });

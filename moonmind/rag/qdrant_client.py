@@ -109,13 +109,38 @@ class RagQdrantClient:
         collections: list[IndexCollectionHealth] = []
 
         for collection_name in collection_names:
-            info = self._client.get_collection(collection_name)
+            try:
+                info = self._client.get_collection(collection_name)
+            except Exception:
+                logger.warning(
+                    "Unable to retrieve health for Qdrant collection %s",
+                    collection_name,
+                    exc_info=True,
+                )
+                collections.append(
+                    IndexCollectionHealth(
+                        name=collection_name,
+                        status="unavailable",
+                        points_count=None,
+                        indexed_vectors_count=None,
+                        segments_count=None,
+                        vector_size=None,
+                        vector_distance=None,
+                        freshness_at=None,
+                        freshness_source=None,
+                        freshness_status="unknown",
+                    )
+                )
+                continue
             vector_size, vector_distance = self._vector_config_summary(info)
-            freshness_at, freshness_source = self._collection_freshness(
-                collection_name=collection_name,
-                limit=freshness_sample_limit,
-            )
             points_count = self._optional_int(getattr(info, "points_count", None))
+            if points_count and points_count > 0:
+                freshness_at, freshness_source = self._collection_freshness(
+                    collection_name=collection_name,
+                    limit=freshness_sample_limit,
+                )
+            else:
+                freshness_at, freshness_source = None, None
             collections.append(
                 IndexCollectionHealth(
                     name=collection_name,
@@ -171,13 +196,31 @@ class RagQdrantClient:
     ) -> tuple[str | None, str | None]:
         if limit <= 0 or not hasattr(self._client, "scroll"):
             return None, None
+        offset: Any = None
+        seen_offsets: set[str] = set()
+        points: list[Any] = []
         try:
-            points, _offset = self._client.scroll(
-                collection_name=collection_name,
-                limit=limit,
-                with_payload=True,
-                with_vectors=False,
-            )
+            while True:
+                kwargs: dict[str, Any] = {
+                    "collection_name": collection_name,
+                    "limit": limit,
+                    "with_payload": True,
+                    "with_vectors": False,
+                }
+                if offset is not None:
+                    kwargs["offset"] = offset
+                page_points, offset = self._client.scroll(**kwargs)
+                points.extend(page_points)
+                if offset is None:
+                    break
+                offset_key = repr(offset)
+                if offset_key in seen_offsets:
+                    logger.warning(
+                        "Qdrant scroll returned repeated offset for collection %s",
+                        collection_name,
+                    )
+                    break
+                seen_offsets.add(offset_key)
         except Exception:
             logger.debug(
                 "Unable to sample freshness for collection %s",

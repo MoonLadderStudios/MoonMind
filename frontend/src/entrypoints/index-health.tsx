@@ -19,7 +19,7 @@ interface IndexHealthResponse {
   generatedAt: string;
   totalCollections: number;
   totalPoints: number;
-  collections: IndexCollectionHealth[];
+  collections?: IndexCollectionHealth[];
 }
 
 function formatNumber(value: number | null | undefined): string {
@@ -76,6 +76,7 @@ export function IndexHealthPage({ payload: _payload }: { payload: BootPayload })
     queryKey: ['index-health'],
     queryFn: fetchIndexHealth,
   });
+  const collections = data?.collections ?? [];
 
   return (
     <div className="index-health-page stack">
@@ -110,9 +111,7 @@ export function IndexHealthPage({ payload: _payload }: { payload: BootPayload })
           <strong>
             {isLoading
               ? '...'
-              : formatNumber(
-                  data?.collections.filter((collection) => collection.freshnessAt).length,
-                )}
+              : formatNumber(collections.filter((collection) => collection.freshnessAt).length)}
           </strong>
         </article>
       </section>
@@ -127,7 +126,7 @@ export function IndexHealthPage({ payload: _payload }: { payload: BootPayload })
 
         {isLoading ? (
           <p className="loading">Loading index health...</p>
-        ) : data && data.collections.length === 0 ? (
+        ) : data && collections.length === 0 ? (
           <p className="small index-health-empty">No indexed collections found.</p>
         ) : data ? (
           <div className="index-health-table-wrap">
@@ -144,7 +143,7 @@ export function IndexHealthPage({ payload: _payload }: { payload: BootPayload })
                 </tr>
               </thead>
               <tbody>
-                {data.collections.map((collection) => (
+                {collections.map((collection) => (
                   <tr key={collection.name}>
                     <td>
                       <code>{collection.name}</code>
