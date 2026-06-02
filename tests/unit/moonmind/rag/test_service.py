@@ -13,11 +13,11 @@ class StubEmbedder:
 
 class StubQdrant:
     def __init__(self) -> None:
-        self.ensured = False
+        self.ensured: list[str | None] = []
         self.calls: list[dict] = []
 
-    def ensure_collection_ready(self):
-        self.ensured = True
+    def ensure_collection_ready(self, collection_name=None):
+        self.ensured.append(collection_name)
 
     def search(self, **kwargs):
         self.calls.append(kwargs)
@@ -49,6 +49,7 @@ def test_context_retrieval_service_direct_flow(monkeypatch):
     assert pack.items
     assert pack.transport == "direct"
     assert "Retrieved Context" in pack.context_text
+    assert service.qdrant_client.ensured == [settings.vector_collection]
 
 def test_context_retrieval_service_honors_overlay_mode_non_collection():
     env = {
@@ -78,6 +79,63 @@ def test_context_retrieval_service_honors_overlay_mode_non_collection():
 
     assert qdrant.calls
     assert qdrant.calls[0]["overlay_collection"] is None
+
+def test_context_retrieval_service_uses_configured_collection_set():
+    env = {
+        "QDRANT_HOST": "localhost",
+        "QDRANT_PORT": "6333",
+        "GOOGLE_EMBEDDING_DIMENSIONS": "2",
+        "VECTOR_STORE_COLLECTION_NAMES": "repo-main,docs-main",
+    }
+    settings = RagRuntimeSettings.from_env(env)
+    qdrant = StubQdrant()
+    service = ContextRetrievalService(
+        settings=settings,
+        env=env,
+        embedding_client=StubEmbedder(),
+        qdrant_client=qdrant,
+    )
+
+    service.retrieve(
+        query="federated check",
+        filters={"repo": "moonmind"},
+        top_k=2,
+        overlay_policy="skip",
+        budgets={},
+        transport="direct",
+    )
+
+    assert qdrant.ensured == ["repo-main", "docs-main"]
+    assert qdrant.calls[0]["collections"] == ("repo-main", "docs-main")
+
+def test_context_retrieval_service_honors_requested_collections():
+    env = {
+        "QDRANT_HOST": "localhost",
+        "QDRANT_PORT": "6333",
+        "GOOGLE_EMBEDDING_DIMENSIONS": "2",
+        "VECTOR_STORE_COLLECTION_NAMES": "repo-main,docs-main",
+    }
+    settings = RagRuntimeSettings.from_env(env)
+    qdrant = StubQdrant()
+    service = ContextRetrievalService(
+        settings=settings,
+        env=env,
+        embedding_client=StubEmbedder(),
+        qdrant_client=qdrant,
+    )
+
+    service.retrieve(
+        query="targeted federation",
+        filters={"repo": "moonmind"},
+        top_k=2,
+        overlay_policy="skip",
+        budgets={},
+        collections=["docs-main"],
+        transport="direct",
+    )
+
+    assert qdrant.ensured == ["docs-main"]
+    assert qdrant.calls[0]["collections"] == ("docs-main",)
 
 def test_context_retrieval_service_enforces_token_budget():
     env = {

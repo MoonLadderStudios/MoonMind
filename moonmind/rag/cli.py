@@ -58,6 +58,7 @@ def run_search(
     overlay_policy: str,
     transport: str | None,
     output_file: Path | None,
+    collection_args: Sequence[str] | None = None,
 ) -> ContextPack:
     if not query.strip():
         raise CliError("Query text cannot be empty")
@@ -84,6 +85,7 @@ def run_search(
             top_k=top_k or settings.similarity_top_k,
             overlay_policy=overlay_policy,
             budgets=budgets,
+            collections=collection_args,
             transport=resolved_transport,
         )
     except (EmbeddingError, RetrievalBudgetExceededError, RuntimeError) as exc:

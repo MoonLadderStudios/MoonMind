@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
-from typing import Mapping, MutableMapping, Optional
+from typing import Mapping, MutableMapping, Optional, Sequence
 
 from moonmind.config.settings import settings as app_settings
 from moonmind.utils.env_bool import env_to_bool
@@ -21,6 +21,17 @@ def _get_env(
         return default
     return os.getenv(key, default)
 
+def _parse_collection_names(raw: str | None) -> tuple[str, ...]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for item in str(raw or "").split(","):
+        name = item.strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+    return tuple(names)
+
 @dataclass(slots=True)
 class RagRuntimeSettings:
     """Normalized settings consumed by CLI, worker doctor, and gateway flows."""
@@ -30,6 +41,7 @@ class RagRuntimeSettings:
     qdrant_port: int
     qdrant_api_key: Optional[str]
     vector_collection: str
+    vector_collections: tuple[str, ...]
     embedding_provider: str
     embedding_model: str
     embedding_dimensions: Optional[int]
@@ -62,6 +74,9 @@ class RagRuntimeSettings:
             )
             or app_settings.vector_store_collection_name
         )
+        vector_collections = _parse_collection_names(
+            _get_env(env, "VECTOR_STORE_COLLECTION_NAMES")
+        ) or (vector_collection,)
         embedding_provider = (
             _get_env(
                 env,
@@ -137,6 +152,7 @@ class RagRuntimeSettings:
             qdrant_port=qdrant_port,
             qdrant_api_key=qdrant_api_key,
             vector_collection=vector_collection,
+            vector_collections=vector_collections,
             embedding_provider=embedding_provider,
             embedding_model=embedding_model,
             embedding_dimensions=embedding_dimensions,
@@ -161,6 +177,23 @@ class RagRuntimeSettings:
         if self.retrieval_gateway_url:
             return "gateway"
         return "direct"
+
+    def resolve_collections(
+        self, requested: Sequence[str] | None = None
+    ) -> tuple[str, ...]:
+        """Return explicit collections or the configured retrieval collection set."""
+
+        names: list[str] = []
+        seen: set[str] = set()
+        for item in requested or self.vector_collections:
+            name = str(item).strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            names.append(name)
+        if not names:
+            raise ValueError("At least one retrieval collection is required.")
+        return tuple(names)
 
     @staticmethod
     def retrieval_gateway_auth_configured(

@@ -35,6 +35,11 @@ def rag_search(
         "--budget",
         help="Budget ceilings in key=value form (repeatable).",
     ),
+    collection_args: List[str] = typer.Option(
+        [],
+        "--collection",
+        help="Qdrant collection to include in federated retrieval (repeatable).",
+    ),
     top_k: Optional[int] = typer.Option(
         None, "--top-k", help="Override similarity top-k."
     ),
@@ -66,6 +71,7 @@ def rag_search(
             query=query,
             filter_args=filter_args,
             budget_args=budget_args,
+            collection_args=collection_args,
             top_k=top_k,
             overlay_policy=overlay.lower(),
             transport=transport.lower() if transport else None,
@@ -176,4 +182,3 @@ def main() -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     main()
-

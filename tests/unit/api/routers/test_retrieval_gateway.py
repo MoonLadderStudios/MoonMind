@@ -139,10 +139,47 @@ def test_context_accepts_scoped_retrieval_token_and_preserves_request_knobs(
             "top_k": 7,
             "overlay_policy": "skip",
             "budgets": {"tokens": 512, "latency_ms": 1000},
+            "collections": None,
             "transport": "direct",
             "initiation_mode": "session",
         }
     ]
+
+def test_context_preserves_requested_collections() -> None:
+    app = _build_app()
+    service = StubService()
+    app.dependency_overrides[get_retrieval_service] = lambda: service
+    app.dependency_overrides[authorize_retrieval_request] = _oidc_auth
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/retrieval/context",
+            json={
+                "query": "q",
+                "filters": {"repo": "moonmind"},
+                "collections": ["repo-main", "docs-main", "repo-main"],
+            },
+        )
+
+    assert response.status_code == 200
+    assert service.calls[0]["collections"] == ["repo-main", "docs-main"]
+
+def test_context_rejects_blank_collection_name() -> None:
+    app = _build_app()
+    app.dependency_overrides[authorize_retrieval_request] = _oidc_auth
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/retrieval/context",
+            json={
+                "query": "q",
+                "filters": {"repo": "moonmind"},
+                "collections": ["repo-main", " "],
+            },
+        )
+
+    assert response.status_code == 422
+    assert "collection names cannot be blank" in str(response.json()["detail"])
 
 
 @pytest.mark.parametrize(

@@ -140,6 +140,52 @@ def test_search_uses_query_points_when_search_api_is_unavailable():
         "src/canon_a.py",
     ]
 
+def test_search_federates_multiple_canonical_collections_by_score():
+    client = _client()
+    calls: list[str] = []
+
+    class FakeQdrant:
+        def search(self, *, collection_name, **kwargs):
+            _ = kwargs
+            calls.append(collection_name)
+            if collection_name == "repo-main":
+                return [
+                    _point(
+                        score=0.72,
+                        path="src/repo.py",
+                        chunk_hash="repo",
+                        text="repo result",
+                    )
+                ]
+            if collection_name == "docs-main":
+                return [
+                    _point(
+                        score=0.95,
+                        path="docs/rag.md",
+                        chunk_hash="docs",
+                        text="docs result",
+                    )
+                ]
+            raise AssertionError("unexpected collection")
+
+    client._client = FakeQdrant()  # type: ignore[assignment]
+    result = client.search(
+        query_vector=[0.1, 0.2],
+        filters={"repo": "moonmind"},
+        top_k=2,
+        collections=["repo-main", "docs-main"],
+        overlay_policy="skip",
+        overlay_collection=None,
+        trust_overrides=None,
+    )
+
+    assert calls == ["repo-main", "docs-main"]
+    assert [item.source for item in result.items] == ["docs/rag.md", "src/repo.py"]
+    assert [item.payload["collection"] for item in result.items] == [
+        "docs-main",
+        "repo-main",
+    ]
+
 def test_merge_results_skips_expired_overlay_chunks():
     client = _client()
     expired_overlay = _point(
