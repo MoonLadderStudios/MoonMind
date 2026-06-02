@@ -134,7 +134,7 @@ async def list_resources(
     _user: User = Depends(get_current_user()),
 ) -> ResourceListResponse:
     """Return MoonMind MCP resource definitions."""
-    return ResourceListResponse(resources=list(_resources))
+    return ResourceListResponse(resources=_resources)
 
 @router.get("/tools", response_model=ToolListResponse)
 async def list_tools(

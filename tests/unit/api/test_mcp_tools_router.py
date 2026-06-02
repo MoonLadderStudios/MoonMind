@@ -13,7 +13,7 @@ from api_service.api.routers import mcp_tools as mcp_tools_router
 from api_service.auth_providers import get_current_user
 from moonmind.integrations.jira.errors import JiraToolError
 from moonmind.mcp.jira_tool_registry import JiraToolRegistry
-from moonmind.mcp.tool_registry import QueueToolRegistry
+from moonmind.mcp.tool_registry import QueueToolRegistry, ResourceListResponse
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -111,6 +111,22 @@ async def test_list_resources_returns_mcp_resource_catalog(
     }
     assert resources["tool-catalog"]["uri"] == "moonmind://mcp/tools"
     assert resources["tool-catalog"]["mimeType"] == "application/json"
+
+async def test_resource_metadata_allows_optional_mcp_fields() -> None:
+    response = ResourceListResponse(
+        resources=[{"uri": "moonmind://minimal", "name": "minimal"}]
+    )
+
+    assert response.model_dump(by_alias=True) == {
+        "resources": [
+            {
+                "uri": "moonmind://minimal",
+                "name": "minimal",
+                "description": None,
+                "mimeType": None,
+            }
+        ]
+    }
 
 async def test_call_curated_execution_tool_requires_task_submission(
     router_app: FastAPI,

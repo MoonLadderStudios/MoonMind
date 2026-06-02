@@ -69,8 +69,8 @@ class ResourceMetadata(BaseModel):
 
     uri: str = Field(..., alias="uri")
     name: str = Field(..., alias="name")
-    description: str = Field(..., alias="description")
-    mime_type: str = Field(..., alias="mimeType")
+    description: str | None = Field(None, alias="description")
+    mime_type: str | None = Field(None, alias="mimeType")
 
 
 class ResourceListResponse(BaseModel):

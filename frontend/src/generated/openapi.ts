@@ -6386,9 +6386,9 @@ export interface components {
             /** Name */
             name: string;
             /** Description */
-            description: string;
+            description?: string | null;
             /** Mimetype */
-            mimeType: string;
+            mimeType?: string | null;
         };
         /** ResumeExecutionRefModel */
         ResumeExecutionRefModel: {
