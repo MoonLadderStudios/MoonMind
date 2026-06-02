@@ -52,6 +52,7 @@ class RetrievalQuery(BaseModel):
     filters: Dict[str, str] = Field(default_factory=dict)
     overlay_policy: str = Field(default="include", pattern="^(include|skip)$")
     budgets: Dict[str, int] = Field(default_factory=dict)
+    planning_ref: Optional[str] = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def validate_budget_keys(self) -> "RetrievalQuery":
@@ -259,6 +260,7 @@ async def retrieve_context_pack(
             budgets=payload.budgets,
             transport="direct",
             initiation_mode="session",
+            planning_ref=payload.planning_ref,
         )
         pack.transport = "gateway"
         return pack.to_dict()
