@@ -128,15 +128,16 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - Context pack primitives (`rag/context_pack.py`)
 - RAG retrieval CLI (`moonmind rag search`)
 - RAG overlay and guardrails
+- Index health monitoring for Mission Control — indexed collections, document counts, and freshness (MM-758)
 - RAG doc ↔ spec consolidation completed (see `docs/MoonMindRoadmap.md`)
 
 ### Remaining tasks
 - [ ] **5.1** End-to-end manifest ingest testing — Manifest pipeline built but not fully tested against live data sources
-- [ ] **5.2** RAG retrieval quality validation — Evaluation framework exists (`manifest/evaluation.py`) but no golden datasets or baseline metrics established
+- [x] **5.2** RAG retrieval quality validation — Golden smoke dataset and baseline `hitRate@10` / `ndcg@10` thresholds established for `manifest/evaluation.py`
 - [ ] **5.3** Context pack assembly wired into agent runs — Primitives exist; not integrated into Temporal activity execution
-- [ ] **5.4** Index health monitoring — No dashboard view of indexed collections, document counts, or freshness
+- [x] **5.4** Index health monitoring — Mission Control shows indexed collections, document counts, and freshness
 - [ ] **5.5** Incremental re-indexing — Full reindex only; no delta/incremental update path
-- [ ] **5.6** Multi-collection retrieval — Single-collection queries; no cross-collection or federated search
+- [x] **5.6** Multi-collection retrieval — Federated retrieval supports configured and request-selected collection sets
 
 ---
 
@@ -146,15 +147,25 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 
 ### What's shipped
 - Memory architecture design doc (`docs/Memory/MemoryArchitecture.md` — "Desired State")
-- MM-766 memory context-pack token budgeting and provenance contract
+- MM-761 memory foundation contracts and fail-open services:
+  - runtime controls for `MEMORY_ENABLED`, `MEMORY_PLANNING`, `MEMORY_HISTORY`, `MEMORY_LONG_TERM`, `MEMORY_FAIL_OPEN`, and `MEMORY_CONTEXT_BUDGET_TOKENS`
+  - Plane B run digests and error-signature/fix-pattern procedural memory models
+  - Plane C Mem0-compatible long-term memory adapter boundary with approved-memory retrieval
+  - Plane A Beads-compatible planning adapter boundary
+  - provenance-carrying, token-budgeted context-pack assembly
+- Fix Patterns / Error Signatures procedural memory primitive
+  (`moonmind/memory/procedural.py`) with compact evidence-backed JSONL
+  storage and prepared-context projection
+- Planning Memory (Beads / Plane A) runtime adapter with optional context-pack prefetch
+- **MM-762 / 6.1** Run Digests (Plane B — task history summaries) — terminal execution summaries are derived from execution records and indexed as retrieval memory
 
 ### Remaining tasks
-- [ ] **6.1** Run Digests (Plane B — task history summaries) — Architecture defined, no implementation
-- [ ] **6.2** Fix Patterns / Error Signatures (procedural memory) — Architecture defined, no implementation
-- [ ] **6.3** Long-Term Memory integration (Mem0 / Plane C) — Architecture defined, no integration
-- [ ] **6.4** Planning Memory (Beads / Plane A) — Architecture defined, no integration
-- [x] **6.5** Token budgeting & provenance tracking — Contract implemented for budgeted memory context-pack assembly
-- [ ] **6.6** Memory feature flags (`MEMORY_ENABLED`, etc.) — Defined in spec, not in codebase
+- [x] **6.1** Run Digests (Plane B — task history summaries) — MM-761 foundation implemented
+- [x] **6.2** Fix Patterns / Error Signatures (procedural memory) — MM-761 foundation implemented
+- [x] **6.3** Long-Term Memory integration (Mem0 / Plane C) — MM-761 adapter boundary implemented
+- [x] **6.4** Planning Memory (Beads / Plane A) — Runtime adapter, optional context-pack prefetch, and MM-761 adapter boundary implemented
+- [x] **6.5** Token budgeting & provenance tracking — MM-761 context-pack implementation
+- [x] **6.6** Memory feature flags (`MEMORY_ENABLED`, etc.) — MM-761 runtime settings implemented
 
 ---
 
@@ -171,11 +182,12 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - Task detail fields: Runtime, Model, Effort
 - Fast cancellation UX (TRY_CANCEL + force-terminate)
 - External runs integrated into main task dashboard
+- Intervention requests surface as the `intervention_requested` execution state in the task dashboard and live status stream
 
 ### Remaining tasks
 - [ ] **7.1** Migrate settings page to Mission Control — Settings currently in separate profile page, should be unified
 - [ ] **7.2** Artifact browsing UI (files/logs/patches) — API exists (`temporal_artifacts.py`), dashboard integration partial
-- [ ] **7.3** Intervention request monitoring — Not implemented
+- [x] **7.3** Intervention request monitoring — Agent requests for human help surface through `intervention_requested` run status monitoring
 - [ ] **7.4** Execution history / audit trail view — Spec 067 (`run-history-rerun`), API exists, UI incomplete
 - [ ] **7.5** Side-by-side comparison view — README promises "run the same task with different models and runtimes to compare results"
 - [ ] **7.6** Multi-step / step DAG visualization — Steps are tracked but no graphical visualization

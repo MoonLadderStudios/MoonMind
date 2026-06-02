@@ -379,9 +379,11 @@ describe('Workflow Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
-      expect(screen.getByText('Plan work')).toBeTruthy();
-      expect(screen.getByText('Apply patch')).toBeTruthy();
-      expect(screen.getByText('Verify tests')).toBeTruthy();
+      expect(screen.getAllByText('Plan work').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Apply patch').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Verify tests').length).toBeGreaterThan(0);
+      expect(screen.getByRole('heading', { name: 'Step DAG' })).toBeTruthy();
+      expect(screen.getByText('Depends on: plan')).toBeTruthy();
       expect(screen.getByText('Merge Automation').closest('div')?.textContent).toContain('—');
       expect(screen.getByText(/^Current Run ID:?$/)).toBeTruthy();
       expect(screen.getAllByText('02-run').length).toBeGreaterThan(0);
@@ -466,6 +468,95 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.queryByText(/^Task ID:?$/)).toBeNull();
       expect(screen.queryByText(/^Task Detail:?$/)).toBeNull();
       expect(screen.queryByText(/^Step Attempt:?$/)).toBeNull();
+    });
+  });
+
+  it('groups workflow artifacts and folds step and intervention events into the audit timeline', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Artifact browser task',
+      summary: 'Execution summary',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      startedAt: '2026-04-09T00:00:01Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+      interventionAudit: [
+        {
+          action: 'send_message',
+          transport: 'temporal_update',
+          summary: 'Operator sent guidance.',
+          createdAt: '2026-04-09T00:00:05Z',
+        },
+      ],
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => latestStepsSnapshot,
+        } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            artifacts: [
+              {
+                artifactId: 'art-log',
+                contentType: 'text/plain',
+                sizeBytes: 120,
+                status: 'complete',
+                metadata: { filename: 'runtime.log' },
+              },
+              {
+                artifactId: 'art-patch',
+                contentType: 'text/x-diff',
+                sizeBytes: 80,
+                status: 'complete',
+                metadata: { filename: 'fix.patch' },
+              },
+              {
+                artifactId: 'art-report-by-type',
+                contentType: 'text/plain',
+                sizeBytes: 256,
+                status: 'complete',
+                metadata: { filename: 'output.txt', artifact_type: 'report.primary' },
+              },
+            ],
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Workflow Artifacts' })).toBeTruthy();
+      expect(screen.getByText(/Artifact Browser/)).toBeTruthy();
+      expect(screen.getByText('runtime.log')).toBeTruthy();
+      expect(screen.getByText('fix.patch')).toBeTruthy();
+      expect(screen.getByText('output.txt').closest('tr')?.textContent).toContain('reports');
+      expect(screen.getByText('Operator sent guidance.')).toBeTruthy();
+      expect(screen.getAllByText((_, element) => element?.textContent?.includes('Verify tests: ready') ?? false).length).toBeGreaterThan(0);
     });
   });
 
@@ -2387,7 +2478,7 @@ describe('Workflow Detail Entrypoint', () => {
     });
     expect(screen.getByRole('heading', { name: 'Target Diagnostics' })).toBeTruthy();
     expect(screen.getAllByText('Workflow objective').length).toBeGreaterThan(0);
-    expect(screen.getByText('objective.png')).toBeTruthy();
+    expect(screen.getAllByText('objective.png').length).toBeGreaterThan(0);
     expect(screen.getByText('Inspect screenshot')).toBeTruthy();
     expect(screen.getByText('Attachment download failed before step execution.')).toBeTruthy();
     expect(screen.getByText('artifact://diagnostics/input-manifest')).toBeTruthy();
@@ -4192,9 +4283,9 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByRole('heading', { name: 'Objective' })).toBeTruthy();
       expect(screen.getByRole('heading', { name: 'Step 2' })).toBeTruthy();
       expect(screen.getAllByRole('heading', { name: 'Step 2' })).toHaveLength(1);
-      expect(screen.getByText('objective.png')).toBeTruthy();
-      expect(screen.getByText('step.webp')).toBeTruthy();
-      expect(screen.getByText('step-second.jpg')).toBeTruthy();
+      expect(screen.getAllByText('objective.png').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('step.webp').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('step-second.jpg').length).toBeGreaterThan(0);
     });
 
     const objectivePreview = screen.getByAltText('Preview of Objective attachment objective.png');
@@ -4236,6 +4327,8 @@ describe('Workflow Detail Entrypoint', () => {
       status: 'waiting',
       state: 'awaiting_external',
       rawState: 'awaiting_external',
+      waitingReason: 'Agent requested human feedback.',
+      attentionRequired: true,
       createdAt: '2026-03-28T00:00:00Z',
       updatedAt: '2026-03-28T00:00:02Z',
       actions: {
@@ -4277,9 +4370,68 @@ describe('Workflow Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Intervention' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Intervention Monitor' })).toBeTruthy();
+      expect(screen.getAllByText('Agent requested human feedback.').length).toBeGreaterThan(0);
       expect(screen.getByRole('heading', { name: 'Observation' })).toBeTruthy();
-      expect(screen.getByText(/Pause requested\./)).toBeTruthy();
+      expect(screen.getAllByText(/Pause requested\./).length).toBeGreaterThan(0);
       expect(screen.getByText(/Live logs are passive observation only/i)).toBeTruthy();
+    });
+  });
+
+  it('renders a side-by-side run comparison for related executions', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Comparison task',
+      summary: 'Compare runs',
+      status: 'completed',
+      state: 'completed',
+      rawState: 'completed',
+      targetRuntime: 'codex_cli',
+      model: 'gpt-5',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {},
+      relatedRuns: [
+        {
+          workflowId: 'test-456',
+          runId: '02-run',
+          relationship: 'rerun',
+          status: 'failed',
+          href: '/workflows/test-456?source=temporal',
+        },
+      ],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Run Comparison' })).toBeTruthy();
+      expect(screen.getByText('current')).toBeTruthy();
+      expect(screen.getByText('test-456')).toBeTruthy();
+      expect(screen.getAllByText('gpt-5').length).toBeGreaterThan(0);
     });
   });
 

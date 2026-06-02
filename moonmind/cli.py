@@ -35,6 +35,11 @@ def rag_search(
         "--budget",
         help="Budget ceilings in key=value form (repeatable).",
     ),
+    collection_args: List[str] = typer.Option(
+        [],
+        "--collection",
+        help="Qdrant collection to include in federated retrieval (repeatable).",
+    ),
     top_k: Optional[int] = typer.Option(
         None, "--top-k", help="Override similarity top-k."
     ),
@@ -60,16 +65,23 @@ def rag_search(
         "--json",
         help="Print full ContextPack JSON to stdout instead of markdown context text.",
     ),
+    planning_ref: Optional[str] = typer.Option(
+        None,
+        "--planning-ref",
+        help="Optional Beads work-item id for Planning Memory prefetch.",
+    ),
 ) -> None:
     try:
         pack = rag_cli.run_search(
             query=query,
             filter_args=filter_args,
             budget_args=budget_args,
+            collection_args=collection_args,
             top_k=top_k,
             overlay_policy=overlay.lower(),
             transport=transport.lower() if transport else None,
             output_file=output_file,
+            planning_ref=planning_ref,
         )
     except rag_cli.CliError as exc:
         typer.secho(f"Error: {exc}", fg=typer.colors.RED)
@@ -176,4 +188,3 @@ def main() -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     main()
-

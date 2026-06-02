@@ -27,6 +27,7 @@ const TEMPORAL_STATUSES = [
   'executing',
   'proposals',
   'awaiting_external',
+  'intervention_requested',
   'finalizing',
   'completed',
   'failed',
@@ -125,6 +126,7 @@ const ExecutionRowSchema = z
     entry: z.string().optional(),
     dependsOn: z.array(z.string()).optional(),
     blockedOnDependencies: z.boolean().optional(),
+    attentionRequired: z.boolean().optional(),
   })
   .passthrough();
 
@@ -201,6 +203,14 @@ function dependencyListSummary(row: ExecutionRow): string {
   const count = row.dependsOn?.length || 0;
   if (count <= 0) return 'Blocked on dependencies';
   return `Blocked by ${count} prerequisite${count === 1 ? '' : 's'}`;
+}
+
+function interventionListSummary(row: ExecutionRow): string {
+  const state = String(row.rawState || row.state || row.status || '').toLowerCase();
+  if (row.attentionRequired || state === 'intervention_requested') {
+    return 'Intervention requested';
+  }
+  return '';
 }
 
 function displayTemporalCount(count: number | null | undefined, countMode: string | undefined): string {
@@ -1527,6 +1537,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                   <tbody>
                     {sortedItems.map((row) => {
                       const depsSummary = dependencyListSummary(row);
+                      const interventionSummary = interventionListSummary(row);
                       return (
                         <tr key={rowWorkflowId(row)}>
                           <td className="queue-table-cell-id">
@@ -1544,6 +1555,9 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                           </td>
                           <td className="queue-table-cell-title">
                             <div>{row.title}</div>
+                            {interventionSummary ? (
+                              <div className="small">{interventionSummary}</div>
+                            ) : null}
                             {depsSummary ? (
                               <div className="small">{depsSummary}</div>
                             ) : null}
@@ -1560,6 +1574,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               <ul className="queue-card-list" data-layout="card" role="list">
                 {sortedItems.map((row) => {
                       const depsSummary = dependencyListSummary(row);
+                      const interventionSummary = interventionListSummary(row);
                       return (
                   <li key={rowWorkflowId(row)} className="queue-card">
                     <div className="queue-card-header">
@@ -1618,6 +1633,12 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                         <div>
                           <dt>Dependencies</dt>
                           <dd>{depsSummary}</dd>
+                        </div>
+                      ) : null}
+                      {interventionSummary ? (
+                        <div>
+                          <dt>Intervention</dt>
+                          <dd>{interventionSummary}</dd>
                         </div>
                       ) : null}
                     </dl>

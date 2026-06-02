@@ -8,6 +8,12 @@ import pytest
 
 pytest.importorskip("temporalio")
 
+from moonmind.memory.procedural import (
+    EvidenceRun,
+    FixPattern,
+    extract_error_signature,
+)
+from moonmind.workflows.tasks.prepared_context import build_memory_manifest
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
 
@@ -129,6 +135,63 @@ def test_run_request_records_retrieval_and_memory_refs_in_attempt_projection() -
         attempt_context["memoryManifestRef"]
     )
     assert "Relevant design summary." not in str(projection)
+
+
+def test_run_request_projects_matched_fix_patterns_into_attempt_memory() -> None:
+    signature = extract_error_signature("RuntimeError: qdrant collection missing")
+    assert signature is not None
+    fix_pattern = FixPattern.from_successful_run(
+        signature=signature,
+        summary="Bootstrap the Qdrant namespace before indexing.",
+        steps=["Run the namespace bootstrap activity before retrieval writes."],
+        evidence=EvidenceRun(
+            workflowId="successful-workflow-1",
+            artifactRefs=["artifact://fix-pattern/evidence"],
+            outcome="succeeded",
+        ),
+    )
+    expected_memory = build_memory_manifest(
+        [
+            {
+                "proposalRef": fix_pattern.pattern_ref,
+                "state": "accepted_for_run_context",
+                "summary": (
+                    "Bootstrap the Qdrant namespace before indexing. Steps: "
+                    "Run the namespace bootstrap activity before retrieval writes."
+                ),
+            }
+        ]
+    )
+    wf = MoonMindRunWorkflow()
+
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        return_value=_workflow_info(),
+    ):
+        request = wf._build_agent_execution_request(
+            node_inputs={"runtime": {"mode": "codex_cli"}},
+            node_id="collect-evidence",
+            tool_name="codex_cli",
+            workflow_parameters={
+                "task": {
+                    **_task_payload(),
+                    "matchedFixPatterns": [
+                        fix_pattern.model_dump(by_alias=True, exclude_none=True)
+                    ],
+                }
+            },
+        )
+
+    attempt_context = request.parameters["metadata"]["moonmind"]["executionContext"]
+    projection = request.parameters["metadata"]["moonmind"][
+        "stepExecutionManifestProjection"
+    ]
+
+    assert attempt_context["memoryManifestRef"] == expected_memory.memory_manifest_ref
+    assert projection["context"]["memoryManifestRef"] == (
+        expected_memory.memory_manifest_ref
+    )
+    assert "artifact://fix-pattern/evidence" not in str(projection)
 
 
 def test_run_request_filters_prepared_context_to_current_step() -> None:

@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. docs/Tasks/TaskStatus.md (score: 1.000, trust: canonical)\n    line 13: - `docs/Temporal/StepLedgerAndProgressModel.md` for step-level statuses, attempts, checks, and latest-run rules\n2. moonmind/integrations/pentest/models.py (score: 1.000, trust: canonical)\n    line 114: \"read_only\": False,\n3. moonmind/cli.py (score: 1.000, trust: canonical)\n    line 12: from moonmind.rag.guardrails import GuardrailError, ensure_rag_ready\n4. api_service/services/settings_migrations.py (score: 1.000, trust: canonical)\n    line 6: settings, coerces values explicitly on type changes (no implicit JSON\n5. api_service/services/oauth_session_service.py (score: 1.000, trust: canonical)\n    line 40: \"profile_settings\": session_model.metadata_json or {},\n6. docs/Tasks/TaskEditingSystem.md (score: 1.000, trust: canonical)\n    line 38: - direct mutation of previously stored artifacts\n7. api_service/services/settings_change_publisher.py (score: 1.000, trust: canonical)\n    line 59: f\"SettingsChangeSubscriber with name '{name}' is already registered\"\n8. api_service/services/settings_change_subscribers.py (score: 1.000, trust: canonical)\n    line 212: already_registered = any(",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "docs/Tasks/TaskStatus.md",
+      "text": "line 13: - `docs/Temporal/StepLedgerAndProgressModel.md` for step-level statuses, attempts, checks, and latest-run rules",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 13,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/integrations/pentest/models.py",
+      "text": "line 114: \"read_only\": False,",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 114,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/cli.py",
+      "text": "line 12: from moonmind.rag.guardrails import GuardrailError, ensure_rag_ready",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 12,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/services/settings_migrations.py",
+      "text": "line 6: settings, coerces values explicitly on type changes (no implicit JSON",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 6,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/services/oauth_session_service.py",
+      "text": "line 40: \"profile_settings\": session_model.metadata_json or {},",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 40,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Tasks/TaskEditingSystem.md",
+      "text": "line 38: - direct mutation of previously stored artifacts",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 38,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/services/settings_change_publisher.py",
+      "text": "line 59: f\"SettingsChangeSubscriber with name '{name}' is already registered\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 59,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/services/settings_change_subscribers.py",
+      "text": "line 212: already_registered = any(",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 212,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-06-02T01:39:42Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
