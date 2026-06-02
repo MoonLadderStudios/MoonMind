@@ -99,6 +99,30 @@ async def test_start_returns_canonical_handle_and_reuses_idempotency_key():
     assert second.run_id == first.run_id
     assert len(client.created) == 1
 
+
+async def test_start_marks_callback_supported_when_callback_ingress_is_provisioned():
+    client = _FakeJulesAdapterClient()
+    adapter = JulesAgentAdapter(client_factory=lambda: client)
+
+    handle = await adapter.start(
+        _request().model_copy(
+            update={
+                "callback_url": "https://moonmind.example.test/api/integrations/jules/callbacks/cb-1",
+                "callback_correlation_key": "cb-1",
+            }
+        )
+    )
+
+    assert adapter.provider_capability.supports_callbacks is True
+    assert handle.metadata["callbackSupported"] is True
+    assert handle.metadata["callbackCorrelationKey"] == "cb-1"
+    create_req = client.created[0]
+    assert create_req.metadata["moonmind"]["callbackCorrelationKey"] == "cb-1"
+    assert create_req.metadata["moonmind"]["callbackUrl"].endswith(
+        "/api/integrations/jules/callbacks/cb-1"
+    )
+
+
 async def test_status_and_fetch_result_normalize_provider_states():
     client = _FakeJulesAdapterClient(get_status="completed")
     adapter = JulesAgentAdapter(client_factory=lambda: client)

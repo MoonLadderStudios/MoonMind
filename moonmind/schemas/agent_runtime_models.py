@@ -417,6 +417,10 @@ class AgentExecutionRequest(BaseModel):
     callback_policy: dict[str, Any] = Field(
         default_factory=dict, alias="callbackPolicy"
     )
+    callback_url: str | None = Field(None, alias="callbackUrl")
+    callback_correlation_key: str | None = Field(
+        None, alias="callbackCorrelationKey"
+    )
     profile_selector: ProfileSelector = Field(
         default_factory=ProfileSelector, alias="profileSelector"
     )
@@ -446,6 +450,14 @@ class AgentExecutionRequest(BaseModel):
         if resolved_skillset_ref is not None:
             self.resolved_skillset_ref = require_non_blank(
                 resolved_skillset_ref, field_name="resolvedSkillsetRef"
+            )
+        if self.callback_url is not None:
+            self.callback_url = require_non_blank(
+                self.callback_url, field_name="callbackUrl"
+            )
+        if self.callback_correlation_key is not None:
+            self.callback_correlation_key = require_non_blank(
+                self.callback_correlation_key, field_name="callbackCorrelationKey"
             )
         if self.managed_session is not None:
             canonical_runtime_id = canonical_managed_session_runtime_id(self.agent_id)

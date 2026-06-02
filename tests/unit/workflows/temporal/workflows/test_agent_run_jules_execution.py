@@ -110,6 +110,65 @@ async def test_agent_run_jules_starts_new_run_instead_of_continuation(
     assert result.metadata["childWorkflowId"] == "wf-agent-run-1"
     assert result.metadata["childRunId"] == "run-1"
 
+
+async def test_agent_run_provisions_external_callback_url_before_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = MoonMindAgentRun()
+    routed_calls: list[tuple[str, Any]] = []
+
+    _configure_workflow_runtime(monkeypatch)
+
+    async def fake_wait_condition(_condition: Any, timeout: timedelta) -> None:
+        raise asyncio.TimeoutError()
+
+    async def fake_execute_routed_activity(
+        activity_name: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        routed_calls.append((activity_name, payload))
+        if activity_name == "integration.resolve_adapter_metadata":
+            return {
+                "agent_id": "jules",
+                "execution_style": "polling",
+                "supports_callbacks": True,
+                "callback_base_url": "https://moonmind.example.test",
+            }
+        if activity_name == "integration.jules.start":
+            assert isinstance(payload, AgentExecutionRequest)
+            assert payload.callback_correlation_key
+            assert payload.callback_url == (
+                "https://moonmind.example.test/api/integrations/jules/callbacks/"
+                f"{payload.callback_correlation_key}"
+            )
+            assert payload.callback_policy["callbackUrl"] == payload.callback_url
+            assert payload.callback_policy["callbackCorrelationKey"] == (
+                payload.callback_correlation_key
+            )
+            return {
+                "external_id": "new-session-1",
+                "status": "queued",
+                "callback_supported": True,
+                "callback_correlation_key": payload.callback_correlation_key,
+            }
+        if activity_name == "integration.jules.status":
+            return {"normalized_status": "completed"}
+        if activity_name == "integration.jules.fetch_result":
+            return {"summary": "Done", "metadata": {}}
+        if activity_name == "agent_runtime.publish_artifacts":
+            return payload
+        raise AssertionError(f"Unexpected routed activity: {activity_name}")
+
+    monkeypatch.setattr(agent_run_module.workflow, "wait_condition", fake_wait_condition)
+    monkeypatch.setattr(run, "_execute_routed_activity", fake_execute_routed_activity)
+
+    result = await run.run(_request())
+
+    assert routed_calls[1][0] == "integration.jules.start"
+    assert result.failure_class is None
+
+
 async def test_agent_run_jules_branch_publish_failure_maps_to_non_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -348,6 +407,8 @@ async def test_resolve_adapter_metadata_normalizes_case_for_activity_routing(
     assert metadata == {
         "agent_id": "openclaw",
         "execution_style": "streaming_gateway",
+        "supports_callbacks": False,
+        "callback_base_url": None,
     }
 
 async def test_agent_run_streaming_gateway_uses_validated_provider_execute_activity(

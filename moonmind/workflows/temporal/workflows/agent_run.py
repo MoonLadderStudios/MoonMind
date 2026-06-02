@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 from collections.abc import Mapping
 from datetime import datetime, timedelta
 from typing import Any
@@ -118,6 +119,7 @@ def _setdefault_compact_ref_metadata(
 # Default workflow-level execution timeouts
 DEFAULT_MANAGED_TIMEOUT_SECONDS = 3600      # 1 hour
 DEFAULT_EXTERNAL_TIMEOUT_SECONDS = 21600    # 6 hours
+_CALLBACK_KEY_SAFE_PATTERN = re.compile(r"[^A-Za-z0-9_.-]+")
 
 STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT = timedelta(seconds=120)
 MANAGED_STATUS_ACTIVITY_PATCH_ID = "agent-run-managed-status-activity-v1"
@@ -284,9 +286,20 @@ async def resolve_adapter_metadata(agent_id: str) -> dict:
     resolved_agent_id = str(agent_id).strip().lower()
     adapter = registry.create(resolved_agent_id)
     execution_style = "polling"
+    supports_callbacks = False
     if isinstance(adapter, BaseExternalAgentAdapter):
-        execution_style = adapter.provider_capability.execution_style
-    return {"agent_id": resolved_agent_id, "execution_style": execution_style}
+        capability = adapter.provider_capability
+        execution_style = capability.execution_style
+        supports_callbacks = capability.supports_callbacks
+
+    from moonmind.config.settings import settings
+
+    return {
+        "agent_id": resolved_agent_id,
+        "execution_style": execution_style,
+        "supports_callbacks": supports_callbacks,
+        "callback_base_url": settings.integration_callbacks.base_url,
+    }
 
 # --- In-flight compatibility shims (spec #285) ---
 # These activities were superseded by resolve_adapter_metadata but must remain
@@ -361,6 +374,87 @@ class MoonMindAgentRun:
         self._slot_wait_timeout_override_seconds: int | None = None
         self.runtime_selection_updated_event = asyncio.Event()
         self._pending_runtime_selection_update: dict[str, Any] | None = None
+
+    @staticmethod
+    def _safe_callback_key(*parts: str) -> str:
+        raw = "-".join(
+            str(part or "").strip() for part in parts if str(part or "").strip()
+        )
+        safe = _CALLBACK_KEY_SAFE_PATTERN.sub("-", raw).strip("-")
+        return safe or "callback"
+
+    @staticmethod
+    def _external_callback_url(
+        *,
+        base_url: str,
+        integration_name: str,
+        callback_correlation_key: str,
+    ) -> str:
+        base = str(base_url or "").strip().rstrip("/")
+        integration = str(integration_name or "").strip().lower()
+        key = str(callback_correlation_key or "").strip()
+        return f"{base}/api/integrations/{integration}/callbacks/{key}"
+
+    def _with_external_callback_ingress(
+        self,
+        request: AgentExecutionRequest,
+        *,
+        integration_name: str,
+        supports_callbacks: bool,
+        callback_base_url: str | None,
+    ) -> AgentExecutionRequest:
+        if not supports_callbacks:
+            return request
+
+        policy = (
+            request.callback_policy if isinstance(request.callback_policy, dict) else {}
+        )
+        if policy.get("enabled") is False:
+            return request
+
+        explicit_url = str(
+            policy.get("callbackUrl") or policy.get("url") or request.callback_url or ""
+        ).strip()
+        explicit_key = str(
+            policy.get("callbackCorrelationKey")
+            or request.callback_correlation_key
+            or ""
+        ).strip()
+        key = explicit_key or self._safe_callback_key(
+            workflow.info().workflow_id,
+            integration_name,
+            request.correlation_id,
+            request.idempotency_key,
+        )
+
+        if explicit_url:
+            callback_url = explicit_url
+        else:
+            base_url = str(
+                policy.get("callbackBaseUrl")
+                or policy.get("baseUrl")
+                or callback_base_url
+                or ""
+            ).strip()
+            if not base_url:
+                return request
+            callback_url = self._external_callback_url(
+                base_url=base_url,
+                integration_name=integration_name,
+                callback_correlation_key=key,
+            )
+
+        next_policy = dict(policy)
+        next_policy.setdefault("enabled", True)
+        next_policy["callbackUrl"] = callback_url
+        next_policy["callbackCorrelationKey"] = key
+        return request.model_copy(
+            update={
+                "callback_policy": next_policy,
+                "callback_url": callback_url,
+                "callback_correlation_key": key,
+            }
+        )
 
     # --- Deterministic catalog-based routing (new path) ---
 
@@ -2515,6 +2609,14 @@ class MoonMindAgentRun:
                     )
                     validated_id = adapter_meta["agent_id"]
                     execution_style = adapter_meta["execution_style"]
+                    request = self._with_external_callback_ingress(
+                        request,
+                        integration_name=validated_id,
+                        supports_callbacks=bool(
+                            adapter_meta.get("supports_callbacks", False)
+                        ),
+                        callback_base_url=adapter_meta.get("callback_base_url"),
+                    )
                     # Store the validated agent_id for activity routing.
                     self._external_agent_id = validated_id
 

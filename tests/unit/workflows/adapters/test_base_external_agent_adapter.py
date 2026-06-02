@@ -173,6 +173,24 @@ async def test_start_injects_correlation_metadata():
     assert moonmind.get("idempotencyKey") == "idem-1"
 
 
+async def test_start_injects_callback_metadata_and_returns_handle_flag():
+    adapter = _StubAdapter()
+    req = _request().model_copy(
+        update={
+            "callback_url": "https://moonmind.example.test/api/integrations/stub/callbacks/cb-1",
+            "callback_correlation_key": "cb-1",
+        }
+    )
+
+    handle = await adapter.start(req)
+
+    call = adapter.do_start_calls[0]
+    moonmind = call["metadata"].get("moonmind", {})
+    assert moonmind["callbackUrl"].endswith("/api/integrations/stub/callbacks/cb-1")
+    assert moonmind["callbackCorrelationKey"] == "cb-1"
+    assert handle.metadata["callbackSupported"] is False
+
+
 async def test_start_forwards_raw_refs_without_mutating_prepared_context_metadata():
     adapter = _StubAdapter()
     req = _request().model_copy(
