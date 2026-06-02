@@ -10,9 +10,9 @@ from typing import Dict, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from api_service.auth_providers import get_current_user_optional
+from api_service.auth_providers import get_current_user, get_current_user_optional
 from api_service.db.models import User
 from moonmind.rag.service import ContextRetrievalService, RetrievalBudgetExceededError
 from moonmind.rag.settings import RagRuntimeSettings
@@ -52,6 +52,7 @@ class RetrievalQuery(BaseModel):
     filters: Dict[str, str] = Field(default_factory=dict)
     overlay_policy: str = Field(default="include", pattern="^(include|skip)$")
     budgets: Dict[str, int] = Field(default_factory=dict)
+    planning_ref: Optional[str] = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def validate_budget_keys(self) -> "RetrievalQuery":
@@ -82,6 +83,31 @@ class RetrievalQuery(BaseModel):
                 f"{SESSION_SCOPE_FILTER_KEYS_MESSAGE}."
             )
         return self
+
+
+class IndexCollectionHealthModel(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str
+    status: str
+    points_count: int | None = Field(None, alias="pointsCount")
+    indexed_vectors_count: int | None = Field(None, alias="indexedVectorsCount")
+    segments_count: int | None = Field(None, alias="segmentsCount")
+    vector_size: int | None = Field(None, alias="vectorSize")
+    vector_distance: str | None = Field(None, alias="vectorDistance")
+    freshness_at: str | None = Field(None, alias="freshnessAt")
+    freshness_source: str | None = Field(None, alias="freshnessSource")
+    freshness_status: str = Field(alias="freshnessStatus")
+
+
+class IndexHealthResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    generated_at: str = Field(alias="generatedAt")
+    total_collections: int = Field(alias="totalCollections")
+    total_points: int = Field(alias="totalPoints")
+    collections: list[IndexCollectionHealthModel]
+
 
 def get_retrieval_service(request: Request) -> ContextRetrievalService:
     cached = getattr(request.app.state, "retrieval_service", None)
@@ -232,8 +258,48 @@ def _enforce_retrieval_available(service: ContextRetrievalService) -> None:
     )
 
 @router.get("/health")
-def health() -> Dict[str, str]:
-    return {"status": "ok"}
+def health(
+    service: ContextRetrievalService = Depends(get_retrieval_service),
+) -> Dict[str, object]:
+    try:
+        return service.collection_health()
+    except Exception as exc:  # pragma: no cover - defensive runtime probe
+        logger.warning("Retrieval health probe failed: %s", exc)
+        return {"status": "degraded", "collections": []}
+
+@router.get("/index-health", response_model=IndexHealthResponse)
+async def index_health(
+    service: ContextRetrievalService = Depends(get_retrieval_service),
+    _user: User = Depends(get_current_user()),
+) -> IndexHealthResponse:
+    try:
+        summary = await run_in_threadpool(service.qdrant_client.index_health)
+    except Exception as exc:  # pragma: no cover - runtime dependency error path
+        logger.exception("Failed to read RAG index health.")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="RAG index health is unavailable.",
+        ) from exc
+    return IndexHealthResponse(
+        generated_at=summary.generated_at,
+        total_collections=summary.total_collections,
+        total_points=summary.total_points,
+        collections=[
+            IndexCollectionHealthModel(
+                name=collection.name,
+                status=collection.status,
+                points_count=collection.points_count,
+                indexed_vectors_count=collection.indexed_vectors_count,
+                segments_count=collection.segments_count,
+                vector_size=collection.vector_size,
+                vector_distance=collection.vector_distance,
+                freshness_at=collection.freshness_at,
+                freshness_source=collection.freshness_source,
+                freshness_status=collection.freshness_status,
+            )
+            for collection in summary.collections
+        ],
+    )
 
 @router.post("/context")
 async def retrieve_context_pack(
@@ -253,6 +319,7 @@ async def retrieve_context_pack(
             budgets=payload.budgets,
             transport="direct",
             initiation_mode="session",
+            planning_ref=payload.planning_ref,
         )
         pack.transport = "gateway"
         return pack.to_dict()

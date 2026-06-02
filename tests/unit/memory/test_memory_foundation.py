@@ -63,6 +63,49 @@ def test_task_history_builds_run_digest_and_fix_pattern_with_provenance():
     assert digest.as_candidate().provenance.workflow_id == "wf-mm-761"
 
 
+def test_fix_pattern_upserts_are_scoped_by_namespace_and_repo():
+    provenance = MemoryProvenance(workflow_id="wf-mm-761")
+    signature = TaskHistoryService().extract_error_signature(
+        "ValueError in /tmp/run/task.py at line 42",
+        evidence=provenance,
+        family="python",
+    )
+    store = InMemoryTaskHistoryStore()
+
+    for namespace_id, repo, summary in (
+        ("default", "moonmind/repo", "first repo fix"),
+        ("other", "moonmind/repo", "other namespace fix"),
+        ("default", "moonmind/other", "other repo fix"),
+    ):
+        store.upsert_fix_pattern(
+            FixPattern(
+                namespace_id=namespace_id,
+                repo=repo,
+                signature=signature,
+                summary=summary,
+                provenance=provenance,
+            )
+        )
+
+    assert {pattern.summary for pattern in store.fix_patterns} == {
+        "first repo fix",
+        "other namespace fix",
+        "other repo fix",
+    }
+
+
+def test_error_signature_collapses_paths_before_volatile_ids():
+    provenance = MemoryProvenance(workflow_id="wf-mm-761")
+    signature = TaskHistoryService().extract_error_signature(
+        "Traceback in /tmp/run/123e4567-e89b-12d3-a456-426614174000/out.py line 99",
+        evidence=provenance,
+        family="python",
+    )
+
+    assert "<path>" in signature.value
+    assert "<path>/<uuid>" not in signature.value
+
+
 def test_retrieval_gateway_combines_planning_history_and_approved_long_term_memory():
     provenance = MemoryProvenance(workflow_id="wf-mm-761")
     history_service = TaskHistoryService()
@@ -209,6 +252,30 @@ def test_memory_feature_flags_disable_or_fail_open_components():
             planning_ref="beads:MM-761",
         )
 
+    missing_fail_open = RetrievalGateway(
+        settings=MemorySettings(enabled=True, planning="beads", fail_open=True),
+    )
+    missing_pack = missing_fail_open.retrieve_context_pack(
+        "anything",
+        namespace_id="default",
+        repo="moonmind/repo",
+        planning_ref="beads:MM-761",
+    )
+
+    assert missing_pack.included == []
+    assert missing_pack.degraded_components == ["planning"]
+
+    missing_fail_closed = RetrievalGateway(
+        settings=MemorySettings(enabled=True, planning="beads", fail_open=False),
+    )
+    with pytest.raises(AttributeError):
+        missing_fail_closed.retrieve_context_pack(
+            "anything",
+            namespace_id="default",
+            repo="moonmind/repo",
+            planning_ref="beads:MM-761",
+        )
+
 
 def test_mem0_adapter_preserves_review_state_and_provenance_metadata():
     class FakeMem0Client:
@@ -248,3 +315,51 @@ def test_mem0_adapter_preserves_review_state_and_provenance_metadata():
     assert client.added[0][1]["workflow_id"] == "wf-mm-761"
     assert results[0].review_state == "approved"
     assert results[0].provenance.workflow_id == "wf-mm-761"
+
+
+def test_mem0_adapter_filters_empty_metadata_and_normalizes_legacy_results():
+    class FakeMem0Client:
+        def __init__(self):
+            self.added = []
+
+        def add(self, text, *, metadata):
+            self.added.append((text, metadata))
+
+        def search(self, query, *, metadata):
+            return [
+                {
+                    "memory": "Legacy Mem0 memory remains readable.",
+                    "metadata": {
+                        "namespace_id": "default",
+                        "repo": "moonmind/repo",
+                        "scope": "legacy",
+                        "review_state": "unknown",
+                        "workflow_id": "",
+                        "artifact_refs": "",
+                    },
+                }
+            ]
+
+    client = FakeMem0Client()
+    service = Mem0LongTermMemoryService(client)
+    service.add_or_update(
+        LongTermMemory(
+            namespace_id="default",
+            repo="moonmind/repo",
+            text="Only non-empty metadata is sent to Mem0.",
+            review_state="approved",
+            provenance=MemoryProvenance(workflow_id="wf-mm-761"),
+            metadata={"empty": "", "kept": "value"},
+        )
+    )
+
+    added_metadata = client.added[0][1]
+    assert "task_run_id" not in added_metadata
+    assert "artifact_refs" not in added_metadata
+    assert "empty" not in added_metadata
+    assert added_metadata["kept"] == "value"
+
+    result = service.search("legacy", namespace_id="default", repo="moonmind/repo")[0]
+    assert result.scope == "project"
+    assert result.review_state == "approved"
+    assert result.provenance.source_refs == ["mem0"]

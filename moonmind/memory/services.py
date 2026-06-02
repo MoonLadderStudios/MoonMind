@@ -19,7 +19,8 @@ from moonmind.memory.models import (
 
 
 class PlanningAdapter(Protocol):
-    def prefetch(self, planning_ref: str | None) -> list[MemoryCandidate]: ...
+    def prefetch(self, planning_ref: str | None) -> list[MemoryCandidate]:
+        raise NotImplementedError
 
 
 class LongTermMemoryAdapter(Protocol):
@@ -29,9 +30,11 @@ class LongTermMemoryAdapter(Protocol):
         *,
         namespace_id: str,
         repo: str,
-    ) -> list[LongTermMemory]: ...
+    ) -> list[LongTermMemory]:
+        raise NotImplementedError
 
-    def add_or_update(self, memory: LongTermMemory) -> LongTermMemory: ...
+    def add_or_update(self, memory: LongTermMemory) -> LongTermMemory:
+        raise NotImplementedError
 
 
 @dataclass
@@ -64,7 +67,9 @@ class InMemoryTaskHistoryStore:
         self.fix_patterns = [
             existing
             for existing in self.fix_patterns
-            if existing.signature.value != pattern.signature.value
+            if existing.namespace_id != pattern.namespace_id
+            or existing.repo != pattern.repo
+            or existing.signature.value != pattern.signature.value
         ]
         self.fix_patterns.append(pattern)
 
@@ -205,9 +210,8 @@ class Mem0LongTermMemoryService:
         ]
 
     def add_or_update(self, memory: LongTermMemory) -> LongTermMemory:
-        self.client.add(
-            memory.text,
-            metadata={
+        metadata = _clean_mem0_metadata(
+            {
                 "namespace_id": memory.namespace_id,
                 "repo": memory.repo,
                 "scope": memory.scope,
@@ -220,6 +224,10 @@ class Mem0LongTermMemoryService:
                 "source_refs": ",".join(memory.provenance.source_refs),
                 **memory.metadata,
             },
+        )
+        self.client.add(
+            memory.text,
+            metadata=metadata,
         )
         return memory
 
@@ -261,7 +269,7 @@ class RetrievalGateway:
             self._collect(
                 "planning",
                 lambda: self.planning.prefetch(planning_ref)
-                if self.settings.planning == "beads" and self.planning
+                if self.settings.planning == "beads"
                 else [],
                 degraded,
             )
@@ -270,7 +278,7 @@ class RetrievalGateway:
             self._collect(
                 "history",
                 lambda: self.history.search(query, namespace_id=namespace_id, repo=repo)
-                if self.settings.history == "digest" and self.history
+                if self.settings.history == "digest"
                 else [],
                 degraded,
             )
@@ -284,7 +292,7 @@ class RetrievalGateway:
                     namespace_id=namespace_id,
                     repo=repo,
                 )
-                if self.settings.long_term == "mem0" and self.long_term
+                if self.settings.long_term == "mem0"
                 else [],
                 degraded,
             )
@@ -365,6 +373,12 @@ def _memory_from_mem0_result(
         metadata = getattr(result, "metadata", {}) or {}
     if not isinstance(metadata, dict):
         metadata = {}
+    raw_scope = str(metadata.get("scope") or "project").strip().lower()
+    scope = raw_scope if raw_scope in ("project", "team", "user") else "project"
+    raw_state = str(metadata.get("review_state") or "approved").strip().lower()
+    review_state = (
+        raw_state if raw_state in ("draft", "approved", "deprecated") else "approved"
+    )
     provenance = MemoryProvenance(
         workflow_id=_optional_str(metadata.get("workflow_id")),
         task_run_id=_optional_str(metadata.get("task_run_id")),
@@ -376,12 +390,20 @@ def _memory_from_mem0_result(
     return LongTermMemory(
         namespace_id=str(metadata.get("namespace_id") or namespace_id),
         repo=str(metadata.get("repo") or repo),
-        scope=str(metadata.get("scope") or "project"),
+        scope=scope,
         text=text,
-        review_state=str(metadata.get("review_state") or "approved"),
+        review_state=review_state,
         provenance=provenance,
         metadata={str(key): str(value) for key, value in metadata.items() if value is not None},
     )
+
+
+def _clean_mem0_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in metadata.items()
+        if value is not None and (not isinstance(value, str) or value.strip())
+    }
 
 
 def _optional_str(value: Any) -> str | None:

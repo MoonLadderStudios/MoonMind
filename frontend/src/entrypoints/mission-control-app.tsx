@@ -5,6 +5,7 @@ import { DashboardAlerts } from './dashboard-alerts';
 
 type PageComponent = ComponentType<{ payload: BootPayload }>;
 const PAGE_COMPONENTS = {
+  'index-health': lazy(() => import('./index-health')),
   manifests: lazy(() => import('./manifests')),
   'oauth-terminal': lazy(() => import('./oauth-terminal')),
   proposals: lazy(() => import('./proposals')),

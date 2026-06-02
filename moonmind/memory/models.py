@@ -240,8 +240,8 @@ def normalize_error_signature(text: str) -> str:
     """Collapse volatile IDs, paths, and numbers into a reusable signature."""
 
     value = " ".join(text.strip().split())
+    value = _PATH_RE.sub("<path>", value)
     value = _UUID_RE.sub("<uuid>", value)
     value = _HEX_RE.sub("<hex>", value)
-    value = _PATH_RE.sub("<path>", value)
     value = _NUMBER_RE.sub("<num>", value)
     return value[:512]

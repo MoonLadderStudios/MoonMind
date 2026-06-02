@@ -96,6 +96,7 @@ class CodexExecPayload:
     codex_effort: str | None
     publish_mode: str
     publish_base_branch: str | None
+    planning_ref: str | None
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "CodexExecPayload":
@@ -137,6 +138,16 @@ class CodexExecPayload:
         if publish_base_branch == "":
             publish_base_branch = None
 
+        planning_raw = (
+            payload.get("planning_ref")
+            or payload.get("planningRef")
+            or payload.get("beads_id")
+            or payload.get("beadsId")
+        )
+        planning_ref = str(planning_raw).strip() if planning_raw is not None else None
+        if planning_ref == "":
+            planning_ref = None
+
         return cls(
             repository=repository,
             instruction=instruction,
@@ -146,6 +157,7 @@ class CodexExecPayload:
             codex_effort=codex_effort,
             publish_mode=publish_mode,
             publish_base_branch=publish_base_branch,
+            planning_ref=planning_ref,
         )
 
 @dataclass(frozen=True, slots=True)
@@ -765,6 +777,7 @@ class CodexExecHandler:
                 overlay_policy=self._resolve_rag_overlay_policy(),
                 budgets=self._resolve_rag_budgets(),
                 transport=transport,
+                planning_ref=payload.planning_ref,
             ),
             None,
         )

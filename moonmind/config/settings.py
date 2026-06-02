@@ -1717,20 +1717,68 @@ class RAGSettings(BaseSettings):
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
 class MemorySettings(BaseSettings):
-    """Memory and procedural-learning runtime controls."""
+    """Runtime controls for memory and procedural-learning surfaces."""
 
-    enabled: bool = Field(True, alias="MEMORY_ENABLED")
-    planning: Literal["off", "beads"] = Field("off", alias="MEMORY_PLANNING")
-    history: Literal["off", "digest"] = Field("digest", alias="MEMORY_HISTORY")
-    long_term: Literal["off", "mem0"] = Field("off", alias="MEMORY_LONG_TERM")
-    fail_open: bool = Field(True, alias="MEMORY_FAIL_OPEN")
+    enabled: bool = Field(
+        True,
+        description="Master toggle for MoonMind memory context and writeback surfaces.",
+    )
+    planning: Literal["off", "beads"] = Field(
+        "off",
+        description="Planning-memory provider. Allowed values: off, beads.",
+    )
+    history: Literal["off", "digest"] = Field(
+        "off",
+        description="Task-history memory provider. Allowed values: off, digest.",
+    )
+    long_term: Literal["off", "mem0"] = Field(
+        "off",
+        description="Long-term memory provider. Allowed values: off, mem0.",
+    )
+    fail_open: bool = Field(
+        True,
+        description=(
+            "Allow chat and task execution to continue when memory providers fail."
+        ),
+    )
     context_budget_tokens: int = Field(
-        4000,
-        alias="MEMORY_CONTEXT_BUDGET_TOKENS",
-        ge=1,
+        4096,
+        gt=0,
+        description="Maximum token budget for memory context packed into a request.",
     )
 
-    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
+    @field_validator("planning", "history", "long_term", mode="before")
+    @classmethod
+    def _normalize_provider(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
+    @property
+    def planning_enabled(self) -> bool:
+        """Return whether planning-memory retrieval should run."""
+
+        return self.enabled and self.planning != "off"
+
+    @property
+    def history_enabled(self) -> bool:
+        """Return whether task-history memory retrieval/writeback should run."""
+
+        return self.enabled and self.history != "off"
+
+    @property
+    def long_term_enabled(self) -> bool:
+        """Return whether long-term memory retrieval/writeback should run."""
+
+        return self.enabled and self.long_term != "off"
+
+    model_config = SettingsConfigDict(
+        populate_by_name=True,
+        env_prefix="MEMORY_",
+        env_file=str(ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
 class LocalDataSettings(BaseSettings):
     """Settings for local data indexing"""
@@ -2081,7 +2129,7 @@ class ExecutionNotificationSettings(BaseSettings):
     enabled: bool = Field(
         False,
         alias="MOONMIND_EXECUTION_NOTIFICATIONS_ENABLED",
-        description="Emit webhook notifications when an agent run reaches a terminal result.",
+        description="Emit notifications when an agent run reaches a terminal result.",
     )
     webhook_url: Optional[str] = Field(
         None,
@@ -2098,6 +2146,48 @@ class ExecutionNotificationSettings(BaseSettings):
         alias="MOONMIND_EXECUTION_NOTIFICATIONS_TIMEOUT_SECONDS",
         description="Webhook timeout in seconds.",
         gt=0,
+    )
+    email_to: Optional[str] = Field(
+        None,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_EMAIL_TO",
+        description="Comma-separated recipient list for completion notification email.",
+    )
+    email_from: Optional[str] = Field(
+        None,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_EMAIL_FROM",
+        description="Sender address for completion notification email.",
+    )
+    smtp_host: Optional[str] = Field(
+        None,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_SMTP_HOST",
+        description="SMTP host used for completion notification email.",
+    )
+    smtp_port: int = Field(
+        587,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_SMTP_PORT",
+        description="SMTP port used for completion notification email.",
+        gt=0,
+    )
+    smtp_username: Optional[str] = Field(
+        None,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_SMTP_USERNAME",
+        description="Optional SMTP username for completion notification email.",
+    )
+    smtp_password: Optional[str] = Field(
+        None,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_SMTP_PASSWORD",
+        description="Optional SMTP password for completion notification email.",
+        exclude=True,
+    )
+    smtp_use_tls: bool = Field(
+        True,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_SMTP_USE_TLS",
+        description="Use STARTTLS for completion notification email.",
+    )
+    smtp_use_ssl: bool = Field(
+        False,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_SMTP_USE_SSL",
+        description="Use implicit TLS for completion notification email.",
     )
 
     model_config = SettingsConfigDict(
