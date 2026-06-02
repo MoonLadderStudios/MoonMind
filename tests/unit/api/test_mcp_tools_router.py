@@ -87,6 +87,31 @@ async def test_list_tools_includes_curated_pentest_execution_tool(
         == "temporal_task_submission"
     )
 
+async def test_list_resources_returns_mcp_resource_catalog(
+    router_app: FastAPI,
+) -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get("/api/mcp/resources")
+
+    assert response.status_code == 200
+    resources = {
+        resource["name"]: resource for resource in response.json()["resources"]
+    }
+    assert resources["context-completion"] == {
+        "uri": "moonmind://context",
+        "name": "context-completion",
+        "description": (
+            "Chat-style context completion endpoint with optional RAG, available "
+            "through POST /context."
+        ),
+        "mimeType": "application/json",
+    }
+    assert resources["tool-catalog"]["uri"] == "moonmind://mcp/tools"
+    assert resources["tool-catalog"]["mimeType"] == "application/json"
+
 async def test_call_curated_execution_tool_requires_task_submission(
     router_app: FastAPI,
 ) -> None:
