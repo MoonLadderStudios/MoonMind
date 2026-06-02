@@ -18,11 +18,14 @@ class LongTermMemoryError(RuntimeError):
 class Mem0ClientProtocol(Protocol):
     """Small protocol covering the Mem0 SDK methods MoonMind uses."""
 
-    def search(self, query: str, **kwargs: Any) -> Any: ...
+    def search(self, query: str, **kwargs: Any) -> Any:
+        raise NotImplementedError
 
-    def add(self, memory: str, **kwargs: Any) -> Any: ...
+    def add(self, memory: str, **kwargs: Any) -> Any:
+        raise NotImplementedError
 
-    def update(self, memory_id: str, **kwargs: Any) -> Any: ...
+    def update(self, memory_id: str, **kwargs: Any) -> Any:
+        raise NotImplementedError
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,10 +74,7 @@ class LongTermMemoryService:
             review_state="approved",
             extra=filters,
         )
-        kwargs: dict[str, Any] = {
-            "user_id": self._user_id(scope=scope, repo=repo),
-            "metadata": metadata_filter,
-        }
+        kwargs: dict[str, Any] = {"filters": metadata_filter}
         if limit is not None and limit > 0:
             kwargs["limit"] = limit
         try:
@@ -115,8 +115,8 @@ class LongTermMemoryService:
             if memory_id:
                 return self.client.update(
                     memory_id,
-                    data=normalized_text,
-                    **kwargs,
+                    text=normalized_text,
+                    metadata=metadata,
                 )
             return self.client.add(normalized_text, **kwargs)
         except Exception as exc:  # pragma: no cover - SDK-specific failures
@@ -144,15 +144,25 @@ class LongTermMemoryService:
         review_state: str,
         extra: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
-        metadata: dict[str, Any] = {
-            "namespace_id": self._settings.memory_namespace_id,
-            "scope": scope,
-            "review_state": review_state,
-        }
+        if extra:
+            metadata = {
+                key: value
+                for key, value in dict(extra).items()
+                if key
+                not in {"namespace_id", "scope", "review_state", "repo", "user_id"}
+            }
+        else:
+            metadata = {}
+        metadata.update(
+            {
+                "namespace_id": self._settings.memory_namespace_id,
+                "scope": scope,
+                "review_state": review_state,
+                "user_id": self._user_id(scope=scope, repo=repo),
+            }
+        )
         if repo:
             metadata["repo"] = repo
-        if extra:
-            metadata.update(dict(extra))
         return metadata
 
     def _memory_metadata(
@@ -230,9 +240,11 @@ class LongTermMemoryService:
         metadata = candidate.get("metadata")
         if not isinstance(metadata, MutableMapping):
             metadata = {}
-        score_raw = candidate.get("score", candidate.get("similarity", 0.0))
+        score_raw = candidate.get("score")
+        if score_raw is None:
+            score_raw = candidate.get("similarity")
         try:
-            score = float(score_raw)
+            score = float(score_raw) if score_raw is not None else 0.0
         except (TypeError, ValueError):
             score = 0.0
         memory_id = candidate.get("id", candidate.get("memory_id"))

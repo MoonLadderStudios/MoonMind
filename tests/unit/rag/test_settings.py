@@ -149,10 +149,10 @@ def test_long_term_memory_mem0_enabled_with_api_key() -> None:
     assert settings.memory_namespace_id == "tenant-a"
     assert settings.mem0_user_id == "mem-user"
 
-def test_long_term_memory_invalid_mode_fails_closed_to_off() -> None:
+def test_long_term_memory_invalid_mode_fails_with_unsupported_reason() -> None:
     settings = RagRuntimeSettings.from_env(
         {"MEMORY_ENABLED": "true", "MEMORY_LONG_TERM": "unsupported"}
     )
     ok, reason = settings.long_term_memory_execution_reason()
     assert not ok
-    assert reason == "long_term_memory_disabled"
+    assert reason == "long_term_memory_unsupported"

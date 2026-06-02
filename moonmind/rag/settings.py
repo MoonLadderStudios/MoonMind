@@ -143,8 +143,6 @@ class RagRuntimeSettings:
         memory_long_term = (
             _get_env(env, "MEMORY_LONG_TERM", "off") or "off"
         ).strip().lower()
-        if memory_long_term not in {"off", "mem0"}:
-            memory_long_term = "off"
         memory_fail_open = env_to_bool(
             _get_env(env, "MEMORY_FAIL_OPEN", "true"), default=True
         )

@@ -140,13 +140,16 @@ class _StubQdrant:
 
 
 class _StubLongTermMemory:
-    def __init__(self, *, fail: bool = False) -> None:
+    def __init__(self, *, fail: bool = False, error: Exception | None = None) -> None:
         self.fail = fail
+        self.error = error
         self.search_calls: list[dict[str, object]] = []
         self.write_calls: list[dict[str, object]] = []
 
     def search(self, **kwargs):
         self.search_calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
         if self.fail:
             from moonmind.rag.long_term_memory import LongTermMemoryError
 
@@ -162,6 +165,8 @@ class _StubLongTermMemory:
 
     def add_or_update(self, **kwargs):
         self.write_calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
         if self.fail:
             from moonmind.rag.long_term_memory import LongTermMemoryError
 
@@ -272,6 +277,36 @@ def test_retrieve_direct_flow_fail_opens_when_mem0_unavailable() -> None:
     assert [item.source for item in pack.items] == ["src/file.py"]
 
 
+def test_retrieve_direct_flow_fail_opens_for_unexpected_mem0_exception() -> None:
+    embedder = _StubEmbedder()
+    qdrant = _StubQdrant()
+    memory = _StubLongTermMemory(error=TypeError("sdk shape changed"))
+    settings = _settings(
+        memory_enabled=True,
+        memory_long_term="mem0",
+        mem0_api_key="mem0-secret",
+        memory_fail_open=True,
+    )
+    service = ContextRetrievalService(
+        settings=settings,
+        env={"GOOGLE_API_KEY": "test"},
+        embedding_client=embedder,
+        qdrant_client=qdrant,
+        long_term_memory_service=memory,
+    )
+
+    pack = service.retrieve(
+        query="How should memory work?",
+        filters={"repo": "MoonLadderStudios/MoonMind"},
+        top_k=3,
+        overlay_policy="skip",
+        budgets={},
+        transport="direct",
+    )
+
+    assert [item.source for item in pack.items] == ["src/file.py"]
+
+
 def test_add_or_update_long_term_memory_skips_when_disabled() -> None:
     service = ContextRetrievalService(
         settings=_settings(memory_enabled=False),
@@ -321,6 +356,30 @@ def test_add_or_update_long_term_memory_writes_with_provenance() -> None:
             "memory_id": None,
         }
     ]
+
+
+def test_add_or_update_long_term_memory_fail_opens_for_unexpected_exception() -> None:
+    memory = _StubLongTermMemory(error=AttributeError("sdk shape changed"))
+    service = ContextRetrievalService(
+        settings=_settings(
+            memory_enabled=True,
+            memory_long_term="mem0",
+            mem0_api_key="mem0-secret",
+            memory_fail_open=True,
+        ),
+        env={"GOOGLE_API_KEY": "test"},
+        embedding_client=_StubEmbedder(),
+        qdrant_client=_StubQdrant(),
+        long_term_memory_service=memory,
+    )
+
+    result = service.add_or_update_long_term_memory(
+        text="Use approved memory only.",
+        repo="MoonLadderStudios/MoonMind",
+        provenance={"workflowId": "wf-1"},
+    )
+
+    assert result == {"skipped": True, "reason": "long_term_memory_unavailable"}
 
 
 def test_retrieve_gateway_flow_skips_embedding_and_preserves_contract_shape(monkeypatch: pytest.MonkeyPatch) -> None:

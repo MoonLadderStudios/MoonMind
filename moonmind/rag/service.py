@@ -249,7 +249,7 @@ class ContextRetrievalService:
                 provenance=provenance,
                 memory_id=memory_id,
             )
-        except LongTermMemoryError:
+        except Exception:
             if self._settings.memory_fail_open:
                 return {"skipped": True, "reason": "long_term_memory_unavailable"}
             raise
@@ -273,7 +273,7 @@ class ContextRetrievalService:
                 scope="project",
                 limit=self._memory_top_k(),
             )
-        except LongTermMemoryError:
+        except Exception:
             if self._settings.memory_fail_open:
                 return [], 0.0
             raise
