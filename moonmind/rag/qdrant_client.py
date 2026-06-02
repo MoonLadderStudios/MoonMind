@@ -353,7 +353,7 @@ class RagQdrantClient:
         for name in targets:
             try:
                 info = self._client.get_collection(name)
-            except UnexpectedResponse as exc:
+            except Exception as exc:
                 health.append(
                     CollectionHealth(
                         name=name,

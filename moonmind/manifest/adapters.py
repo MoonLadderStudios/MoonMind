@@ -19,6 +19,15 @@ from moonmind.manifest.reader_adapter import PlanResult, register_adapter
 from moonmind.schemas.manifest_v0_models import DataSourceConfig
 
 logger = logging.getLogger(__name__)
+_HASH_CHUNK_SIZE = 64 * 1024
+
+
+def _sha256_file(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as file_obj:
+        for chunk in iter(lambda: file_obj.read(_HASH_CHUNK_SIZE), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 # ---------------------------------------------------------------------------
 # Base helper
@@ -255,7 +264,7 @@ class SimpleDirectoryReaderAdapter(_BaseAdapter):
                     continue
                 stat = f.stat()
                 try:
-                    digest = hashlib.sha256(f.read_bytes()).hexdigest()
+                    digest = _sha256_file(f)
                 except OSError:
                     digest = ""
                 files[str(f.relative_to(p))] = {

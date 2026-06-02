@@ -168,6 +168,23 @@ class TestAdapterContracts:
         state = adapter.state()
         assert "inputDir" in state
 
+    def test_local_state_hashes_file_in_chunks(self, tmp_path, monkeypatch):
+        (tmp_path / "file.txt").write_text("hello", encoding="utf-8")
+        monkeypatch.setattr(
+            "pathlib.Path.read_bytes",
+            lambda self: (_ for _ in ()).throw(AssertionError("read_bytes used")),
+        )
+        ds = DataSourceConfig(
+            id="loc", type="SimpleDirectoryReader",
+            params={"inputDir": str(tmp_path)}
+        )
+        adapter = SimpleDirectoryReaderAdapter(ds)
+        state = adapter.state()
+
+        assert state["files"]["file.txt"]["sha256"] == (
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        )
+
     def test_github_state_returns_branch(self):
         ds = DataSourceConfig(
             id="gh", type="GithubRepositoryReader",
@@ -297,6 +314,46 @@ class TestExtensibility:
         previous_state = {"sources": {"local": first.sources[0].state}}
 
         second = ManifestPipeline(manifest, previous_state=previous_state).run()
+
+        assert second.total_docs == 0
+        assert second.sources[0].skipped is True
+        assert second.sources[0].state == first.sources[0].state
+
+    def test_pipeline_skips_unchanged_source_from_serialized_previous_state(
+        self, tmp_path
+    ):
+        source_dir = tmp_path / "docs"
+        source_dir.mkdir()
+        (source_dir / "a.md").write_text("hello", encoding="utf-8")
+        manifest = ManifestV0.from_yaml_string(textwrap.dedent(f"""\
+            version: "v0"
+            metadata:
+              name: "incremental-run"
+            embeddings:
+              provider: "openai"
+              model: "text-embedding-3-large"
+            vectorStore:
+              type: "qdrant"
+              indexName: "test"
+            dataSources:
+              - id: "local"
+                type: "SimpleDirectoryReader"
+                params:
+                  inputDir: "{source_dir}"
+                  requiredExts: [".md"]
+            indices:
+              - id: "idx1"
+                sources: ["local"]
+            retrievers:
+              - id: "ret1"
+                type: "Vector"
+                indices: ["idx1"]
+        """))
+        first = ManifestPipeline(manifest).run()
+
+        second = ManifestPipeline(
+            manifest, previous_state=first.to_dict()
+        ).run()
 
         assert second.total_docs == 0
         assert second.sources[0].skipped is True

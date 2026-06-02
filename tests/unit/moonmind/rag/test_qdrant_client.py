@@ -217,6 +217,21 @@ def test_collection_health_reports_counts_and_dimensions():
     assert result[0].dimensions == 768
     assert result[0].freshness == "ready"
 
+def test_collection_health_reports_transport_exceptions_as_unavailable():
+    client = _client()
+
+    class FakeQdrant:
+        def get_collection(self, name):
+            raise TimeoutError(f"{name} timed out")
+
+    client._client = FakeQdrant()  # type: ignore[assignment]
+
+    result = client.collection_health(collection_names=("repo-main",))
+
+    assert result[0].name == "repo-main"
+    assert result[0].status == "unavailable"
+    assert "timed out" in result[0].error
+
 def test_merge_results_skips_expired_overlay_chunks():
     client = _client()
     expired_overlay = _point(

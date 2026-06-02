@@ -222,6 +222,12 @@ class ManifestPipeline:
         current_state: Dict[str, Any],
     ) -> bool:
         sources_state = self.previous_state.get("sources", self.previous_state)
+        if isinstance(sources_state, list):
+            sources_state = {
+                item.get("id"): item.get("state")
+                for item in sources_state
+                if isinstance(item, dict) and isinstance(item.get("id"), str)
+            }
         if not isinstance(sources_state, dict):
             return False
         previous = sources_state.get(source_id)

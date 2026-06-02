@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -210,11 +211,36 @@ def _default_top_k(manifest: Any) -> int:
     top_k = getattr(params, "topK", None)
     return int(top_k or 10)
 
+def _settings_overrides_from_manifest(manifest: Any) -> Dict[str, str]:
+    overrides: Dict[str, str] = {}
+
+    vector_store = getattr(manifest, "vectorStore", None)
+    index_name = getattr(vector_store, "indexName", None)
+    if isinstance(index_name, str) and index_name.strip():
+        overrides["VECTOR_STORE_COLLECTION_NAME"] = index_name.strip()
+        overrides["VECTOR_STORE_COLLECTION_NAMES"] = index_name.strip()
+
+    embeddings = getattr(manifest, "embeddings", None)
+    provider = getattr(embeddings, "provider", None)
+    if isinstance(provider, str) and provider.strip():
+        normalized_provider = provider.strip().lower()
+        overrides["DEFAULT_EMBEDDING_PROVIDER"] = normalized_provider
+        model = getattr(embeddings, "model", None)
+        if isinstance(model, str) and model.strip():
+            if normalized_provider == "google":
+                overrides["GOOGLE_EMBEDDING_MODEL"] = model.strip()
+            elif normalized_provider == "openai":
+                overrides["OPENAI_EMBEDDING_MODEL"] = model.strip()
+
+    return overrides
+
 def _build_service_retriever(manifest: Any) -> RetrieverFn:
     from moonmind.rag.service import ContextRetrievalService
     from moonmind.rag.settings import RagRuntimeSettings
 
-    settings = RagRuntimeSettings.from_env()
+    settings_source = dict(os.environ)
+    settings_source.update(_settings_overrides_from_manifest(manifest))
+    settings = RagRuntimeSettings.from_env(settings_source)
     executable, reason = settings.retrieval_execution_reason(None)
     if not executable:
         raise RuntimeError(

@@ -11,6 +11,7 @@ from moonmind.manifest.evaluation import (
     DatasetEvaluation,
     EvaluationResult,
     MetricScore,
+    _build_service_retriever,
     evaluate_manifest,
     hit_rate_at_k,
     ndcg_at_k,
@@ -169,6 +170,57 @@ evaluation:
         assert metrics[1]["name"] == "ndcg@2"
         assert metrics[1]["score"] == 0.8155
         assert metrics[1]["passed"] is False
+
+    def test_service_retriever_uses_manifest_vector_store(self, monkeypatch):
+        captured = {}
+
+        class FakePack:
+            items = [type("Item", (), {"payload": {"doc_id": "docs/rag.md"}})()]
+
+        class FakeService:
+            def __init__(self, *, settings):
+                captured["settings"] = settings
+
+            def retrieve(self, **kwargs):
+                captured["retrieve_kwargs"] = kwargs
+                return FakePack()
+
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        monkeypatch.setenv("VECTOR_STORE_COLLECTION_NAME", "env-collection")
+        monkeypatch.setattr(
+            "moonmind.rag.service.ContextRetrievalService", FakeService
+        )
+        manifest = ManifestV0.from_yaml_string(
+            """
+version: "v0"
+metadata:
+  name: "eval-test"
+embeddings:
+  provider: "openai"
+  model: "text-embedding-3-large"
+vectorStore:
+  type: "qdrant"
+  indexName: "manifest-collection"
+dataSources:
+  - id: "local"
+    type: "SimpleDirectoryReader"
+indices:
+  - id: "idx"
+    sources: ["local"]
+retrievers:
+  - id: "ret"
+    type: "Vector"
+    indices: ["idx"]
+"""
+        )
+
+        retriever = _build_service_retriever(manifest)
+
+        assert retriever("where is rag?", 1) == ["docs/rag.md"]
+        assert captured["settings"].vector_collection == "manifest-collection"
+        assert captured["settings"].vector_collections == ("manifest-collection",)
+        assert captured["settings"].embedding_provider == "openai"
+        assert captured["settings"].embedding_model == "text-embedding-3-large"
 
 # ---------------------------------------------------------------------------
 # Dataset loading
