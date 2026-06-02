@@ -131,6 +131,7 @@ class ContextRetrievalService:
                 top_k=top_k,
                 overlay_policy=overlay_policy,
                 overlay_collection=overlay_collection,
+                collections=self._settings.vector_collections,
                 trust_overrides=None,
             )
         planning_items = self._prefetch_planning_context(planning_ref)
@@ -261,6 +262,20 @@ class ContextRetrievalService:
             chunk_hash=item.chunk_hash,
             payload=dict(item.payload) if item.payload is not None else {},
         )
+
+    def collection_health(self) -> dict[str, Any]:
+        collections = self._qdrant.collection_health(
+            collection_names=self._settings.vector_collections
+        )
+        ready = [
+            item
+            for item in collections
+            if item.status.lower() not in {"unavailable", "missing", "error"}
+        ]
+        return {
+            "status": "ok" if len(ready) == len(collections) else "degraded",
+            "collections": [item.to_dict() for item in collections],
+        }
 
     @staticmethod
     def _normalize_budgets(budgets: Mapping[str, Any]) -> dict[str, int]:

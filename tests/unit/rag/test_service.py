@@ -16,6 +16,7 @@ def _settings(**overrides: object) -> RagRuntimeSettings:
         qdrant_port=6333,
         qdrant_api_key=None,
         vector_collection="test_collection",
+        vector_collections=("test_collection",),
         embedding_provider="google",
         embedding_model="test-model",
         embedding_dimensions=768,
@@ -132,6 +133,9 @@ class _StubQdrant:
     def ensure_collection_ready(self) -> None:
         self.ensured = True
 
+    def collection_health(self, **kwargs):
+        return []
+
     def search(self, **kwargs):
         self.calls.append(kwargs)
         item = ContextItem(score=0.8, source="src/file.py", text="snippet")
@@ -162,11 +166,38 @@ def test_retrieve_direct_flow_uses_embedding_and_qdrant_search() -> None:
     assert embedder.calls == ["How to integrate RAG?"]
     assert qdrant.ensured is True
     assert len(qdrant.calls) == 1
+    assert qdrant.calls[0]["collections"] == ("test_collection",)
     assert pack.transport == "direct"
     assert pack.initiation_mode == "session"
     assert pack.truncated is False
     assert pack.items
     assert "Retrieved Context" in pack.context_text
+
+
+def test_retrieve_direct_flow_passes_multiple_collections() -> None:
+    embedder = _StubEmbedder()
+    qdrant = _StubQdrant()
+    settings = _settings(
+        vector_collection="primary",
+        vector_collections=("primary", "docs", "support"),
+    )
+    service = ContextRetrievalService(
+        settings=settings,
+        env={"GOOGLE_API_KEY": "test"},
+        embedding_client=embedder,
+        qdrant_client=qdrant,
+    )
+
+    service.retrieve(
+        query="How to integrate RAG?",
+        filters={"repo": "moonmind"},
+        top_k=3,
+        overlay_policy="skip",
+        budgets={},
+        transport="direct",
+    )
+
+    assert qdrant.calls[0]["collections"] == ("primary", "docs", "support")
 
 
 def test_retrieve_gateway_flow_skips_embedding_and_preserves_contract_shape(monkeypatch: pytest.MonkeyPatch) -> None:

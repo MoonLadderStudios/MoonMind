@@ -16,6 +16,7 @@ def _settings(**overrides: object) -> RagRuntimeSettings:
         qdrant_port=6333,
         qdrant_api_key=None,
         vector_collection="test_collection",
+        vector_collections=("test_collection",),
         embedding_provider="google",
         embedding_model="test-model",
         embedding_dimensions=768,
