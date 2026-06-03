@@ -45,6 +45,7 @@ agent_jobs/
 /var/
 /artifacts/
 /artifacts.retrieved-context/
+/artifacts.root-owned*/
 /artifacts.root-owned/
 /artifacts.root-owned.*/
 /artifacts.root-readonly/
