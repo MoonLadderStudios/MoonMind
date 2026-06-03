@@ -193,6 +193,36 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
         if activity_type == "provider_profile.list":
             return {"profiles": []}
         if activity_type == "artifact.read":
+            if (
+                payload.get("artifact_ref")
+                if isinstance(payload, dict)
+                else getattr(payload, "artifact_ref", None)
+            ) == "artifact://registry/1":
+                return json.dumps(
+                    {
+                        "skills": [
+                            {
+                                "name": "repo.run_tests",
+                                "version": "1.0.0",
+                                "description": "Run tests",
+                                "inputs": {"schema": {"type": "object"}},
+                                "outputs": {"schema": {"type": "object"}},
+                                "executor": {
+                                    "activity_type": "mm.skill.execute",
+                                    "selector": {"mode": "by_capability"},
+                                },
+                                "requirements": {"capabilities": ["sandbox"]},
+                                "policies": {
+                                    "timeouts": {
+                                        "start_to_close_seconds": 1800,
+                                        "schedule_to_close_seconds": 3600,
+                                    },
+                                    "retries": {"max_attempts": 3},
+                                },
+                            }
+                        ]
+                    }
+                ).encode("utf-8")
             return json.dumps(
                 {
                     "plan_version": "1.0",
@@ -355,6 +385,37 @@ async def test_run_execution_stage_rejects_legacy_skill_registry_dispatch(
         if activity_type == "provider_profile.list":
             return {"profiles": []}
         if activity_type == "artifact.read":
+            artifact_ref = (
+                payload.get("artifact_ref")
+                if isinstance(payload, dict)
+                else getattr(payload, "artifact_ref", None)
+            )
+            if artifact_ref == "artifact://registry/1":
+                return json.dumps(
+                    {
+                        "skills": [
+                            {
+                                "name": "repo.run_tests",
+                                "version": "1.0.0",
+                                "description": "Run repository tests",
+                                "inputs": {"schema": {"type": "object"}},
+                                "outputs": {"schema": {"type": "object"}},
+                                "executor": {
+                                    "activity_type": "mm.skill.execute",
+                                    "selector": {"mode": "by_capability"},
+                                },
+                                "requirements": {"capabilities": ["sandbox"]},
+                                "policies": {
+                                    "timeouts": {
+                                        "start_to_close_seconds": 1800,
+                                        "schedule_to_close_seconds": 3600,
+                                    },
+                                    "retries": {"max_attempts": 1},
+                                },
+                            }
+                        ]
+                    }
+                ).encode("utf-8")
             return json.dumps(
                 {
                     "plan_version": "1.0",
@@ -412,19 +473,13 @@ async def test_run_execution_stage_rejects_legacy_skill_registry_dispatch(
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
 
-    with pytest.raises(
-        ValueError,
-        match="unsupported plan node tool.type: 'skill'; expected 'agent_runtime'",
-    ):
-        await workflow._run_execution_stage(
-            parameters={"repo": "MoonLadderStudios/MoonMind"},
-            plan_ref="art_plan_1",
-        )
+    await workflow._run_execution_stage(
+        parameters={"repo": "MoonLadderStudios/MoonMind"},
+        plan_ref="art_plan_1",
+    )
 
-    assert not any(
-        payload.get("artifact_ref") == "artifact://registry/1"
-        for activity_type, payload in captured
-        if activity_type == "artifact.read"
+    assert any(
+        activity_type == "mm.skill.execute" for activity_type, _payload in captured
     )
 
 @pytest.mark.asyncio
@@ -897,16 +952,20 @@ async def test_run_execution_stage_rejects_legacy_jira_blocker_skill_plan(
         _timeout_wait_condition,
     )
 
-    with pytest.raises(
-        ValueError,
-        match="unsupported plan node tool.type: 'skill'; expected 'agent_runtime'",
-    ):
-        await workflow._run_execution_stage(
-            parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "none"},
-            plan_ref="art_plan_1",
-        )
+    await workflow._run_execution_stage(
+        parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "none"},
+        plan_ref="art_plan_1",
+    )
 
-    assert skill_calls == []
+    assert [call[0] for call in skill_calls] == [
+        "jira.check_blockers",
+        "jira.check_blockers",
+        "repo.run_tests",
+    ]
+    assert skill_calls[1][1] == (
+        "wf-1:run-1:check-blockers:execution:1:execute_jira_blocker_recheck_1"
+    )
+    assert workflow._plan_blocked_message is None
     assert workflow._jira_blocker_wait_active is False
     assert workflow._waiting_reason is None
 
