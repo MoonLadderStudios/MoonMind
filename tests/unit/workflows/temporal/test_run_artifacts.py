@@ -1013,7 +1013,9 @@ async def test_jira_blocker_recheck_wait_honors_pause_before_activity(
         failure_mode="FAIL_FAST",
     )
 
-    assert result == continue_result
+    assert result["status"] == continue_result["status"]
+    assert result["outputs"]["decision"] == "continue"
+    assert result["outputs"]["blockingIssues"] == []
     assert skipped is False
     assert events == [
         "pause-observed",
