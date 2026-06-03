@@ -4478,6 +4478,12 @@ export interface components {
             proposalOutcomes?: {
                 [key: string]: unknown;
             }[];
+            /** Finishoutcomecode */
+            finishOutcomeCode?: string | null;
+            /** Finishsummary */
+            finishSummary?: {
+                [key: string]: unknown;
+            } | null;
             debugFields?: components["schemas"]["ExecutionDebugFieldsModel"] | null;
             /** Redirectpath */
             redirectPath?: string | null;

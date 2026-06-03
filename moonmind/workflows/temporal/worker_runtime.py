@@ -35,6 +35,7 @@ from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
+from structlog.stdlib import ProcessorFormatter
 
 from api_service.db.base import get_async_session_context
 from api_service.db.models import (
@@ -43,6 +44,7 @@ from api_service.db.models import (
     TemporalExecutionOwnerType,
     TemporalExecutionRecord,
 )
+from moonmind.config.logging import configure_logging, default_log_fields_from_env
 from moonmind.config.settings import settings
 from moonmind.workflows.skills.deployment_execution import (
     DeploymentUpdateExecutor,
@@ -167,6 +169,8 @@ _MANAGED_SESSION_LOG_FIELD_MAP: tuple[tuple[str, str], ...] = (
 )
 _OPENTELEMETRY_LOG_FORMAT = (
     "%(asctime)s %(levelname)s [%(name)s] "
+    "[service=%(service)s component=%(component)s "
+    "worker_fleet=%(worker_fleet)s worker_id=%(worker_id)s] "
     "[trace_id=%(trace_id)s span_id=%(span_id)s] "
     "[workflow_id=%(temporal_workflow_id)s run_id=%(temporal_run_id)s "
     "activity_id=%(temporal_activity_id)s] "
@@ -1001,10 +1005,6 @@ def _selected_step_tool_version(step_entry: Mapping[str, Any]) -> str:
     return str(step_tool.get("version") or "1.0").strip() or "1.0"
 
 def _selected_step_tool_type(step_entry: Mapping[str, Any], tool_name: str) -> str:
-    if _selected_step_type(step_entry) == "tool":
-        return "skill"
-    if tool_name.lower() in _JIRA_STORY_OUTPUT_TOOLS:
-        return "skill"
     return "agent_runtime"
 
 def _jira_agent_skill_selected(tool_name: str) -> bool:
@@ -1413,18 +1413,21 @@ def _build_runtime_planner():
                 ) or _coerce_mapping(plan_entry.get("skill"))
                 if not tool_payload:
                     raise RuntimeError("task.plan entries require a tool object")
-                tool_type = str(
-                    tool_payload.get("type") or tool_payload.get("kind") or "skill"
-                ).strip() or "skill"
-                tool_name = str(
+                authored_tool_type = str(
+                    tool_payload.get("type")
+                    or tool_payload.get("kind")
+                    or "agent_runtime"
+                ).strip().lower() or "agent_runtime"
+                authored_tool_name = str(
                     tool_payload.get("name") or tool_payload.get("id") or ""
                 ).strip()
-                if not tool_name:
+                if not authored_tool_name:
                     raise RuntimeError("task.plan tool name is required")
-                tool_version = str(
-                    tool_payload.get("version")
-                    or ("1.0.0" if tool_type == "skill" else "1.0")
-                ).strip()
+                tool_type = (
+                    "agent_runtime" if authored_tool_type == "skill" else authored_tool_type
+                )
+                tool_name = runtime_mode if authored_tool_type == "skill" else authored_tool_name
+                tool_version = str(tool_payload.get("version") or "1.0").strip()
                 if not tool_version:
                     raise RuntimeError("task.plan tool version is required")
                 node_inputs = _coerce_mapping(plan_entry.get("inputs"))
@@ -1432,6 +1435,13 @@ def _build_runtime_planner():
                     node_inputs = _coerce_mapping(
                         tool_payload.get("inputs") or tool_payload.get("args")
                     )
+                if authored_tool_type == "skill":
+                    node_inputs = {
+                        "instructions": f"Execute skill '{authored_tool_name}'",
+                        "runtime": dict(runtime_node),
+                        "selectedSkill": authored_tool_name,
+                        **dict(node_inputs),
+                    }
                 node_id = str(plan_entry.get("id") or f"node-{idx}").strip()
                 if not node_id:
                     node_id = f"node-{idx}"
@@ -1622,18 +1632,26 @@ def _build_runtime_planner():
 
                 # Per-step tool/skill override
                 step_tool_name = _selected_step_tool_name(step_entry)
-                step_runtime = _normalize_runtime_mode(
-                    _coerce_mapping(step_node_inputs.get("runtime")).get("mode")
+                step_runtime_payload = _coerce_mapping(step_node_inputs.get("runtime"))
+                step_runtime_raw = (
+                    step_runtime_payload.get("mode")
+                    or step_runtime_payload.get("targetRuntime")
                     or runtime_mode
+                )
+                step_runtime = (
+                    _normalize_runtime_mode(step_runtime_raw)
+                    if step_runtime_raw is not None
+                    else None
                 )
                 tool_type = _selected_step_tool_type(step_entry, step_tool_name)
                 tool_version = _selected_step_tool_version(step_entry)
                 effective_step_skill_name = step_tool_name or selected_skill_name
                 if step_tool_name:
-                    if tool_type == "skill" or not _selected_step_type(step_entry):
-                        step_runtime = step_tool_name
                     step_node_inputs["selectedSkill"] = step_tool_name
-                    if _jira_agent_skill_selected(step_tool_name):
+                    if (
+                        _jira_agent_skill_selected(step_tool_name)
+                        and step_tool_name.lower() not in _MOONSPEC_BREAKDOWN_TOOLS
+                    ):
                         step_node_inputs["publishMode"] = "none"
                 if effective_step_skill_name:
                     step_node_inputs["instructions"] = _append_agent_skill_instructions(
@@ -1667,7 +1685,7 @@ def _build_runtime_planner():
                     "tool": {
                         "type": tool_type,
                         "name": step_runtime,
-                        "version": tool_version if tool_type == "skill" else "1.0",
+                        "version": "1.0",
                     },
                     "inputs": step_node_inputs,
                 })
@@ -1744,14 +1762,8 @@ def _build_runtime_planner():
                 str(node_inputs.get("instructions") or ""),
                 selected_skill=selected_skill_name,
             )
-            node_tool_type = (
-                "skill"
-                if selected_skill_name.lower() in _JIRA_STORY_OUTPUT_TOOLS
-                else "agent_runtime"
-            )
-            node_tool_name = (
-                selected_skill_name if node_tool_type == "skill" else runtime_mode
-            )
+            node_tool_type = "agent_runtime"
+            node_tool_name = runtime_mode
             nodes.append({
                 "id": node_id,
                 "tool": {
@@ -1773,23 +1785,45 @@ def _build_runtime_planner():
             and publish_uses_git
         )
         if publish_requested or story_output_mode == "jira":
-            publish_node = next(
-                (
-                    node
-                    for node in reversed(nodes)
-                    if str(node.get("tool", {}).get("type") or "").strip().lower()
-                    == "agent_runtime"
-                    and not _jira_agent_skill_selected(_plan_node_selected_skill(node))
-                ),
-                nodes[-1],
-            )
+            if story_output_mode == "jira":
+                publish_node = next(
+                    (
+                        node
+                        for node in nodes
+                        if str(
+                            node.get("tool", {}).get("type") or ""
+                        ).strip().lower()
+                        == "agent_runtime"
+                        and _plan_node_selected_skill(node).lower()
+                        in _MOONSPEC_BREAKDOWN_TOOLS
+                    ),
+                    nodes[-1],
+                )
+            else:
+                publish_node = next(
+                    (
+                        node
+                        for node in reversed(nodes)
+                        if str(
+                            node.get("tool", {}).get("type") or ""
+                        ).strip().lower()
+                        == "agent_runtime"
+                        and not _jira_agent_skill_selected(
+                            _plan_node_selected_skill(node)
+                        )
+                    ),
+                    nodes[-1],
+                )
             publish_tool = str(
                 publish_node.get("tool", {}).get("name") or ""
             ).strip().lower()
             publish_selected_skill = _plan_node_selected_skill(publish_node)
             if (
                 publish_tool not in _TOOLS_WITH_AUTO_PR_CREATION
-                and not _jira_agent_skill_selected(publish_selected_skill)
+                and (
+                    not _jira_agent_skill_selected(publish_selected_skill)
+                    or publish_selected_skill.lower() in _MOONSPEC_BREAKDOWN_TOOLS
+                )
                 and not _is_jira_pr_handoff_node(
                     publish_node,
                     task_payload=task_payload,
@@ -2273,7 +2307,14 @@ async def main_async() -> None:
 
 class OpenTelemetryLoggingFilter(logging.Filter):
     """Injects OpenTelemetry and Temporal trace context into standard logging."""
+
+    def __init__(self, name: str = "") -> None:
+        super().__init__(name)
+        self._default_fields = default_log_fields_from_env()
+
     def filter(self, record: logging.LogRecord) -> bool:
+        for key, value in self._default_fields.items():
+            setattr(record, key, value)
         record.trace_id = ""
         record.span_id = ""
         record.temporal_workflow_id = ""
@@ -2330,14 +2371,17 @@ class OpenTelemetryLoggingFilter(logging.Filter):
         return True
 
 def _configure_worker_logging(*, enable_opentelemetry: bool) -> None:
+    configure_logging(
+        level=os.environ.get("LOG_LEVEL", "INFO"),
+        structured=None,
+        default_fields=default_log_fields_from_env(),
+    )
     if not enable_opentelemetry:
-        logging.basicConfig(level=logging.INFO)
         return
 
-    logging.basicConfig(level=logging.INFO, format=_OPENTELEMETRY_LOG_FORMAT)
-    formatter = logging.Formatter(_OPENTELEMETRY_LOG_FORMAT)
     for handler in logging.root.handlers:
-        handler.setFormatter(formatter)
+        if not isinstance(handler.formatter, ProcessorFormatter):
+            handler.setFormatter(logging.Formatter(_OPENTELEMETRY_LOG_FORMAT))
         if not any(
             isinstance(existing_filter, OpenTelemetryLoggingFilter)
             for existing_filter in handler.filters

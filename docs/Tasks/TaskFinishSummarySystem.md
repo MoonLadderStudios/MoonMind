@@ -186,7 +186,9 @@ Inside the Python Temporal workflow logic (`MoonMind.Run`):
 1. The Workflow coordinates stage timings across all child Activities.
 2. Even in failure or `CancelledError` paths, a `finally:` or `except:` block captures the execution state.
 3. The Workflow saves `reports/run_summary.json` to the unified Artifacts API.
-4. The Workflow returns a final typed Result payload that the API syncs (or reads via Webhooks) into the Postgres `agent_jobs` table columns (`finish_outcome_code`, `finish_summary_json`) to make List queries faster in the UI.
+4. The Workflow records the final typed terminal-state payload into the Postgres
+   execution source and projection columns (`finish_outcome_code`,
+   `finish_summary_json`) to make List queries faster in the UI.
 
 ## 4. Proposals Integration
 

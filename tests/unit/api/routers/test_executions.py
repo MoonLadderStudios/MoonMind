@@ -472,6 +472,8 @@ def _build_execution_record(
             ),
         },
         artifact_refs=["art_123"],
+        finish_outcome_code=None,
+        finish_summary_json=None,
         manifest_ref=(
             "art_manifest_1"
             if workflow_type is TemporalWorkflowType.MANIFEST_INGEST
@@ -509,6 +511,24 @@ def _build_execution_record(
         entry=entry,
         integration_state=None,
     )
+
+def test_serialize_execution_includes_finish_summary_projection_fields():
+    record = _build_execution_record(state=MoonMindWorkflowState.COMPLETED)
+    record.close_status = TemporalExecutionCloseStatus.COMPLETED
+    record.finish_outcome_code = "NO_CHANGES"
+    record.finish_summary_json = {
+        "schemaVersion": "v1",
+        "finishOutcome": {
+            "code": "NO_CHANGES",
+            "stage": "publish",
+            "reason": "publish skipped: no local changes",
+        },
+    }
+
+    payload = _serialize_execution(record).model_dump(by_alias=True)
+
+    assert payload["finishOutcomeCode"] == "NO_CHANGES"
+    assert payload["finishSummary"] == record.finish_summary_json
 
 def _override_temporal_client(app: FastAPI) -> AsyncMock:
     client = AsyncMock()
@@ -1685,6 +1705,40 @@ def test_create_task_shaped_execution_rejects_unsupported_runtime_with_attachmen
     assert response.status_code == 422
     assert "Unsupported targetRuntime" in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
+
+
+def test_create_task_shaped_execution_rejects_unsupported_step_runtime(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "targetRuntime": "codex_cli",
+                "task": {
+                    "instructions": "Validate step runtime early.",
+                    "steps": [
+                        {
+                            "id": "bad-runtime",
+                            "instructions": "This should fail before launch.",
+                            "runtime": {"mode": "gemni_cli"},
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert (
+        "Unsupported payload.task.steps[0].runtime.mode"
+        in response.json()["detail"]["message"]
+    )
+    service.create_execution.assert_not_awaited()
+
 
 def test_create_task_shaped_execution_fetches_unique_attachments_in_one_query(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -3367,6 +3421,54 @@ def test_create_task_shaped_execution_defaults_runtime_into_parameters(
     assert initial_parameters["task"]["runtime"]["mode"] == "codex_cli"
 
 
+def test_create_task_shaped_execution_normalizes_scalar_step_runtime_fields(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+    test_client.app.dependency_overrides[get_async_session] = lambda: None
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "targetRuntime": "codex_cli",
+                "task": {
+                    "title": "Preserve scalar runtime fields",
+                    "instructions": "Normalize step runtime metadata.",
+                    "steps": [
+                        {
+                            "id": "scalar-runtime",
+                            "instructions": "Use a step profile.",
+                            "runtime": {
+                                "mode": "CLAUDE",
+                                "model": 42,
+                                "effort": True,
+                                "profileId": 123,
+                            },
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    runtime = initial_parameters["task"]["steps"][0]["runtime"]
+    assert runtime["mode"] == "claude_code"
+    assert runtime["model"] == "42"
+    assert runtime["requestedModel"] == "42"
+    assert runtime["modelSource"] == "task_override"
+    assert runtime["effort"] == "True"
+    assert runtime["profileId"] == "123"
+    assert runtime["providerProfile"] == "123"
+
+
 def test_create_task_shaped_execution_preserves_preset_schedule_provenance(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -3465,6 +3567,11 @@ def test_create_task_shaped_execution_preserves_steps_and_uses_step_title_defaul
                             "id": "tpl:demo:1.0.0:02",
                             "title": "Implement the restored builder",
                             "instructions": "Restore presets and multi-step submission.",
+                            "runtime": {
+                                "mode": "codex_cli",
+                                "model": "gpt-5.4",
+                                "effort": "high",
+                            },
                         },
                     ],
                 },
@@ -3497,6 +3604,13 @@ def test_create_task_shaped_execution_preserves_steps_and_uses_step_title_defaul
             "id": "tpl:demo:1.0.0:02",
             "title": "Implement the restored builder",
             "instructions": "Restore presets and multi-step submission.",
+            "runtime": {
+                "mode": "codex_cli",
+                "model": "gpt-5.4",
+                "effort": "high",
+                "requestedModel": "gpt-5.4",
+                "modelSource": "task_override",
+            },
         },
     ]
 
