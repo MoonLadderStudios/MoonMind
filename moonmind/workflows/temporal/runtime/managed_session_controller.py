@@ -240,13 +240,22 @@ class DockerCodexManagedSessionController:
             or ""
         ).strip().lower()
 
+    @staticmethod
+    def _workflow_docker_mode_source(
+        session_environment: Mapping[str, str],
+    ) -> str | None:
+        raw_mode = session_environment.get("MOONMIND_WORKFLOW_DOCKER_MODE")
+        if raw_mode is None:
+            raw_mode = os.environ.get("MOONMIND_WORKFLOW_DOCKER_MODE")
+        if raw_mode is None:
+            return None
+        return str(raw_mode).strip()
+
     def _apply_unrestricted_docker_session_environment(
         self,
         session_environment: dict[str, str],
     ) -> bool:
-        raw_mode = session_environment.get("MOONMIND_WORKFLOW_DOCKER_MODE")
-        if raw_mode is None:
-            raw_mode = os.environ.get("MOONMIND_WORKFLOW_DOCKER_MODE")
+        raw_mode = self._workflow_docker_mode_source(session_environment)
         workflow_docker_mode = normalize_workflow_docker_mode(raw_mode)
         if workflow_docker_mode != "unrestricted":
             return False
@@ -343,7 +352,7 @@ class DockerCodexManagedSessionController:
                 "Unsupported MOONMIND_MANAGED_SESSION_DOCKER_MODE "
                 f"{raw_mode!r}; expected one of {', '.join(allowed)}"
             )
-        workflow_source = session_environment.get("MOONMIND_WORKFLOW_DOCKER_MODE")
+        workflow_source = self._workflow_docker_mode_source(session_environment)
         if workflow_source is None:
             return False
         workflow_mode = normalize_workflow_docker_mode(workflow_source)

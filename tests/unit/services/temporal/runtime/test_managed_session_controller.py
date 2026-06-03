@@ -36,6 +36,15 @@ from moonmind.workflows.temporal.runtime.managed_session_supervisor import (
 )
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 
+
+@pytest.fixture(autouse=True)
+def _clear_managed_session_docker_policy_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MOONMIND_WORKFLOW_DOCKER_MODE", raising=False)
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_MODE", raising=False)
+
+
 class _LocalArtifactStorage:
     def __init__(self, root: Path) -> None:
         self._root = root
@@ -853,6 +862,91 @@ async def test_mm784_request_unrestricted_mode_uses_sidecar_policy(
             "MOONMIND_URL": "http://api:8000",
             "MOONMIND_WORKFLOW_DOCKER_MODE": "unrestricted",
         },
+    )
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        if command[:3] == ("docker", "rm", "-f"):
+            return 1, "", "No such container"
+        if command[:3] == ("docker", "volume", "rm"):
+            return 1, "", "No such volume"
+        if command[:3] == ("docker", "volume", "create"):
+            return 0, command[3] + "\n", ""
+        if command[:2] == ("docker", "run"):
+            name = command[command.index("--name") + 1]
+            if name.endswith("-docker"):
+                return 0, "sidecar-ctr\n", ""
+            if name.endswith("-agent"):
+                return 0, "agent-ctr\n", ""
+        if command[:3] == ("docker", "exec", "-e") and "docker" in command:
+            return 0, '"27.0.0"\n', ""
+        if "ready" in command:
+            return 0, '{"ready": true}\n', ""
+        if "launch_session" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": request.session_id,
+                    "sessionEpoch": 1,
+                    "containerId": "agent-ctr",
+                    "threadId": request.thread_id,
+                },
+                "status": "ready",
+                "imageRef": request.image_ref,
+                "controlUrl": "docker-exec://moonmind-session-sess-1-agent",
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        docker_host="tcp://docker-proxy:2375",
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    await controller.launch_session(request)
+
+    agent_run = next(
+        command
+        for command in commands
+        if command[:2] == ("docker", "run")
+        and "moonmind-session-sess-1-agent" in command
+    )
+    assert "DOCKER_HOST=unix:///var/run/moonmind-docker/docker.sock" in agent_run
+    assert "DOCKER_HOST=tcp://docker-proxy:2375" not in agent_run
+    assert not any(
+        command[:3] == ("docker", "network", "connect") for command in commands
+    )
+
+@pytest.mark.asyncio
+async def test_mm784_env_unrestricted_mode_uses_sidecar_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_MODE", raising=False)
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
+    monkeypatch.delenv("MOONMIND_DOCKER_NETWORK", raising=False)
+    monkeypatch.setenv("MOONMIND_WORKFLOW_DOCKER_MODE", "unrestricted")
+    monkeypatch.setenv("MOONMIND_DOCKER_PROXY_NETWORK", "docker-proxy-test")
+    workspace_root = tmp_path / "agent_jobs"
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_root / "task-1" / "repo"),
+        sessionWorkspacePath=str(workspace_root / "task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        environment={"MOONMIND_URL": "http://api:8000"},
     )
     commands: list[tuple[str, ...]] = []
 
