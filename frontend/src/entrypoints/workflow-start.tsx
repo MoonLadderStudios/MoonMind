@@ -6976,7 +6976,10 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     setAttachmentTargetErrors({});
 
     const normalizedRuntime = runtime.trim().toLowerCase();
-    if (!supportedTaskRuntimes.includes(normalizedRuntime)) {
+    const supportedTaskRuntimeIds = supportedTaskRuntimes.map((item) =>
+      item.trim().toLowerCase(),
+    );
+    if (!supportedTaskRuntimeIds.includes(normalizedRuntime)) {
       setSubmitMessage(
         `Runtime must be one of: ${supportedTaskRuntimes.join(", ")}.`,
       );
@@ -6985,7 +6988,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     }
     const invalidStepRuntime = submissionSteps.find((step) => {
       const stepRuntime = step.runtime.trim().toLowerCase();
-      return stepRuntime && !supportedTaskRuntimes.includes(stepRuntime);
+      return stepRuntime && !supportedTaskRuntimeIds.includes(stepRuntime);
     });
     if (invalidStepRuntime) {
       const stepIndex = submissionSteps.indexOf(invalidStepRuntime) + 1;
@@ -7580,9 +7583,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       hasTemplateBoundStep ||
       Boolean(primaryGeneratedToolPayload) ||
       primaryStepAttachmentRefs.length > 0 ||
-      Boolean(primaryStep?.runtime.trim()) ||
-      Boolean(primaryStep?.model.trim()) ||
-      Boolean(primaryStep?.effort.trim());
+      Boolean(primaryStep?.runtime?.trim()) ||
+      Boolean(primaryStep?.model?.trim()) ||
+      Boolean(primaryStep?.effort?.trim());
 
     const stepRuntimePayload = (step: StepState): Record<string, string> => ({
       ...(step.runtime.trim() ? { mode: step.runtime.trim().toLowerCase() } : {}),

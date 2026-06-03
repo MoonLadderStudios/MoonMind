@@ -485,7 +485,7 @@ def _build_portability_provenance(
         "runtimeId": runtime_id,
         "model": model,
         "effort": effort,
-        "preparedInputRefCount": len(list(prepared_input_refs)),
+        "preparedInputRefCount": len(prepared_input_refs),
         "memoryManifestRef": memory_manifest_ref,
         "memoryContextRef": memory_context_ref,
         "modelSwitchSafe": True,

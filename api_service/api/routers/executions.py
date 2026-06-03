@@ -143,6 +143,16 @@ router = APIRouter(prefix="/api/executions", tags=["executions"])
 _TEMPORAL_SOURCE = "temporal"
 _ALLOWED_OWNER_TYPES = {"user", "system", "service"}
 _TEMPORAL_LIST_SCOPES = {"tasks", "user", "system", "all"}
+_SUPPORTED_TASK_RUNTIMES = frozenset({
+    "codex_cli",
+    "gemini_cli",
+    "claude_code",
+    "codex_cloud",
+    "jules",
+    # Legacy aliases accepted and normalized below.
+    "codex",
+    "claude",
+})
 _TEMPORAL_SCOPE_QUERIES = {
     "tasks": 'WorkflowType="MoonMind.Run" AND mm_entry="user_workflow"',
     "user": '(WorkflowType="MoonMind.Run" OR WorkflowType="MoonMind.ManifestIngest")',
@@ -4423,8 +4433,20 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                 ("executionProfileRef", "executionProfileRef"),
             ):
                 value = runtime_payload.get(source_key)
-                if isinstance(value, str) and value.strip():
-                    normalized_runtime[target_key] = value.strip()
+                if value is not None and not isinstance(value, (Mapping, list)):
+                    normalized_value = str(value).strip()
+                    if not normalized_value:
+                        continue
+                    if target_key == "mode":
+                        normalized_value = normalize_runtime_id(normalized_value)
+                        if normalized_value not in _SUPPORTED_TASK_RUNTIMES:
+                            raise _invalid_task_request(
+                                "Unsupported payload.task.steps"
+                                f"[{index}].runtime.mode: {value!r}. "
+                                "Must be one of: codex_cli, gemini_cli, "
+                                "claude_code, codex_cloud, jules."
+                            )
+                    normalized_runtime[target_key] = normalized_value
             if normalized_runtime:
                 normalized_step["runtime"] = normalized_runtime
 
@@ -4535,6 +4557,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "type",
                 "inputAttachments",
                 "input_attachments",
+                "runtime",
                 "skill",
                 "skills",
                 "tool",
@@ -4545,6 +4568,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
 
         normalized_steps.append(normalized_step)
 
+    task_payload["steps"] = normalized_steps
     return normalized_steps
 
 
@@ -5993,12 +6017,6 @@ async def _create_execution_from_task_request(
         normalized_task_for_planner["title"] = derived_task_title
 
     # --- Model resolution ---
-    _SUPPORTED_TASK_RUNTIMES = frozenset({
-        "codex_cli", "gemini_cli", "claude_code", "codex_cloud", "jules",
-        # Legacy aliases accepted and normalized below.
-        "codex", "claude",
-    })
-
     raw_target_runtime = (
         payload.get("targetRuntime")
         or runtime_payload.get("mode")
