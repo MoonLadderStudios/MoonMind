@@ -180,4 +180,35 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
       "Review the overall branch.\n\nCheck the runtime command audit trail.",
     );
   });
+
+  it("preserves MM-786 per-step runtime model and effort metadata", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:step-runtime",
+      workflowType: "MoonMind.Run",
+      targetRuntime: "codex_cli",
+      inputParameters: {
+        task: {
+          instructions: "Coordinate portable steps.",
+          runtime: { mode: "codex_cli", model: "gpt-5.4", effort: "medium" },
+          steps: [
+            {
+              id: "step-cheap",
+              instructions: "Run this step cheaply.",
+              runtime: {
+                mode: "gemini_cli",
+                model: "gemini-2.5-flash",
+                effort: "low",
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(draft.steps[0]?.runtime).toEqual({
+      mode: "gemini_cli",
+      model: "gemini-2.5-flash",
+      effort: "low",
+    });
+  });
 });

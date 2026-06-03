@@ -7896,6 +7896,12 @@ class MoonMindRunWorkflow:
             "runtimeId": agent_id,
             "agentKind": agent_kind,
         }
+        if parameters.get("model") is not None:
+            runtime_selection["model"] = parameters["model"]
+        if parameters.get("effort") is not None:
+            runtime_selection["effort"] = parameters["effort"]
+        if execution_profile_ref:
+            runtime_selection["executionProfileRef"] = execution_profile_ref
         if selected_skill:
             runtime_selection["skillId"] = selected_skill
         retrieval_context = None

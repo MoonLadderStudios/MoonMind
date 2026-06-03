@@ -143,6 +143,16 @@ router = APIRouter(prefix="/api/executions", tags=["executions"])
 _TEMPORAL_SOURCE = "temporal"
 _ALLOWED_OWNER_TYPES = {"user", "system", "service"}
 _TEMPORAL_LIST_SCOPES = {"tasks", "user", "system", "all"}
+_SUPPORTED_TASK_RUNTIMES = frozenset({
+    "codex_cli",
+    "gemini_cli",
+    "claude_code",
+    "codex_cloud",
+    "jules",
+    # Legacy aliases accepted and normalized below.
+    "codex",
+    "claude",
+})
 _TEMPORAL_SCOPE_QUERIES = {
     "tasks": 'WorkflowType="MoonMind.Run" AND mm_entry="user_workflow"',
     "user": '(WorkflowType="MoonMind.Run" OR WorkflowType="MoonMind.ManifestIngest")',
@@ -4419,6 +4429,42 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
         if normalized_skills is not None:
             normalized_step["skills"] = normalized_skills
 
+        runtime_payload = step_payload.get("runtime")
+        if runtime_payload is not None:
+            if not isinstance(runtime_payload, Mapping):
+                raise _invalid_task_request(
+                    f"payload.task.steps[{index}].runtime must be an object."
+                )
+            normalized_runtime: dict[str, str] = {}
+            for source_key, target_key in (
+                ("mode", "mode"),
+                ("targetRuntime", "mode"),
+                ("target_runtime", "mode"),
+                ("model", "model"),
+                ("effort", "effort"),
+                ("profileId", "profileId"),
+                ("providerProfile", "providerProfile"),
+                ("executionProfileRef", "executionProfileRef"),
+                ("execution_profile_ref", "executionProfileRef"),
+            ):
+                value = runtime_payload.get(source_key)
+                if value is not None and not isinstance(value, (Mapping, list)):
+                    normalized_value = str(value).strip()
+                    if not normalized_value:
+                        continue
+                    if target_key == "mode":
+                        normalized_value = normalize_runtime_id(normalized_value)
+                        if normalized_value not in _SUPPORTED_TASK_RUNTIMES:
+                            raise _invalid_task_request(
+                                "Unsupported payload.task.steps"
+                                f"[{index}].runtime.mode: {value!r}. "
+                                "Must be one of: codex_cli, gemini_cli, "
+                                "claude_code, codex_cloud, jules."
+                            )
+                    normalized_runtime[target_key] = normalized_value
+            if normalized_runtime:
+                normalized_step["runtime"] = normalized_runtime
+
         normalized_input_attachments = _normalize_task_input_attachments(
             step_payload.get("inputAttachments")
             or step_payload.get("input_attachments"),
@@ -4426,30 +4472,6 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
         )
         if normalized_input_attachments:
             normalized_step["inputAttachments"] = normalized_input_attachments
-
-        step_runtime = (
-            step_payload.get("runtime")
-            if isinstance(step_payload.get("runtime"), Mapping)
-            else None
-        )
-        if step_runtime:
-            normalized_runtime: dict[str, Any] = {}
-            for source_key, target_key in (
-                ("mode", "mode"),
-                ("targetRuntime", "mode"),
-                ("target_runtime", "mode"),
-                ("model", "model"),
-                ("effort", "effort"),
-                ("providerProfile", "providerProfile"),
-                ("profileId", "profileId"),
-                ("executionProfileRef", "executionProfileRef"),
-                ("execution_profile_ref", "executionProfileRef"),
-            ):
-                value = step_runtime.get(source_key)
-                if isinstance(value, str) and value.strip():
-                    normalized_runtime[target_key] = value.strip()
-            if normalized_runtime:
-                normalized_step["runtime"] = normalized_runtime
 
         raw_type = str(step_payload.get("type") or "").strip().lower()
         if raw_type:
@@ -4550,6 +4572,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "type",
                 "inputAttachments",
                 "input_attachments",
+                "runtime",
                 "skill",
                 "skills",
                 "tool",
@@ -4560,6 +4583,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
 
         normalized_steps.append(normalized_step)
 
+    task_payload["steps"] = normalized_steps
     return normalized_steps
 
 async def _resolve_step_runtime_selections(
