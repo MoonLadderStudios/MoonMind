@@ -953,7 +953,12 @@ async def test_jira_blocker_recheck_wait_honors_pause_before_activity(
         assert events[-2:] == ["pause-boundary", "child:MoonMind.AgentRun"]
         assert request is agent_request
         assert kwargs["id"].endswith(":agent:check-blockers:jira-blocker-recheck1")
-        return continue_result
+        return {
+            "metadata": {
+                "decision": "continue",
+                "blockingIssues": [],
+            }
+        }
 
     monkeypatch.setattr(
         run_workflow_module.workflow,

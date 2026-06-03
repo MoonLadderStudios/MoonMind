@@ -1637,7 +1637,10 @@ def _build_runtime_planner():
                 effective_step_skill_name = step_tool_name or selected_skill_name
                 if step_tool_name:
                     step_node_inputs["selectedSkill"] = step_tool_name
-                    if _jira_agent_skill_selected(step_tool_name):
+                    if (
+                        _jira_agent_skill_selected(step_tool_name)
+                        and step_tool_name.lower() not in _MOONSPEC_BREAKDOWN_TOOLS
+                    ):
                         step_node_inputs["publishMode"] = "none"
                 if effective_step_skill_name:
                     step_node_inputs["instructions"] = _append_agent_skill_instructions(
@@ -1771,23 +1774,45 @@ def _build_runtime_planner():
             and publish_uses_git
         )
         if publish_requested or story_output_mode == "jira":
-            publish_node = next(
-                (
-                    node
-                    for node in reversed(nodes)
-                    if str(node.get("tool", {}).get("type") or "").strip().lower()
-                    == "agent_runtime"
-                    and not _jira_agent_skill_selected(_plan_node_selected_skill(node))
-                ),
-                nodes[-1],
-            )
+            if story_output_mode == "jira":
+                publish_node = next(
+                    (
+                        node
+                        for node in nodes
+                        if str(
+                            node.get("tool", {}).get("type") or ""
+                        ).strip().lower()
+                        == "agent_runtime"
+                        and _plan_node_selected_skill(node).lower()
+                        in _MOONSPEC_BREAKDOWN_TOOLS
+                    ),
+                    nodes[-1],
+                )
+            else:
+                publish_node = next(
+                    (
+                        node
+                        for node in reversed(nodes)
+                        if str(
+                            node.get("tool", {}).get("type") or ""
+                        ).strip().lower()
+                        == "agent_runtime"
+                        and not _jira_agent_skill_selected(
+                            _plan_node_selected_skill(node)
+                        )
+                    ),
+                    nodes[-1],
+                )
             publish_tool = str(
                 publish_node.get("tool", {}).get("name") or ""
             ).strip().lower()
             publish_selected_skill = _plan_node_selected_skill(publish_node)
             if (
                 publish_tool not in _TOOLS_WITH_AUTO_PR_CREATION
-                and not _jira_agent_skill_selected(publish_selected_skill)
+                and (
+                    not _jira_agent_skill_selected(publish_selected_skill)
+                    or publish_selected_skill.lower() in _MOONSPEC_BREAKDOWN_TOOLS
+                )
                 and not _is_jira_pr_handoff_node(
                     publish_node,
                     task_payload=task_payload,

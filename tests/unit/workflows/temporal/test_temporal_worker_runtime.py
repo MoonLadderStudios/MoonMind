@@ -896,7 +896,8 @@ def test_runtime_planner_materializes_tool_steps_without_source_lookup(
         snapshot=snapshot,
     )
 
-    assert plan["nodes"][0]["tool"]["name"] == "jira.get_issue"
+    assert plan["nodes"][0]["tool"]["name"] == "codex_cli"
+    assert plan["nodes"][0]["inputs"]["selectedSkill"] == "jira.get_issue"
     if source is None:
         assert "source" not in plan["nodes"][0]["inputs"]
     else:
@@ -1010,7 +1011,7 @@ def test_runtime_planner_routes_jira_issue_creator_as_agent_skill_step():
     jira = plan["nodes"][1]
 
     assert breakdown["tool"]["type"] == "agent_runtime"
-    assert breakdown["tool"]["name"] == "moonspec-breakdown"
+    assert breakdown["tool"]["name"] == "codex_cli"
     assert breakdown["inputs"]["selectedSkill"] == "moonspec-breakdown"
     assert "Do not create or modify any `spec.md`" in breakdown["inputs"]["instructions"]
     assert breakdown["inputs"]["storyBreakdownPath"].startswith(
