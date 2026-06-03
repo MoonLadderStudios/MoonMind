@@ -230,8 +230,12 @@ class TaskProposalService:
             raise TaskProposalValidationError(
                 "MoonMind proposals require at least one approved signal tag"
             )
-        trigger_repo = self._clean_str(metadata.get("triggerRepo"))
-        trigger_job = self._clean_str(metadata.get("triggerJobId"))
+        trigger_repo = self._clean_str(
+            metadata.get("trigger_repo") or metadata.get("triggerRepo")
+        )
+        trigger_job = self._clean_str(
+            metadata.get("trigger_job_id") or metadata.get("triggerJobId")
+        )
         signal_payload = metadata.get("signal")
         if not trigger_repo or not trigger_job:
             raise TaskProposalValidationError(
@@ -241,8 +245,8 @@ class TaskProposalService:
             raise TaskProposalValidationError(
                 "MoonMind proposals must provide origin_metadata.signal details"
             )
-        metadata["triggerRepo"] = trigger_repo
-        metadata["triggerJobId"] = trigger_job
+        metadata["trigger_repo"] = trigger_repo
+        metadata["trigger_job_id"] = trigger_job
         metadata["signal"] = dict(signal_payload)
         normalized_title = self._normalize_moonmind_title(title, allowed_tags)
         return normalized_category, allowed_tags, normalized_title

@@ -111,6 +111,50 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, [])
 
+    async def test_proposal_generate_creates_candidate_from_telemetry_signal(self) -> None:
+        activities = TemporalProposalActivities()
+
+        result = await activities.proposal_generate(
+            {
+                "workflow_id": "wf-mm-794",
+                "repo": "MoonLadderStudios/MoonMind",
+                "parameters": {
+                    "task": {
+                        "instructions": "Run the proposal telemetry checks",
+                        "runtime": {"mode": "codex"},
+                    }
+                },
+                "telemetrySignals": [
+                    {
+                        "type": "retry_exhausted",
+                        "severity": "high",
+                        "summary": "The run retried the same failed check twice.",
+                        "retries": 2,
+                        "diagnosticsRef": "artifact://diag-1",
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(len(result), 1)
+        candidate = result[0]
+        self.assertEqual(
+            candidate["title"],
+            "[run_quality] Review retry signal from workflow wf-mm-794",
+        )
+        self.assertEqual(candidate["tags"], ["retry"])
+        self.assertEqual(candidate["severity"], "high")
+        self.assertEqual(candidate["signal"]["type"], "retry")
+        self.assertEqual(candidate["signal"]["retries"], 2)
+        self.assertEqual(candidate["signal"]["diagnosticsRef"], "artifact://diag-1")
+        task = candidate["taskCreateRequest"]["payload"]["task"]
+        self.assertEqual(task["runtime"], {"mode": "codex"})
+        self.assertIn(
+            "The run retried the same failed check twice.",
+            task["instructions"],
+        )
+        self.assertIn("artifact://diag-1", task["instructions"])
+
     async def test_proposal_generate_rejects_structured_proposal_text(self) -> None:
         activities = TemporalProposalActivities()
 
@@ -1213,6 +1257,64 @@ class TestProposalSubmitPolicyResolution(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call_kwargs["category"], "run_quality")
         self.assertEqual(call_kwargs["tags"], ["loop_detected"])
         self.assertEqual(result["delivery_decisions"][0]["target"], "moonmind")
+
+    async def test_submit_preserves_telemetry_signal_metadata(self) -> None:
+        mock_service = AsyncMock()
+
+        @contextlib.asynccontextmanager
+        async def factory():
+            yield mock_service
+
+        activities = TemporalProposalActivities(proposal_service_factory=factory)
+        result = await activities.proposal_submit(
+            {
+                "candidates": [
+                    {
+                        "title": "Fix retry loop",
+                        "summary": "Retry signal was detected",
+                        "category": "run_quality",
+                        "tags": ["retry"],
+                        "severity": "high",
+                        "signal": {
+                            "type": "retry",
+                            "severity": "high",
+                            "summary": "The run retried the same failed check twice.",
+                            "retries": 2,
+                            "diagnosticsRef": "artifact://diag-1",
+                        },
+                        "taskCreateRequest": {
+                            "payload": {"repository": "MoonLadderStudios/MoonMind"}
+                        },
+                    }
+                ],
+                "policy": {
+                    "targets": ["moonmind"],
+                    "minSeverityForMoonMind": "medium",
+                },
+                "origin": {
+                    "workflow_id": "wf-mm-794",
+                    "temporal_run_id": "run-mm-794",
+                    "trigger_repo": "org/repo",
+                    "trigger_job_id": "job-mm-794",
+                },
+            }
+        )
+
+        self.assertEqual(result["submitted_count"], 1)
+        call_kwargs = mock_service.create_proposal.await_args.kwargs
+        self.assertEqual(call_kwargs["origin_metadata"]["trigger_repo"], "org/repo")
+        self.assertEqual(call_kwargs["origin_metadata"]["trigger_job_id"], "job-mm-794")
+        self.assertEqual(
+            call_kwargs["origin_metadata"]["signal"],
+            {
+                "type": "retry",
+                "severity": "high",
+                "summary": "The run retried the same failed check twice.",
+                "retries": 2,
+                "diagnosticsRef": "artifact://diag-1",
+                "tags": ["retry"],
+            },
+        )
 
     async def test_project_target_preserves_candidate_repository(self) -> None:
         mock_service = AsyncMock()

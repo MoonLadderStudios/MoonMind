@@ -5705,6 +5705,98 @@ class MoonMindRunWorkflow:
             return self._json_mapping(nested_publish, path="parameters.task.publish")
         return {}
 
+    def _proposal_telemetry_signals(self) -> list[dict[str, Any]]:
+        """Build compact run-quality signals for proposal generation."""
+
+        signals: list[dict[str, Any]] = []
+
+        def add_signal(
+            *,
+            signal_type: str,
+            summary: str | None,
+            severity: str = "medium",
+            diagnostics_ref: str | None = None,
+            extra: dict[str, Any] | None = None,
+        ) -> None:
+            bounded_summary = self._coerce_text(summary, max_chars=500)
+            if not bounded_summary:
+                return
+            signal: dict[str, Any] = {
+                "type": signal_type,
+                "tags": [signal_type],
+                "severity": severity,
+                "summary": bounded_summary,
+            }
+            bounded_ref = self._coerce_text(diagnostics_ref, max_chars=400)
+            if bounded_ref:
+                signal["diagnosticsRef"] = bounded_ref
+            if extra:
+                signal.update(extra)
+            signals.append(signal)
+
+        if self._publish_repair_attempts > 0:
+            add_signal(
+                signal_type="retry",
+                severity="high" if self._publish_repair_attempts >= 2 else "medium",
+                summary=(
+                    "Publish required "
+                    f"{self._publish_repair_attempts} repair attempt"
+                    f"{'s' if self._publish_repair_attempts != 1 else ''}."
+                ),
+                extra={"retries": self._publish_repair_attempts},
+            )
+
+        summary = self._coerce_text(self._last_step_summary, max_chars=500)
+        diagnostics_ref = self._coerce_text(self._last_diagnostics_ref, max_chars=400)
+        summary_lc = (summary or "").lower()
+        if summary:
+            if any(term in summary_lc for term in ("flaky", "flake")):
+                add_signal(
+                    signal_type="flaky_test",
+                    summary=summary,
+                    diagnostics_ref=diagnostics_ref,
+                )
+            if "retry" in summary_lc or "retried" in summary_lc:
+                add_signal(
+                    signal_type="retry",
+                    summary=summary,
+                    diagnostics_ref=diagnostics_ref,
+                )
+            if any(term in summary_lc for term in ("loop", "repeated")):
+                add_signal(
+                    signal_type="loop_detected",
+                    severity="high",
+                    summary=summary,
+                    diagnostics_ref=diagnostics_ref,
+                )
+            if any(
+                term in summary_lc
+                for term in ("missing file", "missing ref", "not found")
+            ):
+                add_signal(
+                    signal_type="missing_ref",
+                    severity="high",
+                    summary=summary,
+                    diagnostics_ref=diagnostics_ref,
+                )
+            if any(term in summary_lc for term in ("artifact", "diagnostic")):
+                add_signal(
+                    signal_type="artifact_gap",
+                    summary=summary,
+                    diagnostics_ref=diagnostics_ref,
+                )
+
+        if diagnostics_ref and not any(
+            "diagnosticsRef" in signal for signal in signals
+        ):
+            add_signal(
+                signal_type="artifact_gap",
+                summary="Run produced a diagnostics reference for proposal review.",
+                diagnostics_ref=diagnostics_ref,
+            )
+
+        return signals[:3]
+
     def _proposal_generation_requested(self, parameters: Mapping[str, Any]) -> bool:
         if workflow.patched("run-workflow-nested-propose-tasks"):
             task_node = parameters.get("task")
@@ -8676,6 +8768,9 @@ class MoonMindRunWorkflow:
                 "repo": self._repo,
                 "parameters": parameters,
             }
+            telemetry_signals = self._proposal_telemetry_signals()
+            if telemetry_signals:
+                generate_payload["telemetrySignals"] = telemetry_signals
             if workflow.patched("idempotency_key_phase3"):
                 generate_payload["idempotency_key"] = (
                     f"{workflow.info().workflow_id}_proposal_generate"
