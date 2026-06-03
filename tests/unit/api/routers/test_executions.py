@@ -3588,6 +3588,8 @@ def test_create_task_shaped_execution_preserves_steps_and_uses_step_title_defaul
                 "mode": "codex_cli",
                 "model": "gpt-5.4",
                 "effort": "high",
+                "requestedModel": "gpt-5.4",
+                "modelSource": "task_override",
             },
         },
     ]
