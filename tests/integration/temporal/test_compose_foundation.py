@@ -25,6 +25,23 @@ def _env_map(environment: object) -> dict[str, str]:
         mapped[key] = value
     return mapped
 
+def _network_names(service_config: dict) -> set[str]:
+    networks = service_config.get("networks", {})
+    if isinstance(networks, list):
+        return {str(network) for network in networks}
+    if isinstance(networks, dict):
+        return {str(network) for network in networks}
+    return set()
+
+def _network_aliases(service_config: dict, network_name: str) -> set[str]:
+    networks = service_config.get("networks", {})
+    if not isinstance(networks, dict):
+        return set()
+    network_config = networks.get(network_name)
+    if not isinstance(network_config, dict):
+        return set()
+    return {str(alias) for alias in network_config.get("aliases", [])}
+
 def test_temporal_compose_topology_and_private_exposure():
     compose = _load_compose()
     services = compose["services"]
@@ -49,6 +66,60 @@ def test_temporal_compose_topology_and_private_exposure():
         assert "local-network" in temporal_networks
     elif isinstance(temporal_networks, list):
         assert "local-network" in temporal_networks
+
+def test_sandbox_worker_compose_egress_is_restricted_for_mm_785():
+    compose = _load_compose()
+    services = compose["services"]
+    networks = compose["networks"]
+
+    assert networks["sandbox-egress-network"]["internal"] is True
+    assert _network_names(services["temporal-worker-sandbox"]) == {
+        "sandbox-egress-network"
+    }
+    assert "temporal-internal" in _network_aliases(
+        services["temporal"],
+        "sandbox-egress-network",
+    )
+    assert "moonmind-temporal-artifacts-s3" in _network_aliases(
+        services["minio"],
+        "sandbox-egress-network",
+    )
+    assert "moonmind-api-db" in _network_aliases(
+        services["postgres"],
+        "sandbox-egress-network",
+    )
+
+    proxy_service = services["sandbox-egress-proxy"]
+    assert _network_names(proxy_service) == {
+        "local-network",
+        "sandbox-egress-network",
+    }
+    assert proxy_service["expose"] == ["3128"]
+
+    sandbox_env = _env_map(services["temporal-worker-sandbox"]["environment"])
+    assert sandbox_env["HTTPS_PROXY"] == (
+        "${MOONMIND_SANDBOX_HTTPS_PROXY:-http://sandbox-egress-proxy:3128}"
+    )
+    assert sandbox_env["HTTP_PROXY"] == (
+        "${MOONMIND_SANDBOX_HTTP_PROXY:-http://sandbox-egress-proxy:3128}"
+    )
+    assert "moonmind-api-db" in sandbox_env["NO_PROXY"]
+    assert services["temporal-worker-sandbox"]["depends_on"][
+        "sandbox-egress-proxy"
+    ]["condition"] == "service_started"
+
+    squid_config = (
+        REPO_ROOT / "docker" / "sandbox-egress-proxy" / "squid.conf"
+    ).read_text(encoding="utf-8")
+    expected_proxy_domains = {
+        "." + "".join(parts)
+        for parts in [
+            ("github", ".com"),
+            ("openai", ".com"),
+        ]
+    }
+    assert "http_access deny all" in squid_config
+    assert expected_proxy_domains <= set(squid_config.split())
 
 def test_temporal_persistence_and_visibility_environment_defaults():
     compose = _load_compose()
