@@ -472,6 +472,8 @@ def _build_execution_record(
             ),
         },
         artifact_refs=["art_123"],
+        finish_outcome_code=None,
+        finish_summary_json=None,
         manifest_ref=(
             "art_manifest_1"
             if workflow_type is TemporalWorkflowType.MANIFEST_INGEST
@@ -509,6 +511,24 @@ def _build_execution_record(
         entry=entry,
         integration_state=None,
     )
+
+def test_serialize_execution_includes_finish_summary_projection_fields():
+    record = _build_execution_record(state=MoonMindWorkflowState.COMPLETED)
+    record.close_status = TemporalExecutionCloseStatus.COMPLETED
+    record.finish_outcome_code = "NO_CHANGES"
+    record.finish_summary_json = {
+        "schemaVersion": "v1",
+        "finishOutcome": {
+            "code": "NO_CHANGES",
+            "stage": "publish",
+            "reason": "publish skipped: no local changes",
+        },
+    }
+
+    payload = _serialize_execution(record).model_dump(by_alias=True)
+
+    assert payload["finishOutcomeCode"] == "NO_CHANGES"
+    assert payload["finishSummary"] == record.finish_summary_json
 
 def _override_temporal_client(app: FastAPI) -> AsyncMock:
     client = AsyncMock()

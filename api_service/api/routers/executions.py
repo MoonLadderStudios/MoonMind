@@ -1954,6 +1954,10 @@ def _serialize_execution(
     )
     proposal_summary = _proposal_summary_from_memo(memo)
     proposal_outcomes = _proposal_outcomes_from_summary(proposal_summary)
+    finish_summary_json = getattr(record, "finish_summary_json", None)
+    finish_summary = (
+        dict(finish_summary_json) if isinstance(finish_summary_json, dict) else None
+    )
 
     started_at = getattr(record, "started_at", None)
     created_at = getattr(record, "created_at", None) or started_at or record.updated_at
@@ -2044,6 +2048,8 @@ def _serialize_execution(
         target_diagnostics=target_diagnostics,
         proposal_summary=proposal_summary,
         proposal_outcomes=proposal_outcomes,
+        finish_outcome_code=getattr(record, "finish_outcome_code", None),
+        finish_summary=finish_summary,
         debug_fields=debug_fields,
         redirect_path=f"/workflows/{record.workflow_id}?source=temporal",
         integration=(
