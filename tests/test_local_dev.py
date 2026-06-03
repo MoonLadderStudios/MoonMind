@@ -41,6 +41,25 @@ def _module_assignment_value(path: Path, name: str):
     return None
 
 
+def _network_names(service_config: dict) -> set[str]:
+    networks = service_config.get("networks", {})
+    if isinstance(networks, list):
+        return {str(network) for network in networks}
+    if isinstance(networks, dict):
+        return {str(network) for network in networks}
+    return set()
+
+
+def _network_aliases(service_config: dict, network_name: str) -> set[str]:
+    networks = service_config.get("networks", {})
+    if not isinstance(networks, dict):
+        return set()
+    network_config = networks.get(network_name)
+    if not isinstance(network_config, dict):
+        return set()
+    return {str(alias) for alias in network_config.get("aliases", [])}
+
+
 def test_alembic_revision_ids_fit_default_version_column():
     """Alembic's default version table stores revision ids in VARCHAR(32)."""
     migration_dir = Path("api_service/migrations/versions")
@@ -103,6 +122,47 @@ def test_docker_compose_has_temporal_worker_auto_start_configured():
         assert (
             "sleep" not in command_var
         ), f"Worker '{fleet}' must not be configured to sleep. Found: {command_var}"
+
+
+def test_sandbox_worker_uses_internal_egress_network_for_mm_785():
+    """MM-785: sandbox workers must not retain unrestricted outbound networking."""
+    compose_path = Path("docker-compose.yaml")
+    assert (
+        compose_path.exists()
+    ), "docker-compose.yaml must exist at the repository root"
+
+    compose_data = yaml.safe_load(compose_path.read_text())
+    services = compose_data.get("services", {})
+    networks = compose_data.get("networks", {})
+
+    sandbox_network = networks.get("sandbox-egress-network")
+    assert isinstance(
+        sandbox_network, dict
+    ), "sandbox-egress-network must be declared in docker-compose.yaml"
+    assert sandbox_network.get("internal") is True, (
+        "sandbox-egress-network must be an internal Docker network so sandbox "
+        "workers do not have default outbound internet egress"
+    )
+
+    sandbox_worker = services.get("temporal-worker-sandbox")
+    assert isinstance(
+        sandbox_worker, dict
+    ), "temporal-worker-sandbox service is missing from docker-compose.yaml"
+    assert _network_names(sandbox_worker) == {"sandbox-egress-network"}
+
+    temporal_service = services.get("temporal")
+    assert isinstance(temporal_service, dict), "temporal service is missing"
+    minio_service = services.get("minio")
+    assert isinstance(minio_service, dict), "minio service is missing"
+
+    assert "temporal-internal" in _network_aliases(
+        temporal_service,
+        "sandbox-egress-network",
+    )
+    assert "moonmind-temporal-artifacts-s3" in _network_aliases(
+        minio_service,
+        "sandbox-egress-network",
+    )
 
 
 def test_api_service_runs_with_container_init():

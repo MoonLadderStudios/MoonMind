@@ -25,6 +25,23 @@ def _env_map(environment: object) -> dict[str, str]:
         mapped[key] = value
     return mapped
 
+def _network_names(service_config: dict) -> set[str]:
+    networks = service_config.get("networks", {})
+    if isinstance(networks, list):
+        return {str(network) for network in networks}
+    if isinstance(networks, dict):
+        return {str(network) for network in networks}
+    return set()
+
+def _network_aliases(service_config: dict, network_name: str) -> set[str]:
+    networks = service_config.get("networks", {})
+    if not isinstance(networks, dict):
+        return set()
+    network_config = networks.get(network_name)
+    if not isinstance(network_config, dict):
+        return set()
+    return {str(alias) for alias in network_config.get("aliases", [])}
+
 def test_temporal_compose_topology_and_private_exposure():
     compose = _load_compose()
     services = compose["services"]
@@ -49,6 +66,24 @@ def test_temporal_compose_topology_and_private_exposure():
         assert "local-network" in temporal_networks
     elif isinstance(temporal_networks, list):
         assert "local-network" in temporal_networks
+
+def test_sandbox_worker_compose_egress_is_restricted_for_mm_785():
+    compose = _load_compose()
+    services = compose["services"]
+    networks = compose["networks"]
+
+    assert networks["sandbox-egress-network"]["internal"] is True
+    assert _network_names(services["temporal-worker-sandbox"]) == {
+        "sandbox-egress-network"
+    }
+    assert "temporal-internal" in _network_aliases(
+        services["temporal"],
+        "sandbox-egress-network",
+    )
+    assert "moonmind-temporal-artifacts-s3" in _network_aliases(
+        services["minio"],
+        "sandbox-egress-network",
+    )
 
 def test_temporal_persistence_and_visibility_environment_defaults():
     compose = _load_compose()

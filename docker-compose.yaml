@@ -154,6 +154,9 @@ services:
       local-network:
         aliases:
           - temporal-internal
+      sandbox-egress-network:
+        aliases:
+          - temporal-internal
     restart: unless-stopped
 
   # Network alias `moonmind-temporal-artifacts-s3` is the stable S3 hostname for
@@ -176,6 +179,9 @@ services:
       - minio-data:/data
     networks:
       local-network:
+        aliases:
+          - moonmind-temporal-artifacts-s3
+      sandbox-egress-network:
         aliases:
           - moonmind-temporal-artifacts-s3
     restart: unless-stopped
@@ -561,7 +567,7 @@ services:
       gemini-auth-init:
         condition: service_completed_successfully
     networks:
-      - local-network
+      - sandbox-egress-network
     restart: unless-stopped
 
   temporal-worker-agent-runtime:
@@ -938,4 +944,7 @@ networks:
     external: true
   docker-proxy-network:
     name: ${MOONMIND_DOCKER_PROXY_NETWORK:-moonmind_docker-proxy-network}
+    internal: true
+  sandbox-egress-network:
+    name: ${MOONMIND_SANDBOX_EGRESS_NETWORK:-moonmind_sandbox-egress-network}
     internal: true

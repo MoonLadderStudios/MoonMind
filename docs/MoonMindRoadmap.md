@@ -228,7 +228,7 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - [ ] **9.1** File allowlist enforcement — Promised in README, no implementation found
 - [ ] **9.2** Credential sanitization from logs — Agent rules prohibit secrets in output; no runtime log scrubber
 - [ ] **9.3** Per-runtime capability routing policy — Proxy limits Docker API endpoints, but not per-runtime policies
-- [ ] **9.4** Network egress policies for sandboxes — No outbound network restrictions on worker containers
+- [x] **9.4** Network egress policies for sandboxes — Sandbox worker containers use an internal restricted egress network
 
 ---
 
