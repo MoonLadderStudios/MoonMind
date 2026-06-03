@@ -267,10 +267,11 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - Temporal visibility / execution queries (spec 064)
 - Structured workflow run states in Postgres
 - Task finish summary system (spec 079)
+- Deterministic improvement signal capture for retry, loop/no-progress, and flaky-test run-quality proposals (MM-793)
 
 ### Remaining tasks
 - [x] **11.1** Structured outcome summaries on every run — MM-792 wires the finish summary artifact into indexed execution projections
-- [ ] **11.2** Improvement signal capture (retries, loops, flaky tests) — Constitution X mandates this
+- [x] **11.2** Improvement signal capture (retries, loops, flaky tests) — Constitution X mandates this
 - [ ] **11.3** Reviewable improvement backlog / proposals queue — Task proposals exist; not fed by telemetry
 - [ ] **11.4** Metrics / dashboards (run duration, success rate, cost) — No operational metrics endpoint
 - [x] **11.5** Structured logging enrichment (run IDs, worker IDs) — MM-796 adds shared structlog JSON enrichment for run and worker correlation
