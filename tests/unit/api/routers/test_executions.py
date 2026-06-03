@@ -3362,6 +3362,11 @@ def test_create_task_shaped_execution_preserves_steps_and_uses_step_title_defaul
                             "id": "tpl:demo:1.0.0:02",
                             "title": "Implement the restored builder",
                             "instructions": "Restore presets and multi-step submission.",
+                            "runtime": {
+                                "mode": "codex_cli",
+                                "model": "gpt-5.4",
+                                "effort": "high",
+                            },
                         },
                     ],
                 },
@@ -3394,6 +3399,11 @@ def test_create_task_shaped_execution_preserves_steps_and_uses_step_title_defaul
             "id": "tpl:demo:1.0.0:02",
             "title": "Implement the restored builder",
             "instructions": "Restore presets and multi-step submission.",
+            "runtime": {
+                "mode": "codex_cli",
+                "model": "gpt-5.4",
+                "effort": "high",
+            },
         },
     ]
 
