@@ -48,12 +48,12 @@ def _ordered_nodes() -> list[dict]:
     return [
         {
             "id": "prepare",
-            "tool": {"type": "skill", "name": "repo.prepare", "version": "1"},
+            "tool": {"type": "agent_runtime", "name": "codex_cli", "version": "1"},
             "inputs": {"title": "Prepare workspace"},
         },
         {
             "id": "run-tests",
-            "tool": {"type": "skill", "name": "repo.run_tests", "version": "1"},
+            "tool": {"type": "agent_runtime", "name": "codex_cli", "version": "1"},
             "inputs": {"title": "Run tests"},
         },
     ]
@@ -87,11 +87,11 @@ def _approval_policy_plan_payload() -> dict[str, Any]:
             {
                 "id": "apply-patch",
                 "tool": {
-                    "type": "skill",
-                    "name": "repo.apply_patch",
+                    "type": "agent_runtime",
+                    "name": "codex_cli",
                     "version": "1.0.0",
                 },
-                "inputs": {"instruction": "Apply the patch"},
+                "inputs": {"instructions": "Apply the patch"},
                 "options": {},
             }
         ],
@@ -1299,12 +1299,6 @@ async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check
                     {"upload_url": "unused"},
                 )
             return ({"artifact_id": next(review_artifact_ids)}, {"upload_url": "unused"})
-        if activity_type == "mm.skill.execute":
-            return {
-                "status": "COMPLETED",
-                "summary": "Patch applied cleanly",
-                "outputs": {"outputSummaryRef": "art_summary_1"},
-            }
         if activity_type == "step.review":
             step = workflow.get_step_ledger()["steps"][0]
             review_snapshots.append(step)
@@ -1315,6 +1309,17 @@ async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check
                 "issues": [],
             }
         raise AssertionError(f"unexpected activity: {activity_type}")
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _args: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        return {
+            "summary": "Patch applied cleanly",
+            "metadata": {"outputSummaryRef": "art_summary_1"},
+            "output_refs": [],
+        }
 
     async def fake_execute_typed_activity(
         activity_type: str,
@@ -1354,6 +1359,11 @@ async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check
         run_module.workflow,
         "execute_activity",
         fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
     )
     monkeypatch.setattr(
         run_module,
@@ -1455,20 +1465,24 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
                     {"upload_url": "unused"},
                 )
             return ({"artifact_id": next(review_artifact_ids)}, {"upload_url": "unused"})
-        if activity_type == "mm.skill.execute":
-            invocation_payload = payload["invocation_payload"]
-            skill_inputs.append(dict(invocation_payload["inputs"]))
-            return {
-                "status": "COMPLETED",
-                "summary": "Patch applied cleanly",
-                "outputs": {
-                    "outputSummaryRef": f"art_summary_{len(skill_inputs)}",
-                    "stateCheckpointRef": f"art_checkpoint_{len(skill_inputs)}",
-                },
-            }
         if activity_type == "step.review":
             return next(review_verdicts)
         raise AssertionError(f"unexpected activity: {activity_type}")
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        request: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        skill_inputs.append({"instructions": request.instruction_ref})
+        return {
+            "summary": "Patch applied cleanly",
+            "metadata": {
+                "outputSummaryRef": f"art_summary_{len(skill_inputs)}",
+                "stateCheckpointRef": f"art_checkpoint_{len(skill_inputs)}",
+            },
+            "output_refs": [],
+        }
 
     async def fake_execute_typed_activity(
         activity_type: str,
@@ -1510,6 +1524,11 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
         fake_execute_activity,
     )
     monkeypatch.setattr(
+        run_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
         run_module,
         "execute_typed_activity",
         fake_execute_typed_activity,
@@ -1522,18 +1541,8 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
     )
 
     assert len(skill_inputs) == 2
-    assert "_review_feedback" not in skill_inputs[0]
-    assert skill_inputs[1]["_review_feedback"] == {
-        "attempt": 1,
-        "feedback": "Tests still fail because the import is missing.",
-        "issues": [
-            {
-                "severity": "error",
-                "description": "Missing import",
-                "evidence": "stderr tail",
-            }
-        ],
-    }
+    assert "Tests still fail because the import is missing." not in skill_inputs[0]["instructions"]
+    assert "Tests still fail because the import is missing." in skill_inputs[1]["instructions"]
     step = workflow.get_step_ledger()["steps"][0]
     assert step["executionOrdinal"] == 2
     assert step["status"] == "succeeded"
@@ -1574,14 +1583,14 @@ async def test_run_execution_stage_stops_downstream_handoff_when_gate_budget_exh
     plan_payload["nodes"] = [
         {
             "id": "implement",
-            "tool": {"type": "skill", "name": "repo.apply_patch", "version": "1.0.0"},
-            "inputs": {"instruction": "Apply patch"},
+            "tool": {"type": "agent_runtime", "name": "repo.apply_patch", "version": "1.0.0"},
+            "inputs": {"targetRuntime": "codex_cli", "instructions": "Apply patch"},
             "options": {},
         },
         {
             "id": "publish",
-            "tool": {"type": "skill", "name": "repo.publish", "version": "1.0.0"},
-            "inputs": {"instruction": "Publish"},
+            "tool": {"type": "agent_runtime", "name": "repo.publish", "version": "1.0.0"},
+            "inputs": {"targetRuntime": "codex_cli", "instructions": "Publish"},
             "options": {},
         },
     ]
@@ -1610,14 +1619,6 @@ async def test_run_execution_stage_stops_downstream_handoff_when_gate_budget_exh
             return {"profiles": []}
         if activity_type == "artifact.create":
             return ({"artifact_id": next(artifact_ids)}, {"upload_url": "unused"})
-        if activity_type == "mm.skill.execute":
-            invocation_payload = payload["invocation_payload"]
-            invoked_skills.append(invocation_payload["skill"]["name"])
-            return {
-                "status": "COMPLETED",
-                "summary": "Patch applied",
-                "outputs": {"outputSummaryRef": "art_summary_1"},
-            }
         if activity_type == "step.review":
             return {
                 "verdict": "ADDITIONAL_WORK_NEEDED",
@@ -1628,6 +1629,18 @@ async def test_run_execution_stage_stops_downstream_handoff_when_gate_budget_exh
                 "recommendedNextAction": "needs_human",
             }
         raise AssertionError(f"unexpected activity: {activity_type}")
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        invoked_skills.append(str(kwargs["id"]).rsplit(":agent:", 1)[1])
+        return {
+            "summary": "Patch applied",
+            "metadata": {"outputSummaryRef": "art_summary_1"},
+            "output_refs": [],
+        }
 
     async def fake_execute_typed_activity(
         activity_type: str,
@@ -1655,6 +1668,11 @@ async def test_run_execution_stage_stops_downstream_handoff_when_gate_budget_exh
         fake_execute_activity,
     )
     monkeypatch.setattr(
+        run_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
         run_module,
         "execute_typed_activity",
         fake_execute_typed_activity,
@@ -1666,7 +1684,7 @@ async def test_run_execution_stage_stops_downstream_handoff_when_gate_budget_exh
         plan_ref="art_plan_1",
     )
 
-    assert invoked_skills == ["repo.apply_patch"]
+    assert invoked_skills == ["implement"]
     step = workflow.get_step_ledger()["steps"][0]
     assert step["status"] == "failed"
     assert workflow._publish_status == "not_required"
@@ -1709,14 +1727,14 @@ async def test_run_execution_stage_continues_independent_nodes_after_gate_stop(
     plan_payload["nodes"] = [
         {
             "id": "implement",
-            "tool": {"type": "skill", "name": "repo.apply_patch", "version": "1.0.0"},
-            "inputs": {"instruction": "Apply patch"},
+            "tool": {"type": "agent_runtime", "name": "repo.apply_patch", "version": "1.0.0"},
+            "inputs": {"targetRuntime": "codex_cli", "instructions": "Apply patch"},
             "options": {},
         },
         {
             "id": "publish",
-            "tool": {"type": "skill", "name": "repo.publish", "version": "1.0.0"},
-            "inputs": {"instruction": "Publish independent report"},
+            "tool": {"type": "agent_runtime", "name": "repo.publish", "version": "1.0.0"},
+            "inputs": {"targetRuntime": "codex_cli", "instructions": "Publish independent report"},
             "options": {},
         },
     ]
@@ -1747,14 +1765,6 @@ async def test_run_execution_stage_continues_independent_nodes_after_gate_stop(
             return {"profiles": []}
         if activity_type == "artifact.create":
             return ({"artifact_id": next(artifact_ids)}, {"upload_url": "unused"})
-        if activity_type == "mm.skill.execute":
-            invocation_payload = payload["invocation_payload"]
-            invoked_skills.append(invocation_payload["skill"]["name"])
-            return {
-                "status": "COMPLETED",
-                "summary": "Step complete",
-                "outputs": {"outputSummaryRef": "art_summary_1"},
-            }
         if activity_type == "step.review":
             return {
                 "verdict": "ADDITIONAL_WORK_NEEDED",
@@ -1765,6 +1775,18 @@ async def test_run_execution_stage_continues_independent_nodes_after_gate_stop(
                 "recommendedNextAction": "needs_human",
             }
         raise AssertionError(f"unexpected activity: {activity_type}")
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        invoked_skills.append(str(kwargs["id"]).rsplit(":agent:", 1)[1])
+        return {
+            "summary": "Step complete",
+            "metadata": {"outputSummaryRef": "art_summary_1"},
+            "output_refs": [],
+        }
 
     async def fake_execute_typed_activity(
         activity_type: str,
@@ -1792,6 +1814,11 @@ async def test_run_execution_stage_continues_independent_nodes_after_gate_stop(
         fake_execute_activity,
     )
     monkeypatch.setattr(
+        run_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
         run_module,
         "execute_typed_activity",
         fake_execute_typed_activity,
@@ -1803,7 +1830,7 @@ async def test_run_execution_stage_continues_independent_nodes_after_gate_stop(
         plan_ref="art_plan_1",
     )
 
-    assert invoked_skills == ["repo.apply_patch", "repo.publish"]
+    assert invoked_skills == ["implement", "publish"]
     ledger = workflow.get_step_ledger()["steps"]
     assert ledger[0]["status"] == "failed"
     assert ledger[1]["status"] == "succeeded"
