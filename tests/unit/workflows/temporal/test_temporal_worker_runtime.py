@@ -309,7 +309,7 @@ async def test_child_run_goal_scheduled_breakdown_preserves_target_runtime(tmp_p
     assert downstream_task["runtime"] == {"mode": "jules"}
 
 
-def test_runtime_planner_maps_explicit_tool_step_to_typed_tool_node():
+def test_runtime_planner_maps_explicit_tool_step_to_agent_runtime_node():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
         digest="reg:sha256:test",
@@ -347,9 +347,9 @@ def test_runtime_planner_maps_explicit_tool_step_to_typed_tool_node():
     )
 
     assert plan["nodes"][0]["tool"] == {
-        "type": "skill",
-        "name": "jira.get_issue",
-        "version": "1.0.0",
+        "type": "agent_runtime",
+        "name": "codex_cli",
+        "version": "1.0",
     }
     assert plan["nodes"][0]["inputs"]["selectedSkill"] == "jira.get_issue"
     assert plan["nodes"][0]["inputs"]["type"] == "tool"
@@ -468,9 +468,9 @@ def test_runtime_planner_orders_flattened_tool_and_skill_steps_with_provenance()
     ]
     assert plan["edges"] == [{"from": "fetch-issue", "to": "implement-story"}]
     assert plan["nodes"][0]["tool"] == {
-        "type": "skill",
-        "name": "jira.get_issue",
-        "version": "1.0.0",
+        "type": "agent_runtime",
+        "name": "codex_cli",
+        "version": "1.0",
     }
     assert plan["nodes"][1]["tool"] == {
         "type": "agent_runtime",
@@ -481,7 +481,7 @@ def test_runtime_planner_orders_flattened_tool_and_skill_steps_with_provenance()
     assert plan["nodes"][1]["inputs"]["source"]["presetSlug"] == "jira-orchestrate"
 
 
-def test_runtime_planner_preserves_authored_task_plan_tool_nodes():
+def test_runtime_planner_normalizes_authored_task_plan_skill_nodes():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
         digest="reg:sha256:test",
@@ -528,11 +528,12 @@ def test_runtime_planner_preserves_authored_task_plan_tool_nodes():
         {
             "id": "update-moonmind-deployment",
             "tool": {
-                "type": "skill",
-                "name": "deployment.update_compose_stack",
-                "version": "1.0.0",
+                "type": "agent_runtime",
+                "name": "codex_cli",
+                "version": "1.0",
             },
             "inputs": {
+                "selectedSkill": "deployment.update_compose_stack",
                 "stack": "moonmind",
                 "image": {
                     "repository": "ghcr.io/moonladderstudios/moonmind",
@@ -590,7 +591,7 @@ def test_runtime_planner_preserves_authored_task_plan_node_metadata():
     assert node["description"] == "Use the deployment operations service."
 
 
-def test_runtime_planner_maps_deployment_update_step_to_typed_tool_node():
+def test_runtime_planner_maps_deployment_update_step_to_agent_runtime_node():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
         digest="reg:sha256:test",
@@ -630,9 +631,9 @@ def test_runtime_planner_maps_deployment_update_step_to_typed_tool_node():
     )
 
     assert plan["nodes"][0]["tool"] == {
-        "type": "skill",
-        "name": "deployment.update_compose_stack",
-        "version": "1.0.0",
+        "type": "agent_runtime",
+        "name": "codex_cli",
+        "version": "1.0",
     }
     assert plan["nodes"][0]["inputs"]["selectedSkill"] == (
         "deployment.update_compose_stack"
@@ -893,7 +894,12 @@ def test_runtime_planner_materializes_tool_steps_without_source_lookup(
         snapshot=snapshot,
     )
 
-    assert plan["nodes"][0]["tool"]["name"] == "jira.get_issue"
+    assert plan["nodes"][0]["tool"] == {
+        "type": "agent_runtime",
+        "name": "codex_cli",
+        "version": "1.0",
+    }
+    assert plan["nodes"][0]["inputs"]["selectedSkill"] == "jira.get_issue"
     if source is None:
         assert "source" not in plan["nodes"][0]["inputs"]
     else:
@@ -1097,7 +1103,7 @@ def test_runtime_planner_shares_story_breakdown_path_for_jira_breakdown_preset()
     )
     assert jira["inputs"]["targetBranch"] == breakdown["inputs"]["targetBranch"]
     assert jira["tool"] == {
-        "type": "skill",
+        "type": "agent_runtime",
         "name": "story.create_jira_issues",
         "version": "1.0",
     }
@@ -1252,8 +1258,8 @@ def test_runtime_planner_preserves_authored_branch_for_jira_story_import():
     node = plan["nodes"][0]
 
     assert node["tool"] == {
-        "type": "skill",
-        "name": "story.create_jira_issues",
+        "type": "agent_runtime",
+        "name": "codex_cli",
         "version": "1.0",
     }
     assert node["inputs"]["branch"] == "feature/authored-breakdown"
@@ -1263,7 +1269,7 @@ def test_runtime_planner_preserves_authored_branch_for_jira_story_import():
     assert "targetBranch" not in node["inputs"]
     assert "startingBranch" not in node["inputs"]
 
-def test_runtime_planner_routes_jira_orchestrate_task_creator_as_skill_step():
+def test_runtime_planner_routes_jira_orchestrate_task_creator_as_agent_runtime_step():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
         digest="reg:sha256:test",
@@ -1346,7 +1352,7 @@ def test_runtime_planner_routes_jira_orchestrate_task_creator_as_skill_step():
         == breakdown["inputs"]["storyBreakdownPath"]
     )
     assert orchestrate["tool"] == {
-        "type": "skill",
+        "type": "agent_runtime",
         "name": "story.create_jira_orchestrate_tasks",
         "version": "1.0",
     }
@@ -1356,7 +1362,7 @@ def test_runtime_planner_routes_jira_orchestrate_task_creator_as_skill_step():
     }
 
 
-def test_runtime_planner_routes_jira_implement_task_creator_as_skill_step():
+def test_runtime_planner_routes_jira_implement_task_creator_as_agent_runtime_step():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
         digest="reg:sha256:test",
@@ -1426,7 +1432,7 @@ def test_runtime_planner_routes_jira_implement_task_creator_as_skill_step():
     implement = plan["nodes"][3]
 
     assert implement["tool"] == {
-        "type": "skill",
+        "type": "agent_runtime",
         "name": "story.create_jira_implement_tasks",
         "version": "1.0",
     }

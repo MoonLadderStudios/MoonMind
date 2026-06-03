@@ -1001,14 +1001,13 @@ def _selected_step_tool_version(step_entry: Mapping[str, Any]) -> str:
     return str(step_tool.get("version") or "1.0").strip() or "1.0"
 
 def _selected_step_tool_type(step_entry: Mapping[str, Any], tool_name: str) -> str:
-    if _selected_step_type(step_entry) == "tool":
-        return "skill"
-    if tool_name.lower() in _JIRA_STORY_OUTPUT_TOOLS:
-        return "skill"
     return "agent_runtime"
 
 def _jira_agent_skill_selected(tool_name: str) -> bool:
     return tool_name.lower() in _JIRA_AGENT_SKILLS
+
+def _jira_story_output_skill_selected(tool_name: str) -> bool:
+    return tool_name.lower() in _JIRA_STORY_OUTPUT_TOOLS
 
 def _task_uses_only_jira_agent_skill(
     *, selected_skill_name: str, raw_steps: Any
@@ -1413,18 +1412,26 @@ def _build_runtime_planner():
                 ) or _coerce_mapping(plan_entry.get("skill"))
                 if not tool_payload:
                     raise RuntimeError("task.plan entries require a tool object")
-                tool_type = str(
+                authored_tool_type = str(
                     tool_payload.get("type") or tool_payload.get("kind") or "skill"
-                ).strip() or "skill"
+                ).strip().lower() or "skill"
                 tool_name = str(
                     tool_payload.get("name") or tool_payload.get("id") or ""
                 ).strip()
                 if not tool_name:
                     raise RuntimeError("task.plan tool name is required")
-                tool_version = str(
-                    tool_payload.get("version")
-                    or ("1.0.0" if tool_type == "skill" else "1.0")
-                ).strip()
+                if authored_tool_type == "agent_runtime":
+                    node_tool_type = "agent_runtime"
+                    node_tool_name = tool_name
+                    tool_version = str(tool_payload.get("version") or "1.0").strip()
+                elif authored_tool_type == "skill":
+                    node_tool_type = "agent_runtime"
+                    node_tool_name = runtime_mode
+                    tool_version = "1.0"
+                else:
+                    raise RuntimeError(
+                        "task.plan tool.type must be 'skill' or 'agent_runtime'"
+                    )
                 if not tool_version:
                     raise RuntimeError("task.plan tool version is required")
                 node_inputs = _coerce_mapping(plan_entry.get("inputs"))
@@ -1432,6 +1439,9 @@ def _build_runtime_planner():
                     node_inputs = _coerce_mapping(
                         tool_payload.get("inputs") or tool_payload.get("args")
                     )
+                if authored_tool_type == "skill":
+                    node_inputs = dict(node_inputs)
+                    node_inputs.setdefault("selectedSkill", tool_name)
                 node_id = str(plan_entry.get("id") or f"node-{idx}").strip()
                 if not node_id:
                     node_id = f"node-{idx}"
@@ -1441,8 +1451,8 @@ def _build_runtime_planner():
                 node: dict[str, Any] = {
                     "id": node_id,
                     "tool": {
-                        "type": tool_type,
-                        "name": tool_name,
+                        "type": node_tool_type,
+                        "name": node_tool_name,
                         "version": tool_version,
                     },
                     "inputs": dict(node_inputs),
@@ -1744,19 +1754,11 @@ def _build_runtime_planner():
                 str(node_inputs.get("instructions") or ""),
                 selected_skill=selected_skill_name,
             )
-            node_tool_type = (
-                "skill"
-                if selected_skill_name.lower() in _JIRA_STORY_OUTPUT_TOOLS
-                else "agent_runtime"
-            )
-            node_tool_name = (
-                selected_skill_name if node_tool_type == "skill" else runtime_mode
-            )
             nodes.append({
                 "id": node_id,
                 "tool": {
-                    "type": node_tool_type,
-                    "name": node_tool_name,
+                    "type": "agent_runtime",
+                    "name": runtime_mode,
                     "version": "1.0",
                 },
                 "inputs": node_inputs,
@@ -1780,6 +1782,9 @@ def _build_runtime_planner():
                     if str(node.get("tool", {}).get("type") or "").strip().lower()
                     == "agent_runtime"
                     and not _jira_agent_skill_selected(_plan_node_selected_skill(node))
+                    and not _jira_story_output_skill_selected(
+                        _plan_node_selected_skill(node)
+                    )
                 ),
                 nodes[-1],
             )
@@ -1790,6 +1795,7 @@ def _build_runtime_planner():
             if (
                 publish_tool not in _TOOLS_WITH_AUTO_PR_CREATION
                 and not _jira_agent_skill_selected(publish_selected_skill)
+                and not _jira_story_output_skill_selected(publish_selected_skill)
                 and not _is_jira_pr_handoff_node(
                     publish_node,
                     task_payload=task_payload,

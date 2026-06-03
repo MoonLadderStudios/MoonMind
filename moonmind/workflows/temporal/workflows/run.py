@@ -82,7 +82,6 @@ from moonmind.workflows.skills.approval_policy import (
     build_feedback_instruction,
     parse_review_verdict,
 )
-from moonmind.workflows.skills.skill_registry import parse_skill_registry
 from moonmind.workflows.temporal.step_ledger import (
     TERMINAL_STEP_STATUSES,
     build_initial_step_rows,
@@ -3655,7 +3654,7 @@ class MoonMindRunWorkflow:
         tool_type = str(
             tool_payload.get("type") or tool_payload.get("kind") or ""
         ).strip()
-        if not tool_type or tool_type == "skill":
+        if tool_type in {"", "skill"}:
             tool_name = (
                 self._coerce_text(tool_payload.get("name"), max_chars=160)
                 or self._coerce_text(tool_payload.get("id"), max_chars=160)
@@ -3802,7 +3801,6 @@ class MoonMindRunWorkflow:
         )
         self._capture_prepared_input_refs(parameters)
 
-        registry_snapshot_ref = plan_definition.metadata.registry_snapshot.artifact_ref
         task_payload = parameters.get("task")
         task_skills = (
             task_payload.get("skills")
@@ -3823,36 +3821,6 @@ class MoonMindRunWorkflow:
             and not pr_publish_optional
         )
         pull_request_url: str | None = None
-        skill_definitions_by_key: dict[tuple[str, str], Any] = {}
-        requires_registry_lookup = any(
-            node.tool_type == "skill" for node in plan_definition.nodes
-        )
-        if workflow.patched(RUN_CONDITIONAL_REGISTRY_READ_PATCH):
-            should_read_registry = bool(
-                registry_snapshot_ref and requires_registry_lookup
-            )
-        else:
-            should_read_registry = bool(registry_snapshot_ref)
-
-        if should_read_registry:
-            registry_payload = await execute_typed_activity(
-                "artifact.read",
-                ArtifactReadInput(
-                    principal=self._principal(),
-                    artifact_ref=registry_snapshot_ref,
-                ),
-                **self._execute_kwargs_for_route(artifact_read_route),
-            )
-            registry_document = self._decode_json_payload(
-                registry_payload,
-                error_message=(
-                    "registry_snapshot_ref must resolve to a JSON object payload"
-                ),
-            )
-            skill_definitions = parse_skill_registry(registry_document)
-            skill_definitions_by_key = {
-                definition.key: definition for definition in skill_definitions
-            }
 
         previous_step_outputs: Mapping[str, Any] = {}
         execution_result: Any = None
@@ -3862,27 +3830,18 @@ class MoonMindRunWorkflow:
                 return
 
             tool = node.get("tool")
-            skill = node.get("skill")
-
-            selected_node: Mapping[str, Any] | None = None
-            if isinstance(tool, Mapping):
-                selected_node = tool
-            elif isinstance(skill, Mapping):
-                selected_node = skill
-            if selected_node is None:
-                raise ValueError(
-                    "plan node tool definition is required (node.skill is legacy alias)"
-                )
+            if not isinstance(tool, Mapping):
+                raise ValueError("plan node tool definition is required")
 
             tool_type = (
-                str(selected_node.get("type") or selected_node.get("kind") or "skill")
+                str(tool.get("type") or tool.get("kind") or "")
                 .strip()
                 .lower()
             )
             tool_name = str(
-                selected_node.get("name") or selected_node.get("id") or ""
+                tool.get("name") or tool.get("id") or ""
             ).strip()
-            tool_version = str(selected_node.get("version") or "").strip()
+            tool_version = str(tool.get("version") or "").strip()
             node_id = str(node.get("id") or "unknown")
             if self._is_preserved_step(node_id):
                 preserved_outputs = self._preserved_step_outputs(node_id)
@@ -4131,100 +4090,10 @@ class MoonMindRunWorkflow:
                             result_status = "FAILED"
                             break
 
-                    elif tool_type == "skill":
-                        # --- Activity dispatch: existing skill path ---
-                        if not tool_name or not tool_version:
-                            raise ValueError("plan node tool name/version is required")
-                        invocation_payload = {
-                            "id": node_id,
-                            "tool": {
-                                "type": "skill",
-                                "name": tool_name,
-                                "version": tool_version,
-                            },
-                            "skill": {"name": tool_name, "version": tool_version},
-                            "inputs": node_inputs,
-                            "options": node.get("options", {}),
-                        }
-                        route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-                            "mm.skill.execute"
-                        )
-                        if skill_definitions_by_key:
-                            skill_key = (tool_name, tool_version)
-                            if skill_key not in skill_definitions_by_key:
-                                raise ValueError(
-                                    "Tool "
-                                    f"'{tool_name}:{tool_version}' was not found in pinned "
-                                    "registry snapshot"
-                                )
-                            route = DEFAULT_ACTIVITY_CATALOG.resolve_skill(
-                                skill_definitions_by_key[skill_key]
-                            )
-                        if route.activity_type not in {
-                            "mm.skill.execute",
-                            "mm.tool.execute",
-                        }:
-                            raise ValueError(
-                                "plan node tool executor "
-                                f"'{route.activity_type}' is unsupported by MoonMind.Run; "
-                                "expected mm.tool.execute or mm.skill.execute"
-                            )
-
-                        try:
-                            execute_payload = {
-                                "invocation_payload": invocation_payload,
-                                "principal": self._principal(),
-                                "registry_snapshot_ref": registry_snapshot_ref,
-                                "context": {
-                                    "workflow_id": workflow.info().workflow_id,
-                                    "run_id": workflow.info().run_id,
-                                    "node_id": node_id,
-                                    "ownerId": self._owner_id,
-                                    "ownerType": self._owner_type,
-                                    "previousOutputs": current_previous_outputs,
-                                },
-                            }
-                            if workflow.patched("idempotency_key_phase3"):
-                                execute_payload["idempotency_key"] = (
-                                    step_execution_operation_idempotency_key(
-                                        workflow_id=workflow.info().workflow_id,
-                                        run_id=workflow.info().run_id,
-                                        logical_step_id=node_id,
-                                        execution_ordinal=current_step_execution,
-                                        operation="execute",
-                                    )
-                                )
-
-                            execution_result = await workflow.execute_activity(
-                                route.activity_type,
-                                execute_payload,
-                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                                **self._execute_kwargs_for_route(route),
-                            )
-                        except Exception as exc:
-                            diagnostic = self._record_failure_diagnostic(
-                                exc,
-                                stage=self._state,
-                                step_id=node_id,
-                                step_title=tool_name,
-                                source="activity",
-                            )
-                            self._mark_step_terminal(
-                                node_id,
-                                status="failed",
-                                updated_at=workflow.now(),
-                                summary=diagnostic["message"],
-                                last_error=diagnostic["category"],
-                            )
-                            if failure_mode == "FAIL_FAST":
-                                raise
-                            result_status = "FAILED"
-                            break
-
                     else:
                         raise ValueError(
                             f"unsupported plan node tool.type: '{tool_type}'; "
-                            "expected 'skill' or 'agent_runtime'"
+                            "expected 'agent_runtime'"
                         )
 
                     result_status = self._activity_result_status(execution_result)

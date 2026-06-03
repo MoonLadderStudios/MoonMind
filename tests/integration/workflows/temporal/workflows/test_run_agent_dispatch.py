@@ -411,16 +411,10 @@ class TestAgentRuntimeDispatch(unittest.IsolatedAsyncioTestCase):
                     exc_info.exception.cause.message,
                 )
 
-# ── Snapshot-pinning workflow-boundary tests ──
+# ── Legacy registry workflow-boundary tests ──
 
 class TestSnapshotPinningOnRetry(unittest.IsolatedAsyncioTestCase):
-    """Verify that resolved_skillset_ref is stable across the retry loop
-    inside MoonMind.Run._run_execution_stage().
-
-    The workflow reads registry_snapshot_ref once from plan metadata, then
-    passes the *same* variable to _build_agent_execution_request on every
-    retry iteration.  These tests exercise that boundary contract.
-    """
+    """Verify MoonMind.Run dispatch does not read legacy skill registries."""
 
     def setUp(self) -> None:
         PLAN_GENERATE_CALLS.clear()
@@ -432,13 +426,7 @@ class TestSnapshotPinningOnRetry(unittest.IsolatedAsyncioTestCase):
     # ------------------------------------------------------------------
 
     async def test_retry_child_workflow_receives_identical_skillset_ref(self) -> None:
-        """When the parent retries a plan node, the registry_snapshot_ref is
-        read once from plan metadata and threaded through every retry attempt.
-
-        We use a skill node that fails once, triggering the parent retry loop.
-        The assertion is that the registry snapshot artifact is read exactly
-        once — proving the ref is pinned and not re-resolved on retry.
-        """
+        """Agent runtime dispatch ignores registry_snapshot_ref metadata."""
         KNOWN_SNAPSHOT_REF = "artifact://registry/retry-snap-42"
 
         @activity.defn(name="artifact.read")
@@ -460,13 +448,16 @@ class TestSnapshotPinningOnRetry(unittest.IsolatedAsyncioTestCase):
                 "policy": {"failure_mode": "FAIL_FAST"},
                 "nodes": [
                     {
-                        "id": "retry-skill-step",
+                        "id": "retry-agent-step",
                         "tool": {
-                            "type": "skill",
-                            "name": "repo.run_tests",
-                            "version": "1.0.0",
+                            "type": "agent_runtime",
+                            "name": "codex_cli",
+                            "version": "1.0",
                         },
-                        "inputs": {"repo_ref": "git:moonmind"},
+                        "inputs": {
+                            "repo_ref": "git:moonmind",
+                            "selectedSkill": "repo.run_tests",
+                        },
                         "options": {},
                     }
                 ],
@@ -510,16 +501,14 @@ class TestSnapshotPinningOnRetry(unittest.IsolatedAsyncioTestCase):
                 except Exception:
                     pass
 
-                # The critical assertion: the registry snapshot was read
-                # exactly once at the top of _run_execution_stage, and the
-                # same ref variable is threaded through all retry attempts.
+                # The legacy skill registry is no longer read by Run dispatch.
                 registry_reads = [
                     c for c in ARTIFACT_READ_CALLS
                     if c.get("artifact_ref") == KNOWN_SNAPSHOT_REF
                 ]
                 self.assertEqual(
-                    len(registry_reads), 1,
-                    "Registry snapshot should be read exactly once per execution stage",
+                    len(registry_reads), 0,
+                    "Run dispatch must not read registry snapshots",
                 )
 
     # ------------------------------------------------------------------
@@ -554,13 +543,16 @@ class TestSnapshotPinningOnRetry(unittest.IsolatedAsyncioTestCase):
                 "policy": {"failure_mode": "FAIL_FAST"},
                 "nodes": [
                     {
-                        "id": "rerun-skill-step",
+                        "id": "rerun-agent-step",
                         "tool": {
-                            "type": "skill",
-                            "name": "repo.run_tests",
-                            "version": "1.0.0",
+                            "type": "agent_runtime",
+                            "name": "codex_cli",
+                            "version": "1.0",
                         },
-                        "inputs": {"repo_ref": "git:moonmind"},
+                        "inputs": {
+                            "repo_ref": "git:moonmind",
+                            "selectedSkill": "repo.run_tests",
+                        },
                         "options": {},
                     }
                 ],
@@ -623,30 +615,22 @@ class TestSnapshotPinningOnRetry(unittest.IsolatedAsyncioTestCase):
                 except Exception:
                     pass
 
-                # Both runs read the same plan artifact with the same snapshot ref.
+                # Both runs ignore the legacy registry snapshot ref during dispatch.
                 registry_reads = [
                     c for c in ARTIFACT_READ_CALLS
                     if c.get("artifact_ref") == EXPECTED_SNAPSHOT_REF
                 ]
                 self.assertEqual(
-                    len(registry_reads), 2,
-                    "Both runs should read the registry snapshot artifact",
+                    len(registry_reads), 0,
+                    "Reruns must not read registry snapshots for Run dispatch",
                 )
 
     # ------------------------------------------------------------------
-    # 3. Child workflow AgentRun dispatch receives correct snapshot ref
-    #    on both first-run and retry paths
+    # 3. Child workflow AgentRun dispatch ignores legacy registry snapshots
     # ------------------------------------------------------------------
 
-    async def test_child_workflow_receives_resolved_skillset_ref(self) -> None:
-        """The plan's registry_snapshot_ref is read and threaded through
-        to the execution path.  We verify this by running the workflow
-        with a plan that carries a known registry_snapshot ref, and
-        asserting the registry artifact is read with that exact ref.
-
-        This proves the ref flows from plan metadata → workflow execution
-        → child dispatch without re-resolution.
-        """
+    async def test_child_workflow_ignores_legacy_registry_snapshot_ref(self) -> None:
+        """Agent runtime dispatch does not read registry_snapshot_ref metadata."""
         KNOWN_SNAPSHOT_REF = "artifact://registry/child-ref-test"
 
         @activity.defn(name="artifact.read")
@@ -668,13 +652,16 @@ class TestSnapshotPinningOnRetry(unittest.IsolatedAsyncioTestCase):
                 "policy": {"failure_mode": "FAIL_FAST"},
                 "nodes": [
                     {
-                        "id": "child-ref-step",
+                        "id": "child-agent-step",
                         "tool": {
-                            "type": "skill",
-                            "name": "repo.run_tests",
-                            "version": "1.0.0",
+                            "type": "agent_runtime",
+                            "name": "codex_cli",
+                            "version": "1.0",
                         },
-                        "inputs": {"repo_ref": "git:moonmind"},
+                        "inputs": {
+                            "repo_ref": "git:moonmind",
+                            "selectedSkill": "repo.run_tests",
+                        },
                         "options": {},
                     }
                 ],
@@ -723,12 +710,12 @@ class TestSnapshotPinningOnRetry(unittest.IsolatedAsyncioTestCase):
                 except Exception:
                     pass
 
-                # Assert the registry snapshot was read with the known ref.
+                # Assert the registry snapshot is not read by Run dispatch.
                 registry_reads = [
                     c for c in ARTIFACT_READ_CALLS
                     if c.get("artifact_ref") == KNOWN_SNAPSHOT_REF
                 ]
                 self.assertEqual(
-                    len(registry_reads), 1,
-                    "Parent must read the registry snapshot artifact with the known ref",
+                    len(registry_reads), 0,
+                    "Parent must not read registry snapshots for Run dispatch",
                 )
