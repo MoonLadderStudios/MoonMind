@@ -1657,11 +1657,7 @@ class CodexManagedSessionRuntime:
                     error_text=str(no_op.get("reason") or "").strip() or None,
                     disposition="no_op",
                 )
-            return _TurnTerminalOutcome(
-                status="failed",
-                error_text="codex app-server task_complete produced no assistant output",
-                failure_class="transient",
-            )
+            return _TurnTerminalOutcome(status="completed")
         if scan.assistant_text:
             return _TurnTerminalOutcome(status="completed")
         return None
@@ -1710,11 +1706,7 @@ class CodexManagedSessionRuntime:
                     error_text=str(no_op.get("reason") or "").strip() or None,
                     disposition="no_op",
                 )
-            return _TurnTerminalOutcome(
-                status="failed",
-                error_text="codex app-server task_complete produced no assistant output",
-                failure_class="transient",
-            )
+            return _TurnTerminalOutcome(status="completed")
         no_op = self._read_skill_outcome(turn_started_at=state.last_control_at)
         if no_op is not None:
             return _TurnTerminalOutcome(
