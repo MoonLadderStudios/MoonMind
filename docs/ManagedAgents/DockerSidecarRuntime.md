@@ -246,6 +246,14 @@ from unrelated ambient task text. The `docker-sidecar-rootless` mode remains a
 profile contract target, but Docker launcher materialization fails closed until
 that runtime shape is implemented.
 
+MM-784's per-runtime policy rule is fail-closed: an explicit `no-docker`,
+`disabled`, `none`, or `off` managed-session Docker mode cannot be overridden by
+deployment-wide unrestricted Docker workflow mode. A runtime that is not allowed
+Docker capability must not receive `DOCKER_HOST` for the Docker proxy. When a
+launch inherits unrestricted workflow mode without an explicit no-Docker runtime
+policy, the launcher materializes the per-session sidecar path instead of
+passing host/proxy Docker authority into the agent container.
+
 The Docker sidecar image defaults to the pinned generic image `docker:27-dind`.
 Operators may override it with `MOONMIND_MANAGED_SESSION_DOCKER_SIDECAR_IMAGE`,
 but the value must remain pinned to a non-`latest` tag or digest.

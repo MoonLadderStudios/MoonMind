@@ -223,11 +223,16 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - Docker-socket-proxy (`tecnativa/docker-socket-proxy`) with restricted API endpoints
 - Agent workspace volume isolation
 - Auth-volume separation per runtime
+- Per-runtime managed-session Docker capability policy (MM-784): explicit
+  `no-docker`/disabled runtime policy cannot inherit unrestricted Docker proxy
+  access, and unrestricted workflow mode uses the per-session sidecar path
+  instead of passing proxy authority into the agent
 - File allowlist enforcement for sandbox command and patch activities (`MM-782`)
 
 ### Remaining tasks
 - [ ] **9.2** Credential sanitization from logs — Agent rules prohibit secrets in output; no runtime log scrubber
-- [ ] **9.3** Per-runtime capability routing policy — Proxy limits Docker API endpoints, but not per-runtime policies
+- [x] **9.3** Per-runtime capability routing policy — MM-784 enforces
+  managed-session Docker mode before Docker proxy exposure
 - [x] **9.4** Network egress policies for sandboxes — Sandbox worker containers use an internal restricted egress network
 
 ---
