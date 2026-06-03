@@ -141,6 +141,20 @@ def _merge_default_fields(
 
     return processor
 
+def _extract_record_attributes(
+    _logger: Any, _method_name: str, event_dict: dict[str, Any]
+) -> dict[str, Any]:
+    record = event_dict.get("_record")
+    if record is None:
+        return event_dict
+
+    for key, value in record.__dict__.items():
+        if key in _RESERVED_LOG_RECORD_FIELDS or key in event_dict:
+            continue
+        event_dict[key] = value
+
+    return event_dict
+
 def _configure_structlog(default_fields: Mapping[str, Any]) -> ProcessorFormatter:
     shared_processors = [
         structlog.contextvars.merge_contextvars,
@@ -166,6 +180,7 @@ def _configure_structlog(default_fields: Mapping[str, Any]) -> ProcessorFormatte
             structlog.stdlib.ExtraAdder(),
         ],
         processors=[
+            _extract_record_attributes,
             ProcessorFormatter.remove_processors_meta,
             structlog.processors.JSONRenderer(),
         ],

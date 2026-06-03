@@ -64,3 +64,41 @@ def test_configure_logging_emits_structlog_json_with_execution_context(
     assert structlog_record["service"] == "api-service"
     assert structlog_record["workflow_id"] == "wf-2"
     assert structlog_record["run_id"] == "run-2"
+
+
+def test_configure_logging_preserves_filter_injected_fields_for_native_structlog(
+    capsys, monkeypatch
+):
+    monkeypatch.setenv("MOONMIND_STRUCTURED_LOGS", "1")
+    original_handlers = list(logging.root.handlers)
+
+    class InjectTraceFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            record.trace_id = "trace-from-filter"
+            record.workflow_id = "wf-from-filter"
+            return True
+
+    try:
+        configure_logging(level="INFO", structured=True)
+        for handler in logging.root.handlers:
+            handler.addFilter(InjectTraceFilter())
+
+        structlog.get_logger("moonmind.structlog.filter").info(
+            "structlog filtered event",
+            workflow_id="wf-from-event",
+        )
+    finally:
+        logging.root.handlers = original_handlers
+        structlog.reset_defaults()
+
+    records = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.strip()
+    ]
+    structlog_record = next(
+        record for record in records if record.get("event") == "structlog filtered event"
+    )
+
+    assert structlog_record["trace_id"] == "trace-from-filter"
+    assert structlog_record["workflow_id"] == "wf-from-event"

@@ -151,6 +151,41 @@ def test_opentelemetry_logging_filter_injects_bounded_managed_session_fields(
     assert "rawLog" not in record.managed_session
     assert "token" not in record.managed_session
 
+
+def test_opentelemetry_logging_filter_caches_default_env_fields(monkeypatch) -> None:
+    calls = 0
+
+    def fake_default_fields() -> dict[str, str]:
+        nonlocal calls
+        calls += 1
+        return {
+            "service": "cached-service",
+            "component": "cached-component",
+            "worker_fleet": "cached-fleet",
+            "worker_id": "cached-worker",
+        }
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.worker_runtime.default_log_fields_from_env",
+        fake_default_fields,
+    )
+    otel_filter = OpenTelemetryLoggingFilter()
+
+    for _ in range(2):
+        record = logging.LogRecord(
+            name="moonmind.test",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=1,
+            msg="event",
+            args=(),
+            exc_info=None,
+        )
+        assert otel_filter.filter(record) is True
+        assert record.service == "cached-service"
+
+    assert calls == 1
+
 def test_opentelemetry_log_format_includes_session_locator_fields() -> None:
     assert "service=%(service)s" in _OPENTELEMETRY_LOG_FORMAT
     assert "component=%(component)s" in _OPENTELEMETRY_LOG_FORMAT

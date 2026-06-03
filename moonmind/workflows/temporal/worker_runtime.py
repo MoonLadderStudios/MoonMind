@@ -2284,8 +2284,13 @@ async def main_async() -> None:
 
 class OpenTelemetryLoggingFilter(logging.Filter):
     """Injects OpenTelemetry and Temporal trace context into standard logging."""
+
+    def __init__(self, name: str = "") -> None:
+        super().__init__(name)
+        self._default_fields = default_log_fields_from_env()
+
     def filter(self, record: logging.LogRecord) -> bool:
-        for key, value in default_log_fields_from_env().items():
+        for key, value in self._default_fields.items():
             setattr(record, key, value)
         record.trace_id = ""
         record.span_id = ""
