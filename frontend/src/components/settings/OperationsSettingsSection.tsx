@@ -271,7 +271,11 @@ export function OperationsSettingsSection({
   const [notice, setNotice] = useState<{ level: 'ok' | 'error'; text: string } | null>(
     null,
   );
-  const [deploymentNotice, setDeploymentNotice] = useState<{
+  const [updateNotice, setUpdateNotice] = useState<{
+    level: 'ok' | 'error';
+    text: string;
+  } | null>(null);
+  const [rollbackNotice, setRollbackNotice] = useState<{
     level: 'ok' | 'error';
     text: string;
   } | null>(null);
@@ -546,14 +550,14 @@ export function OperationsSettingsSection({
       if (!result) {
         return;
       }
-      setDeploymentNotice({
+      setUpdateNotice({
         level: 'ok',
         text: `Deployment update queued: ${result.deploymentUpdateRunId}`,
       });
       queryClient.invalidateQueries({ queryKey: ['deployment-stack', DEPLOYMENT_STACK] });
     },
     onError: (mutationError: Error) => {
-      setDeploymentNotice({
+      setUpdateNotice({
         level: 'error',
         text: mutationError.message,
       });
@@ -623,23 +627,40 @@ export function OperationsSettingsSection({
       if (!result) {
         return;
       }
-      setDeploymentNotice({
+      setRollbackNotice({
         level: 'ok',
         text: `Deployment rollback queued: ${result.deploymentUpdateRunId}`,
       });
       queryClient.invalidateQueries({ queryKey: ['deployment-stack', DEPLOYMENT_STACK] });
     },
     onError: (mutationError: Error) => {
-      setDeploymentNotice({
+      setRollbackNotice({
         level: 'error',
         text: mutationError.message,
       });
     },
   });
 
+  const renderDeploymentNotice = (
+    notice: { level: 'ok' | 'error'; text: string } | null,
+  ) =>
+    notice ? (
+      <div
+        role={notice.level === 'error' ? 'alert' : 'status'}
+        aria-live="polite"
+        className={`rounded-2xl border px-4 py-3 text-sm ${
+          notice.level === 'error'
+            ? 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-400'
+            : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-400'
+        }`}
+      >
+        {notice.text}
+      </div>
+    ) : null;
+
   const handleDeploymentSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setDeploymentNotice(null);
+    setUpdateNotice(null);
     deploymentMutation.mutate();
   };
 
@@ -737,36 +758,29 @@ export function OperationsSettingsSection({
         className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm"
         aria-label="Deployment Update"
       >
-        <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
-          <div className="space-y-2">
-            <h4 className="text-lg font-semibold text-slate-900 dark:text-white">
-              Deployment Update
-            </h4>
-            <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-400">
-              Update the configured MoonMind image for the allowlisted Compose stack.
-            </p>
-          </div>
-          {deploymentNotice ? (
-            <div
-              className={`rounded-2xl border px-4 py-3 text-sm ${
-                deploymentNotice.level === 'error'
-                  ? 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-400'
-                  : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-400'
-              }`}
-            >
-              {deploymentNotice.text}
-            </div>
-          ) : null}
+        <div className="space-y-2">
+          <h4 className="text-lg font-semibold text-slate-900 dark:text-white">
+            Deployment Update
+          </h4>
+          <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-400">
+            Update the configured MoonMind image for the allowlisted Compose stack.
+          </p>
         </div>
 
         {isDeploymentStateLoading || areImageTargetsLoading ? (
-          <p className="mt-5 text-sm text-slate-500 dark:text-slate-400">
-            Loading deployment controls...
-          </p>
+          <div className="mt-5 space-y-3">
+            <p className="text-sm text-slate-500 dark:text-slate-400">
+              Loading deployment controls...
+            </p>
+            {renderDeploymentNotice(updateNotice)}
+          </div>
         ) : isDeploymentStateError || areImageTargetsError ? (
-          <p className="mt-5 text-sm text-rose-700 dark:text-rose-400">
-            {((deploymentStateError || imageTargetsError) as Error).message}
-          </p>
+          <div className="mt-5 space-y-3">
+            <p className="text-sm text-rose-700 dark:text-rose-400">
+              {((deploymentStateError || imageTargetsError) as Error).message}
+            </p>
+            {renderDeploymentNotice(updateNotice)}
+          </div>
         ) : (
           <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.8fr)]">
             <div className="space-y-4">
@@ -859,6 +873,7 @@ export function OperationsSettingsSection({
                   Recent deployment actions
                 </h5>
                 <div className="mt-3 space-y-3">
+                  {renderDeploymentNotice(rollbackNotice)}
                   {deploymentState?.recentActions.length ? (
                     deploymentState.recentActions.map((action) => (
                       <div
@@ -1063,6 +1078,8 @@ export function OperationsSettingsSection({
               >
                 Submit deployment update
               </button>
+
+              {renderDeploymentNotice(updateNotice)}
             </form>
           </div>
         )}

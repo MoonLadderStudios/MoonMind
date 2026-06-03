@@ -1591,15 +1591,22 @@ def _build_runtime_planner():
                     step_instructions = instructions  # fall back to task-level
 
                 step_id = str(step_entry.get("id") or "").strip() or f"step-{idx + 1}"
+                base_runtime_payload = _coerce_mapping(node_inputs.get("runtime"))
+                step_runtime_payload = _coerce_mapping(step_entry.get("runtime"))
                 step_node_inputs: dict[str, Any] = {
                     **node_inputs,
                     **{
                         k: v
                         for k, v in step_entry.items()
-                        if k not in {"id", "tool", "skill", "instructions"}
+                        if k not in {"id", "tool", "skill", "instructions", "runtime"}
                     },
                     "instructions": step_instructions,
                 }
+                if base_runtime_payload or step_runtime_payload:
+                    step_node_inputs["runtime"] = {
+                        **base_runtime_payload,
+                        **step_runtime_payload,
+                    }
                 base_story_output = _coerce_mapping(node_inputs.get("storyOutput"))
                 step_story_output = _coerce_mapping(
                     step_entry.get("storyOutput") or step_entry.get("story_output")
@@ -1615,7 +1622,10 @@ def _build_runtime_planner():
 
                 # Per-step tool/skill override
                 step_tool_name = _selected_step_tool_name(step_entry)
-                step_runtime = runtime_mode
+                step_runtime = _normalize_runtime_mode(
+                    _coerce_mapping(step_node_inputs.get("runtime")).get("mode")
+                    or runtime_mode
+                )
                 tool_type = _selected_step_tool_type(step_entry, step_tool_name)
                 tool_version = _selected_step_tool_version(step_entry)
                 effective_step_skill_name = step_tool_name or selected_skill_name
