@@ -532,6 +532,7 @@ class _SandboxFileSnapshotEntry:
     size: int
     mtime_ns: int
     digest: str
+    backup_path: Path | None = None
 
 @dataclass(frozen=True, slots=True)
 class IntegrationStartResult:
@@ -2152,35 +2153,73 @@ class TemporalSandboxActivities:
             allowed.add(resolved.relative_to(cwd).as_posix())
         return frozenset(allowed)
 
+    def _sandbox_path_is_allowed(
+        self,
+        rel_path: str,
+        allowed_paths: frozenset[str],
+    ) -> bool:
+        return any(
+            rel_path == allowed_path or rel_path.startswith(f"{allowed_path}/")
+            for allowed_path in allowed_paths
+        )
+
     def _sandbox_file_snapshot(
         self,
         cwd: Path,
+        *,
+        backup_root: Path | None = None,
+        allowed_paths: frozenset[str] | None = None,
     ) -> dict[str, _SandboxFileSnapshotEntry]:
         snapshot: dict[str, _SandboxFileSnapshotEntry] = {}
         for path in cwd.rglob("*"):
             try:
                 info = path.lstat()
-            except FileNotFoundError:
+            except OSError:
                 continue
             if stat.S_ISDIR(info.st_mode):
                 continue
             rel_path = path.relative_to(cwd).as_posix()
             if stat.S_ISREG(info.st_mode):
                 try:
-                    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-                except FileNotFoundError:
+                    digest = self._sandbox_file_digest(path)
+                except OSError:
                     continue
             elif stat.S_ISLNK(info.st_mode):
-                digest = hashlib.sha256(os.readlink(path).encode("utf-8")).hexdigest()
+                try:
+                    digest = hashlib.sha256(
+                        os.readlink(path).encode("utf-8")
+                    ).hexdigest()
+                except OSError:
+                    continue
             else:
                 digest = hashlib.sha256(str(info.st_rdev).encode("utf-8")).hexdigest()
+            backup_path: Path | None = None
+            if (
+                backup_root is not None
+                and allowed_paths is not None
+                and not self._sandbox_path_is_allowed(rel_path, allowed_paths)
+            ):
+                backup_path = backup_root / rel_path
+                backup_path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    shutil.copy2(path, backup_path, follow_symlinks=False)
+                except OSError:
+                    backup_path = None
             snapshot[rel_path] = _SandboxFileSnapshotEntry(
-                mode=stat.S_IFMT(info.st_mode),
+                mode=int(info.st_mode),
                 size=int(info.st_size),
                 mtime_ns=int(info.st_mtime_ns),
                 digest=digest,
+                backup_path=backup_path,
             )
         return snapshot
+
+    def _sandbox_file_digest(self, path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as file:
+            for chunk in iter(lambda: file.read(65536), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
 
     def _changed_sandbox_files(
         self,
@@ -2190,22 +2229,43 @@ class TemporalSandboxActivities:
         changed: set[str] = set()
         for rel_path, before_entry in before.items():
             after_entry = after.get(rel_path)
-            if after_entry is None or after_entry != before_entry:
+            if after_entry is None or (
+                after_entry.mode,
+                after_entry.size,
+                after_entry.mtime_ns,
+                after_entry.digest,
+            ) != (
+                before_entry.mode,
+                before_entry.size,
+                before_entry.mtime_ns,
+                before_entry.digest,
+            ):
                 changed.add(rel_path)
         for rel_path in after:
             if rel_path not in before:
                 changed.add(rel_path)
         return changed
 
-    def _reject_disallowed_file_changes(
+    def _disallowed_sandbox_file_changes(
         self,
         *,
         changed_paths: Iterable[str],
         allowed_paths: frozenset[str] | None,
-    ) -> None:
+    ) -> list[str]:
         if allowed_paths is None:
-            return
-        disallowed = sorted(set(changed_paths) - set(allowed_paths))
+            return []
+        disallowed = sorted(
+            rel_path
+            for rel_path in set(changed_paths)
+            if not self._sandbox_path_is_allowed(rel_path, allowed_paths)
+        )
+        return disallowed
+
+    def _reject_disallowed_file_changes(
+        self,
+        disallowed_paths: Sequence[str],
+    ) -> None:
+        disallowed = list(disallowed_paths)
         if not disallowed:
             return
         preview = ", ".join(disallowed[:10])
@@ -2214,6 +2274,35 @@ class TemporalSandboxActivities:
             "sandbox command modified files outside the allowlist: "
             f"{preview}{extra}"
         )
+
+    def _restore_disallowed_sandbox_changes(
+        self,
+        cwd: Path,
+        *,
+        disallowed_paths: Iterable[str],
+        before: Mapping[str, _SandboxFileSnapshotEntry],
+    ) -> None:
+        for rel_path in sorted(
+            set(disallowed_paths),
+            key=lambda value: value.count("/"),
+            reverse=True,
+        ):
+            target = cwd / rel_path
+            before_entry = before.get(rel_path)
+            try:
+                if target.is_dir() and not target.is_symlink():
+                    shutil.rmtree(target)
+                else:
+                    target.unlink(missing_ok=True)
+            except OSError:
+                continue
+            if before_entry is None or before_entry.backup_path is None:
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                shutil.copy2(before_entry.backup_path, target, follow_symlinks=False)
+            except OSError:
+                continue
 
     def _resolve_checkout_source(self, repo_ref: str | Path) -> tuple[str, str | Path]:
         normalized = str(repo_ref).strip()
@@ -2410,11 +2499,25 @@ class TemporalSandboxActivities:
             cwd,
             allowed_file_paths,
         )
-        before_files = (
-            self._sandbox_file_snapshot(cwd)
-            if normalized_allowed_file_paths is not None
-            else None
-        )
+        backup_dir: tempfile.TemporaryDirectory[str] | None = None
+        backup_root: Path | None = None
+        if normalized_allowed_file_paths is not None:
+            backup_dir = tempfile.TemporaryDirectory(prefix="sandbox-allowlist-")
+            backup_root = Path(backup_dir.name)
+        try:
+            before_files = (
+                self._sandbox_file_snapshot(
+                    cwd,
+                    backup_root=backup_root,
+                    allowed_paths=normalized_allowed_file_paths,
+                )
+                if normalized_allowed_file_paths is not None
+                else None
+            )
+        except Exception:
+            if backup_dir is not None:
+                backup_dir.cleanup()
+            raise
 
         merged_env = os.environ.copy()
         if env:
@@ -2507,10 +2610,21 @@ class TemporalSandboxActivities:
         if before_files is not None:
             after_files = self._sandbox_file_snapshot(cwd)
             changed_paths = self._changed_sandbox_files(before_files, after_files)
-            self._reject_disallowed_file_changes(
+            disallowed_paths = self._disallowed_sandbox_file_changes(
                 changed_paths=changed_paths,
                 allowed_paths=normalized_allowed_file_paths,
             )
+            if disallowed_paths:
+                self._restore_disallowed_sandbox_changes(
+                    cwd,
+                    disallowed_paths=disallowed_paths,
+                    before=before_files,
+                )
+            if backup_dir is not None:
+                backup_dir.cleanup()
+            self._reject_disallowed_file_changes(disallowed_paths)
+        elif backup_dir is not None:
+            backup_dir.cleanup()
 
         return SandboxCommandResult(
             exit_code=int(process.returncode or 0),

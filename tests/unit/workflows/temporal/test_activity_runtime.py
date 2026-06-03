@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import stat
 import sys
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -1396,6 +1397,29 @@ async def test_sandbox_run_command_allows_allowlisted_file_change(tmp_path: Path
     assert result.exit_code == 0
     assert target.read_text(encoding="utf-8") == "after\n"
 
+async def test_sandbox_run_command_allows_directory_allowlisted_file_change(
+    tmp_path: Path,
+):
+    activities = TemporalSandboxActivities(workspace_root=tmp_path / "workspaces")
+    workspace = tmp_path / "workspaces" / "temporal_sandbox" / "allowlisted-dir"
+    workspace.mkdir(parents=True)
+    target = workspace / "allowed" / "nested.txt"
+    target.parent.mkdir()
+    target.write_text("before\n", encoding="utf-8")
+
+    result = await activities.sandbox_run_command(
+        workspace_ref=workspace,
+        cmd=(
+            sys.executable,
+            "-c",
+            "from pathlib import Path; Path('allowed/nested.txt').write_text('after\\n')",
+        ),
+        allowed_file_paths=("allowed",),
+    )
+
+    assert result.exit_code == 0
+    assert target.read_text(encoding="utf-8") == "after\n"
+
 async def test_sandbox_run_command_rejects_file_change_outside_allowlist(
     tmp_path: Path,
 ):
@@ -1420,6 +1444,36 @@ async def test_sandbox_run_command_rejects_file_change_outside_allowlist(
             ),
             allowed_file_paths=("allowed.txt",),
         )
+
+    assert blocked.read_text(encoding="utf-8") == "before\n"
+
+async def test_sandbox_run_command_rejects_permission_change_outside_allowlist(
+    tmp_path: Path,
+):
+    activities = TemporalSandboxActivities(workspace_root=tmp_path / "workspaces")
+    workspace = tmp_path / "workspaces" / "temporal_sandbox" / "blocked-mode"
+    workspace.mkdir(parents=True)
+    allowed = workspace / "allowed.txt"
+    blocked = workspace / "blocked.sh"
+    allowed.write_text("allowed\n", encoding="utf-8")
+    blocked.write_text("#!/bin/sh\n", encoding="utf-8")
+    blocked.chmod(0o644)
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="modified files outside the allowlist: blocked.sh",
+    ):
+        await activities.sandbox_run_command(
+            workspace_ref=workspace,
+            cmd=(
+                sys.executable,
+                "-c",
+                "from pathlib import Path; Path('blocked.sh').chmod(0o755)",
+            ),
+            allowed_file_paths=("allowed.txt",),
+        )
+
+    assert stat.S_IMODE(blocked.stat().st_mode) == 0o644
 
 async def test_sandbox_apply_patch_enforces_file_allowlist(tmp_path: Path):
     async with temporal_db(tmp_path) as session_maker:
@@ -1460,6 +1514,8 @@ async def test_sandbox_apply_patch_enforces_file_allowlist(tmp_path: Path):
                     principal="user-1",
                     allowed_file_paths=("allowed.txt",),
                 )
+
+            assert (workspace / "blocked.txt").read_text(encoding="utf-8") == "before\n"
 
 async def test_sandbox_checkout_repo_clones_github_slug_and_revision(
     tmp_path: Path,
