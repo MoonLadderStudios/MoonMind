@@ -9017,6 +9017,7 @@ class MoonMindRunWorkflow:
             )
             finish_outcome = (
                 self._finish_summary.get("finishOutcome")
+                or self._finish_summary.get("finish_outcome")
                 if isinstance(self._finish_summary, dict)
                 else None
             )

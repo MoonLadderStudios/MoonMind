@@ -111,6 +111,39 @@ def test_map_temporal_state_to_projection_extracts_finish_summary():
     assert result["finish_outcome_code"] == "PUBLISHED_BRANCH"
     assert result["finish_summary_json"] == finish_summary
 
+
+def test_map_temporal_state_to_projection_extracts_snake_case_finish_outcome():
+    start_time = datetime.now(UTC)
+    desc = Mock(spec=WorkflowExecutionDescription)
+    desc.id = "mm:finish-summary-snake"
+    desc.run_id = "run-finish-summary-snake"
+    desc.namespace = "moonmind"
+    desc.workflow_type = "MoonMind.Run"
+    desc.status = WorkflowExecutionStatus.COMPLETED
+    desc.start_time = start_time
+    desc.execution_time = start_time
+    desc.close_time = start_time
+    desc.search_attributes = {}
+    finish_summary = {
+        "schema_version": "v1",
+        "finish_outcome": {
+            "code": "PUBLISH_DISABLED",
+            "stage": "publish",
+            "reason": "publishing disabled",
+        },
+    }
+
+    async def _memo() -> dict[str, object]:
+        return {"entry": "run", "finish_summary": finish_summary}
+
+    desc.memo = _memo
+
+    result = asyncio.run(map_temporal_state_to_projection(desc))
+
+    assert result["finish_outcome_code"] == "PUBLISH_DISABLED"
+    assert result["finish_summary_json"] == finish_summary
+
+
 def test_map_temporal_state_to_projection_uses_search_attributes_for_owner_fields():
     start_time = datetime.now(UTC)
     desc = Mock(spec=WorkflowExecutionDescription)

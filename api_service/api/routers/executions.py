@@ -1946,7 +1946,7 @@ def _serialize_execution(
     proposal_outcomes = _proposal_outcomes_from_summary(proposal_summary)
     finish_summary_json = getattr(record, "finish_summary_json", None)
     finish_summary = (
-        dict(finish_summary_json) if isinstance(finish_summary_json, Mapping) else None
+        dict(finish_summary_json) if isinstance(finish_summary_json, dict) else None
     )
 
     started_at = getattr(record, "started_at", None)

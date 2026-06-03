@@ -30,6 +30,12 @@ def upgrade() -> None:
             table_name,
             sa.Column("finish_outcome_code", sa.String(length=64), nullable=True),
         )
+        op.create_index(
+            f"ix_{table_name}_finish_outcome_code",
+            table_name,
+            ["finish_outcome_code"],
+            unique=False,
+        )
         op.add_column(
             table_name,
             sa.Column("finish_summary_json", _json_type(), nullable=True),
@@ -38,5 +44,6 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     for table_name in ("temporal_executions", "temporal_execution_sources"):
+        op.drop_index(f"ix_{table_name}_finish_outcome_code", table_name=table_name)
         op.drop_column(table_name, "finish_summary_json")
         op.drop_column(table_name, "finish_outcome_code")

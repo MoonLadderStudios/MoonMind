@@ -2219,7 +2219,9 @@ class TemporalExecutionService:
         if finish_summary is None:
             return
         normalized_summary = dict(finish_summary)
-        finish_outcome = normalized_summary.get("finishOutcome")
+        finish_outcome = normalized_summary.get(
+            "finishOutcome"
+        ) or normalized_summary.get("finish_outcome")
         outcome_code = str(
             finish_outcome_code
             or (

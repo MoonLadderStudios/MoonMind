@@ -981,7 +981,9 @@ class TemporalExecutionCanonicalRecord(Base):
     artifact_refs: Mapped[list[str]] = mapped_column(
         mutable_json_list(), nullable=False, default=list
     )
-    finish_outcome_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    finish_outcome_code: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     finish_summary_json: Mapped[Optional[dict[str, Any]]] = mapped_column(
         mutable_json_dict(), nullable=True
     )
@@ -1210,7 +1212,9 @@ class TemporalExecutionRecord(Base):
     artifact_refs: Mapped[list[str]] = mapped_column(
         mutable_json_list(), nullable=False, default=list
     )
-    finish_outcome_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    finish_outcome_code: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     finish_summary_json: Mapped[Optional[dict[str, Any]]] = mapped_column(
         mutable_json_dict(), nullable=True
     )

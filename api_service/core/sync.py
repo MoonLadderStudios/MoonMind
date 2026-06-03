@@ -90,7 +90,9 @@ def _finish_outcome_code_from_summary(
 ) -> str | None:
     if not isinstance(finish_summary, dict):
         return None
-    finish_outcome = finish_summary.get("finishOutcome")
+    finish_outcome = finish_summary.get("finishOutcome") or finish_summary.get(
+        "finish_outcome"
+    )
     if not isinstance(finish_outcome, dict):
         return None
     code = str(finish_outcome.get("code") or "").strip()
