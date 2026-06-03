@@ -273,7 +273,7 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - [ ] **11.2** Improvement signal capture (retries, loops, flaky tests) — Constitution X mandates this
 - [ ] **11.3** Reviewable improvement backlog / proposals queue — Task proposals exist; not fed by telemetry
 - [ ] **11.4** Metrics / dashboards (run duration, success rate, cost) — No operational metrics endpoint
-- [ ] **11.5** Structured logging enrichment (run IDs, worker IDs) — structlog in use; inconsistent enrichment
+- [x] **11.5** Structured logging enrichment (run IDs, worker IDs) — MM-796 adds shared structlog JSON enrichment for run and worker correlation
 
 ---
 
