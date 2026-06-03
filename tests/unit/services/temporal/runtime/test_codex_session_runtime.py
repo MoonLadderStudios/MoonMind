@@ -2602,6 +2602,55 @@ def test_runtime_send_turn_starts_new_thread_when_rollout_recovery_file_is_empty
     assert "vendorThreadPath" not in updated_state
 
 
+def test_runtime_send_turn_starts_new_thread_when_resumed_rollout_read_is_empty(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    empty_rollout = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "06"
+        / "02"
+        / "rollout-2026-06-02T23-39-56-vendor-thread-1.jsonl"
+    )
+    empty_rollout.parent.mkdir(parents=True)
+    empty_rollout.write_text("", encoding="utf-8")
+    script = write_fake_app_server(
+        tmp_path,
+        fail_thread_read=True,
+        thread_recovery_error_message=(
+            "failed to read thread: thread-store internal error: failed to read "
+            f"thread {empty_rollout}: rollout at {empty_rollout} is empty"
+        ),
+        start_thread_path=str(empty_rollout),
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "completed"
+    assert response.metadata["assistantText"] == "OK"
+
+
 def test_runtime_send_turn_ignores_nonexistent_vendor_thread_path_from_state(
     tmp_path: Path,
 ) -> None:

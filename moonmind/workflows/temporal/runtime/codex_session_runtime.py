@@ -1999,6 +1999,31 @@ class CodexManagedSessionRuntime:
         recovered_thread_path = None
         if not fallback_started and vendor_thread_id == state.vendor_thread_id:
             recovered_thread_path = thread_path
+        if not fallback_started:
+            try:
+                client.request("thread/read", {"threadId": vendor_thread_id})
+            except RuntimeError as exc:
+                message = str(exc)
+                if (
+                    not allow_fallback_start
+                    or not self._recovery_failure_allows_fallback(message)
+                ):
+                    raise
+                started = client.request(
+                    "thread/start",
+                    {"cwd": str(self._workspace_path)},
+                )
+                thread_payload = started.get("thread")
+                if not isinstance(thread_payload, Mapping):
+                    raise RuntimeError(
+                        "codex app-server thread/start did not return a thread"
+                    )
+                vendor_thread_id = str(thread_payload.get("id") or "").strip()
+                if not vendor_thread_id:
+                    raise RuntimeError(
+                        "codex app-server thread/start returned a blank thread id"
+                    )
+                recovered_thread_path = None
         state.vendor_thread_id = vendor_thread_id
         state.vendor_thread_path = self._normalized_thread_path(
             thread_payload.get("path") or recovered_thread_path
