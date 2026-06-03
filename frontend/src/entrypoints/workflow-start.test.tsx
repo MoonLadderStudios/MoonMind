@@ -5316,6 +5316,71 @@ describe.skip("Task Create Entrypoint", () => {
     });
   });
 
+  it("submits per-step runtime selections for MM-787 multi-step flows", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Run a multi-step model portability task." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add Step" }));
+
+    const firstStep = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    const secondStep = (await screen.findByText("Step 2")).closest(
+      "section",
+    ) as HTMLElement;
+
+    fireEvent.change(within(firstStep).getByLabelText("Step 1 Runtime"), {
+      target: { value: "gemini_cli" },
+    });
+    fireEvent.change(within(firstStep).getByLabelText("Step 1 Model"), {
+      target: { value: "gemini-step-model" },
+    });
+    fireEvent.change(within(secondStep).getByLabelText("Instructions"), {
+      target: { value: "Use Codex for implementation." },
+    });
+    fireEvent.change(within(secondStep).getByLabelText("Step 2 Runtime"), {
+      target: { value: "codex_cli" },
+    });
+    fireEvent.change(within(secondStep).getByLabelText("Step 2 Effort"), {
+      target: { value: "high" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({
+          method: "POST",
+        }),
+      );
+    });
+
+    const request = latestCreateRequest() as {
+      payload: {
+        requiredCapabilities?: string[];
+        task: { steps: Array<Record<string, unknown>> };
+      };
+    };
+    expect(request.payload.requiredCapabilities).toEqual([
+      "codex_cli",
+      "gemini_cli",
+      "git",
+      "gh",
+    ]);
+    expect(request.payload.task.steps[0]?.runtime).toEqual({
+      mode: "gemini_cli",
+      model: "gemini-step-model",
+    });
+    expect(request.payload.task.steps[1]?.runtime).toEqual({
+      mode: "codex_cli",
+      effort: "high",
+    });
+  });
+
   it("reveals per-step advanced skill options from the bottom toggle", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 

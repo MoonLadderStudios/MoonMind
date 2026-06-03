@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. tests/test_jira_story_planner.py (score: 1.000, trust: canonical)\n    line 1: from unittest.mock import patch\n2. api_service/scripts/ensure_codex_config.py (score: 1.000, trust: canonical)\n    line 15: from __future__ import annotations\n3. api_service/auth.py (score: 1.000, trust: canonical)\n    line 3: from typing import AsyncGenerator, Optional\n4. moonmind/utils/metrics.py (score: 1.000, trust: canonical)\n    line 3: from __future__ import annotations\n5. moonmind/utils/read_text_file.py (score: 1.000, trust: canonical)\n    line 3: from typing import Optional\n6. moonmind/utils/build_info.py (score: 1.000, trust: canonical)\n    line 3: from __future__ import annotations\n7. moonmind/utils/cli.py (score: 1.000, trust: canonical)\n    line 3: from __future__ import annotations\n8. moonmind/mcp/tool_registry.py (score: 1.000, trust: canonical)\n    line 7: from __future__ import annotations",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "tests/test_jira_story_planner.py",
+      "text": "line 1: from unittest.mock import patch",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/scripts/ensure_codex_config.py",
+      "text": "line 15: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 15,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/auth.py",
+      "text": "line 3: from typing import AsyncGenerator, Optional",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/utils/metrics.py",
+      "text": "line 3: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/utils/read_text_file.py",
+      "text": "line 3: from typing import Optional",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/utils/build_info.py",
+      "text": "line 3: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/utils/cli.py",
+      "text": "line 3: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/mcp/tool_registry.py",
+      "text": "line 7: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 7,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-06-03T01:05:22Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}

@@ -29,6 +29,8 @@ from api_service.api.routers.executions import (
     _recovery_not_available_reason,
     _reuse_original_task_input_snapshot_from_source,
     _task_input_snapshot_descriptor_from_record,
+    _normalize_task_steps,
+    _resolve_step_runtime_selections,
     get_temporal_client,
     _serialize_execution,
     router,
@@ -125,6 +127,40 @@ def _completed_attachment_artifact(
         size_bytes=size_bytes,
         created_by_principal=created_by_principal,
     )
+
+@pytest.mark.asyncio
+async def test_task_step_runtime_selection_is_normalized_and_resolved() -> None:
+    steps = _normalize_task_steps(
+        {
+            "steps": [
+                {
+                    "id": "review",
+                    "instructions": "Review with a step model.",
+                    "runtime": {
+                        "mode": "gemini_cli",
+                        "model": "gemini-step-model",
+                        "effort": "low",
+                    },
+                }
+            ]
+        }
+    )
+
+    await _resolve_step_runtime_selections(
+        steps=steps,
+        task_runtime={"mode": "codex_cli", "effort": "high"},
+        task_target_runtime="codex_cli",
+        task_profile_id=None,
+        session=None,
+    )
+
+    assert steps[0]["runtime"] == {
+        "mode": "gemini_cli",
+        "model": "gemini-step-model",
+        "effort": "low",
+        "requestedModel": "gemini-step-model",
+        "modelSource": "task_override",
+    }
 
 def _mm639_authored_task_payload() -> dict[str, Any]:
     return {
