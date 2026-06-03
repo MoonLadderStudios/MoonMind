@@ -120,6 +120,13 @@ export type TemporalSubmissionDraft = {
     skillId: string;
     skillArgs: Record<string, unknown>;
     skillRequiredCapabilities: string[];
+    runtime?: {
+      mode?: string;
+      model?: string;
+      effort?: string;
+      profileId?: string;
+      providerProfile?: string;
+    };
     templateStepId: string;
     templateInstructions: string;
     inputAttachments?: TemporalTaskInputAttachmentRef[];
@@ -519,6 +526,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     step.runtimeCommand,
     step.runtime_command,
   );
+  const runtime = firstObjectValue(step.runtime);
   const inputAttachments = normalizeAttachmentRefs(step.inputAttachments);
   const templateAttachments = attachmentRefsValue(
     step.templateAttachments,
@@ -541,6 +549,23 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
       tool.requiredCapabilities,
       skill.requiredCapabilities,
     ),
+    ...(Object.keys(runtime).length > 0
+      ? {
+          runtime: {
+            ...(stringValue(runtime.mode, runtime.targetRuntime)
+              ? { mode: stringValue(runtime.mode, runtime.targetRuntime) }
+              : {}),
+            ...(stringValue(runtime.model) ? { model: stringValue(runtime.model) } : {}),
+            ...(stringValue(runtime.effort) ? { effort: stringValue(runtime.effort) } : {}),
+            ...(stringValue(runtime.profileId)
+              ? { profileId: stringValue(runtime.profileId) }
+              : {}),
+            ...(stringValue(runtime.providerProfile)
+              ? { providerProfile: stringValue(runtime.providerProfile) }
+              : {}),
+          },
+        }
+      : {}),
     templateStepId,
     templateInstructions: stringValue(
       step.templateInstructions,
@@ -562,6 +587,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     result.skillId ||
     Object.keys(result.skillArgs).length > 0 ||
     result.skillRequiredCapabilities.length > 0 ||
+    Boolean(result.runtime && Object.keys(result.runtime).length > 0) ||
     result.templateStepId ||
     result.templateInstructions ||
     inputAttachments.length > 0 ||

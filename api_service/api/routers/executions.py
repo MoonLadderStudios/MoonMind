@@ -163,6 +163,16 @@ _DASHBOARD_STATUS_BY_STATE: dict[MoonMindWorkflowState, str] = {
     MoonMindWorkflowState.FAILED: "failed",
     MoonMindWorkflowState.CANCELED: "canceled",
 }
+_SUPPORTED_TASK_RUNTIMES = frozenset({
+    "codex_cli",
+    "gemini_cli",
+    "claude_code",
+    "codex_cloud",
+    "jules",
+    # Legacy aliases accepted and normalized below.
+    "codex",
+    "claude",
+})
 
 _MAX_TASK_TITLE_LENGTH = 150
 _MAX_TASK_SUMMARY_LENGTH = 180
@@ -4367,11 +4377,12 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
 
     normalized_steps: list[dict[str, Any]] = []
     forbidden = {
-        "runtime",
         "targetRuntime",
         "target_runtime",
         "model",
         "effort",
+        "providerProfile",
+        "profileId",
         "repository",
         "repo",
         "git",
@@ -4415,6 +4426,30 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
         )
         if normalized_input_attachments:
             normalized_step["inputAttachments"] = normalized_input_attachments
+
+        step_runtime = (
+            step_payload.get("runtime")
+            if isinstance(step_payload.get("runtime"), Mapping)
+            else None
+        )
+        if step_runtime:
+            normalized_runtime: dict[str, Any] = {}
+            for source_key, target_key in (
+                ("mode", "mode"),
+                ("targetRuntime", "mode"),
+                ("target_runtime", "mode"),
+                ("model", "model"),
+                ("effort", "effort"),
+                ("providerProfile", "providerProfile"),
+                ("profileId", "profileId"),
+                ("executionProfileRef", "executionProfileRef"),
+                ("execution_profile_ref", "executionProfileRef"),
+            ):
+                value = step_runtime.get(source_key)
+                if isinstance(value, str) and value.strip():
+                    normalized_runtime[target_key] = value.strip()
+            if normalized_runtime:
+                normalized_step["runtime"] = normalized_runtime
 
         raw_type = str(step_payload.get("type") or "").strip().lower()
         if raw_type:
@@ -4526,6 +4561,92 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
         normalized_steps.append(normalized_step)
 
     return normalized_steps
+
+async def _resolve_step_runtime_selections(
+    *,
+    steps: list[dict[str, Any]],
+    task_runtime: Mapping[str, Any] | None,
+    task_target_runtime: str | None,
+    task_profile_id: str | None,
+    session: Any,
+) -> None:
+    if not steps:
+        return
+    task_runtime = task_runtime or {}
+
+    for index, step in enumerate(steps):
+        runtime_payload = (
+            step.get("runtime") if isinstance(step.get("runtime"), Mapping) else {}
+        )
+        if not runtime_payload:
+            continue
+
+        raw_step_runtime = runtime_payload.get("mode") or task_target_runtime
+        canonical_step_runtime: str | None = None
+        if raw_step_runtime:
+            normalized_rt = normalize_runtime_id(raw_step_runtime)
+            if normalized_rt not in _SUPPORTED_TASK_RUNTIMES:
+                raise _invalid_task_request(
+                    f"Unsupported payload.task.steps[{index}].runtime.mode: "
+                    f"{raw_step_runtime!r}. Must be one of: codex_cli, "
+                    "gemini_cli, claude_code, codex_cloud, jules."
+                )
+            canonical_step_runtime = normalized_rt
+
+        raw_step_profile_id = str(
+            runtime_payload.get("profileId")
+            or runtime_payload.get("providerProfile")
+            or runtime_payload.get("executionProfileRef")
+            or ""
+        ).strip() or None
+        raw_requested_model: str | None = runtime_payload.get("model") or None
+        if raw_requested_model is not None:
+            raw_requested_model = str(raw_requested_model)
+
+        effective_profile_id = raw_step_profile_id or task_profile_id
+        provider_profile = None
+        if effective_profile_id and session is not None:
+            from api_service.db.models import ManagedAgentProviderProfile
+
+            provider_profile = await session.get(
+                ManagedAgentProviderProfile, effective_profile_id
+            )
+            if provider_profile is None and raw_step_profile_id:
+                raise _invalid_task_request(
+                    f"Provider profile not found for payload.task.steps[{index}]: "
+                    f"{raw_step_profile_id!r}."
+                )
+            if provider_profile is None and task_profile_id and not raw_step_profile_id:
+                raise _invalid_task_request(
+                    f"Provider profile not found for inherited task profile on "
+                    f"payload.task.steps[{index}]: {task_profile_id!r}."
+                )
+
+        resolved_model, model_source = resolve_effective_model(
+            runtime_id=canonical_step_runtime,
+            profile=provider_profile,
+            requested_model=raw_requested_model,
+            workflow_settings=settings.workflow,
+        )
+
+        resolved_runtime = dict(runtime_payload)
+        if canonical_step_runtime:
+            resolved_runtime["mode"] = canonical_step_runtime
+        if resolved_model:
+            resolved_runtime["model"] = resolved_model
+        if raw_requested_model is not None:
+            resolved_runtime["requestedModel"] = raw_requested_model
+        resolved_runtime["modelSource"] = model_source
+        if raw_step_profile_id:
+            resolved_runtime["profileId"] = raw_step_profile_id
+            resolved_runtime["providerProfile"] = raw_step_profile_id
+        elif task_profile_id and not raw_step_profile_id:
+            resolved_runtime.setdefault("inheritedProfileId", task_profile_id)
+        if "effort" not in resolved_runtime and isinstance(
+            task_runtime.get("effort"), str
+        ):
+            resolved_runtime["effort"] = task_runtime["effort"]
+        step["runtime"] = resolved_runtime
 
 
 def _task_template_seed_dir() -> Path:
@@ -5902,8 +6023,6 @@ async def _create_execution_from_task_request(
         normalized_task_for_planner["inputAttachments"] = objective_attachment_refs
     if runtime_payload:
         normalized_task_for_planner["runtime"] = dict(runtime_payload)
-    if normalized_steps:
-        normalized_task_for_planner["steps"] = normalized_steps
     task_title = str(task_payload.get("title") or "").strip()
     if task_title:
         normalized_task_for_planner["title"] = task_title
@@ -5973,12 +6092,6 @@ async def _create_execution_from_task_request(
         normalized_task_for_planner["title"] = derived_task_title
 
     # --- Model resolution ---
-    _SUPPORTED_TASK_RUNTIMES = frozenset({
-        "codex_cli", "gemini_cli", "claude_code", "codex_cloud", "jules",
-        # Legacy aliases accepted and normalized below.
-        "codex", "claude",
-    })
-
     raw_target_runtime = (
         payload.get("targetRuntime")
         or runtime_payload.get("mode")
@@ -6034,6 +6147,16 @@ async def _create_execution_from_task_request(
         requested_model=raw_requested_model,
         workflow_settings=settings.workflow,
     )
+
+    await _resolve_step_runtime_selections(
+        steps=normalized_steps,
+        task_runtime=runtime_payload,
+        task_target_runtime=canonical_target_runtime,
+        task_profile_id=raw_profile_id if _provider_profile is not None else None,
+        session=session,
+    )
+    if normalized_steps:
+        normalized_task_for_planner["steps"] = normalized_steps
 
     initial_parameters = {
         "requestType": request.type,
