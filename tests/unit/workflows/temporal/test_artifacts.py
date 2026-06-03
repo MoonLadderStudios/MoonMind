@@ -270,6 +270,32 @@ async def test_create_write_read_and_list_for_execution(tmp_path: Path) -> None:
             )
             assert [item.artifact_id for item in listed] == [artifact.artifact_id]
 
+async def test_create_rejects_model_provenance_metadata(tmp_path: Path) -> None:
+    """MM-790: Artifacts must not carry model/provider provenance in metadata."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+
+            with pytest.raises(
+                TemporalArtifactValidationError,
+                match="model/provider provenance",
+            ):
+                await service.create(
+                    principal="user-1",
+                    content_type="text/plain",
+                    metadata_json={
+                        "provenance": {
+                            "workflowId": "wf-1",
+                            "providerId": "openai",
+                        }
+                    },
+                )
+
 async def test_report_artifact_contract_accepts_supported_link_types() -> None:
     """MM-492: Report artifact link types should be explicit and stable."""
 

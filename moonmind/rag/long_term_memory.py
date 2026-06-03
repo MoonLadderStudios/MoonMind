@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping, MutableMapping, Protocol, Sequence
 
+from moonmind.core.artifacts import assert_model_agnostic_metadata
 from moonmind.rag.context_pack import ContextItem
 from moonmind.rag.settings import RagRuntimeSettings
 
@@ -191,6 +192,13 @@ class LongTermMemoryService:
         }
         if not normalized_provenance:
             raise LongTermMemoryError("provenance is required for long-term memory")
+        try:
+            assert_model_agnostic_metadata(
+                normalized_provenance,
+                field_name="memory provenance",
+            )
+        except ValueError as exc:
+            raise LongTermMemoryError(str(exc)) from exc
         return {
             "namespace_id": self._settings.memory_namespace_id,
             "repo": normalized_repo,

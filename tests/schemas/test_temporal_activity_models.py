@@ -8,7 +8,10 @@ from moonmind.schemas.temporal_activity_models import (
     ArtifactWriteCompleteInput,
     Base64Bytes,
 )
-from moonmind.schemas.temporal_artifact_models import ArtifactRefModel
+from moonmind.schemas.temporal_artifact_models import (
+    ArtifactRefModel,
+    CreateArtifactRequest,
+)
 
 class DummyModel(BaseModel):
     data: Base64Bytes
@@ -53,6 +56,51 @@ def test_artifact_read_input_accepts_model():
         principal="user1"
     )
     assert model.artifact_ref == ref
+
+def test_create_artifact_request_rejects_model_provenance_metadata():
+    with pytest.raises(ValidationError, match="model/provider provenance"):
+        CreateArtifactRequest.model_validate(
+            {
+                "content_type": "text/plain",
+                "metadata": {
+                    "provenance": {
+                        "workflowId": "wf-1",
+                        "modelName": "expensive-model",
+                    }
+                },
+            }
+        )
+
+    with pytest.raises(ValidationError, match="model/provider provenance"):
+        CreateArtifactRequest.model_validate(
+            {
+                "content_type": "text/plain",
+                "metadata": {
+                    "trace": [
+                        {
+                            "artifactRef": "art_1",
+                            "provider": "openai",
+                        }
+                    ]
+                },
+            }
+        )
+
+def test_create_artifact_request_allows_model_agnostic_evidence_metadata():
+    model = CreateArtifactRequest.model_validate(
+        {
+            "content_type": "text/plain",
+            "metadata": {
+                "provenance": {
+                    "workflowId": "wf-1",
+                    "artifactRefs": ["art_1"],
+                },
+                "artifactKind": "runtime_stdout",
+            },
+        }
+    )
+
+    assert model.metadata["provenance"]["workflowId"] == "wf-1"
 
 def test_artifact_write_complete_input():
     model = ArtifactWriteCompleteInput(

@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db import models as db_models
 from moonmind.config.settings import settings
+from moonmind.core.artifacts import assert_model_agnostic_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -1318,6 +1319,13 @@ class TemporalArtifactService:
         redaction_level: db_models.TemporalArtifactRedactionLevel = db_models.TemporalArtifactRedactionLevel.NONE,
     ) -> tuple[db_models.TemporalArtifact, ArtifactUploadDescriptor]:
         now = datetime.now(UTC)
+        try:
+            assert_model_agnostic_metadata(
+                metadata_json,
+                field_name="artifact metadata",
+            )
+        except ValueError as exc:
+            raise TemporalArtifactValidationError(str(exc)) from exc
         _assert_not_reserved_input_attachment_metadata(metadata_json)
         declared_size: int | None = None
         if size_bytes is not None:

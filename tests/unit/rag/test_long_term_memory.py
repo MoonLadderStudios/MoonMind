@@ -124,6 +124,17 @@ def test_add_or_update_requires_provenance_metadata() -> None:
         )
 
 
+def test_add_or_update_rejects_model_provenance_metadata() -> None:
+    service = LongTermMemoryService(settings=_settings(), client=_Mem0Stub())
+
+    with pytest.raises(LongTermMemoryError, match="model/provider provenance"):
+        service.add_or_update(
+            text="Stable convention.",
+            repo="MoonLadderStudios/MoonMind",
+            provenance={"workflowId": "wf-1", "modelName": "expensive-model"},
+        )
+
+
 def test_add_or_update_sends_required_mem0_metadata() -> None:
     client = _Mem0Stub()
     service = LongTermMemoryService(settings=_settings(), client=client)
