@@ -44,6 +44,8 @@ LOCAL_ONLY_EXECUTION_FIELDS = (
     "create_idempotency_key",
     "last_update_idempotency_key",
     "last_update_response",
+    "finish_outcome_code",
+    "finish_summary_json",
 )
 
 # Lifecycle states where the workflow has not yet begun real work. When a
@@ -75,6 +77,26 @@ def _sanitize_for_json(obj: Any) -> Any:
     if isinstance(obj, (list, tuple)):
         return [_sanitize_for_json(item) for item in obj]
     return obj
+
+def _finish_summary_from_memo(memo: dict[str, Any]) -> dict[str, Any] | None:
+    finish_summary = memo.get("finishSummary") or memo.get("finish_summary")
+    if isinstance(finish_summary, dict):
+        sanitized = _sanitize_for_json(dict(finish_summary))
+        return sanitized if isinstance(sanitized, dict) else None
+    return None
+
+def _finish_outcome_code_from_summary(
+    finish_summary: dict[str, Any] | None,
+) -> str | None:
+    if not isinstance(finish_summary, dict):
+        return None
+    finish_outcome = finish_summary.get("finishOutcome") or finish_summary.get(
+        "finish_outcome"
+    )
+    if not isinstance(finish_outcome, dict):
+        return None
+    code = str(finish_outcome.get("code") or "").strip()
+    return code or None
 
 def _coerce_temporal_scalar(value: Any) -> str | None:
     if isinstance(value, list):
@@ -287,6 +309,7 @@ async def map_temporal_state_to_projection(
             if started_at is not None and started_at < scheduled_for:
                 started_at = scheduled_for
     sanitized_memo = _sanitize_for_json(dict(memo))
+    finish_summary = _finish_summary_from_memo(sanitized_memo)
     return {
         "workflow_id": desc.id,
         "run_id": desc.run_id,
@@ -300,6 +323,8 @@ async def map_temporal_state_to_projection(
         "search_attributes": _sanitize_for_json(search_attributes),
         "memo": sanitized_memo,
         "artifact_refs": artifact_refs,
+        "finish_outcome_code": _finish_outcome_code_from_summary(finish_summary),
+        "finish_summary_json": finish_summary,
         "input_ref": memo.get("input_ref"),
         "plan_ref": memo.get("plan_ref"),
         "manifest_ref": memo.get("manifest_ref"),

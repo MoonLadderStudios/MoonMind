@@ -2088,6 +2088,8 @@ class ExecutionModel(BaseModel):
     proposal_outcomes: list[dict[str, Any]] = Field(
         default_factory=list, alias="proposalOutcomes"
     )
+    finish_outcome_code: str | None = Field(None, alias="finishOutcomeCode")
+    finish_summary: dict[str, Any] | None = Field(None, alias="finishSummary")
     debug_fields: Optional[ExecutionDebugFieldsModel] = Field(None, alias="debugFields")
     redirect_path: Optional[str] = Field(None, alias="redirectPath")
     manifest_artifact_ref: Optional[str] = Field(None, alias="manifestArtifactRef")

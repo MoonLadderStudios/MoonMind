@@ -602,6 +602,14 @@ async def test_record_terminal_state_uses_canonical_activity_boundary(monkeypatc
         "execute_typed_activity",
         fake_execute_typed_activity,
     )
+    workflow_instance._finish_summary = {
+        "schemaVersion": "v1",
+        "finishOutcome": {
+            "code": "PUBLISH_DISABLED",
+            "stage": "publish",
+            "reason": "publishing disabled",
+        },
+    }
 
     await workflow_instance._record_terminal_state(
         state="completed",
@@ -615,8 +623,75 @@ async def test_record_terminal_state_uses_canonical_activity_boundary(monkeypatc
         "state": "completed",
         "closeStatus": "completed",
         "summary": "Workflow completed successfully",
+        "finishOutcomeCode": "PUBLISH_DISABLED",
+        "finishOutcomeStage": "publish",
+        "finishOutcomeReason": "publishing disabled",
+        "finishSummary": {
+            "schemaVersion": "v1",
+            "finishOutcome": {
+                "code": "PUBLISH_DISABLED",
+                "stage": "publish",
+                "reason": "publishing disabled",
+            },
+        },
         "errorCategory": None,
     }
+    assert captured["kwargs"]["task_queue"] == ARTIFACTS_TASK_QUEUE
+    assert captured["kwargs"]["cancellation_type"] == ActivityCancellationType.ABANDON
+
+
+@pytest.mark.asyncio
+async def test_record_terminal_state_supports_snake_case_finish_outcome(monkeypatch):
+    workflow_instance = MoonMindRunWorkflow()
+    captured = {}
+
+    async def fake_execute_typed_activity(activity_type, payload, **kwargs):
+        captured["activity_type"] = activity_type
+        captured["payload"] = payload.model_dump(by_alias=True)
+        captured["kwargs"] = kwargs
+        return {
+            "workflowId": "wf-terminal-snake",
+            "state": "completed",
+            "closeStatus": "completed",
+        }
+
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": "wf-terminal-snake",
+            "run_id": "run-terminal-snake",
+            "search_attributes": {},
+        },
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: workflow_info())
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(
+        run_workflow_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+    workflow_instance._finish_summary = {
+        "schema_version": "v1",
+        "finish_outcome": {
+            "code": "PUBLISH_DISABLED",
+            "stage": "publish",
+            "reason": "publishing disabled",
+        },
+    }
+
+    await workflow_instance._record_terminal_state(
+        state="completed",
+        close_status="completed",
+        summary="Workflow completed successfully",
+    )
+
+    assert captured["activity_type"] == "execution.record_terminal_state"
+    assert captured["payload"]["finishOutcomeCode"] == "PUBLISH_DISABLED"
+    assert captured["payload"]["finishOutcomeStage"] == "publish"
+    assert captured["payload"]["finishOutcomeReason"] == "publishing disabled"
+    assert captured["payload"]["finishSummary"] == workflow_instance._finish_summary
     assert captured["kwargs"]["task_queue"] == ARTIFACTS_TASK_QUEUE
     assert captured["kwargs"]["cancellation_type"] == ActivityCancellationType.ABANDON
 
