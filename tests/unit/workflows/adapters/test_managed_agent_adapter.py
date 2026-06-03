@@ -1110,7 +1110,13 @@ async def test_provider_profile_list_preserves_path_aware_codex_materialization_
                     home_path_overrides={
                         "CODEX_HOME": "{{runtime_support_dir}}/codex-home"
                     },
-                    command_behavior={"suppress_default_model_flag": True},
+                    command_behavior={
+                        "suppress_default_model_flag": True,
+                        "billing": {
+                            "inputPerMillionUsd": 0.2,
+                            "outputPerMillionUsd": 0.8,
+                        },
+                    },
                     max_parallel_runs=4,
                     cooldown_after_429_seconds=300,
                     rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
@@ -1154,7 +1160,15 @@ async def test_provider_profile_list_preserves_path_aware_codex_materialization_
             "CODEX_HOME": "{{runtime_support_dir}}/codex-home"
         }
         assert profiles[0]["command_behavior"] == {
-            "suppress_default_model_flag": True
+            "suppress_default_model_flag": True,
+            "billing": {
+                "inputPerMillionUsd": 0.2,
+                "outputPerMillionUsd": 0.8,
+            },
+        }
+        assert profiles[0]["billing"] == {
+            "inputPerMillionUsd": 0.2,
+            "outputPerMillionUsd": 0.8,
         }
 
 # ---------------------------------------------------------------------------

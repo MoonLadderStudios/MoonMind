@@ -36,6 +36,8 @@ class Usage(BaseModel):
     prompt_tokens: Optional[int] = None  # Made fields optional as per original
     completion_tokens: Optional[int] = None
     total_tokens: Optional[int] = None  # Made field optional
+    cost_estimate_usd: Optional[float] = None
+    pricing_source: Optional[str] = None
 
 class ChatCompletionResponse(BaseModel):
     id: str = "cmpl-xxxxxxxxxxxxxxxxxxxxxxx"
@@ -110,6 +112,8 @@ class ResponseUsage(BaseModel):
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     total_tokens: Optional[int] = None
+    cost_estimate_usd: Optional[float] = None
+    pricing_source: Optional[str] = None
 
 class ResponseCreateResponse(BaseModel):
     id: str

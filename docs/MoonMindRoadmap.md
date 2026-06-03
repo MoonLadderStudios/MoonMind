@@ -249,7 +249,7 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 
 ### Remaining tasks
 - [x] **10.1** Per-step model/runtime selection in multi-step flows — Authored task steps can independently select runtime/model settings
-- [ ] **10.2** Cost tracking / billing-aware routing — No cost instrumentation
+- [x] **10.2** Cost tracking / billing-aware routing — MM-788 adds token cost estimates, cost telemetry, and profile pricing-aware selection
 - [ ] **10.3** Model comparison mode (same task, different models) — README promises this; no implementation
 - [ ] **10.4** Artifact/memory portability across model switches — Artifacts are model-agnostic; memory doesn't track model provenance
 

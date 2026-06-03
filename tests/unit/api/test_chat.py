@@ -247,6 +247,8 @@ def test_chat_completions_openai_via_cache(
     json_response = response.json()
     # Assertions need to align with mock_openai_chat_response structure (which should mimic new SDK)
     assert json_response["model"] == mock_openai_chat_response.model
+    assert json_response["usage"]["cost_estimate_usd"] == 0.000045
+    assert json_response["usage"]["pricing_source"] == "built_in"
     assert (
         json_response["choices"][0]["message"]["content"]
         == mock_openai_chat_response.choices[0].message.content
@@ -327,6 +329,8 @@ def test_chat_completions_google_via_cache(
     assert response.status_code == 200
     json_response = response.json()
     assert json_response["model"] == chat_request_google_model.model
+    assert json_response["usage"]["cost_estimate_usd"] is not None
+    assert json_response["usage"]["pricing_source"] == "built_in"
     assert (
         json_response["choices"][0]["message"]["content"]
         == mock_google_chat_response.candidates[0].content.parts[0].text.strip()

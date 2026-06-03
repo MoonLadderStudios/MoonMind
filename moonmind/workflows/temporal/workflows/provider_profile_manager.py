@@ -24,6 +24,7 @@ from temporalio import exceptions, workflow
 
 with workflow.unsafe.imports_passed_through():
     from temporalio.common import RetryPolicy
+    from moonmind.billing.costs import pricing_from_profile_metadata
 
 WORKFLOW_NAME = "MoonMind.ProviderProfileManager"
 WORKFLOW_TASK_QUEUE = "mm.workflow"
@@ -42,6 +43,9 @@ DB_AUTHORITATIVE_PROFILE_SYNC_PATCH = (
 VERIFY_PENDING_REQUESTS_PATCH = "provider-profile-manager-verify-pending-requests-v1"
 DEFAULT_PROFILE_EXCLUSIVE_SELECTION_PATCH = (
     "provider-profile-manager-default-profile-exclusive-selection-v1"
+)
+BILLING_AWARE_PROFILE_SELECTION_PATCH = (
+    "provider-profile-manager-billing-aware-selection-v1"
 )
 
 # Continue-as-new threshold to bound history growth.
@@ -133,6 +137,9 @@ class ProfileSlotState:
     tags: list[str] = field(default_factory=list)
     priority: int = 100
     runtime_materialization_mode: Optional[str] = None
+    input_per_million_usd: Optional[float] = None
+    output_per_million_usd: Optional[float] = None
+    pricing_source: Optional[str] = None
 
     @property
     def available_slots(self) -> int:
@@ -201,7 +208,16 @@ class ProfileSlotState:
             "tags": list(self.tags),
             "priority": self.priority,
             "runtime_materialization_mode": self.runtime_materialization_mode,
+            "input_per_million_usd": self.input_per_million_usd,
+            "output_per_million_usd": self.output_per_million_usd,
+            "pricing_source": self.pricing_source,
         }
+
+    @property
+    def blended_per_million_usd(self) -> Optional[float]:
+        if self.input_per_million_usd is None or self.output_per_million_usd is None:
+            return None
+        return self.input_per_million_usd + self.output_per_million_usd
 
 @dataclass
 class PendingRequest:
@@ -581,6 +597,9 @@ class MoonMindProviderProfileManagerWorkflow:
                 tags=p.get("tags") or [],
                 priority=p.get("priority", 100),
                 runtime_materialization_mode=p.get("runtime_materialization_mode"),
+                input_per_million_usd=p.get("input_per_million_usd"),
+                output_per_million_usd=p.get("output_per_million_usd"),
+                pricing_source=p.get("pricing_source"),
             )
             self._profiles[pid] = state
 
@@ -613,7 +632,9 @@ class MoonMindProviderProfileManagerWorkflow:
                 existing.runtime_materialization_mode = p.get(
                     "runtime_materialization_mode", existing.runtime_materialization_mode
                 )
+                self._apply_profile_pricing(existing, p)
             else:
+                pricing = pricing_from_profile_metadata(p)
                 self._profiles[pid] = ProfileSlotState(
                     profile_id=pid,
                     max_parallel_runs=p.get("max_parallel_runs", 1),
@@ -630,6 +651,13 @@ class MoonMindProviderProfileManagerWorkflow:
                     tags=p.get("tags") or [],
                     priority=p.get("priority", 100),
                     runtime_materialization_mode=p.get("runtime_materialization_mode"),
+                    input_per_million_usd=(
+                        pricing.input_per_million_usd if pricing else None
+                    ),
+                    output_per_million_usd=(
+                        pricing.output_per_million_usd if pricing else None
+                    ),
+                    pricing_source=pricing.source if pricing else None,
                 )
 
         # Disable profiles that were removed from DB (but don't drop leases).
@@ -643,6 +671,21 @@ class MoonMindProviderProfileManagerWorkflow:
         for pid, profile in list(self._profiles.items()):
             if not profile.enabled and not profile.current_leases:
                 self._profiles.pop(pid, None)
+
+    @staticmethod
+    def _apply_profile_pricing(
+        profile: ProfileSlotState,
+        payload: dict[str, Any],
+    ) -> None:
+        pricing = pricing_from_profile_metadata(payload)
+        if pricing is None:
+            profile.input_per_million_usd = None
+            profile.output_per_million_usd = None
+            profile.pricing_source = None
+            return
+        profile.input_per_million_usd = pricing.input_per_million_usd
+        profile.output_per_million_usd = pricing.output_per_million_usd
+        profile.pricing_source = pricing.source
 
     @staticmethod
     def _normalize_optional_string(value: object) -> str | None:
@@ -869,10 +912,7 @@ class MoonMindProviderProfileManagerWorkflow:
                     return None
                 elif len(eligible_profiles) == 1:
                     return eligible_profiles[0]
-                eligible_profiles.sort(
-                    key=lambda p: (p.priority, p.available_slots),
-                    reverse=True,
-                )
+                self._sort_profiles_for_selection(eligible_profiles)
                 return eligible_profiles[0]
             if len(default_profiles) == 1:
                 return default_profiles[0]
@@ -888,9 +928,28 @@ class MoonMindProviderProfileManagerWorkflow:
                 return eligible_profiles[0]
             return None
 
-        # Sort descending by priority, then by available slots
-        eligible_profiles.sort(key=lambda p: (p.priority, p.available_slots), reverse=True)
+        self._sort_profiles_for_selection(eligible_profiles)
         return eligible_profiles[0]
+
+    @staticmethod
+    def _billing_sort_key(profile: ProfileSlotState) -> tuple[int, float, int, int]:
+        blended_price = profile.blended_per_million_usd
+        has_price = 0 if blended_price is not None else 1
+        price = blended_price if blended_price is not None else float("inf")
+        return (has_price, price, -profile.priority, -profile.available_slots)
+
+    @staticmethod
+    def _workflow_patch_enabled(patch_id: str) -> bool:
+        try:
+            return workflow.patched(patch_id)
+        except Exception:
+            return False
+
+    def _sort_profiles_for_selection(self, profiles: list[ProfileSlotState]) -> None:
+        if self._workflow_patch_enabled(BILLING_AWARE_PROFILE_SELECTION_PATCH):
+            profiles.sort(key=self._billing_sort_key)
+            return
+        profiles.sort(key=lambda p: (p.priority, p.available_slots), reverse=True)
 
     async def _signal_slot_assigned(
         self, requester_workflow_id: str, profile_id: str
@@ -1097,6 +1156,9 @@ class MoonMindProviderProfileManagerWorkflow:
                     "tags": list(state.tags),
                     "priority": state.priority,
                     "runtime_materialization_mode": state.runtime_materialization_mode,
+                    "input_per_million_usd": state.input_per_million_usd,
+                    "output_per_million_usd": state.output_per_million_usd,
+                    "pricing_source": state.pricing_source,
                 }
             )
             if state.current_leases:
