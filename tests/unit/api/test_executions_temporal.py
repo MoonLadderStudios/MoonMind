@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -241,6 +242,94 @@ def test_list_executions_source_temporal_scope_all_fails_safe_to_task_query(
         )
         mock_client.count_workflows.assert_awaited_once_with(query=expected_query)
         assert mock_client.list_workflows.call_args.kwargs["query"] == expected_query
+
+
+def test_execution_metrics_source_temporal_returns_operational_aggregates(
+    client,
+) -> None:
+    test_client, _service, _user, mock_session = client
+
+    executions_module.get_temporal_client_adapter.cache_clear()
+
+    mock_result = MagicMock()
+    mock_scalars = MagicMock()
+    mock_scalars.all.return_value = []
+    mock_result.scalars.return_value = mock_scalars
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    with patch(
+        "api_service.api.routers.executions.TemporalClientAdapter"
+    ) as mock_adapter_cls:
+        mock_adapter = mock_adapter_cls.return_value
+        mock_client = AsyncMock()
+        mock_adapter.get_client = AsyncMock(return_value=mock_client)
+
+        started = datetime(2026, 6, 3, 10, 0, tzinfo=UTC)
+
+        def _workflow(
+            workflow_id: str,
+            *,
+            duration_seconds: int,
+            cost: float,
+        ) -> SimpleNamespace:
+            async def _memo() -> dict[str, object]:
+                return {"costEstimateUsd": cost}
+
+            return SimpleNamespace(
+                id=workflow_id,
+                run_id=f"run-{workflow_id}",
+                namespace="moonmind",
+                workflow_type="MoonMind.Run",
+                status=2,
+                memo=_memo,
+                search_attributes={
+                    "mm_entry": b'["user_workflow"]',
+                    "mm_owner_id": b'["user-123"]',
+                },
+                start_time=started,
+                execution_time=started,
+                close_time=started + timedelta(seconds=duration_seconds),
+            )
+
+        mock_iterator = AsyncMock()
+        mock_iterator.current_page = [
+            _workflow("mm:wf-1", duration_seconds=3600, cost=1.25),
+            _workflow("mm:wf-2", duration_seconds=7200, cost=2.75),
+        ]
+        mock_iterator.next_page_token = None
+        mock_client.list_workflows = MagicMock(return_value=mock_iterator)
+        mock_client.count_workflows = AsyncMock(
+            side_effect=[
+                SimpleNamespace(count=4),
+                SimpleNamespace(count=2),
+                SimpleNamespace(count=1),
+                SimpleNamespace(count=1),
+            ]
+        )
+
+        response = test_client.get(
+            "/api/executions/metrics",
+            params={"source": "temporal", "repoExact": "MoonLadderStudios/MoonMind"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["totalRuns"] == 4
+    assert body["completedRuns"] == 2
+    assert body["failedRuns"] == 1
+    assert body["canceledRuns"] == 1
+    assert body["terminalRuns"] == 4
+    assert body["successRate"] == 0.5
+    assert body["duration"]["averageSeconds"] == 5400
+    assert body["duration"]["medianSeconds"] == 5400
+    assert body["duration"]["observedCount"] == 2
+    assert body["cost"]["totalEstimateUsd"] == 4
+    assert body["cost"]["averageEstimateUsd"] == 2
+    assert body["cost"]["observedCount"] == 2
+    assert body["sampleSize"] == 2
+    assert mock_client.count_workflows.await_count == 4
+    assert mock_client.list_workflows.call_args.kwargs["page_size"] == 200
+    assert 'mm_repo="MoonLadderStudios/MoonMind"' in mock_client.list_workflows.call_args.kwargs["query"]
 
 
 def test_list_executions_source_temporal_ignores_workflow_kind_filters_for_task_list(
