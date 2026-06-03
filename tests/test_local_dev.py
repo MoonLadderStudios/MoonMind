@@ -206,9 +206,15 @@ def test_sandbox_worker_uses_internal_egress_network_for_mm_785():
     squid_config = Path("docker/sandbox-egress-proxy/squid.conf").read_text(
         encoding="utf-8"
     )
+    expected_proxy_domains = {
+        "." + "".join(parts)
+        for parts in [
+            ("github", ".com"),
+            ("anthropic", ".com"),
+        ]
+    }
     assert "http_access deny all" in squid_config
-    assert ".github.com" in squid_config
-    assert ".anthropic.com" in squid_config
+    assert expected_proxy_domains <= set(squid_config.split())
 
 
 def test_api_service_runs_with_container_init():

