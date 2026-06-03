@@ -166,6 +166,25 @@ async def mock_skill_execute(args: Dict[str, Any]) -> Dict[str, Any]:
     return {"status": "COMPLETED", "outputs": {}}
 
 @activity.defn(name="mm.skill.execute")
+async def mock_skill_execute_with_telemetry(args: Dict[str, Any]) -> Dict[str, Any]:
+    SKILL_EXECUTE_CALLS.append(args)
+    if "idempotency_key" in args:
+        context = args.get("context", {})
+        workflow_id = context.get("workflow_id")
+        node_id = context.get("node_id")
+        if workflow_id and node_id:
+            assert args["idempotency_key"] == f"{workflow_id}_{node_id}_execute"
+        else:
+            assert "_execute" in args["idempotency_key"]
+    return {
+        "status": "COMPLETED",
+        "outputs": {
+            "summary": "Retried a flaky test and wrote diagnostics for review.",
+            "diagnostics_ref": "artifact://diag-mm-794",
+        },
+    }
+
+@activity.defn(name="mm.skill.execute")
 async def mock_skill_execute_failed(args: Dict[str, Any]) -> Dict[str, Any]:
     SKILL_EXECUTE_CALLS.append(args)
     return {
@@ -604,7 +623,10 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                     Worker(
                         env.client,
                         task_queue=SANDBOX_TASK_QUEUE,
-                        activities=[mock_sandbox_command, mock_skill_execute],
+                        activities=[
+                            mock_sandbox_command,
+                            mock_skill_execute_with_telemetry,
+                        ],
                     ),
                     Worker(
                         env.client,
@@ -635,6 +657,32 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
 
                 self.assertEqual(result["status"], "success")
                 self.assertEqual(len(PROPOSAL_GENERATE_CALLS), 1)
+                self.assertEqual(
+                    PROPOSAL_GENERATE_CALLS[0].get("telemetrySignals"),
+                    [
+                        {
+                            "type": "flaky_test",
+                            "tags": ["flaky_test"],
+                            "severity": "medium",
+                            "summary": "Retried a flaky test and wrote diagnostics for review.",
+                            "diagnostics_ref": "artifact://diag-mm-794",
+                        },
+                        {
+                            "type": "retry",
+                            "tags": ["retry"],
+                            "severity": "medium",
+                            "summary": "Retried a flaky test and wrote diagnostics for review.",
+                            "diagnostics_ref": "artifact://diag-mm-794",
+                        },
+                        {
+                            "type": "artifact_gap",
+                            "tags": ["artifact_gap"],
+                            "severity": "medium",
+                            "summary": "Retried a flaky test and wrote diagnostics for review.",
+                            "diagnostics_ref": "artifact://diag-mm-794",
+                        },
+                    ],
+                )
                 self.assertEqual(len(PROPOSAL_SUBMIT_CALLS), 1)
                 self.assertEqual(result.get("proposals_generated"), 1)
                 self.assertEqual(result.get("proposals_submitted"), 1)

@@ -11982,8 +11982,8 @@ class CodexWorker:
                 origin["id"] = str(job.id)
             metadata = origin.get("metadata")
             metadata_dict = metadata if isinstance(metadata, Mapping) else {}
-            metadata_dict.setdefault("triggerRepo", project_repository)
-            metadata_dict.setdefault("triggerJobId", str(job.id))
+            metadata_dict.setdefault("trigger_repo", project_repository)
+            metadata_dict.setdefault("trigger_job_id", str(job.id))
             metadata_dict.setdefault("startingBranch", prepared.starting_branch)
             metadata_dict.setdefault("workingBranch", prepared.working_branch)
             if prepared.new_branch and "targetBranch" not in metadata_dict:
