@@ -145,6 +145,18 @@ _MOONMIND_SIGNAL_TAGS = frozenset(
 _FIX_PROPOSAL_SKILL_ID = "fix-proposal"
 _CONTINUATION_PROPOSAL_SKILL_ID = "continuation-proposal"
 _PR_RESOLVER_SKILL_ID = "pr-resolver"
+_RUN_QUALITY_LOOP_PATTERN = re.compile(
+    r"\b(?:loop(?:ing|ed)?|stuck|no progress|repeated output|duplicate output)\b",
+    re.IGNORECASE,
+)
+_RUN_QUALITY_FLAKY_TEST_PATTERN = re.compile(
+    r"\b(?:flaky tests?|test flake|intermittent test|passed on retry|rerun passed)\b",
+    re.IGNORECASE,
+)
+_RUN_QUALITY_RETRY_PATTERN = re.compile(
+    r"\b(?:retry|retries|retried|attempt\s+\d+\s+of\s+\d+)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -445,6 +457,19 @@ def _append_tag_slug(title: str, tags: Sequence[str]) -> str:
     if marker in title:
         return title
     return f"{title} (tags: {slug_text})"
+
+
+def _readable_signal_phrase(tags: Sequence[str]) -> str:
+    """Return a compact human phrase for deterministic run-quality tags."""
+
+    if "loop_detected" in tags:
+        return "execution loop or no-progress behavior"
+    if "flaky_test" in tags:
+        return "flaky test behavior"
+    if "retry" in tags:
+        return "repeated retry behavior"
+    return "run-quality signal"
+
 
 class QueueClientError(RuntimeError):
     """Raised when queue API requests fail."""
@@ -8777,6 +8802,154 @@ class CodexWorker:
 
         return artifacts
 
+    def _build_improvement_signal_proposals(
+        self,
+        *,
+        job: ClaimedJob,
+        canonical_payload: Mapping[str, Any],
+        task_result: WorkerExecutionResult,
+    ) -> list[dict[str, Any]]:
+        """Build deterministic run-quality proposals from normalized telemetry."""
+
+        reason = (
+            dict(task_result.run_quality_reason)
+            if isinstance(task_result.run_quality_reason, Mapping)
+            else {}
+        )
+        reason_text = " ".join(
+            str(part or "")
+            for part in (
+                task_result.summary,
+                task_result.error_message,
+                reason.get("category"),
+                reason.get("code"),
+                reason.get("summary"),
+                reason.get("details"),
+            )
+        )
+        tags = _normalize_proposal_tags(reason.get("tags"))
+        signal_tags: list[str] = [
+            tag for tag in tags if tag in _MOONMIND_SIGNAL_TAGS
+        ]
+
+        details = reason.get("details")
+        details_map = details if isinstance(details, Mapping) else {}
+        failure_class = str(details_map.get("failureClass") or "").strip().lower()
+        reason_category = str(reason.get("category") or "").strip().lower()
+        reason_code = str(reason.get("code") or "").strip().lower()
+
+        if job.attempt > 1 or _RUN_QUALITY_RETRY_PATTERN.search(reason_text):
+            signal_tags.append("retry")
+        if (
+            _RUN_QUALITY_LOOP_PATTERN.search(reason_text)
+            or failure_class in {"stuck_no_progress", "stuck", "no_progress"}
+        ):
+            signal_tags.append("loop_detected")
+        if _RUN_QUALITY_FLAKY_TEST_PATTERN.search(reason_text):
+            signal_tags.append("flaky_test")
+        if reason_category == "self_heal" or reason_code == "step_retryable_exhausted":
+            signal_tags.append("retry")
+
+        signal_tags = [
+            tag
+            for tag in _normalize_proposal_tags(signal_tags)
+            if tag in _MOONMIND_SIGNAL_TAGS
+        ]
+        if not signal_tags:
+            return []
+
+        severity = "medium"
+        if "loop_detected" in signal_tags or (
+            job.max_attempts > 1 and job.attempt >= job.max_attempts
+        ):
+            severity = "high"
+        phrase = _readable_signal_phrase(signal_tags)
+        evidence_source = (
+            reason.get("summary")
+            or task_result.error_message
+            or task_result.summary
+            or phrase
+        )
+        evidence = self._redact_text(
+            str(evidence_source)
+        )[:500]
+        instructions = (
+            "MM-793 follow-up: investigate and harden MoonMind improvement-signal "
+            f"capture for {phrase}. Use the source run evidence, add regression "
+            "coverage, and keep the fix scoped to deterministic signal capture."
+        )
+        request = self._build_proposal_task_request_template(canonical_payload)
+        request_payload = request.get("payload")
+        payload = request_payload if isinstance(request_payload, dict) else {}
+        task_node = payload.get("task")
+        task = task_node if isinstance(task_node, dict) else {}
+        task["instructions"] = instructions
+        publish_node = task.get("publish")
+        publish = publish_node if isinstance(publish_node, dict) else {}
+        publish["commitMessage"] = "MM-793 Capture improvement signals"
+        publish["prTitle"] = "MM-793 Capture improvement signals"
+        task["publish"] = publish
+        payload["task"] = task
+        request["payload"] = payload
+
+        return [
+            {
+                "title": f"[run_quality] MM-793 Capture {phrase}",
+                "summary": (
+                    "Deterministic improvement signal captured from run telemetry: "
+                    f"{evidence or phrase}"
+                ),
+                "category": "run_quality",
+                "tags": signal_tags,
+                "signal": {
+                    "severity": severity,
+                    "evidence": evidence or phrase,
+                    "source": "codex_worker",
+                    "jobAttempt": job.attempt,
+                    "jobMaxAttempts": job.max_attempts,
+                    "reasonCode": reason.get("code"),
+                },
+                "taskCreateRequest": request,
+            }
+        ]
+
+    @staticmethod
+    def _write_task_proposal_seed(
+        *,
+        proposals_path: Path,
+        candidates: Sequence[Mapping[str, Any]],
+    ) -> str:
+        """Write deterministic proposal candidates and return the serialized text."""
+
+        proposal_text = json.dumps(list(candidates), indent=2, sort_keys=True) + "\n"
+        proposals_path.parent.mkdir(parents=True, exist_ok=True)
+        proposals_path.write_text(proposal_text, encoding="utf-8")
+        return proposal_text
+
+    def _proposal_artifact_for_seed(
+        self,
+        *,
+        prepared: PreparedTaskWorkspace,
+        candidates: Sequence[Mapping[str, Any]],
+    ) -> list[ArtifactUpload]:
+        """Persist deterministic proposal candidates as a proposal artifact."""
+
+        if not candidates:
+            return []
+        proposal_output_path = prepared.artifacts_dir / "task_proposals.json"
+        self._write_task_proposal_seed(
+            proposals_path=proposal_output_path,
+            candidates=candidates,
+        )
+        return [
+            ArtifactUpload(
+                path=proposal_output_path,
+                name="task_proposals.json",
+                content_type="application/json",
+                required=False,
+            )
+        ]
+
     async def _run_post_task_proposal_skills(
         self,
         *,
@@ -8791,6 +8964,11 @@ class CodexWorker:
     ) -> list[ArtifactUpload]:
         """Execute post-run proposal skills and collect generated artifacts."""
 
+        deterministic_candidates = self._build_improvement_signal_proposals(
+            job=job,
+            canonical_payload=canonical_payload,
+            task_result=task_result,
+        )
         hook_skill_ids = self._proposal_hook_skill_ids(
             include_continuation=task_result.succeeded
         )
@@ -8812,7 +8990,10 @@ class CodexWorker:
                     payload={"skills": skipped_skills},
                 )
         if not hook_skill_ids:
-            return []
+            return self._proposal_artifact_for_seed(
+                prepared=prepared,
+                candidates=deterministic_candidates,
+            )
         if not self._ensure_post_task_proposal_skills_materialized(
             job_id=job.id,
             prepared=prepared,
@@ -8825,15 +9006,23 @@ class CodexWorker:
                 message="task.proposalSkill.materializationFailed",
                 payload={"skills": list(hook_skill_ids)},
             )
-            return []
+            return self._proposal_artifact_for_seed(
+                prepared=prepared,
+                candidates=deterministic_candidates,
+            )
 
         proposal_output_path = prepared.artifacts_dir / "task_proposals.json"
-        proposal_output_path.write_text("[]\n", encoding="utf-8")
+        self._write_task_proposal_seed(
+            proposals_path=proposal_output_path,
+            candidates=deterministic_candidates,
+        )
         proposal_output_path_for_skill = (
             prepared.repo_dir / ".artifacts" / f"moonmind_task_proposals_{job.id}.json"
         )
-        proposal_output_path_for_skill.parent.mkdir(parents=True, exist_ok=True)
-        proposal_output_path_for_skill.write_text("[]\n", encoding="utf-8")
+        self._write_task_proposal_seed(
+            proposals_path=proposal_output_path_for_skill,
+            candidates=deterministic_candidates,
+        )
         initial_proposal_output_for_skill = proposal_output_path_for_skill.read_text(
             encoding="utf-8"
         )
