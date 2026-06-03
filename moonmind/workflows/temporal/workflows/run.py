@@ -76,6 +76,7 @@ with workflow.unsafe.imports_passed_through():
     )
 
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
+from moonmind.workflows.skills.tool_registry import ToolRegistrySnapshot, parse_tool_registry
 from moonmind.workflows.skills.approval_policy import (
     ReviewRequest,
     build_feedback_input,
@@ -3653,7 +3654,7 @@ class MoonMindRunWorkflow:
         skill_payload = self._mapping_value(task_payload, "skill") or {}
         tool_type = str(
             tool_payload.get("type") or tool_payload.get("kind") or ""
-        ).strip()
+        ).strip().lower()
         if tool_type in {"", "skill"}:
             tool_name = (
                 self._coerce_text(tool_payload.get("name"), max_chars=160)
@@ -3782,10 +3783,38 @@ class MoonMindRunWorkflow:
             error_message="plan_ref must resolve to a JSON object",
         )
         plan_definition = parse_plan_definition(plan_dict)
+        registry_snapshot: ToolRegistrySnapshot | None = None
+
+        async def load_registry_snapshot() -> ToolRegistrySnapshot:
+            nonlocal registry_snapshot
+            if registry_snapshot is not None:
+                return registry_snapshot
+            registry_ref = str(plan_definition.metadata.registry_snapshot.artifact_ref)
+            registry_payload = await execute_typed_activity(
+                "artifact.read",
+                ArtifactReadInput(
+                    principal=self._principal(),
+                    artifact_ref=registry_ref,
+                ),
+                **self._execute_kwargs_for_route(artifact_read_route),
+            )
+            registry_dict = self._decode_json_payload(
+                registry_payload,
+                error_message="registry snapshot must resolve to a JSON object",
+            )
+            registry_snapshot = ToolRegistrySnapshot(
+                digest=str(plan_definition.metadata.registry_snapshot.digest),
+                artifact_ref=registry_ref,
+                skills=parse_tool_registry(registry_dict),
+            )
+            return registry_snapshot
+
         ordered_nodes = self._ordered_plan_node_payloads(
             nodes=plan_definition.nodes,
             edges=plan_definition.edges,
         )
+        if not workflow.patched(RUN_CONDITIONAL_REGISTRY_READ_PATCH):
+            await load_registry_snapshot()
         if workflow.patched("jules-bundling-v1"):
             ordered_nodes = await self._bundle_ordered_nodes_for_execution(
                 ordered_nodes
@@ -3829,7 +3858,7 @@ class MoonMindRunWorkflow:
             if self._cancel_requested:
                 return
 
-            tool = node.get("tool")
+            tool = self._plan_node_tool_mapping(node)
             if not isinstance(tool, Mapping):
                 raise ValueError("plan node tool definition is required")
 
@@ -3855,6 +3884,8 @@ class MoonMindRunWorkflow:
             ):
                 continue
             original_node_inputs = dict(node.get("inputs", {}))
+            if tool_type == "skill":
+                await load_registry_snapshot()
             approval_policy = plan_definition.policy.approval_policy
             review_gate_active = self._review_gate_active(
                 approval_policy=approval_policy,
@@ -3929,6 +3960,8 @@ class MoonMindRunWorkflow:
 
                 system_retries = 0
                 while system_retries <= 3:
+                    route = None
+                    execute_payload = None
                     await self._wait_if_paused_at_safe_boundary()
                     if self._cancel_requested:
                         return
@@ -4090,10 +4123,54 @@ class MoonMindRunWorkflow:
                             result_status = "FAILED"
                             break
 
+                    elif tool_type == "skill":
+                        snapshot = await load_registry_snapshot()
+                        definition = snapshot.get_skill(
+                            name=tool_name,
+                            version=tool_version,
+                        )
+                        route = DEFAULT_ACTIVITY_CATALOG.resolve_skill(definition)
+                        execute_payload = {
+                            "registry_snapshot_ref": snapshot.artifact_ref,
+                            "invocation_payload": {
+                                "id": node_id,
+                                "tool": {
+                                    "type": tool_type,
+                                    "name": tool_name,
+                                    "version": tool_version,
+                                },
+                                "skill": {
+                                    "name": tool_name,
+                                    "version": tool_version,
+                                },
+                                "inputs": node_inputs,
+                                "options": node.get("options") or {},
+                            },
+                            "context": {
+                                "namespace": workflow.info().namespace,
+                                "workflow_id": workflow.info().workflow_id,
+                                "run_id": workflow.info().run_id,
+                                "node_id": node_id,
+                            },
+                            "idempotency_key": step_execution_operation_idempotency_key(
+                                workflow_id=workflow.info().workflow_id,
+                                run_id=workflow.info().run_id,
+                                logical_step_id=node_id,
+                                execution_ordinal=current_step_execution,
+                                operation="execute",
+                            ),
+                        }
+                        execution_result = await workflow.execute_activity(
+                            route.activity_type,
+                            execute_payload,
+                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            **self._execute_kwargs_for_route(route),
+                        )
+
                     else:
                         raise ValueError(
                             f"unsupported plan node tool.type: '{tool_type}'; "
-                            "expected 'agent_runtime'"
+                            "expected 'agent_runtime' or 'skill'"
                         )
 
                     result_status = self._activity_result_status(execution_result)
@@ -4115,6 +4192,7 @@ class MoonMindRunWorkflow:
                             execution_result,
                             tool_type=tool_type,
                             tool_name=tool_name,
+                            selected_skill=node_inputs.get("selectedSkill"),
                         )
                     ):
                         execution_result, blocked_outcome_wait_skipped = (
@@ -4125,6 +4203,11 @@ class MoonMindRunWorkflow:
                                 node_id=node_id,
                                 tool_name=tool_name,
                                 tool_type=tool_type,
+                                selected_skill=node_inputs.get("selectedSkill"),
+                                node=node,
+                                node_inputs=node_inputs,
+                                task_skills=task_skills,
+                                workflow_parameters=parameters,
                                 failure_mode=failure_mode,
                             )
                         )
@@ -5016,8 +5099,20 @@ class MoonMindRunWorkflow:
         *,
         tool_type: str,
         tool_name: str,
+        selected_skill: Any = None,
     ) -> bool:
-        if tool_type != "skill" or tool_name != JIRA_CHECK_BLOCKERS_TOOL_NAME:
+        normalized_tool_type = str(tool_type or "").strip().lower()
+        normalized_tool_name = str(tool_name or "").strip()
+        normalized_selected_skill = str(selected_skill or "").strip()
+        if normalized_tool_type == "skill":
+            is_check_blockers = normalized_tool_name == JIRA_CHECK_BLOCKERS_TOOL_NAME
+        elif normalized_tool_type == "agent_runtime":
+            is_check_blockers = (
+                normalized_selected_skill == JIRA_CHECK_BLOCKERS_TOOL_NAME
+            )
+        else:
+            is_check_blockers = False
+        if not is_check_blockers:
             return False
         outputs = self._get_from_result(execution_result, "outputs")
         if not isinstance(outputs, Mapping):
@@ -5091,16 +5186,96 @@ class MoonMindRunWorkflow:
             self._waiting_reason = None
         self._attention_required = False
 
+    async def _reexecute_jira_blocker_agent_runtime(
+        self,
+        *,
+        node: Mapping[str, Any],
+        node_inputs: Mapping[str, Any],
+        node_id: str,
+        tool_name: str,
+        task_skills: Any,
+        workflow_parameters: Mapping[str, Any],
+        recheck_count: int,
+        failure_mode: str,
+    ) -> Any:
+        try:
+            resolved_skillset_ref = await self._resolve_agent_node_skillset_ref(
+                task_skills=task_skills,
+                node_skills=node.get("skills"),
+                node_inputs=node_inputs,
+                node_id=node_id,
+                existing_skillset_ref=self._existing_agent_skillset_ref(
+                    parameters=workflow_parameters,
+                    node=node,
+                    node_inputs=node_inputs,
+                ),
+            )
+            request = self._build_agent_execution_request(
+                node_inputs=dict(node_inputs),
+                node_id=node_id,
+                tool_name=tool_name,
+                resolved_skillset_ref=resolved_skillset_ref,
+                workflow_parameters=workflow_parameters,
+                step_execution=self._step_execution_for(node_id) or 1,
+                attempt_reason="policy_revalidation",
+            )
+            child_workflow_id = (
+                f"{workflow.info().workflow_id}:agent:{node_id}:"
+                f"jira-blocker-recheck{recheck_count}"
+            )
+            self._active_agent_child_workflow_id = child_workflow_id
+            self._active_agent_id = request.agent_id
+            try:
+                child_result = await workflow.execute_child_workflow(
+                    "MoonMind.AgentRun",
+                    request,
+                    id=child_workflow_id,
+                    task_queue=WORKFLOW_TASK_QUEUE,
+                )
+            finally:
+                self._active_agent_child_workflow_id = None
+                self._active_agent_id = None
+            return self._map_agent_run_result(child_result)
+        except Exception as exc:
+            diagnostic = self._record_failure_diagnostic(
+                exc,
+                stage=self._state,
+                step_id=node_id,
+                step_title=f"Re-check of Jira blockers for {tool_name}",
+                source="child_workflow",
+            )
+            self._mark_step_terminal(
+                node_id,
+                status="failed",
+                updated_at=workflow.now(),
+                summary=diagnostic["message"],
+                last_error=diagnostic["category"],
+            )
+            if failure_mode == "FAIL_FAST":
+                raise
+            return {
+                "status": "FAILED",
+                "outputs": {
+                    "error": diagnostic["category"],
+                    "summary": diagnostic["message"],
+                },
+            }
+
     async def _wait_for_jira_blocker_resolution(
         self,
         *,
         execution_result: Any,
-        route: Any,
-        execute_payload: Mapping[str, Any],
+        route: Any | None,
+        execute_payload: Mapping[str, Any] | None,
         node_id: str,
         tool_name: str,
         tool_type: str,
         failure_mode: str,
+        selected_skill: Any = None,
+        node: Mapping[str, Any] | None = None,
+        node_inputs: Mapping[str, Any] | None = None,
+        task_skills: Any = None,
+        workflow_parameters: Mapping[str, Any] | None = None,
     ) -> tuple[Any, bool]:
         skipped = False
         recheck_count = 0
@@ -5109,6 +5284,7 @@ class MoonMindRunWorkflow:
             current_result,
             tool_type=tool_type,
             tool_name=tool_name,
+            selected_skill=selected_skill,
         ):
             self._enter_jira_blocker_wait(
                 node_id=node_id,
@@ -5164,37 +5340,57 @@ class MoonMindRunWorkflow:
                     },
                 }
                 break
-            recheck_payload = dict(execute_payload)
-            idempotency_key = recheck_payload.get("idempotency_key")
-            if isinstance(idempotency_key, str) and idempotency_key.strip():
-                recheck_payload["idempotency_key"] = (
-                    f"{idempotency_key}_jira_blocker_recheck_{recheck_count}"
+            if str(tool_type or "").strip().lower() == "agent_runtime":
+                if node is None or node_inputs is None or workflow_parameters is None:
+                    raise ValueError(
+                        "agent_runtime Jira blocker recheck requires node context"
+                    )
+                current_result = await self._reexecute_jira_blocker_agent_runtime(
+                    node=node,
+                    node_inputs=node_inputs,
+                    node_id=node_id,
+                    tool_name=tool_name,
+                    task_skills=task_skills,
+                    workflow_parameters=workflow_parameters,
+                    recheck_count=recheck_count,
+                    failure_mode=failure_mode,
                 )
-            try:
-                current_result = await workflow.execute_activity(
-                    route.activity_type,
-                    recheck_payload,
-                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                    **self._execute_kwargs_for_route(route),
-                )
-            except Exception as exc:
-                diagnostic = self._record_failure_diagnostic(
-                    exc,
-                    stage=self._state,
-                    step_id=node_id,
-                    step_title=f"Re-check of Jira blockers for {tool_name}",
-                    source="activity",
-                )
-                self._mark_step_terminal(
-                    node_id,
-                    status="failed",
-                    updated_at=workflow.now(),
-                    summary=diagnostic["message"],
-                    last_error=diagnostic["category"],
-                )
-                if failure_mode == "FAIL_FAST":
-                    raise
-                break
+            else:
+                if route is None or execute_payload is None:
+                    raise ValueError(
+                        "skill Jira blocker recheck requires activity context"
+                    )
+                recheck_payload = dict(execute_payload)
+                idempotency_key = recheck_payload.get("idempotency_key")
+                if isinstance(idempotency_key, str) and idempotency_key.strip():
+                    recheck_payload["idempotency_key"] = (
+                        f"{idempotency_key}_jira_blocker_recheck_{recheck_count}"
+                    )
+                try:
+                    current_result = await workflow.execute_activity(
+                        route.activity_type,
+                        recheck_payload,
+                        cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                        **self._execute_kwargs_for_route(route),
+                    )
+                except Exception as exc:
+                    diagnostic = self._record_failure_diagnostic(
+                        exc,
+                        stage=self._state,
+                        step_id=node_id,
+                        step_title=f"Re-check of Jira blockers for {tool_name}",
+                        source="activity",
+                    )
+                    self._mark_step_terminal(
+                        node_id,
+                        status="failed",
+                        updated_at=workflow.now(),
+                        summary=diagnostic["message"],
+                        last_error=diagnostic["category"],
+                    )
+                    if failure_mode == "FAIL_FAST":
+                        raise
+                    break
             self._record_step_result_evidence(
                 node_id,
                 execution_result=current_result,
