@@ -3868,6 +3868,30 @@ class CodexWorker:
             json.dumps(finish_summary, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+        timestamps = finish_summary.get("timestamps")
+        finish_outcome_block = finish_summary.get("finishOutcome")
+        cost_block = finish_summary.get("cost")
+        duration_ms = (
+            timestamps.get("durationMs")
+            if isinstance(timestamps, Mapping)
+            else None
+        )
+        cost_status = (
+            cost_block.get("status")
+            if isinstance(cost_block, Mapping)
+            else "not_recorded"
+        )
+        if isinstance(duration_ms, int | float):
+            self._metrics.record_run_outcome(
+                duration_seconds=max(0.0, float(duration_ms) / 1000.0),
+                success=finish_outcome.code not in {"FAILED", "CANCELLED"},
+                outcome_code=(
+                    str(finish_outcome_block.get("code") or finish_outcome.code)
+                    if isinstance(finish_outcome_block, Mapping)
+                    else finish_outcome.code
+                ),
+                cost_status=str(cost_status or "not_recorded"),
+            )
         artifacts: list[ArtifactUpload] = [
             ArtifactUpload(
                 path=run_summary_path,

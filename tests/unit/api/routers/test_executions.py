@@ -3235,6 +3235,42 @@ def test_serialize_execution_includes_failed_proposal_outcomes() -> None:
     ]
 
 
+def test_serialize_execution_projects_observability_from_finish_summary() -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.COMPLETED)
+    record.close_status = TemporalExecutionCloseStatus.COMPLETED
+    record.memo["worker_id"] = "worker-7"
+    record.memo["finishSummary"] = {
+        "timestamps": {"durationMs": 12345},
+        "finishOutcome": {"code": "NO_CHANGES", "reason": "No local changes"},
+        "runQuality": {
+            "code": "flaky_test_detected",
+            "reason": "A flaky test was retried before passing.",
+            "tags": ["flaky_test", "retry"],
+            "severity": "high",
+        },
+        "proposals": {"requested": True, "submittedCount": 1},
+        "cost": {"status": "not_recorded", "amountUsd": None},
+    }
+
+    payload = _serialize_execution(record).model_dump(by_alias=True)
+
+    assert payload["runMetrics"] == {
+        "durationMs": 12345,
+        "outcomeCode": "NO_CHANGES",
+        "success": True,
+        "successRateSample": {"success": 1, "sampleSize": 1},
+        "cost": {"status": "not_recorded", "amountUsd": None},
+    }
+    assert payload["improvementSignals"][0]["tags"] == ["flaky_test", "retry"]
+    assert payload["recommendedNextAction"] == "Review generated improvement proposals."
+    assert payload["logContext"] == {
+        "workflowId": "mm:wf-1",
+        "runId": "run-2",
+        "workerId": "worker-7",
+        "namespace": "moonmind",
+    }
+
+
 def test_serialize_execution_exposes_snake_case_publish_merge_automation() -> None:
     record = _build_execution_record()
     record.parameters = {

@@ -1,8 +1,14 @@
 import os
+import json
+import logging
 from unittest.mock import patch
 
 import pytest
 
+from moonmind.config.logging import (
+    StructuredLogFormatter,
+    _runtime_log_context_from_environ,
+)
 from moonmind.utils.logging import (
     SecretRedactor,
     _is_non_secret_sentinel,
@@ -173,3 +179,42 @@ def test_redact_sensitive_payload_preserves_auth_readiness_metadata_string():
     }
 
     assert redact_sensitive_payload(payload) == payload
+
+
+def test_structured_log_formatter_promotes_runtime_context_fields() -> None:
+    formatter = StructuredLogFormatter(default_fields={"workerId": "worker-1"})
+    record = logging.LogRecord(
+        name="moonmind.test",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="execution event",
+        args=(),
+        exc_info=None,
+    )
+    record.workflow_id = "workflow-1"
+    record.run_id = "run-1"
+
+    payload = json.loads(formatter.format(record))
+
+    assert payload["workflowId"] == "workflow-1"
+    assert payload["runId"] == "run-1"
+    assert payload["workerId"] == "worker-1"
+    assert payload["extra"]["workflow_id"] == "workflow-1"
+
+
+@patch.dict(
+    os.environ,
+    {
+        "MOONMIND_WORKFLOW_ID": "workflow-env",
+        "MOONMIND_RUN_ID": "run-env",
+        "MOONMIND_WORKER_ID": "worker-env",
+    },
+    clear=True,
+)
+def test_runtime_log_context_from_environ_uses_moonmind_identifiers() -> None:
+    assert _runtime_log_context_from_environ() == {
+        "workflowId": "workflow-env",
+        "runId": "run-env",
+        "workerId": "worker-env",
+    }

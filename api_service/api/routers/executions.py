@@ -1942,8 +1942,32 @@ def _serialize_execution(
         params=params,
         resume_summary=resume_summary,
     )
+    finish_summary = _finish_summary_from_memo(memo)
     proposal_summary = _proposal_summary_from_memo(memo)
     proposal_outcomes = _proposal_outcomes_from_summary(proposal_summary)
+    run_metrics = _run_metrics_from_summary(
+        record=record,
+        finish_summary=finish_summary,
+        close_status=close_status,
+        state_value=state_value,
+    )
+    improvement_signals = _improvement_signals_from_summary(
+        finish_summary=finish_summary,
+        proposal_summary=proposal_summary,
+    )
+    log_context = _execution_log_context(
+        record=record,
+        memo=memo,
+        search_attributes=search_attributes,
+        params=params,
+    )
+    recommended_next_action = _recommended_next_action(
+        finish_summary=finish_summary,
+        close_status=close_status,
+        state_value=state_value,
+        proposal_summary=proposal_summary,
+        pr_url=pr_url,
+    )
 
     started_at = getattr(record, "started_at", None)
     created_at = getattr(record, "created_at", None) or started_at or record.updated_at
@@ -2032,6 +2056,10 @@ def _serialize_execution(
         resume=resume_summary,
         related_runs=related_runs,
         target_diagnostics=target_diagnostics,
+        run_metrics=run_metrics,
+        improvement_signals=improvement_signals,
+        recommended_next_action=recommended_next_action,
+        log_context=log_context,
         proposal_summary=proposal_summary,
         proposal_outcomes=proposal_outcomes,
         debug_fields=debug_fields,
@@ -2059,16 +2087,256 @@ def _serialize_execution(
     )
 
 
+def _finish_summary_from_memo(memo: Mapping[str, Any]) -> dict[str, Any] | None:
+    finish_summary = memo.get("finishSummary") or memo.get("finish_summary")
+    if isinstance(finish_summary, Mapping):
+        return dict(finish_summary)
+    return None
+
+
 def _proposal_summary_from_memo(memo: Mapping[str, Any]) -> dict[str, Any] | None:
     direct = memo.get("proposals")
     if isinstance(direct, Mapping):
         return dict(direct)
-    finish_summary = memo.get("finishSummary") or memo.get("finish_summary")
+    finish_summary = _finish_summary_from_memo(memo)
     if isinstance(finish_summary, Mapping):
         proposals = finish_summary.get("proposals")
         if isinstance(proposals, Mapping):
             return dict(proposals)
     return None
+
+
+def _int_or_none(value: object) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _run_metrics_from_summary(
+    *,
+    record: Any,
+    finish_summary: Mapping[str, Any] | None,
+    close_status: str | None,
+    state_value: str,
+) -> dict[str, Any]:
+    timestamps = (
+        finish_summary.get("timestamps")
+        if isinstance(finish_summary, Mapping)
+        else None
+    )
+    if not isinstance(timestamps, Mapping):
+        timestamps = {}
+    finish_outcome = (
+        finish_summary.get("finishOutcome")
+        if isinstance(finish_summary, Mapping)
+        else None
+    )
+    if not isinstance(finish_outcome, Mapping):
+        finish_outcome = {}
+    cost = (
+        finish_summary.get("cost")
+        if isinstance(finish_summary, Mapping)
+        else None
+    )
+    if not isinstance(cost, Mapping):
+        cost = {"status": "not_recorded", "amountUsd": None}
+    success = (
+        str(close_status or "").strip().lower() == "completed"
+        or state_value == "completed"
+    )
+    duration_ms = _int_or_none(timestamps.get("durationMs"))
+    if duration_ms is None:
+        started_at = getattr(record, "started_at", None)
+        closed_at = getattr(record, "closed_at", None)
+        updated_at = getattr(record, "updated_at", None)
+        end_at = closed_at or updated_at
+        if started_at is not None and end_at is not None:
+            duration_ms = max(0, int((end_at - started_at).total_seconds() * 1000))
+    return {
+        "durationMs": duration_ms,
+        "outcomeCode": finish_outcome.get("code"),
+        "success": success,
+        "successRateSample": {"success": 1 if success else 0, "sampleSize": 1},
+        "cost": dict(cost),
+    }
+
+
+_SIGNAL_TAG_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("retry", ("retry", "reattempt", "self heal", "self-heal")),
+    ("loop_detected", ("loop", "repeated", "no progress", "stuck")),
+    ("flaky_test", ("flaky", "nondeterministic test")),
+    ("missing_ref", ("missing file", "missing ref", "not found")),
+    ("artifact_gap", ("artifact", "diagnostic", "summary missing")),
+)
+
+
+def _signal_tags_from_text(*values: object) -> list[str]:
+    text = " ".join(str(value or "").lower() for value in values if value)
+    tags: list[str] = []
+    for tag, needles in _SIGNAL_TAG_KEYWORDS:
+        if any(needle in text for needle in needles):
+            tags.append(tag)
+    return tags
+
+
+def _compact_signal(
+    *,
+    code: str,
+    source: str,
+    summary: str,
+    tags: list[str],
+    severity: str = "medium",
+) -> dict[str, Any]:
+    return {
+        "code": code[:96],
+        "source": source,
+        "summary": summary[:500],
+        "severity": severity,
+        "tags": tags[:6],
+    }
+
+
+def _improvement_signals_from_summary(
+    *,
+    finish_summary: Mapping[str, Any] | None,
+    proposal_summary: Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    signals: list[dict[str, Any]] = []
+    if isinstance(finish_summary, Mapping):
+        run_quality = finish_summary.get("runQuality")
+        if isinstance(run_quality, Mapping):
+            raw_tags = run_quality.get("tags")
+            tags = [
+                str(tag).strip()
+                for tag in (raw_tags if isinstance(raw_tags, list) else [])
+                if str(tag).strip()
+            ]
+            if not tags:
+                tags = _signal_tags_from_text(
+                    run_quality.get("code"),
+                    run_quality.get("reason"),
+                    run_quality.get("message"),
+                )
+            signals.append(
+                _compact_signal(
+                    code=str(run_quality.get("code") or "run_quality"),
+                    source="finish_summary.runQuality",
+                    summary=str(
+                        run_quality.get("reason")
+                        or run_quality.get("message")
+                        or "Run quality signal captured."
+                    ),
+                    tags=tags or ["artifact_gap"],
+                    severity=str(run_quality.get("severity") or "high"),
+                )
+            )
+        failure = finish_summary.get("failure")
+        if isinstance(failure, Mapping):
+            tags = _signal_tags_from_text(
+                failure.get("category"),
+                failure.get("message"),
+                failure.get("rootCauseType"),
+            )
+            if tags:
+                signals.append(
+                    _compact_signal(
+                        code=str(failure.get("category") or "failure_signal"),
+                        source="finish_summary.failure",
+                        summary=str(failure.get("message") or "Failure signal captured."),
+                        tags=tags,
+                        severity="high",
+                    )
+                )
+        last_step = finish_summary.get("lastStep")
+        if isinstance(last_step, Mapping):
+            tags = _signal_tags_from_text(
+                last_step.get("summary"),
+                last_step.get("lastError"),
+            )
+            if tags:
+                signals.append(
+                    _compact_signal(
+                        code=str(last_step.get("lastError") or "last_step_signal"),
+                        source="finish_summary.lastStep",
+                        summary=str(last_step.get("summary") or "Step signal captured."),
+                        tags=tags,
+                    )
+                )
+    if isinstance(proposal_summary, Mapping):
+        errors = proposal_summary.get("errors") or []
+        if isinstance(errors, list) and errors:
+            signals.append(
+                _compact_signal(
+                    code="proposal_stage_errors",
+                    source="finish_summary.proposals",
+                    summary=str(errors[0]),
+                    tags=["artifact_gap"],
+                )
+            )
+    return signals
+
+
+def _execution_log_context(
+    *,
+    record: Any,
+    memo: Mapping[str, Any],
+    search_attributes: Mapping[str, Any],
+    params: Mapping[str, Any],
+) -> dict[str, Any]:
+    worker_id = (
+        _coerce_temporal_scalar(memo.get("workerId"))
+        or _coerce_temporal_scalar(memo.get("worker_id"))
+        or _coerce_temporal_scalar(search_attributes.get("mm_worker_id"))
+        or _coerce_temporal_scalar(params.get("workerId"))
+        or _coerce_temporal_scalar(params.get("worker_id"))
+    )
+    return {
+        "workflowId": record.workflow_id,
+        "runId": record.run_id,
+        "workerId": worker_id,
+        "namespace": record.namespace,
+    }
+
+
+def _recommended_next_action(
+    *,
+    finish_summary: Mapping[str, Any] | None,
+    close_status: str | None,
+    state_value: str,
+    proposal_summary: Mapping[str, Any] | None,
+    pr_url: str | None,
+) -> str:
+    finish_outcome = (
+        finish_summary.get("finishOutcome")
+        if isinstance(finish_summary, Mapping)
+        else None
+    )
+    code = ""
+    if isinstance(finish_outcome, Mapping):
+        code = str(finish_outcome.get("code") or "").strip().upper()
+    submitted_count = (
+        _int_or_none(proposal_summary.get("submittedCount"))
+        if proposal_summary
+        else None
+    )
+    if submitted_count and submitted_count > 0:
+        return "Review generated improvement proposals."
+    if code in {"PUBLISHED_PR", "PUBLISHED_BRANCH"}:
+        return (
+            "Review published output."
+            if not pr_url
+            else "Review published pull request."
+        )
+    if code == "NO_CHANGES":
+        return "No follow-up required unless the outcome is unexpected."
+    if code == "PUBLISH_DISABLED":
+        return "Review generated artifacts; publishing was disabled."
+    if code == "CANCELLED" or state_value == "canceled":
+        return "Review cancellation reason and rerun if needed."
+    if code == "FAILED" or str(close_status or "").lower() == "failed":
+        return "Review failure diagnostics and create a follow-up proposal if needed."
+    return "Monitor execution until a terminal outcome is available."
 
 
 def _proposal_outcomes_from_summary(

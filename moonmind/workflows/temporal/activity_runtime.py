@@ -3133,6 +3133,107 @@ class TemporalProposalActivities:
                 return idea
         return ""
 
+    @staticmethod
+    def _run_quality_tags_from_text(*values: object) -> list[str]:
+        text = " ".join(str(value or "").lower() for value in values if value)
+        matches: list[str] = []
+        keyword_map = (
+            ("retry", ("retry", "reattempt", "self heal", "self-heal")),
+            ("loop_detected", ("loop", "repeated", "no progress", "stuck")),
+            ("flaky_test", ("flaky", "nondeterministic test")),
+            ("missing_ref", ("missing file", "missing ref", "not found")),
+            ("artifact_gap", ("artifact", "diagnostic", "summary missing")),
+        )
+        for tag, needles in keyword_map:
+            if any(needle in text for needle in needles):
+                matches.append(tag)
+        return matches
+
+    @classmethod
+    def _resolve_run_quality_signal(
+        cls,
+        *,
+        payload: Mapping[str, Any],
+        task: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        for key in ("runQuality", "run_quality", "signal"):
+            raw = payload.get(key)
+            if isinstance(raw, Mapping):
+                signal = dict(raw)
+                break
+        else:
+            observability = payload.get("observability")
+            if not isinstance(observability, Mapping):
+                return None
+            last_step = observability.get("lastStep")
+            last_step_summary = (
+                last_step.get("summary")
+                if isinstance(last_step, Mapping)
+                else None
+            )
+            operator_summary = observability.get("operatorSummary")
+            tags = cls._run_quality_tags_from_text(
+                operator_summary,
+                last_step_summary,
+            )
+            if not tags:
+                return None
+            signal = {
+                "code": tags[0],
+                "reason": last_step_summary or operator_summary,
+                "tags": tags,
+            }
+
+        tags_node = signal.get("tags")
+        if isinstance(tags_node, Sequence) and not isinstance(tags_node, (str, bytes)):
+            tags = [str(tag).strip() for tag in tags_node if str(tag).strip()]
+        else:
+            tags = []
+        if not tags:
+            tags = cls._run_quality_tags_from_text(
+                signal.get("code"),
+                signal.get("reason"),
+                signal.get("message"),
+                signal.get("summary"),
+            )
+        if not tags:
+            return None
+
+        title = cls._normalize_proposal_text(
+            signal.get("proposalTitle")
+            or signal.get("title")
+            or signal.get("recommendedNextAction")
+        )
+        if not title:
+            code = cls._normalize_proposal_text(signal.get("code")) or tags[0]
+            title = f"Investigate {code.replace('_', ' ')}"
+
+        workflow_texts = {
+            cls._comparison_key(task.get("title")),
+            cls._comparison_key(task.get("instructions")),
+        }
+        workflow_texts.discard("")
+        if cls._comparison_key(title) in workflow_texts:
+            title = f"Investigate run quality signal {tags[0]}"
+
+        return {
+            "title": title,
+            "tags": tags,
+            "signal": {
+                "code": cls._normalize_proposal_text(signal.get("code")) or tags[0],
+                "severity": (
+                    cls._normalize_proposal_text(signal.get("severity")) or "medium"
+                ),
+                "reason": cls._normalize_proposal_text(
+                    signal.get("reason")
+                    or signal.get("message")
+                    or signal.get("summary")
+                    or title
+                ),
+                "tags": tags,
+            },
+        }
+
     @classmethod
     def _build_follow_up_instructions(cls, proposal_idea: str, instructions: str) -> str:
         normalized_idea = cls._normalize_proposal_text(proposal_idea)
@@ -3373,12 +3474,18 @@ class TemporalProposalActivities:
             task=task,
             instructions=instructions,
         )
+        run_quality_signal = self._resolve_run_quality_signal(
+            payload=payload,
+            task=task,
+        )
 
         if not proposal_idea:
-            # Do not create generic proposals whose title simply repeats the
-            # completed workflow. The fallback path only emits a proposal when
-            # it receives an explicit next-step idea from upstream context.
-            return []
+            if run_quality_signal is None:
+                # Do not create generic proposals whose title simply repeats the
+                # completed workflow. The fallback path only emits a proposal when
+                # it receives explicit next-step or run-quality signal context.
+                return []
+            proposal_idea = str(run_quality_signal["title"])
 
         normalized_title = proposal_idea
         if not normalized_title.lower().startswith("[run_quality]"):
@@ -3425,9 +3532,15 @@ class TemporalProposalActivities:
             "title": normalized_title,
             "summary": summary,
             "category": "run_quality",
-            "tags": ["artifact_gap", "auto-generated", "follow_up"],
+            "tags": (
+                list(run_quality_signal["tags"])
+                if run_quality_signal is not None
+                else ["artifact_gap", "auto-generated", "follow_up"]
+            ),
             "taskCreateRequest": task_create_request,
         }
+        if run_quality_signal is not None:
+            candidate["signal"] = run_quality_signal["signal"]
 
         return [candidate]
 

@@ -29,6 +29,36 @@ _RESERVED_LOG_RECORD_FIELDS = {
     "taskName",
 }
 
+_LOG_CONTEXT_ALIASES = {
+    "workflow_id": "workflowId",
+    "workflowId": "workflowId",
+    "run_id": "runId",
+    "runId": "runId",
+    "worker_id": "workerId",
+    "workerId": "workerId",
+    "task_run_id": "taskRunId",
+    "taskRunId": "taskRunId",
+}
+
+_LOG_CONTEXT_ENV_KEYS = {
+    "workflowId": ("MOONMIND_WORKFLOW_ID", "TEMPORAL_WORKFLOW_ID"),
+    "runId": ("MOONMIND_RUN_ID", "TEMPORAL_RUN_ID"),
+    "workerId": ("MOONMIND_WORKER_ID", "WORKER_ID"),
+    "taskRunId": ("MOONMIND_TASK_RUN_ID", "TASK_RUN_ID"),
+}
+
+
+def _runtime_log_context_from_environ() -> dict[str, str]:
+    context: dict[str, str] = {}
+    for target_key, env_keys in _LOG_CONTEXT_ENV_KEYS.items():
+        for env_key in env_keys:
+            value = os.getenv(env_key, "").strip()
+            if value:
+                context[target_key] = value
+                break
+    return context
+
+
 class StructuredLogFormatter(logging.Formatter):
     """JSON formatter that preserves extra fields for log aggregation."""
 
@@ -64,6 +94,9 @@ class StructuredLogFormatter(logging.Formatter):
             if key in _RESERVED_LOG_RECORD_FIELDS:
                 continue
             extras[key] = value
+            context_key = _LOG_CONTEXT_ALIASES.get(key)
+            if context_key and value not in (None, ""):
+                payload[context_key] = value
 
         if extras:
             payload["extra"] = extras
@@ -97,11 +130,16 @@ def configure_logging(
         )
         structured = env_value.lower() in {"1", "true", "yes"} if env_value else False
 
+    merged_default_fields = {
+        **_runtime_log_context_from_environ(),
+        **dict(default_fields or {}),
+    }
+
     if structured:
         formatter: logging.Formatter = StructuredLogFormatter(
             include_timestamp=include_timestamp,
             include_module=include_module,
-            default_fields=default_fields,
+            default_fields=merged_default_fields,
         )
     elif format_string is None:
         parts = []

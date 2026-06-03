@@ -2084,6 +2084,14 @@ class ExecutionModel(BaseModel):
     target_diagnostics: ExecutionTargetDiagnosticsModel | None = Field(
         None, alias="targetDiagnostics"
     )
+    run_metrics: dict[str, Any] | None = Field(None, alias="runMetrics")
+    improvement_signals: list[dict[str, Any]] = Field(
+        default_factory=list, alias="improvementSignals"
+    )
+    recommended_next_action: str | None = Field(
+        None, alias="recommendedNextAction"
+    )
+    log_context: dict[str, Any] | None = Field(None, alias="logContext")
     proposal_summary: dict[str, Any] | None = Field(None, alias="proposalSummary")
     proposal_outcomes: list[dict[str, Any]] = Field(
         default_factory=list, alias="proposalOutcomes"

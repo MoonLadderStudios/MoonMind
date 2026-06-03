@@ -263,13 +263,15 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - Temporal visibility / execution queries (spec 064)
 - Structured workflow run states in Postgres
 - Task finish summary system (spec 079)
+- MM-791 observability projections: run metrics, recommended next actions,
+  improvement signals, proposal signal routing, and structured log context
 
 ### Remaining tasks
-- [ ] **11.1** Structured outcome summaries on every run — Spec 079 started; not fully wired
-- [ ] **11.2** Improvement signal capture (retries, loops, flaky tests) — Constitution X mandates this
-- [ ] **11.3** Reviewable improvement backlog / proposals queue — Task proposals exist; not fed by telemetry
-- [ ] **11.4** Metrics / dashboards (run duration, success rate, cost) — No operational metrics endpoint
-- [ ] **11.5** Structured logging enrichment (run IDs, worker IDs) — structlog in use; inconsistent enrichment
+- [x] **11.1** Structured outcome summaries on every run — MM-791 projects finish summaries into Mission Control with recommended next actions
+- [x] **11.2** Improvement signal capture (retries, loops, flaky tests) — MM-791 extracts bounded run-quality signals from finish summaries and observability context
+- [x] **11.3** Reviewable improvement backlog / proposals queue — MM-791 routes run-quality signals into proposal generation
+- [x] **11.4** Metrics / dashboards (run duration, success rate, cost) — MM-791 exposes run metrics in execution responses and emits worker run-outcome metrics
+- [x] **11.5** Structured logging enrichment (run IDs, worker IDs) — MM-791 standardizes structured log context fields
 
 ---
 

@@ -8675,6 +8675,14 @@ class MoonMindRunWorkflow:
                 "run_id": workflow.info().run_id,
                 "repo": self._repo,
                 "parameters": parameters,
+                "observability": {
+                    "operatorSummary": self._operator_summary,
+                    "lastStep": {
+                        "id": self._last_step_id,
+                        "summary": self._last_step_summary,
+                        "diagnosticsRef": self._last_diagnostics_ref,
+                    },
+                },
             }
             if workflow.patched("idempotency_key_phase3"):
                 generate_payload["idempotency_key"] = (

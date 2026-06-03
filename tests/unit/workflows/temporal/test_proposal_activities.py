@@ -111,6 +111,50 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, [])
 
+    async def test_proposal_generate_builds_candidate_from_run_quality_signal(self) -> None:
+        activities = TemporalProposalActivities()
+
+        result = await activities.proposal_generate(
+            {
+                "workflow_id": "test-wf-run-quality",
+                "repo": "Moon/Mind",
+                "parameters": {"instructions": "Run test suite"},
+                "runQuality": {
+                    "code": "flaky_test_detected",
+                    "reason": "A flaky test required retry.",
+                    "tags": ["flaky_test", "retry"],
+                    "severity": "high",
+                },
+            }
+        )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(
+            result[0]["title"],
+            "[run_quality] Investigate flaky test detected",
+        )
+        self.assertEqual(result[0]["tags"], ["flaky_test", "retry"])
+        self.assertEqual(result[0]["signal"]["code"], "flaky_test_detected")
+        self.assertEqual(result[0]["signal"]["severity"], "high")
+
+    async def test_proposal_generate_builds_candidate_from_observability_text(self) -> None:
+        activities = TemporalProposalActivities()
+
+        result = await activities.proposal_generate(
+            {
+                "workflow_id": "test-wf-observability",
+                "repo": "Moon/Mind",
+                "parameters": {"instructions": "Run task"},
+                "observability": {
+                    "lastStep": {
+                        "summary": "No progress loop detected during retry handling.",
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(result[0]["tags"], ["retry", "loop_detected"])
+
     async def test_proposal_generate_rejects_structured_proposal_text(self) -> None:
         activities = TemporalProposalActivities()
 

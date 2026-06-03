@@ -80,6 +80,26 @@ class WorkerMetrics:
             "task.step.duration_seconds", value=duration_seconds, tags=tags
         )
 
+    def record_run_outcome(
+        self,
+        *,
+        duration_seconds: float,
+        success: bool,
+        outcome_code: str | None,
+        cost_status: str | None = None,
+    ) -> None:
+        tags = self._step_tags(
+            extras={
+                "success": "true" if success else "false",
+                "outcome": outcome_code,
+                "cost_status": cost_status or "not_recorded",
+            }
+        )
+        self._emitter.observe(
+            "task.run.duration_seconds", value=duration_seconds, tags=tags
+        )
+        self._emitter.increment("task.run.completed_total", tags=tags)
+
     def record_wall_timeout(
         self,
         *,
