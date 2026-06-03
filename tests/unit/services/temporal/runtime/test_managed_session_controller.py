@@ -762,7 +762,7 @@ async def test_controller_uses_request_moonmind_url_for_docker_network(
     assert "local-network" in run_command
 
 @pytest.mark.asyncio
-async def test_controller_launch_unrestricted_session_exposes_docker_proxy(
+async def test_mm784_no_docker_session_rejects_unrestricted_docker_proxy(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -826,30 +826,19 @@ async def test_controller_launch_unrestricted_session_exposes_docker_proxy(
         ready_poll_interval_seconds=0,
     )
 
-    await controller.launch_session(request)
+    with pytest.raises(RuntimeError, match="MM-784 per-runtime Docker policy denied"):
+        await controller.launch_session(request)
 
-    run_command = next(
-        command for command in commands if command[:2] == ("docker", "run")
-    )
-    assert "DOCKER_HOST=tcp://docker-proxy:2375" in run_command
-    assert "SYSTEM_DOCKER_HOST=tcp://docker-proxy:2375" in run_command
-    assert "MOONMIND_WORKFLOW_DOCKER_MODE=unrestricted" in run_command
-    assert (
-        "docker",
-        "network",
-        "connect",
-        "docker-proxy-test",
-        "ctr-1",
-    ) in commands
+    assert not any(command[:2] == ("docker", "run") for command in commands)
 
 @pytest.mark.asyncio
-async def test_controller_launch_removes_container_when_proxy_network_attach_fails(
+async def test_mm784_request_unrestricted_mode_uses_sidecar_policy(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
     monkeypatch.delenv("MOONMIND_DOCKER_NETWORK", raising=False)
-    monkeypatch.setenv("MOONMIND_DOCKER_PROXY_NETWORK", "missing-proxy-network")
+    monkeypatch.setenv("MOONMIND_DOCKER_PROXY_NETWORK", "docker-proxy-test")
     workspace_root = tmp_path / "agent_jobs"
     request = LaunchCodexManagedSessionRequest(
         taskRunId="task-1",
@@ -863,7 +852,6 @@ async def test_controller_launch_removes_container_when_proxy_network_attach_fai
         environment={
             "MOONMIND_URL": "http://api:8000",
             "MOONMIND_WORKFLOW_DOCKER_MODE": "unrestricted",
-            "MOONMIND_MANAGED_SESSION_DOCKER_MODE": "no-docker",
         },
     )
     commands: list[tuple[str, ...]] = []
@@ -877,10 +865,33 @@ async def test_controller_launch_removes_container_when_proxy_network_attach_fai
         commands.append(command)
         if command[:3] == ("docker", "rm", "-f"):
             return 1, "", "No such container"
+        if command[:3] == ("docker", "volume", "rm"):
+            return 1, "", "No such volume"
+        if command[:3] == ("docker", "volume", "create"):
+            return 0, command[3] + "\n", ""
         if command[:2] == ("docker", "run"):
-            return 0, "ctr-1\n", ""
-        if command[:3] == ("docker", "network", "connect"):
-            return 1, "", "network not found"
+            name = command[command.index("--name") + 1]
+            if name.endswith("-docker"):
+                return 0, "sidecar-ctr\n", ""
+            if name.endswith("-agent"):
+                return 0, "agent-ctr\n", ""
+        if command[:3] == ("docker", "exec", "-e") and "docker" in command:
+            return 0, '"27.0.0"\n', ""
+        if "ready" in command:
+            return 0, '{"ready": true}\n', ""
+        if "launch_session" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": request.session_id,
+                    "sessionEpoch": 1,
+                    "containerId": "agent-ctr",
+                    "threadId": request.thread_id,
+                },
+                "status": "ready",
+                "imageRef": request.image_ref,
+                "controlUrl": "docker-exec://moonmind-session-sess-1-agent",
+            }
+            return 0, json.dumps(payload), ""
         raise AssertionError(f"unexpected command: {command}")
 
     controller = DockerCodexManagedSessionController(
@@ -892,10 +903,19 @@ async def test_controller_launch_removes_container_when_proxy_network_attach_fai
         ready_poll_interval_seconds=0,
     )
 
-    with pytest.raises(RuntimeError, match="network not found"):
-        await controller.launch_session(request)
+    await controller.launch_session(request)
 
-    assert commands[-1] == ("docker", "rm", "-f", "ctr-1")
+    agent_run = next(
+        command
+        for command in commands
+        if command[:2] == ("docker", "run")
+        and "moonmind-session-sess-1-agent" in command
+    )
+    assert "DOCKER_HOST=unix:///var/run/moonmind-docker/docker.sock" in agent_run
+    assert "DOCKER_HOST=tcp://docker-proxy:2375" not in agent_run
+    assert not any(
+        command[:3] == ("docker", "network", "connect") for command in commands
+    )
 
 @pytest.mark.asyncio
 async def test_controller_replaces_blank_request_moonmind_url(

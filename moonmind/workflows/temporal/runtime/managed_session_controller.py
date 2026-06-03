@@ -230,6 +230,16 @@ class DockerCodexManagedSessionController:
             env["DOCKER_HOST"] = self._docker_host
         return env
 
+    @staticmethod
+    def _managed_session_docker_mode(
+        session_environment: Mapping[str, str],
+    ) -> str:
+        return (
+            session_environment.get("MOONMIND_MANAGED_SESSION_DOCKER_MODE")
+            or os.environ.get("MOONMIND_MANAGED_SESSION_DOCKER_MODE")
+            or ""
+        ).strip().lower()
+
     def _apply_unrestricted_docker_session_environment(
         self,
         session_environment: dict[str, str],
@@ -240,6 +250,20 @@ class DockerCodexManagedSessionController:
         workflow_docker_mode = normalize_workflow_docker_mode(raw_mode)
         if workflow_docker_mode != "unrestricted":
             return False
+
+        managed_session_docker_mode = self._managed_session_docker_mode(
+            session_environment
+        )
+        if (
+            raw_mode is not None
+            and managed_session_docker_mode in _SESSION_DOCKER_MODE_DISABLED_VALUES
+        ):
+            raise RuntimeError(
+                "MM-784 per-runtime Docker policy denied: "
+                "MOONMIND_MANAGED_SESSION_DOCKER_MODE="
+                f"{managed_session_docker_mode} cannot receive unrestricted "
+                "Docker proxy access"
+            )
 
         session_environment["MOONMIND_WORKFLOW_DOCKER_MODE"] = "unrestricted"
         if self._docker_host:
@@ -299,11 +323,7 @@ class DockerCodexManagedSessionController:
         self,
         session_environment: Mapping[str, str],
     ) -> bool:
-        raw_mode = (
-            session_environment.get("MOONMIND_MANAGED_SESSION_DOCKER_MODE")
-            or os.environ.get("MOONMIND_MANAGED_SESSION_DOCKER_MODE")
-            or ""
-        ).strip().lower()
+        raw_mode = self._managed_session_docker_mode(session_environment)
         if raw_mode in _SESSION_DOCKER_MODE_DISABLED_VALUES:
             return False
         if raw_mode == "docker-sidecar-rootless":
