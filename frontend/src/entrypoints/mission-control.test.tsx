@@ -286,6 +286,44 @@ describe('Mission Control shared entry', () => {
     expect(settingsPanelBlock).toContain('padding: 0');
   });
 
+  it('drops the workflow list table shell to a card-first layout on mobile viewports', async () => {
+    const isMobileWorkflowRule = (selector: string) => (rule: Rule) =>
+      normalizeCssSelector(rule.selector) === selector &&
+      rule.parent?.type === 'atrule' &&
+      rule.parent.name === 'media' &&
+      rule.parent.params.includes('max-width: 767px');
+
+    const mobileSlabBlock = cssRuleBlockMatching(
+      missionControlCss,
+      isMobileWorkflowRule('.workflow-list-data-slab'),
+    );
+    const mobileHeaderBlock = cssRuleBlockMatching(
+      missionControlCss,
+      isMobileWorkflowRule('.workflow-list-results-header'),
+    );
+    const mobileFooterBlock = cssRuleBlockMatching(
+      missionControlCss,
+      isMobileWorkflowRule('.workflow-list-data-slab .workflow-list-results-footer'),
+    );
+
+    expect(mobileSlabBlock).toContain('border: 0');
+    expect(mobileSlabBlock).toContain('border-radius: 0');
+    expect(mobileSlabBlock).toContain('background: transparent');
+    expect(mobileSlabBlock).toContain('box-shadow: none');
+    expect(mobileSlabBlock).toContain('padding: 0');
+
+    expect(mobileHeaderBlock).toContain('border-bottom: 0');
+    expect(mobileHeaderBlock).toContain('background: transparent');
+
+    expect(mobileFooterBlock).toContain('border-top: 0');
+
+    // Individual cards must keep their standalone card styling.
+    const cardBlock = cssRuleBlock(missionControlCss, '.queue-card');
+    expect(cardBlock).toContain('border: 1px solid rgb(var(--mm-border) / 0.8)');
+    expect(cardBlock).toContain('border-radius: 1rem');
+    expect(cardBlock).toContain('background: rgb(var(--mm-panel) / 0.78)');
+  });
+
   it('stacks Settings section radio controls on mobile viewports', async () => {
     const mobileSettingsNavBlock = cssRuleBlockMatching(missionControlCss, (rule) => {
       return (

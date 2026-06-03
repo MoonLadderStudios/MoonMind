@@ -1957,6 +1957,24 @@ tr[data-proposal-id].proposal-consuming td {
     display: none;
   }
 
+  .workflow-list-data-slab {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    padding: 0;
+  }
+
+  .workflow-list-results-header {
+    padding: 0 0 0.75rem;
+    border-bottom: 0;
+    background: transparent;
+  }
+
+  .workflow-list-data-slab .workflow-list-results-footer {
+    border-top: 0;
+  }
+
   .queue-card-list {
     display: grid;
   }
