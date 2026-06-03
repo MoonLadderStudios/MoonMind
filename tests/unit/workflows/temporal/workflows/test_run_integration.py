@@ -477,7 +477,7 @@ async def test_run_execution_stage_rejects_dood_skill_tool_in_run_dispatch(
     )
 
     async def fail_if_child_workflow_starts(*_args: Any, **_kwargs: Any) -> Any:
-        raise AssertionError("legacy DooD skill tools must be rejected before child dispatch")
+        raise AssertionError("DooD skill tools must not start MoonMind.AgentRun")
 
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -522,14 +522,19 @@ async def test_run_execution_stage_rejects_dood_skill_tool_in_run_dispatch(
         ),
     )
 
-    with pytest.raises(
-        ValueError,
-        match="unsupported plan node tool.type: 'skill'; expected 'agent_runtime'",
-    ):
-        await workflow._run_execution_stage(parameters={}, plan_ref="art:sha256:plan")
+    await workflow._run_execution_stage(parameters={}, plan_ref="art:sha256:plan")
 
     tool_calls = [call for call in captured if call[0] == "mm.tool.execute"]
-    assert tool_calls == []
+    assert len(tool_calls) == 1
+    payload = tool_calls[0][1]
+    assert payload["invocation_payload"]["tool"] == {
+        "type": "skill",
+        "name": "container.run_workload",
+        "version": "1.0",
+    }
+    assert payload["context"]["workflow_id"] == "wf-1"
+    assert payload["context"]["node_id"] == "workload-step"
+    assert tool_calls[0][2]["task_queue"] == "mm.activity.agent_runtime"
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_skips_integration_after_merge_automation_cancels(
