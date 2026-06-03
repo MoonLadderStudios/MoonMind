@@ -40,6 +40,33 @@ async def _timeout_wait_condition(
     assert predicate() is False
     raise asyncio.TimeoutError
 
+def _agent_runtime_step(
+    step_id: str = "step-1",
+    *,
+    instructions: str = "Run the requested work.",
+) -> dict[str, Any]:
+    return {
+        "id": step_id,
+        "tool": {
+            "type": "agent_runtime",
+            "name": "codex_cli",
+            "version": "1.0",
+        },
+        "inputs": {"instructions": instructions},
+        "options": {},
+    }
+
+async def _completed_child_workflow(
+    _workflow_type: str,
+    _args: object,
+    **_kwargs: object,
+) -> object:
+    return {
+        "summary": "Agent finished",
+        "metadata": {"push_status": "not_requested"},
+        "output_refs": [],
+    }
+
 def test_initialize_from_payload_captures_input_and_plan_refs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -166,32 +193,6 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
         if activity_type == "provider_profile.list":
             return {"profiles": []}
         if activity_type == "artifact.read":
-            if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "artifact://registry/1":
-                return json.dumps(
-                    {
-                        "skills": [
-                            {
-                                "name": "repo.run_tests",
-                                "version": "1.0.0",
-                                "description": "Run tests",
-                                "inputs": {"schema": {"type": "object"}},
-                                "outputs": {"schema": {"type": "object"}},
-                                "executor": {
-                                    "activity_type": "mm.skill.execute",
-                                    "selector": {"mode": "by_capability"},
-                                },
-                                "requirements": {"capabilities": ["sandbox"]},
-                                "policies": {
-                                    "timeouts": {
-                                        "start_to_close_seconds": 1800,
-                                        "schedule_to_close_seconds": 3600,
-                                    },
-                                    "retries": {"max_attempts": 3},
-                                },
-                            }
-                        ]
-                    }
-                ).encode("utf-8")
             return json.dumps(
                 {
                     "plan_version": "1.0",
@@ -204,14 +205,7 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
                         },
                     },
                     "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
-                    "nodes": [
-                        {
-                            "id": "step-1",
-                            "skill": {"name": "repo.run_tests", "version": "1.0.0"},
-                            "inputs": {"repo_ref": "git:org/repo#branch"},
-                            "options": {},
-                        }
-                    ],
+                    "nodes": [_agent_runtime_step()],
                     "edges": [],
                 }
             ).encode("utf-8")
@@ -221,6 +215,11 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
         run_workflow_module.workflow,
         "execute_activity",
         fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        _completed_child_workflow,
     )
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -251,15 +250,16 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
     )
 
     # provider_profile.list calls (3) happen first, then artifact.read for plan,
-    # artifact.read for registry, then the step execution manifest's artifact.create
-    # is recorded before the actual mm.skill.execute dispatch.
+    # then the step execution manifest artifact.create is recorded before
+    # child workflow dispatch.
     assert captured[3][0] == "artifact.read"
     assert captured[3][1]["artifact_ref"] == "art_plan_1"
-    assert captured[4][0] == "artifact.read"
-    assert captured[4][1]["artifact_ref"] == "artifact://registry/1"
-    assert captured[5][0] == "artifact.create"
-    assert captured[6][0] == "mm.skill.execute"
-    assert captured[6][1]["registry_snapshot_ref"] == "artifact://registry/1"
+    assert captured[4][0] == "artifact.create"
+    assert not any(
+        payload.get("artifact_ref") == "artifact://registry/1"
+        for activity_type, payload in captured
+        if activity_type == "artifact.read"
+    )
 
 @pytest.mark.asyncio
 async def test_run_finalizing_stage_writes_dependency_summary_metadata(
@@ -339,7 +339,7 @@ async def test_run_finalizing_stage_writes_dependency_summary_metadata(
     }
 
 @pytest.mark.asyncio
-async def test_run_execution_stage_routes_mm_tool_execute_from_registry(
+async def test_run_execution_stage_rejects_legacy_skill_registry_dispatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflow = MoonMindRunWorkflow()
@@ -355,32 +355,6 @@ async def test_run_execution_stage_routes_mm_tool_execute_from_registry(
         if activity_type == "provider_profile.list":
             return {"profiles": []}
         if activity_type == "artifact.read":
-            if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "artifact://registry/1":
-                return json.dumps(
-                    {
-                        "skills": [
-                            {
-                                "name": "repo.run_tests",
-                                "version": "1.0.0",
-                                "description": "Run tests",
-                                "inputs": {"schema": {"type": "object"}},
-                                "outputs": {"schema": {"type": "object"}},
-                                "executor": {
-                                    "activity_type": "mm.tool.execute",
-                                    "selector": {"mode": "by_capability"},
-                                },
-                                "requirements": {"capabilities": ["sandbox"]},
-                                "policies": {
-                                    "timeouts": {
-                                        "start_to_close_seconds": 1800,
-                                        "schedule_to_close_seconds": 3600,
-                                    },
-                                    "retries": {"max_attempts": 3},
-                                },
-                            }
-                        ]
-                    }
-                ).encode("utf-8")
             return json.dumps(
                 {
                     "plan_version": "1.0",
@@ -438,17 +412,20 @@ async def test_run_execution_stage_routes_mm_tool_execute_from_registry(
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
 
-    await workflow._run_execution_stage(
-        parameters={"repo": "MoonLadderStudios/MoonMind"},
-        plan_ref="art_plan_1",
-    )
+    with pytest.raises(
+        ValueError,
+        match="unsupported plan node tool.type: 'skill'; expected 'agent_runtime'",
+    ):
+        await workflow._run_execution_stage(
+            parameters={"repo": "MoonLadderStudios/MoonMind"},
+            plan_ref="art_plan_1",
+        )
 
-    # provider_profile.list calls (3) happen first, then artifact.read for plan,
-    # artifact.read for registry, then the step execution manifest's artifact.create
-    # is recorded before the actual mm.tool.execute dispatch.
-    assert captured[5][0] == "artifact.create"
-    assert captured[6][0] == "mm.tool.execute"
-    assert captured[6][1]["registry_snapshot_ref"] == "artifact://registry/1"
+    assert not any(
+        payload.get("artifact_ref") == "artifact://registry/1"
+        for activity_type, payload in captured
+        if activity_type == "artifact.read"
+    )
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_skips_empty_registry_for_agent_runtime_only_plan(
@@ -726,7 +703,7 @@ async def test_run_execution_stage_stops_plan_after_structured_blocked_outcome(
     assert steps[1]["status"] == "skipped"
 
 @pytest.mark.asyncio
-async def test_run_execution_stage_rechecks_jira_blockers_in_dependency_wait(
+async def test_run_execution_stage_rejects_legacy_jira_blocker_skill_plan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflow = MoonMindRunWorkflow()
@@ -920,25 +897,18 @@ async def test_run_execution_stage_rechecks_jira_blockers_in_dependency_wait(
         _timeout_wait_condition,
     )
 
-    await workflow._run_execution_stage(
-        parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "none"},
-        plan_ref="art_plan_1",
-    )
+    with pytest.raises(
+        ValueError,
+        match="unsupported plan node tool.type: 'skill'; expected 'agent_runtime'",
+    ):
+        await workflow._run_execution_stage(
+            parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "none"},
+            plan_ref="art_plan_1",
+        )
 
-    steps = workflow.get_step_ledger()["steps"]
-    assert [call[0] for call in skill_calls] == [
-        "jira.check_blockers",
-        "jira.check_blockers",
-        "repo.run_tests",
-    ]
-    assert skill_calls[1][1] == (
-        "wf-1:run-1:check-blockers:execution:1:execute_jira_blocker_recheck_1"
-    )
-    assert workflow._plan_blocked_message is None
+    assert skill_calls == []
     assert workflow._jira_blocker_wait_active is False
     assert workflow._waiting_reason is None
-    assert steps[0]["status"] == "succeeded"
-    assert steps[1]["status"] == "succeeded"
 
 @pytest.mark.asyncio
 async def test_jira_blocker_recheck_wait_honors_pause_before_activity(
@@ -1154,7 +1124,7 @@ def test_skip_dependency_wait_allows_active_jira_wait_without_issue_keys() -> No
     workflow.validate_skip_dependency_wait()
 
 @pytest.mark.asyncio
-async def test_run_execution_stage_preserves_registry_read_for_unpatched_histories(
+async def test_run_execution_stage_skips_registry_read_for_unpatched_histories(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflow = MoonMindRunWorkflow()
@@ -1287,7 +1257,7 @@ async def test_run_execution_stage_preserves_registry_read_for_unpatched_histori
         for activity_type, payload in captured
         if activity_type == "artifact.read"
     ]
-    assert artifact_reads == ["art_plan_1", "artifact://registry/empty"]
+    assert artifact_reads == ["art_plan_1"]
 
 def test_build_agent_execution_request_includes_bundle_metadata(
     monkeypatch: pytest.MonkeyPatch,
@@ -1334,32 +1304,6 @@ async def test_run_execution_stage_fail_fast_raises_when_tool_returns_failed_sta
         **_kwargs: object,
     ) -> object:
         if activity_type == "artifact.read":
-            if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "artifact://registry/1":
-                return json.dumps(
-                    {
-                        "skills": [
-                            {
-                                "name": "repo.run_tests",
-                                "version": "1.0.0",
-                                "description": "Run tests",
-                                "inputs": {"schema": {"type": "object"}},
-                                "outputs": {"schema": {"type": "object"}},
-                                "executor": {
-                                    "activity_type": "mm.tool.execute",
-                                    "selector": {"mode": "by_capability"},
-                                },
-                                "requirements": {"capabilities": ["sandbox"]},
-                                "policies": {
-                                    "timeouts": {
-                                        "start_to_close_seconds": 1800,
-                                        "schedule_to_close_seconds": 3600,
-                                    },
-                                    "retries": {"max_attempts": 1},
-                                },
-                            }
-                        ]
-                    }
-                ).encode("utf-8")
             return json.dumps(
                 {
                     "plan_version": "1.0",
@@ -1372,28 +1316,26 @@ async def test_run_execution_stage_fail_fast_raises_when_tool_returns_failed_sta
                         },
                     },
                     "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
-                    "nodes": [
-                        {
-                            "id": "step-1",
-                            "tool": {
-                                "type": "skill",
-                                "name": "repo.run_tests",
-                                "version": "1.0.0",
-                            },
-                            "inputs": {"repo_ref": "git:org/repo#branch"},
-                            "options": {},
-                        }
-                    ],
+                    "nodes": [_agent_runtime_step()],
                     "edges": [],
                 }
             ).encode("utf-8")
+        return {"status": "COMPLETED", "outputs": {}}
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _args: object,
+        **_kwargs: object,
+    ) -> object:
         return {
-            "status": "FAILED",
-            "outputs": {"error": "gemini CLI command failed"},
-            "progress": {"details": "Failed to execute generic LLM handler"},
+            "summary": "Failed to execute generic LLM handler",
+            "failureClass": "gemini CLI command failed",
+            "metadata": {},
+            "output_refs": [],
         }
 
     monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_child_workflow", fake_execute_child_workflow)
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -1424,41 +1366,14 @@ async def test_run_execution_stage_continue_mode_keeps_running_after_failed_stat
 ) -> None:
     workflow = MoonMindRunWorkflow()
     workflow._owner_id = "owner-1"
-    skill_calls = 0
+    child_calls = 0
 
     async def fake_execute_activity(
         activity_type: str,
         payload: dict[str, object],
         **_kwargs: object,
     ) -> object:
-        nonlocal skill_calls
         if activity_type == "artifact.read":
-            if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "artifact://registry/1":
-                return json.dumps(
-                    {
-                        "skills": [
-                            {
-                                "name": "repo.run_tests",
-                                "version": "1.0.0",
-                                "description": "Run tests",
-                                "inputs": {"schema": {"type": "object"}},
-                                "outputs": {"schema": {"type": "object"}},
-                                "executor": {
-                                    "activity_type": "mm.tool.execute",
-                                    "selector": {"mode": "by_capability"},
-                                },
-                                "requirements": {"capabilities": ["sandbox"]},
-                                "policies": {
-                                    "timeouts": {
-                                        "start_to_close_seconds": 1800,
-                                        "schedule_to_close_seconds": 3600,
-                                    },
-                                    "retries": {"max_attempts": 1},
-                                },
-                            }
-                        ]
-                    }
-                ).encode("utf-8")
             return json.dumps(
                 {
                     "plan_version": "1.0",
@@ -1472,42 +1387,36 @@ async def test_run_execution_stage_continue_mode_keeps_running_after_failed_stat
                     },
                     "policy": {"failure_mode": "CONTINUE", "max_concurrency": 1},
                     "nodes": [
-                        {
-                            "id": "step-1",
-                            "tool": {
-                                "type": "skill",
-                                "name": "repo.run_tests",
-                                "version": "1.0.0",
-                            },
-                            "inputs": {"repo_ref": "git:org/repo#branch"},
-                            "options": {},
-                        },
-                        {
-                            "id": "step-2",
-                            "tool": {
-                                "type": "skill",
-                                "name": "repo.run_tests",
-                                "version": "1.0.0",
-                            },
-                            "inputs": {"repo_ref": "git:org/repo#branch"},
-                            "options": {},
-                        },
+                        _agent_runtime_step("step-1"),
+                        _agent_runtime_step("step-2"),
                     ],
                     "edges": [],
                 }
             ).encode("utf-8")
-        if activity_type == "mm.tool.execute":
-            skill_calls += 1
-            if skill_calls == 1:
-                return {
-                    "status": "FAILED",
-                    "outputs": {"error": "first step failed"},
-                    "progress": {"details": "intentional failure"},
-                }
-            return {"status": "COMPLETED", "outputs": {}}
         return {"status": "COMPLETED", "outputs": {}}
 
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _args: object,
+        **_kwargs: object,
+    ) -> object:
+        nonlocal child_calls
+        child_calls += 1
+        if child_calls == 1:
+            return {
+                "summary": "intentional failure",
+                "failureClass": "first step failed",
+                "metadata": {},
+                "output_refs": [],
+            }
+        return {
+            "summary": "Agent finished",
+            "metadata": {"push_status": "not_requested"},
+            "output_refs": [],
+        }
+
     monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_child_workflow", fake_execute_child_workflow)
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -1528,7 +1437,7 @@ async def test_run_execution_stage_continue_mode_keeps_running_after_failed_stat
         plan_ref="art_plan_1",
     )
 
-    assert skill_calls == 2
+    assert child_calls == 2
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_publish_mode_pr_requires_pull_request_url(
@@ -1543,32 +1452,6 @@ async def test_run_execution_stage_publish_mode_pr_requires_pull_request_url(
         **_kwargs: object,
     ) -> object:
         if activity_type == "artifact.read":
-            if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "artifact://registry/1":
-                return json.dumps(
-                    {
-                        "skills": [
-                            {
-                                "name": "repo.publish",
-                                "version": "1.0.0",
-                                "description": "Publish",
-                                "inputs": {"schema": {"type": "object"}},
-                                "outputs": {"schema": {"type": "object"}},
-                                "executor": {
-                                    "activity_type": "mm.tool.execute",
-                                    "selector": {"mode": "by_capability"},
-                                },
-                                "requirements": {"capabilities": ["sandbox"]},
-                                "policies": {
-                                    "timeouts": {
-                                        "start_to_close_seconds": 1800,
-                                        "schedule_to_close_seconds": 3600,
-                                    },
-                                    "retries": {"max_attempts": 1},
-                                },
-                            }
-                        ]
-                    }
-                ).encode("utf-8")
             return json.dumps(
                 {
                     "plan_version": "1.0",
@@ -1581,27 +1464,25 @@ async def test_run_execution_stage_publish_mode_pr_requires_pull_request_url(
                         },
                     },
                     "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
-                    "nodes": [
-                        {
-                            "id": "step-1",
-                            "tool": {
-                                "type": "skill",
-                                "name": "repo.publish",
-                                "version": "1.0.0",
-                            },
-                            "inputs": {"repo_ref": "git:org/repo#branch"},
-                            "options": {},
-                        }
-                    ],
+                    "nodes": [_agent_runtime_step()],
                     "edges": [],
                 }
             ).encode("utf-8")
+        return {"status": "COMPLETED", "outputs": {}}
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _args: object,
+        **_kwargs: object,
+    ) -> object:
         return {
-            "status": "COMPLETED",
-            "outputs": {"stdout_tail": "Applied requested changes."},
+            "summary": "Applied requested changes.",
+            "metadata": {"stdout_tail": "Applied requested changes."},
+            "output_refs": [],
         }
 
     monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_child_workflow", fake_execute_child_workflow)
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -1639,32 +1520,6 @@ async def test_run_execution_stage_publish_mode_pr_accepts_github_pull_request_u
         **_kwargs: object,
     ) -> object:
         if activity_type == "artifact.read":
-            if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "artifact://registry/1":
-                return json.dumps(
-                    {
-                        "skills": [
-                            {
-                                "name": "repo.publish",
-                                "version": "1.0.0",
-                                "description": "Publish",
-                                "inputs": {"schema": {"type": "object"}},
-                                "outputs": {"schema": {"type": "object"}},
-                                "executor": {
-                                    "activity_type": "mm.tool.execute",
-                                    "selector": {"mode": "by_capability"},
-                                },
-                                "requirements": {"capabilities": ["sandbox"]},
-                                "policies": {
-                                    "timeouts": {
-                                        "start_to_close_seconds": 1800,
-                                        "schedule_to_close_seconds": 3600,
-                                    },
-                                    "retries": {"max_attempts": 1},
-                                },
-                            }
-                        ]
-                    }
-                ).encode("utf-8")
             return json.dumps(
                 {
                     "plan_version": "1.0",
@@ -1677,29 +1532,27 @@ async def test_run_execution_stage_publish_mode_pr_accepts_github_pull_request_u
                         },
                     },
                     "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
-                    "nodes": [
-                        {
-                            "id": "step-1",
-                            "tool": {
-                                "type": "skill",
-                                "name": "repo.publish",
-                                "version": "1.0.0",
-                            },
-                            "inputs": {"repo_ref": "git:org/repo#branch"},
-                            "options": {},
-                        }
-                    ],
+                    "nodes": [_agent_runtime_step()],
                     "edges": [],
                 }
             ).encode("utf-8")
+        return {"status": "COMPLETED", "outputs": {}}
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _args: object,
+        **_kwargs: object,
+    ) -> object:
         return {
-            "status": "COMPLETED",
-            "outputs": {
+            "summary": "Opened PR: https://github.com/org/repo/pull/123",
+            "metadata": {
                 "stdout_tail": "Opened PR: https://github.com/org/repo/pull/123"
             },
+            "output_refs": [],
         }
 
     monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_child_workflow", fake_execute_child_workflow)
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
     monkeypatch.setattr(
         run_workflow_module.workflow,

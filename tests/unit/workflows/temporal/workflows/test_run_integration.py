@@ -114,15 +114,26 @@ async def test_run_execution_stage_skips_integration_after_merge_gate_cancellati
                     {
                         "id": "step-1",
                         "tool": {
-                            "type": "skill",
-                            "name": "repo.noop",
+                            "type": "agent_runtime",
+                            "name": "jules",
                             "version": "1.0",
                         },
-                        "inputs": {},
+                        "inputs": {"instructions": "Do nothing."},
                     }
                 ]
             )
         return {"status": "COMPLETED", "outputs": {}}
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _args: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        return {
+            "summary": "No-op completed",
+            "metadata": {"push_status": "not_requested"},
+            "output_refs": [],
+        }
 
     async def fake_merge_gate(
         *,
@@ -143,6 +154,11 @@ async def test_run_execution_stage_skips_integration_after_merge_gate_cancellati
         run_workflow_module.workflow,
         "execute_activity",
         fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
     )
     monkeypatch.setattr(mock_run_workflow, "_maybe_start_merge_gate", fake_merge_gate)
     monkeypatch.setattr(
@@ -388,7 +404,7 @@ async def test_run_execution_stage_bundles_consecutive_jules_nodes(
     assert request.parameters["metadata"]["moonmind"]["bundleStrategy"] == "one_shot_jules"
 
 @pytest.mark.asyncio
-async def test_run_execution_stage_routes_dood_skill_tool_to_agent_runtime_activity(
+async def test_run_execution_stage_rejects_dood_skill_tool_in_run_dispatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflow = MoonMindRunWorkflow()
@@ -461,7 +477,7 @@ async def test_run_execution_stage_routes_dood_skill_tool_to_agent_runtime_activ
     )
 
     async def fail_if_child_workflow_starts(*_args: Any, **_kwargs: Any) -> Any:
-        raise AssertionError("DooD skill tools must not start MoonMind.AgentRun")
+        raise AssertionError("legacy DooD skill tools must be rejected before child dispatch")
 
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -506,19 +522,14 @@ async def test_run_execution_stage_routes_dood_skill_tool_to_agent_runtime_activ
         ),
     )
 
-    await workflow._run_execution_stage(parameters={}, plan_ref="art:sha256:plan")
+    with pytest.raises(
+        ValueError,
+        match="unsupported plan node tool.type: 'skill'; expected 'agent_runtime'",
+    ):
+        await workflow._run_execution_stage(parameters={}, plan_ref="art:sha256:plan")
 
     tool_calls = [call for call in captured if call[0] == "mm.tool.execute"]
-    assert len(tool_calls) == 1
-    payload = tool_calls[0][1]
-    assert payload["invocation_payload"]["tool"] == {
-        "type": "skill",
-        "name": "container.run_workload",
-        "version": "1.0",
-    }
-    assert payload["context"]["workflow_id"] == "wf-1"
-    assert payload["context"]["node_id"] == "workload-step"
-    assert tool_calls[0][2]["task_queue"] == "mm.activity.agent_runtime"
+    assert tool_calls == []
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_skips_integration_after_merge_automation_cancels(
