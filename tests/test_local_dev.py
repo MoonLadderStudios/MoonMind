@@ -60,6 +60,21 @@ def _network_aliases(service_config: dict, network_name: str) -> set[str]:
     return {str(alias) for alias in network_config.get("aliases", [])}
 
 
+def _env_map(environment: object) -> dict[str, str]:
+    if isinstance(environment, dict):
+        return {str(k): str(v) for k, v in environment.items()}
+    if not isinstance(environment, list):
+        return {}
+    mapped: dict[str, str] = {}
+    for item in environment:
+        text = str(item)
+        if "=" not in text:
+            continue
+        key, value = text.split("=", 1)
+        mapped[key] = value
+    return mapped
+
+
 def test_alembic_revision_ids_fit_default_version_column():
     """Alembic's default version table stores revision ids in VARCHAR(32)."""
     migration_dir = Path("api_service/migrations/versions")
@@ -154,6 +169,12 @@ def test_sandbox_worker_uses_internal_egress_network_for_mm_785():
     assert isinstance(temporal_service, dict), "temporal service is missing"
     minio_service = services.get("minio")
     assert isinstance(minio_service, dict), "minio service is missing"
+    postgres_service = services.get("postgres")
+    assert isinstance(postgres_service, dict), "postgres service is missing"
+    proxy_service = services.get("sandbox-egress-proxy")
+    assert isinstance(
+        proxy_service, dict
+    ), "sandbox-egress-proxy service is missing"
 
     assert "temporal-internal" in _network_aliases(
         temporal_service,
@@ -163,6 +184,31 @@ def test_sandbox_worker_uses_internal_egress_network_for_mm_785():
         minio_service,
         "sandbox-egress-network",
     )
+    assert "moonmind-api-db" in _network_aliases(
+        postgres_service,
+        "sandbox-egress-network",
+    )
+    assert _network_names(proxy_service) == {
+        "local-network",
+        "sandbox-egress-network",
+    }
+    assert proxy_service.get("expose") == ["3128"]
+
+    sandbox_env = _env_map(sandbox_worker.get("environment"))
+    assert sandbox_env["HTTPS_PROXY"] == (
+        "${MOONMIND_SANDBOX_HTTPS_PROXY:-http://sandbox-egress-proxy:3128}"
+    )
+    assert sandbox_env["HTTP_PROXY"] == (
+        "${MOONMIND_SANDBOX_HTTP_PROXY:-http://sandbox-egress-proxy:3128}"
+    )
+    assert "moonmind-api-db" in sandbox_env["NO_PROXY"]
+
+    squid_config = Path("docker/sandbox-egress-proxy/squid.conf").read_text(
+        encoding="utf-8"
+    )
+    assert "http_access deny all" in squid_config
+    assert ".github.com" in squid_config
+    assert ".anthropic.com" in squid_config
 
 
 def test_api_service_runs_with_container_init():

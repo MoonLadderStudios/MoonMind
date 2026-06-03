@@ -120,6 +120,9 @@ services:
         aliases:
           - moonmind-api-db
           - temporal-db
+      sandbox-egress-network:
+        aliases:
+          - moonmind-api-db
     restart: unless-stopped
     healthcheck:
       test:
@@ -525,6 +528,12 @@ services:
       - TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID=${TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID:-minioadmin}
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
+      - HTTP_PROXY=${MOONMIND_SANDBOX_HTTP_PROXY:-http://sandbox-egress-proxy:3128}
+      - HTTPS_PROXY=${MOONMIND_SANDBOX_HTTPS_PROXY:-http://sandbox-egress-proxy:3128}
+      - http_proxy=${MOONMIND_SANDBOX_HTTP_PROXY:-http://sandbox-egress-proxy:3128}
+      - https_proxy=${MOONMIND_SANDBOX_HTTPS_PROXY:-http://sandbox-egress-proxy:3128}
+      - NO_PROXY=${MOONMIND_SANDBOX_NO_PROXY:-localhost,127.0.0.1,temporal-internal,moonmind-temporal-artifacts-s3,moonmind-api-db,postgres,minio,temporal}
+      - no_proxy=${MOONMIND_SANDBOX_NO_PROXY:-localhost,127.0.0.1,temporal-internal,moonmind-temporal-artifacts-s3,moonmind-api-db,postgres,minio,temporal}
     env_file:
       - .env
     volumes:
@@ -566,6 +575,8 @@ services:
         condition: service_completed_successfully
       gemini-auth-init:
         condition: service_completed_successfully
+      sandbox-egress-proxy:
+        condition: service_started
     networks:
       - sandbox-egress-network
     restart: unless-stopped
@@ -893,6 +904,17 @@ services:
       - ./docker/docker-proxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
     networks:
       - docker-proxy-network
+    restart: unless-stopped
+
+  sandbox-egress-proxy:
+    image: ubuntu/squid:latest
+    volumes:
+      - ./docker/sandbox-egress-proxy/squid.conf:/etc/squid/squid.conf:ro
+    expose:
+      - "3128"
+    networks:
+      - local-network
+      - sandbox-egress-network
     restart: unless-stopped
 
   openhands:

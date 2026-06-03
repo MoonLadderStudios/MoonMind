@@ -84,6 +84,36 @@ def test_sandbox_worker_compose_egress_is_restricted_for_mm_785():
         services["minio"],
         "sandbox-egress-network",
     )
+    assert "moonmind-api-db" in _network_aliases(
+        services["postgres"],
+        "sandbox-egress-network",
+    )
+
+    proxy_service = services["sandbox-egress-proxy"]
+    assert _network_names(proxy_service) == {
+        "local-network",
+        "sandbox-egress-network",
+    }
+    assert proxy_service["expose"] == ["3128"]
+
+    sandbox_env = _env_map(services["temporal-worker-sandbox"]["environment"])
+    assert sandbox_env["HTTPS_PROXY"] == (
+        "${MOONMIND_SANDBOX_HTTPS_PROXY:-http://sandbox-egress-proxy:3128}"
+    )
+    assert sandbox_env["HTTP_PROXY"] == (
+        "${MOONMIND_SANDBOX_HTTP_PROXY:-http://sandbox-egress-proxy:3128}"
+    )
+    assert "moonmind-api-db" in sandbox_env["NO_PROXY"]
+    assert services["temporal-worker-sandbox"]["depends_on"][
+        "sandbox-egress-proxy"
+    ]["condition"] == "service_started"
+
+    squid_config = (
+        REPO_ROOT / "docker" / "sandbox-egress-proxy" / "squid.conf"
+    ).read_text(encoding="utf-8")
+    assert "http_access deny all" in squid_config
+    assert ".github.com" in squid_config
+    assert ".openai.com" in squid_config
 
 def test_temporal_persistence_and_visibility_environment_defaults():
     compose = _load_compose()
