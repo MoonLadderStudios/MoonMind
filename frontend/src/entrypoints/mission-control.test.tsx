@@ -316,6 +316,8 @@ describe('Mission Control shared entry', () => {
     expect(mobileHeaderBlock).toContain('background: transparent');
 
     expect(mobileFooterBlock).toContain('border-top: 0');
+    expect(mobileFooterBlock).toContain('padding-left: 0');
+    expect(mobileFooterBlock).toContain('padding-right: 0');
 
     // Individual cards must keep their standalone card styling.
     const cardBlock = cssRuleBlock(missionControlCss, '.queue-card');
