@@ -230,16 +230,12 @@ class TaskProposalService:
             raise TaskProposalValidationError(
                 "MoonMind proposals require at least one approved signal tag"
             )
-        trigger_repo = self._clean_str(
-            metadata.get("trigger_repo") or metadata.get("triggerRepo")
-        )
-        trigger_job = self._clean_str(
-            metadata.get("trigger_job_id") or metadata.get("triggerJobId")
-        )
+        trigger_repo = self._clean_str(metadata.get("trigger_repo"))
+        trigger_job = self._clean_str(metadata.get("trigger_job_id"))
         signal_payload = metadata.get("signal")
         if not trigger_repo or not trigger_job:
             raise TaskProposalValidationError(
-                "MoonMind proposals must include triggerRepo and triggerJobId metadata"
+                "MoonMind proposals must include trigger_repo and trigger_job_id metadata"
             )
         if not isinstance(signal_payload, dict):
             raise TaskProposalValidationError(
@@ -275,9 +271,7 @@ class TaskProposalService:
         if "conflicting_instructions" in tag_set:
             return TaskProposalReviewPriority.HIGH, "signal:conflicting_instructions"
         if "missing_ref" in tag_set:
-            missing_refs = signal_dict.get("missingRefs") or signal_dict.get(
-                "missing_refs"
-            )
+            missing_refs = signal_dict.get("missing_refs")
             if isinstance(missing_refs, (list, tuple)) and missing_refs:
                 return TaskProposalReviewPriority.HIGH, "signal:missing_ref"
         if "retry" in tag_set:

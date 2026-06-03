@@ -5729,7 +5729,7 @@ class MoonMindRunWorkflow:
             }
             bounded_ref = self._coerce_text(diagnostics_ref, max_chars=400)
             if bounded_ref:
-                signal["diagnosticsRef"] = bounded_ref
+                signal["diagnostics_ref"] = bounded_ref
             if extra:
                 signal.update(extra)
             signals.append(signal)
@@ -5785,15 +5785,6 @@ class MoonMindRunWorkflow:
                     summary=summary,
                     diagnostics_ref=diagnostics_ref,
                 )
-
-        if diagnostics_ref and not any(
-            "diagnosticsRef" in signal for signal in signals
-        ):
-            add_signal(
-                signal_type="artifact_gap",
-                summary="Run produced a diagnostics reference for proposal review.",
-                diagnostics_ref=diagnostics_ref,
-            )
 
         return signals[:3]
 

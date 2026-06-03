@@ -3427,7 +3427,7 @@ class TemporalProposalActivities:
 
             severity = cls._telemetry_signal_severity(signal, tags)
             diagnostics_ref = cls._normalize_proposal_text(
-                signal.get("diagnosticsRef") or signal.get("diagnostics_ref")
+                signal.get("diagnostics_ref")
             )
             runtime_node = task.get("runtime")
             runtime = dict(runtime_node) if isinstance(runtime_node, Mapping) else {}
@@ -3469,9 +3469,7 @@ class TemporalProposalActivities:
                     "message",
                     "reason",
                     "retries",
-                    "missingRefs",
                     "missing_refs",
-                    "diagnosticsRef",
                     "diagnostics_ref",
                 }
             }

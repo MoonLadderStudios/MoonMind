@@ -334,8 +334,8 @@ async def test_create_proposal_overrides_priority_for_moonmind() -> None:
         origin_source="queue",
         origin_id=None,
         origin_metadata={
-            "triggerRepo": "moon/org",
-            "triggerJobId": str(uuid4()),
+            "trigger_repo": "moon/org",
+            "trigger_job_id": str(uuid4()),
             "signal": {"severity": "medium"},
         },
         proposed_by_worker_id="worker-1",
@@ -444,8 +444,8 @@ async def test_create_proposal_honors_requested_priority_when_higher() -> None:
         origin_source="queue",
         origin_id=None,
         origin_metadata={
-            "triggerRepo": "moon/org",
-            "triggerJobId": str(uuid4()),
+            "trigger_repo": "moon/org",
+            "trigger_job_id": str(uuid4()),
             "signal": {"severity": "medium", "retries": 1},
         },
         proposed_by_worker_id="worker-1",

@@ -130,7 +130,7 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
                         "severity": "high",
                         "summary": "The run retried the same failed check twice.",
                         "retries": 2,
-                        "diagnosticsRef": "artifact://diag-1",
+                        "diagnostics_ref": "artifact://diag-1",
                     }
                 ],
             }
@@ -146,7 +146,7 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(candidate["severity"], "high")
         self.assertEqual(candidate["signal"]["type"], "retry")
         self.assertEqual(candidate["signal"]["retries"], 2)
-        self.assertEqual(candidate["signal"]["diagnosticsRef"], "artifact://diag-1")
+        self.assertEqual(candidate["signal"]["diagnostics_ref"], "artifact://diag-1")
         task = candidate["taskCreateRequest"]["payload"]["task"]
         self.assertEqual(task["runtime"], {"mode": "codex"})
         self.assertIn(
@@ -1280,7 +1280,7 @@ class TestProposalSubmitPolicyResolution(unittest.IsolatedAsyncioTestCase):
                             "severity": "high",
                             "summary": "The run retried the same failed check twice.",
                             "retries": 2,
-                            "diagnosticsRef": "artifact://diag-1",
+                            "diagnostics_ref": "artifact://diag-1",
                         },
                         "taskCreateRequest": {
                             "payload": {"repository": "MoonLadderStudios/MoonMind"}
@@ -1311,7 +1311,7 @@ class TestProposalSubmitPolicyResolution(unittest.IsolatedAsyncioTestCase):
                 "severity": "high",
                 "summary": "The run retried the same failed check twice.",
                 "retries": 2,
-                "diagnosticsRef": "artifact://diag-1",
+                "diagnostics_ref": "artifact://diag-1",
                 "tags": ["retry"],
             },
         )
