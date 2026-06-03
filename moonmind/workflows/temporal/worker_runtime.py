@@ -35,6 +35,7 @@ from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
+from structlog.stdlib import ProcessorFormatter
 
 from api_service.db.base import get_async_session_context
 from api_service.db.models import (
@@ -43,6 +44,7 @@ from api_service.db.models import (
     TemporalExecutionOwnerType,
     TemporalExecutionRecord,
 )
+from moonmind.config.logging import configure_logging, default_log_fields_from_env
 from moonmind.config.settings import settings
 from moonmind.workflows.skills.deployment_execution import (
     DeploymentUpdateExecutor,
@@ -167,6 +169,8 @@ _MANAGED_SESSION_LOG_FIELD_MAP: tuple[tuple[str, str], ...] = (
 )
 _OPENTELEMETRY_LOG_FORMAT = (
     "%(asctime)s %(levelname)s [%(name)s] "
+    "[service=%(service)s component=%(component)s "
+    "worker_fleet=%(worker_fleet)s worker_id=%(worker_id)s] "
     "[trace_id=%(trace_id)s span_id=%(span_id)s] "
     "[workflow_id=%(temporal_workflow_id)s run_id=%(temporal_run_id)s "
     "activity_id=%(temporal_activity_id)s] "
@@ -2303,7 +2307,14 @@ async def main_async() -> None:
 
 class OpenTelemetryLoggingFilter(logging.Filter):
     """Injects OpenTelemetry and Temporal trace context into standard logging."""
+
+    def __init__(self, name: str = "") -> None:
+        super().__init__(name)
+        self._default_fields = default_log_fields_from_env()
+
     def filter(self, record: logging.LogRecord) -> bool:
+        for key, value in self._default_fields.items():
+            setattr(record, key, value)
         record.trace_id = ""
         record.span_id = ""
         record.temporal_workflow_id = ""
@@ -2360,14 +2371,17 @@ class OpenTelemetryLoggingFilter(logging.Filter):
         return True
 
 def _configure_worker_logging(*, enable_opentelemetry: bool) -> None:
+    configure_logging(
+        level=os.environ.get("LOG_LEVEL", "INFO"),
+        structured=None,
+        default_fields=default_log_fields_from_env(),
+    )
     if not enable_opentelemetry:
-        logging.basicConfig(level=logging.INFO)
         return
 
-    logging.basicConfig(level=logging.INFO, format=_OPENTELEMETRY_LOG_FORMAT)
-    formatter = logging.Formatter(_OPENTELEMETRY_LOG_FORMAT)
     for handler in logging.root.handlers:
-        handler.setFormatter(formatter)
+        if not isinstance(handler.formatter, ProcessorFormatter):
+            handler.setFormatter(logging.Formatter(_OPENTELEMETRY_LOG_FORMAT))
         if not any(
             isinstance(existing_filter, OpenTelemetryLoggingFilter)
             for existing_filter in handler.filters
