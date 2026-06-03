@@ -4128,8 +4128,7 @@ class MoonMindRunWorkflow:
                         execution_result, blocked_outcome_wait_skipped = (
                             await self._wait_for_jira_blocker_resolution(
                                 execution_result=execution_result,
-                                route=route,
-                                execute_payload=execute_payload,
+                                agent_request=request,
                                 node_id=node_id,
                                 tool_name=tool_name,
                                 tool_type=tool_type,
@@ -5025,7 +5024,7 @@ class MoonMindRunWorkflow:
         tool_type: str,
         tool_name: str,
     ) -> bool:
-        if tool_type != "skill" or tool_name != JIRA_CHECK_BLOCKERS_TOOL_NAME:
+        if tool_type != "agent_runtime" or tool_name != JIRA_CHECK_BLOCKERS_TOOL_NAME:
             return False
         outputs = self._get_from_result(execution_result, "outputs")
         if not isinstance(outputs, Mapping):
@@ -5103,8 +5102,7 @@ class MoonMindRunWorkflow:
         self,
         *,
         execution_result: Any,
-        route: Any,
-        execute_payload: Mapping[str, Any],
+        agent_request: Any,
         node_id: str,
         tool_name: str,
         tool_type: str,
@@ -5172,26 +5170,28 @@ class MoonMindRunWorkflow:
                     },
                 }
                 break
-            recheck_payload = dict(execute_payload)
-            idempotency_key = recheck_payload.get("idempotency_key")
-            if isinstance(idempotency_key, str) and idempotency_key.strip():
-                recheck_payload["idempotency_key"] = (
-                    f"{idempotency_key}_jira_blocker_recheck_{recheck_count}"
-                )
+            child_workflow_id = (
+                f"{workflow.info().workflow_id}:agent:{node_id}:"
+                f"jira-blocker-recheck{recheck_count}"
+            )
             try:
-                current_result = await workflow.execute_activity(
-                    route.activity_type,
-                    recheck_payload,
-                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                    **self._execute_kwargs_for_route(route),
+                self._active_agent_child_workflow_id = child_workflow_id
+                self._active_agent_id = getattr(agent_request, "agent_id", None)
+                child_result = await workflow.execute_child_workflow(
+                    "MoonMind.AgentRun",
+                    agent_request,
+                    id=child_workflow_id,
+                    task_queue=WORKFLOW_TASK_QUEUE,
                 )
+                current_result = self._map_agent_run_result(child_result)
             except Exception as exc:
                 diagnostic = self._record_failure_diagnostic(
                     exc,
                     stage=self._state,
                     step_id=node_id,
                     step_title=f"Re-check of Jira blockers for {tool_name}",
-                    source="activity",
+                    source="child_workflow",
+                    child_workflow_id=child_workflow_id,
                 )
                 self._mark_step_terminal(
                     node_id,
@@ -5203,6 +5203,9 @@ class MoonMindRunWorkflow:
                 if failure_mode == "FAIL_FAST":
                     raise
                 break
+            finally:
+                self._active_agent_child_workflow_id = None
+                self._active_agent_id = None
             self._record_step_result_evidence(
                 node_id,
                 execution_result=current_result,

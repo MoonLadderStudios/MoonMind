@@ -916,7 +916,7 @@ async def test_jira_blocker_recheck_wait_honors_pause_before_activity(
 ) -> None:
     workflow = MoonMindRunWorkflow()
     events: list[str] = []
-    route = type("Route", (), {"activity_type": "mm.skill.execute"})()
+    agent_request = type("AgentRequest", (), {"agent_id": "agent-1"})()
     blocked_result = {
         "status": "COMPLETED",
         "outputs": {
@@ -944,16 +944,15 @@ async def test_jira_blocker_recheck_wait_honors_pause_before_activity(
         events.append("pause-boundary")
         self._paused = False
 
-    async def fake_execute_activity(
-        activity_type: str,
-        payload: Any,
-        **_kwargs: Any,
+    async def fake_execute_child_workflow(
+        workflow_type: str,
+        request: Any,
+        **kwargs: Any,
     ) -> Any:
-        events.append(f"activity:{activity_type}")
-        assert events[-2:] == ["pause-boundary", "activity:mm.skill.execute"]
-        assert _normalize_payload(payload)["idempotency_key"].endswith(
-            "_jira_blocker_recheck_1"
-        )
+        events.append(f"child:{workflow_type}")
+        assert events[-2:] == ["pause-boundary", "child:MoonMind.AgentRun"]
+        assert request is agent_request
+        assert kwargs["id"].endswith(":agent:check-blockers:jira-blocker-recheck1")
         return continue_result
 
     monkeypatch.setattr(
@@ -983,27 +982,26 @@ async def test_jira_blocker_recheck_wait_honors_pause_before_activity(
     )
     monkeypatch.setattr(
         run_workflow_module.workflow,
-        "execute_activity",
-        fake_execute_activity,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "info",
+        lambda: type("WorkflowInfo", (), {"workflow_id": "wf-1"})(),
     )
     monkeypatch.setattr(
         MoonMindRunWorkflow,
         "_wait_if_paused_at_safe_boundary",
         fake_pause_boundary,
     )
-    monkeypatch.setattr(
-        MoonMindRunWorkflow,
-        "_execute_kwargs_for_route",
-        lambda self, route: {},
-    )
 
     result, skipped = await workflow._wait_for_jira_blocker_resolution(
         execution_result=blocked_result,
-        route=route,
-        execute_payload={"idempotency_key": "wf-1_check-blockers_execute"},
+        agent_request=agent_request,
         node_id="check-blockers",
         tool_name="jira.check_blockers",
-        tool_type="skill",
+        tool_type="agent_runtime",
         failure_mode="FAIL_FAST",
     )
 
@@ -1012,7 +1010,7 @@ async def test_jira_blocker_recheck_wait_honors_pause_before_activity(
     assert events == [
         "pause-observed",
         "pause-boundary",
-        "activity:mm.skill.execute",
+        "child:MoonMind.AgentRun",
     ]
     assert workflow._jira_blocker_wait_active is False
     assert workflow._jira_blocker_wait_started_at is None
@@ -1025,7 +1023,7 @@ async def test_jira_blocker_recheck_activity_failure_respects_failure_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflow = MoonMindRunWorkflow()
-    route = type("Route", (), {"activity_type": "mm.skill.execute"})()
+    agent_request = type("AgentRequest", (), {"agent_id": "agent-1"})()
     blocked_result = {
         "status": "COMPLETED",
         "outputs": {
@@ -1035,11 +1033,7 @@ async def test_jira_blocker_recheck_activity_failure_respects_failure_mode(
         },
     }
 
-    async def fake_execute_activity(
-        _activity_type: str,
-        _payload: Any,
-        **_kwargs: Any,
-    ) -> Any:
+    async def fake_execute_child_workflow(*_args: Any, **_kwargs: Any) -> Any:
         raise RuntimeError("worker unavailable")
 
     async def fake_noop_async(*_args: Any, **_kwargs: Any) -> None:
@@ -1072,27 +1066,26 @@ async def test_jira_blocker_recheck_activity_failure_respects_failure_mode(
     )
     monkeypatch.setattr(
         run_workflow_module.workflow,
-        "execute_activity",
-        fake_execute_activity,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "info",
+        lambda: type("WorkflowInfo", (), {"workflow_id": "wf-1"})(),
     )
     monkeypatch.setattr(
         MoonMindRunWorkflow,
         "_wait_if_paused_at_safe_boundary",
         fake_noop_async,
     )
-    monkeypatch.setattr(
-        MoonMindRunWorkflow,
-        "_execute_kwargs_for_route",
-        lambda self, route: {},
-    )
 
     result, skipped = await workflow._wait_for_jira_blocker_resolution(
         execution_result=blocked_result,
-        route=route,
-        execute_payload={"idempotency_key": "wf-1_check-blockers_execute"},
+        agent_request=agent_request,
         node_id="check-blockers",
         tool_name="jira.check_blockers",
-        tool_type="skill",
+        tool_type="agent_runtime",
         failure_mode="CONTINUE",
     )
 
@@ -1106,11 +1099,10 @@ async def test_jira_blocker_recheck_activity_failure_respects_failure_mode(
     with pytest.raises(RuntimeError, match="worker unavailable"):
         await workflow._wait_for_jira_blocker_resolution(
             execution_result=blocked_result,
-            route=route,
-            execute_payload={"idempotency_key": "wf-1_check-blockers_execute"},
+            agent_request=agent_request,
             node_id="check-blockers",
             tool_name="jira.check_blockers",
-            tool_type="skill",
+            tool_type="agent_runtime",
             failure_mode="FAIL_FAST",
         )
 
@@ -2075,11 +2067,10 @@ async def test_skipped_jira_blocker_wait_restores_executing_state(
                 "summary": "Blocked by upstream Jira work.",
             },
         },
-        route=type("Route", (), {"activity_type": "mm.skill.execute"})(),
-        execute_payload={},
+        agent_request=type("AgentRequest", (), {"agent_id": "agent-1"})(),
         node_id="check-blockers",
         tool_name=run_workflow_module.JIRA_CHECK_BLOCKERS_TOOL_NAME,
-        tool_type="skill",
+        tool_type="agent_runtime",
         failure_mode="FAIL_FAST",
     )
 
