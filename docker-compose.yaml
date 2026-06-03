@@ -120,6 +120,9 @@ services:
         aliases:
           - moonmind-api-db
           - temporal-db
+      sandbox-egress-network:
+        aliases:
+          - moonmind-api-db
     restart: unless-stopped
     healthcheck:
       test:
@@ -154,6 +157,9 @@ services:
       local-network:
         aliases:
           - temporal-internal
+      sandbox-egress-network:
+        aliases:
+          - temporal-internal
     restart: unless-stopped
 
   # Network alias `moonmind-temporal-artifacts-s3` is the stable S3 hostname for
@@ -176,6 +182,9 @@ services:
       - minio-data:/data
     networks:
       local-network:
+        aliases:
+          - moonmind-temporal-artifacts-s3
+      sandbox-egress-network:
         aliases:
           - moonmind-temporal-artifacts-s3
     restart: unless-stopped
@@ -519,6 +528,12 @@ services:
       - TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID=${TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID:-minioadmin}
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
+      - HTTP_PROXY=${MOONMIND_SANDBOX_HTTP_PROXY:-http://sandbox-egress-proxy:3128}
+      - HTTPS_PROXY=${MOONMIND_SANDBOX_HTTPS_PROXY:-http://sandbox-egress-proxy:3128}
+      - http_proxy=${MOONMIND_SANDBOX_HTTP_PROXY:-http://sandbox-egress-proxy:3128}
+      - https_proxy=${MOONMIND_SANDBOX_HTTPS_PROXY:-http://sandbox-egress-proxy:3128}
+      - NO_PROXY=${MOONMIND_SANDBOX_NO_PROXY:-localhost,127.0.0.1,temporal-internal,moonmind-temporal-artifacts-s3,moonmind-api-db,postgres,minio,temporal}
+      - no_proxy=${MOONMIND_SANDBOX_NO_PROXY:-localhost,127.0.0.1,temporal-internal,moonmind-temporal-artifacts-s3,moonmind-api-db,postgres,minio,temporal}
     env_file:
       - .env
     volumes:
@@ -560,8 +575,10 @@ services:
         condition: service_completed_successfully
       gemini-auth-init:
         condition: service_completed_successfully
+      sandbox-egress-proxy:
+        condition: service_started
     networks:
-      - local-network
+      - sandbox-egress-network
     restart: unless-stopped
 
   temporal-worker-agent-runtime:
@@ -889,6 +906,17 @@ services:
       - docker-proxy-network
     restart: unless-stopped
 
+  sandbox-egress-proxy:
+    image: ubuntu/squid:latest
+    volumes:
+      - ./docker/sandbox-egress-proxy/squid.conf:/etc/squid/squid.conf:ro
+    expose:
+      - "3128"
+    networks:
+      - local-network
+      - sandbox-egress-network
+    restart: unless-stopped
+
   openhands:
     profiles: [ "openhands" ]
     image: docker.all-hands.dev/all-hands-ai/openhands:0.39
@@ -938,4 +966,7 @@ networks:
     external: true
   docker-proxy-network:
     name: ${MOONMIND_DOCKER_PROXY_NETWORK:-moonmind_docker-proxy-network}
+    internal: true
+  sandbox-egress-network:
+    name: ${MOONMIND_SANDBOX_EGRESS_NETWORK:-moonmind_sandbox-egress-network}
     internal: true
