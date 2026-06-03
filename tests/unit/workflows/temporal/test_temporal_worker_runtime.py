@@ -78,7 +78,11 @@ class _FakeTaskInputSnapshotArtifactService:
         return SimpleNamespace(artifact_id="art_task_snapshot_1")
 
 
-def test_opentelemetry_logging_filter_injects_bounded_managed_session_fields() -> None:
+def test_opentelemetry_logging_filter_injects_bounded_managed_session_fields(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("TEMPORAL_WORKER_FLEET", "agent_runtime")
+    monkeypatch.setenv("MOONMIND_WORKER_ID", "worker-otel-1")
     record = logging.LogRecord(
         name="moonmind.test",
         level=logging.INFO,
@@ -107,6 +111,10 @@ def test_opentelemetry_logging_filter_injects_bounded_managed_session_fields() -
 
     assert OpenTelemetryLoggingFilter().filter(record) is True
 
+    assert record.service == "temporal-worker-agent-runtime"
+    assert record.component == "agent_runtime"
+    assert record.worker_fleet == "agent_runtime"
+    assert record.worker_id == "worker-otel-1"
     assert record.managed_session_task_run_id == "wf-run-1"
     assert record.managed_session_runtime_id == "codex_cli"
     assert record.managed_session_id == "sess:wf-run-1:codex_cli"
@@ -144,25 +152,31 @@ def test_opentelemetry_logging_filter_injects_bounded_managed_session_fields() -
     assert "token" not in record.managed_session
 
 def test_opentelemetry_log_format_includes_session_locator_fields() -> None:
+    assert "service=%(service)s" in _OPENTELEMETRY_LOG_FORMAT
+    assert "component=%(component)s" in _OPENTELEMETRY_LOG_FORMAT
+    assert "worker_fleet=%(worker_fleet)s" in _OPENTELEMETRY_LOG_FORMAT
+    assert "worker_id=%(worker_id)s" in _OPENTELEMETRY_LOG_FORMAT
     assert "container_id=%(managed_session_container_id)s" in _OPENTELEMETRY_LOG_FORMAT
     assert "thread_id=%(managed_session_thread_id)s" in _OPENTELEMETRY_LOG_FORMAT
     assert "turn_id=%(managed_session_turn_id)s" in _OPENTELEMETRY_LOG_FORMAT
 
-def test_configure_worker_logging_applies_otel_formatter_to_existing_handlers() -> None:
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(message)s"))
+def test_configure_worker_logging_applies_otel_filter(monkeypatch) -> None:
+    monkeypatch.setenv("MOONMIND_STRUCTURED_LOGS", "1")
+    monkeypatch.setenv("TEMPORAL_WORKER_FLEET", "sandbox")
+    monkeypatch.setenv("MOONMIND_WORKER_ID", "worker-sandbox-1")
     original_handlers = list(logging.root.handlers)
-    logging.root.handlers = [handler]
 
     try:
         _configure_worker_logging(enable_opentelemetry=True)
     finally:
+        handlers = list(logging.root.handlers)
         logging.root.handlers = original_handlers
 
-    assert handler.formatter is not None
-    assert handler.formatter._fmt == _OPENTELEMETRY_LOG_FORMAT
+    assert handlers
+    assert all(handler.formatter is not None for handler in handlers)
     assert any(
         isinstance(existing_filter, OpenTelemetryLoggingFilter)
+        for handler in handlers
         for existing_filter in handler.filters
     )
 
