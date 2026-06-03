@@ -114,15 +114,26 @@ async def test_run_execution_stage_skips_integration_after_merge_gate_cancellati
                     {
                         "id": "step-1",
                         "tool": {
-                            "type": "skill",
-                            "name": "repo.noop",
+                            "type": "agent_runtime",
+                            "name": "jules",
                             "version": "1.0",
                         },
-                        "inputs": {},
+                        "inputs": {"instructions": "Do nothing."},
                     }
                 ]
             )
         return {"status": "COMPLETED", "outputs": {}}
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _args: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        return {
+            "summary": "No-op completed",
+            "metadata": {"push_status": "not_requested"},
+            "output_refs": [],
+        }
 
     async def fake_merge_gate(
         *,
@@ -143,6 +154,11 @@ async def test_run_execution_stage_skips_integration_after_merge_gate_cancellati
         run_workflow_module.workflow,
         "execute_activity",
         fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
     )
     monkeypatch.setattr(mock_run_workflow, "_maybe_start_merge_gate", fake_merge_gate)
     monkeypatch.setattr(
@@ -388,7 +404,7 @@ async def test_run_execution_stage_bundles_consecutive_jules_nodes(
     assert request.parameters["metadata"]["moonmind"]["bundleStrategy"] == "one_shot_jules"
 
 @pytest.mark.asyncio
-async def test_run_execution_stage_routes_dood_skill_tool_to_agent_runtime_activity(
+async def test_run_execution_stage_rejects_dood_skill_tool_in_run_dispatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflow = MoonMindRunWorkflow()

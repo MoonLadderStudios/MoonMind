@@ -170,3 +170,36 @@ def test_mm569_flat_executable_steps_preserve_preset_provenance_without_lookup()
     assert steps[0]["source"]["presetSlug"] == "mm569-parent"
     assert steps[1]["source"]["presetSlug"] == "mm569-parent"
     assert all(step.get("type") != "preset" for step in steps)
+
+
+def test_mm786_flat_steps_preserve_per_step_runtime_selection() -> None:
+    result = build_canonical_task_view(
+        job_type="task",
+        payload=_task_payload(
+            {
+                "runtime": {
+                    "mode": "codex_cli",
+                    "model": "gpt-5.4",
+                    "effort": "medium",
+                },
+                "steps": [
+                    {
+                        "id": "low-cost-step",
+                        "instructions": "Run this step with a lower-cost runtime.",
+                        "runtime": {
+                            "mode": "gemini_cli",
+                            "model": "gemini-2.5-flash",
+                            "effort": "low",
+                        },
+                    }
+                ],
+            }
+        ),
+    )
+
+    runtime = result["task"]["steps"][0]["runtime"]
+    assert {key: runtime[key] for key in ("mode", "model", "effort")} == {
+        "mode": "gemini_cli",
+        "model": "gemini-2.5-flash",
+        "effort": "low",
+    }
