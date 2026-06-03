@@ -80,6 +80,37 @@ def test_map_temporal_state_to_projection_success():
     assert result["search_attributes"]["mm_custom"] == {"key": "value"}
     assert result["updated_at"] == updated_at
 
+def test_map_temporal_state_to_projection_extracts_finish_summary():
+    start_time = datetime.now(UTC)
+    desc = Mock(spec=WorkflowExecutionDescription)
+    desc.id = "mm:finish-summary"
+    desc.run_id = "run-finish-summary"
+    desc.namespace = "moonmind"
+    desc.workflow_type = "MoonMind.Run"
+    desc.status = WorkflowExecutionStatus.COMPLETED
+    desc.start_time = start_time
+    desc.execution_time = start_time
+    desc.close_time = start_time
+    desc.search_attributes = {}
+    finish_summary = {
+        "schemaVersion": "v1",
+        "finishOutcome": {
+            "code": "PUBLISHED_BRANCH",
+            "stage": "publish",
+            "reason": "published branch",
+        },
+    }
+
+    async def _memo() -> dict[str, object]:
+        return {"entry": "run", "finishSummary": finish_summary}
+
+    desc.memo = _memo
+
+    result = asyncio.run(map_temporal_state_to_projection(desc))
+
+    assert result["finish_outcome_code"] == "PUBLISHED_BRANCH"
+    assert result["finish_summary_json"] == finish_summary
+
 def test_map_temporal_state_to_projection_uses_search_attributes_for_owner_fields():
     start_time = datetime.now(UTC)
     desc = Mock(spec=WorkflowExecutionDescription)
@@ -445,6 +476,11 @@ async def test_sync_execution_projection_preserves_metadata_when_temporal_memo_d
                 search_attributes={"mm_state": "initializing", "mm_entry": "run"},
                 memo={"title": "Task", "summary": "Existing summary"},
                 artifact_refs=[],
+                finish_outcome_code="FAILED",
+                finish_summary_json={
+                    "schemaVersion": "v1",
+                    "finishOutcome": {"code": "FAILED"},
+                },
                 input_ref="input-1",
                 parameters={"targetRuntime": "codex_cli"},
                 create_idempotency_key="create-key-2",
@@ -490,6 +526,11 @@ async def test_sync_execution_projection_preserves_metadata_when_temporal_memo_d
             assert refreshed.run_id == "run-new"
             assert refreshed.state == MoonMindWorkflowState.EXECUTING
             assert refreshed.memo["summary"] == "Existing summary"
+            assert refreshed.finish_outcome_code == "FAILED"
+            assert refreshed.finish_summary_json == {
+                "schemaVersion": "v1",
+                "finishOutcome": {"code": "FAILED"},
+            }
             assert refreshed.input_ref == "input-1"
             assert refreshed.create_idempotency_key == "create-key-2"
             assert refreshed.last_update_idempotency_key == "update-key-2"

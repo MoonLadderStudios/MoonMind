@@ -1691,6 +1691,55 @@ async def test_record_terminal_state_preserves_existing_terminal_summary(
 
 
 @pytest.mark.asyncio
+async def test_record_terminal_state_indexes_finish_summary(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="Finish summary run",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        finish_summary = {
+            "schemaVersion": "v1",
+            "jobId": created.workflow_id,
+            "finishOutcome": {
+                "code": "NO_CHANGES",
+                "stage": "publish",
+                "reason": "publish skipped: no local changes",
+            },
+            "publish": {"status": "skipped"},
+        }
+
+        projection = await service.record_terminal_state(
+            workflow_id=created.workflow_id,
+            state="completed",
+            close_status="completed",
+            summary="Workflow completed with no changes.",
+            finish_outcome_code="NO_CHANGES",
+            finish_summary=finish_summary,
+        )
+
+        source = await session.get(
+            TemporalExecutionCanonicalRecord, created.workflow_id
+        )
+        assert source is not None
+        assert source.finish_outcome_code == "NO_CHANGES"
+        assert source.finish_summary_json == finish_summary
+        assert isinstance(projection, TemporalExecutionRecord)
+        assert projection.finish_outcome_code == "NO_CHANGES"
+        assert projection.finish_summary_json == finish_summary
+
+
+@pytest.mark.asyncio
 async def test_dependency_status_snapshot_repairs_stale_terminal_prerequisite(
     tmp_path, mock_client_adapter
 ):

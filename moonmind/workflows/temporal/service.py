@@ -2144,6 +2144,8 @@ class TemporalExecutionService:
         close_status: str | None = None,
         summary: str | None = None,
         error_category: str | None = None,
+        finish_outcome_code: str | None = None,
+        finish_summary: dict[str, Any] | None = None,
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         normalized_state = str(state or "").strip().lower()
         state_by_value = {item.value: item for item in MoonMindWorkflowState}
@@ -2169,6 +2171,11 @@ class TemporalExecutionService:
                 f"Execution already terminal as {record.state.value}."
             )
         if record.state in TERMINAL_STATES:
+            self._record_finish_summary(
+                record,
+                finish_outcome_code=finish_outcome_code,
+                finish_summary=finish_summary,
+            )
             if record.close_status is None:
                 self._set_state(record, target_state, close_status=target_close_status)
                 await self._sync_integration_correlation_record(record)
@@ -2178,6 +2185,11 @@ class TemporalExecutionService:
             return await self._sync_projection_best_effort(record)
 
         self._set_state(record, target_state, close_status=target_close_status)
+        self._record_finish_summary(
+            record,
+            finish_outcome_code=finish_outcome_code,
+            finish_summary=finish_summary,
+        )
         if summary:
             if target_state is MoonMindWorkflowState.FAILED:
                 category = str(error_category or "execution_error").strip()
@@ -2196,6 +2208,29 @@ class TemporalExecutionService:
         await self._session.refresh(record)
         await self._fan_out_dependency_resolution(record)
         return await self._sync_projection_best_effort(record)
+
+    def _record_finish_summary(
+        self,
+        record: TemporalExecutionCanonicalRecord,
+        *,
+        finish_outcome_code: str | None,
+        finish_summary: dict[str, Any] | None,
+    ) -> None:
+        if finish_summary is None:
+            return
+        normalized_summary = dict(finish_summary)
+        finish_outcome = normalized_summary.get("finishOutcome")
+        outcome_code = str(
+            finish_outcome_code
+            or (
+                finish_outcome.get("code")
+                if isinstance(finish_outcome, dict)
+                else None
+            )
+            or ""
+        ).strip()
+        record.finish_outcome_code = outcome_code or None
+        record.finish_summary_json = normalized_summary
 
     async def mark_execution_planning(
         self,
@@ -3999,6 +4034,12 @@ class TemporalExecutionService:
             "search_attributes": dict(source.search_attributes or {}),
             "memo": dict(source.memo or {}),
             "artifact_refs": list(source.artifact_refs or []),
+            "finish_outcome_code": source.finish_outcome_code,
+            "finish_summary_json": (
+                dict(source.finish_summary_json)
+                if isinstance(source.finish_summary_json, dict)
+                else None
+            ),
             "input_ref": source.input_ref,
             "plan_ref": source.plan_ref,
             "manifest_ref": source.manifest_ref,

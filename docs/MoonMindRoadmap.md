@@ -265,7 +265,7 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - Task finish summary system (spec 079)
 
 ### Remaining tasks
-- [ ] **11.1** Structured outcome summaries on every run — Spec 079 started; not fully wired
+- [x] **11.1** Structured outcome summaries on every run — MM-792 wires the finish summary artifact into indexed execution projections
 - [ ] **11.2** Improvement signal capture (retries, loops, flaky tests) — Constitution X mandates this
 - [ ] **11.3** Reviewable improvement backlog / proposals queue — Task proposals exist; not fed by telemetry
 - [ ] **11.4** Metrics / dashboards (run duration, success rate, cost) — No operational metrics endpoint

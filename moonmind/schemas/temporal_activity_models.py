@@ -176,6 +176,10 @@ class ExecutionTerminalStateInput(BaseModel):
         "timed_out",
     ] | None = Field(None, alias="closeStatus")
     summary: str | None = Field(None, alias="summary")
+    finish_outcome_code: str | None = Field(None, alias="finishOutcomeCode")
+    finish_outcome_stage: str | None = Field(None, alias="finishOutcomeStage")
+    finish_outcome_reason: str | None = Field(None, alias="finishOutcomeReason")
+    finish_summary: dict[str, Any] | None = Field(None, alias="finishSummary")
     error_category: Literal[
         "user_error",
         "integration_error",

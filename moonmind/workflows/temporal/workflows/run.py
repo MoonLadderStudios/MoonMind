@@ -581,6 +581,7 @@ class MoonMindRunWorkflow:
         self._plan_ref: Optional[str] = None
         self._logs_ref: Optional[str] = None
         self._summary_ref: Optional[str] = None
+        self._finish_summary: dict[str, Any] | None = None
         self._recovery_source: dict[str, Any] | None = None
         self._recovery_failed_step_id: str | None = None
         self._recovery_workspace: dict[str, Any] = {}
@@ -8961,6 +8962,8 @@ class MoonMindRunWorkflow:
             if status == "failed" and isinstance(self._failure_diagnostic, dict):
                 finish_summary["failure"] = dict(self._failure_diagnostic)
 
+            self._finish_summary = finish_summary
+
             artifact_create_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
                 "artifact.create"
             )
@@ -9012,6 +9015,13 @@ class MoonMindRunWorkflow:
             terminal_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
                 "execution.record_terminal_state"
             )
+            finish_outcome = (
+                self._finish_summary.get("finishOutcome")
+                if isinstance(self._finish_summary, dict)
+                else None
+            )
+            if not isinstance(finish_outcome, dict):
+                finish_outcome = {}
             activity_task = asyncio.create_task(
                 execute_typed_activity(
                     "execution.record_terminal_state",
@@ -9020,6 +9030,16 @@ class MoonMindRunWorkflow:
                         state=state,
                         closeStatus=close_status,
                         summary=summary,
+                        finishOutcomeCode=(
+                            str(finish_outcome.get("code") or "").strip() or None
+                        ),
+                        finishOutcomeStage=(
+                            str(finish_outcome.get("stage") or "").strip() or None
+                        ),
+                        finishOutcomeReason=(
+                            str(finish_outcome.get("reason") or "").strip() or None
+                        ),
+                        finishSummary=self._finish_summary,
                         errorCategory=error_category,
                     ),
                     cancellation_type=ActivityCancellationType.ABANDON,

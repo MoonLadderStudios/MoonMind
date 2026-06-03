@@ -602,6 +602,14 @@ async def test_record_terminal_state_uses_canonical_activity_boundary(monkeypatc
         "execute_typed_activity",
         fake_execute_typed_activity,
     )
+    workflow_instance._finish_summary = {
+        "schemaVersion": "v1",
+        "finishOutcome": {
+            "code": "PUBLISH_DISABLED",
+            "stage": "publish",
+            "reason": "publishing disabled",
+        },
+    }
 
     await workflow_instance._record_terminal_state(
         state="completed",
@@ -615,6 +623,17 @@ async def test_record_terminal_state_uses_canonical_activity_boundary(monkeypatc
         "state": "completed",
         "closeStatus": "completed",
         "summary": "Workflow completed successfully",
+        "finishOutcomeCode": "PUBLISH_DISABLED",
+        "finishOutcomeStage": "publish",
+        "finishOutcomeReason": "publishing disabled",
+        "finishSummary": {
+            "schemaVersion": "v1",
+            "finishOutcome": {
+                "code": "PUBLISH_DISABLED",
+                "stage": "publish",
+                "reason": "publishing disabled",
+            },
+        },
         "errorCategory": None,
     }
     assert captured["kwargs"]["task_queue"] == ARTIFACTS_TASK_QUEUE
