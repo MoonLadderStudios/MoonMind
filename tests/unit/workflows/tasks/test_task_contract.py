@@ -905,6 +905,26 @@ def test_task_steps_reject_shell_like_executable_fields(field: str) -> None:
             }
         )
 
+def test_task_step_accepts_per_step_runtime_selection() -> None:
+    spec = TaskStepSpec.model_validate(
+        {
+            "id": "review",
+            "instructions": "Review with a cheaper model.",
+            "runtime": {
+                "mode": "gemini_cli",
+                "model": "gemini-3.1-flash",
+                "effort": "low",
+                "profileId": "gemini-default",
+            },
+        }
+    )
+
+    assert spec.runtime is not None
+    assert spec.runtime.mode == "gemini_cli"
+    assert spec.runtime.model == "gemini-3.1-flash"
+    assert spec.runtime.effort == "low"
+    assert spec.runtime.provider_profile == "gemini-default"
+
 def test_mm569_accepts_executable_tool_and_skill_payload_fixtures() -> None:
     result = build_canonical_task_view(
         job_type="task",

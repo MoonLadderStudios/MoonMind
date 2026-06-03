@@ -29,6 +29,8 @@ from api_service.api.routers.executions import (
     _recovery_not_available_reason,
     _reuse_original_task_input_snapshot_from_source,
     _task_input_snapshot_descriptor_from_record,
+    _normalize_task_steps,
+    _resolve_step_runtime_selections,
     get_temporal_client,
     _serialize_execution,
     router,
@@ -125,6 +127,107 @@ def _completed_attachment_artifact(
         size_bytes=size_bytes,
         created_by_principal=created_by_principal,
     )
+
+@pytest.mark.asyncio
+async def test_task_step_runtime_selection_is_normalized_and_resolved() -> None:
+    steps = _normalize_task_steps(
+        {
+            "steps": [
+                {
+                    "id": "review",
+                    "instructions": "Review with a step model.",
+                    "runtime": {
+                        "mode": "gemini_cli",
+                        "model": "gemini-step-model",
+                        "effort": "low",
+                    },
+                }
+            ]
+        }
+    )
+
+    await _resolve_step_runtime_selections(
+        steps=steps,
+        task_runtime={"mode": "codex_cli", "effort": "high"},
+        task_target_runtime="codex_cli",
+        task_profile_id=None,
+        session=None,
+    )
+
+    assert steps[0]["runtime"] == {
+        "mode": "gemini_cli",
+        "model": "gemini-step-model",
+        "effort": "low",
+        "requestedModel": "gemini-step-model",
+        "modelSource": "task_override",
+    }
+
+
+@pytest.mark.asyncio
+async def test_step_runtime_inherits_task_profile_default_model() -> None:
+    steps = _normalize_task_steps(
+        {
+            "steps": [
+                {
+                    "id": "implement",
+                    "instructions": "Implement using inherited profile defaults.",
+                    "runtime": {"effort": "low"},
+                }
+            ]
+        }
+    )
+    session = SimpleNamespace(
+        get=AsyncMock(
+            return_value=SimpleNamespace(default_model="codex-profile-default")
+        )
+    )
+
+    await _resolve_step_runtime_selections(
+        steps=steps,
+        task_runtime={"mode": "codex_cli", "effort": "high"},
+        task_target_runtime="codex_cli",
+        task_profile_id="profile-codex",
+        session=session,
+    )
+
+    assert steps[0]["runtime"] == {
+        "effort": "low",
+        "mode": "codex_cli",
+        "model": "codex-profile-default",
+        "modelSource": "provider_profile_default",
+        "inheritedProfileId": "profile-codex",
+    }
+
+
+@pytest.mark.asyncio
+async def test_step_runtime_normalizes_explicit_profile_without_session() -> None:
+    steps = _normalize_task_steps(
+        {
+            "steps": [
+                {
+                    "id": "review",
+                    "instructions": "Review with a profile ref in a unit test.",
+                    "runtime": {
+                        "mode": "gemini_cli",
+                        "profileId": "profile-gemini",
+                    },
+                }
+            ]
+        }
+    )
+
+    await _resolve_step_runtime_selections(
+        steps=steps,
+        task_runtime=None,
+        task_target_runtime="codex_cli",
+        task_profile_id=None,
+        session=None,
+    )
+
+    assert steps[0]["runtime"]["mode"] == "gemini_cli"
+    assert steps[0]["runtime"]["profileId"] == "profile-gemini"
+    assert steps[0]["runtime"]["providerProfile"] == "profile-gemini"
+
 
 def _mm639_authored_task_payload() -> dict[str, Any]:
     return {
@@ -3303,6 +3406,7 @@ def test_create_task_shaped_execution_normalizes_scalar_step_runtime_fields(
 ) -> None:
     test_client, service, _user = client
     service.create_execution.return_value = _build_execution_record()
+    test_client.app.dependency_overrides[get_async_session] = lambda: None
 
     response = test_client.post(
         "/api/executions",
@@ -3335,12 +3439,14 @@ def test_create_task_shaped_execution_normalizes_scalar_step_runtime_fields(
     initial_parameters = service.create_execution.await_args.kwargs[
         "initial_parameters"
     ]
-    assert initial_parameters["task"]["steps"][0]["runtime"] == {
-        "mode": "claude_code",
-        "model": "42",
-        "effort": "True",
-        "profileId": "123",
-    }
+    runtime = initial_parameters["task"]["steps"][0]["runtime"]
+    assert runtime["mode"] == "claude_code"
+    assert runtime["model"] == "42"
+    assert runtime["requestedModel"] == "42"
+    assert runtime["modelSource"] == "task_override"
+    assert runtime["effort"] == "True"
+    assert runtime["profileId"] == "123"
+    assert runtime["providerProfile"] == "123"
 
 
 def test_create_task_shaped_execution_preserves_preset_schedule_provenance(

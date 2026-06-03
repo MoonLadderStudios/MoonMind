@@ -864,7 +864,11 @@ class TaskRuntimeSelection(BaseModel):
     )
     model: str | None = Field(None, alias="model")
     effort: str | None = Field(None, alias="effort")
-    provider_profile: str | None = Field(None, alias="providerProfile")
+    provider_profile: str | None = Field(
+        None,
+        alias="providerProfile",
+        validation_alias=AliasChoices("providerProfile", "profileId"),
+    )
 
     @field_validator("mode", mode="before")
     @classmethod
@@ -1396,6 +1400,7 @@ class TaskStepSpec(BaseModel):
     runtime: TaskRuntimeSelection | None = Field(None, alias="runtime")
     skill: TaskSkillSelection | None = Field(None, alias="skill")
     skills: TaskSkillSelectors | None = Field(None, alias="skills")
+    runtime: TaskRuntimeSelection | None = Field(None, alias="runtime")
     source: TaskStepSource | None = Field(None, alias="source")
     input_attachments: list[TaskInputAttachmentRef] = Field(
         default_factory=list, alias="inputAttachments"
@@ -1471,6 +1476,8 @@ class TaskStepSpec(BaseModel):
             "target_runtime",
             "model",
             "effort",
+            "providerProfile",
+            "profileId",
             "repository",
             "repo",
             "git",

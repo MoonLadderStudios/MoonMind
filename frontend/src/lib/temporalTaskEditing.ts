@@ -551,6 +551,23 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
       tool.requiredCapabilities,
       skill.requiredCapabilities,
     ),
+    ...(Object.keys(runtime).length > 0
+      ? {
+          runtime: {
+            ...(stringValue(runtime.mode, runtime.targetRuntime)
+              ? { mode: stringValue(runtime.mode, runtime.targetRuntime) }
+              : {}),
+            ...(stringValue(runtime.model) ? { model: stringValue(runtime.model) } : {}),
+            ...(stringValue(runtime.effort) ? { effort: stringValue(runtime.effort) } : {}),
+            ...(stringValue(runtime.profileId)
+              ? { profileId: stringValue(runtime.profileId) }
+              : {}),
+            ...(stringValue(runtime.providerProfile)
+              ? { providerProfile: stringValue(runtime.providerProfile) }
+              : {}),
+          },
+        }
+      : {}),
     templateStepId,
     templateInstructions: stringValue(
       step.templateInstructions,
@@ -573,6 +590,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     result.skillId ||
     Object.keys(result.skillArgs).length > 0 ||
     result.skillRequiredCapabilities.length > 0 ||
+    Boolean(result.runtime && Object.keys(result.runtime).length > 0) ||
     result.templateStepId ||
     result.templateInstructions ||
     inputAttachments.length > 0 ||
