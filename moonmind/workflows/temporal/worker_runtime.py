@@ -1622,9 +1622,16 @@ def _build_runtime_planner():
 
                 # Per-step tool/skill override
                 step_tool_name = _selected_step_tool_name(step_entry)
-                step_runtime = _normalize_runtime_mode(
-                    _coerce_mapping(step_node_inputs.get("runtime")).get("mode")
+                step_runtime_payload = _coerce_mapping(step_node_inputs.get("runtime"))
+                step_runtime_raw = (
+                    step_runtime_payload.get("mode")
+                    or step_runtime_payload.get("targetRuntime")
                     or runtime_mode
+                )
+                step_runtime = (
+                    _normalize_runtime_mode(step_runtime_raw)
+                    if step_runtime_raw is not None
+                    else None
                 )
                 tool_type = _selected_step_tool_type(step_entry, step_tool_name)
                 tool_version = _selected_step_tool_version(step_entry)
