@@ -8873,11 +8873,26 @@ class CodexWorker:
         evidence = self._redact_text(
             str(evidence_source)
         )[:500]
-        instructions = (
-            "MM-793 follow-up: investigate and harden MoonMind improvement-signal "
-            f"capture for {phrase}. Use the source run evidence, add regression "
-            "coverage, and keep the fix scoped to deterministic signal capture."
-        )
+        repository = str(canonical_payload.get("repository") or "").strip().lower()
+        is_moonmind_repository = repository == "moonladderstudios/moonmind"
+        if is_moonmind_repository:
+            instructions = (
+                "MM-793 follow-up: investigate and harden MoonMind improvement-signal "
+                f"capture for {phrase}. Use the source run evidence, add regression "
+                "coverage, and keep the fix scoped to deterministic signal capture."
+            )
+            title = f"[run_quality] MM-793 Capture {phrase}"
+            commit_message = "MM-793 Capture improvement signals"
+            pr_title = "MM-793 Capture improvement signals"
+        else:
+            instructions = (
+                f"Investigate and harden this project's run-quality handling for {phrase}. "
+                "Use the source run evidence, add regression coverage, and keep the fix "
+                "scoped to the observed retry, loop, or flaky-test behavior."
+            )
+            title = f"[run_quality] Capture {phrase}"
+            commit_message = f"Capture run-quality signals for {phrase}"
+            pr_title = f"Capture run-quality signals for {phrase}"
         request = self._build_proposal_task_request_template(canonical_payload)
         request_payload = request.get("payload")
         payload = request_payload if isinstance(request_payload, dict) else {}
@@ -8886,15 +8901,15 @@ class CodexWorker:
         task["instructions"] = instructions
         publish_node = task.get("publish")
         publish = publish_node if isinstance(publish_node, dict) else {}
-        publish["commitMessage"] = "MM-793 Capture improvement signals"
-        publish["prTitle"] = "MM-793 Capture improvement signals"
+        publish["commitMessage"] = commit_message
+        publish["prTitle"] = pr_title
         task["publish"] = publish
         payload["task"] = task
         request["payload"] = payload
 
         return [
             {
-                "title": f"[run_quality] MM-793 Capture {phrase}",
+                "title": title,
                 "summary": (
                     "Deterministic improvement signal captured from run telemetry: "
                     f"{evidence or phrase}"
@@ -9196,9 +9211,29 @@ class CodexWorker:
                         encoding="utf-8"
                     )
                     if skill_output != initial_proposal_output_for_skill:
-                        shutil.copy2(
-                            proposal_output_path_for_skill, proposal_output_path
+                        parsed_output = json.loads(skill_output)
+                        normalized_output = (
+                            parsed_output
+                            if isinstance(parsed_output, list)
+                            else [parsed_output]
                         )
+                        proposal_output_path.write_text(
+                            json.dumps(
+                                normalized_output,
+                                indent=2,
+                                sort_keys=True,
+                            )
+                            + "\n",
+                            encoding="utf-8",
+                        )
+            except json.JSONDecodeError:
+                logger.warning(
+                    "Skipping invalid proposal output copy from %s to %s for job %s",
+                    proposal_output_path_for_skill,
+                    proposal_output_path,
+                    job.id,
+                    exc_info=True,
+                )
             except OSError:
                 logger.warning(
                     "Failed to copy proposal output from %s to %s for job %s",

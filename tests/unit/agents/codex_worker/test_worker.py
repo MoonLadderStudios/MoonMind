@@ -1369,6 +1369,52 @@ async def test_worker_builds_deterministic_retry_loop_signal_proposal(
     assert "MM-793" in instructions
 
 
+async def test_worker_builds_project_safe_run_quality_signal_proposal(
+    tmp_path: Path,
+) -> None:
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:8000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        enable_task_proposals=True,
+    )
+    worker = CodexWorker(
+        config=config,
+        queue_client=FakeQueueClient(),
+        codex_exec_handler=FakeHandler(
+            WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+        ),
+    )  # type: ignore[arg-type]
+
+    proposals = worker._build_improvement_signal_proposals(
+        job=ClaimedJob(id=uuid4(), type="task", attempt=2, max_attempts=3, payload={}),
+        canonical_payload={
+            "repository": "ExampleOrg/ProjectRepo",
+            "task": {"git": {"startingBranch": "main"}},
+        },
+        task_result=WorkerExecutionResult(
+            succeeded=False,
+            summary="retry loop detected",
+            error_message="agent entered a loop after retry",
+        ),
+    )
+
+    assert len(proposals) == 1
+    proposal = proposals[0]
+    serialized = json.dumps(proposal)
+    assert "MM-793" not in serialized
+    assert "MoonMind improvement-signal" not in serialized
+    assert proposal["taskCreateRequest"]["payload"]["repository"] == (
+        "ExampleOrg/ProjectRepo"
+    )
+    task = proposal["taskCreateRequest"]["payload"]["task"]
+    assert "this project's run-quality handling" in task["instructions"]
+    assert task["publish"]["commitMessage"].startswith("Capture run-quality signals")
+
+
 async def test_worker_builds_deterministic_flaky_test_signal_proposal(
     tmp_path: Path,
 ) -> None:
@@ -1472,6 +1518,85 @@ async def test_post_task_proposal_skills_seed_deterministic_signal_artifact(
     )
     assert proposals[0]["tags"] == ["retry", "loop_detected"]
     assert proposals[0]["signal"]["source"] == "codex_worker"
+
+
+async def test_post_task_proposal_skills_preserve_seed_on_invalid_hook_output(
+    tmp_path: Path,
+) -> None:
+    class CorruptingHandler(FakeHandler):
+        async def handle_skill(self, **kwargs):  # type: ignore[no-untyped-def]
+            payload = kwargs["payload"]
+            output_path = Path(payload["inputs"]["proposalOutputPath"])
+            output_path.write_text("{invalid json", encoding="utf-8")
+            return await super().handle_skill(**kwargs)
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:8000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        enable_task_proposals=True,
+    )
+    handler = CorruptingHandler(
+        WorkerExecutionResult(
+            succeeded=True,
+            summary="proposal skill wrote malformed output",
+            error_message=None,
+        )
+    )
+    worker = CodexWorker(
+        config=config,
+        queue_client=FakeQueueClient(),
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+    worker._active_cancel_event = asyncio.Event()
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path / "job",
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=tmp_path / "artifacts",
+        publish_result_path=tmp_path / "publish-result.log",
+        default_branch="main",
+        starting_branch="main",
+        new_branch=None,
+        working_branch="feature/mm-793",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+    prepared.repo_dir.mkdir(parents=True)
+    prepared.artifacts_dir.mkdir(parents=True)
+
+    artifacts = await worker._run_post_task_proposal_skills(
+        job=ClaimedJob(id=uuid4(), type="task", attempt=2, max_attempts=3, payload={}),
+        canonical_payload={"repository": "MoonLadderStudios/MoonMind", "task": {}},
+        source_payload={},
+        runtime_mode="codex",
+        prepared=prepared,
+        task_result=WorkerExecutionResult(
+            succeeded=False,
+            summary="retry loop detected",
+            error_message="agent entered a loop after retry",
+        ),
+        selected_skills=("auto",),
+    )
+
+    assert "codex_skill:fix-proposal:True" in handler.calls
+    assert any(artifact.name == "task_proposals.json" for artifact in artifacts)
+    proposals = json.loads(
+        (prepared.artifacts_dir / "task_proposals.json").read_text(encoding="utf-8")
+    )
+    assert proposals[0]["tags"] == ["retry", "loop_detected"]
+    assert proposals[0]["signal"]["source"] == "codex_worker"
+    skill_output_path = next(
+        (prepared.repo_dir / ".artifacts").glob("moonmind_task_proposals_*.json")
+    )
+    assert skill_output_path.read_text(encoding="utf-8") == "{invalid json"
 
 
 async def test_worker_submission_outcome_preserves_delivery_failure_details() -> None:
