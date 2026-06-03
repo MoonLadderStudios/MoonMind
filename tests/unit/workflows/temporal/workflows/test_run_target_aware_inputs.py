@@ -43,7 +43,13 @@ def _task_payload() -> dict[str, object]:
     }
 
 
-def _build_request_for_step(step_id: str, *, runtime_mode: str = "jules"):
+def _build_request_for_step(
+    step_id: str,
+    *,
+    runtime_mode: str = "jules",
+    model: str | None = None,
+    effort: str | None = None,
+):
     wf = MoonMindRunWorkflow()
     with patch(
         "moonmind.workflows.temporal.workflows.run.workflow.info",
@@ -51,7 +57,11 @@ def _build_request_for_step(step_id: str, *, runtime_mode: str = "jules"):
     ):
         return wf._build_agent_execution_request(
             node_inputs={
-                "runtime": {"mode": runtime_mode},
+                "runtime": {
+                    "mode": runtime_mode,
+                    **({"model": model} if model else {}),
+                    **({"effort": effort} if effort else {}),
+                },
                 "inputRefs": ["artifact://explicit-node-input"],
             },
             node_id=step_id,
@@ -85,6 +95,41 @@ def test_run_request_records_prepared_manifest_before_step_dispatch() -> None:
         attempt_context["contextBundleDigest"]
     )
     assert "preparedInputRefs" not in projection["context"]
+
+
+def test_mm786_runtime_selection_projects_cost_and_portability_metadata() -> None:
+    request = _build_request_for_step(
+        "collect-evidence",
+        runtime_mode="gemini_cli",
+        model="gemini-2.5-pro",
+        effort="high",
+    )
+
+    attempt_context = request.parameters["metadata"]["moonmind"]["executionContext"]
+    projection = request.parameters["metadata"]["moonmind"][
+        "stepExecutionManifestProjection"
+    ]
+
+    assert attempt_context["runtimeSelection"]["runtimeId"] == "gemini_cli"
+    assert attempt_context["runtimeSelection"]["model"] == "gemini-2.5-pro"
+    assert attempt_context["runtimeSelection"]["effort"] == "high"
+    assert attempt_context["costPolicy"]["billingAwareRouting"] is True
+    assert attempt_context["costPolicy"]["routingBasis"] == "step_runtime_selection"
+    assert attempt_context["costPolicy"]["runtimeId"] == "gemini_cli"
+    assert attempt_context["costPolicy"]["model"] == "gemini-2.5-pro"
+    assert attempt_context["costPolicy"]["effort"] == "high"
+    assert attempt_context["costPolicy"]["estimatedCostUnits"] >= 1
+    assert attempt_context["portabilityProvenance"]["artifactPortability"] == (
+        "model_agnostic_refs"
+    )
+    assert attempt_context["portabilityProvenance"]["memoryPortability"] == (
+        "model_provenance_attached"
+    )
+    assert attempt_context["portabilityProvenance"]["model"] == "gemini-2.5-pro"
+    assert projection["context"]["costPolicy"] == attempt_context["costPolicy"]
+    assert projection["context"]["portabilityProvenance"] == (
+        attempt_context["portabilityProvenance"]
+    )
 
 
 def test_run_request_records_retrieval_and_memory_refs_in_attempt_projection() -> None:

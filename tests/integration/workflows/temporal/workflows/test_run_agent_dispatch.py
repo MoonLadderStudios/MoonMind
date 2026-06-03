@@ -353,8 +353,87 @@ class TestAgentRuntimeDispatch(unittest.IsolatedAsyncioTestCase):
                         search_attributes=_trusted_search_attributes(),
                     )
                 self.assertIn(
-                    "must be 'skill' or 'agent_runtime'",
+                    "expected 'agent_runtime'",
                     exc_info.exception.cause.message,
+                )
+
+    async def test_legacy_skill_tool_type_is_rejected(self) -> None:
+        """Legacy tool.type='skill' plan nodes are no longer dispatched by MoonMind.Run."""
+
+        @activity.defn(name="artifact.read")
+        async def legacy_skill_plan_reader(args: Dict[str, Any]) -> bytes:
+            ARTIFACT_READ_CALLS.append(args)
+            plan = {
+                "plan_version": "1.0",
+                "metadata": {
+                    "title": "Legacy skill plan",
+                    "created_at": "2026-06-03T00:00:00Z",
+                    "registry_snapshot": {
+                        "digest": "reg:sha256:" + ("e" * 64),
+                        "artifact_ref": "artifact://registry/legacy-skill",
+                    },
+                },
+                "policy": {"failure_mode": "FAIL_FAST"},
+                "nodes": [
+                    {
+                        "id": "legacy-skill-step",
+                        "tool": {
+                            "type": "skill",
+                            "name": "repo.run_tests",
+                            "version": "1.0.0",
+                        },
+                        "inputs": {},
+                    }
+                ],
+            }
+            return json.dumps(plan).encode("utf-8")
+
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            await _register_test_search_attributes(env)
+            async with (
+                Worker(
+                    env.client,
+                    task_queue=LLM_TASK_QUEUE,
+                    activities=[mock_plan_generate_agent],
+                ),
+                Worker(
+                    env.client,
+                    task_queue=ARTIFACTS_TASK_QUEUE,
+                    activities=[
+                        legacy_skill_plan_reader,
+                        mock_artifact_create,
+                        mock_artifact_write_complete,
+                    ],
+                ),
+                Worker(
+                    env.client,
+                    task_queue=SANDBOX_TASK_QUEUE,
+                    activities=[mock_skill_execute_agent],
+                ),
+                Worker(
+                    env.client,
+                    task_queue="test-task-queue",
+                    workflows=[MoonMindRunWorkflow],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ),
+            ):
+                with self.assertRaises(client.WorkflowFailureError) as exc_info:
+                    await env.client.execute_workflow(
+                        MoonMindRunWorkflow.run,
+                        {"workflowType": "MoonMind.Run"},
+                        id="test-legacy-skill-tool-type-rejected",
+                        task_queue="test-task-queue",
+                        search_attributes=_trusted_search_attributes(),
+                    )
+
+                self.assertIn(
+                    "unsupported plan node tool.type: 'skill'; expected 'agent_runtime'",
+                    exc_info.exception.cause.message,
+                )
+                self.assertEqual(SKILL_EXECUTE_CALLS, [])
+                self.assertNotIn(
+                    "artifact://registry/legacy-skill",
+                    [call.get("artifact_ref") for call in ARTIFACT_READ_CALLS],
                 )
 
     async def test_jules_agent_runtime_pr_publish_without_pr_fails_in_finalization(

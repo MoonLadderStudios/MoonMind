@@ -3813,8 +3813,6 @@ class MoonMindRunWorkflow:
             nodes=plan_definition.nodes,
             edges=plan_definition.edges,
         )
-        if not workflow.patched(RUN_CONDITIONAL_REGISTRY_READ_PATCH):
-            await load_registry_snapshot()
         if workflow.patched("jules-bundling-v1"):
             ordered_nodes = await self._bundle_ordered_nodes_for_execution(
                 ordered_nodes
@@ -3850,7 +3848,6 @@ class MoonMindRunWorkflow:
             and not pr_publish_optional
         )
         pull_request_url: str | None = None
-
         previous_step_outputs: Mapping[str, Any] = {}
         execution_result: Any = None
         for index, node in enumerate(ordered_nodes, start=1):
@@ -4011,6 +4008,8 @@ class MoonMindRunWorkflow:
                             result_status = "FAILED"
                             break
 
+                    route = None
+                    execute_payload = None
                     if tool_type == "agent_runtime":
                         # --- Agent dispatch: child workflow ---
                         child_workflow_id: str | None = None
@@ -4198,11 +4197,11 @@ class MoonMindRunWorkflow:
                         execution_result, blocked_outcome_wait_skipped = (
                             await self._wait_for_jira_blocker_resolution(
                                 execution_result=execution_result,
-                                route=route,
-                                execute_payload=execute_payload,
                                 node_id=node_id,
                                 tool_name=tool_name,
                                 tool_type=tool_type,
+                                route=route,
+                                execute_payload=execute_payload,
                                 selected_skill=node_inputs.get("selectedSkill"),
                                 node=node,
                                 node_inputs=node_inputs,
@@ -5109,6 +5108,7 @@ class MoonMindRunWorkflow:
         elif normalized_tool_type == "agent_runtime":
             is_check_blockers = (
                 normalized_selected_skill == JIRA_CHECK_BLOCKERS_TOOL_NAME
+                or normalized_tool_name == JIRA_CHECK_BLOCKERS_TOOL_NAME
             )
         else:
             is_check_blockers = False
@@ -5265,17 +5265,18 @@ class MoonMindRunWorkflow:
         self,
         *,
         execution_result: Any,
-        route: Any | None,
-        execute_payload: Mapping[str, Any] | None,
         node_id: str,
         tool_name: str,
         tool_type: str,
         failure_mode: str,
+        route: Any | None = None,
+        execute_payload: Mapping[str, Any] | None = None,
         selected_skill: Any = None,
         node: Mapping[str, Any] | None = None,
         node_inputs: Mapping[str, Any] | None = None,
         task_skills: Any = None,
         workflow_parameters: Mapping[str, Any] | None = None,
+        agent_request: Any = None,
     ) -> tuple[Any, bool]:
         skipped = False
         recheck_count = 0
@@ -5341,20 +5342,58 @@ class MoonMindRunWorkflow:
                 }
                 break
             if str(tool_type or "").strip().lower() == "agent_runtime":
-                if node is None or node_inputs is None or workflow_parameters is None:
+                if agent_request is not None:
+                    child_workflow_id = (
+                        f"{workflow.info().workflow_id}:agent:{node_id}:"
+                        f"jira-blocker-recheck{recheck_count}"
+                    )
+                    try:
+                        self._active_agent_child_workflow_id = child_workflow_id
+                        self._active_agent_id = getattr(agent_request, "agent_id", None)
+                        child_result = await workflow.execute_child_workflow(
+                            "MoonMind.AgentRun",
+                            agent_request,
+                            id=child_workflow_id,
+                            task_queue=WORKFLOW_TASK_QUEUE,
+                        )
+                        current_result = self._map_agent_run_result(child_result)
+                    except Exception as exc:
+                        diagnostic = self._record_failure_diagnostic(
+                            exc,
+                            stage=self._state,
+                            step_id=node_id,
+                            step_title=f"Re-check of Jira blockers for {tool_name}",
+                            source="child_workflow",
+                            child_workflow_id=child_workflow_id,
+                        )
+                        self._mark_step_terminal(
+                            node_id,
+                            status="failed",
+                            updated_at=workflow.now(),
+                            summary=diagnostic["message"],
+                            last_error=diagnostic["category"],
+                        )
+                        if failure_mode == "FAIL_FAST":
+                            raise
+                        break
+                    finally:
+                        self._active_agent_child_workflow_id = None
+                        self._active_agent_id = None
+                elif node is None or node_inputs is None or workflow_parameters is None:
                     raise ValueError(
                         "agent_runtime Jira blocker recheck requires node context"
                     )
-                current_result = await self._reexecute_jira_blocker_agent_runtime(
-                    node=node,
-                    node_inputs=node_inputs,
-                    node_id=node_id,
-                    tool_name=tool_name,
-                    task_skills=task_skills,
-                    workflow_parameters=workflow_parameters,
-                    recheck_count=recheck_count,
-                    failure_mode=failure_mode,
-                )
+                else:
+                    current_result = await self._reexecute_jira_blocker_agent_runtime(
+                        node=node,
+                        node_inputs=node_inputs,
+                        node_id=node_id,
+                        tool_name=tool_name,
+                        task_skills=task_skills,
+                        workflow_parameters=workflow_parameters,
+                        recheck_count=recheck_count,
+                        failure_mode=failure_mode,
+                    )
             else:
                 if route is None or execute_payload is None:
                     raise ValueError(
@@ -7961,6 +8000,12 @@ class MoonMindRunWorkflow:
             "runtimeId": agent_id,
             "agentKind": agent_kind,
         }
+        if parameters.get("model") is not None:
+            runtime_selection["model"] = parameters["model"]
+        if parameters.get("effort") is not None:
+            runtime_selection["effort"] = parameters["effort"]
+        if execution_profile_ref:
+            runtime_selection["executionProfileRef"] = execution_profile_ref
         if selected_skill:
             runtime_selection["skillId"] = selected_skill
         retrieval_context = None

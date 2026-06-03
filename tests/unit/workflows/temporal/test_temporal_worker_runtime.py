@@ -309,7 +309,7 @@ async def test_child_run_goal_scheduled_breakdown_preserves_target_runtime(tmp_p
     assert downstream_task["runtime"] == {"mode": "jules"}
 
 
-def test_runtime_planner_maps_explicit_tool_step_to_agent_runtime_node():
+def test_runtime_planner_maps_explicit_tool_step_to_typed_tool_node():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
         digest="reg:sha256:test",
@@ -481,7 +481,7 @@ def test_runtime_planner_orders_flattened_tool_and_skill_steps_with_provenance()
     assert plan["nodes"][1]["inputs"]["source"]["presetSlug"] == "jira-orchestrate"
 
 
-def test_runtime_planner_normalizes_authored_task_plan_skill_nodes():
+def test_runtime_planner_preserves_authored_task_plan_tool_nodes():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
         digest="reg:sha256:test",
@@ -530,9 +530,11 @@ def test_runtime_planner_normalizes_authored_task_plan_skill_nodes():
             "tool": {
                 "type": "agent_runtime",
                 "name": "codex_cli",
-                "version": "1.0",
+                "version": "1.0.0",
             },
             "inputs": {
+                "instructions": "Execute skill 'deployment.update_compose_stack'",
+                "runtime": {"mode": "codex_cli"},
                 "selectedSkill": "deployment.update_compose_stack",
                 "stack": "moonmind",
                 "image": {
@@ -591,7 +593,7 @@ def test_runtime_planner_preserves_authored_task_plan_node_metadata():
     assert node["description"] == "Use the deployment operations service."
 
 
-def test_runtime_planner_maps_deployment_update_step_to_agent_runtime_node():
+def test_runtime_planner_maps_deployment_update_step_to_typed_tool_node():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
         digest="reg:sha256:test",
@@ -894,11 +896,7 @@ def test_runtime_planner_materializes_tool_steps_without_source_lookup(
         snapshot=snapshot,
     )
 
-    assert plan["nodes"][0]["tool"] == {
-        "type": "agent_runtime",
-        "name": "codex_cli",
-        "version": "1.0",
-    }
+    assert plan["nodes"][0]["tool"]["name"] == "codex_cli"
     assert plan["nodes"][0]["inputs"]["selectedSkill"] == "jira.get_issue"
     if source is None:
         assert "source" not in plan["nodes"][0]["inputs"]
@@ -1013,7 +1011,7 @@ def test_runtime_planner_routes_jira_issue_creator_as_agent_skill_step():
     jira = plan["nodes"][1]
 
     assert breakdown["tool"]["type"] == "agent_runtime"
-    assert breakdown["tool"]["name"] == "moonspec-breakdown"
+    assert breakdown["tool"]["name"] == "codex_cli"
     assert breakdown["inputs"]["selectedSkill"] == "moonspec-breakdown"
     assert "Do not create or modify any `spec.md`" in breakdown["inputs"]["instructions"]
     assert breakdown["inputs"]["storyBreakdownPath"].startswith(
@@ -1029,7 +1027,7 @@ def test_runtime_planner_routes_jira_issue_creator_as_agent_skill_step():
 
     assert jira["tool"] == {
         "type": "agent_runtime",
-        "name": "jira-issue-creator",
+        "name": "codex_cli",
         "version": "1.0",
     }
     assert jira["inputs"]["selectedSkill"] == "jira-issue-creator"
@@ -1104,7 +1102,7 @@ def test_runtime_planner_shares_story_breakdown_path_for_jira_breakdown_preset()
     assert jira["inputs"]["targetBranch"] == breakdown["inputs"]["targetBranch"]
     assert jira["tool"] == {
         "type": "agent_runtime",
-        "name": "story.create_jira_issues",
+        "name": "codex_cli",
         "version": "1.0",
     }
     assert jira["inputs"]["selectedSkill"] == "story.create_jira_issues"
@@ -1269,7 +1267,7 @@ def test_runtime_planner_preserves_authored_branch_for_jira_story_import():
     assert "targetBranch" not in node["inputs"]
     assert "startingBranch" not in node["inputs"]
 
-def test_runtime_planner_routes_jira_orchestrate_task_creator_as_agent_runtime_step():
+def test_runtime_planner_routes_jira_orchestrate_task_creator_as_skill_step():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
         digest="reg:sha256:test",
@@ -1339,7 +1337,7 @@ def test_runtime_planner_routes_jira_orchestrate_task_creator_as_agent_runtime_s
     orchestrate = plan["nodes"][3]
     assert reconcile["tool"] == {
         "type": "agent_runtime",
-        "name": "story-reconcile-implementation",
+        "name": "codex_cli",
         "version": "1.0",
     }
     assert reconcile["inputs"]["selectedSkill"] == "story-reconcile-implementation"
@@ -1353,7 +1351,7 @@ def test_runtime_planner_routes_jira_orchestrate_task_creator_as_agent_runtime_s
     )
     assert orchestrate["tool"] == {
         "type": "agent_runtime",
-        "name": "story.create_jira_orchestrate_tasks",
+        "name": "codex_cli",
         "version": "1.0",
     }
     assert orchestrate["inputs"]["selectedSkill"] == "story.create_jira_orchestrate_tasks"
@@ -1362,7 +1360,7 @@ def test_runtime_planner_routes_jira_orchestrate_task_creator_as_agent_runtime_s
     }
 
 
-def test_runtime_planner_routes_jira_implement_task_creator_as_agent_runtime_step():
+def test_runtime_planner_routes_jira_implement_task_creator_as_skill_step():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
         digest="reg:sha256:test",
@@ -1433,7 +1431,7 @@ def test_runtime_planner_routes_jira_implement_task_creator_as_agent_runtime_ste
 
     assert implement["tool"] == {
         "type": "agent_runtime",
-        "name": "story.create_jira_implement_tasks",
+        "name": "codex_cli",
         "version": "1.0",
     }
     assert implement["inputs"]["selectedSkill"] == "story.create_jira_implement_tasks"
@@ -2269,6 +2267,45 @@ def test_runtime_planner_multi_step_generates_multiple_nodes_with_edges():
     assert len(edges) == 2
     assert edges[0] == {"from": "s1", "to": "s2"}
     assert edges[1] == {"from": "s2", "to": "s3"}
+
+
+def test_mm786_runtime_planner_uses_per_step_runtime_selection():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Objective",
+                "steps": [
+                    {"id": "s1", "instructions": "Use default runtime."},
+                    {
+                        "id": "s2",
+                        "instructions": "Use lower-cost runtime.",
+                        "runtime": {
+                            "mode": "gemini_cli",
+                            "model": "gemini-2.5-flash",
+                            "effort": "low",
+                        },
+                    },
+                ],
+                "runtime": {"mode": "codex_cli", "model": "gpt-5.4"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    nodes = plan["nodes"]
+    assert nodes[0]["tool"]["name"] == "codex_cli"
+    assert nodes[0]["inputs"]["runtime"]["mode"] == "codex_cli"
+    assert nodes[1]["tool"]["name"] == "gemini_cli"
+    assert nodes[1]["inputs"]["runtime"] == {
+        "mode": "gemini_cli",
+        "model": "gemini-2.5-flash",
+        "effort": "low",
+    }
+
 
 def test_runtime_planner_multi_step_preserves_custom_keys():
     planner = _build_runtime_planner()
