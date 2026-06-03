@@ -113,6 +113,14 @@ export type TemporalSubmissionDraft = {
     id: string;
     title: string;
     instructions: string;
+    runtime?: {
+      mode?: string | null;
+      model?: string | null;
+      effort?: string | null;
+      profileId?: string | null;
+      providerProfile?: string | null;
+      executionProfileRef?: string | null;
+    };
     stepType: TemporalSubmissionDraftStepType;
     tool?: TemporalSubmissionDraftToolPayload;
     skill?: TemporalSubmissionDraftSkillPayload;
@@ -519,6 +527,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     step.runtimeCommand,
     step.runtime_command,
   );
+  const runtime = firstObjectValue(step.runtime);
   const inputAttachments = normalizeAttachmentRefs(step.inputAttachments);
   const templateAttachments = attachmentRefsValue(
     step.templateAttachments,
@@ -531,6 +540,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     id,
     title: stringValue(step.title),
     instructions,
+    ...(Object.keys(runtime).length > 0 ? { runtime } : {}),
     stepType,
     ...(Object.keys(tool).length > 0 ? { tool } : {}),
     ...(Object.keys(skill).length > 0 ? { skill } : {}),
@@ -558,6 +568,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     result.id ||
     result.title ||
     result.instructions ||
+    Object.keys(runtime).length > 0 ||
     result.stepType !== 'skill' ||
     result.skillId ||
     Object.keys(result.skillArgs).length > 0 ||

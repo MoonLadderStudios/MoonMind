@@ -25,6 +25,23 @@ MemoryProposalState = Literal[
 ]
 EXECUTION_CONTEXT_BUILDER_VERSION = "execution-context-builder-v1"
 
+_EFFORT_COST_UNITS = {
+    "minimal": 1,
+    "low": 1,
+    "medium": 2,
+    "high": 3,
+    "max": 4,
+}
+
+_RUNTIME_COST_UNITS = {
+    "codex": 3,
+    "codex_cli": 3,
+    "claude": 3,
+    "claude_code": 3,
+    "gemini_cli": 2,
+    "jules": 2,
+}
+
 _INLINE_ATTACHMENT_KEYS = {
     "base64",
     "bytes",
@@ -212,6 +229,11 @@ class ExecutionContextBundle(BaseModel):
         default_factory=dict,
         alias="runtimeSelection",
     )
+    cost_policy: dict[str, Any] = Field(default_factory=dict, alias="costPolicy")
+    portability_provenance: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="portabilityProvenance",
+    )
     context_bundle_ref: str = Field(alias="contextBundleRef")
     context_bundle_digest: str = Field(alias="contextBundleDigest")
     builder_version: str = Field(alias="builderVersion")
@@ -245,6 +267,8 @@ class ExecutionContextBundle(BaseModel):
                 "retrievalManifestRef": self.retrieval_manifest_ref,
                 "memoryManifestRef": self.memory_manifest_ref,
                 "memoryContextRef": self.memory_context_ref,
+                "costPolicy": self.cost_policy,
+                "portabilityProvenance": self.portability_provenance,
             }
         }
 
@@ -400,6 +424,13 @@ def build_execution_context_bundle(
         "memoryManifestRef": memory_manifest_ref,
         "memoryContextRef": memory_context_ref,
         "runtimeSelection": dict(runtime_selection or {}),
+        "costPolicy": _build_cost_policy(runtime_selection or {}),
+        "portabilityProvenance": _build_portability_provenance(
+            runtime_selection or {},
+            prepared_input_refs=prepared_input_refs,
+            memory_manifest_ref=memory_manifest_ref,
+            memory_context_ref=memory_context_ref,
+        ),
         "builderVersion": builder_version,
     }
     digest = _digest_payload(base_payload)
@@ -409,6 +440,56 @@ def build_execution_context_bundle(
         "contextBundleDigest": digest,
     }
     return ExecutionContextBundle.model_validate(payload)
+
+
+def _build_cost_policy(runtime_selection: Mapping[str, Any]) -> dict[str, Any]:
+    runtime_id = _optional_text(
+        runtime_selection.get("runtimeId") or runtime_selection.get("runtime")
+    )
+    model = _optional_text(runtime_selection.get("model"))
+    effort = _optional_text(runtime_selection.get("effort"))
+    runtime_units = _RUNTIME_COST_UNITS.get(str(runtime_id or "").lower(), 2)
+    effort_units = _EFFORT_COST_UNITS.get(str(effort or "").lower(), 2 if effort else 1)
+    model_units = 1
+    model_key = str(model or "").lower()
+    if any(marker in model_key for marker in ("pro", "opus", "gpt-5", "m2.7")):
+        model_units = 2
+    estimated_units = runtime_units * effort_units * model_units
+    tier = "premium" if estimated_units >= 12 else "standard" if estimated_units >= 4 else "economy"
+    return {
+        "billingAwareRouting": True,
+        "routingBasis": "step_runtime_selection",
+        "runtimeId": runtime_id,
+        "model": model,
+        "effort": effort,
+        "estimatedCostUnits": estimated_units,
+        "costTier": tier,
+    }
+
+
+def _build_portability_provenance(
+    runtime_selection: Mapping[str, Any],
+    *,
+    prepared_input_refs: Sequence[str],
+    memory_manifest_ref: str | None,
+    memory_context_ref: str | None,
+) -> dict[str, Any]:
+    runtime_id = _optional_text(
+        runtime_selection.get("runtimeId") or runtime_selection.get("runtime")
+    )
+    model = _optional_text(runtime_selection.get("model"))
+    effort = _optional_text(runtime_selection.get("effort"))
+    return {
+        "artifactPortability": "model_agnostic_refs",
+        "memoryPortability": "model_provenance_attached",
+        "runtimeId": runtime_id,
+        "model": model,
+        "effort": effort,
+        "preparedInputRefCount": len(list(prepared_input_refs)),
+        "memoryManifestRef": memory_manifest_ref,
+        "memoryContextRef": memory_context_ref,
+        "modelSwitchSafe": True,
+    }
 
 
 def build_retrieval_manifest(retrieval: Mapping[str, Any]) -> RetrievalManifest:

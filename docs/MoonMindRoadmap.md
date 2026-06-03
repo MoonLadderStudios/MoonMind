@@ -232,7 +232,7 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 
 ---
 
-## Milestone 10 — Vendor Portability & Model Flexibility 🔧
+## Milestone 10 — Vendor Portability & Model Flexibility ✅
 
 **README claim:** *"Swap between proprietary cloud models and local open-source models with a single configuration change."* / *"Multi-Agent Chaining: Break massive goals into smaller steps. Only use expensive models for steps that need them."*
 
@@ -241,12 +241,16 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - Optional vLLM compose profiles
 - Runtime selector per task submission
 - Model routing in chat endpoint
+- Per-step runtime/model/effort selection in multi-step task submissions (MM-786)
+- Compact billing-aware routing metadata on step execution context bundles (MM-786)
+- Model/runtime comparison runs linked to source executions (MM-773)
+- Artifact and memory portability provenance across model switches (MM-786)
 
 ### Remaining tasks
-- [ ] **10.1** Per-step model/runtime selection in multi-step flows — Steps don't independently select models
-- [ ] **10.2** Cost tracking / billing-aware routing — No cost instrumentation
-- [ ] **10.3** Model comparison mode (same task, different models) — README promises this; no implementation
-- [ ] **10.4** Artifact/memory portability across model switches — Artifacts are model-agnostic; memory doesn't track model provenance
+- [x] **10.1** Per-step model/runtime selection in multi-step flows — Steps can independently select runtime, model, and effort
+- [x] **10.2** Cost tracking / billing-aware routing — Step execution context records deterministic billing-aware routing metadata
+- [x] **10.3** Model comparison mode (same task, different models) — Comparison runs preserve source-run lineage and runtime/model metadata
+- [x] **10.4** Artifact/memory portability across model switches — Execution context records model/runtime provenance beside artifact and memory refs
 
 ---
 

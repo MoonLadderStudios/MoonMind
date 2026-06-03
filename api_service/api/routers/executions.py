@@ -4367,7 +4367,6 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
 
     normalized_steps: list[dict[str, Any]] = []
     forbidden = {
-        "runtime",
         "targetRuntime",
         "target_runtime",
         "model",
@@ -4407,6 +4406,27 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
         )
         if normalized_skills is not None:
             normalized_step["skills"] = normalized_skills
+
+        runtime_payload = step_payload.get("runtime")
+        if runtime_payload is not None:
+            if not isinstance(runtime_payload, Mapping):
+                raise _invalid_task_request(
+                    f"payload.task.steps[{index}].runtime must be an object."
+                )
+            normalized_runtime: dict[str, str] = {}
+            for source_key, target_key in (
+                ("mode", "mode"),
+                ("model", "model"),
+                ("effort", "effort"),
+                ("profileId", "profileId"),
+                ("providerProfile", "providerProfile"),
+                ("executionProfileRef", "executionProfileRef"),
+            ):
+                value = runtime_payload.get(source_key)
+                if isinstance(value, str) and value.strip():
+                    normalized_runtime[target_key] = value.strip()
+            if normalized_runtime:
+                normalized_step["runtime"] = normalized_runtime
 
         normalized_input_attachments = _normalize_task_input_attachments(
             step_payload.get("inputAttachments")

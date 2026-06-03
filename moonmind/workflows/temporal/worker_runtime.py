@@ -1615,7 +1615,12 @@ def _build_runtime_planner():
 
                 # Per-step tool/skill override
                 step_tool_name = _selected_step_tool_name(step_entry)
-                step_runtime = runtime_mode
+                step_runtime_payload = _coerce_mapping(step_entry.get("runtime"))
+                step_runtime = str(
+                    step_runtime_payload.get("mode")
+                    or step_runtime_payload.get("targetRuntime")
+                    or runtime_mode
+                ).strip()
                 tool_type = _selected_step_tool_type(step_entry, step_tool_name)
                 tool_version = _selected_step_tool_version(step_entry)
                 effective_step_skill_name = step_tool_name or selected_skill_name

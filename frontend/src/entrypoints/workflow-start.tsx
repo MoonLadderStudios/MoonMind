@@ -675,6 +675,9 @@ interface StepState {
   title: string;
   stepType: StepType;
   instructions: string;
+  runtime: string;
+  model: string;
+  effort: string;
   toolId: string;
   toolVersion: string;
   toolInputs: string;
@@ -1308,6 +1311,9 @@ function createStepStateEntry(
     title: "",
     stepType: "skill",
     instructions: "",
+    runtime: "",
+    model: "",
+    effort: "",
     toolId: "",
     toolVersion: "",
     toolInputs: "{}",
@@ -1600,6 +1606,9 @@ function createStepStateEntriesFromTemporalDraft(
       title: step.title,
       stepType: step.stepType,
       instructions: step.instructions,
+      runtime: String(step.runtime?.mode || "").trim(),
+      model: String(step.runtime?.model || "").trim(),
+      effort: String(step.runtime?.effort || "").trim(),
       skillId:
         step.stepType === "skill"
           ? shouldUsePrimarySkill
@@ -6974,6 +6983,18 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       clearSubmitBusy();
       return;
     }
+    const invalidStepRuntime = submissionSteps.find((step) => {
+      const stepRuntime = step.runtime.trim().toLowerCase();
+      return stepRuntime && !supportedTaskRuntimes.includes(stepRuntime);
+    });
+    if (invalidStepRuntime) {
+      const stepIndex = submissionSteps.indexOf(invalidStepRuntime) + 1;
+      setSubmitMessage(
+        `Step ${stepIndex} runtime must be one of: ${supportedTaskRuntimes.join(", ")}.`,
+      );
+      clearSubmitBusy();
+      return;
+    }
 
     const normalizedPublishMode = normalizePublishModeForSubmit(publishMode);
     if (!["none", "branch", "pr"].includes(normalizedPublishMode)) {
@@ -7558,7 +7579,16 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       includePrimaryStepForObjectiveOverride ||
       hasTemplateBoundStep ||
       Boolean(primaryGeneratedToolPayload) ||
-      primaryStepAttachmentRefs.length > 0;
+      primaryStepAttachmentRefs.length > 0 ||
+      Boolean(primaryStep?.runtime.trim()) ||
+      Boolean(primaryStep?.model.trim()) ||
+      Boolean(primaryStep?.effort.trim());
+
+    const stepRuntimePayload = (step: StepState): Record<string, string> => ({
+      ...(step.runtime.trim() ? { mode: step.runtime.trim().toLowerCase() } : {}),
+      ...(step.model.trim() ? { model: step.model.trim() } : {}),
+      ...(step.effort.trim() ? { effort: step.effort.trim() } : {}),
+    });
 
     const normalizedSteps = includeExplicitSteps
       ? [
@@ -7587,6 +7617,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
             return entry.payload;
           }
           const submittedPayload = entry.payload;
+          const runtimePayload = stepRuntimePayload(sourceStep);
           const payloadAttachments = Array.isArray(
             submittedPayload.inputAttachments,
           )
@@ -7635,6 +7666,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
             Boolean(sourceStep.id.trim()) ||
             Boolean(sourceStep.title.trim()) ||
             Boolean(sourceStep.storyOutput) ||
+            Object.keys(runtimePayload).length > 0 ||
             Boolean(
               submittedSource && Object.keys(submittedSource).length > 0,
             ) ||
@@ -7658,6 +7690,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
               : {}),
             ...(sourceStep.storyOutput
               ? { storyOutput: sourceStep.storyOutput }
+              : {}),
+            ...(Object.keys(runtimePayload).length > 0
+              ? { runtime: runtimePayload }
               : {}),
             ...(submittedSource && Object.keys(submittedSource).length > 0
               ? { source: submittedSource }
@@ -8526,7 +8561,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                 step.toolId.trim() === "jira.transition_issue";
               const instructionPreview = deriveRuntimeCommandPreview({
                 instructions: step.instructions,
-                runtime,
+                runtime: step.runtime.trim() || runtime,
                 sourcePath: index === 0
                   ? "objective.instructions"
                   : `steps[${index - 1}].instructions`,
@@ -8623,6 +8658,56 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                       })}
                     </div>
                   </fieldset>
+                  <div className="grid two">
+                    <label>
+                      Step Runtime
+                      <select
+                        data-step-field="runtime"
+                        data-step-index={String(index)}
+                        value={step.runtime}
+                        onChange={(event) =>
+                          updateStep(step.localId, {
+                            runtime: event.target.value,
+                          })
+                        }
+                      >
+                        <option value="">Task default</option>
+                        {supportedTaskRuntimes.map((runtimeOption) => (
+                          <option key={runtimeOption} value={runtimeOption}>
+                            {runtimeOption}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Step Model
+                      <input
+                        data-step-field="model"
+                        data-step-index={String(index)}
+                        placeholder={model || "Task default"}
+                        value={step.model}
+                        onChange={(event) =>
+                          updateStep(step.localId, {
+                            model: event.target.value,
+                          })
+                        }
+                      />
+                    </label>
+                    <label>
+                      Step Effort
+                      <input
+                        data-step-field="effort"
+                        data-step-index={String(index)}
+                        placeholder={effort || "Task default"}
+                        value={step.effort}
+                        onChange={(event) =>
+                          updateStep(step.localId, {
+                            effort: event.target.value,
+                          })
+                        }
+                      />
+                    </label>
+                  </div>
                   {step.stepType === "tool" ? (
                     <div className="stack queue-step-type-panel">
                       <p className="small">

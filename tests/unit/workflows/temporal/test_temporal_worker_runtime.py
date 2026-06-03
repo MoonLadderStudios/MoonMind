@@ -2264,6 +2264,45 @@ def test_runtime_planner_multi_step_generates_multiple_nodes_with_edges():
     assert edges[0] == {"from": "s1", "to": "s2"}
     assert edges[1] == {"from": "s2", "to": "s3"}
 
+
+def test_mm786_runtime_planner_uses_per_step_runtime_selection():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Objective",
+                "steps": [
+                    {"id": "s1", "instructions": "Use default runtime."},
+                    {
+                        "id": "s2",
+                        "instructions": "Use lower-cost runtime.",
+                        "runtime": {
+                            "mode": "gemini_cli",
+                            "model": "gemini-2.5-flash",
+                            "effort": "low",
+                        },
+                    },
+                ],
+                "runtime": {"mode": "codex_cli", "model": "gpt-5.4"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    nodes = plan["nodes"]
+    assert nodes[0]["tool"]["name"] == "codex_cli"
+    assert nodes[0]["inputs"]["runtime"]["mode"] == "codex_cli"
+    assert nodes[1]["tool"]["name"] == "gemini_cli"
+    assert nodes[1]["inputs"]["runtime"] == {
+        "mode": "gemini_cli",
+        "model": "gemini-2.5-flash",
+        "effort": "low",
+    }
+
+
 def test_runtime_planner_multi_step_preserves_custom_keys():
     planner = _build_runtime_planner()
     snapshot = _make_snapshot()
