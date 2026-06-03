@@ -826,15 +826,13 @@ def test_runtime_send_turn_fails_empty_task_complete_event(
     )
 
     assert response.status == "failed"
+    assert response.turn_id == "vendor-turn-1"
+    assert response.session_state.active_turn_id is None
     assert response.metadata["failureClass"] == "transient"
-    assert (
-        response.metadata["reason"]
-        == "codex app-server task_complete produced no assistant output"
+    assert response.metadata["reason"] == (
+        "codex app-server turn/completed produced no assistant output"
     )
-    assert response.metadata["failureCause"] == "app_server_protocol_empty_turn"
-    evidence = response.metadata["turnFailureEvidence"]
-    assert evidence["rolloutScan"]["sawTaskComplete"] is True
-    assert evidence["rolloutScan"]["entriesReferencingTurn"] >= 1
+    assert response.metadata["retryRecommendedAction"] == "clear_session"
     handle = runtime.session_status(
         CodexManagedSessionLocator(
             sessionId="sess-1",
@@ -846,9 +844,8 @@ def test_runtime_send_turn_fails_empty_task_complete_event(
     assert handle.status == "failed"
     assert handle.metadata["lastTurnStatus"] == "failed"
     assert handle.metadata["failureClass"] == "transient"
-    assert (
-        handle.metadata["lastTurnError"]
-        == "codex app-server task_complete produced no assistant output"
+    assert handle.metadata["lastTurnError"] == (
+        "codex app-server turn/completed produced no assistant output"
     )
     assert "lastAssistantText" not in handle.metadata
 
@@ -1396,9 +1393,8 @@ def test_runtime_session_status_fails_empty_task_complete_after_running_turn(
     assert handle.session_state.active_turn_id is None
     assert handle.metadata["lastTurnStatus"] == "failed"
     assert handle.metadata["failureClass"] == "transient"
-    assert (
-        handle.metadata["lastTurnError"]
-        == "codex app-server task_complete produced no assistant output"
+    assert handle.metadata["lastTurnError"] == (
+        "codex app-server turn/completed produced no assistant output"
     )
     assert "lastAssistantText" not in handle.metadata
 
