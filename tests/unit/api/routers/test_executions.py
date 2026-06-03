@@ -162,6 +162,73 @@ async def test_task_step_runtime_selection_is_normalized_and_resolved() -> None:
         "modelSource": "task_override",
     }
 
+
+@pytest.mark.asyncio
+async def test_step_runtime_inherits_task_profile_default_model() -> None:
+    steps = _normalize_task_steps(
+        {
+            "steps": [
+                {
+                    "id": "implement",
+                    "instructions": "Implement using inherited profile defaults.",
+                    "runtime": {"effort": "low"},
+                }
+            ]
+        }
+    )
+    session = SimpleNamespace(
+        get=AsyncMock(
+            return_value=SimpleNamespace(default_model="codex-profile-default")
+        )
+    )
+
+    await _resolve_step_runtime_selections(
+        steps=steps,
+        task_runtime={"mode": "codex_cli", "effort": "high"},
+        task_target_runtime="codex_cli",
+        task_profile_id="profile-codex",
+        session=session,
+    )
+
+    assert steps[0]["runtime"] == {
+        "effort": "low",
+        "mode": "codex_cli",
+        "model": "codex-profile-default",
+        "modelSource": "provider_profile_default",
+        "inheritedProfileId": "profile-codex",
+    }
+
+
+@pytest.mark.asyncio
+async def test_step_runtime_normalizes_explicit_profile_without_session() -> None:
+    steps = _normalize_task_steps(
+        {
+            "steps": [
+                {
+                    "id": "review",
+                    "instructions": "Review with a profile ref in a unit test.",
+                    "runtime": {
+                        "mode": "gemini_cli",
+                        "profileId": "profile-gemini",
+                    },
+                }
+            ]
+        }
+    )
+
+    await _resolve_step_runtime_selections(
+        steps=steps,
+        task_runtime=None,
+        task_target_runtime="codex_cli",
+        task_profile_id=None,
+        session=None,
+    )
+
+    assert steps[0]["runtime"]["mode"] == "gemini_cli"
+    assert steps[0]["runtime"]["profileId"] == "profile-gemini"
+    assert steps[0]["runtime"]["providerProfile"] == "profile-gemini"
+
+
 def _mm639_authored_task_payload() -> dict[str, Any]:
     return {
         "title": "MM-639 durable snapshot",

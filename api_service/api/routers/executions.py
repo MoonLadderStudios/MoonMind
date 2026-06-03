@@ -4565,13 +4565,14 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
 async def _resolve_step_runtime_selections(
     *,
     steps: list[dict[str, Any]],
-    task_runtime: Mapping[str, Any],
+    task_runtime: Mapping[str, Any] | None,
     task_target_runtime: str | None,
     task_profile_id: str | None,
     session: Any,
 ) -> None:
     if not steps:
         return
+    task_runtime = task_runtime or {}
 
     for index, step in enumerate(steps):
         runtime_payload = (
@@ -4602,17 +4603,23 @@ async def _resolve_step_runtime_selections(
         if raw_requested_model is not None:
             raw_requested_model = str(raw_requested_model)
 
+        effective_profile_id = raw_step_profile_id or task_profile_id
         provider_profile = None
-        if raw_step_profile_id and session is not None:
+        if effective_profile_id and session is not None:
             from api_service.db.models import ManagedAgentProviderProfile
 
             provider_profile = await session.get(
-                ManagedAgentProviderProfile, raw_step_profile_id
+                ManagedAgentProviderProfile, effective_profile_id
             )
-            if provider_profile is None:
+            if provider_profile is None and raw_step_profile_id:
                 raise _invalid_task_request(
                     f"Provider profile not found for payload.task.steps[{index}]: "
                     f"{raw_step_profile_id!r}."
+                )
+            if provider_profile is None and task_profile_id and not raw_step_profile_id:
+                raise _invalid_task_request(
+                    f"Provider profile not found for inherited task profile on "
+                    f"payload.task.steps[{index}]: {task_profile_id!r}."
                 )
 
         resolved_model, model_source = resolve_effective_model(
@@ -4630,7 +4637,7 @@ async def _resolve_step_runtime_selections(
         if raw_requested_model is not None:
             resolved_runtime["requestedModel"] = raw_requested_model
         resolved_runtime["modelSource"] = model_source
-        if raw_step_profile_id and provider_profile is not None:
+        if raw_step_profile_id:
             resolved_runtime["profileId"] = raw_step_profile_id
             resolved_runtime["providerProfile"] = raw_step_profile_id
         elif task_profile_id and not raw_step_profile_id:

@@ -7746,12 +7746,11 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     const mergedCapabilities = deriveRequiredCapabilities({
       runtimeMode: normalizedRuntime,
       stepRuntimeModes: normalizedSteps
-        .map((step) => {
-          const stepRuntime = (step as Record<string, unknown>)["runtime"];
-          return typeof stepRuntime === "object" && stepRuntime !== null
-            ? String((stepRuntime as Record<string, unknown>).mode || "").trim()
-            : "";
-        })
+        .map((step) =>
+          String(
+            (step as { runtime?: { mode?: unknown } }).runtime?.mode || "",
+          ).trim(),
+        )
         .filter(Boolean),
       publishMode: effectivePublishMode,
       taskSkillRequiredCapabilities,
