@@ -285,7 +285,7 @@ These are technical debt items that don't map to README claims but improve code 
 - [x] **H.1** Complete legacy system removal — Code removal is complete (migration `c1d2e3f4a5b6`); requirements and guard tests in `specs/087-orchestrator-removal/` and `tests/unit/orchestrator_removal/`. Remaining documentation updates are tracked in `docs/MoonMindRoadmap.md`.
 - [x] **H.2** Spec deduplication — Duplicate spec directories were removed with the retired specs tree; no Worker Pause (038/040), Claude gating (044/046), Manifest Phase 0 (032/034), Jules events (048 stub), or Task Presets (026/028) duplicates remain.
 - [x] **H.3** Legacy skill dispatch cleanup — Removed the dead `tool.type == "skill"` dispatch branch from `MoonMind.Run`; current plan execution accepts `agent_runtime` nodes.
-- [x] **H.4** Delete legacy docs identified in `docs/LegacyDocsReview.md` — Removed the legacy docs flagged for deletion (`CodexCliWorkers.md`, `GeminiCliWorkers.md`, `SpecKitAutomation.md`, etc.).
+- [x] **H.4** Delete legacy docs identified by the legacy docs review (MM-800) — Removed the legacy docs flagged for deletion (`CodexCliWorkers.md`, `GeminiCliWorkers.md`, `SpecKitAutomation.md`, etc.).
 
 ---
 
