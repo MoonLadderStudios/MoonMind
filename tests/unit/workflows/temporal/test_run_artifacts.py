@@ -980,6 +980,9 @@ async def test_jira_blocker_recheck_wait_honors_pause_before_activity(
         "wait_condition",
         fake_wait_condition,
     )
+    def fake_workflow_info() -> Any:
+        return type("WorkflowInfo", (), {"workflow_id": "wf-1"})()
+
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "execute_child_workflow",
@@ -988,7 +991,7 @@ async def test_jira_blocker_recheck_wait_honors_pause_before_activity(
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "info",
-        lambda: type("WorkflowInfo", (), {"workflow_id": "wf-1"})(),
+        fake_workflow_info,
     )
     monkeypatch.setattr(
         MoonMindRunWorkflow,
@@ -1064,6 +1067,9 @@ async def test_jira_blocker_recheck_activity_failure_respects_failure_mode(
         "wait_condition",
         _timeout_wait_condition,
     )
+    def fake_workflow_info() -> Any:
+        return type("WorkflowInfo", (), {"workflow_id": "wf-1"})()
+
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "execute_child_workflow",
@@ -1072,7 +1078,7 @@ async def test_jira_blocker_recheck_activity_failure_respects_failure_mode(
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "info",
-        lambda: type("WorkflowInfo", (), {"workflow_id": "wf-1"})(),
+        fake_workflow_info,
     )
     monkeypatch.setattr(
         MoonMindRunWorkflow,
