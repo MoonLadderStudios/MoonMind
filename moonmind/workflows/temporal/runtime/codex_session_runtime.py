@@ -1968,9 +1968,13 @@ class CodexManagedSessionRuntime:
         state: CodexSessionRuntimeState,
         allow_fallback_start: bool = True,
     ) -> str:
-        thread_path = self._existing_thread_path(
-            state.vendor_thread_path
-        ) or self._find_vendor_thread_path(state.vendor_thread_id)
+        existing_thread_path = self._existing_thread_path(state.vendor_thread_path)
+        discovered_thread_path = None
+        if existing_thread_path is None:
+            discovered_thread_path = self._find_vendor_thread_path(
+                state.vendor_thread_id
+            )
+        thread_path = existing_thread_path or discovered_thread_path
         params: dict[str, Any] = {"threadId": state.vendor_thread_id}
         if thread_path:
             params["path"] = thread_path
@@ -1998,10 +2002,11 @@ class CodexManagedSessionRuntime:
             )
         recovered_thread_path = None
         if not fallback_started and vendor_thread_id == state.vendor_thread_id:
-            recovered_thread_path = thread_path
+            recovered_thread_path = discovered_thread_path
         if not fallback_started:
             try:
-                client.request("thread/read", {"threadId": vendor_thread_id})
+                read_result = client.request("thread/read", {"threadId": vendor_thread_id})
+                thread_payload = read_result.get("thread") or thread_payload
             except RuntimeError as exc:
                 message = str(exc)
                 if (
@@ -2026,7 +2031,7 @@ class CodexManagedSessionRuntime:
                 recovered_thread_path = None
         state.vendor_thread_id = vendor_thread_id
         state.vendor_thread_path = self._normalized_thread_path(
-            thread_payload.get("path") or recovered_thread_path
+            recovered_thread_path or thread_payload.get("path")
         )
         return vendor_thread_id
 
