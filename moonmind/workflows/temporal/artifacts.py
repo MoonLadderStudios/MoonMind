@@ -2792,6 +2792,17 @@ class TemporalArtifactActivities:
 
         profiles = []
         for row in rows:
+            command_behavior = row.command_behavior or {}
+            billing_metadata = (
+                command_behavior.get("billing")
+                if isinstance(command_behavior, dict)
+                else None
+            )
+            pricing_metadata = (
+                command_behavior.get("pricing")
+                if isinstance(command_behavior, dict)
+                else None
+            )
             profiles.append(
                 {
                     "profile_id": row.profile_id,
@@ -2811,7 +2822,8 @@ class TemporalArtifactActivities:
                     "env_template": row.env_template or {},
                     "file_templates": row.file_templates or [],
                     "home_path_overrides": row.home_path_overrides or {},
-                    "command_behavior": row.command_behavior or {},
+                    "command_behavior": command_behavior,
+                    "billing": billing_metadata or pricing_metadata or {},
                     "default_model": row.default_model,
                     "model_overrides": row.model_overrides or {},
                     "max_parallel_runs": row.max_parallel_runs,

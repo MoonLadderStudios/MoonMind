@@ -24,6 +24,7 @@ from moonmind.factories.anthropic_factory import AnthropicFactory
 from moonmind.factories.google_factory import get_google_model
 from moonmind.factories.openai_factory import get_openai_model
 from moonmind.models_cache import model_cache
+from moonmind.billing.costs import emit_llm_cost_telemetry, estimate_model_cost
 from moonmind.rag.retriever import QdrantRAG
 from moonmind.schemas.chat_models import (
     ChatCompletionRequest,
@@ -258,6 +259,34 @@ def _usage_from_chat_usage(usage: Usage | None) -> ResponseUsage | None:
         input_tokens=usage.prompt_tokens,
         output_tokens=usage.completion_tokens,
         total_tokens=usage.total_tokens,
+        cost_estimate_usd=usage.cost_estimate_usd,
+        pricing_source=usage.pricing_source,
+    )
+
+def _usage_with_cost(
+    *,
+    provider: str,
+    model: str,
+    prompt_tokens: int | None,
+    completion_tokens: int | None,
+    total_tokens: int | None = None,
+) -> Usage:
+    estimate = estimate_model_cost(
+        model=model,
+        input_tokens=prompt_tokens,
+        output_tokens=completion_tokens,
+    )
+    emit_llm_cost_telemetry(provider=provider, model=model, estimate=estimate)
+    return Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=(
+            total_tokens
+            if total_tokens is not None
+            else int(prompt_tokens or 0) + int(completion_tokens or 0)
+        ),
+        cost_estimate_usd=estimate.cost_estimate_usd if estimate else None,
+        pricing_source=estimate.pricing_source if estimate else None,
     )
 
 def _responses_payload_from_chat(
@@ -329,6 +358,34 @@ def _normalize_openai_response_payload(
     )
     payload["output_text"] = text
     payload.setdefault("metadata", metadata)
+    usage = payload.get("usage")
+    if isinstance(usage, dict):
+        input_tokens = (
+            usage.get("input_tokens")
+            if usage.get("input_tokens") is not None
+            else usage.get("prompt_tokens")
+        )
+        output_tokens = (
+            usage.get("output_tokens")
+            if usage.get("output_tokens") is not None
+            else usage.get("completion_tokens")
+        )
+        estimate = estimate_model_cost(
+            model=str(payload.get("model") or fallback_model),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+        if estimate:
+            usage.setdefault("cost_estimate_usd", estimate.cost_estimate_usd)
+            usage.setdefault("pricing_source", estimate.pricing_source)
+            billing = dict(payload.get("metadata") or {})
+            billing["billing"] = estimate.to_metadata()
+            payload["metadata"] = billing
+            emit_llm_cost_telemetry(
+                provider="OpenAI",
+                model=str(payload.get("model") or fallback_model),
+                estimate=estimate,
+            )
     return payload
 
 @router.post("/completions", response_model=ChatCompletionResponse)
@@ -630,7 +687,9 @@ async def handle_openai_request(
                 finish_reason=finish_reason,
             )
         ],
-        usage=Usage(  # Ensure these fields exist on usage_data
+        usage=_usage_with_cost(
+            provider="OpenAI",
+            model=getattr(openai_response, "model", model_to_use),
             prompt_tokens=getattr(
                 usage_data, "prompt_tokens", usage_data.get("prompt_tokens", 0)
             ),
@@ -749,7 +808,9 @@ async def handle_google_request(
                 finish_reason="stop",
             )
         ],
-        usage=Usage(
+        usage=_usage_with_cost(
+            provider="Google",
+            model=model_to_use,
             prompt_tokens=prompt_tokens_estimate,
             completion_tokens=completion_tokens_estimate,
             total_tokens=prompt_tokens_estimate + completion_tokens_estimate,
@@ -902,7 +963,9 @@ async def handle_anthropic_request(
                 finish_reason="stop",  # Or map from Anthropic's finish reasons
             )
         ],
-        usage=Usage(
+        usage=_usage_with_cost(
+            provider="Anthropic",
+            model=model_to_use,
             prompt_tokens=prompt_tokens_estimate,
             completion_tokens=completion_tokens_estimate,
             total_tokens=prompt_tokens_estimate + completion_tokens_estimate,

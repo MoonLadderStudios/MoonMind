@@ -9,6 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+    BILLING_AWARE_PROFILE_SELECTION_PATCH,
     DB_AUTHORITATIVE_PROFILE_SYNC_PATCH,
     DEFAULT_PROFILE_EXCLUSIVE_SELECTION_PATCH,
     HandoffReservation,
@@ -223,6 +224,28 @@ class TestProviderProfileManagerHelpers:
         assert wf._profiles["p1"].rate_limit_policy == "queue"
         # Leases should be preserved across sync.
         assert wf._profiles["p1"].current_leases == ["wf1"]
+
+    def test_apply_profile_sync_loads_operator_billing_metadata(self):
+        wf = self._make_workflow()
+        wf._apply_profile_sync(
+            [
+                {
+                    "profile_id": "cheap",
+                    "max_parallel_runs": 1,
+                    "rate_limit_policy": "backoff",
+                    "enabled": True,
+                    "billing": {
+                        "inputPerMillionUsd": 0.10,
+                        "outputPerMillionUsd": 0.40,
+                    },
+                }
+            ]
+        )
+
+        profile = wf._profiles["cheap"]
+        assert profile.input_per_million_usd == 0.10
+        assert profile.output_per_million_usd == 0.40
+        assert profile.pricing_source == "profile.billing"
 
     def test_apply_profile_sync_disables_removed_profiles_without_leases(self):
         wf = self._make_workflow()
@@ -673,6 +696,42 @@ class TestProviderProfileManagerHelpers:
 
         assert best is not None
         assert best.profile_id == "p2"
+
+    def test_find_available_profile_prefers_lower_cost_when_billing_patch_enabled(self):
+        wf = self._make_workflow()
+        wf._profiles["expensive"] = ProfileSlotState(
+            profile_id="expensive",
+            max_parallel_runs=3,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            provider_id="openai",
+            priority=500,
+            input_per_million_usd=5.0,
+            output_per_million_usd=15.0,
+        )
+        wf._profiles["cheap"] = ProfileSlotState(
+            profile_id="cheap",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            provider_id="openai",
+            priority=10,
+            input_per_million_usd=0.1,
+            output_per_million_usd=0.4,
+        )
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.patched.side_effect = (
+                lambda patch_id: patch_id == BILLING_AWARE_PROFILE_SELECTION_PATCH
+            )
+            best = wf._find_available_profile({"providerId": "openai"})
+
+        assert best is not None
+        assert best.profile_id == "cheap"
 
     def test_find_available_profile_none_available(self):
         wf = self._make_workflow()

@@ -8264,6 +8264,10 @@ export interface components {
             completion_tokens?: number | null;
             /** Total Tokens */
             total_tokens?: number | null;
+            /** Cost Estimate Usd */
+            cost_estimate_usd?: number | null;
+            /** Pricing Source */
+            pricing_source?: string | null;
         };
         /** UserCreate */
         UserCreate: {

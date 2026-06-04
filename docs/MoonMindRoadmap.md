@@ -253,7 +253,7 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 
 ### Remaining tasks
 - [x] **10.1** Per-step model/runtime selection in multi-step flows — Steps can independently select runtime, model, and effort
-- [x] **10.2** Cost tracking / billing-aware routing — Step execution context records deterministic billing-aware routing metadata
+- [x] **10.2** Cost tracking / billing-aware routing — MM-788 adds token cost estimates, cost telemetry, profile pricing-aware selection, and deterministic routing metadata
 - [x] **10.3** Model comparison mode (same task, different models) — Comparison runs preserve source-run lineage and runtime/model metadata
 - [x] **10.4** Artifact/memory portability across model switches — Artifacts and memory keep model-agnostic metadata while execution context records runtime/model provenance beside their refs
 
