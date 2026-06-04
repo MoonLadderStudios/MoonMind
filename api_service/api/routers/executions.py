@@ -2141,9 +2141,16 @@ def _run_metrics_from_summary(
     )
     if not isinstance(cost, Mapping):
         cost = {"status": "not_recorded", "amountUsd": None}
-    success = (
-        str(close_status or "").strip().lower() == "completed"
-        or state_value == "completed"
+    normalized_close_status = str(close_status or "").strip().lower()
+    terminal = normalized_close_status in {
+        "completed",
+        "failed",
+        "canceled",
+        "terminated",
+        "timed_out",
+    } or state_value in {"completed", "failed", "canceled"}
+    success = normalized_close_status == "completed" or (
+        not normalized_close_status and state_value == "completed"
     )
     duration_ms = _int_or_none(timestamps.get("durationMs"))
     if duration_ms is None:
@@ -2152,12 +2159,22 @@ def _run_metrics_from_summary(
         updated_at = getattr(record, "updated_at", None)
         end_at = closed_at or updated_at
         if started_at is not None and end_at is not None:
-            duration_ms = max(0, int((end_at - started_at).total_seconds() * 1000))
+            try:
+                duration_ms = max(
+                    0, int((end_at - started_at).total_seconds() * 1000)
+                )
+            except (TypeError, AttributeError):
+                duration_ms = None
+    success_rate_sample = (
+        {"success": 1 if success else 0, "sampleSize": 1}
+        if terminal
+        else {"success": 0, "sampleSize": 0}
+    )
     return {
         "durationMs": duration_ms,
         "outcomeCode": finish_outcome.get("code"),
         "success": success,
-        "successRateSample": {"success": 1 if success else 0, "sampleSize": 1},
+        "successRateSample": success_rate_sample,
         "cost": dict(cost),
     }
 

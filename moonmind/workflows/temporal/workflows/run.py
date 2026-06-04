@@ -581,6 +581,7 @@ class MoonMindRunWorkflow:
         self._plan_ref: Optional[str] = None
         self._logs_ref: Optional[str] = None
         self._summary_ref: Optional[str] = None
+        self._finish_summary: dict[str, Any] | None = None
         self._recovery_source: dict[str, Any] | None = None
         self._recovery_failed_step_id: str | None = None
         self._recovery_workspace: dict[str, Any] = {}
@@ -8969,6 +8970,8 @@ class MoonMindRunWorkflow:
             if status == "failed" and isinstance(self._failure_diagnostic, dict):
                 finish_summary["failure"] = dict(self._failure_diagnostic)
 
+            self._finish_summary = dict(finish_summary)
+
             artifact_create_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
                 "artifact.create"
             )
@@ -9028,6 +9031,7 @@ class MoonMindRunWorkflow:
                         state=state,
                         closeStatus=close_status,
                         summary=summary,
+                        finishSummary=self._finish_summary,
                         errorCategory=error_category,
                     ),
                     cancellation_type=ActivityCancellationType.ABANDON,

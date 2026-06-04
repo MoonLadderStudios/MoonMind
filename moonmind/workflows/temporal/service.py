@@ -2143,6 +2143,7 @@ class TemporalExecutionService:
         state: str,
         close_status: str | None = None,
         summary: str | None = None,
+        finish_summary: dict[str, Any] | None = None,
         error_category: str | None = None,
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         normalized_state = str(state or "").strip().lower()
@@ -2190,6 +2191,10 @@ class TemporalExecutionService:
                 )
             else:
                 self._update_summary(record, summary)
+        if isinstance(finish_summary, dict):
+            memo = dict(record.memo or {})
+            memo["finishSummary"] = dict(finish_summary)
+            record.memo = memo
 
         await self._sync_integration_correlation_record(record)
         await self._session.commit()

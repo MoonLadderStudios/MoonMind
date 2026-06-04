@@ -2598,6 +2598,7 @@ class TemporalArtifactActivities:
                 state=model.state,
                 close_status=model.close_status,
                 summary=model.summary,
+                finish_summary=model.finish_summary,
                 error_category=model.error_category,
             )
 

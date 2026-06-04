@@ -3185,7 +3185,7 @@ class TemporalProposalActivities:
             }
 
         tags_node = signal.get("tags")
-        if isinstance(tags_node, Sequence) and not isinstance(tags_node, (str, bytes)):
+        if isinstance(tags_node, (list, tuple)):
             tags = [str(tag).strip() for tag in tags_node if str(tag).strip()]
         else:
             tags = []

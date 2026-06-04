@@ -4470,6 +4470,20 @@ export interface components {
             /** Relatedruns */
             relatedRuns?: components["schemas"]["ExecutionRelatedRunModel"][];
             targetDiagnostics?: components["schemas"]["ExecutionTargetDiagnosticsModel"] | null;
+            /** Runmetrics */
+            runMetrics?: {
+                [key: string]: unknown;
+            } | null;
+            /** Improvementsignals */
+            improvementSignals?: {
+                [key: string]: unknown;
+            }[];
+            /** Recommendednextaction */
+            recommendedNextAction?: string | null;
+            /** Logcontext */
+            logContext?: {
+                [key: string]: unknown;
+            } | null;
             /** Proposalsummary */
             proposalSummary?: {
                 [key: string]: unknown;

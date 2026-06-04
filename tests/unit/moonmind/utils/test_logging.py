@@ -1,6 +1,6 @@
 import os
 import json
-import logging
+from logging import INFO, LogRecord
 from unittest.mock import patch
 
 import pytest
@@ -183,9 +183,9 @@ def test_redact_sensitive_payload_preserves_auth_readiness_metadata_string():
 
 def test_structured_log_formatter_promotes_runtime_context_fields() -> None:
     formatter = StructuredLogFormatter(default_fields={"workerId": "worker-1"})
-    record = logging.LogRecord(
+    record = LogRecord(
         name="moonmind.test",
-        level=logging.INFO,
+        level=INFO,
         pathname=__file__,
         lineno=1,
         msg="execution event",

@@ -573,6 +573,7 @@ def test_update_inputs_extracts_clarification_message_from_parameters_patch():
 @pytest.mark.asyncio
 async def test_record_terminal_state_uses_canonical_activity_boundary(monkeypatch):
     workflow_instance = MoonMindRunWorkflow()
+    workflow_instance._finish_summary = {"finishOutcome": {"code": "SUCCESS"}}
     captured = {}
 
     async def fake_execute_typed_activity(activity_type, payload, **kwargs):
@@ -615,6 +616,7 @@ async def test_record_terminal_state_uses_canonical_activity_boundary(monkeypatc
         "state": "completed",
         "closeStatus": "completed",
         "summary": "Workflow completed successfully",
+        "finishSummary": {"finishOutcome": {"code": "SUCCESS"}},
         "errorCategory": None,
     }
     assert captured["kwargs"]["task_queue"] == ARTIFACTS_TASK_QUEUE

@@ -3271,6 +3271,33 @@ def test_serialize_execution_projects_observability_from_finish_summary() -> Non
     }
 
 
+def test_serialize_execution_omits_success_rate_sample_for_active_run() -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
+
+    payload = _serialize_execution(record).model_dump(by_alias=True)
+
+    assert payload["runMetrics"]["success"] is False
+    assert payload["runMetrics"]["successRateSample"] == {
+        "success": 0,
+        "sampleSize": 0,
+    }
+
+
+def test_serialize_execution_handles_mixed_timezone_duration_inputs() -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    record.close_status = TemporalExecutionCloseStatus.FAILED
+    record.started_at = datetime(2026, 6, 4, 12, 0, tzinfo=UTC)
+    record.updated_at = datetime(2026, 6, 4, 12, 1)
+
+    payload = _serialize_execution(record).model_dump(by_alias=True)
+
+    assert payload["runMetrics"]["durationMs"] is None
+    assert payload["runMetrics"]["successRateSample"] == {
+        "success": 0,
+        "sampleSize": 1,
+    }
+
+
 def test_serialize_execution_exposes_snake_case_publish_merge_automation() -> None:
     record = _build_execution_record()
     record.parameters = {
