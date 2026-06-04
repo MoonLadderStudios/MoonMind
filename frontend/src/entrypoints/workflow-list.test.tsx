@@ -137,6 +137,65 @@ describe('Workflows Entrypoint', () => {
     });
   });
 
+  it('renders the operational metrics dashboard from the metrics endpoint', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/executions/metrics?')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            totalRuns: 12,
+            completedRuns: 9,
+            failedRuns: 2,
+            canceledRuns: 1,
+            terminalRuns: 12,
+            successRate: 0.75,
+            duration: {
+              averageSeconds: 5400,
+              medianSeconds: 3600,
+              observedCount: 10,
+            },
+            cost: {
+              totalEstimateUsd: 3.5,
+              averageEstimateUsd: 0.35,
+              observedCount: 4,
+            },
+            sampleSize: 10,
+            countMode: 'exact',
+            refreshedAt: '2026-06-03T12:00:00Z',
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          items: [
+            {
+              taskId: 'task-123',
+              source: 'temporal',
+              title: 'Example task',
+              status: 'completed',
+              state: 'completed',
+              rawState: 'completed',
+              createdAt: '2026-03-28T00:00:00Z',
+            },
+          ],
+          count: 12,
+        }),
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    const metrics = screen.getByLabelText('Operational metrics');
+    expect(metrics.textContent).toContain('Runs12');
+    expect(metrics.textContent).toContain('Success rate75%9/12 terminal');
+    expect(metrics.textContent).toContain('Avg duration1.5h10 sampled');
+    expect(metrics.textContent).toContain('Cost$3.504 with cost');
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/metrics?'))).toBe(true);
+  });
+
   it('surfaces intervention requests in list rows and status filters', async () => {
     fetchSpy.mockResolvedValue({
       ok: true,

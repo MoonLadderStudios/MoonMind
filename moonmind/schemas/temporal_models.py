@@ -2096,6 +2096,8 @@ class ExecutionModel(BaseModel):
     proposal_outcomes: list[dict[str, Any]] = Field(
         default_factory=list, alias="proposalOutcomes"
     )
+    finish_outcome_code: str | None = Field(None, alias="finishOutcomeCode")
+    finish_summary: dict[str, Any] | None = Field(None, alias="finishSummary")
     debug_fields: Optional[ExecutionDebugFieldsModel] = Field(None, alias="debugFields")
     redirect_path: Optional[str] = Field(None, alias="redirectPath")
     manifest_artifact_ref: Optional[str] = Field(None, alias="manifestArtifactRef")
@@ -2203,6 +2205,53 @@ class ExecutionListResponse(BaseModel):
     stale_state: bool = Field(False, alias="staleState")
     degraded_count: bool = Field(False, alias="degradedCount")
     refreshed_at: datetime | None = Field(None, alias="refreshedAt")
+
+class ExecutionMetricsDurationModel(BaseModel):
+    """Run-duration aggregates for the operational metrics dashboard."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    average_seconds: float | None = Field(None, alias="averageSeconds", ge=0)
+    median_seconds: float | None = Field(None, alias="medianSeconds", ge=0)
+    min_seconds: float | None = Field(None, alias="minSeconds", ge=0)
+    max_seconds: float | None = Field(None, alias="maxSeconds", ge=0)
+    observed_count: int = Field(0, alias="observedCount", ge=0)
+
+
+class ExecutionMetricsCostModel(BaseModel):
+    """Cost aggregates for runs that publish bounded cost metadata."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    total_estimate_usd: float = Field(0.0, alias="totalEstimateUsd", ge=0)
+    average_estimate_usd: float | None = Field(
+        None, alias="averageEstimateUsd", ge=0
+    )
+    observed_count: int = Field(0, alias="observedCount", ge=0)
+
+
+class ExecutionMetricsResponse(BaseModel):
+    """Operational run metrics for Mission Control dashboards."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    total_runs: int = Field(0, alias="totalRuns", ge=0)
+    completed_runs: int = Field(0, alias="completedRuns", ge=0)
+    failed_runs: int = Field(0, alias="failedRuns", ge=0)
+    canceled_runs: int = Field(0, alias="canceledRuns", ge=0)
+    terminal_runs: int = Field(0, alias="terminalRuns", ge=0)
+    success_rate: float | None = Field(None, alias="successRate", ge=0, le=1)
+    duration: ExecutionMetricsDurationModel = Field(
+        default_factory=ExecutionMetricsDurationModel, alias="duration"
+    )
+    cost: ExecutionMetricsCostModel = Field(
+        default_factory=ExecutionMetricsCostModel, alias="cost"
+    )
+    sample_size: int = Field(0, alias="sampleSize", ge=0)
+    count_mode: Literal["exact", "estimated_or_unknown"] = Field(
+        "exact", alias="countMode"
+    )
+    refreshed_at: datetime = Field(..., alias="refreshedAt")
 
 class ExecutionFacetItemModel(BaseModel):
     """One value bucket returned by an execution list facet query."""

@@ -3,7 +3,11 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
+from collections.abc import Callable
 from typing import Any, Mapping, Optional
+
+import structlog
+from structlog.stdlib import ProcessorFormatter
 
 _RESERVED_LOG_RECORD_FIELDS = {
     "name",
@@ -28,36 +32,6 @@ _RESERVED_LOG_RECORD_FIELDS = {
     "process",
     "taskName",
 }
-
-_LOG_CONTEXT_ALIASES = {
-    "workflow_id": "workflowId",
-    "workflowId": "workflowId",
-    "run_id": "runId",
-    "runId": "runId",
-    "worker_id": "workerId",
-    "workerId": "workerId",
-    "task_run_id": "taskRunId",
-    "taskRunId": "taskRunId",
-}
-
-_LOG_CONTEXT_ENV_KEYS = {
-    "workflowId": ("MOONMIND_WORKFLOW_ID", "TEMPORAL_WORKFLOW_ID"),
-    "runId": ("MOONMIND_RUN_ID", "TEMPORAL_RUN_ID"),
-    "workerId": ("MOONMIND_WORKER_ID", "WORKER_ID"),
-    "taskRunId": ("MOONMIND_TASK_RUN_ID", "TASK_RUN_ID"),
-}
-
-
-def _runtime_log_context_from_environ() -> dict[str, str]:
-    context: dict[str, str] = {}
-    for target_key, env_keys in _LOG_CONTEXT_ENV_KEYS.items():
-        for env_key in env_keys:
-            value = os.getenv(env_key, "").strip()
-            if value:
-                context[target_key] = value
-                break
-    return context
-
 
 class StructuredLogFormatter(logging.Formatter):
     """JSON formatter that preserves extra fields for log aggregation."""
@@ -94,14 +68,123 @@ class StructuredLogFormatter(logging.Formatter):
             if key in _RESERVED_LOG_RECORD_FIELDS:
                 continue
             extras[key] = value
-            context_key = _LOG_CONTEXT_ALIASES.get(key)
-            if context_key and value not in (None, ""):
-                payload[context_key] = value
 
         if extras:
             payload["extra"] = extras
 
         return json.dumps(payload, default=str)
+
+def _first_env_text(*names: str) -> str:
+    for name in names:
+        value = os.getenv(name)
+        if value is not None and value.strip():
+            return value.strip()
+    return ""
+
+def _service_name_from_env() -> str:
+    configured = _first_env_text(
+        "MOONMIND_SERVICE_NAME",
+        "MOONMIND_SERVICE",
+        "OTEL_SERVICE_NAME",
+        "SERVICE_NAME",
+    )
+    if configured:
+        return configured
+
+    worker_fleet = _first_env_text("MOONMIND_WORKER_FLEET", "TEMPORAL_WORKER_FLEET")
+    if worker_fleet:
+        return f"temporal-worker-{worker_fleet.replace('_', '-')}"
+
+    worker_runtime = _first_env_text("MOONMIND_WORKER_RUNTIME")
+    if worker_runtime:
+        return f"moonmind-{worker_runtime.replace('_', '-')}-worker"
+
+    return "moonmind"
+
+def _component_name_from_env() -> str:
+    return (
+        _first_env_text(
+            "MOONMIND_COMPONENT",
+            "MOONMIND_COMPONENT_NAME",
+            "TEMPORAL_WORKER_FLEET",
+            "MOONMIND_WORKER_RUNTIME",
+        )
+        or "application"
+    )
+
+def _worker_fleet_from_env() -> str:
+    return _first_env_text(
+        "MOONMIND_WORKER_FLEET",
+        "TEMPORAL_WORKER_FLEET",
+        "MOONMIND_WORKER_RUNTIME",
+    )
+
+def default_log_fields_from_env() -> dict[str, str]:
+    """Return stable log enrichment fields shared by MoonMind services."""
+
+    return {
+        "service": _service_name_from_env(),
+        "component": _component_name_from_env(),
+        "worker_fleet": _worker_fleet_from_env(),
+        "worker_id": _first_env_text("MOONMIND_WORKER_ID", "HOSTNAME"),
+    }
+
+def _merge_default_fields(
+    default_fields: Mapping[str, Any],
+) -> Callable[[Any, str, dict[str, Any]], dict[str, Any]]:
+    def processor(
+        _logger: Any, _method_name: str, event_dict: dict[str, Any]
+    ) -> dict[str, Any]:
+        for key, value in default_fields.items():
+            event_dict.setdefault(key, value)
+        return event_dict
+
+    return processor
+
+def _extract_record_attributes(
+    _logger: Any, _method_name: str, event_dict: dict[str, Any]
+) -> dict[str, Any]:
+    record = event_dict.get("_record")
+    if record is None:
+        return event_dict
+
+    for key, value in record.__dict__.items():
+        if key in _RESERVED_LOG_RECORD_FIELDS or key in event_dict:
+            continue
+        event_dict[key] = value
+
+    return event_dict
+
+def _configure_structlog(default_fields: Mapping[str, Any]) -> ProcessorFormatter:
+    shared_processors = [
+        structlog.contextvars.merge_contextvars,
+        structlog.stdlib.add_log_level,
+        structlog.stdlib.add_logger_name,
+        _merge_default_fields(default_fields),
+        structlog.processors.TimeStamper(fmt="iso", utc=True, key="timestamp"),
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.format_exc_info,
+    ]
+    structlog.configure(
+        processors=[
+            *shared_processors,
+            ProcessorFormatter.wrap_for_formatter,
+        ],
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        cache_logger_on_first_use=True,
+    )
+    return ProcessorFormatter(
+        foreign_pre_chain=[
+            *shared_processors,
+            structlog.stdlib.ExtraAdder(),
+        ],
+        processors=[
+            _extract_record_attributes,
+            ProcessorFormatter.remove_processors_meta,
+            structlog.processors.JSONRenderer(),
+        ],
+    )
 
 def configure_logging(
     level: str = "INFO",
@@ -126,21 +209,17 @@ def configure_logging(
         env_value = (
             os.getenv("WORKFLOW_STRUCTURED_LOGS")
             or os.getenv("STRUCTURED_LOGS")
-            or os.getenv("WORKFLOW_STRUCTURED_LOGS")
+            or os.getenv("MOONMIND_STRUCTURED_LOGS")
         )
-        structured = env_value.lower() in {"1", "true", "yes"} if env_value else False
+        structured = env_value.lower() in {"1", "true", "yes"} if env_value else True
 
-    merged_default_fields = {
-        **_runtime_log_context_from_environ(),
+    resolved_default_fields = {
+        **default_log_fields_from_env(),
         **dict(default_fields or {}),
     }
 
     if structured:
-        formatter: logging.Formatter = StructuredLogFormatter(
-            include_timestamp=include_timestamp,
-            include_module=include_module,
-            default_fields=merged_default_fields,
-        )
+        formatter: logging.Formatter = _configure_structlog(resolved_default_fields)
     elif format_string is None:
         parts = []
         if include_timestamp:

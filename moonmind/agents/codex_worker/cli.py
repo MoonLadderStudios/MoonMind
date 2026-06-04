@@ -31,6 +31,7 @@ from moonmind.agents.codex_worker.worker import (
     QueueApiClient,
     QueueClientError,
 )
+from moonmind.config.logging import configure_logging, default_log_fields_from_env
 from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
 from moonmind.jules.runtime import (
     build_runtime_gate_state as build_jules_runtime_gate_state,
@@ -483,6 +484,11 @@ async def _run(args: argparse.Namespace) -> None:
 def main(argv: list[str] | None = None) -> int:
     """Entry point for `moonmind-codex-worker`."""
 
+    configure_logging(
+        level=os.environ.get("LOG_LEVEL", "INFO"),
+        structured=None,
+        default_fields=default_log_fields_from_env(),
+    )
     parser = build_parser()
     args = parser.parse_args(argv)
     try:

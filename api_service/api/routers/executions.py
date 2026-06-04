@@ -63,6 +63,9 @@ from moonmind.schemas.temporal_models import (
     ExecutionMergeAutomationResolverChildModel,
     ExecutionProjectionDiagnosticModel,
     ExecutionListResponse,
+    ExecutionMetricsCostModel,
+    ExecutionMetricsDurationModel,
+    ExecutionMetricsResponse,
     ExecutionModel,
     ExecutionProgressModel,
     ExecutionReportProjectionModel,
@@ -143,6 +146,16 @@ router = APIRouter(prefix="/api/executions", tags=["executions"])
 _TEMPORAL_SOURCE = "temporal"
 _ALLOWED_OWNER_TYPES = {"user", "system", "service"}
 _TEMPORAL_LIST_SCOPES = {"tasks", "user", "system", "all"}
+_SUPPORTED_TASK_RUNTIMES = frozenset({
+    "codex_cli",
+    "gemini_cli",
+    "claude_code",
+    "codex_cloud",
+    "jules",
+    # Legacy aliases accepted and normalized below.
+    "codex",
+    "claude",
+})
 _TEMPORAL_SCOPE_QUERIES = {
     "tasks": 'WorkflowType="MoonMind.Run" AND mm_entry="user_workflow"',
     "user": '(WorkflowType="MoonMind.Run" OR WorkflowType="MoonMind.ManifestIngest")',
@@ -188,6 +201,21 @@ _EXECUTION_FILTER_VALUE_LIMIT = 50
 _EXECUTION_FILTER_VALUE_MAX_LENGTH = 200
 _EXECUTION_TEXT_FILTER_MAX_LENGTH = 200
 _EXECUTION_FACET_PAGE_SIZE_LIMIT = 200
+_EXECUTION_METRICS_SAMPLE_SIZE_LIMIT = 500
+_EXECUTION_COST_KEYS = frozenset(
+    {
+        "costEstimateUsd",
+        "cost_estimate_usd",
+        "estimatedCostUsd",
+        "estimated_cost_usd",
+        "costUsd",
+        "cost_usd",
+        "totalCostUsd",
+        "total_cost_usd",
+        "mm_cost_estimate_usd",
+        "moonmind.cost_estimate_usd",
+    }
+)
 _EXECUTION_SORT_FIELDS = {
     "workflowId": "WorkflowId",
     "targetRuntime": "mm_target_runtime",
@@ -384,6 +412,35 @@ def _is_execution_admin(user: User | None) -> bool:
 def _owner_id(user: User | None) -> str | None:
     value = getattr(user, "id", None)
     return str(value) if value is not None else None
+
+
+def _effective_execution_owner_scope(
+    *,
+    user: User,
+    owner_type: str | None,
+    owner_id: str | None,
+) -> tuple[str | None, str | None]:
+    if _is_execution_admin(user):
+        return owner_type, owner_id
+
+    normalized_owner_type = str(owner_type or "").strip().lower()
+    if owner_type is not None and normalized_owner_type != "user":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "execution_forbidden",
+                "message": "Cannot list non-user executions.",
+            },
+        )
+    if owner_id is not None and owner_id != _owner_id(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "execution_forbidden",
+                "message": "Cannot list executions for another user.",
+            },
+        )
+    return ("user" if normalized_owner_type == "user" else None), _owner_id(user)
 
 
 def _normalize_temporal_list_scope(
@@ -1942,8 +1999,18 @@ def _serialize_execution(
         params=params,
         resume_summary=resume_summary,
     )
-    finish_summary = _finish_summary_from_memo(memo)
+    memo_finish_summary = _finish_summary_from_memo(memo)
+    finish_summary_json = getattr(record, "finish_summary_json", None)
+    finish_summary = (
+        dict(finish_summary_json)
+        if isinstance(finish_summary_json, dict)
+        else memo_finish_summary
+    )
     proposal_summary = _proposal_summary_from_memo(memo)
+    if isinstance(finish_summary, Mapping):
+        finish_proposals = finish_summary.get("proposals")
+        if isinstance(finish_proposals, Mapping):
+            proposal_summary = dict(finish_proposals)
     proposal_outcomes = _proposal_outcomes_from_summary(proposal_summary)
     run_metrics = _run_metrics_from_summary(
         record=record,
@@ -2062,6 +2129,8 @@ def _serialize_execution(
         log_context=log_context,
         proposal_summary=proposal_summary,
         proposal_outcomes=proposal_outcomes,
+        finish_outcome_code=getattr(record, "finish_outcome_code", None),
+        finish_summary=finish_summary,
         debug_fields=debug_fields,
         redirect_path=f"/workflows/{record.workflow_id}?source=temporal",
         integration=(
@@ -4704,6 +4773,42 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
         if normalized_skills is not None:
             normalized_step["skills"] = normalized_skills
 
+        runtime_payload = step_payload.get("runtime")
+        if runtime_payload is not None:
+            if not isinstance(runtime_payload, Mapping):
+                raise _invalid_task_request(
+                    f"payload.task.steps[{index}].runtime must be an object."
+                )
+            normalized_runtime: dict[str, str] = {}
+            for source_key, target_key in (
+                ("mode", "mode"),
+                ("targetRuntime", "mode"),
+                ("target_runtime", "mode"),
+                ("model", "model"),
+                ("effort", "effort"),
+                ("profileId", "profileId"),
+                ("providerProfile", "providerProfile"),
+                ("executionProfileRef", "executionProfileRef"),
+                ("execution_profile_ref", "executionProfileRef"),
+            ):
+                value = runtime_payload.get(source_key)
+                if value is not None and not isinstance(value, (Mapping, list)):
+                    normalized_value = str(value).strip()
+                    if not normalized_value:
+                        continue
+                    if target_key == "mode":
+                        normalized_value = normalize_runtime_id(normalized_value)
+                        if normalized_value not in _SUPPORTED_TASK_RUNTIMES:
+                            raise _invalid_task_request(
+                                "Unsupported payload.task.steps"
+                                f"[{index}].runtime.mode: {value!r}. "
+                                "Must be one of: codex_cli, gemini_cli, "
+                                "claude_code, codex_cloud, jules."
+                            )
+                    normalized_runtime[target_key] = normalized_value
+            if normalized_runtime:
+                normalized_step["runtime"] = normalized_runtime
+
         normalized_input_attachments = _normalize_task_input_attachments(
             step_payload.get("inputAttachments")
             or step_payload.get("input_attachments"),
@@ -4711,30 +4816,6 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
         )
         if normalized_input_attachments:
             normalized_step["inputAttachments"] = normalized_input_attachments
-
-        step_runtime = (
-            step_payload.get("runtime")
-            if isinstance(step_payload.get("runtime"), Mapping)
-            else None
-        )
-        if step_runtime:
-            normalized_runtime: dict[str, Any] = {}
-            for source_key, target_key in (
-                ("mode", "mode"),
-                ("targetRuntime", "mode"),
-                ("target_runtime", "mode"),
-                ("model", "model"),
-                ("effort", "effort"),
-                ("providerProfile", "providerProfile"),
-                ("profileId", "profileId"),
-                ("executionProfileRef", "executionProfileRef"),
-                ("execution_profile_ref", "executionProfileRef"),
-            ):
-                value = step_runtime.get(source_key)
-                if isinstance(value, str) and value.strip():
-                    normalized_runtime[target_key] = value.strip()
-            if normalized_runtime:
-                normalized_step["runtime"] = normalized_runtime
 
         raw_type = str(step_payload.get("type") or "").strip().lower()
         if raw_type:
@@ -4835,6 +4916,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "type",
                 "inputAttachments",
                 "input_attachments",
+                "runtime",
                 "skill",
                 "skills",
                 "tool",
@@ -4845,6 +4927,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
 
         normalized_steps.append(normalized_step)
 
+    task_payload["steps"] = normalized_steps
     return normalized_steps
 
 async def _resolve_step_runtime_selections(
@@ -7225,29 +7308,11 @@ async def list_executions(
     session: AsyncSession = Depends(get_async_session),
     temporal_client: Client = Depends(get_temporal_client),
 ) -> ExecutionListResponse:
-    if _is_execution_admin(user):
-        effective_owner_type = owner_type
-        effective_owner = owner_id
-    else:
-        normalized_owner_type = str(owner_type or "").strip().lower()
-        if owner_type is not None and owner_type != "user":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={
-                    "code": "execution_forbidden",
-                    "message": "Cannot list non-user executions.",
-                },
-            )
-        if owner_id is not None and owner_id != _owner_id(user):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={
-                    "code": "execution_forbidden",
-                    "message": "Cannot list executions for another user.",
-                },
-            )
-        effective_owner = _owner_id(user)
-        effective_owner_type = "user" if normalized_owner_type == "user" else None
+    effective_owner_type, effective_owner = _effective_execution_owner_scope(
+        user=user,
+        owner_type=owner_type,
+        owner_id=owner_id,
+    )
 
     if source == "temporal":
         try:
@@ -7451,6 +7516,299 @@ async def list_executions(
             default=None,
         ),
     )
+
+def _coerce_metric_float(value: Any) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int | float):
+        candidate = float(value)
+    elif isinstance(value, str):
+        text = value.strip().replace("$", "").replace(",", "")
+        if not text:
+            return None
+        try:
+            candidate = float(text)
+        except ValueError:
+            return None
+    else:
+        return None
+    if candidate < 0:
+        return None
+    return candidate
+
+
+def _extract_cost_estimate_usd(*payloads: Any) -> float | None:
+    stack = [(payload, False) for payload in payloads]
+    while stack:
+        value, cost_context = stack.pop()
+        if cost_context:
+            candidate = _coerce_metric_float(value)
+            if candidate is not None:
+                return candidate
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                if str(key) in _EXECUTION_COST_KEYS:
+                    candidate = _coerce_metric_float(nested)
+                    if candidate is not None:
+                        return candidate
+                    if isinstance(nested, dict | list | tuple):
+                        stack.append((nested, True))
+                elif isinstance(nested, dict | list | tuple):
+                    stack.append((nested, False))
+        elif isinstance(value, (list, tuple)):
+            stack.extend((nested, cost_context) for nested in value)
+    return None
+
+
+def _duration_seconds_from_payload(payload: Mapping[str, Any]) -> float | None:
+    closed_at = payload.get("closed_at")
+    started_at = payload.get("started_at") or payload.get("created_at")
+    if not isinstance(closed_at, datetime) or not isinstance(started_at, datetime):
+        return None
+    duration = (closed_at - started_at).total_seconds()
+    return duration if duration >= 0 else None
+
+
+def _duration_metrics(values: list[float]) -> ExecutionMetricsDurationModel:
+    if not values:
+        return ExecutionMetricsDurationModel()
+    ordered = sorted(values)
+    midpoint = len(ordered) // 2
+    if len(ordered) % 2:
+        median = ordered[midpoint]
+    else:
+        median = (ordered[midpoint - 1] + ordered[midpoint]) / 2
+    return ExecutionMetricsDurationModel(
+        averageSeconds=sum(ordered) / len(ordered),
+        medianSeconds=median,
+        minSeconds=ordered[0],
+        maxSeconds=ordered[-1],
+        observedCount=len(ordered),
+    )
+
+
+def _cost_metrics(values: list[float]) -> ExecutionMetricsCostModel:
+    if not values:
+        return ExecutionMetricsCostModel()
+    total = sum(values)
+    return ExecutionMetricsCostModel(
+        totalEstimateUsd=total,
+        averageEstimateUsd=total / len(values),
+        observedCount=len(values),
+    )
+
+
+@router.get("/metrics", response_model=ExecutionMetricsResponse)
+async def get_execution_metrics(
+    *,
+    request: Request,
+    workflow_type: Optional[str] = Query(None, alias="workflowType"),
+    owner_type: Optional[str] = Query(None, alias="ownerType"),
+    state: Optional[str] = Query(None, alias="state"),
+    state_in: Optional[str] = Query(None, alias="stateIn"),
+    state_not_in: Optional[str] = Query(None, alias="stateNotIn"),
+    owner_id: Optional[str] = Query(None, alias="ownerId"),
+    entry: Optional[str] = Query(None, alias="entry"),
+    repo: Optional[str] = Query(None, alias="repo"),
+    repo_exact: Optional[str] = Query(None, alias="repoExact"),
+    repo_in: Optional[str] = Query(None, alias="repoIn"),
+    repo_not_in: Optional[str] = Query(None, alias="repoNotIn"),
+    integration: Optional[str] = Query(None, alias="integration"),
+    target_runtime: Optional[str] = Query(None, alias="targetRuntime"),
+    target_runtime_in: Optional[str] = Query(None, alias="targetRuntimeIn"),
+    target_runtime_not_in: Optional[str] = Query(None, alias="targetRuntimeNotIn"),
+    target_skill_in: Optional[str] = Query(None, alias="targetSkillIn"),
+    target_skill_not_in: Optional[str] = Query(None, alias="targetSkillNotIn"),
+    scheduled_from: Optional[str] = Query(None, alias="scheduledFrom"),
+    scheduled_to: Optional[str] = Query(None, alias="scheduledTo"),
+    scheduled_blank: Optional[str] = Query(None, alias="scheduledBlank"),
+    created_from: Optional[str] = Query(None, alias="createdFrom"),
+    created_to: Optional[str] = Query(None, alias="createdTo"),
+    finished_from: Optional[str] = Query(None, alias="finishedFrom"),
+    finished_to: Optional[str] = Query(None, alias="finishedTo"),
+    finished_blank: Optional[str] = Query(None, alias="finishedBlank"),
+    scope: Optional[str] = Query(None, alias="scope"),
+    source: Optional[str] = Query(None),
+    sample_size: int = Query(
+        200,
+        alias="sampleSize",
+        ge=1,
+        le=_EXECUTION_METRICS_SAMPLE_SIZE_LIMIT,
+    ),
+    user: User = Depends(get_current_user()),
+    session: AsyncSession = Depends(get_async_session),
+    temporal_client: Client = Depends(get_temporal_client),
+) -> ExecutionMetricsResponse:
+    if source not in {None, _TEMPORAL_SOURCE}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "invalid_execution_query",
+                "message": "metrics currently support source=temporal only.",
+            },
+        )
+
+    effective_owner_type, effective_owner = _effective_execution_owner_scope(
+        user=user,
+        owner_type=owner_type,
+        owner_id=owner_id,
+    )
+
+    def build_query(
+        *,
+        metric_state_in: str | None = None,
+        include_order: bool = False,
+    ) -> str | None:
+        metric_state_values = _split_temporal_values(
+            metric_state_in,
+            alias="metric_state_in",
+        )
+        state_values = _raw_query_values(request, "stateIn", state_in)
+        state_not_values = _raw_query_values(request, "stateNotIn", state_not_in)
+        if metric_state_values:
+            exact_state = str(state or "").strip()
+            if exact_state and not (state_values or state_not_values):
+                metric_state_values = [
+                    value for value in metric_state_values if value == exact_state
+                ]
+            if state_values:
+                allowed = set(state_values)
+                metric_state_values = [
+                    value for value in metric_state_values if value in allowed
+                ]
+            if state_not_values:
+                blocked = set(state_not_values)
+                metric_state_values = [
+                    value for value in metric_state_values if value not in blocked
+                ]
+            if not metric_state_values:
+                return None
+            metric_state_in = ",".join(metric_state_values)
+        count_query, list_query = _build_temporal_execution_query(
+            request=request,
+            workflow_type=workflow_type,
+            state=None if metric_state_values else state,
+            state_in=metric_state_in or state_in,
+            state_not_in=None if metric_state_values else state_not_in,
+            entry=entry,
+            repo=repo,
+            repo_exact=repo_exact,
+            repo_in=repo_in,
+            repo_not_in=repo_not_in,
+            integration=integration,
+            target_runtime=target_runtime,
+            target_runtime_in=target_runtime_in,
+            target_runtime_not_in=target_runtime_not_in,
+            target_skill_in=target_skill_in,
+            target_skill_not_in=target_skill_not_in,
+            scheduled_from=scheduled_from,
+            scheduled_to=scheduled_to,
+            scheduled_blank=scheduled_blank,
+            created_from=created_from,
+            created_to=created_to,
+            finished_from=finished_from,
+            finished_to=finished_to,
+            finished_blank=finished_blank,
+            scope=scope,
+            owner_type=effective_owner_type,
+            owner_id=effective_owner,
+            sort="closedAt",
+            sort_dir="desc",
+            include_order=include_order,
+        )
+        return list_query if include_order else count_query
+
+    try:
+        client = temporal_client
+
+        async def count_matching_workflows(query: str | None) -> int:
+            if query is None:
+                return 0
+            count_result = await client.count_workflows(query=query)
+            return int(count_result.count)
+
+        total, completed, failed, canceled = await asyncio.gather(
+            count_matching_workflows(build_query()),
+            count_matching_workflows(build_query(metric_state_in="completed")),
+            count_matching_workflows(build_query(metric_state_in="failed")),
+            count_matching_workflows(build_query(metric_state_in="canceled")),
+        )
+
+        terminal_query = build_query(
+            metric_state_in="completed,failed,canceled",
+            include_order=True,
+        )
+        page = []
+        if terminal_query is not None:
+            iterator = client.list_workflows(
+                query=terminal_query,
+                page_size=sample_size,
+            )
+            await iterator.fetch_next_page()
+            page = iterator.current_page or []
+        canonical_map: dict[str, TemporalExecutionCanonicalRecord] = {}
+        if page:
+            workflow_ids = [wf.id for wf in page]
+            stmt = select(TemporalExecutionCanonicalRecord).where(
+                TemporalExecutionCanonicalRecord.workflow_id.in_(workflow_ids)
+            )
+            canonical_rows = (await session.execute(stmt)).scalars().all()
+            canonical_map = {row.workflow_id: row for row in canonical_rows}
+
+        durations: list[float] = []
+        costs: list[float] = []
+        from api_service.core.sync import (
+            map_temporal_state_to_projection,
+            merged_parameters_for_projection,
+        )
+
+        for wf in page:
+            payload = await map_temporal_state_to_projection(wf)
+            canonical = canonical_map.get(wf.id)
+            payload["parameters"] = merged_parameters_for_projection(payload, canonical)
+            duration = _duration_seconds_from_payload(payload)
+            if duration is not None:
+                durations.append(duration)
+            cost = _extract_cost_estimate_usd(
+                payload.get("search_attributes"),
+                payload.get("memo"),
+                payload.get("parameters"),
+            )
+            if cost is not None:
+                costs.append(cost)
+
+        terminal = completed + failed + canceled
+        success_rate = completed / terminal if terminal else None
+        return ExecutionMetricsResponse(
+            totalRuns=total,
+            completedRuns=completed,
+            failedRuns=failed,
+            canceledRuns=canceled,
+            terminalRuns=terminal,
+            successRate=success_rate,
+            duration=_duration_metrics(durations),
+            cost=_cost_metrics(costs),
+            sampleSize=len(page),
+            countMode="exact",
+            refreshedAt=datetime.now(UTC),
+        )
+    except TemporalExecutionValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "invalid_execution_query",
+                "message": str(exc),
+            },
+        ) from exc
+    except RPCError as exc:
+        logger.warning("Failed to read Temporal execution metrics: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "temporal_unavailable",
+                "message": "Temporal service unavailable.",
+            },
+        ) from exc
 
 @router.get("/facets", response_model=ExecutionFacetResponse)
 async def list_execution_facets(

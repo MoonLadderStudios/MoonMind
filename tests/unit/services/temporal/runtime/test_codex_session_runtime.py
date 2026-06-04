@@ -826,15 +826,13 @@ def test_runtime_send_turn_fails_empty_task_complete_event(
     )
 
     assert response.status == "failed"
+    assert response.turn_id == "vendor-turn-1"
+    assert response.session_state.active_turn_id is None
     assert response.metadata["failureClass"] == "transient"
-    assert (
-        response.metadata["reason"]
-        == "codex app-server task_complete produced no assistant output"
+    assert response.metadata["reason"] == (
+        "codex app-server turn/completed produced no assistant output"
     )
-    assert response.metadata["failureCause"] == "app_server_protocol_empty_turn"
-    evidence = response.metadata["turnFailureEvidence"]
-    assert evidence["rolloutScan"]["sawTaskComplete"] is True
-    assert evidence["rolloutScan"]["entriesReferencingTurn"] >= 1
+    assert response.metadata["retryRecommendedAction"] == "clear_session"
     handle = runtime.session_status(
         CodexManagedSessionLocator(
             sessionId="sess-1",
@@ -846,9 +844,8 @@ def test_runtime_send_turn_fails_empty_task_complete_event(
     assert handle.status == "failed"
     assert handle.metadata["lastTurnStatus"] == "failed"
     assert handle.metadata["failureClass"] == "transient"
-    assert (
-        handle.metadata["lastTurnError"]
-        == "codex app-server task_complete produced no assistant output"
+    assert handle.metadata["lastTurnError"] == (
+        "codex app-server turn/completed produced no assistant output"
     )
     assert "lastAssistantText" not in handle.metadata
 
@@ -1396,9 +1393,8 @@ def test_runtime_session_status_fails_empty_task_complete_after_running_turn(
     assert handle.session_state.active_turn_id is None
     assert handle.metadata["lastTurnStatus"] == "failed"
     assert handle.metadata["failureClass"] == "transient"
-    assert (
-        handle.metadata["lastTurnError"]
-        == "codex app-server task_complete produced no assistant output"
+    assert handle.metadata["lastTurnError"] == (
+        "codex app-server turn/completed produced no assistant output"
     )
     assert "lastAssistantText" not in handle.metadata
 
@@ -2600,6 +2596,95 @@ def test_runtime_send_turn_starts_new_thread_when_rollout_recovery_file_is_empty
     updated_state = json.loads(state_path.read_text(encoding="utf-8"))
     assert updated_state["vendorThreadId"] == "vendor-thread-2"
     assert "vendorThreadPath" not in updated_state
+
+
+def test_runtime_send_turn_starts_new_thread_when_resumed_rollout_read_is_empty(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    empty_rollout = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "06"
+        / "02"
+        / "rollout-2026-06-02T23-39-56-vendor-thread-1.jsonl"
+    )
+    empty_rollout.parent.mkdir(parents=True)
+    empty_rollout.write_text("", encoding="utf-8")
+    script = write_fake_app_server(
+        tmp_path,
+        fail_thread_read=True,
+        thread_recovery_error_message=(
+            "failed to read thread: thread-store internal error: failed to read "
+            f"thread {empty_rollout}: rollout at {empty_rollout} is empty"
+        ),
+        start_thread_path=str(empty_rollout),
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "completed"
+    assert response.metadata["assistantText"] == "OK"
+
+
+def test_runtime_send_turn_refreshes_resumed_thread_payload_from_read(
+    tmp_path: Path,
+) -> None:
+    script = write_fake_app_server(tmp_path)
+    request = launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+
+    stale_rollout = tmp_path / "stale" / "vendor-thread-1.jsonl"
+    stale_rollout.parent.mkdir(parents=True)
+    stale_rollout.write_text("", encoding="utf-8")
+    state_path = Path(request.session_workspace_path) / ".moonmind-codex-session-state.json"
+    state_payload = json.loads(state_path.read_text(encoding="utf-8"))
+    state_payload["vendorThreadPath"] = str(stale_rollout)
+    state_path.write_text(json.dumps(state_payload) + "\n", encoding="utf-8")
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "completed"
+    updated_state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert updated_state["vendorThreadPath"] == "/tmp/vendor-thread-1.jsonl"
 
 
 def test_runtime_send_turn_ignores_nonexistent_vendor_thread_path_from_state(

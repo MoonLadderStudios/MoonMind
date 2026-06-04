@@ -150,7 +150,15 @@ async def test_execution_record_terminal_state_indexes_run_digest_best_effort(
             "state": "completed",
             "closeStatus": "completed",
             "summary": "Workflow completed successfully",
-            "finishSummary": {"finishOutcome": {"code": "SUCCESS"}},
+            "finishOutcomeCode": "PUBLISHED_PR",
+            "finishSummary": {
+                "schemaVersion": "v1",
+                "finishOutcome": {
+                    "code": "PUBLISHED_PR",
+                    "stage": "publish",
+                    "reason": "published pull request",
+                },
+            },
         }
     )
 
@@ -160,8 +168,16 @@ async def test_execution_record_terminal_state_indexes_run_digest_best_effort(
             "state": "completed",
             "close_status": "completed",
             "summary": "Workflow completed successfully",
-            "finish_summary": {"finishOutcome": {"code": "SUCCESS"}},
             "error_category": None,
+            "finish_outcome_code": "PUBLISHED_PR",
+            "finish_summary": {
+                "schemaVersion": "v1",
+                "finishOutcome": {
+                    "code": "PUBLISHED_PR",
+                    "stage": "publish",
+                    "reason": "published pull request",
+                },
+            },
         }
     ]
     assert digest_calls == ["mm:run:123"]

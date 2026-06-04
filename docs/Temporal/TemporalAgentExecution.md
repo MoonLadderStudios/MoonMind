@@ -154,11 +154,10 @@ _run_execution_stage()
   │   → start → wait → fetch_result → publish outputs
   │   → returns AgentRunResult { output_refs, summary, diagnostics, ... }
   │
-  └── tool.type == "skill" (or other activity-based types):
+  └── any other tool.type:
       │
       ▼
-    workflow.execute_activity("mm.skill.execute", ...)
-      → returns ToolResult { status, outputs, output_artifacts }
+    fail fast as unsupported by MoonMind.Run
 ```
 
 For **generic LLM text instructions** (no specific tool), planning produces
@@ -234,7 +233,6 @@ Serialized payload form (legacy accepted): `{ id, skill: { name, version }, inpu
 |---------------|-------|------------|-------------|
 | `plan.generate` | llm | `mm.activity.llm` | LLM-driven plan generation |
 | `plan.validate` | llm | `mm.activity.llm` | Plan validation against registry |
-| `mm.skill.execute` | by_capability | `mm.activity.llm` (default) | Skill dispatch via registry |
 | `agent_runtime.publish_artifacts` | agent_runtime | `mm.activity.agent_runtime` | Publish agent run outputs |
 | `agent_runtime.cancel` | agent_runtime | `mm.activity.agent_runtime` | Cancel managed/external agent run |
 | `integration.resolve_adapter_metadata`| integrations | `mm.activity.integrations` | Single-hop adapter validation and resolution |

@@ -188,6 +188,41 @@ async def _run_command(cmd, **kwargs):
     return CmdRes(stdout)
 
 logger = getLogger(__name__)
+
+_PROPOSAL_TELEMETRY_SIGNAL_TAGS = {
+    "retry",
+    "duplicate_output",
+    "missing_ref",
+    "conflicting_instructions",
+    "flaky_test",
+    "loop_detected",
+    "artifact_gap",
+}
+_PROPOSAL_TELEMETRY_TAG_ALIASES = {
+    "artifact": "artifact_gap",
+    "artifact_missing": "artifact_gap",
+    "diagnostic_gap": "artifact_gap",
+    "duplicate": "duplicate_output",
+    "duplicate_outputs": "duplicate_output",
+    "flaky": "flaky_test",
+    "flaky_tests": "flaky_test",
+    "loop": "loop_detected",
+    "missing_file": "missing_ref",
+    "missing_files": "missing_ref",
+    "missing_reference": "missing_ref",
+    "missing_refs": "missing_ref",
+    "repeated_retry": "retry",
+    "retry_exhausted": "retry",
+}
+_PROPOSAL_TELEMETRY_TAG_LABELS = {
+    "artifact_gap": "artifact gap",
+    "conflicting_instructions": "conflicting instructions",
+    "duplicate_output": "duplicate output",
+    "flaky_test": "flaky test",
+    "loop_detected": "loop detection",
+    "missing_ref": "missing reference",
+    "retry": "retry",
+}
 _AUTO_SKILL_SENTINEL = "auto"
 _NON_SECRET_MANAGED_SESSION_ENV_KEYS: tuple[str, ...] = ("MOONMIND_URL",)
 _MANAGED_SESSION_TELEMETRY_KEYS: tuple[str, ...] = (
@@ -3133,107 +3168,6 @@ class TemporalProposalActivities:
                 return idea
         return ""
 
-    @staticmethod
-    def _run_quality_tags_from_text(*values: object) -> list[str]:
-        text = " ".join(str(value or "").lower() for value in values if value)
-        matches: list[str] = []
-        keyword_map = (
-            ("retry", ("retry", "reattempt", "self heal", "self-heal")),
-            ("loop_detected", ("loop", "repeated", "no progress", "stuck")),
-            ("flaky_test", ("flaky", "nondeterministic test")),
-            ("missing_ref", ("missing file", "missing ref", "not found")),
-            ("artifact_gap", ("artifact", "diagnostic", "summary missing")),
-        )
-        for tag, needles in keyword_map:
-            if any(needle in text for needle in needles):
-                matches.append(tag)
-        return matches
-
-    @classmethod
-    def _resolve_run_quality_signal(
-        cls,
-        *,
-        payload: Mapping[str, Any],
-        task: Mapping[str, Any],
-    ) -> dict[str, Any] | None:
-        for key in ("runQuality", "run_quality", "signal"):
-            raw = payload.get(key)
-            if isinstance(raw, Mapping):
-                signal = dict(raw)
-                break
-        else:
-            observability = payload.get("observability")
-            if not isinstance(observability, Mapping):
-                return None
-            last_step = observability.get("lastStep")
-            last_step_summary = (
-                last_step.get("summary")
-                if isinstance(last_step, Mapping)
-                else None
-            )
-            operator_summary = observability.get("operatorSummary")
-            tags = cls._run_quality_tags_from_text(
-                operator_summary,
-                last_step_summary,
-            )
-            if not tags:
-                return None
-            signal = {
-                "code": tags[0],
-                "reason": last_step_summary or operator_summary,
-                "tags": tags,
-            }
-
-        tags_node = signal.get("tags")
-        if isinstance(tags_node, (list, tuple)):
-            tags = [str(tag).strip() for tag in tags_node if str(tag).strip()]
-        else:
-            tags = []
-        if not tags:
-            tags = cls._run_quality_tags_from_text(
-                signal.get("code"),
-                signal.get("reason"),
-                signal.get("message"),
-                signal.get("summary"),
-            )
-        if not tags:
-            return None
-
-        title = cls._normalize_proposal_text(
-            signal.get("proposalTitle")
-            or signal.get("title")
-            or signal.get("recommendedNextAction")
-        )
-        if not title:
-            code = cls._normalize_proposal_text(signal.get("code")) or tags[0]
-            title = f"Investigate {code.replace('_', ' ')}"
-
-        workflow_texts = {
-            cls._comparison_key(task.get("title")),
-            cls._comparison_key(task.get("instructions")),
-        }
-        workflow_texts.discard("")
-        if cls._comparison_key(title) in workflow_texts:
-            title = f"Investigate run quality signal {tags[0]}"
-
-        return {
-            "title": title,
-            "tags": tags,
-            "signal": {
-                "code": cls._normalize_proposal_text(signal.get("code")) or tags[0],
-                "severity": (
-                    cls._normalize_proposal_text(signal.get("severity")) or "medium"
-                ),
-                "reason": cls._normalize_proposal_text(
-                    signal.get("reason")
-                    or signal.get("message")
-                    or signal.get("summary")
-                    or title
-                ),
-                "tags": tags,
-            },
-        }
-
     @classmethod
     def _build_follow_up_instructions(cls, proposal_idea: str, instructions: str) -> str:
         normalized_idea = cls._normalize_proposal_text(proposal_idea)
@@ -3376,6 +3310,190 @@ class TemporalProposalActivities:
         return str(runtime_node or "").strip()
 
     @classmethod
+    def _normalize_signal_tag(cls, value: object) -> str:
+        text = cls._normalize_proposal_text(value).lower()
+        text = re.sub(r"[^a-z0-9]+", "_", text).strip("_")
+        if not text:
+            return ""
+        text = _PROPOSAL_TELEMETRY_TAG_ALIASES.get(text, text)
+        if text in _PROPOSAL_TELEMETRY_SIGNAL_TAGS:
+            return text
+        return ""
+
+    @classmethod
+    def _telemetry_signal_tags(cls, signal: Mapping[str, Any]) -> list[str]:
+        raw_values: list[object] = []
+        for key in ("tag", "type", "kind", "code", "category"):
+            if key in signal:
+                raw_values.append(signal.get(key))
+        raw_tags = signal.get("tags")
+        if isinstance(raw_tags, Sequence) and not isinstance(raw_tags, (str, bytes)):
+            raw_values.extend(raw_tags)
+        elif raw_tags is not None:
+            raw_values.append(raw_tags)
+
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in raw_values:
+            tag = cls._normalize_signal_tag(value)
+            if not tag or tag in seen:
+                continue
+            normalized.append(tag)
+            seen.add(tag)
+        return normalized
+
+    @classmethod
+    def _telemetry_signal_severity(
+        cls, signal: Mapping[str, Any], tags: Sequence[str]
+    ) -> str:
+        severity = cls._normalize_proposal_text(signal.get("severity")).lower()
+        if severity in {"low", "medium", "normal", "high", "critical"}:
+            return severity
+        if any(tag in {"loop_detected", "conflicting_instructions"} for tag in tags):
+            return "high"
+        return "medium"
+
+    @classmethod
+    def _telemetry_signal_summary(cls, signal: Mapping[str, Any]) -> str:
+        for key in ("summary", "message", "reason", "details", "description"):
+            summary = cls._normalize_proposal_text(signal.get(key))
+            if summary:
+                return summary[:500]
+        tags = cls._telemetry_signal_tags(signal)
+        if tags:
+            label = _PROPOSAL_TELEMETRY_TAG_LABELS.get(tags[0], tags[0])
+            return f"Telemetry reported a {label} signal."
+        return ""
+
+    @classmethod
+    def _build_telemetry_signal_instructions(
+        cls,
+        *,
+        workflow_id: str,
+        label: str,
+        summary: str,
+        instructions: str,
+        diagnostics_ref: str,
+    ) -> str:
+        parts = [
+            (
+                "Investigate and address the run-quality telemetry signal "
+                f"'{label}' reported by workflow {workflow_id or 'unknown'}."
+            ),
+            f"Signal summary: {summary}",
+        ]
+        if diagnostics_ref:
+            parts.append(f"Diagnostics reference: {diagnostics_ref}")
+        if instructions:
+            parts.append(f"Context from the completed task:\n{instructions}")
+        return "\n\n".join(parts)
+
+    @classmethod
+    def _telemetry_signal_candidates(
+        cls,
+        *,
+        payload: Mapping[str, Any],
+        repo: str,
+        workflow_id: str,
+        instructions: str,
+        task: Mapping[str, Any],
+    ) -> list[dict[str, Any]]:
+        raw_signals = payload.get("telemetrySignals")
+        if not isinstance(raw_signals, Sequence) or isinstance(
+            raw_signals, (str, bytes)
+        ):
+            return []
+
+        candidates: list[dict[str, Any]] = []
+        for raw_signal in raw_signals[:3]:
+            if not isinstance(raw_signal, Mapping):
+                continue
+            signal = dict(raw_signal)
+            tags = cls._telemetry_signal_tags(signal)
+            if not tags:
+                continue
+            summary = cls._telemetry_signal_summary(signal)
+            if not summary:
+                continue
+            primary_tag = tags[0]
+            label = _PROPOSAL_TELEMETRY_TAG_LABELS.get(primary_tag, primary_tag)
+            title = cls._normalize_proposal_text(signal.get("title")) or (
+                f"Review {label} signal from workflow {workflow_id or 'unknown'}"
+            )
+            if not title.lower().startswith("[run_quality]"):
+                title = f"[run_quality] {title}"
+            if len(title) > 194:
+                title = title[:194].rstrip()
+
+            severity = cls._telemetry_signal_severity(signal, tags)
+            diagnostics_ref = cls._normalize_proposal_text(
+                signal.get("diagnostics_ref")
+            )
+            runtime_node = task.get("runtime")
+            runtime = dict(runtime_node) if isinstance(runtime_node, Mapping) else {}
+            git_node = task.get("git")
+            git = dict(git_node) if isinstance(git_node, Mapping) else {}
+            publish_node = task.get("publish")
+            publish = dict(publish_node) if isinstance(publish_node, Mapping) else {}
+            task_create_request: dict[str, Any] = {
+                "type": "task",
+                "payload": {
+                    "repository": repo,
+                    "task": {
+                        "instructions": cls._build_telemetry_signal_instructions(
+                            workflow_id=workflow_id,
+                            label=label,
+                            summary=summary,
+                            instructions=instructions,
+                            diagnostics_ref=diagnostics_ref,
+                        ),
+                        "runtime": runtime,
+                        "git": git,
+                        "publish": publish,
+                    },
+                },
+            }
+            cls._preserve_compact_task_metadata(
+                source_task=task,
+                target_task=task_create_request["payload"]["task"],
+            )
+            candidate_signal = {
+                key: deepcopy(value)
+                for key, value in signal.items()
+                if key
+                in {
+                    "type",
+                    "kind",
+                    "severity",
+                    "summary",
+                    "message",
+                    "reason",
+                    "retries",
+                    "missing_refs",
+                    "diagnostics_ref",
+                }
+            }
+            candidate_signal["type"] = primary_tag
+            candidate_signal["severity"] = severity
+            candidate_signal["tags"] = list(tags)
+            candidate_signal["summary"] = summary
+            candidates.append(
+                {
+                    "title": title,
+                    "summary": (
+                        f"Telemetry signal from workflow {workflow_id or 'unknown'}: "
+                        f"{summary}"
+                    ),
+                    "category": "run_quality",
+                    "tags": list(tags),
+                    "severity": severity,
+                    "signal": candidate_signal,
+                    "taskCreateRequest": task_create_request,
+                }
+            )
+        return candidates
+
+    @classmethod
     def _validate_candidate_task_create_request(
         cls, request: Mapping[str, Any], *, default_runtime: str | None
     ) -> dict[str, Any]:
@@ -3474,18 +3592,22 @@ class TemporalProposalActivities:
             task=task,
             instructions=instructions,
         )
-        run_quality_signal = self._resolve_run_quality_signal(
-            payload=payload,
-            task=task,
-        )
 
         if not proposal_idea:
-            if run_quality_signal is None:
-                # Do not create generic proposals whose title simply repeats the
-                # completed workflow. The fallback path only emits a proposal when
-                # it receives explicit next-step or run-quality signal context.
-                return []
-            proposal_idea = str(run_quality_signal["title"])
+            telemetry_candidates = self._telemetry_signal_candidates(
+                payload=payload,
+                repo=repo,
+                workflow_id=workflow_id,
+                instructions=instructions,
+                task=task,
+            )
+            if telemetry_candidates:
+                return telemetry_candidates
+            # Do not create generic proposals whose title simply repeats the
+            # completed workflow. The fallback path only emits a proposal when
+            # it receives an explicit next-step idea or telemetry signal from
+            # upstream context.
+            return []
 
         normalized_title = proposal_idea
         if not normalized_title.lower().startswith("[run_quality]"):
@@ -3532,15 +3654,9 @@ class TemporalProposalActivities:
             "title": normalized_title,
             "summary": summary,
             "category": "run_quality",
-            "tags": (
-                list(run_quality_signal["tags"])
-                if run_quality_signal is not None
-                else ["artifact_gap", "auto-generated", "follow_up"]
-            ),
+            "tags": ["artifact_gap", "auto-generated", "follow_up"],
             "taskCreateRequest": task_create_request,
         }
-        if run_quality_signal is not None:
-            candidate["signal"] = run_quality_signal["signal"]
 
         return [candidate]
 
@@ -3820,6 +3936,18 @@ class TemporalProposalActivities:
                         )
 
                         origin_source = TaskProposalOriginSource.WORKFLOW
+                        candidate_signal = candidate.get("signal")
+                        signal_metadata = (
+                            deepcopy(dict(candidate_signal))
+                            if isinstance(candidate_signal, Mapping)
+                            else {"severity": "normal", "type": "follow_up"}
+                        )
+                        signal_metadata.setdefault("severity", severity)
+                        if tags:
+                            signal_metadata.setdefault("tags", list(tags))
+                        if not signal_metadata.get("type") and tags:
+                            signal_metadata["type"] = tags[0]
+                        signal_metadata.setdefault("type", "follow_up")
                         origin_metadata = {
                             "source": "workflow",
                             "id": workflow_id,
@@ -3827,7 +3955,7 @@ class TemporalProposalActivities:
                             "temporal_run_id": run_id,
                             "trigger_repo": trigger_repo,
                             "trigger_job_id": trigger_job_id,
-                            "signal": {"severity": "normal", "type": "follow_up"},
+                            "signal": signal_metadata,
                         }
                         proposal = await service.create_proposal(
                             title=title,

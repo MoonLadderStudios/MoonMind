@@ -2,7 +2,7 @@
 
 > Tracking the major milestones remaining to fully deliver on the README promise.
 >
-> Last updated: 2026-05-31
+> Last updated: 2026-06-03
 
 ---
 
@@ -237,7 +237,7 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 
 ---
 
-## Milestone 10 — Vendor Portability & Model Flexibility 🔧
+## Milestone 10 — Vendor Portability & Model Flexibility ✅
 
 **README claim:** *"Swap between proprietary cloud models and local open-source models with a single configuration change."* / *"Multi-Agent Chaining: Break massive goals into smaller steps. Only use expensive models for steps that need them."*
 
@@ -246,12 +246,16 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - Optional vLLM compose profiles
 - Runtime selector per task submission
 - Model routing in chat endpoint
+- Per-step runtime/model/effort selection in multi-step task submissions (MM-786)
+- Compact billing-aware routing metadata on step execution context bundles (MM-786)
+- Model/runtime comparison runs linked to source executions (MM-773)
+- Artifact and memory portability provenance across model switches (MM-786)
 
 ### Remaining tasks
-- [x] **10.1** Per-step model/runtime selection in multi-step flows — Authored task steps can independently select runtime/model settings
-- [ ] **10.2** Cost tracking / billing-aware routing — No cost instrumentation
-- [ ] **10.3** Model comparison mode (same task, different models) — README promises this; no implementation
-- [ ] **10.4** Artifact/memory portability across model switches — Artifacts are model-agnostic; memory doesn't track model provenance
+- [x] **10.1** Per-step model/runtime selection in multi-step flows — Steps can independently select runtime, model, and effort
+- [x] **10.2** Cost tracking / billing-aware routing — Step execution context records deterministic billing-aware routing metadata
+- [x] **10.3** Model comparison mode (same task, different models) — Comparison runs preserve source-run lineage and runtime/model metadata
+- [x] **10.4** Artifact/memory portability across model switches — Execution context records model/runtime provenance beside artifact and memory refs
 
 ---
 
@@ -263,15 +267,14 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - Temporal visibility / execution queries (spec 064)
 - Structured workflow run states in Postgres
 - Task finish summary system (spec 079)
-- MM-791 observability projections: run metrics, recommended next actions,
-  improvement signals, proposal signal routing, and structured log context
+- Deterministic improvement signal capture for retry, loop/no-progress, and flaky-test run-quality proposals (MM-793)
 
 ### Remaining tasks
-- [x] **11.1** Structured outcome summaries on every run — MM-791 projects finish summaries into Mission Control with recommended next actions
-- [x] **11.2** Improvement signal capture (retries, loops, flaky tests) — MM-791 extracts bounded run-quality signals from finish summaries and observability context
-- [x] **11.3** Reviewable improvement backlog / proposals queue — MM-791 routes run-quality signals into proposal generation
-- [x] **11.4** Metrics / dashboards (run duration, success rate, cost) — MM-791 exposes run metrics in execution responses and emits worker run-outcome metrics
-- [x] **11.5** Structured logging enrichment (run IDs, worker IDs) — MM-791 standardizes structured log context fields
+- [x] **11.1** Structured outcome summaries on every run — MM-792 wires the finish summary artifact into indexed execution projections
+- [x] **11.2** Improvement signal capture (retries, loops, flaky tests) — Constitution X mandates this
+- [ ] **11.3** Reviewable improvement backlog / proposals queue — Task proposals exist; not fed by telemetry
+- [ ] **11.4** Metrics / dashboards (run duration, success rate, cost) — No operational metrics endpoint
+- [x] **11.5** Structured logging enrichment (run IDs, worker IDs) — MM-796 adds shared structlog JSON enrichment for run and worker correlation
 
 ---
 
@@ -281,9 +284,9 @@ These are technical debt items that don't map to README claims but improve code 
 
 ### Remaining tasks
 - [x] **H.1** Complete legacy system removal — Code removal is complete (migration `c1d2e3f4a5b6`); requirements and guard tests in `specs/087-orchestrator-removal/` and `tests/unit/orchestrator_removal/`. Remaining documentation updates are tracked in `docs/MoonMindRoadmap.md`.
-- [ ] **H.2** Spec deduplication — Merge duplicate specs identified in `docs/MoonMindRoadmap.md`: Worker Pause (038/040), Claude gating (044/046), Manifest Phase 0 (032/034), Jules events (048 stub → delete), Task Presets (026/028)
-- [ ] **H.3** Legacy skill dispatch cleanup — Remove dead `tool.type == "skill"` branch in `run.py`; all current plan generators emit `agent_runtime` nodes. See `docs/MoonMindRoadmap.md`.
-- [ ] **H.4** Delete legacy docs identified in `docs/LegacyDocsReview.md` — 6 docs flagged for deletion (`CodexCliWorkers.md`, `GeminiCliWorkers.md`, `SpecKitAutomation.md`, etc.)
+- [x] **H.2** Spec deduplication — Duplicate spec directories were removed with the retired specs tree; canonical desired-state docs remain for Worker Pause ([docs/Temporal/WorkerPauseSystem.md](Temporal/WorkerPauseSystem.md)), Claude gating ([docs/ManagedAgents/ClaudeCodeManagedSessions.md](ManagedAgents/ClaudeCodeManagedSessions.md)), Manifest Phase 0 ([docs/Rag/ManifestIngestDesign.md](Rag/ManifestIngestDesign.md) and [docs/Rag/LlamaIndexManifestSystem.md](Rag/LlamaIndexManifestSystem.md)), Jules events ([docs/ExternalAgents/JulesTemporalExternalEventContract.md](ExternalAgents/JulesTemporalExternalEventContract.md)), and Task Presets ([docs/Tasks/TaskPresetsSystem.md](Tasks/TaskPresetsSystem.md)).
+- [x] **H.3** Legacy skill dispatch cleanup — Removed the dead `tool.type == "skill"` dispatch branch from `MoonMind.Run`; current plan execution accepts `agent_runtime` nodes.
+- [x] **H.4** Delete legacy docs identified by the legacy docs review (MM-800) — Removed the legacy docs flagged for deletion (`CodexCliWorkers.md`, `GeminiCliWorkers.md`, `SpecKitAutomation.md`, etc.).
 
 ---
 
@@ -304,7 +307,7 @@ The milestones below are ordered by **impact on delivering the README promise** 
 | 🟡 P2 | **8 — Universal Integration (MCP)** | 🔧 Partial | 4 items |
 | 🟢 P3 | **10 — Vendor Portability & Model Flexibility** | 🔧 Partial | 4 items |
 | 🟢 P3 | **1 — Managed Agent Runtimes** | ✅ Shipped | 2 items |
-| 🟢 P3 | **H — Housekeeping / Cleanup** | 🔧 Partial | 3 items |
+| 🟢 P3 | **H — Housekeeping / Cleanup** | ✅ Shipped | 0 items |
 
 ---
 
@@ -316,5 +319,3 @@ The milestones below are ordered by **impact on delivering the README promise** 
 | `CancellationAnalysis.md` | **Delete** | Recommendations shipped (TRY_CANCEL in all activities, force-terminate path). Analysis preserved in Milestone 4 entries. |
 | `OrchestratorRemovalPlan.md` | **Deleted** | Superseded by spec 087, in-repo removal work, and `016-SingleSubstrateMigration.md`. |
 | `RagDocUpdates.md` | **Delete** | Marked "Status: Complete". Spec merge plan fully executed (spec 088 shipped). |
-| `SpecMergeReview.md` | **Keep until H.2 complete** | Actionable merge candidates not yet resolved. Tracked as H.2 in Housekeeping. |
-| `skill-system-alignment.md` | **Keep until H.3 complete** | Legacy skill branch still present in `run.py`. Tracked as H.3 in Housekeeping. |
