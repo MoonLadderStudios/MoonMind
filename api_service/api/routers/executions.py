@@ -7217,19 +7217,25 @@ def _coerce_metric_float(value: Any) -> float | None:
 
 
 def _extract_cost_estimate_usd(*payloads: Any) -> float | None:
-    stack = list(payloads)
+    stack = [(payload, False) for payload in payloads]
     while stack:
-        value = stack.pop()
+        value, cost_context = stack.pop()
+        if cost_context:
+            candidate = _coerce_metric_float(value)
+            if candidate is not None:
+                return candidate
         if isinstance(value, dict):
             for key, nested in value.items():
                 if str(key) in _EXECUTION_COST_KEYS:
                     candidate = _coerce_metric_float(nested)
                     if candidate is not None:
                         return candidate
+                    if isinstance(nested, dict | list | tuple):
+                        stack.append((nested, True))
                 elif isinstance(nested, dict | list | tuple):
-                    stack.append(nested)
+                    stack.append((nested, False))
         elif isinstance(value, (list, tuple)):
-            stack.extend(value)
+            stack.extend((nested, cost_context) for nested in value)
     return None
 
 
@@ -7331,13 +7337,38 @@ async def get_execution_metrics(
         *,
         metric_state_in: str | None = None,
         include_order: bool = False,
-    ) -> str:
+    ) -> str | None:
+        metric_state_values = _split_temporal_values(
+            metric_state_in,
+            alias="metric_state_in",
+        )
+        state_values = _raw_query_values(request, "stateIn", state_in)
+        state_not_values = _raw_query_values(request, "stateNotIn", state_not_in)
+        if metric_state_values:
+            exact_state = str(state or "").strip()
+            if exact_state and not (state_values or state_not_values):
+                metric_state_values = [
+                    value for value in metric_state_values if value == exact_state
+                ]
+            if state_values:
+                allowed = set(state_values)
+                metric_state_values = [
+                    value for value in metric_state_values if value in allowed
+                ]
+            if state_not_values:
+                blocked = set(state_not_values)
+                metric_state_values = [
+                    value for value in metric_state_values if value not in blocked
+                ]
+            if not metric_state_values:
+                return None
+            metric_state_in = ",".join(metric_state_values)
         count_query, list_query = _build_temporal_execution_query(
             request=request,
             workflow_type=workflow_type,
-            state=state,
+            state=None if metric_state_values else state,
             state_in=metric_state_in or state_in,
-            state_not_in=None if metric_state_in else state_not_in,
+            state_not_in=None if metric_state_values else state_not_in,
             entry=entry,
             repo=repo,
             repo_exact=repo_exact,
@@ -7362,39 +7393,38 @@ async def get_execution_metrics(
             owner_id=effective_owner,
             sort="closedAt",
             sort_dir="desc",
-            exclude_aliases=(
-                frozenset({"state", "stateIn", "stateNotIn"})
-                if metric_state_in
-                else frozenset()
-            ),
             include_order=include_order,
         )
         return list_query if include_order else count_query
 
     try:
         client = temporal_client
-        total_count = await client.count_workflows(query=build_query())
-        completed_count = await client.count_workflows(
-            query=build_query(metric_state_in="completed")
-        )
-        failed_count = await client.count_workflows(
-            query=build_query(metric_state_in="failed")
-        )
-        canceled_count = await client.count_workflows(
-            query=build_query(metric_state_in="canceled")
+
+        async def count_matching_workflows(query: str | None) -> int:
+            if query is None:
+                return 0
+            count_result = await client.count_workflows(query=query)
+            return int(count_result.count)
+
+        total, completed, failed, canceled = await asyncio.gather(
+            count_matching_workflows(build_query()),
+            count_matching_workflows(build_query(metric_state_in="completed")),
+            count_matching_workflows(build_query(metric_state_in="failed")),
+            count_matching_workflows(build_query(metric_state_in="canceled")),
         )
 
         terminal_query = build_query(
             metric_state_in="completed,failed,canceled",
             include_order=True,
         )
-        iterator = client.list_workflows(
-            query=terminal_query,
-            page_size=sample_size,
-        )
-        await iterator.fetch_next_page()
-
-        page = iterator.current_page or []
+        page = []
+        if terminal_query is not None:
+            iterator = client.list_workflows(
+                query=terminal_query,
+                page_size=sample_size,
+            )
+            await iterator.fetch_next_page()
+            page = iterator.current_page or []
         canonical_map: dict[str, TemporalExecutionCanonicalRecord] = {}
         if page:
             workflow_ids = [wf.id for wf in page]
@@ -7426,13 +7456,10 @@ async def get_execution_metrics(
             if cost is not None:
                 costs.append(cost)
 
-        completed = int(completed_count.count)
-        failed = int(failed_count.count)
-        canceled = int(canceled_count.count)
         terminal = completed + failed + canceled
         success_rate = completed / terminal if terminal else None
         return ExecutionMetricsResponse(
-            totalRuns=int(total_count.count),
+            totalRuns=total,
             completedRuns=completed,
             failedRuns=failed,
             canceledRuns=canceled,

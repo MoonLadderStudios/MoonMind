@@ -24,6 +24,7 @@ from api_service.api.routers.executions import (
     _artifact_id_from_ref,
     _build_original_task_input_snapshot_payload,
     _expand_goal_preset_for_task_submission,
+    _extract_cost_estimate_usd,
     _hydrate_related_run_metadata,
     _merge_task_preserving_artifact_instructions,
     _recovery_not_available_reason,
@@ -1212,6 +1213,109 @@ def test_execution_facets_exclude_requested_facet_filter_and_keep_task_scope() -
     assert body["items"] == [{"value": "claude_code", "label": "Claude Code", "count": 7}]
     assert body["blankCount"] == 0
     assert body["source"] == "authoritative"
+
+
+def test_execution_metrics_cost_extraction_unwraps_search_attribute_lists() -> None:
+    assert (
+        _extract_cost_estimate_usd(
+            {
+                "mm_cost_estimate_usd": [
+                    None,
+                    "2.50",
+                ]
+            }
+        )
+        == 2.5
+    )
+
+
+def test_execution_metrics_status_filter_limits_metric_buckets() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = _empty_session_override
+    _override_user_dependencies(app, is_superuser=False)
+
+    class _WorkflowIterator:
+        current_page: list[object] = []
+
+        async def fetch_next_page(self) -> None:
+            return None
+
+    temporal_client = SimpleNamespace(
+        count_workflows=AsyncMock(
+            side_effect=[SimpleNamespace(count=5), SimpleNamespace(count=3)]
+        ),
+        list_workflows=Mock(return_value=_WorkflowIterator()),
+    )
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions/metrics",
+            params={"source": "temporal", "stateIn": "failed"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["totalRuns"] == 5
+    assert body["completedRuns"] == 0
+    assert body["failedRuns"] == 3
+    assert body["canceledRuns"] == 0
+    assert body["terminalRuns"] == 3
+    assert body["successRate"] == 0
+    count_queries = [
+        call.kwargs["query"] for call in temporal_client.count_workflows.await_args_list
+    ]
+    assert len(count_queries) == 2
+    assert all('ExecutionStatus="Failed"' in query for query in count_queries)
+    assert temporal_client.list_workflows.call_args.kwargs["query"].count(
+        'ExecutionStatus="Failed"'
+    ) == 1
+
+
+def test_execution_metrics_counts_workflows_concurrently() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = _empty_session_override
+    _override_user_dependencies(app, is_superuser=False)
+
+    class _WorkflowIterator:
+        current_page: list[object] = []
+
+        async def fetch_next_page(self) -> None:
+            return None
+
+    active_calls = 0
+    max_active_calls = 0
+
+    async def _count_workflows(*, query: str) -> SimpleNamespace:
+        nonlocal active_calls, max_active_calls
+        active_calls += 1
+        max_active_calls = max(max_active_calls, active_calls)
+        await asyncio.sleep(0)
+        active_calls -= 1
+        return SimpleNamespace(count=1)
+
+    temporal_client = SimpleNamespace(
+        count_workflows=AsyncMock(side_effect=_count_workflows),
+        list_workflows=Mock(return_value=_WorkflowIterator()),
+    )
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions/metrics",
+            params={"source": "temporal"},
+        )
+
+    assert response.status_code == 200
+    assert temporal_client.count_workflows.await_count == 4
+    assert max_active_calls > 1
+
 
 def test_execution_status_facet_counts_static_status_values_with_task_scope() -> None:
     app = FastAPI()
