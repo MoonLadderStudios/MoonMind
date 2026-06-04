@@ -6,6 +6,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Mapping
 
 from moonmind.utils.metrics import get_metrics_emitter
@@ -82,33 +83,52 @@ def _pricing_from_mapping(
     source: str,
 ) -> ModelTokenPricing | None:
     input_price = _coerce_non_negative_float(
-        payload.get("inputPerMillionUsd")
-        or payload.get("input_per_million_usd")
-        or payload.get("promptPerMillionUsd")
-        or payload.get("prompt_per_million_usd")
+        _first_present(
+            payload,
+            (
+                "inputPerMillionUsd",
+                "input_per_million_usd",
+                "promptPerMillionUsd",
+                "prompt_per_million_usd",
+            ),
+        )
     )
     output_price = _coerce_non_negative_float(
-        payload.get("outputPerMillionUsd")
-        or payload.get("output_per_million_usd")
-        or payload.get("completionPerMillionUsd")
-        or payload.get("completion_per_million_usd")
+        _first_present(
+            payload,
+            (
+                "outputPerMillionUsd",
+                "output_per_million_usd",
+                "completionPerMillionUsd",
+                "completion_per_million_usd",
+            ),
+        )
     )
     if input_price is None or output_price is None:
         return None
     return ModelTokenPricing(input_price, output_price, source)
 
 
-def _env_pricing() -> dict[str, ModelTokenPricing]:
-    raw = os.getenv(_ENV_PRICING_KEY)
-    if not raw:
-        return {}
+def _first_present(payload: Mapping[str, Any], keys: tuple[str, ...]) -> Any:
+    for key in keys:
+        if key in payload:
+            return payload[key]
+    return None
+
+
+@lru_cache(maxsize=16)
+def _parse_env_pricing(raw: str) -> dict[str, ModelTokenPricing]:
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
-        logger.warning("%s is not valid JSON; ignoring model pricing override", _ENV_PRICING_KEY)
+        logger.warning(
+            "%s is not valid JSON; ignoring model pricing override", _ENV_PRICING_KEY
+        )
         return {}
     if not isinstance(parsed, dict):
-        logger.warning("%s must be a JSON object; ignoring model pricing override", _ENV_PRICING_KEY)
+        logger.warning(
+            "%s must be a JSON object; ignoring model pricing override", _ENV_PRICING_KEY
+        )
         return {}
 
     pricing: dict[str, ModelTokenPricing] = {}
@@ -122,6 +142,13 @@ def _env_pricing() -> dict[str, ModelTokenPricing]:
         if model_pricing:
             pricing[normalized] = model_pricing
     return pricing
+
+
+def _env_pricing() -> dict[str, ModelTokenPricing]:
+    raw = os.getenv(_ENV_PRICING_KEY)
+    if not raw:
+        return {}
+    return _parse_env_pricing(raw)
 
 
 def pricing_from_profile_metadata(
@@ -147,9 +174,11 @@ def pricing_for_model(model: str | None) -> ModelTokenPricing | None:
     env_pricing = _env_pricing()
     if normalized_model in env_pricing:
         return env_pricing[normalized_model]
-    for known_model, pricing in _DEFAULT_MODEL_PRICING.items():
-        if normalized_model == known_model or known_model in normalized_model:
-            return pricing
+    if normalized_model in _DEFAULT_MODEL_PRICING:
+        return _DEFAULT_MODEL_PRICING[normalized_model]
+    for known_model in sorted(_DEFAULT_MODEL_PRICING, key=len, reverse=True):
+        if known_model in normalized_model:
+            return _DEFAULT_MODEL_PRICING[known_model]
     return None
 
 

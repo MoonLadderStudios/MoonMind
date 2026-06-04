@@ -360,8 +360,16 @@ def _normalize_openai_response_payload(
     payload.setdefault("metadata", metadata)
     usage = payload.get("usage")
     if isinstance(usage, dict):
-        input_tokens = usage.get("input_tokens") or usage.get("prompt_tokens")
-        output_tokens = usage.get("output_tokens") or usage.get("completion_tokens")
+        input_tokens = (
+            usage.get("input_tokens")
+            if usage.get("input_tokens") is not None
+            else usage.get("prompt_tokens")
+        )
+        output_tokens = (
+            usage.get("output_tokens")
+            if usage.get("output_tokens") is not None
+            else usage.get("completion_tokens")
+        )
         estimate = estimate_model_cost(
             model=str(payload.get("model") or fallback_model),
             input_tokens=input_tokens,

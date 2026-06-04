@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 # If chat.py is in api_service.api.routers.chat, this should be fine.
 from api_service.api.routers.chat import (
     _extract_openai_response_text,
+    _normalize_openai_response_payload,
     _response_content_to_text,
     responses_router,
     router as chat_router,
@@ -293,6 +294,28 @@ def test_chat_completions_endpoint_success_corrected_path(
     mock_get_provider.assert_called_once_with(chat_request_openai_model.model)
     mock_async_openai_client.assert_called_once_with(api_key="sk-test-user-key")
     mock_client_instance.chat.completions.create.assert_called_once()
+
+
+def test_openai_response_normalization_preserves_zero_token_usage() -> None:
+    payload = _normalize_openai_response_payload(
+        {
+            "model": "gpt-4o-mini",
+            "output_text": "ok",
+            "usage": {
+                "input_tokens": 0,
+                "prompt_tokens": 1_000,
+                "output_tokens": 0,
+                "completion_tokens": 1_000,
+            },
+        },
+        fallback_model="gpt-4o-mini",
+        metadata={},
+    )
+
+    assert payload["usage"]["cost_estimate_usd"] == 0
+    assert payload["metadata"]["billing"]["inputTokens"] == 0
+    assert payload["metadata"]["billing"]["outputTokens"] == 0
+
 
 @patch("google.generativeai.configure")
 @patch("api_service.api.routers.chat.get_google_model")
