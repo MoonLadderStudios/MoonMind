@@ -86,6 +86,23 @@ def test_create_artifact_request_rejects_model_provenance_metadata():
             }
         )
 
+    with pytest.raises(ValidationError, match="model/provider provenance"):
+        CreateArtifactRequest.model_validate(
+            {
+                "content_type": "text/plain",
+                "metadata": {
+                    "trace": [
+                        {
+                            "artifactRef": "art_1",
+                            "selectedModel": "expensive-model",
+                        },
+                        {"runtimeProvider": "openai"},
+                        {"llm_model": "gpt-5"},
+                    ]
+                },
+            }
+        )
+
 def test_create_artifact_request_allows_model_agnostic_evidence_metadata():
     model = CreateArtifactRequest.model_validate(
         {

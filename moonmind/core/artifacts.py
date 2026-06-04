@@ -1,5 +1,5 @@
 import enum
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Any
 
 class TemporalArtifactStorageBackend(str, enum.Enum):
@@ -40,20 +40,7 @@ class TemporalArtifactUploadMode(str, enum.Enum):
     MULTIPART = "multipart"
 
 
-_MODEL_PROVENANCE_KEYS = frozenset(
-    {
-        "model",
-        "modelid",
-        "modelname",
-        "modelprovider",
-        "modelproviderid",
-        "modelrevision",
-        "modelversion",
-        "provider",
-        "providerid",
-        "providername",
-    }
-)
+_MODEL_PROVENANCE_KEY_TERMS = frozenset({"model", "provider"})
 
 
 def assert_model_agnostic_metadata(
@@ -72,7 +59,7 @@ def assert_model_agnostic_metadata(
             for character in str(key).lower()
             if character.isalnum()
         )
-        if normalized in _MODEL_PROVENANCE_KEYS:
+        if any(term in normalized for term in _MODEL_PROVENANCE_KEY_TERMS):
             dotted_path = ".".join(str(part) for part in path)
             raise ValueError(
                 f"{field_name} must be model-agnostic; "
@@ -84,19 +71,17 @@ def _walk_metadata(
     value: Any,
     *,
     prefix: tuple[str, ...] = (),
-) -> list[tuple[tuple[str, ...], Any]]:
-    items: list[tuple[tuple[str, ...], Any]] = []
+) -> Iterator[tuple[tuple[str, ...], Any]]:
     if isinstance(value, Mapping):
         for key, child in value.items():
             path = (*prefix, str(key))
-            items.append((path, child))
-            items.extend(_walk_metadata(child, prefix=path))
+            yield path, child
+            yield from _walk_metadata(child, prefix=path)
     elif isinstance(value, Sequence) and not isinstance(
         value,
         (str, bytes, bytearray),
     ):
         for index, child in enumerate(value):
             path = (*prefix, str(index))
-            items.append((path, child))
-            items.extend(_walk_metadata(child, prefix=path))
-    return items
+            yield path, child
+            yield from _walk_metadata(child, prefix=path)
