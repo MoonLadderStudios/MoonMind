@@ -1629,6 +1629,10 @@ async def test_record_terminal_state_fans_out_dependency_resolution_signals(
             state="completed",
             close_status="completed",
             summary="Prerequisite completed from workflow terminal path.",
+            finish_summary={
+                "finishOutcome": {"code": "SUCCESS"},
+                "proposals": {"submittedCount": 1},
+            },
         )
 
         source = await session.get(
@@ -1637,6 +1641,11 @@ async def test_record_terminal_state_fans_out_dependency_resolution_signals(
         assert source is not None
         assert source.state is MoonMindWorkflowState.COMPLETED
         assert source.close_status is TemporalExecutionCloseStatus.COMPLETED
+        assert source.finish_outcome_code == "SUCCESS"
+        assert source.finish_summary_json == {
+            "finishOutcome": {"code": "SUCCESS"},
+            "proposals": {"submittedCount": 1},
+        }
         mock_client_adapter.signal_workflow.assert_awaited_once()
         assert mock_client_adapter.signal_workflow.await_args.args[0] == (
             dependent.workflow_id

@@ -65,3 +65,42 @@ def test_record_step_duration_emits_timer() -> None:
             {"value": 1.25, "tags": {"step": 0, "attempt": 3}},
         )
     ]
+
+
+def test_record_run_outcome_emits_duration_and_success_counter() -> None:
+    emitter = FakeEmitter()
+    metrics = WorkerMetrics(emitter=emitter)
+
+    metrics.record_run_outcome(
+        duration_seconds=12.5,
+        success=False,
+        outcome_code="FAILED",
+        cost_status="not_recorded",
+    )
+
+    assert emitter.calls == [
+        (
+            "observe",
+            "task.run.duration_seconds",
+            {
+                "value": 12.5,
+                "tags": {
+                    "success": "false",
+                    "outcome": "FAILED",
+                    "cost_status": "not_recorded",
+                },
+            },
+        ),
+        (
+            "increment",
+            "task.run.completed_total",
+            {
+                "value": 1,
+                "tags": {
+                    "success": "false",
+                    "outcome": "FAILED",
+                    "cost_status": "not_recorded",
+                },
+            },
+        ),
+    ]

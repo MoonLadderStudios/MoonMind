@@ -8869,6 +8869,14 @@ class MoonMindRunWorkflow:
                 "run_id": workflow.info().run_id,
                 "repo": self._repo,
                 "parameters": parameters,
+                "observability": {
+                    "operatorSummary": self._operator_summary,
+                    "lastStep": {
+                        "id": self._last_step_id,
+                        "summary": self._last_step_summary,
+                        "diagnosticsRef": self._last_diagnostics_ref,
+                    },
+                },
             }
             telemetry_signals = self._proposal_telemetry_signals()
             if telemetry_signals:
