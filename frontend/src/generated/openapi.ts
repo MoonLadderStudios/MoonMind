@@ -1392,6 +1392,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executions/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Execution Metrics */
+        get: operations["get_execution_metrics_api_executions_metrics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executions/facets": {
         parameters: {
             query?: never;
@@ -4332,6 +4349,94 @@ export interface components {
             status?: string | null;
             /** Detailhref */
             detailHref?: string | null;
+        };
+        /**
+         * ExecutionMetricsCostModel
+         * @description Cost aggregates for runs that publish bounded cost metadata.
+         */
+        ExecutionMetricsCostModel: {
+            /**
+             * Totalestimateusd
+             * @default 0
+             */
+            totalEstimateUsd: number;
+            /** Averageestimateusd */
+            averageEstimateUsd?: number | null;
+            /**
+             * Observedcount
+             * @default 0
+             */
+            observedCount: number;
+        };
+        /**
+         * ExecutionMetricsDurationModel
+         * @description Run-duration aggregates for the operational metrics dashboard.
+         */
+        ExecutionMetricsDurationModel: {
+            /** Averageseconds */
+            averageSeconds?: number | null;
+            /** Medianseconds */
+            medianSeconds?: number | null;
+            /** Minseconds */
+            minSeconds?: number | null;
+            /** Maxseconds */
+            maxSeconds?: number | null;
+            /**
+             * Observedcount
+             * @default 0
+             */
+            observedCount: number;
+        };
+        /**
+         * ExecutionMetricsResponse
+         * @description Operational run metrics for Mission Control dashboards.
+         */
+        ExecutionMetricsResponse: {
+            /**
+             * Totalruns
+             * @default 0
+             */
+            totalRuns: number;
+            /**
+             * Completedruns
+             * @default 0
+             */
+            completedRuns: number;
+            /**
+             * Failedruns
+             * @default 0
+             */
+            failedRuns: number;
+            /**
+             * Canceledruns
+             * @default 0
+             */
+            canceledRuns: number;
+            /**
+             * Terminalruns
+             * @default 0
+             */
+            terminalRuns: number;
+            /** Successrate */
+            successRate?: number | null;
+            duration?: components["schemas"]["ExecutionMetricsDurationModel"];
+            cost?: components["schemas"]["ExecutionMetricsCostModel"];
+            /**
+             * Samplesize
+             * @default 0
+             */
+            sampleSize: number;
+            /**
+             * Countmode
+             * @default exact
+             * @enum {string}
+             */
+            countMode: "exact" | "estimated_or_unknown";
+            /**
+             * Refreshedat
+             * Format: date-time
+             */
+            refreshedAt: string;
         };
         /**
          * ExecutionModel
@@ -11388,6 +11493,64 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ExecutionModel"] | components["schemas"]["ScheduleCreatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_execution_metrics_api_executions_metrics_get: {
+        parameters: {
+            query?: {
+                workflowType?: string | null;
+                ownerType?: string | null;
+                state?: string | null;
+                stateIn?: string | null;
+                stateNotIn?: string | null;
+                ownerId?: string | null;
+                entry?: string | null;
+                repo?: string | null;
+                repoExact?: string | null;
+                repoIn?: string | null;
+                repoNotIn?: string | null;
+                integration?: string | null;
+                targetRuntime?: string | null;
+                targetRuntimeIn?: string | null;
+                targetRuntimeNotIn?: string | null;
+                targetSkillIn?: string | null;
+                targetSkillNotIn?: string | null;
+                scheduledFrom?: string | null;
+                scheduledTo?: string | null;
+                scheduledBlank?: string | null;
+                createdFrom?: string | null;
+                createdTo?: string | null;
+                finishedFrom?: string | null;
+                finishedTo?: string | null;
+                finishedBlank?: string | null;
+                scope?: string | null;
+                source?: string | null;
+                sampleSize?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionMetricsResponse"];
                 };
             };
             /** @description Validation Error */
