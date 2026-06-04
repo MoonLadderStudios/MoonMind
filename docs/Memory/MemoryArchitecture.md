@@ -167,6 +167,8 @@ Required metadata on every Mem0 entry:
 - `review_state` (`draft | approved | deprecated`)
 - `provenance` pointers (`workflowId`, `taskRunId` when applicable, commits, doc refs)
 
+Memory provenance must stay model-agnostic. It records durable evidence pointers, not the model or provider that happened to produce the memory contribution.
+
 ## 7) Integration Surfaces
 
 MoonMind implements this architecture with four small adapters/services:
