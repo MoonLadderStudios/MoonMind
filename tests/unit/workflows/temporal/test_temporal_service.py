@@ -1629,6 +1629,10 @@ async def test_record_terminal_state_fans_out_dependency_resolution_signals(
             state="completed",
             close_status="completed",
             summary="Prerequisite completed from workflow terminal path.",
+            finish_summary={
+                "finishOutcome": {"code": "SUCCESS"},
+                "proposals": {"submittedCount": 1},
+            },
         )
 
         source = await session.get(
@@ -1637,6 +1641,11 @@ async def test_record_terminal_state_fans_out_dependency_resolution_signals(
         assert source is not None
         assert source.state is MoonMindWorkflowState.COMPLETED
         assert source.close_status is TemporalExecutionCloseStatus.COMPLETED
+        assert source.finish_outcome_code == "SUCCESS"
+        assert source.finish_summary_json == {
+            "finishOutcome": {"code": "SUCCESS"},
+            "proposals": {"submittedCount": 1},
+        }
         mock_client_adapter.signal_workflow.assert_awaited_once()
         assert mock_client_adapter.signal_workflow.await_args.args[0] == (
             dependent.workflow_id
@@ -1688,6 +1697,103 @@ async def test_record_terminal_state_preserves_existing_terminal_summary(
         assert canceled.state is MoonMindWorkflowState.CANCELED
         assert canceled.close_status is TemporalExecutionCloseStatus.CANCELED
         assert canceled.memo["summary"] == "operator requested cancellation"
+
+
+@pytest.mark.asyncio
+async def test_record_terminal_state_indexes_finish_summary(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="Finish summary run",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        finish_summary = {
+            "schemaVersion": "v1",
+            "jobId": created.workflow_id,
+            "finishOutcome": {
+                "code": "NO_CHANGES",
+                "stage": "publish",
+                "reason": "publish skipped: no local changes",
+            },
+            "publish": {"status": "skipped"},
+        }
+
+        projection = await service.record_terminal_state(
+            workflow_id=created.workflow_id,
+            state="completed",
+            close_status="completed",
+            summary="Workflow completed with no changes.",
+            finish_outcome_code="NO_CHANGES",
+            finish_summary=finish_summary,
+        )
+
+        source = await session.get(
+            TemporalExecutionCanonicalRecord, created.workflow_id
+        )
+        assert source is not None
+        assert source.finish_outcome_code == "NO_CHANGES"
+        assert source.finish_summary_json == finish_summary
+        assert isinstance(projection, TemporalExecutionRecord)
+        assert projection.finish_outcome_code == "NO_CHANGES"
+        assert projection.finish_summary_json == finish_summary
+
+
+@pytest.mark.asyncio
+async def test_record_terminal_state_derives_snake_case_finish_outcome_code(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="Snake finish summary run",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        finish_summary = {
+            "schema_version": "v1",
+            "job_id": created.workflow_id,
+            "finish_outcome": {
+                "code": "PUBLISH_DISABLED",
+                "stage": "publish",
+                "reason": "publishing disabled",
+            },
+        }
+
+        projection = await service.record_terminal_state(
+            workflow_id=created.workflow_id,
+            state="completed",
+            close_status="completed",
+            summary="Workflow completed without publishing.",
+            finish_outcome_code=None,
+            finish_summary=finish_summary,
+        )
+
+        source = await session.get(
+            TemporalExecutionCanonicalRecord, created.workflow_id
+        )
+        assert source is not None
+        assert source.finish_outcome_code == "PUBLISH_DISABLED"
+        assert source.finish_summary_json == finish_summary
+        assert isinstance(projection, TemporalExecutionRecord)
+        assert projection.finish_outcome_code == "PUBLISH_DISABLED"
+        assert projection.finish_summary_json == finish_summary
 
 
 @pytest.mark.asyncio

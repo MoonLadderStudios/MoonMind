@@ -2607,6 +2607,8 @@ class TemporalArtifactActivities:
                 close_status=model.close_status,
                 summary=model.summary,
                 error_category=model.error_category,
+                finish_outcome_code=model.finish_outcome_code,
+                finish_summary=model.finish_summary,
             )
 
         await self._write_run_digest_best_effort(record)

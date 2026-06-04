@@ -7002,9 +7002,24 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     setAttachmentTargetErrors({});
 
     const normalizedRuntime = runtime.trim().toLowerCase();
-    if (!supportedTaskRuntimes.includes(normalizedRuntime)) {
+    const supportedTaskRuntimeIds = supportedTaskRuntimes.map((item) =>
+      item.trim().toLowerCase(),
+    );
+    if (!supportedTaskRuntimeIds.includes(normalizedRuntime)) {
       setSubmitMessage(
         `Runtime must be one of: ${supportedTaskRuntimes.join(", ")}.`,
+      );
+      clearSubmitBusy();
+      return;
+    }
+    const invalidStepRuntime = submissionSteps.find((step) => {
+      const stepRuntime = step.runtimeMode.trim().toLowerCase();
+      return stepRuntime && !supportedTaskRuntimeIds.includes(stepRuntime);
+    });
+    if (invalidStepRuntime) {
+      const stepIndex = submissionSteps.indexOf(invalidStepRuntime) + 1;
+      setSubmitMessage(
+        `Step ${stepIndex} runtime must be one of: ${supportedTaskRuntimes.join(", ")}.`,
       );
       clearSubmitBusy();
       return;
