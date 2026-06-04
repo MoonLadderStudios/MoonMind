@@ -161,6 +161,30 @@ const ExecutionFacetResponseSchema = z.object({
 
 type ExecutionFacetResponse = z.infer<typeof ExecutionFacetResponseSchema>;
 
+const ExecutionMetricsResponseSchema = z.object({
+  totalRuns: z.number(),
+  completedRuns: z.number(),
+  failedRuns: z.number(),
+  canceledRuns: z.number(),
+  terminalRuns: z.number(),
+  successRate: z.number().nullable().optional(),
+  duration: z.object({
+    averageSeconds: z.number().nullable().optional(),
+    medianSeconds: z.number().nullable().optional(),
+    observedCount: z.number(),
+  }),
+  cost: z.object({
+    totalEstimateUsd: z.number(),
+    averageEstimateUsd: z.number().nullable().optional(),
+    observedCount: z.number(),
+  }),
+  sampleSize: z.number(),
+  countMode: z.string().optional(),
+  refreshedAt: z.string(),
+});
+
+type ExecutionMetricsResponse = z.infer<typeof ExecutionMetricsResponseSchema>;
+
 function readListDashboardConfig(payload: BootPayload): ListDashboardConfig | undefined {
   const raw = payload.initialData as { dashboardConfig?: ListDashboardConfig } | undefined;
   return raw?.dashboardConfig;
@@ -218,6 +242,29 @@ function displayTemporalCount(count: number | null | undefined, countMode: strin
     return '';
   }
   return countMode && countMode !== 'exact' ? `${count} (${countMode})` : String(count);
+}
+
+function formatPercent(value: number | null | undefined): string {
+  if (typeof value !== 'number' || Number.isNaN(value)) return '—';
+  return `${Math.round(value * 100)}%`;
+}
+
+function formatDurationSeconds(value: number | null | undefined): string {
+  if (typeof value !== 'number' || Number.isNaN(value)) return '—';
+  if (value < 60) return `${Math.round(value)}s`;
+  if (value < 3600) return `${Math.round(value / 60)}m`;
+  const hours = value / 3600;
+  return `${hours >= 10 ? Math.round(hours) : hours.toFixed(1)}h`;
+}
+
+function formatUsd(value: number | null | undefined): string {
+  if (typeof value !== 'number' || Number.isNaN(value)) return '—';
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: value === 0 ? 2 : 2,
+    maximumFractionDigits: value < 1 ? 4 : 2,
+  }).format(value);
 }
 
 function sortRows(rows: ExecutionRow[], field: string, direction: 'asc' | 'desc'): ExecutionRow[] {
@@ -653,6 +700,27 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   useEffect(() => {
     syncUrl();
   }, [syncUrl]);
+
+  const {
+    data: metricsData,
+    isLoading: metricsLoading,
+    isError: metricsIsError,
+  } = useQuery({
+    queryKey: ['workflow-list-metrics', 'temporal', filters] as const,
+    enabled: listEnabled && filterValidationErrors.length === 0,
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      params.set('source', 'temporal');
+      params.set('scope', 'tasks');
+      appendFilterParams(params, filters);
+      const response = await fetch(`${payload.apiBase}/executions/metrics?${params}`);
+      if (!response.ok) {
+        throw new Error(await taskListErrorMessage(response));
+      }
+      return ExecutionMetricsResponseSchema.parse(await response.json());
+    },
+    refetchInterval: liveUpdates && listEnabled && !openFilter ? listPollMs : false,
+  });
 
   const queryKey = [
     'workflow-list',
@@ -1354,6 +1422,38 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     );
   };
 
+  const metrics = metricsData as ExecutionMetricsResponse | undefined;
+  const metricsSummary = metrics ? (
+    <section className="workflow-list-metrics" aria-label="Operational metrics">
+      <div className="workflow-list-metric">
+        <span>Runs</span>
+        <strong>{metrics.totalRuns}</strong>
+      </div>
+      <div className="workflow-list-metric">
+        <span>Success rate</span>
+        <strong>{formatPercent(metrics.successRate)}</strong>
+        <small>{metrics.completedRuns}/{metrics.terminalRuns || 0} terminal</small>
+      </div>
+      <div className="workflow-list-metric">
+        <span>Avg duration</span>
+        <strong>{formatDurationSeconds(metrics.duration.averageSeconds)}</strong>
+        <small>{metrics.duration.observedCount} sampled</small>
+      </div>
+      <div className="workflow-list-metric">
+        <span>Cost</span>
+        <strong>{formatUsd(metrics.cost.totalEstimateUsd)}</strong>
+        <small>{metrics.cost.observedCount} with cost</small>
+      </div>
+    </section>
+  ) : (
+    <section className="workflow-list-metrics is-loading" aria-label="Operational metrics">
+      <div className="workflow-list-metric">
+        <span>{metricsIsError ? 'Metrics unavailable' : metricsLoading ? 'Loading metrics' : 'Metrics'}</span>
+        <strong>—</strong>
+      </div>
+    </section>
+  );
+
   return (
     <div className="stack">
       <section className="workflow-list-control-deck" aria-label="Workflow list filters">
@@ -1443,6 +1543,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
         <header className="workflow-list-results-header">
           <h2 className="page-title" id="workflow-list-title">Workflows</h2>
         </header>
+        {metricsSummary}
         {isLoading ? (
           <p className="loading workflow-list-empty-message">Loading workflows...</p>
         ) : isError ? (

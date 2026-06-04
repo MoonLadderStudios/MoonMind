@@ -58,10 +58,10 @@ Canonical terminology for execution payloads is:
 * **step** (plan node)
 * **tool** (executable capability — Temporal contract object)
 
-There are two tool subtypes:
+The contract model recognizes two tool subtypes:
 
-* `tool.type = "skill"` — dispatched as a Temporal Activity (`mm.tool.execute` / `mm.skill.execute`). Uses a `ToolDefinition` from the tool registry snapshot.
-* `tool.type = "agent_runtime"` — dispatched as a child `MoonMind.AgentRun` workflow. Uses an `AgentExecutionRequest`.
+* `tool.type = "skill"` — activity-backed executable tool contract using a `ToolDefinition` from the tool registry snapshot. Current `MoonMind.Run` plans do not dispatch this legacy shape.
+* `tool.type = "agent_runtime"` — dispatched by `MoonMind.Run` as a child `MoonMind.AgentRun` workflow. Uses an `AgentExecutionRequest`.
 
 A runtime-native command is not a third `tool.type`.
 
@@ -102,7 +102,7 @@ Compatibility rule:
 
 * Legacy `Skill*` aliases are re-exported for backward compatibility during migration.
 * New code should import canonical `Tool*` names.
-* Legacy `skill` payload fields are accepted during migration, but should not be reused indefinitely.
+* Legacy `Skill*` Python aliases remain for registry/model compatibility. Current `MoonMind.Run` plan execution accepts `agent_runtime` nodes and rejects legacy `tool.type = "skill"` nodes.
 
 ---
 
@@ -169,15 +169,15 @@ A **Tool** is a named capability defined by:
 * default policies (timeouts, retries)
 * capability requirements (what worker fleet can run it)
 
-A Tool is not a workflow. Workflows interpret Plans and invoke Tools as Activities (or child workflows for `agent_runtime`).
+A Tool is not a workflow. `MoonMind.Run` interprets current Plans as child workflows for `agent_runtime`; activity-backed executable tool contracts remain registry concepts outside the active Run dispatch path.
 A `ToolDefinition` is **not** an `AgentSkillDefinition`. Executable tool execution and agent-skill materialization are adjacent but separate concerns.
 Note: An agent-runtime step may simultaneously receive a `resolved_skillset_ref` or equivalent execution context from the Agent Skill System, but that is resolved separately.
 
-Two tool subtypes are currently in use:
+The plan contract defines these tool subtypes:
 
 | `tool.type` | Dispatch mechanism | Contract |
 |---|---|---|
-| `skill` | Temporal Activity (`mm.tool.execute`) | `ToolDefinition` from tool registry snapshot |
+| `skill` | Legacy activity-backed executable tool contract; not dispatched by current `MoonMind.Run` plans | `ToolDefinition` from registry snapshot |
 | `agent_runtime` | Child `MoonMind.AgentRun` workflow | `AgentExecutionRequest` |
 
 ---

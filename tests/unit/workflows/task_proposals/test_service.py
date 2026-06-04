@@ -334,8 +334,8 @@ async def test_create_proposal_overrides_priority_for_moonmind() -> None:
         origin_source="queue",
         origin_id=None,
         origin_metadata={
-            "triggerRepo": "moon/org",
-            "triggerJobId": str(uuid4()),
+            "trigger_repo": "moon/org",
+            "trigger_job_id": str(uuid4()),
             "signal": {"severity": "medium"},
         },
         proposed_by_worker_id="worker-1",
@@ -345,6 +345,62 @@ async def test_create_proposal_overrides_priority_for_moonmind() -> None:
     kwargs = repo.create_proposal.await_args.kwargs
     assert kwargs["review_priority"] is TaskProposalReviewPriority.HIGH
     assert kwargs["priority_override_reason"] == "signal:loop_detected"
+
+@pytest.mark.asyncio
+async def test_create_proposal_accepts_snake_case_moonmind_signal_metadata() -> None:
+    repo = AsyncMock()
+    record = SimpleNamespace(
+        id=uuid4(),
+        status=TaskProposalStatus.OPEN,
+        title="Run Quality",
+        summary="Fix retry",
+        category="run_quality",
+        tags=["retry"],
+        repository="MoonLadderStudios/MoonMind",
+        proposed_by_worker_id="worker-1",
+        proposed_by_user_id=None,
+        promoted_at=None,
+        promoted_by_user_id=None,
+        decided_by_user_id=None,
+        decision_note=None,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        origin_source=TaskProposalOriginSource.WORKFLOW,
+        origin_id=None,
+        origin_metadata={},
+        task_create_request={},
+    )
+    repo.create_proposal.return_value = record
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
+    service._emit_notification = AsyncMock()
+
+    await service.create_proposal(
+        title="[run_quality] Fix retry",
+        summary="Detected retry signal",
+        category="run_quality",
+        tags=["retry"],
+        task_create_request={
+            "type": "task",
+            "priority": 0,
+            "maxAttempts": 3,
+            "payload": {"repository": "MoonLadderStudios/MoonMind"},
+        },
+        origin_source="workflow",
+        origin_id=None,
+        origin_metadata={
+            "trigger_repo": "moon/org",
+            "trigger_job_id": str(uuid4()),
+            "signal": {"severity": "high", "retries": 2},
+        },
+        proposed_by_worker_id="worker-1",
+        proposed_by_user_id=None,
+    )
+
+    kwargs = repo.create_proposal.await_args.kwargs
+    assert kwargs["origin_metadata"]["trigger_repo"] == "moon/org"
+    assert "triggerRepo" not in kwargs["origin_metadata"]
+    assert kwargs["review_priority"] is TaskProposalReviewPriority.HIGH
+    assert kwargs["priority_override_reason"] == "signal:severity"
 
 @pytest.mark.asyncio
 async def test_create_proposal_honors_requested_priority_when_higher() -> None:
@@ -388,8 +444,8 @@ async def test_create_proposal_honors_requested_priority_when_higher() -> None:
         origin_source="queue",
         origin_id=None,
         origin_metadata={
-            "triggerRepo": "moon/org",
-            "triggerJobId": str(uuid4()),
+            "trigger_repo": "moon/org",
+            "trigger_job_id": str(uuid4()),
             "signal": {"severity": "medium", "retries": 1},
         },
         proposed_by_worker_id="worker-1",
