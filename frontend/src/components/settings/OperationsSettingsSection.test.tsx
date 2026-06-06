@@ -97,40 +97,46 @@ const workerShardHealth = {
   ],
 };
 
+const recentAction = {
+  status: 'SUCCEEDED',
+  requestedImage: 'ghcr.io/moonladderstudios/moonmind:20260425.1234',
+  resolvedDigest: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+  operator: 'admin@example.com',
+  reason: 'Routine release',
+  startedAt: '2026-04-25T18:00:00Z',
+  completedAt: '2026-04-25T18:04:00Z',
+  runDetailUrl: '/workflows/depupd_recent',
+  logsArtifactUrl: '/api/artifacts/logs',
+  rawCommandLogUrl: null,
+  beforeBuildId: 'stable',
+  afterBuildId: '20260425.1234',
+};
+
 const stackState = {
   stack: 'moonmind',
   projectName: 'moonmind',
-  configuredImage: 'ghcr.io/moonladderstudios/moonmind:stable',
-  version: '2026.04.25',
-  runningImages: [
-    {
-      service: 'api',
-      image: 'ghcr.io/moonladderstudios/moonmind:stable',
-      imageId: 'sha256:api-image',
-      digest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    },
-  ],
-  services: [
-    { name: 'api', state: 'running', health: 'healthy' },
-    { name: 'worker', state: 'running', health: 'healthy' },
-  ],
-  lastUpdateRunId: 'depupd_recent',
-  recentActions: [
-    {
-      status: 'SUCCEEDED',
-      requestedImage: 'ghcr.io/moonladderstudios/moonmind:20260425.1234',
-      resolvedDigest: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-      operator: 'admin@example.com',
-      reason: 'Routine release',
-      startedAt: '2026-04-25T18:00:00Z',
-      completedAt: '2026-04-25T18:04:00Z',
-      runDetailUrl: '/workflows/depupd_recent',
-      logsArtifactUrl: '/api/artifacts/logs',
-      rawCommandLogUrl: null,
-      beforeSummary: 'stable',
-      afterSummary: '20260425.1234',
-    },
-  ],
+  buildId: '20260425.1234',
+  currentImage: {
+    requestedImage: 'ghcr.io/moonladderstudios/moonmind:stable',
+    deployedImage: 'ghcr.io/moonladderstudios/moonmind:stable',
+    repository: 'ghcr.io/moonladderstudios/moonmind',
+    reference: 'stable',
+    resolvedDigest:
+      'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    sourceRunId: 'depupd_recent',
+    updatedAt: '2026-04-25T18:04:00Z',
+    evidence: 'desired_state',
+  },
+  latestAction: recentAction,
+  recentActions: [recentAction],
+  policy: {
+    repository: 'ghcr.io/moonladderstudios/moonmind',
+    defaultReference: 'stable',
+    allowedReferences: ['stable', 'latest'],
+    recentTags: ['20260425.1234'],
+    mutableReferences: ['latest', 'stable'],
+    allowedModes: ['changed_services', 'force_recreate'],
+  },
 };
 
 const stackStateWithRollback = {
@@ -338,33 +344,29 @@ describe('OperationsSettingsSection deployment update card', () => {
   it('renders deployment state inside Operations without top-level deployment navigation', async () => {
     renderOperations();
 
-    const card = await screen.findByRole('region', { name: /deployment update/i });
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
     await within(card).findByText('ghcr.io/moonladderstudios/moonmind:stable');
-    expect(within(card).getAllByText('moonmind').length).toBeGreaterThanOrEqual(2);
+    expect(within(card).getByText('v20260425.1234')).toBeTruthy();
     expect(within(card).getByText('ghcr.io/moonladderstudios/moonmind:stable')).toBeTruthy();
-    expect(within(card).getByText(/sha256:api-image/i)).toBeTruthy();
-    expect(within(card).getByText(/healthy/i)).toBeTruthy();
-    expect(within(card).getByText(/depupd_recent/i)).toBeTruthy();
+    expect(within(card).getAllByText('moonmind').length).toBeGreaterThanOrEqual(2);
     expect(screen.queryByRole('navigation', { name: /deployment/i })).toBeNull();
   });
 
   it('defaults the target reference to latest, warns for mutable tags, and omits runner image controls', async () => {
     renderOperations();
 
-    const card = await screen.findByRole('region', { name: /deployment update/i });
-    const reference = (await within(card).findByLabelText(/target reference/i)) as HTMLInputElement;
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
+    const reference = (await within(card).findByLabelText(/update to/i)) as HTMLInputElement;
     expect(reference.value).toBe('latest');
-    expect(within(card).getByDisplayValue('latest')).toBeTruthy();
-    expect(within(card).getByText(/latest may resolve differently/i)).toBeTruthy();
+    expect(within(card).getByText(/latest is mutable/i)).toBeTruthy();
 
     const mode = within(card).getByLabelText(/update mode/i) as HTMLSelectElement;
     expect(mode.value).toBe('changed_services');
     expect(within(mode).getByRole('option', { name: /force recreate all services/i })).toBeTruthy();
-    expect(within(card).getByText(/recreate every service/i)).toBeTruthy();
     expect(within(card).queryByLabelText(/updater runner/i)).toBeNull();
   });
 
-  it('defaults missing deployment mode policy to changed services only', async () => {
+  it('omits the update mode selector when only changed services is allowed', async () => {
     fetchSpy.mockImplementation((input) => {
       const url = String(input);
       if (url === '/api/workers') {
@@ -382,7 +384,10 @@ describe('OperationsSettingsSection deployment update card', () => {
       if (url === '/api/v1/operations/deployment/stacks/moonmind') {
         return Promise.resolve({
           ok: true,
-          json: async () => stackState,
+          json: async () => ({
+            ...stackState,
+            policy: { ...stackState.policy, allowedModes: ['changed_services'] },
+          }),
         } as Response);
       }
       if (url === '/api/v1/operations/deployment/image-targets?stack=moonmind') {
@@ -404,31 +409,27 @@ describe('OperationsSettingsSection deployment update card', () => {
 
     renderOperations();
 
-    const card = await screen.findByRole('region', { name: /deployment update/i });
-    const mode = await within(card).findByLabelText(/update mode/i);
-    expect(within(mode).getByRole('option', { name: /restart changed services/i })).toBeTruthy();
-    expect(within(mode).queryByRole('option', { name: /force recreate all services/i })).toBeNull();
-    expect(within(card).queryByText(/recreate every service/i)).toBeNull();
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
+    await within(card).findByText('v20260425.1234');
+    expect(within(card).queryByLabelText(/update mode/i)).toBeNull();
   });
 
   it('submits the typed deployment payload without requiring a reason', async () => {
     renderOperations();
 
-    const card = await screen.findByRole('region', { name: /deployment update/i });
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
 
-    fireEvent.change(await within(card).findByLabelText(/target reference/i), {
+    fireEvent.change(await within(card).findByLabelText(/update to/i), {
       target: { value: 'v20260507.2470' },
     });
     fireEvent.click(
-      await within(card).findByRole('button', { name: /submit deployment update/i }),
+      await within(card).findByRole('button', { name: /update moonmind/i }),
     );
 
     await waitFor(() => {
       expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('Current image: ghcr.io/moonladderstudios/moonmind:stable'));
       expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('Target image: ghcr.io/moonladderstudios/moonmind:v20260507.2470'));
       expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('Mode: Restart changed services'));
-      expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('Stack: moonmind'));
-      expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('Expected affected services: api, worker'));
       expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('Services may restart'));
     });
 
@@ -453,18 +454,17 @@ describe('OperationsSettingsSection deployment update card', () => {
     expect(await within(card).findByText(/deployment update queued/i)).toBeTruthy();
   });
 
-  it('renders recent deployment context and hides raw command-log links by default', async () => {
+  it('renders update history and hides raw command-log links by default', async () => {
     renderOperations();
 
-    const card = await screen.findByRole('region', { name: /deployment update/i });
-    await within(card).findByText('SUCCEEDED');
-    expect(within(card).getByText('SUCCEEDED')).toBeTruthy();
-    expect(within(card).getByText(/Routine release/i)).toBeTruthy();
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
+    await within(card).findByRole('heading', { name: /update history/i });
+    expect(within(card).getAllByText('SUCCEEDED').length).toBeGreaterThan(0);
     expect(within(card).getByText(/admin@example.com/i)).toBeTruthy();
     expect(within(card).getByRole('link', { name: /run detail/i }).getAttribute('href')).toBe(
       '/workflows/depupd_recent',
     );
-    expect(within(card).getByRole('link', { name: /logs artifact/i }).getAttribute('href')).toBe(
+    expect(within(card).getByRole('link', { name: /^logs$/i }).getAttribute('href')).toBe(
       '/api/artifacts/logs',
     );
     expect(within(card).queryByRole('link', { name: /raw command/i })).toBeNull();
@@ -493,7 +493,7 @@ describe('OperationsSettingsSection deployment update card', () => {
 
     renderOperations();
 
-    const card = await screen.findByRole('region', { name: /deployment update/i });
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
     expect(await within(card).findByRole('button', { name: /roll back to stable/i })).toBeTruthy();
     expect(within(card).queryByRole('button', { name: /roll back to latest/i })).toBeNull();
     expect(within(card).getByText(/before-state evidence is missing/i)).toBeTruthy();
@@ -535,7 +535,7 @@ describe('OperationsSettingsSection deployment update card', () => {
 
     renderOperations();
 
-    const card = await screen.findByRole('region', { name: /deployment update/i });
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
     fireEvent.click(await within(card).findByRole('button', { name: /roll back to stable/i }));
 
     await waitFor(() => {

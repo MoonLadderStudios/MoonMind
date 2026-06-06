@@ -3893,12 +3893,49 @@ export interface components {
              */
             markdown?: string | null;
         };
+        /** DeploymentCurrentImageModel */
+        DeploymentCurrentImageModel: {
+            /** Requestedimage */
+            requestedImage?: string | null;
+            /** Deployedimage */
+            deployedImage?: string | null;
+            /** Repository */
+            repository?: string | null;
+            /** Reference */
+            reference?: string | null;
+            /** Resolveddigest */
+            resolvedDigest?: string | null;
+            /** Sourcerunid */
+            sourceRunId?: string | null;
+            /** Updatedat */
+            updatedAt?: string | null;
+            /**
+             * Evidence
+             * @enum {string}
+             */
+            evidence: "desired_state" | "environment" | "policy" | "unavailable";
+        };
         /** DeploymentImageRequest */
         DeploymentImageRequest: {
             /** Repository */
             repository: string;
             /** Reference */
             reference: string;
+        };
+        /** DeploymentPolicyModel */
+        DeploymentPolicyModel: {
+            /** Repository */
+            repository: string;
+            /** Defaultreference */
+            defaultReference: string;
+            /** Allowedreferences */
+            allowedReferences: string[];
+            /** Recenttags */
+            recentTags: string[];
+            /** Mutablereferences */
+            mutableReferences: string[];
+            /** Allowedmodes */
+            allowedModes: string[];
         };
         /** DeploymentRecentActionModel */
         DeploymentRecentActionModel: {
@@ -3937,16 +3974,11 @@ export interface components {
             beforeSummary?: string | null;
             /** Aftersummary */
             afterSummary?: string | null;
+            /** Beforebuildid */
+            beforeBuildId?: string | null;
+            /** Afterbuildid */
+            afterBuildId?: string | null;
             rollbackEligibility?: components["schemas"]["RollbackEligibilityModel"] | null;
-        };
-        /** DeploymentServiceStateModel */
-        DeploymentServiceStateModel: {
-            /** Name */
-            name: string;
-            /** State */
-            state: string;
-            /** Health */
-            health?: string | null;
         };
         /** DeploymentStackStateResponse */
         DeploymentStackStateResponse: {
@@ -3954,16 +3986,13 @@ export interface components {
             stack: string;
             /** Projectname */
             projectName: string;
-            /** Configuredimage */
-            configuredImage: string;
-            /** Runningimages */
-            runningImages: components["schemas"]["RunningImageModel"][];
-            /** Services */
-            services: components["schemas"]["DeploymentServiceStateModel"][];
-            /** Lastupdaterunid */
-            lastUpdateRunId?: string | null;
+            /** Buildid */
+            buildId?: string | null;
+            currentImage: components["schemas"]["DeploymentCurrentImageModel"];
+            latestAction?: components["schemas"]["DeploymentRecentActionModel"] | null;
             /** Recentactions */
             recentActions?: components["schemas"]["DeploymentRecentActionModel"][];
+            policy: components["schemas"]["DeploymentPolicyModel"];
         };
         /** DeploymentUpdateRequest */
         DeploymentUpdateRequest: {
@@ -5126,6 +5155,8 @@ export interface components {
             recentTags: string[];
             /** Digestpinningrecommended */
             digestPinningRecommended: boolean;
+            /** Allowedmodes */
+            allowedModes: string[];
         };
         /** ImageTargetsResponse */
         ImageTargetsResponse: {
@@ -6716,17 +6747,6 @@ export interface components {
             repository: string;
             /** Reference */
             reference: string;
-        };
-        /** RunningImageModel */
-        RunningImageModel: {
-            /** Service */
-            service: string;
-            /** Image */
-            image: string;
-            /** Imageid */
-            imageId?: string | null;
-            /** Digest */
-            digest?: string | null;
         };
         /**
          * ScheduleCreatedResponse
