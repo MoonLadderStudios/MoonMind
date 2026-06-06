@@ -281,23 +281,35 @@ Example response:
 {
   "stack": "moonmind",
   "projectName": "moonmind",
-  "configuredImage": "ghcr.io/moonladderstudios/moonmind:20260425.1234",
-  "runningImages": [
-    {
-      "service": "api",
-      "image": "ghcr.io/moonladderstudios/moonmind:20260425.1234",
-      "imageId": "sha256:...",
-      "digest": "sha256:..."
-    }
-  ],
-  "services": [
-    {
-      "name": "api",
-      "state": "running",
-      "health": "healthy"
-    }
-  ],
-  "lastUpdateRunId": "depupd_01HV..."
+  "buildId": "20260425.1234",
+  "currentImage": {
+    "requestedImage": "ghcr.io/moonladderstudios/moonmind:20260425.1234",
+    "deployedImage": "ghcr.io/moonladderstudios/moonmind@sha256:...",
+    "repository": "ghcr.io/moonladderstudios/moonmind",
+    "reference": "20260425.1234",
+    "resolvedDigest": "sha256:...",
+    "sourceRunId": "depupd_01HV...",
+    "updatedAt": "2026-04-25T18:04:00Z",
+    "evidence": "desired_state"
+  },
+  "latestAction": {
+    "kind": "success",
+    "status": "SUCCEEDED",
+    "requestedImage": "ghcr.io/moonladderstudios/moonmind:20260425.1234",
+    "operator": "operator@example.com",
+    "completedAt": "2026-04-25T18:04:00Z",
+    "beforeBuildId": "20260424.0901",
+    "afterBuildId": "20260425.1234"
+  },
+  "recentActions": [],
+  "policy": {
+    "repository": "ghcr.io/moonladderstudios/moonmind",
+    "defaultReference": "stable",
+    "allowedReferences": ["stable", "latest"],
+    "recentTags": ["20260425.1234", "20260424.0901"],
+    "mutableReferences": ["latest", "stable"],
+    "allowedModes": ["changed_services", "force_recreate"]
+  }
 }
 ```
 
@@ -317,7 +329,8 @@ Example response:
       "repository": "ghcr.io/moonladderstudios/moonmind",
       "allowedReferences": ["stable", "latest"],
       "recentTags": ["20260425.1234", "20260424.0901"],
-      "digestPinningRecommended": true
+      "digestPinningRecommended": true,
+      "allowedModes": ["changed_services", "force_recreate"]
     }
   ]
 }
