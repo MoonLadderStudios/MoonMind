@@ -459,13 +459,13 @@ def resolve_current_deployment_image(
     env = environ if environ is not None else dict(os.environ)
 
     sidecar_path = str(
-        env.get("MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", "")
+        env.get("MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE") or ""
     ).strip()
     if sidecar_path:
         try:
             raw = Path(sidecar_path).expanduser().read_text(encoding="utf-8")
             record = json.loads(raw)
-        except (OSError, ValueError):
+        except (OSError, ValueError, RuntimeError):
             record = None
         if isinstance(record, dict):
             stack = str(record.get("stack") or "").strip()
@@ -476,9 +476,9 @@ def resolve_current_deployment_image(
                 if resolved is not None:
                     return resolved
 
-    deployed = str(env.get("MOONMIND_IMAGE", "")).strip()
-    requested = str(env.get("MOONMIND_IMAGE_REQUESTED", "")).strip()
-    run_id = str(env.get("MOONMIND_DEPLOYMENT_RUN_ID", "")).strip() or None
+    deployed = str(env.get("MOONMIND_IMAGE") or "").strip()
+    requested = str(env.get("MOONMIND_IMAGE_REQUESTED") or "").strip()
+    run_id = str(env.get("MOONMIND_DEPLOYMENT_RUN_ID") or "").strip() or None
     if deployed or requested:
         repository, reference, digest = _split_image_reference(
             requested or deployed

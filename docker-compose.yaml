@@ -52,6 +52,7 @@ services:
       - DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
       - MOONMIND_OAUTH_RUNNER_IMAGE=${MOONMIND_OAUTH_RUNNER_IMAGE:-${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
+      - MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE=${MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE:-/workspace/deployment_state/desired-state.json}
       # OIDC specific variables for API service
       - AUTH_PROVIDER=${AUTH_PROVIDER:-disabled} # local, google, or disabled
       - OIDC_ISSUER_URL=${OIDC_ISSUER_URL:-http://keycloak:8080/realms/moonmind} # For 'local'
@@ -65,6 +66,7 @@ services:
       - ./api_service:/app/api_service
       - ./moonmind:/app/moonmind:ro
       - ./.agents:/app/.agents:ro
+      - ./deploy/state:/workspace/deployment_state:ro
       - ./keycloak:/app/keycloak:ro # Mount keycloak configs if needed by api, or remove if only for keycloak service
       - moonmind_secrets:/app/var/secrets
       - agent_workspaces:/work/agent_jobs:ro
