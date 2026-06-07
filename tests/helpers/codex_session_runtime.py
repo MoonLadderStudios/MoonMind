@@ -16,6 +16,7 @@ def write_fake_app_server(
     thread_status_type: str = "idle",
     thread_status_reason: str | None = None,
     fail_thread_resume: bool = False,
+    fail_thread_read: bool = False,
     resume_requires_existing_rollout_path: bool = False,
     start_thread_id: str = "vendor-thread-1",
     start_thread_path: str | None = "/tmp/vendor-thread-1.jsonl",
@@ -27,6 +28,7 @@ def write_fake_app_server(
     interrupt_record_path: Path | None = None,
     codex_home_record_path: Path | None = None,
     thread_recovery_error_message: str | None = None,
+    thread_read_error_message: str | None = None,
 ) -> Path:
     script = tmp_path / "fake_app_server.py"
     completion_block = """
@@ -50,7 +52,9 @@ INTERRUPT_RECORD_PATH = __INTERRUPT_RECORD_PATH__
 STEER_RECORD_PATH = __STEER_RECORD_PATH__
 CODEX_HOME_RECORD_PATH = __CODEX_HOME_RECORD_PATH__
 FAIL_THREAD_RESUME = __FAIL_THREAD_RESUME__
+FAIL_THREAD_READ = __FAIL_THREAD_READ__
 THREAD_RESUME_ERROR_MESSAGE = __THREAD_RESUME_ERROR_MESSAGE__
+THREAD_READ_ERROR_MESSAGE = __THREAD_READ_ERROR_MESSAGE__
 RESUME_REQUIRES_EXISTING_ROLLOUT_PATH = __RESUME_REQUIRES_EXISTING_ROLLOUT_PATH__
 START_THREAD_ID = __START_THREAD_ID__
 START_THREAD_PATH = __START_THREAD_PATH__
@@ -243,6 +247,16 @@ __COMPLETION_BLOCK__
         sys.stdout.flush()
     elif method == "thread/read":
         thread_id = message["params"]["threadId"]
+        if FAIL_THREAD_READ:
+            sys.stdout.write(json.dumps({
+                "id": msg_id,
+                "error": {
+                    "code": -32603 if THREAD_READ_ERROR_MESSAGE else -32600,
+                    "message": THREAD_READ_ERROR_MESSAGE or "failed to read thread",
+                },
+            }) + "\\n")
+            sys.stdout.flush()
+            continue
         if START_THREAD_PATH and ROLLOUT_ENTRIES_ON_READ:
             os.makedirs(os.path.dirname(START_THREAD_PATH), exist_ok=True)
             with open(START_THREAD_PATH, "a", encoding="utf-8") as rollout_handle:
@@ -322,7 +336,9 @@ __COMPLETION_BLOCK__
             repr(str(codex_home_record_path) if codex_home_record_path is not None else ""),
         )
         .replace("__FAIL_THREAD_RESUME__", "True" if fail_thread_resume else "False")
+        .replace("__FAIL_THREAD_READ__", "True" if fail_thread_read else "False")
         .replace("__THREAD_RESUME_ERROR_MESSAGE__", repr(thread_recovery_error_message))
+        .replace("__THREAD_READ_ERROR_MESSAGE__", repr(thread_read_error_message))
         .replace(
             "__RESUME_REQUIRES_EXISTING_ROLLOUT_PATH__",
             "True" if resume_requires_existing_rollout_path else "False",
