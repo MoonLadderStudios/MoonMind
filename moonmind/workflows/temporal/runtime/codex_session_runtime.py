@@ -1560,6 +1560,69 @@ class CodexManagedSessionRuntime:
             ),
         }
 
+    def _empty_rollout_read_failure_evidence(
+        self,
+        *,
+        reason: str,
+        state: CodexSessionRuntimeState,
+        client: CodexAppServerRpcClient,
+        vendor_turn_id: str,
+    ) -> dict[str, Any]:
+        rollout_path = self._rollout_path_from_empty_rollout_message(reason)
+        rollout_scan = self._scan_rollout_for_turn(
+            rollout_path or self._allowed_rollout_path(state.vendor_thread_path),
+            vendor_turn_id=vendor_turn_id,
+            turn_started_at=state.last_control_at,
+        )
+        return {
+            "schemaVersion": "v1",
+            "failureCause": EMPTY_ASSISTANT_FAILURE_CAUSE,
+            "reason": self._redact_diagnostic_text(reason),
+            "capturedAt": datetime.now(UTC).isoformat(),
+            "session": {
+                "sessionId": state.session_id,
+                "sessionEpoch": state.session_epoch,
+                "containerId": state.container_id,
+                "logicalThreadId": state.logical_thread_id,
+                "vendorThreadId": state.vendor_thread_id,
+                "vendorTurnId": vendor_turn_id,
+            },
+            "appServerRpcTrace": self._diagnostic_value(client.trace_summary()),
+            "threadPayloadSummary": None,
+            "rolloutScan": self._rollout_scan_summary(rollout_scan),
+            "runtimeLogExcerpts": self._recent_runtime_log_excerpts(
+                vendor_turn_id=vendor_turn_id,
+                turn_started_at=state.last_control_at,
+            ),
+        }
+
+    def _empty_rollout_read_failure_metadata(
+        self,
+        *,
+        reason: str,
+        state: CodexSessionRuntimeState,
+        client: CodexAppServerRpcClient,
+        vendor_turn_id: str,
+    ) -> dict[str, Any]:
+        return {
+            "reason": reason,
+            "failureClass": "transient",
+            "failureCause": EMPTY_ASSISTANT_FAILURE_CAUSE,
+            "retryRecommendedAction": "clear_session",
+            "turnFailureEvidence": self._empty_rollout_read_failure_evidence(
+                reason=reason,
+                state=state,
+                client=client,
+                vendor_turn_id=vendor_turn_id,
+            ),
+        }
+
+    def _rollout_path_from_empty_rollout_message(self, message: str) -> str | None:
+        match = re.search(r"rollout at (?P<path>.+?) is empty", message)
+        if match is None:
+            return None
+        return self._allowed_rollout_path(match.group("path").strip())
+
     def _reset_skill_outcome(self) -> None:
         """Remove any stale skill-outcome marker before a new turn begins.
 
@@ -1935,6 +1998,13 @@ class CodexManagedSessionRuntime:
         normalized = message.lower()
         if "no rollout found" in normalized or "thread not found" in normalized:
             return True
+        return CodexManagedSessionRuntime._failure_message_reports_empty_rollout(
+            message
+        )
+
+    @staticmethod
+    def _failure_message_reports_empty_rollout(message: str) -> bool:
+        normalized = message.lower()
         return "rollout at " in normalized and " is empty" in normalized
 
     def _recovery_thread(
@@ -2312,6 +2382,26 @@ class CodexManagedSessionRuntime:
                     turnId=vendor_turn_id,
                     status="running",
                     metadata={},
+                )
+            if self._failure_message_reports_empty_rollout(message):
+                metadata = self._empty_rollout_read_failure_metadata(
+                    reason=message,
+                    state=state,
+                    client=client,
+                    vendor_turn_id=vendor_turn_id,
+                )
+                self._finalize_turn(
+                    state=state,
+                    turn_id=vendor_turn_id,
+                    status="failed",
+                    error_text=message,
+                    failure_class="transient",
+                )
+                return CodexManagedSessionTurnResponse(
+                    sessionState=self._session_state(state),
+                    turnId=vendor_turn_id,
+                    status="failed",
+                    metadata=metadata,
                 )
             self._finalize_turn(
                 state=state,
