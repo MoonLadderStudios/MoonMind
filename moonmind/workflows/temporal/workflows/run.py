@@ -3784,6 +3784,10 @@ class MoonMindRunWorkflow:
             error_message="plan_ref must resolve to a JSON object",
         )
         plan_definition = parse_plan_definition(plan_dict)
+        # Keep this patch command for histories that recorded the registry-read
+        # branch before registry loading became lazy. Removing it strands
+        # in-flight MoonMind.Run histories before cancellation/failure handling.
+        workflow.patched(RUN_CONDITIONAL_REGISTRY_READ_PATCH)
         registry_snapshot: ToolRegistrySnapshot | None = None
 
         async def load_registry_snapshot() -> ToolRegistrySnapshot:
