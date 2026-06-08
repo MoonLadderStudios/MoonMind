@@ -66,6 +66,9 @@ This document defines the artifact system: storage, identity, linkage, authoriza
 7. **Canonical runtime result discipline** 
  True agent-runtime activities return compact canonical contracts, while large outputs and diagnostics live in artifacts referenced by those contracts.
 
+8. **Model-agnostic portability**
+ Artifact metadata and refs must not encode model or provider identity as provenance. Model-specific diagnostics may live inside artifact bytes when required, but the artifact contract remains portable across model switches.
+
 ---
 
 ## 3. Non-goals

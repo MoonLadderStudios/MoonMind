@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import yaml
@@ -20,6 +21,76 @@ def _has_volume_mount(service_config: dict, source: str, target: str) -> bool:
             if volume.get("source") == source and volume.get("target") == target:
                 return True
     return False
+
+
+def _module_assignment_value(path: Path, name: str):
+    module = ast.parse(path.read_text(encoding="utf-8"))
+    for node in module.body:
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            if node.target.id == name and node.value is not None:
+                try:
+                    return ast.literal_eval(node.value)
+                except (ValueError, TypeError):
+                    pass
+        if isinstance(node, ast.Assign):
+            if any(isinstance(target, ast.Name) and target.id == name for target in node.targets):
+                try:
+                    return ast.literal_eval(node.value)
+                except (ValueError, TypeError):
+                    pass
+    return None
+
+
+def _network_names(service_config: dict) -> set[str]:
+    networks = service_config.get("networks", {})
+    if isinstance(networks, list):
+        return {str(network) for network in networks}
+    if isinstance(networks, dict):
+        return {str(network) for network in networks}
+    return set()
+
+
+def _network_aliases(service_config: dict, network_name: str) -> set[str]:
+    networks = service_config.get("networks", {})
+    if not isinstance(networks, dict):
+        return set()
+    network_config = networks.get(network_name)
+    if not isinstance(network_config, dict):
+        return set()
+    return {str(alias) for alias in network_config.get("aliases", [])}
+
+
+def _env_map(environment: object) -> dict[str, str]:
+    if isinstance(environment, dict):
+        return {str(k): str(v) for k, v in environment.items()}
+    if not isinstance(environment, list):
+        return {}
+    mapped: dict[str, str] = {}
+    for item in environment:
+        text = str(item)
+        if "=" not in text:
+            continue
+        key, value = text.split("=", 1)
+        mapped[key] = value
+    return mapped
+
+
+def test_alembic_revision_ids_fit_default_version_column():
+    """Alembic's default version table stores revision ids in VARCHAR(32)."""
+    migration_dir = Path("api_service/migrations/versions")
+    assert migration_dir.exists(), "Alembic versions directory is missing"
+
+    for migration_path in migration_dir.glob("*.py"):
+        if migration_path.name == "__init__.py":
+            continue
+        revision = _module_assignment_value(migration_path, "revision")
+        assert isinstance(revision, str), (
+            f"{migration_path} must declare a string Alembic revision id"
+        )
+        assert len(revision) <= 32, (
+            f"{migration_path} revision id is too long for alembic_version.version_num: "
+            f"{revision!r}"
+        )
 
 
 def test_docker_compose_has_temporal_worker_auto_start_configured():
@@ -66,6 +137,84 @@ def test_docker_compose_has_temporal_worker_auto_start_configured():
         assert (
             "sleep" not in command_var
         ), f"Worker '{fleet}' must not be configured to sleep. Found: {command_var}"
+
+
+def test_sandbox_worker_uses_internal_egress_network_for_mm_785():
+    """MM-785: sandbox workers must not retain unrestricted outbound networking."""
+    compose_path = Path("docker-compose.yaml")
+    assert (
+        compose_path.exists()
+    ), "docker-compose.yaml must exist at the repository root"
+
+    compose_data = yaml.safe_load(compose_path.read_text())
+    services = compose_data.get("services", {})
+    networks = compose_data.get("networks", {})
+
+    sandbox_network = networks.get("sandbox-egress-network")
+    assert isinstance(
+        sandbox_network, dict
+    ), "sandbox-egress-network must be declared in docker-compose.yaml"
+    assert sandbox_network.get("internal") is True, (
+        "sandbox-egress-network must be an internal Docker network so sandbox "
+        "workers do not have default outbound internet egress"
+    )
+
+    sandbox_worker = services.get("temporal-worker-sandbox")
+    assert isinstance(
+        sandbox_worker, dict
+    ), "temporal-worker-sandbox service is missing from docker-compose.yaml"
+    assert _network_names(sandbox_worker) == {"sandbox-egress-network"}
+
+    temporal_service = services.get("temporal")
+    assert isinstance(temporal_service, dict), "temporal service is missing"
+    minio_service = services.get("minio")
+    assert isinstance(minio_service, dict), "minio service is missing"
+    postgres_service = services.get("postgres")
+    assert isinstance(postgres_service, dict), "postgres service is missing"
+    proxy_service = services.get("sandbox-egress-proxy")
+    assert isinstance(
+        proxy_service, dict
+    ), "sandbox-egress-proxy service is missing"
+
+    assert "temporal-internal" in _network_aliases(
+        temporal_service,
+        "sandbox-egress-network",
+    )
+    assert "moonmind-temporal-artifacts-s3" in _network_aliases(
+        minio_service,
+        "sandbox-egress-network",
+    )
+    assert "moonmind-api-db" in _network_aliases(
+        postgres_service,
+        "sandbox-egress-network",
+    )
+    assert _network_names(proxy_service) == {
+        "local-network",
+        "sandbox-egress-network",
+    }
+    assert proxy_service.get("expose") == ["3128"]
+
+    sandbox_env = _env_map(sandbox_worker.get("environment"))
+    assert sandbox_env["HTTPS_PROXY"] == (
+        "${MOONMIND_SANDBOX_HTTPS_PROXY:-http://sandbox-egress-proxy:3128}"
+    )
+    assert sandbox_env["HTTP_PROXY"] == (
+        "${MOONMIND_SANDBOX_HTTP_PROXY:-http://sandbox-egress-proxy:3128}"
+    )
+    assert "moonmind-api-db" in sandbox_env["NO_PROXY"]
+
+    squid_config = Path("docker/sandbox-egress-proxy/squid.conf").read_text(
+        encoding="utf-8"
+    )
+    expected_proxy_domains = {
+        "." + "".join(parts)
+        for parts in [
+            ("github", ".com"),
+            ("anthropic", ".com"),
+        ]
+    }
+    assert "http_access deny all" in squid_config
+    assert expected_proxy_domains <= set(squid_config.split())
 
 
 def test_api_service_runs_with_container_init():

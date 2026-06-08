@@ -71,6 +71,7 @@ SKILL_OUTCOME_PATH = __SKILL_OUTCOME_PATH__
 SKILL_OUTCOME_PAYLOAD = __SKILL_OUTCOME_PAYLOAD__
 SKILL_OUTCOME_PAYLOAD_IS_RAW = __SKILL_OUTCOME_PAYLOAD_IS_RAW__
 turn_completed = False
+thread_read_failed = False
 
 for line in sys.stdin:
     message = json.loads(line)
@@ -247,7 +248,8 @@ __COMPLETION_BLOCK__
         sys.stdout.flush()
     elif method == "thread/read":
         thread_id = message["params"]["threadId"]
-        if FAIL_THREAD_READ:
+        if FAIL_THREAD_READ and thread_id == "vendor-thread-1" and not thread_read_failed:
+            thread_read_failed = True
             sys.stdout.write(json.dumps({
                 "id": msg_id,
                 "error": {

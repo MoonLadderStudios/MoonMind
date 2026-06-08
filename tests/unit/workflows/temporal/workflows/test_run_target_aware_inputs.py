@@ -8,6 +8,12 @@ import pytest
 
 pytest.importorskip("temporalio")
 
+from moonmind.memory.procedural import (
+    EvidenceRun,
+    FixPattern,
+    extract_error_signature,
+)
+from moonmind.workflows.tasks.prepared_context import build_memory_manifest
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
 
@@ -37,7 +43,13 @@ def _task_payload() -> dict[str, object]:
     }
 
 
-def _build_request_for_step(step_id: str, *, runtime_mode: str = "jules"):
+def _build_request_for_step(
+    step_id: str,
+    *,
+    runtime_mode: str = "jules",
+    model: str | None = None,
+    effort: str | None = None,
+):
     wf = MoonMindRunWorkflow()
     with patch(
         "moonmind.workflows.temporal.workflows.run.workflow.info",
@@ -45,7 +57,11 @@ def _build_request_for_step(step_id: str, *, runtime_mode: str = "jules"):
     ):
         return wf._build_agent_execution_request(
             node_inputs={
-                "runtime": {"mode": runtime_mode},
+                "runtime": {
+                    "mode": runtime_mode,
+                    **({"model": model} if model else {}),
+                    **({"effort": effort} if effort else {}),
+                },
                 "inputRefs": ["artifact://explicit-node-input"],
             },
             node_id=step_id,
@@ -79,6 +95,41 @@ def test_run_request_records_prepared_manifest_before_step_dispatch() -> None:
         attempt_context["contextBundleDigest"]
     )
     assert "preparedInputRefs" not in projection["context"]
+
+
+def test_mm786_runtime_selection_projects_cost_and_portability_metadata() -> None:
+    request = _build_request_for_step(
+        "collect-evidence",
+        runtime_mode="gemini_cli",
+        model="gemini-2.5-pro",
+        effort="high",
+    )
+
+    attempt_context = request.parameters["metadata"]["moonmind"]["executionContext"]
+    projection = request.parameters["metadata"]["moonmind"][
+        "stepExecutionManifestProjection"
+    ]
+
+    assert attempt_context["runtimeSelection"]["runtimeId"] == "gemini_cli"
+    assert attempt_context["runtimeSelection"]["model"] == "gemini-2.5-pro"
+    assert attempt_context["runtimeSelection"]["effort"] == "high"
+    assert attempt_context["costPolicy"]["billingAwareRouting"] is True
+    assert attempt_context["costPolicy"]["routingBasis"] == "step_runtime_selection"
+    assert attempt_context["costPolicy"]["runtimeId"] == "gemini_cli"
+    assert attempt_context["costPolicy"]["model"] == "gemini-2.5-pro"
+    assert attempt_context["costPolicy"]["effort"] == "high"
+    assert attempt_context["costPolicy"]["estimatedCostUnits"] >= 1
+    assert attempt_context["portabilityProvenance"]["artifactPortability"] == (
+        "model_agnostic_refs"
+    )
+    assert attempt_context["portabilityProvenance"]["memoryPortability"] == (
+        "model_provenance_attached"
+    )
+    assert attempt_context["portabilityProvenance"]["model"] == "gemini-2.5-pro"
+    assert projection["context"]["costPolicy"] == attempt_context["costPolicy"]
+    assert projection["context"]["portabilityProvenance"] == (
+        attempt_context["portabilityProvenance"]
+    )
 
 
 def test_run_request_records_retrieval_and_memory_refs_in_attempt_projection() -> None:
@@ -129,6 +180,63 @@ def test_run_request_records_retrieval_and_memory_refs_in_attempt_projection() -
         attempt_context["memoryManifestRef"]
     )
     assert "Relevant design summary." not in str(projection)
+
+
+def test_run_request_projects_matched_fix_patterns_into_attempt_memory() -> None:
+    signature = extract_error_signature("RuntimeError: qdrant collection missing")
+    assert signature is not None
+    fix_pattern = FixPattern.from_successful_run(
+        signature=signature,
+        summary="Bootstrap the Qdrant namespace before indexing.",
+        steps=["Run the namespace bootstrap activity before retrieval writes."],
+        evidence=EvidenceRun(
+            workflowId="successful-workflow-1",
+            artifactRefs=["artifact://fix-pattern/evidence"],
+            outcome="succeeded",
+        ),
+    )
+    expected_memory = build_memory_manifest(
+        [
+            {
+                "proposalRef": fix_pattern.pattern_ref,
+                "state": "accepted_for_run_context",
+                "summary": (
+                    "Bootstrap the Qdrant namespace before indexing. Steps: "
+                    "Run the namespace bootstrap activity before retrieval writes."
+                ),
+            }
+        ]
+    )
+    wf = MoonMindRunWorkflow()
+
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        return_value=_workflow_info(),
+    ):
+        request = wf._build_agent_execution_request(
+            node_inputs={"runtime": {"mode": "codex_cli"}},
+            node_id="collect-evidence",
+            tool_name="codex_cli",
+            workflow_parameters={
+                "task": {
+                    **_task_payload(),
+                    "matchedFixPatterns": [
+                        fix_pattern.model_dump(by_alias=True, exclude_none=True)
+                    ],
+                }
+            },
+        )
+
+    attempt_context = request.parameters["metadata"]["moonmind"]["executionContext"]
+    projection = request.parameters["metadata"]["moonmind"][
+        "stepExecutionManifestProjection"
+    ]
+
+    assert attempt_context["memoryManifestRef"] == expected_memory.memory_manifest_ref
+    assert projection["context"]["memoryManifestRef"] == (
+        expected_memory.memory_manifest_ref
+    )
+    assert "artifact://fix-pattern/evidence" not in str(projection)
 
 
 def test_run_request_filters_prepared_context_to_current_step() -> None:

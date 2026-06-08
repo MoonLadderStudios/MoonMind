@@ -41,6 +41,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/responses": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Response */
+        post: operations["create_response_v1_responses_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/models/": {
         parameters: {
             query?: never;
@@ -214,6 +231,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/retrieval/index-health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Index Health */
+        get: operations["index_health_retrieval_index_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/retrieval/context": {
         parameters: {
             query?: never;
@@ -225,6 +259,50 @@ export interface paths {
         put?: never;
         /** Retrieve Context Pack */
         post: operations["retrieve_context_pack_retrieval_context_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mcp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Handle Streamable Http Get
+         * @description Return 405 because MoonMind does not emit server-initiated SSE messages.
+         */
+        get: operations["handle_streamable_http_get_mcp_get"];
+        put?: never;
+        /**
+         * Handle Streamable Http Post
+         * @description Handle MCP Streamable HTTP JSON-RPC messages at the single MCP endpoint.
+         */
+        post: operations["handle_streamable_http_post_mcp_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mcp/resources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Resources
+         * @description Return MoonMind MCP resource definitions.
+         */
+        get: operations["list_resources_mcp_resources_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1314,6 +1392,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executions/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Execution Metrics */
+        get: operations["get_execution_metrics_api_executions_metrics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executions/facets": {
         parameters: {
             query?: never;
@@ -1569,6 +1664,26 @@ export interface paths {
         put?: never;
         /** Recover Execution From Failed Step */
         post: operations["recover_execution_from_failed_step_api_executions__workflow_id__recover_from_failed_step_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/callbacks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Describe Integration Callbacks
+         * @description Return the generic external-agent callback contract.
+         */
+        get: operations["describe_integration_callbacks_api_integrations_callbacks_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2162,6 +2277,26 @@ export interface paths {
          * @description Serve the manifests shell for manifest deep links.
          */
         get: operations["task_manifest_detail_route_manifests__manifest_name__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/index-health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Index Health Route
+         * @description Serve the React-powered RAG index health page.
+         */
+        get: operations["index_health_route_index_health_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3758,12 +3893,49 @@ export interface components {
              */
             markdown?: string | null;
         };
+        /** DeploymentCurrentImageModel */
+        DeploymentCurrentImageModel: {
+            /** Requestedimage */
+            requestedImage?: string | null;
+            /** Deployedimage */
+            deployedImage?: string | null;
+            /** Repository */
+            repository?: string | null;
+            /** Reference */
+            reference?: string | null;
+            /** Resolveddigest */
+            resolvedDigest?: string | null;
+            /** Sourcerunid */
+            sourceRunId?: string | null;
+            /** Updatedat */
+            updatedAt?: string | null;
+            /**
+             * Evidence
+             * @enum {string}
+             */
+            evidence: "desired_state" | "environment" | "policy" | "unavailable";
+        };
         /** DeploymentImageRequest */
         DeploymentImageRequest: {
             /** Repository */
             repository: string;
             /** Reference */
             reference: string;
+        };
+        /** DeploymentPolicyModel */
+        DeploymentPolicyModel: {
+            /** Repository */
+            repository: string;
+            /** Defaultreference */
+            defaultReference: string;
+            /** Allowedreferences */
+            allowedReferences: string[];
+            /** Recenttags */
+            recentTags: string[];
+            /** Mutablereferences */
+            mutableReferences: string[];
+            /** Allowedmodes */
+            allowedModes: string[];
         };
         /** DeploymentRecentActionModel */
         DeploymentRecentActionModel: {
@@ -3802,16 +3974,11 @@ export interface components {
             beforeSummary?: string | null;
             /** Aftersummary */
             afterSummary?: string | null;
+            /** Beforebuildid */
+            beforeBuildId?: string | null;
+            /** Afterbuildid */
+            afterBuildId?: string | null;
             rollbackEligibility?: components["schemas"]["RollbackEligibilityModel"] | null;
-        };
-        /** DeploymentServiceStateModel */
-        DeploymentServiceStateModel: {
-            /** Name */
-            name: string;
-            /** State */
-            state: string;
-            /** Health */
-            health?: string | null;
         };
         /** DeploymentStackStateResponse */
         DeploymentStackStateResponse: {
@@ -3819,16 +3986,13 @@ export interface components {
             stack: string;
             /** Projectname */
             projectName: string;
-            /** Configuredimage */
-            configuredImage: string;
-            /** Runningimages */
-            runningImages: components["schemas"]["RunningImageModel"][];
-            /** Services */
-            services: components["schemas"]["DeploymentServiceStateModel"][];
-            /** Lastupdaterunid */
-            lastUpdateRunId?: string | null;
+            /** Buildid */
+            buildId?: string | null;
+            currentImage: components["schemas"]["DeploymentCurrentImageModel"];
+            latestAction?: components["schemas"]["DeploymentRecentActionModel"] | null;
             /** Recentactions */
             recentActions?: components["schemas"]["DeploymentRecentActionModel"][];
+            policy: components["schemas"]["DeploymentPolicyModel"];
         };
         /** DeploymentUpdateRequest */
         DeploymentUpdateRequest: {
@@ -4216,6 +4380,94 @@ export interface components {
             detailHref?: string | null;
         };
         /**
+         * ExecutionMetricsCostModel
+         * @description Cost aggregates for runs that publish bounded cost metadata.
+         */
+        ExecutionMetricsCostModel: {
+            /**
+             * Totalestimateusd
+             * @default 0
+             */
+            totalEstimateUsd: number;
+            /** Averageestimateusd */
+            averageEstimateUsd?: number | null;
+            /**
+             * Observedcount
+             * @default 0
+             */
+            observedCount: number;
+        };
+        /**
+         * ExecutionMetricsDurationModel
+         * @description Run-duration aggregates for the operational metrics dashboard.
+         */
+        ExecutionMetricsDurationModel: {
+            /** Averageseconds */
+            averageSeconds?: number | null;
+            /** Medianseconds */
+            medianSeconds?: number | null;
+            /** Minseconds */
+            minSeconds?: number | null;
+            /** Maxseconds */
+            maxSeconds?: number | null;
+            /**
+             * Observedcount
+             * @default 0
+             */
+            observedCount: number;
+        };
+        /**
+         * ExecutionMetricsResponse
+         * @description Operational run metrics for Mission Control dashboards.
+         */
+        ExecutionMetricsResponse: {
+            /**
+             * Totalruns
+             * @default 0
+             */
+            totalRuns: number;
+            /**
+             * Completedruns
+             * @default 0
+             */
+            completedRuns: number;
+            /**
+             * Failedruns
+             * @default 0
+             */
+            failedRuns: number;
+            /**
+             * Canceledruns
+             * @default 0
+             */
+            canceledRuns: number;
+            /**
+             * Terminalruns
+             * @default 0
+             */
+            terminalRuns: number;
+            /** Successrate */
+            successRate?: number | null;
+            duration?: components["schemas"]["ExecutionMetricsDurationModel"];
+            cost?: components["schemas"]["ExecutionMetricsCostModel"];
+            /**
+             * Samplesize
+             * @default 0
+             */
+            sampleSize: number;
+            /**
+             * Countmode
+             * @default exact
+             * @enum {string}
+             */
+            countMode: "exact" | "estimated_or_unknown";
+            /**
+             * Refreshedat
+             * Format: date-time
+             */
+            refreshedAt: string;
+        };
+        /**
          * ExecutionModel
          * @description Materialized execution view returned by lifecycle APIs.
          */
@@ -4352,6 +4604,20 @@ export interface components {
             /** Relatedruns */
             relatedRuns?: components["schemas"]["ExecutionRelatedRunModel"][];
             targetDiagnostics?: components["schemas"]["ExecutionTargetDiagnosticsModel"] | null;
+            /** Runmetrics */
+            runMetrics?: {
+                [key: string]: unknown;
+            } | null;
+            /** Improvementsignals */
+            improvementSignals?: {
+                [key: string]: unknown;
+            }[];
+            /** Recommendednextaction */
+            recommendedNextAction?: string | null;
+            /** Logcontext */
+            logContext?: {
+                [key: string]: unknown;
+            } | null;
             /** Proposalsummary */
             proposalSummary?: {
                 [key: string]: unknown;
@@ -4360,6 +4626,12 @@ export interface components {
             proposalOutcomes?: {
                 [key: string]: unknown;
             }[];
+            /** Finishoutcomecode */
+            finishOutcomeCode?: string | null;
+            /** Finishsummary */
+            finishSummary?: {
+                [key: string]: unknown;
+            } | null;
             debugFields?: components["schemas"]["ExecutionDebugFieldsModel"] | null;
             /** Redirectpath */
             redirectPath?: string | null;
@@ -4571,6 +4843,16 @@ export interface components {
             relationship: string;
             /** Status */
             status?: string | null;
+            /** Targetruntime */
+            targetRuntime?: string | null;
+            /** Model */
+            model?: string | null;
+            /** Requestedmodel */
+            requestedModel?: string | null;
+            /** Resolvedmodel */
+            resolvedModel?: string | null;
+            /** Effort */
+            effort?: string | null;
             /** Createdat */
             createdAt?: string | null;
             /** Href */
@@ -4873,6 +5155,8 @@ export interface components {
             recentTags: string[];
             /** Digestpinningrecommended */
             digestPinningRecommended: boolean;
+            /** Allowedmodes */
+            allowedModes: string[];
         };
         /** ImageTargetsResponse */
         ImageTargetsResponse: {
@@ -4880,6 +5164,40 @@ export interface components {
             stack: string;
             /** Repositories */
             repositories: components["schemas"]["ImageTargetModel"][];
+        };
+        /** IndexCollectionHealthModel */
+        IndexCollectionHealthModel: {
+            /** Name */
+            name: string;
+            /** Status */
+            status: string;
+            /** Pointscount */
+            pointsCount?: number | null;
+            /** Indexedvectorscount */
+            indexedVectorsCount?: number | null;
+            /** Segmentscount */
+            segmentsCount?: number | null;
+            /** Vectorsize */
+            vectorSize?: number | null;
+            /** Vectordistance */
+            vectorDistance?: string | null;
+            /** Freshnessat */
+            freshnessAt?: string | null;
+            /** Freshnesssource */
+            freshnessSource?: string | null;
+            /** Freshnessstatus */
+            freshnessStatus: string;
+        };
+        /** IndexHealthResponse */
+        IndexHealthResponse: {
+            /** Generatedat */
+            generatedAt: string;
+            /** Totalcollections */
+            totalCollections: number;
+            /** Totalpoints */
+            totalPoints: number;
+            /** Collections */
+            collections: components["schemas"]["IndexCollectionHealthModel"][];
         };
         /**
          * IntegrationCallbackRequest
@@ -6277,6 +6595,91 @@ export interface components {
              */
             scheduledFor: string;
         };
+        /**
+         * ResourceListResponse
+         * @description Resource discovery response envelope.
+         */
+        ResourceListResponse: {
+            /** Resources */
+            resources?: components["schemas"]["ResourceMetadata"][];
+        };
+        /**
+         * ResourceMetadata
+         * @description Resource definition payload returned by discovery endpoint.
+         */
+        ResourceMetadata: {
+            /** Uri */
+            uri: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+            /** Mimetype */
+            mimeType?: string | null;
+        };
+        /**
+         * ResponseCreateRequest
+         * @description Supported subset of OpenAI's Responses API create request.
+         */
+        ResponseCreateRequest: {
+            /**
+             * Model
+             * @description The model to use. If omitted, MoonMind's default chat model is used.
+             */
+            model?: string | null;
+            /**
+             * Input
+             * @description Text input or Responses-style message input items.
+             */
+            input: string | unknown[];
+            /**
+             * Instructions
+             * @description Optional system/developer instructions prepended to the input.
+             */
+            instructions?: string | null;
+            /**
+             * Temperature
+             * @description Sampling temperature, between 0 and 2.
+             * @default 1
+             */
+            temperature: number | null;
+            /**
+             * Max Output Tokens
+             * @description Maximum output tokens to generate.
+             */
+            max_output_tokens?: number | null;
+            /**
+             * Stream
+             * @description Streaming is not supported by MoonMind's compatibility route.
+             * @default false
+             */
+            stream: boolean;
+            /**
+             * Tools
+             * @description Tool use is not supported by MoonMind's compatibility route.
+             */
+            tools?: unknown[] | null;
+            /**
+             * Conversation
+             * @description Conversation state is not supported by MoonMind's compatibility route.
+             */
+            conversation?: unknown | null;
+            /**
+             * Previous Response Id
+             * @description Previous response state is not supported by MoonMind's compatibility route.
+             */
+            previous_response_id?: string | null;
+            /**
+             * Background
+             * @description Background responses are not supported by MoonMind's compatibility route.
+             * @default false
+             */
+            background: boolean;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
+        };
         /** ResumeExecutionRefModel */
         ResumeExecutionRefModel: {
             /** Workflowid */
@@ -6292,6 +6695,8 @@ export interface components {
             query: string;
             /** Top K */
             top_k?: number | null;
+            /** Collections */
+            collections?: string[];
             /** Filters */
             filters?: {
                 [key: string]: string;
@@ -6305,6 +6710,8 @@ export interface components {
             budgets?: {
                 [key: string]: number;
             };
+            /** Planning Ref */
+            planning_ref?: string | null;
         };
         /**
          * RetryWorkflowMode
@@ -6340,17 +6747,6 @@ export interface components {
             repository: string;
             /** Reference */
             reference: string;
-        };
-        /** RunningImageModel */
-        RunningImageModel: {
-            /** Service */
-            service: string;
-            /** Image */
-            image: string;
-            /** Imageid */
-            imageId?: string | null;
-            /** Digest */
-            digest?: string | null;
         };
         /**
          * ScheduleCreatedResponse
@@ -7888,6 +8284,10 @@ export interface components {
             completion_tokens?: number | null;
             /** Total Tokens */
             total_tokens?: number | null;
+            /** Cost Estimate Usd */
+            cost_estimate_usd?: number | null;
+            /** Pricing Source */
+            pricing_source?: string | null;
         };
         /** UserCreate */
         UserCreate: {
@@ -8368,6 +8768,39 @@ export interface operations {
             };
         };
     };
+    create_response_v1_responses_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResponseCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     models_v1_models__get: {
         parameters: {
             query?: never;
@@ -8642,8 +9075,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        [key: string]: string;
+                        [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    index_health_retrieval_index_health_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IndexHealthResponse"];
                 };
             };
         };
@@ -8683,6 +9136,66 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    handle_streamable_http_get_mcp_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    handle_streamable_http_post_mcp_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    list_resources_mcp_resources_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceListResponse"];
                 };
             };
         };
@@ -11037,6 +11550,64 @@ export interface operations {
             };
         };
     };
+    get_execution_metrics_api_executions_metrics_get: {
+        parameters: {
+            query?: {
+                workflowType?: string | null;
+                ownerType?: string | null;
+                state?: string | null;
+                stateIn?: string | null;
+                stateNotIn?: string | null;
+                ownerId?: string | null;
+                entry?: string | null;
+                repo?: string | null;
+                repoExact?: string | null;
+                repoIn?: string | null;
+                repoNotIn?: string | null;
+                integration?: string | null;
+                targetRuntime?: string | null;
+                targetRuntimeIn?: string | null;
+                targetRuntimeNotIn?: string | null;
+                targetSkillIn?: string | null;
+                targetSkillNotIn?: string | null;
+                scheduledFrom?: string | null;
+                scheduledTo?: string | null;
+                scheduledBlank?: string | null;
+                createdFrom?: string | null;
+                createdTo?: string | null;
+                finishedFrom?: string | null;
+                finishedTo?: string | null;
+                finishedBlank?: string | null;
+                scope?: string | null;
+                source?: string | null;
+                sampleSize?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionMetricsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_execution_facets_api_executions_facets_get: {
         parameters: {
             query: {
@@ -11567,6 +12138,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    describe_integration_callbacks_api_integrations_callbacks_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };
@@ -12739,6 +13332,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    index_health_route_index_health_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
                 };
             };
         };

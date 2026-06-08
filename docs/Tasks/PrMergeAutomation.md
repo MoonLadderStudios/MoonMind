@@ -96,13 +96,13 @@ MoonMind's lifecycle model already expects `MoonMind.Run` to mix direct activiti
 
 ### 6.3 Why the resolver itself is a child `MoonMind.Run`
 
-The current MoonMind execution model dispatches `tool.type = "skill"` via activity execution inside `MoonMind.Run`, while `agent_runtime` work dispatches through `MoonMind.AgentRun` child workflows. `pr-resolver` is currently a **skill**, not a standalone workflow type, and it owns git/PR mutations and requires `publishMode = "none"`.
+The current MoonMind execution model dispatches plan execution through `agent_runtime` child workflows. `pr-resolver` is an agent skill selected for the resolver run, not a standalone workflow type, and it owns git/PR mutations and requires `publishMode = "none"`.
 
 Because of that, `MoonMind.MergeAutomation` SHOULD start a child **`MoonMind.Run`** for the resolver, rather than trying to execute the resolver skill directly inside the gate workflow. This reuses:
 
 - existing workspace/runtime setup,
 - artifact publishing,
-- skill execution routing,
+- agent-runtime routing,
 - logging and run summaries,
 - existing `pr-resolver` contract.
 

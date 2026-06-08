@@ -2,7 +2,7 @@
 
 > Tracking the major milestones remaining to fully deliver on the README promise.
 >
-> Last updated: 2026-03-21
+> Last updated: 2026-06-03
 
 ---
 
@@ -62,7 +62,7 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - [x] **2.1** Jules end-to-end external event workflow — Spec 048/066, adapter exists, event wiring complete
 - [x] **2.2** Remove External Runs tab — External runs integrated into main dashboard
 - [ ] **2.3** Codex Cloud integration adapter — No adapter yet for the hosted Codex product
-- [ ] **2.4** Generic external-agent adapter pattern — Designed in `ExternalAgentIntegrationSystem.md`, not generalized in code
+- [x] **2.4** Generic external-agent adapter pattern — MM-741; shared adapter contract, registry-based provider selection, polling and streaming-gateway execution styles
 
 ---
 
@@ -76,14 +76,17 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - Manifest-based task submission (`manifest.schema.json`, `moonmind/manifest/`)
 - Task proposal queue for automated step generation
 - `proposal_generate` activity implemented
+- Task proposal admin/recovery UI surfacing and review actions — MM-743
+- Context clearing between ordered Codex managed-session steps via the
+  task-scoped AgentSession reset boundary (MM-745)
 
 ### Remaining tasks
-- [ ] **3.1** Fix task proposal system end-to-end — `proposal_generate` activity exists but proposals not surfaced reliably in UI
+- [ ] **3.1** Fix task proposal system end-to-end — tracker-native GitHub/Jira proposal delivery and review remains the desired primary workflow; `/proposals` is admin/recovery coverage only
 - [ ] **3.2** Automatic context injection per step — Context pack exists (`rag/context_pack.py`), not wired into step execution
-- [ ] **3.3** Context clearing between steps — No implementation; promised in README
+- [x] **3.3** Context clearing between steps — Task-scoped Codex managed sessions clear to a new epoch before reuse by a later ordered step (MM-745)
 - [ ] **3.4** Multi-step workflow visualization in Mission Control — Dashboard shows tasks but not step DAGs
-- [ ] **3.5** Preset-driven scheduling (auto-sequence from goal) — Presets exist but goal-to-plan decomposition is manual
-- [ ] **3.6** Overhaul and streamline schedules UI — Current schedules interface needs UX improvement
+- [x] **3.5** Preset-driven scheduling (auto-sequence from goal) — Goal-only task submissions are deterministically mapped to seeded presets before backend expansion (MM-747)
+- [x] **3.6** Overhaul and streamline schedules UI — Current schedules interface needs UX improvement
 
 ---
 
@@ -98,14 +101,15 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - Recurring task schedules (spec 049)
 - TRY_CANCEL activity cancellation — fast cancellation without waiting for activity completion
 - Force-terminate path for stuck tasks
+- Runtime-specific agent-run resiliency policies, generic no-progress detection, intervention escalation, and completion webhooks (MM-749)
 
 ### Remaining tasks
 - [x] **4.1** Fast cancellation via `TRY_CANCEL` — All `execute_activity` calls now use `ActivityCancellationType.TRY_CANCEL`
 - [x] **4.2** Force-terminate path for stuck tasks — Shipped in `9050b4d9`
-- [ ] **4.3** Automatic stuck-detection for agent runs — Spec 039 (`worker-self-heal`), partial design
-- [ ] **4.4** Smart retry policies per runtime — Temporal retries exist but not tuned per agent type
-- [ ] **4.5** Intervention request signaling (agent asks for human help) — README promises "monitor intervention requests"
-- [ ] **4.6** Notification system (email/webhook on completion) — No notification channel for fire-and-forget results
+- [x] **4.3** Automatic stuck-detection for agent runs — AgentRun detects repeated no-progress status observations and escalates to `intervention_requested`
+- [x] **4.4** Smart retry policies per runtime — AgentRun records runtime-specific resiliency policy metadata for managed and external runtimes
+- [x] **4.5** Intervention request signaling (agent asks for human help) — Non-auto-answer feedback requests signal `intervention_requested` to the parent workflow
+- [x] **4.6** Notification system (email/webhook on completion) — `execution.notify_completion` emits opt-in terminal-result webhooks via `MOONMIND_EXECUTION_NOTIFICATIONS_*`
 
 ---
 
@@ -124,15 +128,16 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - Context pack primitives (`rag/context_pack.py`)
 - RAG retrieval CLI (`moonmind rag search`)
 - RAG overlay and guardrails
+- Index health monitoring for Mission Control — indexed collections, document counts, and freshness (MM-758)
 - RAG doc ↔ spec consolidation completed (see `docs/MoonMindRoadmap.md`)
 
 ### Remaining tasks
 - [ ] **5.1** End-to-end manifest ingest testing — Manifest pipeline built but not fully tested against live data sources
-- [ ] **5.2** RAG retrieval quality validation — Evaluation framework exists (`manifest/evaluation.py`) but no golden datasets or baseline metrics established
+- [x] **5.2** RAG retrieval quality validation — Golden smoke dataset and baseline `hitRate@10` / `ndcg@10` thresholds established for `manifest/evaluation.py`
 - [ ] **5.3** Context pack assembly wired into agent runs — Primitives exist; not integrated into Temporal activity execution
-- [ ] **5.4** Index health monitoring — No dashboard view of indexed collections, document counts, or freshness
+- [x] **5.4** Index health monitoring — Mission Control shows indexed collections, document counts, and freshness
 - [ ] **5.5** Incremental re-indexing — Full reindex only; no delta/incremental update path
-- [ ] **5.6** Multi-collection retrieval — Single-collection queries; no cross-collection or federated search
+- [x] **5.6** Multi-collection retrieval — Federated retrieval supports configured and request-selected collection sets
 
 ---
 
@@ -142,14 +147,25 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 
 ### What's shipped
 - Memory architecture design doc (`docs/Memory/MemoryArchitecture.md` — "Desired State")
+- MM-761 memory foundation contracts and fail-open services:
+  - runtime controls for `MEMORY_ENABLED`, `MEMORY_PLANNING`, `MEMORY_HISTORY`, `MEMORY_LONG_TERM`, `MEMORY_FAIL_OPEN`, and `MEMORY_CONTEXT_BUDGET_TOKENS`
+  - Plane B run digests and error-signature/fix-pattern procedural memory models
+  - Plane C Mem0-compatible long-term memory adapter boundary with approved-memory retrieval
+  - Plane A Beads-compatible planning adapter boundary
+  - provenance-carrying, token-budgeted context-pack assembly
+- Fix Patterns / Error Signatures procedural memory primitive
+  (`moonmind/memory/procedural.py`) with compact evidence-backed JSONL
+  storage and prepared-context projection
+- Planning Memory (Beads / Plane A) runtime adapter with optional context-pack prefetch
+- **MM-762 / 6.1** Run Digests (Plane B — task history summaries) — terminal execution summaries are derived from execution records and indexed as retrieval memory
 
 ### Remaining tasks
-- [ ] **6.1** Run Digests (Plane B — task history summaries) — Architecture defined, no implementation
-- [ ] **6.2** Fix Patterns / Error Signatures (procedural memory) — Architecture defined, no implementation
-- [ ] **6.3** Long-Term Memory integration (Mem0 / Plane C) — Architecture defined, no integration
-- [ ] **6.4** Planning Memory (Beads / Plane A) — Architecture defined, no integration
-- [ ] **6.5** Token budgeting & provenance tracking — Designed in memory arch, not implemented
-- [ ] **6.6** Memory feature flags (`MEMORY_ENABLED`, etc.) — Defined in spec, not in codebase
+- [x] **6.1** Run Digests (Plane B — task history summaries) — MM-761 foundation implemented
+- [x] **6.2** Fix Patterns / Error Signatures (procedural memory) — MM-761 foundation implemented
+- [x] **6.3** Long-Term Memory integration (Mem0 / Plane C) — MM-761 adapter boundary implemented
+- [x] **6.4** Planning Memory (Beads / Plane A) — Runtime adapter, optional context-pack prefetch, and MM-761 adapter boundary implemented
+- [x] **6.5** Token budgeting & provenance tracking — MM-761 context-pack implementation
+- [x] **6.6** Memory feature flags (`MEMORY_ENABLED`, etc.) — MM-761 runtime settings implemented
 
 ---
 
@@ -166,15 +182,16 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - Task detail fields: Runtime, Model, Effort
 - Fast cancellation UX (TRY_CANCEL + force-terminate)
 - External runs integrated into main task dashboard
+- Intervention requests surface as the `intervention_requested` execution state in the task dashboard and live status stream
 
 ### Remaining tasks
 - [ ] **7.1** Migrate settings page to Mission Control — Settings currently in separate profile page, should be unified
 - [ ] **7.2** Artifact browsing UI (files/logs/patches) — API exists (`temporal_artifacts.py`), dashboard integration partial
-- [ ] **7.3** Intervention request monitoring — Not implemented
-- [ ] **7.4** Execution history / audit trail view — Spec 067 (`run-history-rerun`), API exists, UI incomplete
+- [x] **7.3** Intervention request monitoring — Agent requests for human help surface through `intervention_requested` run status monitoring
+- [x] **7.4** Execution history / audit trail view — Spec 067 (`run-history-rerun`), `/workflows/{workflowId}/runs` now exposes the Mission Control execution history/audit view (MM-772)
 - [ ] **7.5** Side-by-side comparison view — README promises "run the same task with different models and runtimes to compare results"
 - [ ] **7.6** Multi-step / step DAG visualization — Steps are tracked but no graphical visualization
-- [ ] **7.7** Worker fleet health dashboard — No per-worker health view
+- [x] **7.7** Worker fleet health dashboard — Per-worker Codex shard health view in Settings Operations (MM-775)
 
 ---
 
@@ -183,15 +200,17 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 **README claim:** *"Connect any agent through MCP or standard API endpoints."*
 
 ### What's shipped
-- MCP server endpoint (`/context` — `context_protocol.py`)
-- MCP tools wrapper (`mcp_tools.py`)
+- MCP Streamable HTTP endpoint (`/mcp` — `mcp_tools.py`, MM-777)
+- Legacy context completion endpoint (`/context` — `context_protocol.py`)
+- MCP resource and tools wrapper (`mcp_tools.py`)
+- MCP JSON helper routes (`/mcp/tools`, `/mcp/tools/call`)
 - OpenAI-compatible chat API (`chat.py`)
-- Operator doc [`docs/ModelContextProtocol.md`](../ModelContextProtocol.md) (context endpoint + `/mcp` HTTP tools; supersedes removed `CodexMcpToolsAdapter.md`)
+- Operator doc [`docs/ExternalAgents/ModelContextProtocol.md`](ExternalAgents/ModelContextProtocol.md) (`/mcp` Streamable HTTP endpoint, legacy `/context`, and JSON helper routes; supersedes removed `CodexMcpToolsAdapter.md`)
 
 ### Remaining tasks
-- [ ] **8.1** MCP Streamable HTTP Transport (2025 spec) — Current `/context` is REST-style; modern MCP uses streamable HTTP
-- [ ] **8.2** MCP resource & tool discovery — Clients can't discover what MoonMind offers via MCP
-- [ ] **8.3** Webhook / callback API for external agents — Jules external events started, no generic webhook receiver
+- [x] **8.1** MCP Streamable HTTP Transport (2025 spec) — `/mcp` accepts JSON-RPC over the 2025 Streamable HTTP transport shape (MM-777)
+- [x] **8.2** MCP resource & tool discovery — Clients can list MoonMind MCP resources and tools
+- [x] **8.3** Webhook / callback API for external agents — Generic integration callback receiver, correlation lookup, callback URL provisioning, and polling fallback are available for external agents that advertise callback support (MM-779)
 - [ ] **8.4** OpenAI Responses API compatibility — Only Chat Completions format supported
 
 ---
@@ -204,16 +223,21 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - Docker-socket-proxy (`tecnativa/docker-socket-proxy`) with restricted API endpoints
 - Agent workspace volume isolation
 - Auth-volume separation per runtime
+- Per-runtime managed-session Docker capability policy (MM-784): explicit
+  `no-docker`/disabled runtime policy cannot inherit unrestricted Docker proxy
+  access, and unrestricted workflow mode uses the per-session sidecar path
+  instead of passing proxy authority into the agent
+- File allowlist enforcement for sandbox command and patch activities (`MM-782`)
 
 ### Remaining tasks
-- [ ] **9.1** File allowlist enforcement — Promised in README, no implementation found
 - [ ] **9.2** Credential sanitization from logs — Agent rules prohibit secrets in output; no runtime log scrubber
-- [ ] **9.3** Per-runtime capability routing policy — Proxy limits Docker API endpoints, but not per-runtime policies
-- [ ] **9.4** Network egress policies for sandboxes — No outbound network restrictions on worker containers
+- [x] **9.3** Per-runtime capability routing policy — MM-784 enforces
+  managed-session Docker mode before Docker proxy exposure
+- [x] **9.4** Network egress policies for sandboxes — Sandbox worker containers use an internal restricted egress network
 
 ---
 
-## Milestone 10 — Vendor Portability & Model Flexibility 🔧
+## Milestone 10 — Vendor Portability & Model Flexibility ✅
 
 **README claim:** *"Swap between proprietary cloud models and local open-source models with a single configuration change."* / *"Multi-Agent Chaining: Break massive goals into smaller steps. Only use expensive models for steps that need them."*
 
@@ -222,12 +246,16 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - Optional vLLM compose profiles
 - Runtime selector per task submission
 - Model routing in chat endpoint
+- Per-step runtime/model/effort selection in multi-step task submissions (MM-786)
+- Compact billing-aware routing metadata on step execution context bundles (MM-786)
+- Model/runtime comparison runs linked to source executions (MM-773)
+- Artifact and memory portability provenance across model switches (MM-786)
 
 ### Remaining tasks
-- [ ] **10.1** Per-step model/runtime selection in multi-step flows — Steps don't independently select models
-- [ ] **10.2** Cost tracking / billing-aware routing — No cost instrumentation
-- [ ] **10.3** Model comparison mode (same task, different models) — README promises this; no implementation
-- [ ] **10.4** Artifact/memory portability across model switches — Artifacts are model-agnostic; memory doesn't track model provenance
+- [x] **10.1** Per-step model/runtime selection in multi-step flows — Steps can independently select runtime, model, and effort
+- [x] **10.2** Cost tracking / billing-aware routing — MM-788 adds token cost estimates, cost telemetry, profile pricing-aware selection, and deterministic routing metadata
+- [x] **10.3** Model comparison mode (same task, different models) — Comparison runs preserve source-run lineage and runtime/model metadata
+- [x] **10.4** Artifact/memory portability across model switches — Artifacts and memory keep model-agnostic metadata while execution context records runtime/model provenance beside their refs
 
 ---
 
@@ -239,13 +267,14 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - Temporal visibility / execution queries (spec 064)
 - Structured workflow run states in Postgres
 - Task finish summary system (spec 079)
+- Deterministic improvement signal capture for retry, loop/no-progress, and flaky-test run-quality proposals (MM-793)
 
 ### Remaining tasks
-- [ ] **11.1** Structured outcome summaries on every run — Spec 079 started; not fully wired
-- [ ] **11.2** Improvement signal capture (retries, loops, flaky tests) — Constitution X mandates this
+- [x] **11.1** Structured outcome summaries on every run — MM-792 wires the finish summary artifact into indexed execution projections
+- [x] **11.2** Improvement signal capture (retries, loops, flaky tests) — Constitution X mandates this
 - [ ] **11.3** Reviewable improvement backlog / proposals queue — Task proposals exist; not fed by telemetry
 - [ ] **11.4** Metrics / dashboards (run duration, success rate, cost) — No operational metrics endpoint
-- [ ] **11.5** Structured logging enrichment (run IDs, worker IDs) — structlog in use; inconsistent enrichment
+- [x] **11.5** Structured logging enrichment (run IDs, worker IDs) — MM-796 adds shared structlog JSON enrichment for run and worker correlation
 
 ---
 
@@ -255,9 +284,9 @@ These are technical debt items that don't map to README claims but improve code 
 
 ### Remaining tasks
 - [x] **H.1** Complete legacy system removal — Code removal is complete (migration `c1d2e3f4a5b6`); requirements and guard tests in `specs/087-orchestrator-removal/` and `tests/unit/orchestrator_removal/`. Remaining documentation updates are tracked in `docs/MoonMindRoadmap.md`.
-- [ ] **H.2** Spec deduplication — Merge duplicate specs identified in `docs/MoonMindRoadmap.md`: Worker Pause (038/040), Claude gating (044/046), Manifest Phase 0 (032/034), Jules events (048 stub → delete), Task Presets (026/028)
-- [ ] **H.3** Legacy skill dispatch cleanup — Remove dead `tool.type == "skill"` branch in `run.py`; all current plan generators emit `agent_runtime` nodes. See `docs/MoonMindRoadmap.md`.
-- [ ] **H.4** Delete legacy docs identified in `docs/LegacyDocsReview.md` — 6 docs flagged for deletion (`CodexCliWorkers.md`, `GeminiCliWorkers.md`, `SpecKitAutomation.md`, etc.)
+- [x] **H.2** Spec deduplication — Duplicate spec directories were removed with the retired specs tree; canonical desired-state docs remain for Worker Pause ([docs/Temporal/WorkerPauseSystem.md](Temporal/WorkerPauseSystem.md)), Claude gating ([docs/ManagedAgents/ClaudeCodeManagedSessions.md](ManagedAgents/ClaudeCodeManagedSessions.md)), Manifest Phase 0 ([docs/Rag/ManifestIngestDesign.md](Rag/ManifestIngestDesign.md) and [docs/Rag/LlamaIndexManifestSystem.md](Rag/LlamaIndexManifestSystem.md)), Jules events ([docs/ExternalAgents/JulesTemporalExternalEventContract.md](ExternalAgents/JulesTemporalExternalEventContract.md)), and Task Presets ([docs/Tasks/TaskPresetsSystem.md](Tasks/TaskPresetsSystem.md)).
+- [x] **H.3** Legacy skill dispatch cleanup — Removed the dead `tool.type == "skill"` dispatch branch from `MoonMind.Run`; current plan execution accepts `agent_runtime` nodes.
+- [x] **H.4** Delete legacy docs identified by the legacy docs review (MM-800) — Removed the legacy docs flagged for deletion (`CodexCliWorkers.md`, `GeminiCliWorkers.md`, `SpecKitAutomation.md`, etc.).
 
 ---
 
@@ -278,7 +307,7 @@ The milestones below are ordered by **impact on delivering the README promise** 
 | 🟡 P2 | **8 — Universal Integration (MCP)** | 🔧 Partial | 4 items |
 | 🟢 P3 | **10 — Vendor Portability & Model Flexibility** | 🔧 Partial | 4 items |
 | 🟢 P3 | **1 — Managed Agent Runtimes** | ✅ Shipped | 2 items |
-| 🟢 P3 | **H — Housekeeping / Cleanup** | 🔧 Partial | 3 items |
+| 🟢 P3 | **H — Housekeeping / Cleanup** | ✅ Shipped | 0 items |
 
 ---
 
@@ -290,5 +319,3 @@ The milestones below are ordered by **impact on delivering the README promise** 
 | `CancellationAnalysis.md` | **Delete** | Recommendations shipped (TRY_CANCEL in all activities, force-terminate path). Analysis preserved in Milestone 4 entries. |
 | `OrchestratorRemovalPlan.md` | **Deleted** | Superseded by spec 087, in-repo removal work, and `016-SingleSubstrateMigration.md`. |
 | `RagDocUpdates.md` | **Delete** | Marked "Status: Complete". Spec merge plan fully executed (spec 088 shipped). |
-| `SpecMergeReview.md` | **Keep until H.2 complete** | Actionable merge candidates not yet resolved. Tracked as H.2 in Housekeeping. |
-| `skill-system-alignment.md` | **Keep until H.3 complete** | Legacy skill branch still present in `run.py`. Tracked as H.3 in Housekeeping. |

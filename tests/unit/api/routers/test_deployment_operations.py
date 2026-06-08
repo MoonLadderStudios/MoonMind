@@ -419,9 +419,18 @@ def test_current_deployment_state_returns_typed_shape(
     payload = response.json()
     assert payload["stack"] == "moonmind"
     assert payload["projectName"] == "moonmind"
-    assert payload["configuredImage"].startswith("ghcr.io/moonladderstudios/moonmind:")
-    assert payload["services"][0]["name"] == "api"
-    assert payload["services"][0]["state"] == "unknown"
+    assert "buildId" in payload
+    current_image = payload["currentImage"]
+    assert current_image["evidence"] in {
+        "desired_state",
+        "environment",
+        "policy",
+        "unavailable",
+    }
+    assert payload["policy"]["repository"].startswith(
+        "ghcr.io/moonladderstudios/moonmind"
+    )
+    assert "latestAction" in payload
 
 
 def test_deployment_state_returns_recent_failure_action_with_rollback_eligibility(

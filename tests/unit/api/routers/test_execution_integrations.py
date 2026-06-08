@@ -107,6 +107,7 @@ async def _create_monitored_execution(
     client: AsyncClient,
     *,
     execution_suffix: str = "default",
+    integration_name: str = "jules",
 ) -> tuple[str, str]:
     create_response = await client.post(
         "/api/executions",
@@ -122,7 +123,7 @@ async def _create_monitored_execution(
     configure_response = await client.post(
         f"/api/executions/{workflow_id}/integration",
         json={
-            "integrationName": "jules",
+            "integrationName": integration_name,
             "externalOperationId": f"task-{execution_suffix}",
             "normalizedStatus": "running",
             "providerStatus": "running",
@@ -143,6 +144,22 @@ def _shared_client(shared_user_id):
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_callback_discovery_describes_generic_contract():
+    shared_user_id = uuid4()
+
+    async with _shared_client(shared_user_id) as client:
+        response = await client.get("/api/integrations/callbacks")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert (
+        payload["endpointTemplate"]
+        == "/api/integrations/{integrationName}/callbacks/{callbackCorrelationKey}"
+    )
+    assert payload["payloadSchema"] == "IntegrationCallbackRequest"
+    assert payload["defaults"]["maxPayloadBytes"] > 0
 
 @pytest.mark.asyncio
 async def test_callback_rejects_missing_configured_token(monkeypatch):
@@ -185,6 +202,42 @@ async def test_callback_accepts_matching_bearer_token(monkeypatch):
 
     assert response.status_code == 202
     assert response.json()["integration"]["normalizedStatus"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_generic_callback_profile_accepts_matching_bearer_token(monkeypatch):
+    shared_user_id = uuid4()
+    monkeypatch.setattr(settings.integration_callbacks, "callback_token", "generic-secret")
+
+    async with _shared_client(shared_user_id) as client:
+        _workflow_id, callback_key = await _create_monitored_execution(
+            client,
+            execution_suffix=f"generic-auth-{uuid4().hex[:8]}",
+            integration_name="codex_cloud",
+        )
+        unauthorized = await client.post(
+            f"/api/integrations/codex_cloud/callbacks/{callback_key}",
+            json={
+                "eventType": "completed",
+                "normalizedStatus": "completed",
+            },
+        )
+        accepted = await client.post(
+            f"/api/integrations/codex_cloud/callbacks/{callback_key}",
+            headers={"Authorization": "Bearer generic-secret"},
+            json={
+                "eventType": "completed",
+                "providerEventId": "evt-generic",
+                "normalizedStatus": "completed",
+            },
+        )
+
+    assert unauthorized.status_code == 401
+    assert unauthorized.json()["detail"]["code"] == "integration_callback_unauthorized"
+    assert accepted.status_code == 202
+    assert accepted.json()["integration"]["integrationName"] == "codex_cloud"
+    assert accepted.json()["integration"]["normalizedStatus"] == "completed"
+
 
 @pytest.mark.asyncio
 async def test_callback_rejects_payload_over_limit(monkeypatch):

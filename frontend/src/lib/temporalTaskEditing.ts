@@ -3,7 +3,8 @@ export type TaskSubmitPageIntent =
   | 'create'
   | 'edit'
   | 'rerun'
-  | 'edit-for-rerun';
+  | 'edit-for-rerun'
+  | 'comparison';
 
 export type TaskSubmitPageModeResolution = {
   mode: TaskSubmitPageMode;
@@ -112,6 +113,14 @@ export type TemporalSubmissionDraft = {
     id: string;
     title: string;
     instructions: string;
+    runtime?: {
+      mode?: string | null;
+      model?: string | null;
+      effort?: string | null;
+      profileId?: string | null;
+      providerProfile?: string | null;
+      executionProfileRef?: string | null;
+    };
     stepType: TemporalSubmissionDraftStepType;
     tool?: TemporalSubmissionDraftToolPayload;
     skill?: TemporalSubmissionDraftSkillPayload;
@@ -146,6 +155,7 @@ export type TemporalTaskEditUpdateName = 'UpdateInputs' | 'RequestRerun';
 
 export type TemporalTaskEditingTelemetryEvent =
   | 'detail_edit_click'
+  | 'detail_compare_click'
   | 'detail_rerun_click'
   | 'draft_reconstruction_success'
   | 'draft_reconstruction_failure'
@@ -274,6 +284,10 @@ export function taskEditForRerunHref(workflowId: string): string {
   return `${taskCreateHref()}?rerunExecutionId=${encodeURIComponent(workflowId)}&mode=edit`;
 }
 
+export function taskCompareHref(workflowId: string): string {
+  return `${taskCreateHref()}?rerunExecutionId=${encodeURIComponent(workflowId)}&mode=compare`;
+}
+
 export function resolveTaskSubmitPageMode(
   search: string | URLSearchParams,
 ): TaskSubmitPageModeResolution {
@@ -281,10 +295,18 @@ export function resolveTaskSubmitPageMode(
     typeof search === 'string' ? new URLSearchParams(search) : search;
   const rerunExecutionId = String(params.get('rerunExecutionId') || '').trim();
   if (rerunExecutionId) {
-    if (String(params.get('mode') || '').trim().toLowerCase() === 'edit') {
+    const mode = String(params.get('mode') || '').trim().toLowerCase();
+    if (mode === 'edit') {
       return {
         mode: 'rerun',
         intent: 'edit-for-rerun',
+        executionId: rerunExecutionId,
+      };
+    }
+    if (mode === 'compare') {
+      return {
+        mode: 'rerun',
+        intent: 'comparison',
         executionId: rerunExecutionId,
       };
     }
@@ -505,6 +527,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     step.runtimeCommand,
     step.runtime_command,
   );
+  const runtime = firstObjectValue(step.runtime);
   const inputAttachments = normalizeAttachmentRefs(step.inputAttachments);
   const templateAttachments = attachmentRefsValue(
     step.templateAttachments,
@@ -517,6 +540,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     id,
     title: stringValue(step.title),
     instructions,
+    ...(Object.keys(runtime).length > 0 ? { runtime } : {}),
     stepType,
     ...(Object.keys(tool).length > 0 ? { tool } : {}),
     ...(Object.keys(skill).length > 0 ? { skill } : {}),
@@ -527,6 +551,23 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
       tool.requiredCapabilities,
       skill.requiredCapabilities,
     ),
+    ...(Object.keys(runtime).length > 0
+      ? {
+          runtime: {
+            ...(stringValue(runtime.mode, runtime.targetRuntime)
+              ? { mode: stringValue(runtime.mode, runtime.targetRuntime) }
+              : {}),
+            ...(stringValue(runtime.model) ? { model: stringValue(runtime.model) } : {}),
+            ...(stringValue(runtime.effort) ? { effort: stringValue(runtime.effort) } : {}),
+            ...(stringValue(runtime.profileId)
+              ? { profileId: stringValue(runtime.profileId) }
+              : {}),
+            ...(stringValue(runtime.providerProfile)
+              ? { providerProfile: stringValue(runtime.providerProfile) }
+              : {}),
+          },
+        }
+      : {}),
     templateStepId,
     templateInstructions: stringValue(
       step.templateInstructions,
@@ -544,10 +585,12 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     result.id ||
     result.title ||
     result.instructions ||
+    Object.keys(runtime).length > 0 ||
     result.stepType !== 'skill' ||
     result.skillId ||
     Object.keys(result.skillArgs).length > 0 ||
     result.skillRequiredCapabilities.length > 0 ||
+    Boolean(result.runtime && Object.keys(result.runtime).length > 0) ||
     result.templateStepId ||
     result.templateInstructions ||
     inputAttachments.length > 0 ||

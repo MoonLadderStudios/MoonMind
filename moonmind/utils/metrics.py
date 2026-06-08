@@ -117,7 +117,7 @@ class _MetricsEmitter:
             )
 
     def increment(
-        self, metric: str, *, value: int = 1, tags: Optional[Mapping[str, Any]] = None
+        self, metric: str, *, value: float = 1, tags: Optional[Mapping[str, Any]] = None
     ) -> None:
         if not self.enabled:
             return

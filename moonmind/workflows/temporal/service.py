@@ -89,6 +89,57 @@ FULL_RERUN_RECOVERY_CARRYOVER_PARAM_KEYS = frozenset(
         "completed_steps",
     }
 )
+
+
+def _mapping_payload(value: object) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _truthy_enabled(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    if isinstance(value, (int, float)):
+        return value != 0
+    return False
+
+
+def _merge_automation_publish_selected(parameters: Mapping[str, Any]) -> bool:
+    task_payload = _mapping_payload(parameters.get("task"))
+    task_publish = _mapping_payload(task_payload.get("publish"))
+    publish_payload = _mapping_payload(parameters.get("publish"))
+
+    publish_mode = str(
+        parameters.get("publishMode")
+        or parameters.get("publish_mode")
+        or task_publish.get("mode")
+        or publish_payload.get("mode")
+        or ""
+    ).strip().lower()
+    if publish_mode != "pr":
+        return False
+
+    candidates = (
+        publish_payload.get("mergeAutomation")
+        or publish_payload.get("merge_automation"),
+        task_payload.get("mergeAutomation") or task_payload.get("merge_automation"),
+        task_publish.get("mergeAutomation") or task_publish.get("merge_automation"),
+        parameters.get("mergeAutomation") or parameters.get("merge_automation"),
+    )
+    return any(
+        isinstance(candidate, Mapping)
+        and _truthy_enabled(candidate.get("enabled"))
+        for candidate in candidates
+    )
+
+
+def _workflow_start_task_queue(parameters: Mapping[str, Any]) -> str | None:
+    if not _merge_automation_publish_selected(parameters):
+        return None
+    return settings.temporal.merge_automation_workflow_task_queue
+
+
 ALLOWED_REMEDIATION_AUTHORITY_MODES = frozenset(
     {"observe_only", "approval_gated", "admin_auto"}
 )
@@ -1106,6 +1157,7 @@ class TemporalExecutionService:
                 input_args=input_args,
                 memo=memo,
                 search_attributes=search_attributes,
+                task_queue=_workflow_start_task_queue(params),
                 start_delay=(
                     start_delay
                     if workflow_type_enum is not TemporalWorkflowType.RUN
@@ -2092,6 +2144,8 @@ class TemporalExecutionService:
         close_status: str | None = None,
         summary: str | None = None,
         error_category: str | None = None,
+        finish_outcome_code: str | None = None,
+        finish_summary: dict[str, Any] | None = None,
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         normalized_state = str(state or "").strip().lower()
         state_by_value = {item.value: item for item in MoonMindWorkflowState}
@@ -2117,6 +2171,11 @@ class TemporalExecutionService:
                 f"Execution already terminal as {record.state.value}."
             )
         if record.state in TERMINAL_STATES:
+            self._record_finish_summary(
+                record,
+                finish_outcome_code=finish_outcome_code,
+                finish_summary=finish_summary,
+            )
             if record.close_status is None:
                 self._set_state(record, target_state, close_status=target_close_status)
                 await self._sync_integration_correlation_record(record)
@@ -2126,6 +2185,11 @@ class TemporalExecutionService:
             return await self._sync_projection_best_effort(record)
 
         self._set_state(record, target_state, close_status=target_close_status)
+        self._record_finish_summary(
+            record,
+            finish_outcome_code=finish_outcome_code,
+            finish_summary=finish_summary,
+        )
         if summary:
             if target_state is MoonMindWorkflowState.FAILED:
                 category = str(error_category or "execution_error").strip()
@@ -2144,6 +2208,31 @@ class TemporalExecutionService:
         await self._session.refresh(record)
         await self._fan_out_dependency_resolution(record)
         return await self._sync_projection_best_effort(record)
+
+    def _record_finish_summary(
+        self,
+        record: TemporalExecutionCanonicalRecord,
+        *,
+        finish_outcome_code: str | None,
+        finish_summary: dict[str, Any] | None,
+    ) -> None:
+        if finish_summary is None:
+            return
+        normalized_summary = dict(finish_summary)
+        finish_outcome = normalized_summary.get(
+            "finishOutcome"
+        ) or normalized_summary.get("finish_outcome")
+        outcome_code = str(
+            finish_outcome_code
+            or (
+                finish_outcome.get("code")
+                if isinstance(finish_outcome, dict)
+                else None
+            )
+            or ""
+        ).strip()
+        record.finish_outcome_code = outcome_code or None
+        record.finish_summary_json = normalized_summary
 
     async def mark_execution_planning(
         self,
@@ -3947,6 +4036,12 @@ class TemporalExecutionService:
             "search_attributes": dict(source.search_attributes or {}),
             "memo": dict(source.memo or {}),
             "artifact_refs": list(source.artifact_refs or []),
+            "finish_outcome_code": source.finish_outcome_code,
+            "finish_summary_json": (
+                dict(source.finish_summary_json)
+                if isinstance(source.finish_summary_json, dict)
+                else None
+            ),
             "input_ref": source.input_ref,
             "plan_ref": source.plan_ref,
             "manifest_ref": source.manifest_ref,

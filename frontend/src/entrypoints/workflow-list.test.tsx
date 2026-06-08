@@ -137,6 +137,69 @@ describe('Workflows Entrypoint', () => {
     });
   });
 
+  it('does not request or render operational metrics on the workflow overview', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/executions/metrics?')) {
+        throw new Error('Workflow overview should not request execution metrics.');
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          items: [
+            {
+              taskId: 'task-123',
+              source: 'temporal',
+              title: 'Example task',
+              status: 'completed',
+              state: 'completed',
+              rawState: 'completed',
+              createdAt: '2026-03-28T00:00:00Z',
+            },
+          ],
+          count: 12,
+        }),
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    expect(screen.queryByLabelText('Operational metrics')).toBeNull();
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/metrics?'))).toBe(false);
+  });
+
+  it('surfaces intervention requests in list rows and status filters', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-needs-human',
+            source: 'temporal',
+            title: 'Needs operator input',
+            status: 'intervention_requested',
+            state: 'intervention_requested',
+            rawState: 'intervention_requested',
+            attentionRequired: true,
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Needs operator input');
+    expect(screen.getAllByText('Intervention requested').length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
+    const statusFilter = screen.getByLabelText('Status filter value') as HTMLSelectElement;
+    expect(
+      Array.from(statusFilter.options).some((option) => option.value === 'intervention_requested'),
+    ).toBe(true);
+  });
+
   it('separates desktop header sorting from filter popovers', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
@@ -625,6 +688,7 @@ describe('Workflows Entrypoint', () => {
       'executing',
       'proposals',
       'awaiting_external',
+      'intervention_requested',
       'finalizing',
       'completed',
       'failed',
@@ -639,6 +703,7 @@ describe('Workflows Entrypoint', () => {
       'executing',
       'proposals',
       'awaiting external',
+      'intervention requested',
       'finalizing',
       'completed',
       'failed',

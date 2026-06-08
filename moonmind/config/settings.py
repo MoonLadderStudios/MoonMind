@@ -76,6 +76,10 @@ class TemporalSettings(BaseSettings):
     workflow_task_queue: str = Field(
         "mm.workflow", validation_alias="TEMPORAL_WORKFLOW_TASK_QUEUE"
     )
+    merge_automation_workflow_task_queue: str = Field(
+        "mm.workflow.merge_automation",
+        validation_alias="TEMPORAL_MERGE_AUTOMATION_WORKFLOW_TASK_QUEUE",
+    )
     user_workflow_contract_mode: Literal["legacy_run", "renamed_contract"] = Field(
         "legacy_run",
         validation_alias="TEMPORAL_USER_WORKFLOW_CONTRACT_MODE",
@@ -221,6 +225,16 @@ class TemporalSettings(BaseSettings):
         normalized = str(value or "").strip()
         if not normalized:
             raise ValueError("TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE must not be blank")
+        return normalized
+
+    @field_validator("merge_automation_workflow_task_queue", mode="before")
+    @classmethod
+    def _normalize_merge_automation_workflow_task_queue(cls, value: Any) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError(
+                "TEMPORAL_MERGE_AUTOMATION_WORKFLOW_TASK_QUEUE must not be blank"
+            )
         return normalized
 
     @field_validator("user_workflow_contract_mode", mode="before")
@@ -511,6 +525,18 @@ class WorkflowSettings(BaseSettings):
         validation_alias=AliasChoices("MOONMIND_VISION_MAX_TOKENS"),
         ge=64,
         description="Maximum token budget allocated per vision prompt batch.",
+    )
+    memory_context_budget_tokens: int = Field(
+        4096,
+        validation_alias=AliasChoices(
+            "MOONMIND_MEMORY_CONTEXT_BUDGET_TOKENS",
+            "MEMORY_CONTEXT_BUDGET_TOKENS",
+        ),
+        ge=1,
+        description=(
+            "Maximum token budget for normalized memory context-pack items "
+            "assembled before runtime injection."
+        ),
     )
     vision_ocr_enabled: bool = Field(
         True,
@@ -1702,6 +1728,70 @@ class RAGSettings(BaseSettings):
 
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
+class MemorySettings(BaseSettings):
+    """Runtime controls for memory and procedural-learning surfaces."""
+
+    enabled: bool = Field(
+        True,
+        description="Master toggle for MoonMind memory context and writeback surfaces.",
+    )
+    planning: Literal["off", "beads"] = Field(
+        "off",
+        description="Planning-memory provider. Allowed values: off, beads.",
+    )
+    history: Literal["off", "digest"] = Field(
+        "off",
+        description="Task-history memory provider. Allowed values: off, digest.",
+    )
+    long_term: Literal["off", "mem0"] = Field(
+        "off",
+        description="Long-term memory provider. Allowed values: off, mem0.",
+    )
+    fail_open: bool = Field(
+        True,
+        description=(
+            "Allow chat and task execution to continue when memory providers fail."
+        ),
+    )
+    context_budget_tokens: int = Field(
+        4096,
+        gt=0,
+        description="Maximum token budget for memory context packed into a request.",
+    )
+
+    @field_validator("planning", "history", "long_term", mode="before")
+    @classmethod
+    def _normalize_provider(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
+    @property
+    def planning_enabled(self) -> bool:
+        """Return whether planning-memory retrieval should run."""
+
+        return self.enabled and self.planning != "off"
+
+    @property
+    def history_enabled(self) -> bool:
+        """Return whether task-history memory retrieval/writeback should run."""
+
+        return self.enabled and self.history != "off"
+
+    @property
+    def long_term_enabled(self) -> bool:
+        """Return whether long-term memory retrieval/writeback should run."""
+
+        return self.enabled and self.long_term != "off"
+
+    model_config = SettingsConfigDict(
+        populate_by_name=True,
+        env_prefix="MEMORY_",
+        env_file=str(ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
 class LocalDataSettings(BaseSettings):
     """Settings for local data indexing"""
 
@@ -2045,6 +2135,145 @@ class TaskProposalSettings(BaseSettings):
         extra="ignore",
     )
 
+class ExecutionNotificationSettings(BaseSettings):
+    """Operator notification settings for terminal execution outcomes."""
+
+    enabled: bool = Field(
+        False,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_ENABLED",
+        description="Emit notifications when an agent run reaches a terminal result.",
+    )
+    webhook_url: Optional[str] = Field(
+        None,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_WEBHOOK_URL",
+        description="Webhook endpoint for agent run completion notifications.",
+    )
+    authorization: Optional[str] = Field(
+        None,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_AUTHORIZATION",
+        description="Optional Authorization header for completion notification webhooks.",
+    )
+    timeout_seconds: int = Field(
+        5,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_TIMEOUT_SECONDS",
+        description="Webhook timeout in seconds.",
+        gt=0,
+    )
+    email_to: Optional[str] = Field(
+        None,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_EMAIL_TO",
+        description="Comma-separated recipient list for completion notification email.",
+    )
+    email_from: Optional[str] = Field(
+        None,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_EMAIL_FROM",
+        description="Sender address for completion notification email.",
+    )
+    smtp_host: Optional[str] = Field(
+        None,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_SMTP_HOST",
+        description="SMTP host used for completion notification email.",
+    )
+    smtp_port: int = Field(
+        587,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_SMTP_PORT",
+        description="SMTP port used for completion notification email.",
+        gt=0,
+    )
+    smtp_username: Optional[str] = Field(
+        None,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_SMTP_USERNAME",
+        description="Optional SMTP username for completion notification email.",
+    )
+    smtp_password: Optional[str] = Field(
+        None,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_SMTP_PASSWORD",
+        description="Optional SMTP password for completion notification email.",
+        exclude=True,
+    )
+    smtp_use_tls: bool = Field(
+        True,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_SMTP_USE_TLS",
+        description="Use STARTTLS for completion notification email.",
+    )
+    smtp_use_ssl: bool = Field(
+        False,
+        alias="MOONMIND_EXECUTION_NOTIFICATIONS_SMTP_USE_SSL",
+        description="Use implicit TLS for completion notification email.",
+    )
+
+    model_config = SettingsConfigDict(
+        populate_by_name=True,
+        env_prefix="",
+        env_file=str(ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+class IntegrationCallbackSettings(BaseSettings):
+    """Generic external integration callback ingress settings."""
+
+    base_url: Optional[str] = Field(
+        None,
+        alias="MOONMIND_INTEGRATION_CALLBACK_BASE_URL",
+        description=(
+            "Absolute public base URL used to build external integration callback URLs."
+        ),
+    )
+    callback_token: Optional[str] = Field(
+        None,
+        alias="MOONMIND_INTEGRATION_CALLBACK_TOKEN",
+        description="Optional shared bearer/header token for generic integration callbacks.",
+    )
+    max_payload_bytes: int = Field(
+        64 * 1024,
+        alias="MOONMIND_INTEGRATION_CALLBACK_MAX_PAYLOAD_BYTES",
+        ge=1,
+        description="Maximum callback payload size for generic integrations.",
+    )
+    rate_limit_per_window: int = Field(
+        30,
+        alias="MOONMIND_INTEGRATION_CALLBACK_RATE_LIMIT_PER_WINDOW",
+        ge=1,
+        description="Generic integration callback requests allowed per window.",
+    )
+    rate_limit_window_seconds: int = Field(
+        60,
+        alias="MOONMIND_INTEGRATION_CALLBACK_RATE_LIMIT_WINDOW_SECONDS",
+        ge=1,
+        description="Generic integration callback rate limit window in seconds.",
+    )
+    artifact_capture_enabled: bool = Field(
+        False,
+        alias="MOONMIND_INTEGRATION_CALLBACK_ARTIFACT_CAPTURE_ENABLED",
+        description="Capture raw generic integration callback payloads as artifacts.",
+    )
+
+    @field_validator("base_url", mode="after")
+    @classmethod
+    def _normalize_base_url(cls, value: Optional[str]) -> Optional[str]:
+        text = str(value or "").strip().rstrip("/")
+        if not text:
+            return None
+        parsed = urlsplit(text)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError(
+                "MOONMIND_INTEGRATION_CALLBACK_BASE_URL must be an absolute http(s) URL"
+            )
+        if parsed.query or parsed.fragment:
+            raise ValueError(
+                "MOONMIND_INTEGRATION_CALLBACK_BASE_URL must not include query or fragment"
+            )
+        return text
+
+    model_config = SettingsConfigDict(
+        populate_by_name=True,
+        env_prefix="",
+        env_file=str(ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
 class AppSettings(BaseSettings):
     """Main application settings"""
 
@@ -2058,6 +2287,7 @@ class AppSettings(BaseSettings):
     google_drive: GoogleDriveSettings = Field(default_factory=GoogleDriveSettings)
     qdrant: QdrantSettings = Field(default_factory=QdrantSettings)
     rag: RAGSettings = Field(default_factory=RAGSettings)
+    memory: MemorySettings = Field(default_factory=MemorySettings)
     atlassian: AtlassianSettings = Field(default_factory=AtlassianSettings)
     local_data: LocalDataSettings = Field(default_factory=LocalDataSettings)
     oidc: OIDCSettings = Field(default_factory=OIDCSettings)
@@ -2069,6 +2299,12 @@ class AppSettings(BaseSettings):
     workflow: AppWorkflowSettings = Field(default_factory=AppWorkflowSettings)
     feature_flags: FeatureFlagsSettings = Field(default_factory=FeatureFlagsSettings)
     task_proposals: TaskProposalSettings = Field(default_factory=TaskProposalSettings)
+    execution_notifications: ExecutionNotificationSettings = Field(
+        default_factory=ExecutionNotificationSettings
+    )
+    integration_callbacks: IntegrationCallbackSettings = Field(
+        default_factory=IntegrationCallbackSettings
+    )
     jules: JulesSettings = Field(default_factory=JulesSettings)
     worker_enable_task_proposals: Optional[bool] = Field(
         None,

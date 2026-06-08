@@ -14,6 +14,7 @@ from moonmind.core.artifacts import (
     TemporalArtifactRetentionClass,
     TemporalArtifactRedactionLevel,
     TemporalArtifactUploadMode,
+    assert_model_agnostic_metadata,
 )
 from moonmind.schemas._validation import require_non_blank
 
@@ -94,6 +95,9 @@ class CreateArtifactRequest(BaseModel):
     encryption: TemporalArtifactEncryption = Field(
         TemporalArtifactEncryption.NONE
     )
+
+    def model_post_init(self, __context: Any) -> None:
+        assert_model_agnostic_metadata(self.metadata, field_name="metadata")
 
 class CreateArtifactResponse(BaseModel):
     """Creation response payload with artifact ref and upload hints."""

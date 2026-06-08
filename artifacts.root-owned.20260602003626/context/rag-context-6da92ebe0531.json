@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. docs/Tasks/TaskStatus.md (score: 1.000, trust: canonical)\n    line 18: - it did not separate task status from step status\n2. api_service/test_ui_route.py (score: 1.000, trust: canonical)\n    line 1: from fastapi import APIRouter\n3. docs/Tasks/SkillAndPlanEvolution.md (score: 1.000, trust: canonical)\n    line 5: **Executive Summary:** The MoonMind system uses **tools** and **plans** atop Temporal to manage agent tasks. A *Tool* (`ToolDefinition`) is a named capability with input/output schemas, execution bindings, retries, etc. (not a workflow). A *Plan* is a DAG of tool invocations (Steps) with explicit dependencies and policies. This design leverages Temporal's deterministic workflows (orchestration) vs activities (side-effects). The codebase has completed a rename from `Skill*` to `Tool*` for Temporal contract objects; the term \"Skill\" is now reserved for agent instruction bundles (`.agents/skills/SKILL.md` files).\n4. docs/Tasks/SkillAndPlanContracts.md (score: 1.000, trust: canonical)\n    line 63: * `tool.type = \"skill\"` — dispatched as a Temporal Activity (`mm.tool.execute` / `mm.skill.execute`). Uses a `ToolDefinition` from the tool registry snapshot.\n5. docs/Tasks/TaskDependencies.md (score: 1.000, trust: canonical)\n    line 45: ```json\n6. api_service/main.py (score: 1.000, trust: canonical)\n    line 5: from moonmind.config.logging import configure_logging\n7. docs/Artifacts/ArtifactPresentationContract.md (score: 1.000, trust: canonical)\n    line 15: - stable conventions for `link_type`, default reads, downloads, previews, and rendering hints\n8. docs/Tasks/TaskRunsApi.md (score: 1.000, trust: canonical)\n    line 60: | `GET` | `/api/task-runs/{taskRunId}/logs/stdout` | Read the stdout log artifact |",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "docs/Tasks/TaskStatus.md",
+      "text": "line 18: - it did not separate task status from step status",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 18,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/test_ui_route.py",
+      "text": "line 1: from fastapi import APIRouter",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Tasks/SkillAndPlanEvolution.md",
+      "text": "line 5: **Executive Summary:** The MoonMind system uses **tools** and **plans** atop Temporal to manage agent tasks. A *Tool* (`ToolDefinition`) is a named capability with input/output schemas, execution bindings, retries, etc. (not a workflow). A *Plan* is a DAG of tool invocations (Steps) with explicit dependencies and policies. This design leverages Temporal's deterministic workflows (orchestration) vs activities (side-effects). The codebase has completed a rename from `Skill*` to `Tool*` for Temporal contract objects; the term \"Skill\" is now reserved for agent instruction bundles (`.agents/skills/SKILL.md` files).",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 5,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Tasks/SkillAndPlanContracts.md",
+      "text": "line 63: * `tool.type = \"skill\"` — dispatched as a Temporal Activity (`mm.tool.execute` / `mm.skill.execute`). Uses a `ToolDefinition` from the tool registry snapshot.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 63,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Tasks/TaskDependencies.md",
+      "text": "line 45: ```json",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 45,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/main.py",
+      "text": "line 5: from moonmind.config.logging import configure_logging",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 5,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Artifacts/ArtifactPresentationContract.md",
+      "text": "line 15: - stable conventions for `link_type`, default reads, downloads, previews, and rendering hints",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 15,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Tasks/TaskRunsApi.md",
+      "text": "line 60: | `GET` | `/api/task-runs/{taskRunId}/logs/stdout` | Read the stdout log artifact |",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 60,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-06-02T03:57:01Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}

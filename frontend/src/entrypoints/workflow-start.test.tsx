@@ -2616,6 +2616,13 @@ describe.skip("Task Create Entrypoint", () => {
       intent: "edit-for-rerun",
       executionId: "mm:rerun",
     });
+    expect(
+      resolveTaskSubmitPageMode("?rerunExecutionId=mm%3Arerun&mode=compare"),
+    ).toEqual({
+      mode: "rerun",
+      intent: "comparison",
+      executionId: "mm:rerun",
+    });
   });
 
   it("builds the canonical Temporal UpdateInputs payload without mutating historical artifacts", () => {
@@ -4002,6 +4009,51 @@ describe.skip("Task Create Entrypoint", () => {
     });
   });
 
+  it("submits MM-773 comparison runs as fresh task creations with source lineage", async () => {
+    window.history.pushState(
+      {},
+      "Task Comparison",
+      "/workflows/new?rerunExecutionId=mm%3Acomplex-rerun&mode=compare",
+    );
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Compare Workflow" })).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "You are starting a comparison run. Choose a different runtime or model to compare results with the source run.",
+      ),
+    ).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Runtime"), {
+      target: { value: "gemini_cli" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Comparison Run" }));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+      ).toBe(true);
+    });
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url]) => String(url) === "/api/executions/mm%3Acomplex-rerun/update",
+      ),
+    ).toBe(false);
+    const createCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    const request = JSON.parse(String(createCall?.[1]?.body));
+
+    expect(request.payload.targetRuntime).toBe("gemini_cli");
+    expect(request.payload.task.comparison).toEqual({
+      kind: "model_runtime_comparison",
+      sourceWorkflowId: "mm:complex-rerun",
+      sourceRunId: "run-complex-source",
+    });
+    expect(request.payload.task.recovery).toBeUndefined();
+    expect(request.payload.task.resume).toBeUndefined();
+  });
+
   it("reports current preview version drift without mutating source-run command metadata", () => {
     const warnings = buildRuntimeCommandVersionWarnings(historicalRuntimeCommand, {
       capabilityVersion: "2026-05-13",
@@ -5261,6 +5313,71 @@ describe.skip("Task Create Entrypoint", () => {
         mode: "runtime",
       },
       requiredCapabilities: ["git", "jira"],
+    });
+  });
+
+  it("submits per-step runtime selections for MM-787 multi-step flows", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Run a multi-step model portability task." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add Step" }));
+
+    const firstStep = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    const secondStep = (await screen.findByText("Step 2")).closest(
+      "section",
+    ) as HTMLElement;
+
+    fireEvent.change(within(firstStep).getByLabelText("Step 1 Runtime"), {
+      target: { value: "gemini_cli" },
+    });
+    fireEvent.change(within(firstStep).getByLabelText("Step 1 Model"), {
+      target: { value: "gemini-step-model" },
+    });
+    fireEvent.change(within(secondStep).getByLabelText("Instructions"), {
+      target: { value: "Use Codex for implementation." },
+    });
+    fireEvent.change(within(secondStep).getByLabelText("Step 2 Runtime"), {
+      target: { value: "codex_cli" },
+    });
+    fireEvent.change(within(secondStep).getByLabelText("Step 2 Effort"), {
+      target: { value: "high" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({
+          method: "POST",
+        }),
+      );
+    });
+
+    const request = latestCreateRequest() as {
+      payload: {
+        requiredCapabilities?: string[];
+        task: { steps: Array<Record<string, unknown>> };
+      };
+    };
+    expect(request.payload.requiredCapabilities).toEqual([
+      "codex_cli",
+      "gemini_cli",
+      "git",
+      "gh",
+    ]);
+    expect(request.payload.task.steps[0]?.runtime).toEqual({
+      mode: "gemini_cli",
+      model: "gemini-step-model",
+    });
+    expect(request.payload.task.steps[1]?.runtime).toEqual({
+      mode: "codex_cli",
+      effort: "high",
     });
   });
 

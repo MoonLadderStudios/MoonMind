@@ -432,6 +432,35 @@ def test_resolve_runtime_selection_uses_execution_profile_env(
     assert runtime.mode == "codex_cli"
     assert runtime.provider_profile == "codex_default"
 
+def test_resolve_runtime_selection_prefers_execution_profile_over_default(
+    monkeypatch: Any,
+) -> None:
+    module = _load_module()
+    resolve_runtime_selection = module["_resolve_runtime_selection"]
+
+    # The caller runs under Claude Code (execution profile) while the system
+    # default task runtime is still codex_cli. The child must inherit the
+    # caller's Claude Code runtime/profile, not fall back to the codex default.
+    monkeypatch.setenv("MOONMIND_DEFAULT_TASK_RUNTIME", "codex_cli")
+    monkeypatch.setenv("MOONMIND_EXECUTION_PROFILE_REF", "claude_anthropic")
+    monkeypatch.setenv("MOONMIND_EXECUTION_PROFILE_RUNTIME", "claude_code")
+
+    args = type(
+        "Args",
+        (),
+        {
+            "task_context_path": None,
+            "runtime_mode": None,
+            "runtime_model": None,
+            "runtime_effort": None,
+            "runtime_provider_profile": None,
+        },
+    )()
+
+    runtime = resolve_runtime_selection(args)
+    assert runtime.mode == "claude_code"
+    assert runtime.provider_profile == "claude_anthropic"
+
 def test_resolve_runtime_selection_ignores_env_profile_for_other_runtime(
     monkeypatch: Any,
 ) -> None:
@@ -515,6 +544,8 @@ def test_resolve_runtime_selection_uses_default_runtime_env(monkeypatch: Any):
     resolve_runtime_selection = module["_resolve_runtime_selection"]
 
     monkeypatch.setenv("MOONMIND_DEFAULT_TASK_RUNTIME", "claude")
+    monkeypatch.delenv("MOONMIND_EXECUTION_PROFILE_REF", raising=False)
+    monkeypatch.delenv("MOONMIND_EXECUTION_PROFILE_RUNTIME", raising=False)
 
     args = type(
         "Args",

@@ -111,11 +111,24 @@ def _callback_profile(integration_name: str) -> _CallbackProfile:
         )
     return _CallbackProfile(
         normalized_name=normalized,
-        expected_token=None,
-        max_payload_bytes=_DEFAULT_CALLBACK_MAX_PAYLOAD_BYTES,
-        rate_limit_per_window=_DEFAULT_CALLBACK_RATE_LIMIT,
-        rate_limit_window_seconds=_DEFAULT_CALLBACK_RATE_LIMIT_WINDOW_SECONDS,
-        capture_artifacts=False,
+        expected_token=(
+            str(settings.integration_callbacks.callback_token or "").strip() or None
+        ),
+        max_payload_bytes=int(
+            settings.integration_callbacks.max_payload_bytes
+            or _DEFAULT_CALLBACK_MAX_PAYLOAD_BYTES
+        ),
+        rate_limit_per_window=int(
+            settings.integration_callbacks.rate_limit_per_window
+            or _DEFAULT_CALLBACK_RATE_LIMIT
+        ),
+        rate_limit_window_seconds=int(
+            settings.integration_callbacks.rate_limit_window_seconds
+            or _DEFAULT_CALLBACK_RATE_LIMIT_WINDOW_SECONDS
+        ),
+        capture_artifacts=bool(
+            settings.integration_callbacks.artifact_capture_enabled
+        ),
     )
 
 async def _validate_callback_request(
@@ -192,6 +205,33 @@ async def _get_service(
             settings.temporal.manifest_continue_as_new_phase_threshold
         ),
     )
+
+@router.get("/callbacks")
+async def describe_integration_callbacks() -> dict[str, object]:
+    """Return the generic external-agent callback contract."""
+    return {
+        "endpointTemplate": (
+            "/api/integrations/{integrationName}/callbacks/"
+            "{callbackCorrelationKey}"
+        ),
+        "method": "POST",
+        "payloadSchema": "IntegrationCallbackRequest",
+        "authHeaders": [
+            "X-MoonMind-Integration-Token",
+            "Authorization: Bearer <token>",
+        ],
+        "defaults": {
+            "maxPayloadBytes": _DEFAULT_CALLBACK_MAX_PAYLOAD_BYTES,
+            "rateLimitPerWindow": _DEFAULT_CALLBACK_RATE_LIMIT,
+            "rateLimitWindowSeconds": _DEFAULT_CALLBACK_RATE_LIMIT_WINDOW_SECONDS,
+        },
+        "providerOverrides": {
+            "jules": {
+                "tokenSetting": "JULES_CALLBACK_TOKEN",
+                "artifactCaptureSetting": "JULES_CALLBACK_ARTIFACT_CAPTURE_ENABLED",
+            }
+        },
+    }
 
 @router.post(
     "/{integration_name}/callbacks/{callback_correlation_key}",

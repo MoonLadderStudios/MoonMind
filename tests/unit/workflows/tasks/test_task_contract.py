@@ -174,6 +174,39 @@ def test_authoritative_snapshot_preserves_task_and_step_runtime_command_versions
     assert step_command["detectionPhase"] == "submit"
 
 
+def test_mm786_task_steps_accept_runtime_selection_and_snapshot_it() -> None:
+    payload = {
+        "instructions": "Run MM-786 as a multi-step task.",
+        "runtime": {"mode": "codex_cli", "model": "gpt-5.4", "effort": "medium"},
+        "steps": [
+            {
+                "id": "cheap-analysis",
+                "instructions": "Analyze with the cheaper runtime.",
+                "runtime": {
+                    "mode": "gemini_cli",
+                    "model": "gemini-2.5-flash",
+                    "effort": "low",
+                },
+            }
+        ],
+    }
+
+    spec = TaskExecutionSpec.model_validate(payload)
+
+    assert spec.steps[0].runtime is not None
+    assert spec.steps[0].runtime.mode == "gemini_cli"
+    assert spec.steps[0].runtime.model == "gemini-2.5-flash"
+    assert spec.steps[0].runtime.effort == "low"
+
+    snapshot = build_authoritative_task_input_snapshot(task_payload=payload)
+
+    assert snapshot["steps"][0]["runtime"] == {
+        "mode": "gemini_cli",
+        "model": "gemini-2.5-flash",
+        "effort": "low",
+    }
+
+
 def test_runtime_command_unknown_valid_commands_are_opaque_not_rejected() -> None:
     snapshot = build_authoritative_task_input_snapshot(
         task_payload={
@@ -871,6 +904,26 @@ def test_task_steps_reject_shell_like_executable_fields(field: str) -> None:
                 ],
             }
         )
+
+def test_task_step_accepts_per_step_runtime_selection() -> None:
+    spec = TaskStepSpec.model_validate(
+        {
+            "id": "review",
+            "instructions": "Review with a cheaper model.",
+            "runtime": {
+                "mode": "gemini_cli",
+                "model": "gemini-3.1-flash",
+                "effort": "low",
+                "profileId": "gemini-default",
+            },
+        }
+    )
+
+    assert spec.runtime is not None
+    assert spec.runtime.mode == "gemini_cli"
+    assert spec.runtime.model == "gemini-3.1-flash"
+    assert spec.runtime.effort == "low"
+    assert spec.runtime.provider_profile == "gemini-default"
 
 def test_mm569_accepts_executable_tool_and_skill_payload_fixtures() -> None:
     result = build_canonical_task_view(

@@ -95,6 +95,91 @@ async def test_run_proposals_stage_propagates_policy(
 
 
 @pytest.mark.asyncio
+async def test_run_proposals_stage_passes_compact_telemetry_signals(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_generate_payload: dict[str, Any] = {}
+    mock_run_workflow._last_step_summary = (
+        "Retried a flaky test and wrote diagnostics for review."
+    )
+    mock_run_workflow._last_diagnostics_ref = "artifact://diag-mm-794"
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_type == "proposal.generate":
+            captured_generate_payload.update(
+                json.loads(json.dumps(payload, default=_to_serializable))
+            )
+            return []
+        return {}
+
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+
+    await mock_run_workflow._run_proposals_stage(
+        parameters={"repo": "org/repo", "task": {"proposeTasks": True}}
+    )
+
+    signals = captured_generate_payload["telemetrySignals"]
+    assert signals == [
+        {
+            "type": "flaky_test",
+            "tags": ["flaky_test"],
+            "severity": "medium",
+            "summary": "Retried a flaky test and wrote diagnostics for review.",
+            "diagnostics_ref": "artifact://diag-mm-794",
+        },
+        {
+            "type": "retry",
+            "tags": ["retry"],
+            "severity": "medium",
+            "summary": "Retried a flaky test and wrote diagnostics for review.",
+            "diagnostics_ref": "artifact://diag-mm-794",
+        },
+        {
+            "type": "artifact_gap",
+            "tags": ["artifact_gap"],
+            "severity": "medium",
+            "summary": "Retried a flaky test and wrote diagnostics for review.",
+            "diagnostics_ref": "artifact://diag-mm-794",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_proposals_stage_does_not_fabricate_signal_from_diagnostics_ref(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_generate_payload: dict[str, Any] = {}
+    mock_run_workflow._last_step_summary = "Completed successfully."
+    mock_run_workflow._last_diagnostics_ref = "artifact://diag-mm-794"
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_type == "proposal.generate":
+            captured_generate_payload.update(
+                json.loads(json.dumps(payload, default=_to_serializable))
+            )
+            return []
+        return {}
+
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+
+    await mock_run_workflow._run_proposals_stage(
+        parameters={"repo": "org/repo", "task": {"proposeTasks": True}}
+    )
+
+    assert "telemetrySignals" not in captured_generate_payload
+
+
+@pytest.mark.asyncio
 async def test_run_proposals_stage_records_operator_visible_outcomes(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,

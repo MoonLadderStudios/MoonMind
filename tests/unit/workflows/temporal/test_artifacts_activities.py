@@ -1,4 +1,6 @@
 import pytest
+import threading
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from moonmind.schemas.temporal_activity_models import ArtifactReadInput, ArtifactWriteCompleteInput
@@ -94,6 +96,195 @@ async def test_artifact_write_complete_payload_roundtrip_legacy_list_ints(activi
     )
 
 @pytest.mark.asyncio
+async def test_execution_record_terminal_state_indexes_run_digest_best_effort(
+    activities,
+    monkeypatch,
+):
+    """MM-762: terminal-state activity triggers Plane B run digest writeback."""
+
+    import api_service.db.base as db_base
+    import moonmind.workflows.temporal.service as temporal_service
+
+    record = SimpleNamespace(
+        workflow_id="mm:run:123",
+        run_id="temporal-run-1",
+        state="completed",
+        close_status="completed",
+    )
+    service_calls: list[dict[str, object]] = []
+    digest_calls: list[str] = []
+
+    class _SessionContext:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _TemporalExecutionService:
+        def __init__(self, session):
+            self.session = session
+
+        async def record_terminal_state(self, **kwargs):
+            service_calls.append(dict(kwargs))
+            return record
+
+    async def _fake_digest_writeback(target):
+        digest_calls.append(target.workflow_id)
+
+    monkeypatch.setattr(db_base, "get_async_session_context", lambda: _SessionContext())
+    monkeypatch.setattr(
+        temporal_service,
+        "TemporalExecutionService",
+        _TemporalExecutionService,
+    )
+    monkeypatch.setattr(
+        activities,
+        "_write_run_digest_best_effort",
+        _fake_digest_writeback,
+    )
+
+    result = await activities.execution_record_terminal_state(
+        {
+            "workflowId": "mm:run:123",
+            "state": "completed",
+            "closeStatus": "completed",
+            "summary": "Workflow completed successfully",
+            "finishOutcomeCode": "PUBLISHED_PR",
+            "finishSummary": {
+                "schemaVersion": "v1",
+                "finishOutcome": {
+                    "code": "PUBLISHED_PR",
+                    "stage": "publish",
+                    "reason": "published pull request",
+                },
+            },
+        }
+    )
+
+    assert service_calls == [
+        {
+            "workflow_id": "mm:run:123",
+            "state": "completed",
+            "close_status": "completed",
+            "summary": "Workflow completed successfully",
+            "error_category": None,
+            "finish_outcome_code": "PUBLISHED_PR",
+            "finish_summary": {
+                "schemaVersion": "v1",
+                "finishOutcome": {
+                    "code": "PUBLISHED_PR",
+                    "stage": "publish",
+                    "reason": "published pull request",
+                },
+            },
+        }
+    ]
+    assert digest_calls == ["mm:run:123"]
+    assert result == {
+        "workflowId": "mm:run:123",
+        "state": "completed",
+        "closeStatus": "completed",
+    }
+
+
+@pytest.mark.asyncio
+async def test_write_run_digest_best_effort_runs_sync_indexing_in_executor(
+    activities,
+    monkeypatch,
+):
+    import moonmind.memory.run_digest as run_digest_module
+    import moonmind.rag.service as rag_service
+    import moonmind.rag.settings as rag_settings
+
+    event_loop_thread = threading.get_ident()
+    indexing_threads: list[int] = []
+
+    class _Settings:
+        def retrieval_execution_reason(self, _environ, *, preferred_transport):
+            return True, "enabled"
+
+    class _RetrievalService:
+        qdrant_client = object()
+        embedding_client = object()
+
+        def __init__(self, *, settings):
+            self.settings = settings
+
+    class _TaskHistoryService:
+        def __init__(self, *, qdrant_client, embedding_provider):
+            self.qdrant_client = qdrant_client
+            self.embedding_provider = embedding_provider
+
+        def build_and_upsert_run_digest(self, record):
+            indexing_threads.append(threading.get_ident())
+            return {"workflowId": record.workflow_id}
+
+    monkeypatch.setattr(
+        rag_settings.RagRuntimeSettings,
+        "from_env",
+        lambda _env: _Settings(),
+    )
+    monkeypatch.setattr(rag_service, "ContextRetrievalService", _RetrievalService)
+    monkeypatch.setattr(run_digest_module, "TaskHistoryService", _TaskHistoryService)
+
+    await activities._write_run_digest_best_effort(
+        SimpleNamespace(workflow_id="mm:run:123")
+    )
+
+    assert indexing_threads
+    assert indexing_threads[0] != event_loop_thread
+
+
+@pytest.mark.asyncio
+async def test_write_run_digest_best_effort_timeout_fails_open(
+    activities,
+    monkeypatch,
+):
+    import moonmind.memory.run_digest as run_digest_module
+    import moonmind.rag.service as rag_service
+    import moonmind.rag.settings as rag_settings
+
+    class _Settings:
+        def retrieval_execution_reason(self, _environ, *, preferred_transport):
+            return True, "enabled"
+
+    class _RetrievalService:
+        qdrant_client = object()
+        embedding_client = object()
+
+        def __init__(self, *, settings):
+            self.settings = settings
+
+    class _TaskHistoryService:
+        def __init__(self, *, qdrant_client, embedding_provider):
+            pass
+
+        def build_and_upsert_run_digest(self, record):
+            return {"workflowId": record.workflow_id}
+
+    async def _raise_timeout(awaitable, *, timeout):
+        awaitable.cancel()
+        raise TimeoutError("digest write timed out")
+
+    monkeypatch.setattr(
+        rag_settings.RagRuntimeSettings,
+        "from_env",
+        lambda _env: _Settings(),
+    )
+    monkeypatch.setattr(rag_service, "ContextRetrievalService", _RetrievalService)
+    monkeypatch.setattr(run_digest_module, "TaskHistoryService", _TaskHistoryService)
+    monkeypatch.setattr(
+        TemporalArtifactActivities._write_run_digest_best_effort.__globals__["asyncio"],
+        "wait_for",
+        _raise_timeout,
+    )
+
+    await activities._write_run_digest_best_effort(
+        SimpleNamespace(workflow_id="mm:run:123")
+    )
+
+@pytest.mark.asyncio
 async def test_artifact_publish_report_bundle_delegates_to_service(
     activities, mock_service
 ):
@@ -122,4 +313,3 @@ async def test_artifact_publish_report_bundle_delegates_to_service(
 
     assert result == expected
     mock_service.publish_report_bundle.assert_awaited_once_with(**request)
-

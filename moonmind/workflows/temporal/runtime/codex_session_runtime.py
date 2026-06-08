@@ -1700,9 +1700,9 @@ class CodexManagedSessionRuntime:
                 error_text=scan.error_text,
                 failure_class="permanent",
             )
+        if scan.assistant_text:
+            return _TurnTerminalOutcome(status="completed")
         if scan.saw_task_complete:
-            if scan.assistant_text:
-                return _TurnTerminalOutcome(status="completed")
             recovered_error = self._extract_turn_error_from_logs(
                 vendor_turn_id,
                 turn_started_at=turn_started_at,
@@ -1720,13 +1720,6 @@ class CodexManagedSessionRuntime:
                     error_text=str(no_op.get("reason") or "").strip() or None,
                     disposition="no_op",
                 )
-            return _TurnTerminalOutcome(
-                status="failed",
-                error_text="codex app-server task_complete produced no assistant output",
-                failure_class="transient",
-            )
-        if scan.assistant_text:
-            return _TurnTerminalOutcome(status="completed")
         return None
 
     def _completed_turn_without_assistant_outcome(
@@ -1747,37 +1740,13 @@ class CodexManagedSessionRuntime:
                 vendor_turn_id=vendor_turn_id,
                 turn_started_at=state.last_control_at,
             )
-        if rollout_scan.error_text:
-            return _TurnTerminalOutcome(
-                status="failed",
-                error_text=rollout_scan.error_text,
-                failure_class="permanent",
-            )
-        if rollout_scan.saw_task_complete:
-            recovered_error = self._extract_turn_error_from_logs(
-                vendor_turn_id,
-                turn_started_at=state.last_control_at,
-            )
-            if recovered_error:
-                return _TurnTerminalOutcome(
-                    status="failed",
-                    error_text=recovered_error,
-                    failure_class="permanent",
-                )
-            no_op = self._read_skill_outcome(
-                turn_started_at=state.last_control_at,
-            )
-            if no_op is not None:
-                return _TurnTerminalOutcome(
-                    status="completed",
-                    error_text=str(no_op.get("reason") or "").strip() or None,
-                    disposition="no_op",
-                )
-            return _TurnTerminalOutcome(
-                status="failed",
-                error_text="codex app-server task_complete produced no assistant output",
-                failure_class="transient",
-            )
+        rollout_outcome = self._rollout_terminal_outcome_from_scan(
+            rollout_scan,
+            vendor_turn_id=vendor_turn_id,
+            turn_started_at=state.last_control_at,
+        )
+        if rollout_outcome is not None:
+            return rollout_outcome
         no_op = self._read_skill_outcome(turn_started_at=state.last_control_at)
         if no_op is not None:
             return _TurnTerminalOutcome(
@@ -1941,6 +1910,13 @@ class CodexManagedSessionRuntime:
         )
         if rollout_outcome is not None:
             return rollout_outcome
+        if rollout_scan.saw_task_complete:
+            return self._completed_turn_without_assistant_outcome(
+                state=state,
+                thread_payload=thread_payload,
+                vendor_turn_id=vendor_turn_id,
+                rollout_scan=rollout_scan,
+            )
         if thread_outcome is not None and not rollout_scan.references_turn:
             return thread_outcome
         return None
@@ -2038,9 +2014,13 @@ class CodexManagedSessionRuntime:
         state: CodexSessionRuntimeState,
         allow_fallback_start: bool = True,
     ) -> str:
-        thread_path = self._existing_thread_path(
-            state.vendor_thread_path
-        ) or self._find_vendor_thread_path(state.vendor_thread_id)
+        existing_thread_path = self._existing_thread_path(state.vendor_thread_path)
+        discovered_thread_path = None
+        if existing_thread_path is None:
+            discovered_thread_path = self._find_vendor_thread_path(
+                state.vendor_thread_id
+            )
+        thread_path = existing_thread_path or discovered_thread_path
         params: dict[str, Any] = {"threadId": state.vendor_thread_id}
         if thread_path:
             params["path"] = thread_path
@@ -2068,10 +2048,36 @@ class CodexManagedSessionRuntime:
             )
         recovered_thread_path = None
         if not fallback_started and vendor_thread_id == state.vendor_thread_id:
-            recovered_thread_path = thread_path
+            recovered_thread_path = discovered_thread_path
+        if not fallback_started:
+            try:
+                read_result = client.request("thread/read", {"threadId": vendor_thread_id})
+                thread_payload = read_result.get("thread") or thread_payload
+            except RuntimeError as exc:
+                message = str(exc)
+                if (
+                    not allow_fallback_start
+                    or not self._recovery_failure_allows_fallback(message)
+                ):
+                    raise
+                started = client.request(
+                    "thread/start",
+                    {"cwd": str(self._workspace_path)},
+                )
+                thread_payload = started.get("thread")
+                if not isinstance(thread_payload, Mapping):
+                    raise RuntimeError(
+                        "codex app-server thread/start did not return a thread"
+                    )
+                vendor_thread_id = str(thread_payload.get("id") or "").strip()
+                if not vendor_thread_id:
+                    raise RuntimeError(
+                        "codex app-server thread/start returned a blank thread id"
+                    )
+                recovered_thread_path = None
         state.vendor_thread_id = vendor_thread_id
         state.vendor_thread_path = self._normalized_thread_path(
-            thread_payload.get("path") or recovered_thread_path
+            recovered_thread_path or thread_payload.get("path")
         )
         return vendor_thread_id
 

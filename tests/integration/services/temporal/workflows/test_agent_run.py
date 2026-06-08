@@ -2,8 +2,9 @@ import sys
 import pytest
 import asyncio
 import json
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from temporalio import workflow
 from temporalio.testing import WorkflowEnvironment
@@ -905,6 +906,189 @@ async def mock_jules_cancel(request: dict) -> dict:
         "observedAt": datetime.now(tz=UTC).isoformat(),
         "metadata": {"cancelAccepted": False, "unsupported": True},
     }
+
+_codex_cloud_status_mode = "feedback"
+_codex_cloud_status_poll_count = 0
+
+@_activity.defn(name="integration.codex_cloud.start")
+async def mock_codex_cloud_start(request: dict) -> dict:
+    _external_activity_calls.append("codex_cloud_start")
+    return {
+        "runId": "codex-cloud-task-001",
+        "agentKind": "external",
+        "agentId": "codex_cloud",
+        "status": "running",
+        "startedAt": datetime.now(tz=UTC).isoformat(),
+        "pollHintSeconds": 1,
+        "metadata": {
+            "providerStatus": "running",
+            "normalizedStatus": "running",
+        },
+    }
+
+@_activity.defn(name="integration.codex_cloud.status")
+async def mock_codex_cloud_status(request: dict) -> dict:
+    global _codex_cloud_status_poll_count
+    _codex_cloud_status_poll_count += 1
+    _external_activity_calls.append(
+        f"codex_cloud_status:{_codex_cloud_status_poll_count}"
+    )
+    status = (
+        "awaiting_feedback"
+        if _codex_cloud_status_mode == "feedback"
+        else "running"
+    )
+    return {
+        "runId": request.get("runId")
+        or request.get("run_id")
+        or "codex-cloud-task-001",
+        "agentKind": "external",
+        "agentId": "codex_cloud",
+        "status": status,
+        "metadata": {
+            "providerStatus": status,
+            "normalizedStatus": status,
+        },
+    }
+
+@_activity.defn(name="integration.codex_cloud.fetch_result")
+async def mock_codex_cloud_fetch_result(request: dict) -> dict:
+    _external_activity_calls.append("codex_cloud_fetch_result")
+    return {
+        "summary": "Codex Cloud completed unexpectedly.",
+        "metadata": {"normalizedStatus": "completed"},
+    }
+
+@_activity.defn(name="integration.codex_cloud.cancel")
+async def mock_codex_cloud_cancel(request: dict) -> dict:
+    return {
+        "runId": request.get("runId")
+        or request.get("run_id")
+        or "codex-cloud-task-001",
+        "agentKind": "external",
+        "agentId": "codex_cloud",
+        "status": "cancelled",
+    }
+
+async def _run_codex_cloud_parent_for_resiliency_test(
+    *,
+    workflow_id: str,
+) -> tuple[AgentRunResult, dict[str, Any]]:
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with (
+            Worker(
+                env.client,
+                task_queue="agent-run-task-queue",
+                workflows=[MoonMindAgentRun, TestAgentRunParent],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
+            Worker(
+                env.client,
+                task_queue="mm.workflow",
+                activities=[mock_resolve_adapter_metadata],
+            ),
+            Worker(
+                env.client,
+                task_queue="mm.activity.integrations",
+                activities=[
+                    mock_codex_cloud_start,
+                    mock_codex_cloud_status,
+                    mock_codex_cloud_fetch_result,
+                    mock_codex_cloud_cancel,
+                ],
+            ),
+            Worker(
+                env.client,
+                task_queue="mm.activity.agent_runtime",
+                activities=[mock_publish_artifacts],
+            ),
+        ):
+            parent_handle = await env.client.start_workflow(
+                TestAgentRunParent.run,
+                AgentExecutionRequest(
+                    agent_kind="external",
+                    agent_id="codex_cloud",
+                    execution_profile_ref="profile:codex-cloud-default",
+                    correlation_id=f"{workflow_id}:corr",
+                    idempotency_key=f"{workflow_id}:idem",
+                ),
+                id=workflow_id,
+                task_queue="agent-run-task-queue",
+            )
+            try:
+                result = await asyncio.wait_for(parent_handle.result(), timeout=15)
+            except asyncio.TimeoutError as exc:
+                raise AssertionError(
+                    "AgentRun resiliency test timed out; "
+                    f"calls={_external_activity_calls}, "
+                    f"status_polls={_codex_cloud_status_poll_count}"
+                ) from exc
+            parent_state = await parent_handle.query(TestAgentRunParent.get_state)
+            return result, parent_state
+
+@pytest.mark.asyncio
+async def test_agent_run_escalates_external_feedback_request_to_parent_intervention():
+    global _codex_cloud_status_mode, _codex_cloud_status_poll_count
+    _codex_cloud_status_mode = "feedback"
+    _codex_cloud_status_poll_count = 0
+    _external_activity_calls.clear()
+
+    result, parent_state = await _run_codex_cloud_parent_for_resiliency_test(
+        workflow_id="test-parent-codex-cloud-feedback",
+    )
+
+    assert result.provider_error_code == "intervention_requested"
+    assert result.metadata["reason"] == "agent_requested_feedback"
+    assert result.metadata["status"] == "intervention_requested"
+    assert result.metadata["resiliencyPolicy"]["runtime"] == "codex_cloud"
+    assert any(
+        change["state"] == "intervention_requested"
+        and "feedback" in change["reason"].lower()
+        for change in parent_state["state_changes"]
+    )
+    assert "codex_cloud_fetch_result" not in _external_activity_calls
+
+@pytest.mark.asyncio
+async def test_agent_run_escalates_external_no_progress_to_parent_intervention(
+    monkeypatch,
+):
+    global _codex_cloud_status_mode, _codex_cloud_status_poll_count
+    _codex_cloud_status_mode = "stagnant"
+    _codex_cloud_status_poll_count = 0
+    _external_activity_calls.clear()
+
+    def test_policy(request: AgentExecutionRequest) -> dict[str, Any]:
+        return {
+            "runtime": request.agent_id,
+            "noProgressTimeoutSeconds": 1,
+            "stuckAction": "request_intervention",
+            "retryPolicy": "test_short_no_progress_policy",
+        }
+
+    monkeypatch.setattr(
+        MoonMindAgentRun,
+        "_resiliency_policy_for_request",
+        staticmethod(test_policy),
+    )
+
+    result, parent_state = await _run_codex_cloud_parent_for_resiliency_test(
+        workflow_id="test-parent-codex-cloud-no-progress",
+    )
+
+    assert _codex_cloud_status_poll_count >= 2
+    assert result.provider_error_code == "intervention_requested"
+    assert result.metadata["reason"] == "stuck_no_progress"
+    assert result.metadata["status"] == "intervention_requested"
+    assert (
+        result.metadata["resiliencyPolicy"]["retryPolicy"]
+        == "test_short_no_progress_policy"
+    )
+    assert any(
+        change["state"] == "intervention_requested"
+        and "no observable progress" in change["reason"].lower()
+        for change in parent_state["state_changes"]
+    )
+    assert "codex_cloud_fetch_result" not in _external_activity_calls
 
 @pytest.mark.asyncio
 async def test_agent_run_external_agent_workflow():

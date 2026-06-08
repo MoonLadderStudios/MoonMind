@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from email.message import EmailMessage
 import hashlib
+import httpx
 import inspect
 import json
 from copy import deepcopy
@@ -13,6 +15,8 @@ import os
 import re
 import shlex
 import shutil
+import smtplib
+import stat
 import tempfile
 import time
 from dataclasses import dataclass
@@ -66,7 +70,7 @@ from moonmind.workflows.adapters.managed_agent_adapter import (
     ManagedProfileLaunchContext,
     build_managed_profile_launch_context,
 )
-from moonmind.utils.logging import SecretRedactor, redact_sensitive_text
+from moonmind.utils.logging import SecretRedactor, redact_sensitive_payload, redact_sensitive_text
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
 from moonmind.workflows.adapters.codex_cloud_agent_adapter import CodexCloudAgentAdapter
 from moonmind.workflows.adapters.codex_cloud_client import CodexCloudClient as CodexCloudHttpClient
@@ -184,6 +188,41 @@ async def _run_command(cmd, **kwargs):
     return CmdRes(stdout)
 
 logger = getLogger(__name__)
+
+_PROPOSAL_TELEMETRY_SIGNAL_TAGS = {
+    "retry",
+    "duplicate_output",
+    "missing_ref",
+    "conflicting_instructions",
+    "flaky_test",
+    "loop_detected",
+    "artifact_gap",
+}
+_PROPOSAL_TELEMETRY_TAG_ALIASES = {
+    "artifact": "artifact_gap",
+    "artifact_missing": "artifact_gap",
+    "diagnostic_gap": "artifact_gap",
+    "duplicate": "duplicate_output",
+    "duplicate_outputs": "duplicate_output",
+    "flaky": "flaky_test",
+    "flaky_tests": "flaky_test",
+    "loop": "loop_detected",
+    "missing_file": "missing_ref",
+    "missing_files": "missing_ref",
+    "missing_reference": "missing_ref",
+    "missing_refs": "missing_ref",
+    "repeated_retry": "retry",
+    "retry_exhausted": "retry",
+}
+_PROPOSAL_TELEMETRY_TAG_LABELS = {
+    "artifact_gap": "artifact gap",
+    "conflicting_instructions": "conflicting instructions",
+    "duplicate_output": "duplicate output",
+    "flaky_test": "flaky test",
+    "loop_detected": "loop detection",
+    "missing_ref": "missing reference",
+    "retry": "retry",
+}
 _AUTO_SKILL_SENTINEL = "auto"
 _NON_SECRET_MANAGED_SESSION_ENV_KEYS: tuple[str, ...] = ("MOONMIND_URL",)
 _MANAGED_SESSION_TELEMETRY_KEYS: tuple[str, ...] = (
@@ -521,6 +560,16 @@ class SandboxCommandResult:
     diagnostics_ref: ArtifactRef | None
 
 @dataclass(frozen=True, slots=True)
+class _SandboxFileSnapshotEntry:
+    """Compact file state used to detect sandbox write-policy violations."""
+
+    mode: int
+    size: int
+    mtime_ns: int
+    digest: str
+    backup_path: Path | None = None
+
+@dataclass(frozen=True, slots=True)
 class IntegrationStartResult:
     """Structured result from ``integration.jules.start``."""
 
@@ -574,6 +623,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "artifacts",
         "execution_record_terminal_state",
     ),
+    "execution.notify_completion": ("agent_runtime", "execution_notify_completion"),
     "artifact.list_for_execution": ("artifacts", "artifact_list_for_execution"),
     "artifact.compute_preview": ("artifacts", "artifact_compute_preview"),
     "artifact.link": ("artifacts", "artifact_link"),
@@ -1366,6 +1416,108 @@ def _coerce_activity_payload_input(
         request = kwargs
     return _coerce_activity_request(request, activity_type=activity_type)
 
+def _redacted_webhook_target(webhook_url: str) -> str:
+    if not webhook_url:
+        return ""
+    return webhook_url.split("?", 1)[0]
+
+
+def _coerce_notification_recipients(value: str | Sequence[str] | None) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw_values = value.split(",")
+    else:
+        raw_values = [str(item) for item in value]
+    return [item.strip() for item in raw_values if item.strip()]
+
+
+def _redacted_email_target(recipients: Sequence[str]) -> str:
+    count = len([recipient for recipient in recipients if str(recipient).strip()])
+    if count == 1:
+        return "email:1 recipient"
+    return f"email:{count} recipients"
+
+
+def _build_execution_notification_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    result_payload = payload.get("result")
+    if isinstance(result_payload, BaseModel):
+        result_payload = result_payload.model_dump(mode="json", by_alias=True)
+    result = result_payload if isinstance(result_payload, Mapping) else {}
+    metadata = result.get("metadata") if isinstance(result.get("metadata"), Mapping) else {}
+    event: dict[str, Any] = {
+        "event": "moonmind.execution.completed",
+        "workflowId": str(payload.get("workflowId") or ""),
+        "runId": str(payload.get("runId") or ""),
+        "agentId": str(payload.get("agentId") or ""),
+        "agentKind": str(payload.get("agentKind") or ""),
+        "status": str(payload.get("status") or ""),
+        "failureClass": result.get("failureClass"),
+        "providerErrorCode": result.get("providerErrorCode"),
+        "retryRecommendation": result.get("retryRecommendation"),
+        "summary": result.get("summary"),
+        "diagnosticsRef": result.get("diagnosticsRef"),
+        "outputRefs": list(result.get("outputRefs") or []),
+    }
+    for key in (
+        "taskRunId",
+        "childWorkflowId",
+        "childRunId",
+        "pullRequestUrl",
+        "publishOutcome",
+    ):
+        value = metadata.get(key)
+        if value is not None:
+            event[key] = value
+    return redact_sensitive_payload(event)
+
+
+def _build_execution_notification_email(
+    event: Mapping[str, Any],
+    *,
+    sender: str,
+    recipients: Sequence[str],
+) -> EmailMessage:
+    status = str(event.get("status") or "completed")
+    workflow_id = str(event.get("workflowId") or "unknown-workflow")
+    message = EmailMessage()
+    message["From"] = sender
+    message["To"] = ", ".join(recipients)
+    message["Subject"] = f"MoonMind execution {status}: {workflow_id}"
+    message.set_content(
+        "MoonMind execution completed.\n\n"
+        + json.dumps(dict(event), indent=2, sort_keys=True)
+        + "\n"
+    )
+    return message
+
+
+def _send_execution_notification_email(
+    event: Mapping[str, Any],
+    *,
+    sender: str,
+    recipients: Sequence[str],
+    smtp_host: str,
+    smtp_port: int,
+    smtp_username: str | None,
+    smtp_password: str | None,
+    smtp_use_tls: bool,
+    smtp_use_ssl: bool,
+    timeout_seconds: int,
+) -> None:
+    message = _build_execution_notification_email(
+        event,
+        sender=sender,
+        recipients=recipients,
+    )
+    smtp_cls = smtplib.SMTP_SSL if smtp_use_ssl else smtplib.SMTP
+    with smtp_cls(smtp_host, smtp_port, timeout=timeout_seconds) as client:
+        if smtp_use_tls and not smtp_use_ssl:
+            client.starttls()
+        if smtp_username:
+            client.login(smtp_username, smtp_password or "")
+        client.send_message(message)
+
 def _validate_external_agent_run_input(payload: Any) -> ExternalAgentRunInput:
     """Validate external activity input, including scalar legacy histories."""
 
@@ -1997,6 +2149,196 @@ class TemporalSandboxActivities:
             raise TemporalActivityRuntimeError(f"workspace does not exist: {workspace}")
         return workspace
 
+    def _normalize_allowed_file_paths(
+        self,
+        cwd: Path,
+        allowed_file_paths: Sequence[str | Path] | None,
+    ) -> frozenset[str] | None:
+        if allowed_file_paths is None:
+            return None
+        if isinstance(allowed_file_paths, (str, bytes, bytearray)) or not isinstance(
+            allowed_file_paths,
+            Sequence,
+        ):
+            raise TemporalActivityRuntimeError(
+                "sandbox file allowlist must be a list of relative file paths"
+            )
+
+        allowed: set[str] = set()
+        for raw_path in allowed_file_paths:
+            if not isinstance(raw_path, (str, Path)):
+                raise TemporalActivityRuntimeError(
+                    "sandbox file allowlist entries must be relative file paths"
+                )
+            raw_text = str(raw_path).strip()
+            if not raw_text:
+                raise TemporalActivityRuntimeError(
+                    "sandbox file allowlist entries must not be empty"
+                )
+            candidate = Path(raw_text)
+            if candidate.is_absolute():
+                raise TemporalActivityRuntimeError(
+                    "sandbox file allowlist entries must be relative file paths"
+                )
+            resolved = (cwd / candidate).resolve()
+            if not resolved.is_relative_to(cwd):
+                raise TemporalActivityRuntimeError(
+                    "sandbox file allowlist entries must stay within the workspace"
+                )
+            allowed.add(resolved.relative_to(cwd).as_posix())
+        return frozenset(allowed)
+
+    def _sandbox_path_is_allowed(
+        self,
+        rel_path: str,
+        allowed_paths: frozenset[str],
+    ) -> bool:
+        return any(
+            rel_path == allowed_path or rel_path.startswith(f"{allowed_path}/")
+            for allowed_path in allowed_paths
+        )
+
+    def _sandbox_file_snapshot(
+        self,
+        cwd: Path,
+        *,
+        backup_root: Path | None = None,
+        allowed_paths: frozenset[str] | None = None,
+    ) -> dict[str, _SandboxFileSnapshotEntry]:
+        snapshot: dict[str, _SandboxFileSnapshotEntry] = {}
+        for path in cwd.rglob("*"):
+            try:
+                info = path.lstat()
+            except OSError:
+                continue
+            if stat.S_ISDIR(info.st_mode):
+                continue
+            rel_path = path.relative_to(cwd).as_posix()
+            if stat.S_ISREG(info.st_mode):
+                try:
+                    digest = self._sandbox_file_digest(path)
+                except OSError:
+                    continue
+            elif stat.S_ISLNK(info.st_mode):
+                try:
+                    digest = hashlib.sha256(
+                        os.readlink(path).encode("utf-8")
+                    ).hexdigest()
+                except OSError:
+                    continue
+            else:
+                digest = hashlib.sha256(str(info.st_rdev).encode("utf-8")).hexdigest()
+            backup_path: Path | None = None
+            if (
+                backup_root is not None
+                and allowed_paths is not None
+                and not self._sandbox_path_is_allowed(rel_path, allowed_paths)
+            ):
+                backup_path = backup_root / rel_path
+                backup_path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    shutil.copy2(path, backup_path, follow_symlinks=False)
+                except OSError:
+                    backup_path = None
+            snapshot[rel_path] = _SandboxFileSnapshotEntry(
+                mode=int(info.st_mode),
+                size=int(info.st_size),
+                mtime_ns=int(info.st_mtime_ns),
+                digest=digest,
+                backup_path=backup_path,
+            )
+        return snapshot
+
+    def _sandbox_file_digest(self, path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as file:
+            for chunk in iter(lambda: file.read(65536), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def _changed_sandbox_files(
+        self,
+        before: Mapping[str, _SandboxFileSnapshotEntry],
+        after: Mapping[str, _SandboxFileSnapshotEntry],
+    ) -> set[str]:
+        changed: set[str] = set()
+        for rel_path, before_entry in before.items():
+            after_entry = after.get(rel_path)
+            if after_entry is None or (
+                after_entry.mode,
+                after_entry.size,
+                after_entry.mtime_ns,
+                after_entry.digest,
+            ) != (
+                before_entry.mode,
+                before_entry.size,
+                before_entry.mtime_ns,
+                before_entry.digest,
+            ):
+                changed.add(rel_path)
+        for rel_path in after:
+            if rel_path not in before:
+                changed.add(rel_path)
+        return changed
+
+    def _disallowed_sandbox_file_changes(
+        self,
+        *,
+        changed_paths: Iterable[str],
+        allowed_paths: frozenset[str] | None,
+    ) -> list[str]:
+        if allowed_paths is None:
+            return []
+        disallowed = sorted(
+            rel_path
+            for rel_path in set(changed_paths)
+            if not self._sandbox_path_is_allowed(rel_path, allowed_paths)
+        )
+        return disallowed
+
+    def _reject_disallowed_file_changes(
+        self,
+        disallowed_paths: Sequence[str],
+    ) -> None:
+        disallowed = list(disallowed_paths)
+        if not disallowed:
+            return
+        preview = ", ".join(disallowed[:10])
+        extra = "" if len(disallowed) <= 10 else f", ... ({len(disallowed)} total)"
+        raise TemporalActivityRuntimeError(
+            "sandbox command modified files outside the allowlist: "
+            f"{preview}{extra}"
+        )
+
+    def _restore_disallowed_sandbox_changes(
+        self,
+        cwd: Path,
+        *,
+        disallowed_paths: Iterable[str],
+        before: Mapping[str, _SandboxFileSnapshotEntry],
+    ) -> None:
+        for rel_path in sorted(
+            set(disallowed_paths),
+            key=lambda value: value.count("/"),
+            reverse=True,
+        ):
+            target = cwd / rel_path
+            before_entry = before.get(rel_path)
+            try:
+                if target.is_dir() and not target.is_symlink():
+                    shutil.rmtree(target)
+                else:
+                    target.unlink(missing_ok=True)
+            except OSError:
+                continue
+            if before_entry is None or before_entry.backup_path is None:
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                shutil.copy2(before_entry.backup_path, target, follow_symlinks=False)
+            except OSError:
+                continue
+
     def _resolve_checkout_source(self, repo_ref: str | Path) -> tuple[str, str | Path]:
         normalized = str(repo_ref).strip()
         if not normalized:
@@ -2081,6 +2423,7 @@ class TemporalSandboxActivities:
         workspace_ref: str | Path,
         patch_ref: ArtifactRef | str,
         principal: str,
+        allowed_file_paths: Sequence[str | Path] | None = None,
         strip: int = 0,
         timeout_seconds: float | None = None,
         heartbeat: HeartbeatCallback | None = None,
@@ -2122,6 +2465,9 @@ class TemporalSandboxActivities:
                     "workspace_ref": str(cwd),
                     "cmd": list(command),
                     "principal": principal,
+                    "allowed_file_paths": list(allowed_file_paths)
+                    if allowed_file_paths is not None
+                    else None,
                     "timeout_seconds": timeout_seconds,
                 },
                 heartbeat=heartbeat,
@@ -2145,6 +2491,7 @@ class TemporalSandboxActivities:
         principal: str | None = None,
         env: Mapping[str, str | None] | None = None,
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
+        allowed_file_paths: Sequence[str | Path] | None = None,
         timeout_seconds: float | None = None,
         heartbeat: HeartbeatCallback | None = None,
     ) -> SandboxCommandResult:
@@ -2162,6 +2509,8 @@ class TemporalSandboxActivities:
                 env = request_payload.get("env")
             if execution_ref is None:
                 execution_ref = request_payload.get("execution_ref")
+            if allowed_file_paths is None:
+                allowed_file_paths = request_payload.get("allowed_file_paths")
             if timeout_seconds is None:
                 timeout_seconds = request_payload.get("timeout_seconds")
 
@@ -2180,6 +2529,30 @@ class TemporalSandboxActivities:
             command = tuple(str(part) for part in cmd)
         if not command:
             raise TemporalActivityRuntimeError("sandbox command must not be empty")
+
+        normalized_allowed_file_paths = self._normalize_allowed_file_paths(
+            cwd,
+            allowed_file_paths,
+        )
+        backup_dir: tempfile.TemporaryDirectory[str] | None = None
+        backup_root: Path | None = None
+        if normalized_allowed_file_paths is not None:
+            backup_dir = tempfile.TemporaryDirectory(prefix="sandbox-allowlist-")
+            backup_root = Path(backup_dir.name)
+        try:
+            before_files = (
+                self._sandbox_file_snapshot(
+                    cwd,
+                    backup_root=backup_root,
+                    allowed_paths=normalized_allowed_file_paths,
+                )
+                if normalized_allowed_file_paths is not None
+                else None
+            )
+        except Exception:
+            if backup_dir is not None:
+                backup_dir.cleanup()
+            raise
 
         merged_env = os.environ.copy()
         if env:
@@ -2268,6 +2641,25 @@ class TemporalSandboxActivities:
                 content_type="text/plain",
             )
             diagnostics_ref = build_artifact_ref(completed)
+
+        if before_files is not None:
+            after_files = self._sandbox_file_snapshot(cwd)
+            changed_paths = self._changed_sandbox_files(before_files, after_files)
+            disallowed_paths = self._disallowed_sandbox_file_changes(
+                changed_paths=changed_paths,
+                allowed_paths=normalized_allowed_file_paths,
+            )
+            if disallowed_paths:
+                self._restore_disallowed_sandbox_changes(
+                    cwd,
+                    disallowed_paths=disallowed_paths,
+                    before=before_files,
+                )
+            if backup_dir is not None:
+                backup_dir.cleanup()
+            self._reject_disallowed_file_changes(disallowed_paths)
+        elif backup_dir is not None:
+            backup_dir.cleanup()
 
         return SandboxCommandResult(
             exit_code=int(process.returncode or 0),
@@ -2918,6 +3310,190 @@ class TemporalProposalActivities:
         return str(runtime_node or "").strip()
 
     @classmethod
+    def _normalize_signal_tag(cls, value: object) -> str:
+        text = cls._normalize_proposal_text(value).lower()
+        text = re.sub(r"[^a-z0-9]+", "_", text).strip("_")
+        if not text:
+            return ""
+        text = _PROPOSAL_TELEMETRY_TAG_ALIASES.get(text, text)
+        if text in _PROPOSAL_TELEMETRY_SIGNAL_TAGS:
+            return text
+        return ""
+
+    @classmethod
+    def _telemetry_signal_tags(cls, signal: Mapping[str, Any]) -> list[str]:
+        raw_values: list[object] = []
+        for key in ("tag", "type", "kind", "code", "category"):
+            if key in signal:
+                raw_values.append(signal.get(key))
+        raw_tags = signal.get("tags")
+        if isinstance(raw_tags, Sequence) and not isinstance(raw_tags, (str, bytes)):
+            raw_values.extend(raw_tags)
+        elif raw_tags is not None:
+            raw_values.append(raw_tags)
+
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in raw_values:
+            tag = cls._normalize_signal_tag(value)
+            if not tag or tag in seen:
+                continue
+            normalized.append(tag)
+            seen.add(tag)
+        return normalized
+
+    @classmethod
+    def _telemetry_signal_severity(
+        cls, signal: Mapping[str, Any], tags: Sequence[str]
+    ) -> str:
+        severity = cls._normalize_proposal_text(signal.get("severity")).lower()
+        if severity in {"low", "medium", "normal", "high", "critical"}:
+            return severity
+        if any(tag in {"loop_detected", "conflicting_instructions"} for tag in tags):
+            return "high"
+        return "medium"
+
+    @classmethod
+    def _telemetry_signal_summary(cls, signal: Mapping[str, Any]) -> str:
+        for key in ("summary", "message", "reason", "details", "description"):
+            summary = cls._normalize_proposal_text(signal.get(key))
+            if summary:
+                return summary[:500]
+        tags = cls._telemetry_signal_tags(signal)
+        if tags:
+            label = _PROPOSAL_TELEMETRY_TAG_LABELS.get(tags[0], tags[0])
+            return f"Telemetry reported a {label} signal."
+        return ""
+
+    @classmethod
+    def _build_telemetry_signal_instructions(
+        cls,
+        *,
+        workflow_id: str,
+        label: str,
+        summary: str,
+        instructions: str,
+        diagnostics_ref: str,
+    ) -> str:
+        parts = [
+            (
+                "Investigate and address the run-quality telemetry signal "
+                f"'{label}' reported by workflow {workflow_id or 'unknown'}."
+            ),
+            f"Signal summary: {summary}",
+        ]
+        if diagnostics_ref:
+            parts.append(f"Diagnostics reference: {diagnostics_ref}")
+        if instructions:
+            parts.append(f"Context from the completed task:\n{instructions}")
+        return "\n\n".join(parts)
+
+    @classmethod
+    def _telemetry_signal_candidates(
+        cls,
+        *,
+        payload: Mapping[str, Any],
+        repo: str,
+        workflow_id: str,
+        instructions: str,
+        task: Mapping[str, Any],
+    ) -> list[dict[str, Any]]:
+        raw_signals = payload.get("telemetrySignals")
+        if not isinstance(raw_signals, Sequence) or isinstance(
+            raw_signals, (str, bytes)
+        ):
+            return []
+
+        candidates: list[dict[str, Any]] = []
+        for raw_signal in raw_signals[:3]:
+            if not isinstance(raw_signal, Mapping):
+                continue
+            signal = dict(raw_signal)
+            tags = cls._telemetry_signal_tags(signal)
+            if not tags:
+                continue
+            summary = cls._telemetry_signal_summary(signal)
+            if not summary:
+                continue
+            primary_tag = tags[0]
+            label = _PROPOSAL_TELEMETRY_TAG_LABELS.get(primary_tag, primary_tag)
+            title = cls._normalize_proposal_text(signal.get("title")) or (
+                f"Review {label} signal from workflow {workflow_id or 'unknown'}"
+            )
+            if not title.lower().startswith("[run_quality]"):
+                title = f"[run_quality] {title}"
+            if len(title) > 194:
+                title = title[:194].rstrip()
+
+            severity = cls._telemetry_signal_severity(signal, tags)
+            diagnostics_ref = cls._normalize_proposal_text(
+                signal.get("diagnostics_ref")
+            )
+            runtime_node = task.get("runtime")
+            runtime = dict(runtime_node) if isinstance(runtime_node, Mapping) else {}
+            git_node = task.get("git")
+            git = dict(git_node) if isinstance(git_node, Mapping) else {}
+            publish_node = task.get("publish")
+            publish = dict(publish_node) if isinstance(publish_node, Mapping) else {}
+            task_create_request: dict[str, Any] = {
+                "type": "task",
+                "payload": {
+                    "repository": repo,
+                    "task": {
+                        "instructions": cls._build_telemetry_signal_instructions(
+                            workflow_id=workflow_id,
+                            label=label,
+                            summary=summary,
+                            instructions=instructions,
+                            diagnostics_ref=diagnostics_ref,
+                        ),
+                        "runtime": runtime,
+                        "git": git,
+                        "publish": publish,
+                    },
+                },
+            }
+            cls._preserve_compact_task_metadata(
+                source_task=task,
+                target_task=task_create_request["payload"]["task"],
+            )
+            candidate_signal = {
+                key: deepcopy(value)
+                for key, value in signal.items()
+                if key
+                in {
+                    "type",
+                    "kind",
+                    "severity",
+                    "summary",
+                    "message",
+                    "reason",
+                    "retries",
+                    "missing_refs",
+                    "diagnostics_ref",
+                }
+            }
+            candidate_signal["type"] = primary_tag
+            candidate_signal["severity"] = severity
+            candidate_signal["tags"] = list(tags)
+            candidate_signal["summary"] = summary
+            candidates.append(
+                {
+                    "title": title,
+                    "summary": (
+                        f"Telemetry signal from workflow {workflow_id or 'unknown'}: "
+                        f"{summary}"
+                    ),
+                    "category": "run_quality",
+                    "tags": list(tags),
+                    "severity": severity,
+                    "signal": candidate_signal,
+                    "taskCreateRequest": task_create_request,
+                }
+            )
+        return candidates
+
+    @classmethod
     def _validate_candidate_task_create_request(
         cls, request: Mapping[str, Any], *, default_runtime: str | None
     ) -> dict[str, Any]:
@@ -3018,9 +3594,19 @@ class TemporalProposalActivities:
         )
 
         if not proposal_idea:
+            telemetry_candidates = self._telemetry_signal_candidates(
+                payload=payload,
+                repo=repo,
+                workflow_id=workflow_id,
+                instructions=instructions,
+                task=task,
+            )
+            if telemetry_candidates:
+                return telemetry_candidates
             # Do not create generic proposals whose title simply repeats the
             # completed workflow. The fallback path only emits a proposal when
-            # it receives an explicit next-step idea from upstream context.
+            # it receives an explicit next-step idea or telemetry signal from
+            # upstream context.
             return []
 
         normalized_title = proposal_idea
@@ -3350,6 +3936,18 @@ class TemporalProposalActivities:
                         )
 
                         origin_source = TaskProposalOriginSource.WORKFLOW
+                        candidate_signal = candidate.get("signal")
+                        signal_metadata = (
+                            deepcopy(dict(candidate_signal))
+                            if isinstance(candidate_signal, Mapping)
+                            else {"severity": "normal", "type": "follow_up"}
+                        )
+                        signal_metadata.setdefault("severity", severity)
+                        if tags:
+                            signal_metadata.setdefault("tags", list(tags))
+                        if not signal_metadata.get("type") and tags:
+                            signal_metadata["type"] = tags[0]
+                        signal_metadata.setdefault("type", "follow_up")
                         origin_metadata = {
                             "source": "workflow",
                             "id": workflow_id,
@@ -3357,7 +3955,7 @@ class TemporalProposalActivities:
                             "temporal_run_id": run_id,
                             "trigger_repo": trigger_repo,
                             "trigger_job_id": trigger_job_id,
-                            "signal": {"severity": "normal", "type": "follow_up"},
+                            "signal": signal_metadata,
                         }
                         proposal = await service.create_proposal(
                             title=title,
@@ -3564,6 +4162,118 @@ class TemporalAgentRuntimeActivities:
             client_adapter = temporal_client_module.TemporalClientAdapter()
         self._client_adapter = client_adapter
         self._supervision_tasks: set[asyncio.Task] = set()
+
+    async def execution_notify_completion(
+        self,
+        request: Any = None,
+        /,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Best-effort webhook notification for terminal agent-run results."""
+
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="execution.notify_completion",
+            kwargs=kwargs,
+        )
+        notification_settings = settings.execution_notifications
+        webhook_url = str(notification_settings.webhook_url or "").strip()
+        email_recipients = _coerce_notification_recipients(
+            notification_settings.email_to
+        )
+        email_sender = str(notification_settings.email_from or "").strip()
+        smtp_host = str(notification_settings.smtp_host or "").strip()
+        email_configured = bool(email_recipients and email_sender and smtp_host)
+        if not notification_settings.enabled:
+            return {"status": "skipped", "reason": "disabled"}
+        if not webhook_url and not email_configured:
+            return {"status": "skipped", "reason": "no_channels"}
+
+        event = _build_execution_notification_payload(payload)
+        results: list[dict[str, str]] = []
+        errors: list[dict[str, str]] = []
+        timeout_seconds = max(1, int(notification_settings.timeout_seconds or 5))
+        if webhook_url:
+            headers = {"Content-Type": "application/json"}
+            authorization = str(notification_settings.authorization or "").strip()
+            if authorization:
+                headers["Authorization"] = authorization
+            try:
+                async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+                    response = await client.post(
+                        webhook_url,
+                        json=event,
+                        headers=headers,
+                    )
+                    response.raise_for_status()
+            except Exception as exc:  # pragma: no cover - best effort telemetry
+                logger.warning("Execution completion webhook failed: %s", exc)
+                errors.append(
+                    {
+                        "channel": "webhook",
+                        "reason": redact_sensitive_text(str(exc)),
+                        "target": _redacted_webhook_target(webhook_url),
+                    }
+                )
+            else:
+                results.append(
+                    {
+                        "channel": "webhook",
+                        "target": _redacted_webhook_target(webhook_url),
+                    }
+                )
+        if email_configured:
+            try:
+                await asyncio.to_thread(
+                    _send_execution_notification_email,
+                    event,
+                    sender=email_sender,
+                    recipients=email_recipients,
+                    smtp_host=smtp_host,
+                    smtp_port=int(notification_settings.smtp_port),
+                    smtp_username=notification_settings.smtp_username,
+                    smtp_password=notification_settings.smtp_password,
+                    smtp_use_tls=bool(notification_settings.smtp_use_tls),
+                    smtp_use_ssl=bool(notification_settings.smtp_use_ssl),
+                    timeout_seconds=timeout_seconds,
+                )
+            except Exception as exc:  # pragma: no cover - best effort telemetry
+                logger.warning("Execution completion email failed: %s", exc)
+                errors.append(
+                    {
+                        "channel": "email",
+                        "reason": redact_sensitive_text(str(exc)),
+                        "target": _redacted_email_target(email_recipients),
+                    }
+                )
+            else:
+                results.append(
+                    {
+                        "channel": "email",
+                        "target": _redacted_email_target(email_recipients),
+                    }
+                )
+        if errors and not results:
+            if len(errors) == 1:
+                return {
+                    "status": "failed",
+                    "reason": errors[0]["reason"],
+                    "target": errors[0]["target"],
+                }
+            return {"status": "failed", "errors": errors}
+        if len(results) == 1:
+            result: dict[str, Any] = {"status": "sent", "target": results[0]["target"]}
+            if errors:
+                result["errors"] = errors
+            return result
+        result = {
+            "status": "sent",
+            "channels": [result["channel"] for result in results],
+            "targets": [result["target"] for result in results],
+        }
+        if errors:
+            result["errors"] = errors
+        return result
 
     async def oauth_session_ensure_volume(
         self,
@@ -4064,6 +4774,51 @@ class TemporalAgentRuntimeActivities:
         except RuntimeError:
             info = None
 
+        async def _notify_terminal_result(
+            published_result: AgentRunResult | Mapping[str, Any],
+        ) -> None:
+            result_payload = (
+                published_result.model_dump(mode="json", by_alias=True)
+                if isinstance(published_result, BaseModel)
+                else dict(published_result)
+            )
+            result_metadata = (
+                result_payload.get("metadata")
+                if isinstance(result_payload.get("metadata"), Mapping)
+                else {}
+            )
+            try:
+                await self.execution_notify_completion(
+                    {
+                        "workflowId": (
+                            info.workflow_id
+                            if info is not None
+                            else result_metadata.get("childWorkflowId", "")
+                        ),
+                        "runId": (
+                            info.workflow_run_id
+                            if info is not None
+                            else result_metadata.get("childRunId", "")
+                        ),
+                        "agentId": result_metadata.get("agentId", ""),
+                        "agentKind": result_metadata.get("agentKind", ""),
+                        "status": (
+                            result_metadata.get("status")
+                            or (
+                                "failed"
+                                if result_payload.get("failureClass")
+                                else "completed"
+                            )
+                        ),
+                        "result": result_payload,
+                    }
+                )
+            except Exception:
+                logger.warning(
+                    "agent_runtime.publish_artifacts completion notification failed",
+                    exc_info=True,
+                )
+
         def _execution_ref(link_type: str) -> ExecutionRef | None:
             if info is None:
                 return None
@@ -4552,6 +5307,7 @@ class TemporalAgentRuntimeActivities:
                 # Remove snake_case if alias is present to avoid Pydantic validation errors
                 if "diagnosticsRef" in enriched and "diagnostics_ref" in enriched:
                     del enriched["diagnostics_ref"]
+                await _notify_terminal_result(enriched)
                 return enriched
             if hasattr(result, "diagnostics_ref"):
                 result.diagnostics_ref = agent_result_ref.artifact_id
@@ -4568,6 +5324,7 @@ class TemporalAgentRuntimeActivities:
                     }
                 )
                 result.metadata = enriched_metadata
+            await _notify_terminal_result(result)
             return result
         except Exception as exc:
             logger.warning(

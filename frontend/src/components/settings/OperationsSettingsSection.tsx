@@ -20,6 +20,7 @@ const WorkerSnapshotSchema = z.object({
       running: z.number().optional(),
       staleRunning: z.number().optional(),
       isDrained: z.boolean().optional(),
+      metricsSource: z.string().optional(),
     })
     .optional(),
   audit: z
@@ -60,77 +61,104 @@ const WorkerSnapshotSchema = z.object({
 
 type WorkerSnapshot = z.infer<typeof WorkerSnapshotSchema>;
 
+const WorkerShardHealthSchema = z.object({
+  shards: z
+    .array(
+      z.object({
+        queueName: z.string(),
+        status: z.string(),
+        hashModulo: z.number().optional(),
+        workerHostname: z.string().nullable().optional(),
+        volumeName: z.string().nullable().optional(),
+        volumeStatus: z.string().nullable().optional(),
+        volumeLastVerifiedAt: z.string().nullable().optional(),
+        volumeWorkerAffinity: z.string().nullable().optional(),
+        volumeNotes: z.string().nullable().optional(),
+        latestRunId: z.string().nullable().optional(),
+        latestRunStatus: z.string().nullable().optional(),
+        latestPreflightStatus: z.string().nullable().optional(),
+        latestPreflightMessage: z.string().nullable().optional(),
+        latestPreflightCheckedAt: z.string().nullable().optional(),
+      }),
+    )
+    .default([]),
+});
+
+type WorkerShardHealth = z.infer<typeof WorkerShardHealthSchema>;
+type WorkerShard = WorkerShardHealth['shards'][number];
+
+const DeploymentActionSchema = z
+  .object({
+    kind: z.string().optional().nullable(),
+    status: z.string().optional().nullable(),
+    requestedImage: z.string().optional().nullable(),
+    resolvedDigest: z.string().optional().nullable(),
+    operator: z.string().optional().nullable(),
+    reason: z.string().optional().nullable(),
+    startedAt: z.string().optional().nullable(),
+    completedAt: z.string().optional().nullable(),
+    runDetailUrl: z.string().optional().nullable(),
+    logsArtifactUrl: z.string().optional().nullable(),
+    rawCommandLogUrl: z.string().optional().nullable(),
+    rawCommandLogPermitted: z.boolean().optional(),
+    id: z.union([z.string(), z.number()]).optional().nullable(),
+    runId: z.string().optional().nullable(),
+    beforeSummary: z.string().optional().nullable(),
+    afterSummary: z.string().optional().nullable(),
+    beforeBuildId: z.string().optional().nullable(),
+    afterBuildId: z.string().optional().nullable(),
+    rollbackEligibility: z
+      .object({
+        eligible: z.boolean(),
+        sourceActionId: z.string().optional().nullable(),
+        targetImage: z
+          .object({
+            repository: z.string(),
+            reference: z.string(),
+          })
+          .optional()
+          .nullable(),
+        reason: z.string().optional().nullable(),
+        evidenceRef: z.string().optional().nullable(),
+      })
+      .optional()
+      .nullable(),
+  })
+  .passthrough();
+
+const DeploymentCurrentImageSchema = z
+  .object({
+    requestedImage: z.string().optional().nullable(),
+    deployedImage: z.string().optional().nullable(),
+    repository: z.string().optional().nullable(),
+    reference: z.string().optional().nullable(),
+    resolvedDigest: z.string().optional().nullable(),
+    sourceRunId: z.string().optional().nullable(),
+    updatedAt: z.string().optional().nullable(),
+    evidence: z.string().optional().nullable(),
+  })
+  .passthrough();
+
+const DeploymentPolicySchema = z
+  .object({
+    repository: z.string(),
+    defaultReference: z.string().optional().nullable(),
+    allowedReferences: z.array(z.string()).default([]),
+    recentTags: z.array(z.string()).default([]),
+    mutableReferences: z.array(z.string()).default([]),
+    allowedModes: z.array(z.string()).default([]),
+  })
+  .passthrough();
+
 const DeploymentStackStateSchema = z
   .object({
     stack: z.string(),
     projectName: z.string(),
-    configuredImage: z.string(),
-    version: z.string().optional().nullable(),
-    build: z.string().optional().nullable(),
-    runningImages: z
-      .array(
-        z
-          .object({
-            service: z.string(),
-            image: z.string(),
-            imageId: z.string().optional().nullable(),
-            digest: z.string().optional().nullable(),
-          })
-          .passthrough(),
-      )
-      .default([]),
-    services: z
-      .array(
-        z
-          .object({
-            name: z.string(),
-            state: z.string(),
-            health: z.string().optional().nullable(),
-          })
-          .passthrough(),
-      )
-      .default([]),
-    lastUpdateRunId: z.string().optional().nullable(),
-    recentActions: z
-      .array(
-        z
-          .object({
-            status: z.string().optional().nullable(),
-            requestedImage: z.string().optional().nullable(),
-            resolvedDigest: z.string().optional().nullable(),
-            operator: z.string().optional().nullable(),
-            reason: z.string().optional().nullable(),
-            startedAt: z.string().optional().nullable(),
-            completedAt: z.string().optional().nullable(),
-            runDetailUrl: z.string().optional().nullable(),
-            logsArtifactUrl: z.string().optional().nullable(),
-            rawCommandLogUrl: z.string().optional().nullable(),
-            rawCommandLogPermitted: z.boolean().optional(),
-            id: z.union([z.string(), z.number()]).optional().nullable(),
-            runId: z.string().optional().nullable(),
-            beforeSummary: z.string().optional().nullable(),
-            afterSummary: z.string().optional().nullable(),
-            rollbackEligibility: z
-              .object({
-                eligible: z.boolean(),
-                sourceActionId: z.string().optional().nullable(),
-                targetImage: z
-                  .object({
-                    repository: z.string(),
-                    reference: z.string(),
-                  })
-                  .optional()
-                  .nullable(),
-                reason: z.string().optional().nullable(),
-                evidenceRef: z.string().optional().nullable(),
-              })
-              .optional()
-              .nullable(),
-          })
-          .passthrough(),
-      )
-      .optional()
-      .default([]),
+    buildId: z.string().optional().nullable(),
+    currentImage: DeploymentCurrentImageSchema.default({ evidence: 'unavailable' }),
+    latestAction: DeploymentActionSchema.optional().nullable(),
+    recentActions: z.array(DeploymentActionSchema).optional().default([]),
+    policy: DeploymentPolicySchema,
   })
   .passthrough();
 
@@ -158,21 +186,40 @@ type DeploymentAction = DeploymentStackState['recentActions'][number];
 export interface WorkerPauseConfig {
   get: string;
   post: string;
+  shardHealth?: string;
   pollIntervalMs?: number;
 }
 
 const DEPLOYMENT_STACK = 'moonmind';
 
+const DEFAULT_UPDATE_OPTIONS = {
+  mode: 'changed_services',
+  removeOrphans: true,
+  wait: true,
+  runSmokeCheck: false,
+  pauseWork: false,
+  pruneOldImages: false,
+} as const;
+
 function uniqueStrings(values: string[]): string[] {
   return values.filter((value, index) => value && values.indexOf(value) === index);
 }
 
-function isMutableReference(reference: string): boolean {
+const DEFAULT_TARGET_REFERENCE = 'latest';
+
+function isMutableReference(
+  reference: string,
+  mutableReferences: string[] = [],
+): boolean {
   const normalized = reference.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (mutableReferences.some((value) => value.toLowerCase() === normalized)) {
+    return true;
+  }
   return normalized === 'latest' || normalized === 'stable';
 }
-
-const DEFAULT_TARGET_REFERENCE = 'latest';
 
 function modeLabel(mode: string): string {
   if (mode === 'force_recreate') {
@@ -181,16 +228,44 @@ function modeLabel(mode: string): string {
   return 'Restart changed services';
 }
 
-function modeDescription(mode: string): string {
-  if (mode === 'force_recreate') {
-    return 'Pull images and recreate every service in the allowlisted stack.';
+function shortenDigest(digest: string | null | undefined): string | null {
+  const value = String(digest || '').trim();
+  if (!value) {
+    return null;
   }
-  return 'Pull images and recreate services whose image or configuration changed.';
+  const body = value.startsWith('sha256:') ? value.slice('sha256:'.length) : value;
+  if (body.length <= 12) {
+    return value;
+  }
+  return `sha256:${body.slice(0, 12)}…`;
 }
 
-function affectedServices(state: DeploymentStackState | undefined): string {
-  const names = state?.services.map((service) => service.name).filter(Boolean) ?? [];
-  return names.length > 0 ? names.join(', ') : 'services reported by deployment policy';
+function currentVersionLabel(buildId: string | null | undefined): string {
+  const value = String(buildId || '').trim();
+  return value ? `v${value}` : 'Unavailable';
+}
+
+function Metric({
+  label,
+  value,
+  mono = false,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+}) {
+  return (
+    <div className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800/50">
+      <div className="text-sm font-medium text-slate-500 dark:text-slate-400">{label}</div>
+      <div
+        className={`mt-1 break-all font-semibold text-slate-900 dark:text-white ${
+          mono ? 'font-mono text-sm' : 'text-base'
+        }`}
+      >
+        {value}
+      </div>
+    </div>
+  );
 }
 
 function deploymentActionKey(action: DeploymentAction): string {
@@ -219,6 +294,21 @@ function operationIdempotencyKey(action: string): string {
   return `worker-${action}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function workerStatusTone(status: string | null | undefined): string {
+  const normalized = String(status || '').toLowerCase();
+  if (normalized === 'active' || normalized === 'healthy' || normalized === 'passed') {
+    return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300';
+  }
+  if (normalized === 'offline' || normalized === 'failed' || normalized === 'error') {
+    return 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300';
+  }
+  return 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300';
+}
+
+function workerDisplayName(shard: WorkerShard): string {
+  return shard.workerHostname || shard.queueName;
+}
+
 export function OperationsSettingsSection({
   workerPauseConfig,
 }: {
@@ -228,22 +318,19 @@ export function OperationsSettingsSection({
   const [notice, setNotice] = useState<{ level: 'ok' | 'error'; text: string } | null>(
     null,
   );
-  const [deploymentNotice, setDeploymentNotice] = useState<{
+  const [updateNotice, setUpdateNotice] = useState<{
+    level: 'ok' | 'error';
+    text: string;
+  } | null>(null);
+  const [rollbackNotice, setRollbackNotice] = useState<{
     level: 'ok' | 'error';
     text: string;
   } | null>(null);
   const [pauseMode, setPauseMode] = useState('drain');
   const [pauseReason, setPauseReason] = useState('');
   const [resumeReason, setResumeReason] = useState('');
-  const [targetRepository, setTargetRepository] = useState('');
   const [targetReference, setTargetReference] = useState(DEFAULT_TARGET_REFERENCE);
-  const [updateMode, setUpdateMode] = useState('changed_services');
-  const [removeOrphans, setRemoveOrphans] = useState(true);
-  const [waitForServices, setWaitForServices] = useState(true);
-  const [runSmokeCheck, setRunSmokeCheck] = useState(false);
-  const [pauseWork, setPauseWork] = useState(false);
-  const [pruneOldImages, setPruneOldImages] = useState(false);
-  const [deploymentReason, setDeploymentReason] = useState('');
+  const [updateMode, setUpdateMode] = useState<string>(DEFAULT_UPDATE_OPTIONS.mode);
 
   const {
     data: snapshot,
@@ -267,6 +354,32 @@ export function OperationsSettingsSection({
     enabled: workerPauseConfig !== null,
     refetchInterval:
       workerPauseConfig !== null
+        ? Math.max(1000, Number(workerPauseConfig.pollIntervalMs) || 5000)
+        : false,
+  });
+
+  const {
+    data: shardHealth,
+    isLoading: isShardHealthLoading,
+    isError: isShardHealthError,
+    error: shardHealthError,
+  } = useQuery<WorkerShardHealth>({
+    queryKey: ['worker-shard-health'],
+    queryFn: async () => {
+      if (!workerPauseConfig?.shardHealth) {
+        throw new Error('Worker shard health is not configured for this deployment.');
+      }
+      const response = await fetch(workerPauseConfig.shardHealth, {
+        headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to fetch worker shard health: ${response.statusText}`);
+      }
+      return WorkerShardHealthSchema.parse(await response.json());
+    },
+    enabled: Boolean(workerPauseConfig?.shardHealth),
+    refetchInterval:
+      workerPauseConfig?.shardHealth
         ? Math.max(1000, Number(workerPauseConfig.pollIntervalMs) || 5000)
         : false,
   });
@@ -373,40 +486,37 @@ export function OperationsSettingsSection({
     },
   });
 
-  const activeTargetRepository = useMemo(
-    () =>
-      imageTargets?.repositories.find(
-        (repository) => repository.repository === targetRepository,
-      ) ?? imageTargets?.repositories[0],
-    [imageTargets, targetRepository],
-  );
+  const activeTargetRepository = imageTargets?.repositories[0];
+
+  const repository =
+    activeTargetRepository?.repository ||
+    deploymentState?.policy.repository ||
+    deploymentState?.currentImage.repository ||
+    '';
 
   const referenceOptions = useMemo(
     () =>
       uniqueStrings([
-        ...(activeTargetRepository?.recentTags ?? []),
-        ...(activeTargetRepository?.allowedReferences ?? []),
+        ...(activeTargetRepository?.recentTags ?? deploymentState?.policy.recentTags ?? []),
+        ...(activeTargetRepository?.allowedReferences ??
+          deploymentState?.policy.allowedReferences ??
+          []),
       ]),
-    [activeTargetRepository],
+    [activeTargetRepository, deploymentState],
   );
 
-  const allowedModes = useMemo(
-    () => {
-      const explicitModes = activeTargetRepository?.allowedModes?.filter(Boolean) ?? [];
-      return explicitModes.length > 0 ? explicitModes : ['changed_services'];
-    },
-    [activeTargetRepository],
+  const mutableReferences = useMemo(
+    () => deploymentState?.policy.mutableReferences ?? [],
+    [deploymentState],
   );
 
-  useEffect(() => {
-    const firstRepository = imageTargets?.repositories[0];
-    if (!firstRepository) {
-      return;
-    }
-    if (!targetRepository) {
-      setTargetRepository(firstRepository.repository);
-    }
-  }, [imageTargets, targetRepository]);
+  const allowedModes = useMemo(() => {
+    const explicitModes =
+      activeTargetRepository?.allowedModes?.filter(Boolean) ??
+      deploymentState?.policy.allowedModes?.filter(Boolean) ??
+      [];
+    return explicitModes.length > 0 ? explicitModes : ['changed_services'];
+  }, [activeTargetRepository, deploymentState]);
 
   useEffect(() => {
     if (allowedModes.length > 0 && !allowedModes.includes(updateMode)) {
@@ -416,23 +526,24 @@ export function OperationsSettingsSection({
 
   const deploymentMutation = useMutation({
     mutationFn: async () => {
-      const repository = targetRepository || activeTargetRepository?.repository || '';
       const reference = targetReference.trim();
-      const reason = deploymentReason.trim();
       if (!repository || !reference) {
         throw new Error('Target image is required.');
       }
 
       const targetImage = `${repository}:${reference}`;
+      const currentImageLabel =
+        deploymentState?.currentImage.deployedImage ||
+        deploymentState?.currentImage.requestedImage ||
+        'Unavailable';
       const confirmation = [
-        'Submit deployment update?',
-        `Current image: ${deploymentState?.configuredImage || 'Unavailable'}`,
+        'Update MoonMind?',
+        `Current version: ${currentVersionLabel(deploymentState?.buildId)}`,
+        `Current image: ${currentImageLabel}`,
         `Target image: ${targetImage}`,
         `Mode: ${modeLabel(updateMode)}`,
-        `Stack: ${deploymentState?.stack || DEPLOYMENT_STACK}`,
-        `Expected affected services: ${affectedServices(deploymentState)}`,
-        isMutableReference(reference)
-          ? 'Mutable tag warning: this tag may resolve differently over time.'
+        isMutableReference(reference, mutableReferences)
+          ? `${reference} is mutable; the update run records the resolved digest.`
           : null,
         'Services may restart during this operation.',
       ]
@@ -455,13 +566,8 @@ export function OperationsSettingsSection({
             repository,
             reference,
           },
+          ...DEFAULT_UPDATE_OPTIONS,
           mode: updateMode,
-          removeOrphans,
-          wait: waitForServices,
-          runSmokeCheck,
-          pauseWork,
-          pruneOldImages,
-          ...(reason ? { reason } : {}),
         }),
       });
       if (!response.ok) {
@@ -480,15 +586,14 @@ export function OperationsSettingsSection({
       if (!result) {
         return;
       }
-      setDeploymentNotice({
+      setUpdateNotice({
         level: 'ok',
         text: `Deployment update queued: ${result.deploymentUpdateRunId}`,
       });
-      setDeploymentReason('');
       queryClient.invalidateQueries({ queryKey: ['deployment-stack', DEPLOYMENT_STACK] });
     },
     onError: (mutationError: Error) => {
-      setDeploymentNotice({
+      setUpdateNotice({
         level: 'error',
         text: mutationError.message,
       });
@@ -558,23 +663,40 @@ export function OperationsSettingsSection({
       if (!result) {
         return;
       }
-      setDeploymentNotice({
+      setRollbackNotice({
         level: 'ok',
         text: `Deployment rollback queued: ${result.deploymentUpdateRunId}`,
       });
       queryClient.invalidateQueries({ queryKey: ['deployment-stack', DEPLOYMENT_STACK] });
     },
     onError: (mutationError: Error) => {
-      setDeploymentNotice({
+      setRollbackNotice({
         level: 'error',
         text: mutationError.message,
       });
     },
   });
 
+  const renderDeploymentNotice = (
+    notice: { level: 'ok' | 'error'; text: string } | null,
+  ) =>
+    notice ? (
+      <div
+        role={notice.level === 'error' ? 'alert' : 'status'}
+        aria-live="polite"
+        className={`rounded-2xl border px-4 py-3 text-sm ${
+          notice.level === 'error'
+            ? 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-400'
+            : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-400'
+        }`}
+      >
+        {notice.text}
+      </div>
+    ) : null;
+
   const handleDeploymentSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setDeploymentNotice(null);
+    setUpdateNotice(null);
     deploymentMutation.mutate();
   };
 
@@ -631,9 +753,34 @@ export function OperationsSettingsSection({
     });
   };
 
+  const latestAction = deploymentState?.latestAction;
+  const latestActionSummary = latestAction
+    ? [
+        formatStatusLabel(latestAction.status, 'UNKNOWN'),
+        latestAction.completedAt || latestAction.startedAt,
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : 'No previous update';
+
   const system = snapshot?.system ?? {};
   const metrics = snapshot?.metrics ?? {};
   const commands = snapshot?.commands ?? [];
+  const hasShardHealthConfig = Boolean(workerPauseConfig?.shardHealth);
+  const workerShards = shardHealth?.shards ?? [];
+  const unavailableCommands = commands.filter((command) => !command.available);
+  const commandTargets = uniqueStrings(commands.map((command) => command.target || 'workers'));
+  const hasUnavailableWorker = workerShards.some((shard) => {
+    const status = String(shard.status || '').toLowerCase();
+    const preflightStatus = String(shard.latestPreflightStatus || '').toLowerCase();
+    return status === 'offline' || preflightStatus === 'failed';
+  });
+  const fleetHealthStatus =
+    (metrics.staleRunning && metrics.staleRunning > 0) || hasUnavailableWorker
+      ? 'Attention required'
+      : isError || isShardHealthError
+        ? 'Unavailable'
+        : 'Healthy';
   const isPaused = Boolean(system.workersPaused);
   const stateLabel = isPaused
     ? system.mode === 'quiesce'
@@ -655,159 +802,143 @@ export function OperationsSettingsSection({
 
       <section
         className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm"
-        aria-label="Deployment Update"
+        aria-label="MoonMind update"
       >
-        <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
-          <div className="space-y-2">
-            <h4 className="text-lg font-semibold text-slate-900 dark:text-white">
-              Deployment Update
-            </h4>
-            <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-400">
-              Update the configured MoonMind image for the allowlisted Compose stack.
-            </p>
-          </div>
-          {deploymentNotice ? (
-            <div
-              className={`rounded-2xl border px-4 py-3 text-sm ${
-                deploymentNotice.level === 'error'
-                  ? 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-400'
-                  : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-400'
-              }`}
-            >
-              {deploymentNotice.text}
-            </div>
-          ) : null}
+        <div className="space-y-2">
+          <h4 className="text-lg font-semibold text-slate-900 dark:text-white">
+            MoonMind update
+          </h4>
+          <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-400">
+            Update this MoonMind instance to a new image tag or digest.
+          </p>
         </div>
 
         {isDeploymentStateLoading || areImageTargetsLoading ? (
-          <p className="mt-5 text-sm text-slate-500 dark:text-slate-400">
-            Loading deployment controls...
-          </p>
+          <div className="mt-5 space-y-3">
+            <p className="text-sm text-slate-500 dark:text-slate-400">
+              Loading update controls...
+            </p>
+            {renderDeploymentNotice(updateNotice)}
+          </div>
         ) : isDeploymentStateError || areImageTargetsError ? (
-          <p className="mt-5 text-sm text-rose-700 dark:text-rose-400">
-            {((deploymentStateError || imageTargetsError) as Error).message}
-          </p>
+          <div className="mt-5 space-y-3">
+            <p className="text-sm text-rose-700 dark:text-rose-400">
+              {((deploymentStateError || imageTargetsError) as Error).message}
+            </p>
+            {renderDeploymentNotice(updateNotice)}
+          </div>
         ) : (
-          <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.8fr)]">
-            <div className="space-y-4">
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                <div className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800/50">
-                  <div className="text-sm font-medium text-slate-500 dark:text-slate-400">
-                    Stack
-                  </div>
-                  <div className="mt-1 text-base font-semibold text-slate-900 dark:text-white">
-                    {deploymentState?.stack || DEPLOYMENT_STACK}
-                  </div>
-                </div>
-                <div className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800/50">
-                  <div className="text-sm font-medium text-slate-500 dark:text-slate-400">
-                    Compose project
-                  </div>
-                  <div className="mt-1 text-base font-semibold text-slate-900 dark:text-white">
-                    {deploymentState?.projectName || '-'}
-                  </div>
-                </div>
-                <div className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800/50">
-                  <div className="text-sm font-medium text-slate-500 dark:text-slate-400">
-                    Version/build
-                  </div>
-                  <div className="mt-1 text-base font-semibold text-slate-900 dark:text-white">
-                    {deploymentState?.version || deploymentState?.build || 'Unavailable'}
-                  </div>
-                </div>
-              </div>
+          <div className="mt-6 space-y-6">
+            <div className="grid gap-4 md:grid-cols-3">
+              <Metric
+                label="Current version"
+                value={currentVersionLabel(deploymentState?.buildId)}
+              />
+              <Metric
+                label="Running image"
+                value={
+                  deploymentState?.currentImage.deployedImage ||
+                  deploymentState?.currentImage.requestedImage ||
+                  'Unavailable'
+                }
+                mono
+              />
+              <Metric label="Last update" value={latestActionSummary} />
+            </div>
+            {!deploymentState?.buildId ? (
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Build metadata unavailable for this image.
+              </p>
+            ) : null}
 
-              <div className="rounded-2xl border border-slate-200 p-4 dark:border-slate-800">
-                <h5 className="text-sm font-semibold text-slate-900 dark:text-white">
-                  Current deployment
-                </h5>
-                <dl className="mt-3 space-y-3 text-sm">
-                  <div>
-                    <dt className="font-medium text-slate-500 dark:text-slate-400">
-                      Configured image
-                    </dt>
-                    <dd className="break-all text-slate-900 dark:text-white">
-                      {deploymentState?.configuredImage || 'Unavailable'}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="font-medium text-slate-500 dark:text-slate-400">
-                      Running image evidence
-                    </dt>
-                    <dd className="space-y-1 text-slate-900 dark:text-white">
-                      {deploymentState?.runningImages.length ? (
-                        deploymentState.runningImages.map((image) => (
-                          <div key={`${image.service}-${image.image}`}>
-                            {image.service}: {image.imageId || image.digest || 'Unavailable'}
-                          </div>
-                        ))
-                      ) : (
-                        <span>Unavailable</span>
-                      )}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="font-medium text-slate-500 dark:text-slate-400">
-                      Health summary
-                    </dt>
-                    <dd className="text-slate-900 dark:text-white">
-                      {deploymentState?.services.length
-                        ? deploymentState.services
-                            .map(
-                              (service) =>
-                                `${service.name}: ${formatStatusLabel(service.state)}${
-                                  service.health ? ` / ${formatStatusLabel(service.health)}` : ''
-                                }`,
-                            )
-                            .join(', ')
-                        : 'Unavailable'}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="font-medium text-slate-500 dark:text-slate-400">
-                      Last update result
-                    </dt>
-                    <dd className="text-slate-900 dark:text-white">
-                      {deploymentState?.lastUpdateRunId || 'No previous update'}
-                    </dd>
-                  </div>
-                </dl>
-              </div>
+            <form
+              className="space-y-4 rounded-2xl border border-slate-200 p-5 dark:border-slate-800"
+              onSubmit={handleDeploymentSubmit}
+              noValidate
+            >
+              <label className="block space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
+                <span>Update to</span>
+                <input
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                  list="deployment-target-references"
+                  value={targetReference}
+                  onChange={(event) => setTargetReference(event.target.value)}
+                />
+                <datalist id="deployment-target-references">
+                  {referenceOptions.map((reference) => (
+                    <option key={reference} value={reference}>
+                      {reference}
+                    </option>
+                  ))}
+                </datalist>
+              </label>
+              <p className="break-all text-xs text-slate-500 dark:text-slate-400">
+                Repository: {repository || 'Unavailable'}
+              </p>
+              {isMutableReference(targetReference, mutableReferences) ? (
+                <p className="text-xs text-amber-700 dark:text-amber-300">
+                  {targetReference} is mutable; the update run records the resolved
+                  digest.
+                </p>
+              ) : null}
 
-              <div className="rounded-2xl border border-slate-200 p-4 dark:border-slate-800">
-                <h5 className="text-sm font-semibold text-slate-900 dark:text-white">
-                  Recent deployment actions
-                </h5>
-                <div className="mt-3 space-y-3">
-                  {deploymentState?.recentActions.length ? (
-                    deploymentState.recentActions.map((action) => (
+              <button
+                type="submit"
+                disabled={deploymentMutation.isPending}
+                className="inline-flex items-center justify-center rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-200"
+              >
+                Update MoonMind
+              </button>
+
+              {renderDeploymentNotice(updateNotice)}
+            </form>
+
+            <div className="rounded-2xl border border-slate-200 p-4 dark:border-slate-800">
+              <h5 className="text-sm font-semibold text-slate-900 dark:text-white">
+                Update history
+              </h5>
+              <div className="mt-3 space-y-3">
+                {renderDeploymentNotice(rollbackNotice)}
+                {deploymentState?.recentActions.length ? (
+                  deploymentState.recentActions.map((action) => {
+                    const target =
+                      action.rollbackEligibility?.targetImage?.reference ||
+                      action.requestedImage ||
+                      'Requested image unavailable';
+                    const digest = shortenDigest(action.resolvedDigest);
+                    const beforeBuild = action.beforeBuildId
+                      ? `v${action.beforeBuildId}`
+                      : null;
+                    const afterBuild = action.afterBuildId
+                      ? `v${action.afterBuildId}`
+                      : null;
+                    return (
                       <div
                         key={deploymentActionKey(action)}
                         className="rounded-2xl bg-slate-50 p-4 text-sm dark:bg-slate-800/50"
                       >
                         <div className="font-semibold text-slate-900 dark:text-white">
                           {formatStatusLabel(action.status, 'UNKNOWN')}
+                          <span className="font-normal text-slate-600 dark:text-slate-400">
+                            {' '}
+                            · {target}
+                          </span>
                         </div>
-                        <div className="mt-1 break-all text-slate-600 dark:text-slate-400">
-                          {action.requestedImage || 'Requested image unavailable'}
-                        </div>
-                        {action.resolvedDigest ? (
-                          <div className="mt-1 break-all text-xs text-slate-500 dark:text-slate-400">
-                            Resolved digest: {action.resolvedDigest}
+                        {digest ? (
+                          <div className="mt-1 break-all font-mono text-xs text-slate-500 dark:text-slate-400">
+                            {action.requestedImage ? `${action.requestedImage} → ` : ''}
+                            {digest}
                           </div>
                         ) : null}
-                        <div className="mt-2 text-slate-600 dark:text-slate-400">
-                          {action.operator || 'Unknown operator'} |{' '}
-                          {action.reason || '(no reason)'}
-                        </div>
-                        <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                          {action.startedAt || '-'} {'->'} {action.completedAt || '-'}
-                        </div>
-                        {(action.beforeSummary || action.afterSummary) ? (
+                        {beforeBuild || afterBuild ? (
                           <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                            {action.beforeSummary || '-'} {'->'} {action.afterSummary || '-'}
+                            {beforeBuild || 'unknown'} {'→'} {afterBuild || 'unknown'}
                           </div>
                         ) : null}
+                        <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                          {action.completedAt || action.startedAt || '-'}
+                          {action.operator ? ` · ${action.operator}` : ''}
+                        </div>
                         <div className="mt-3 flex flex-wrap gap-3">
                           {action.runDetailUrl ? (
                             <a
@@ -822,7 +953,7 @@ export function OperationsSettingsSection({
                               className="text-sm font-medium text-sky-700 hover:text-sky-600 dark:text-sky-400"
                               href={action.logsArtifactUrl}
                             >
-                              Logs artifact
+                              Logs
                             </a>
                           ) : null}
                           {action.rawCommandLogPermitted && action.rawCommandLogUrl ? (
@@ -851,150 +982,87 @@ export function OperationsSettingsSection({
                           ) : null}
                         </div>
                       </div>
-                    ))
-                  ) : (
-                    <p className="text-sm text-slate-500 dark:text-slate-400">
-                      No recent deployment update actions.
-                    </p>
-                  )}
-                </div>
+                    );
+                  })
+                ) : (
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    No previous updates.
+                  </p>
+                )}
               </div>
             </div>
 
-            <form
-              className="space-y-4 rounded-2xl border border-slate-200 p-5 dark:border-slate-800"
-              onSubmit={handleDeploymentSubmit}
-              noValidate
-            >
-              <h5 className="text-sm font-semibold text-slate-900 dark:text-white">
-                Update target
-              </h5>
-              <label className="block space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>Image repository</span>
-                <select
-                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                  value={targetRepository}
-                  onChange={(event) => {
-                    setTargetRepository(event.target.value);
-                    setTargetReference(DEFAULT_TARGET_REFERENCE);
-                  }}
-                >
-                  {imageTargets?.repositories.map((repository) => (
-                    <option key={repository.repository} value={repository.repository}>
-                      {repository.repository}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="block space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>Target reference</span>
-                <input
-                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                  list="deployment-target-references"
-                  value={targetReference}
-                  onChange={(event) => setTargetReference(event.target.value)}
-                />
-                <datalist id="deployment-target-references">
-                  {referenceOptions.map((reference) => (
-                    <option key={reference} value={reference}>
-                      {reference}
-                    </option>
-                  ))}
-                </datalist>
-              </label>
-              {isMutableReference(targetReference) ? (
-                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-300">
-                  {targetReference} may resolve differently over time. Digest-pinned or
-                  release-tagged updates are preferred.
+            <details className="rounded-2xl border border-slate-200 p-4 dark:border-slate-800">
+              <summary className="cursor-pointer text-sm font-semibold text-slate-900 dark:text-white">
+                Advanced deployment details
+              </summary>
+              <dl className="mt-3 space-y-3 text-sm">
+                <div>
+                  <dt className="font-medium text-slate-500 dark:text-slate-400">Stack</dt>
+                  <dd className="text-slate-900 dark:text-white">
+                    {deploymentState?.stack || DEPLOYMENT_STACK}
+                  </dd>
                 </div>
-              ) : null}
-              <label className="block space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>Update mode</span>
-                <select
-                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                  value={updateMode}
-                  onChange={(event) => setUpdateMode(event.target.value)}
-                >
-                  {allowedModes.map((mode) => (
-                    <option key={mode} value={mode}>
-                      {modeLabel(mode)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <p className="text-sm text-slate-600 dark:text-slate-400">
-                {modeDescription(updateMode)}
-              </p>
-              {allowedModes.includes('force_recreate') ? (
-                <p className="text-sm text-amber-700 dark:text-amber-300">
-                  Force recreate all services will recreate every service in the
-                  allowlisted stack.
-                </p>
-              ) : null}
-
-              <fieldset className="space-y-2 text-sm text-slate-700 dark:text-slate-300">
-                <legend className="font-medium">Options</legend>
-                <label className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={removeOrphans}
-                    onChange={(event) => setRemoveOrphans(event.target.checked)}
-                  />
-                  Remove orphan containers
-                </label>
-                <label className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={waitForServices}
-                    onChange={(event) => setWaitForServices(event.target.checked)}
-                  />
-                  Wait for services
-                </label>
-                <label className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={runSmokeCheck}
-                    onChange={(event) => setRunSmokeCheck(event.target.checked)}
-                  />
-                  Run smoke check
-                </label>
-                <label className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={pauseWork}
-                    onChange={(event) => setPauseWork(event.target.checked)}
-                  />
-                  Pause or drain new task work
-                </label>
-                <label className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={pruneOldImages}
-                    onChange={(event) => setPruneOldImages(event.target.checked)}
-                  />
-                  Prune old images after success
-                </label>
-              </fieldset>
-
-              <label className="block space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>Reason (optional)</span>
-                <input
-                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                  type="text"
-                  maxLength={200}
-                  value={deploymentReason}
-                  onChange={(event) => setDeploymentReason(event.target.value)}
-                />
-              </label>
-
-              <button
-                type="submit"
-                disabled={deploymentMutation.isPending}
-                className="inline-flex items-center justify-center rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-200"
-              >
-                Submit deployment update
-              </button>
-            </form>
+                <div>
+                  <dt className="font-medium text-slate-500 dark:text-slate-400">
+                    Compose project
+                  </dt>
+                  <dd className="text-slate-900 dark:text-white">
+                    {deploymentState?.projectName || '-'}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="font-medium text-slate-500 dark:text-slate-400">
+                    Policy repository
+                  </dt>
+                  <dd className="break-all text-slate-900 dark:text-white">
+                    {deploymentState?.policy.repository || repository || '-'}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="font-medium text-slate-500 dark:text-slate-400">
+                    Current image evidence
+                  </dt>
+                  <dd className="text-slate-900 dark:text-white">
+                    {formatStatusLabel(
+                      deploymentState?.currentImage.evidence,
+                      'Unavailable',
+                    )}
+                  </dd>
+                </div>
+                {deploymentState?.currentImage.resolvedDigest ? (
+                  <div>
+                    <dt className="font-medium text-slate-500 dark:text-slate-400">
+                      Resolved digest
+                    </dt>
+                    <dd className="break-all font-mono text-xs text-slate-900 dark:text-white">
+                      {deploymentState.currentImage.resolvedDigest}
+                    </dd>
+                  </div>
+                ) : null}
+                {allowedModes.includes('force_recreate') ? (
+                  <div>
+                    <dt className="font-medium text-slate-500 dark:text-slate-400">
+                      Update mode
+                    </dt>
+                    <dd>
+                      <select
+                        aria-label="Update mode"
+                        className="mt-1 w-full max-w-sm rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                        value={updateMode}
+                        onChange={(event) => setUpdateMode(event.target.value)}
+                      >
+                        {allowedModes.map((mode) => (
+                          <option key={mode} value={mode}>
+                            {modeLabel(mode)}
+                          </option>
+                        ))}
+                      </select>
+                    </dd>
+                  </div>
+                ) : null}
+              </dl>
+            </details>
           </div>
         )}
       </section>
@@ -1059,6 +1127,150 @@ export function OperationsSettingsSection({
                 </div>
               </div>
             </div>
+
+            <section className="rounded-3xl border border-slate-200 dark:border-slate-800 p-5">
+              <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <h4 className="text-base font-semibold text-slate-900 dark:text-white">
+                    Worker Fleet Health
+                  </h4>
+                  <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                    Snapshot combines worker pause state, Temporal-backed queue counters, stale-running detection, and operation command availability.
+                  </p>
+                </div>
+                <span
+                  className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                    fleetHealthStatus === 'Healthy'
+                      ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                      : 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
+                  }`}
+                >
+                  {fleetHealthStatus}
+                </span>
+              </div>
+              <div className="mt-4 grid gap-4 md:grid-cols-3">
+                <div className="rounded-2xl bg-slate-50 dark:bg-slate-800/50 p-4">
+                  <div className="text-sm font-medium text-slate-500 dark:text-slate-400">
+                    Metrics source
+                  </div>
+                  <div className="mt-1 text-base font-semibold text-slate-900 dark:text-white">
+                    {metrics.metricsSource || 'temporal'}
+                  </div>
+                </div>
+                <div className="rounded-2xl bg-slate-50 dark:bg-slate-800/50 p-4">
+                  <div className="text-sm font-medium text-slate-500 dark:text-slate-400">
+                    Command targets
+                  </div>
+                  <div className="mt-1 text-base font-semibold text-slate-900 dark:text-white">
+                    {commandTargets.length > 0 ? commandTargets.join(', ') : 'workers'}
+                  </div>
+                </div>
+                <div className="rounded-2xl bg-slate-50 dark:bg-slate-800/50 p-4">
+                  <div className="text-sm font-medium text-slate-500 dark:text-slate-400">
+                    Unavailable commands
+                  </div>
+                  <div className="mt-1 text-base font-semibold text-slate-900 dark:text-white">
+                    {String(unavailableCommands.length)}
+                  </div>
+                </div>
+              </div>
+              {hasShardHealthConfig ? (
+                <div className="mt-5">
+                  <h5 className="text-sm font-semibold text-slate-900 dark:text-white">
+                    Per-worker health
+                  </h5>
+                  {isShardHealthLoading ? (
+                    <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">
+                      Loading per-worker health...
+                    </p>
+                  ) : isShardHealthError ? (
+                    <p className="mt-3 text-sm text-rose-700 dark:text-rose-400">
+                      {(shardHealthError as Error).message}
+                    </p>
+                  ) : workerShards.length > 0 ? (
+                    <div className="mt-3 overflow-x-auto">
+                      <table className="min-w-full divide-y divide-slate-200 text-left text-sm dark:divide-slate-800">
+                        <thead className="text-xs uppercase text-slate-500 dark:text-slate-400">
+                          <tr>
+                            <th scope="col" className="px-3 py-2 font-semibold">
+                              Worker
+                            </th>
+                            <th scope="col" className="px-3 py-2 font-semibold">
+                              Status
+                            </th>
+                            <th scope="col" className="px-3 py-2 font-semibold">
+                              Queue
+                            </th>
+                            <th scope="col" className="px-3 py-2 font-semibold">
+                              Auth volume
+                            </th>
+                            <th scope="col" className="px-3 py-2 font-semibold">
+                              Latest run
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                          {workerShards.map((shard) => (
+                            <tr key={shard.queueName}>
+                              <td className="px-3 py-3 align-top font-medium text-slate-900 dark:text-white">
+                                {workerDisplayName(shard)}
+                              </td>
+                              <td className="px-3 py-3 align-top">
+                                <span
+                                  className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${workerStatusTone(
+                                    shard.status,
+                                  )}`}
+                                >
+                                  {formatStatusLabel(shard.status)}
+                                </span>
+                              </td>
+                              <td className="px-3 py-3 align-top text-slate-600 dark:text-slate-300">
+                                <div>{shard.queueName}</div>
+                                {shard.hashModulo ? (
+                                  <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                    Hash modulo {shard.hashModulo}
+                                  </div>
+                                ) : null}
+                              </td>
+                              <td className="px-3 py-3 align-top text-slate-600 dark:text-slate-300">
+                                <div>{shard.volumeName || 'No auth volume'}</div>
+                                {shard.volumeStatus ? (
+                                  <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                    {formatStatusLabel(shard.volumeStatus)}
+                                    {shard.volumeLastVerifiedAt
+                                      ? ` | Verified ${shard.volumeLastVerifiedAt}`
+                                      : ''}
+                                  </div>
+                                ) : null}
+                              </td>
+                              <td className="px-3 py-3 align-top text-slate-600 dark:text-slate-300">
+                                <div>
+                                  {shard.latestRunStatus
+                                    ? formatStatusLabel(shard.latestRunStatus)
+                                    : 'No runs'}
+                                </div>
+                                {shard.latestPreflightStatus ? (
+                                  <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                    Preflight {formatStatusLabel(shard.latestPreflightStatus)}
+                                    {shard.latestPreflightMessage
+                                      ? ` | ${shard.latestPreflightMessage}`
+                                      : ''}
+                                  </div>
+                                ) : null}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">
+                      No worker shards registered.
+                    </p>
+                  )}
+                </div>
+              ) : null}
+            </section>
 
             <div className="grid gap-6 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
               <section className="rounded-3xl border border-slate-200 dark:border-slate-800 p-5">

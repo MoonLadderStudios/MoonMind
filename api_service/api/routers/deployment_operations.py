@@ -12,6 +12,7 @@ from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import User
 from api_service.services.deployment_operations import (
+    DeploymentCurrentImage,
     DeploymentOperationError,
     DeploymentOperationsService,
     DeploymentRecentAction,
@@ -19,8 +20,11 @@ from api_service.services.deployment_operations import (
     DeploymentUpdateSubmission,
     RollbackEligibilityDecision,
     RollbackImageTarget,
+    mutable_references,
+    resolve_current_deployment_image,
 )
 from moonmind.config.settings import settings
+from moonmind.utils.build_info import resolve_moonmind_build_id
 from moonmind.workflows.tasks.routing import TemporalSubmitDisabledError
 from moonmind.workflows.temporal import (
     TemporalExecutionService,
@@ -67,17 +71,28 @@ class DeploymentUpdateResponse(BaseModel):
     status: Literal["QUEUED"]
 
 
-class RunningImageModel(BaseModel):
-    service: str
-    image: str
-    image_id: str | None = Field(None, alias="imageId")
-    digest: str | None = None
+class DeploymentCurrentImageModel(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    requested_image: str | None = Field(None, alias="requestedImage")
+    deployed_image: str | None = Field(None, alias="deployedImage")
+    repository: str | None = None
+    reference: str | None = None
+    resolved_digest: str | None = Field(None, alias="resolvedDigest")
+    source_run_id: str | None = Field(None, alias="sourceRunId")
+    updated_at: str | None = Field(None, alias="updatedAt")
+    evidence: Literal["desired_state", "environment", "policy", "unavailable"]
 
 
-class DeploymentServiceStateModel(BaseModel):
-    name: str
-    state: str
-    health: str | None = None
+class DeploymentPolicyModel(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    repository: str
+    default_reference: str = Field(..., alias="defaultReference")
+    allowed_references: list[str] = Field(..., alias="allowedReferences")
+    recent_tags: list[str] = Field(..., alias="recentTags")
+    mutable_references: list[str] = Field(..., alias="mutableReferences")
+    allowed_modes: list[str] = Field(..., alias="allowedModes")
 
 
 class DeploymentStackStateResponse(BaseModel):
@@ -85,13 +100,15 @@ class DeploymentStackStateResponse(BaseModel):
 
     stack: str
     project_name: str = Field(..., alias="projectName")
-    configured_image: str = Field(..., alias="configuredImage")
-    running_images: list[RunningImageModel] = Field(..., alias="runningImages")
-    services: list[DeploymentServiceStateModel]
-    last_update_run_id: str | None = Field(None, alias="lastUpdateRunId")
+    build_id: str | None = Field(None, alias="buildId")
+    current_image: DeploymentCurrentImageModel = Field(..., alias="currentImage")
+    latest_action: "DeploymentRecentActionModel | None" = Field(
+        None, alias="latestAction"
+    )
     recent_actions: list["DeploymentRecentActionModel"] = Field(
         default_factory=list, alias="recentActions"
     )
+    policy: DeploymentPolicyModel
 
 
 class RollbackImageTargetModel(BaseModel):
@@ -128,6 +145,8 @@ class DeploymentRecentActionModel(BaseModel):
     run_id: str | None = Field(None, alias="runId")
     before_summary: str | None = Field(None, alias="beforeSummary")
     after_summary: str | None = Field(None, alias="afterSummary")
+    before_build_id: str | None = Field(None, alias="beforeBuildId")
+    after_build_id: str | None = Field(None, alias="afterBuildId")
     rollback_eligibility: RollbackEligibilityModel | None = Field(
         None, alias="rollbackEligibility"
     )
@@ -140,6 +159,7 @@ class ImageTargetModel(BaseModel):
     allowed_references: list[str] = Field(..., alias="allowedReferences")
     recent_tags: list[str] = Field(..., alias="recentTags")
     digest_pinning_recommended: bool = Field(..., alias="digestPinningRecommended")
+    allowed_modes: list[str] = Field(..., alias="allowedModes")
 
 
 class ImageTargetsResponse(BaseModel):
@@ -319,6 +339,7 @@ def _recent_action_from_execution_record(
     ]
     before_summary = None
     after_summary = None
+    after_build_id = None
     memo = getattr(record, "memo", None)
     if isinstance(memo, dict):
         before_summary = (
@@ -332,8 +353,15 @@ def _recent_action_from_execution_record(
             or memo.get("after_summary")
             or memo.get("summary")
         )
+        after_build_id = (
+            memo.get("deploymentAfterBuildId")
+            or memo.get("afterBuildId")
+            or memo.get("after_build_id")
+        )
     before_summary = str(before_summary).strip() if before_summary else None
     after_summary = str(after_summary).strip() if after_summary else None
+    before_build_id = str(operation.get("beforeBuildId") or "").strip() or None
+    after_build_id = str(after_build_id).strip() if after_build_id else None
     target_image = _rollback_target_from_summary(
         before_summary=before_summary,
         policy=policy,
@@ -363,6 +391,8 @@ def _recent_action_from_execution_record(
         run_id=run_id or None,
         before_summary=before_summary,
         after_summary=after_summary,
+        before_build_id=before_build_id,
+        after_build_id=after_build_id,
         rollback_eligibility=eligibility,
     )
 
@@ -411,6 +441,8 @@ def _recent_action_model(action: DeploymentRecentAction) -> DeploymentRecentActi
         run_id=action.run_id,
         before_summary=action.before_summary,
         after_summary=action.after_summary,
+        before_build_id=action.before_build_id,
+        after_build_id=action.after_build_id,
         rollback_eligibility=(
             RollbackEligibilityModel(
                 eligible=eligibility.eligible,
@@ -432,6 +464,30 @@ def _recent_action_model(action: DeploymentRecentAction) -> DeploymentRecentActi
     )
 
 
+def _current_image_model(image: DeploymentCurrentImage) -> DeploymentCurrentImageModel:
+    return DeploymentCurrentImageModel(
+        requested_image=image.requested_image,
+        deployed_image=image.deployed_image,
+        repository=image.repository,
+        reference=image.reference,
+        resolved_digest=image.resolved_digest,
+        source_run_id=image.source_run_id,
+        updated_at=image.updated_at,
+        evidence=image.evidence,
+    )
+
+
+def _policy_model(policy: DeploymentStackPolicy) -> DeploymentPolicyModel:
+    return DeploymentPolicyModel(
+        repository=policy.repository,
+        default_reference=policy.configured_reference,
+        allowed_references=list(policy.allowed_references),
+        recent_tags=list(policy.recent_tags),
+        mutable_references=list(mutable_references(policy)),
+        allowed_modes=list(policy.allowed_modes),
+    )
+
+
 def _stack_state(
     policy: DeploymentStackPolicy,
     service: DeploymentOperationsService,
@@ -442,27 +498,17 @@ def _stack_state(
         if recent_actions is not None
         else service.recent_actions(policy.stack)
     )
+    action_models = [_recent_action_model(action) for action in actions]
     return DeploymentStackStateResponse(
         stack=policy.stack,
         project_name=policy.project_name,
-        configured_image=policy.configured_image,
-        running_images=[
-            RunningImageModel(
-                service="api",
-                image=policy.configured_image,
-                image_id=None,
-                digest=None,
-            )
-        ],
-        services=[
-            DeploymentServiceStateModel(
-                name="api",
-                state="unknown",
-                health=None,
-            )
-        ],
-        last_update_run_id=None,
-        recent_actions=[_recent_action_model(action) for action in actions],
+        build_id=resolve_moonmind_build_id(),
+        current_image=_current_image_model(
+            resolve_current_deployment_image(policy)
+        ),
+        latest_action=action_models[0] if action_models else None,
+        recent_actions=action_models,
+        policy=_policy_model(policy),
     )
 
 
@@ -510,6 +556,7 @@ async def submit_deployment_update(
                 operation_kind=payload.operation_kind,
                 rollback_source_action_id=payload.rollback_source_action_id,
                 confirmation=payload.confirmation,
+                before_build_id=resolve_moonmind_build_id(),
             ),
         )
     except TemporalSubmitDisabledError as exc:
@@ -567,6 +614,7 @@ async def list_deployment_image_targets(
                 allowedReferences=list(policy.allowed_references),
                 recentTags=list(policy.recent_tags),
                 digestPinningRecommended=policy.allow_mutable_tags,
+                allowedModes=list(policy.allowed_modes),
             )
         ],
     )

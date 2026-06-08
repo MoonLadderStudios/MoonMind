@@ -10,6 +10,7 @@ import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge'
 import { formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import {
   recordTemporalTaskEditingClientEvent,
+  taskCompareHref,
   taskEditForRerunHref,
   taskEditHref,
 } from '../lib/temporalTaskEditing';
@@ -88,6 +89,26 @@ function shouldEnableSessionTimelineViewer({
 
 function shouldUseStructuredHistory(config: DashboardConfig | undefined): boolean {
   return config?.features?.liveLogsStructuredHistoryEnabled !== false;
+}
+
+type WorkflowDetailSubroute = 'overview' | 'steps' | 'artifacts' | 'runs';
+
+function workflowDetailSubrouteFromPath(pathname: string): WorkflowDetailSubroute {
+  const match = pathname.match(/^\/workflows\/[^/]+(?:\/(steps|artifacts|runs))?$/);
+  if (match?.[1] === 'steps' || match?.[1] === 'artifacts' || match?.[1] === 'runs') {
+    return match[1];
+  }
+  return 'overview';
+}
+
+function workflowDetailSubrouteHref(
+  workflowId: string,
+  subroute: WorkflowDetailSubroute,
+  search: URLSearchParams,
+): string {
+  const suffix = subroute === 'overview' ? '' : `/${subroute}`;
+  const query = search.toString();
+  return `/workflows/${encodeURIComponent(workflowId)}${suffix}${query ? `?${query}` : ''}`;
 }
 
 function detailObjectValue(value: unknown): Record<string, unknown> {
@@ -566,6 +587,11 @@ const ExecutionDetailSchema = z
             runId: z.string().nullable().optional(),
             relationship: z.string(),
             status: z.string().nullable().optional(),
+            targetRuntime: z.string().nullable().optional(),
+            model: z.string().nullable().optional(),
+            requestedModel: z.string().nullable().optional(),
+            resolvedModel: z.string().nullable().optional(),
+            effort: z.string().nullable().optional(),
             href: z.string(),
           })
           .passthrough(),
@@ -1991,6 +2017,16 @@ function metadataString(metadata: Record<string, unknown>, ...keys: string[]): s
     }
   }
   return '';
+}
+
+function metadataStrings(metadata: Record<string, unknown>, ...keys: string[]): string {
+  return keys
+    .map((key) => {
+      const value = metadata[key];
+      return typeof value === 'string' ? value.trim() : '';
+    })
+    .filter(Boolean)
+    .join(' ');
 }
 
 function artifactReportLinkType(
@@ -4027,6 +4063,394 @@ function RemediationEvidencePanel({
   );
 }
 
+type ArtifactCategory = 'files' | 'logs' | 'patches' | 'reports' | 'other';
+
+function artifactBrowserCategory(artifact: z.infer<typeof ArtifactSummarySchema>): ArtifactCategory {
+  const metadata = artifact.metadata || {};
+  const searchText = [
+    artifact.artifactId,
+    artifact.contentType,
+    metadataStrings(metadata, 'filename', 'name', 'label', 'artifact_type', 'artifactType', 'render_hint', 'renderHint'),
+    artifact.links.map((link) => `${link.linkType} ${link.label || ''}`).join(' '),
+  ]
+    .join(' ')
+    .toLowerCase();
+  if (searchText.includes('report')) return 'reports';
+  if (/\b(log|stdout|stderr|diagnostic|trace)\b/.test(searchText)) return 'logs';
+  if (/\b(patch|diff|apply_output)\b/.test(searchText)) return 'patches';
+  if (/\b(file|attachment|input|context|summary|checkpoint)\b/.test(searchText)) return 'files';
+  return 'other';
+}
+
+function ArtifactBrowserPanel({
+  artifacts,
+  apiBase,
+  isLoading,
+  error,
+}: {
+  artifacts: z.infer<typeof ArtifactSummarySchema>[];
+  apiBase: string;
+  isLoading: boolean;
+  error: Error | null;
+}) {
+  const grouped = artifacts.reduce<Record<ArtifactCategory, z.infer<typeof ArtifactSummarySchema>[]>>(
+    (acc, artifact) => {
+      acc[artifactBrowserCategory(artifact)].push(artifact);
+      return acc;
+    },
+    { files: [], logs: [], patches: [], reports: [], other: [] },
+  );
+  const categoryRows = (Object.keys(grouped) as ArtifactCategory[]).filter(
+    (category) => grouped[category].length > 0,
+  );
+
+  return (
+    <section className="stack td-artifacts-region td-evidence-region">
+      <div className="step-tl-section-header">
+        <h3>Workflow Artifacts</h3>
+        <span className="step-tl-count">
+          Artifact Browser | {artifacts.length} artifact{artifacts.length === 1 ? '' : 's'}
+        </span>
+      </div>
+      {isLoading ? (
+        <p className="loading">Loading artifacts...</p>
+      ) : error ? (
+        <div className="notice error">{error.message}</div>
+      ) : artifacts.length === 0 ? (
+        <p className="small">No artifacts.</p>
+      ) : (
+        <div className="queue-table-wrapper td-evidence-slab" data-layout="table">
+          <table>
+            <thead>
+              <tr>
+                <th>Group</th>
+                <th>Artifact</th>
+                <th>Size</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {categoryRows.flatMap((category) =>
+                grouped[category].map((artifact) => (
+                  <tr key={`${category}-${artifact.artifactId}`}>
+                    <td>{formatStatusLabel(category)}</td>
+                    <td>
+                      <code>{metadataString(artifact.metadata, 'filename', 'name', 'label') || artifact.artifactId}</code>
+                      {artifact.contentType ? <div className="small">{artifact.contentType}</div> : null}
+                    </td>
+                    <td>{artifact.sizeBytes ?? '—'}</td>
+                    <td>{formatStatusLabel(artifact.status)}</td>
+                    <td>
+                      <div className="actions">
+                        <a
+                          className="button secondary"
+                          href={artifactDownloadHref(apiBase, artifact)}
+                          title="Download artifact"
+                        >
+                          Download
+                        </a>
+                        <a
+                          className="button secondary"
+                          href={reportOpenHref(apiBase, artifact)}
+                          title="Open readable artifact content"
+                        >
+                          Open
+                        </a>
+                      </div>
+                    </td>
+                  </tr>
+                )),
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function StepDagOverview({
+  snapshot,
+}: {
+  snapshot: z.infer<typeof StepLedgerSnapshotSchema>;
+}) {
+  return (
+    <section className="step-dag-panel" aria-label="Step DAG visualization">
+      <h4>Step DAG</h4>
+      <div className="step-dag-grid">
+        {snapshot.steps.map((step) => (
+          <article key={step.logicalStepId} className="step-dag-node">
+            <div className="step-dag-node-header">
+              <strong>{step.title}</strong>
+              <span {...executionStatusPillProps(step.status)}>
+                {formatStatusLabel(step.status)}
+              </span>
+            </div>
+            <div className="small">
+              <code>{step.logicalStepId}</code>
+            </div>
+            <div className="small">
+              Depends on: {step.dependsOn.length > 0 ? step.dependsOn.join(', ') : 'start'}
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function InterventionMonitorPanel({
+  execution,
+}: {
+  execution: z.infer<typeof ExecutionDetailSchema>;
+}) {
+  const state = execution.rawState || execution.state || execution.status;
+  const requested = execution.attentionRequired || state === 'intervention_requested';
+  const auditCount = execution.interventionAudit?.length ?? 0;
+  if (!requested && auditCount === 0 && !execution.waitingReason) {
+    return null;
+  }
+  return (
+    <section className="stack td-intervention-monitor-region td-evidence-region">
+      <h3>Intervention Monitor</h3>
+      <div className="grid-2">
+        <Card label="Request State">{requested ? 'Intervention requested' : 'No active request'}</Card>
+        <Card label="Workflow State">{formatStatusLabel(state)}</Card>
+        <Card label="Audit Entries">{String(auditCount)}</Card>
+        <Card label="Waiting Reason">{execution.waitingReason || '—'}</Card>
+      </div>
+    </section>
+  );
+}
+
+function AuditTrailPanel({
+  execution,
+  steps,
+}: {
+  execution: z.infer<typeof ExecutionDetailSchema>;
+  steps: z.infer<typeof StepLedgerSnapshotSchema> | null | undefined;
+}) {
+  const rows: Array<{ stage: string; timestamp: string | null | undefined; detail: ReactNode }> = [
+    { stage: 'Started', timestamp: execution.startedAt, detail: 'Execution created.' },
+    {
+      stage: 'Last update',
+      timestamp: execution.updatedAt,
+      detail: <>State: {formatStatusLabel(execution.state, '')}</>,
+    },
+  ];
+  if (execution.waitingReason || execution.attentionRequired) {
+    rows.push({
+      stage: 'Waiting',
+      timestamp: execution.updatedAt,
+      detail: `${execution.waitingReason || 'Awaiting external input.'}${execution.attentionRequired ? ' Attention required.' : ''}`,
+    });
+  }
+  for (const step of steps?.steps ?? []) {
+    rows.push({
+      stage: `Step ${step.order}`,
+      timestamp: step.updatedAt || step.startedAt,
+      detail: (
+        <>
+          {step.title}: {formatStatusLabel(step.status)}
+        </>
+      ),
+    });
+  }
+  for (const entry of execution.interventionAudit || []) {
+    rows.push({
+      stage: 'Intervention',
+      timestamp: entry.createdAt,
+      detail: (
+        <>
+          {entry.summary} <code className="text-xs">{entry.transport}</code>
+        </>
+      ),
+    });
+  }
+  if (execution.closedAt) {
+    rows.push({
+      stage: 'Closed',
+      timestamp: execution.closedAt,
+      detail: <>Close status: {formatStatusLabel(execution.closeStatus || execution.temporalStatus)}</>,
+    });
+  }
+
+  return (
+    <section className="stack td-timeline-region td-evidence-region">
+      <h3>Timeline</h3>
+      <div className="queue-table-wrapper td-evidence-slab" data-layout="table">
+        <table>
+          <thead>
+            <tr>
+              <th>Stage</th>
+              <th>Timestamp</th>
+              <th>Detail</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, index) => (
+              <tr key={`${row.stage}-${row.timestamp || ''}-${index}`}>
+                <td>{row.stage}</td>
+                <td>{formatWhen(row.timestamp)}</td>
+                <td>{row.detail}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function WorkflowDetailSubrouteNav({
+  workflowId,
+  current,
+  search,
+}: {
+  workflowId: string;
+  current: WorkflowDetailSubroute;
+  search: URLSearchParams;
+}) {
+  const items: Array<{ route: WorkflowDetailSubroute; label: string }> = [
+    { route: 'overview', label: 'Overview' },
+    { route: 'steps', label: 'Steps' },
+    { route: 'artifacts', label: 'Artifacts' },
+    { route: 'runs', label: 'Runs' },
+  ];
+  return (
+    <nav className="td-subroute-nav" aria-label="Workflow detail sections">
+      {items.map((item) => (
+        <a
+          key={item.route}
+          href={workflowDetailSubrouteHref(workflowId, item.route, search)}
+          aria-current={current === item.route ? 'page' : undefined}
+        >
+          {item.label}
+        </a>
+      ))}
+    </nav>
+  );
+}
+
+function ExecutionHistoryPanel({
+  execution,
+}: {
+  execution: z.infer<typeof ExecutionDetailSchema>;
+}) {
+  const currentStatus = execution.rawState || execution.state || execution.status;
+  const currentRunId = execution.runId || execution.temporalRunId || '—';
+  const rows = [
+    {
+      relationship: 'current',
+      workflowId: execution.workflowId || execution.taskId || '—',
+      runId: currentRunId,
+      status: currentStatus,
+      href: '',
+    },
+    ...(execution.relatedRuns || []).map((run) => ({
+      relationship: run.relationship,
+      workflowId: run.workflowId,
+      runId: run.runId || '—',
+      status: run.status || 'unknown',
+      href: run.href,
+    })),
+  ];
+  return (
+    <section className="stack td-runs-region td-evidence-region" data-mm-issue="MM-772">
+      <h3>Execution History</h3>
+      <div className="grid-2">
+        <Card label="Workflow ID">
+          <code className="text-xs break-all">{execution.workflowId || execution.taskId || '—'}</code>
+        </Card>
+        <Card label="Current Run ID">
+          <code className="text-xs break-all">{currentRunId}</code>
+        </Card>
+        <Card label="Workflow State">{formatStatusLabel(currentStatus)}</Card>
+        <Card label="Related Runs">{String(execution.relatedRuns?.length ?? 0)}</Card>
+      </div>
+      <div className="queue-table-wrapper td-evidence-slab" data-layout="table">
+        <table>
+          <thead>
+            <tr>
+              <th>Relation</th>
+              <th>Workflow</th>
+              <th>Run</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, index) => (
+              <tr key={`${row.relationship}-${row.workflowId}-${row.runId}-${index}`}>
+                <td>{formatStatusLabel(row.relationship)}</td>
+                <td>
+                  {row.href ? (
+                    <a href={row.href}><code>{row.workflowId}</code></a>
+                  ) : (
+                    <code>{row.workflowId}</code>
+                  )}
+                </td>
+                <td><code>{row.runId}</code></td>
+                <td>{formatStatusLabel(row.status)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function RunComparisonPanel({
+  execution,
+}: {
+  execution: z.infer<typeof ExecutionDetailSchema>;
+}) {
+  if (!execution.relatedRuns || execution.relatedRuns.length === 0) {
+    return null;
+  }
+  const currentStatus = execution.rawState || execution.state || execution.status;
+  return (
+    <section className="stack td-comparison-region td-evidence-region">
+      <h3>Run Comparison</h3>
+      <div className="queue-table-wrapper td-evidence-slab" data-layout="table">
+        <table>
+          <thead>
+            <tr>
+              <th>Relation</th>
+              <th>Workflow</th>
+              <th>Run</th>
+              <th>Status</th>
+              <th>Runtime</th>
+              <th>Model</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>current</td>
+              <td><code>{execution.workflowId || execution.taskId}</code></td>
+              <td><code>{execution.runId || execution.temporalRunId || '—'}</code></td>
+              <td>{formatStatusLabel(currentStatus)}</td>
+              <td>{formatRuntimeLabel(execution.targetRuntime)}</td>
+              <td>{execution.model || execution.resolvedModel || execution.requestedModel || '—'}</td>
+            </tr>
+            {execution.relatedRuns.map((run) => (
+              <tr key={`${run.relationship}-${run.workflowId}-${run.runId || ''}`}>
+                <td>{formatStatusLabel(run.relationship)}</td>
+                <td><a href={run.href}><code>{run.workflowId}</code></a></td>
+                <td><code>{run.runId || '—'}</code></td>
+                <td>{formatStatusLabel(run.status || 'unknown')}</td>
+                <td>{formatRuntimeLabel(run.targetRuntime)}</td>
+                <td>{run.model || run.resolvedModel || run.requestedModel || '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const queryClient = useQueryClient();
   const cfg = readDashboardConfig(payload);
@@ -4044,6 +4468,8 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const taskId = decodeTaskPathSegment(workflowIdMatch ? workflowIdMatch[1] : null);
   const encodedTaskId = taskId ? encodeURIComponent(taskId) : null;
   const search = useMemo(() => new URLSearchParams(window.location.search), []);
+  const detailSubroute = workflowDetailSubrouteFromPath(window.location.pathname);
+  const isRunsSubroute = detailSubroute === 'runs';
   const sourceTemporal = search.get('source') === 'temporal';
 
   const [actionError, setActionError] = useState<string | null>(null);
@@ -4489,9 +4915,11 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       ? taskEditForRerunHref(workflowId)
       : taskEditHref(workflowId)
     : '';
+  const compareHref =
+    workflowId && actions?.canEditForRerun ? taskCompareHref(workflowId) : '';
   const onTaskEditingNavigation = (
     event: MouseEvent<HTMLAnchorElement>,
-    telemetryEvent: 'detail_edit_click',
+    telemetryEvent: 'detail_edit_click' | 'detail_compare_click',
   ) => {
     if (busy) {
       event.preventDefault();
@@ -4548,6 +4976,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const hasTaskEditingActions = taskEditingOn && Boolean(
     canShowEditWorkflow ||
       actions?.canRerun ||
+      compareHref ||
       canFailedStepResume ||
       editTaskUnavailableReason ||
       rerunUnavailableReason,
@@ -4586,7 +5015,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     <div className="stack workflow-detail-page">
       <div className="toolbar">
         <div>
-          <h2 className="page-title">Workflow Detail</h2>
+          <h2 className="page-title">{isRunsSubroute ? 'Execution History' : 'Workflow Detail'}</h2>
           <div className="toolbar-identity-row">
             <p className="page-meta">Workflow {taskId || '—'}</p>
             {execution ? (
@@ -4610,6 +5039,14 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           </span>
         </div>
       </div>
+
+      {taskId ? (
+        <WorkflowDetailSubrouteNav
+          workflowId={taskId}
+          current={detailSubroute}
+          search={search}
+        />
+      ) : null}
 
       {actionError ? <div className="notice error">{actionError}</div> : null}
       {actionNotice ? (
@@ -4674,6 +5111,10 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
 
           {shouldShowRuntimeCommand ? (
             <RuntimeCommandDetail command={runtimeCommand} />
+          ) : null}
+
+          {isRunsSubroute ? (
+            <ExecutionHistoryPanel execution={execution} />
           ) : null}
 
           <div className="td-summary-block">
@@ -4923,28 +5364,33 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
               ) : stepsQuery.isError ? (
                 <div className="notice error">{(stepsQuery.error as Error).message}</div>
               ) : stepsQuery.data ? (
-                <div className="step-tl-list">
-                  {stepsQuery.data.steps.map((row, idx) => (
-                    <StepLedgerRowCard
-                      key={row.logicalStepId}
-                      apiBase={payload.apiBase}
-                      logStreamingEnabled={logStreamingEnabled}
-                      sessionTimelineEnabled={sessionTimelineEnabled}
-                      structuredHistoryEnabled={structuredHistoryEnabled}
-                      row={row}
-                      runId={latestRunId}
-                      expanded={Boolean(expandedSteps[row.logicalStepId])}
-                      onToggle={() => toggleStep(row.logicalStepId)}
-                      isLast={idx === stepsQuery.data.steps.length - 1}
-                      routes={taskRunRoutes}
-                    />
-                  ))}
-                </div>
+                <>
+                  <StepDagOverview snapshot={stepsQuery.data} />
+                  <div className="step-tl-list">
+                    {stepsQuery.data.steps.map((row, idx) => (
+                      <StepLedgerRowCard
+                        key={row.logicalStepId}
+                        apiBase={payload.apiBase}
+                        logStreamingEnabled={logStreamingEnabled}
+                        sessionTimelineEnabled={sessionTimelineEnabled}
+                        structuredHistoryEnabled={structuredHistoryEnabled}
+                        row={row}
+                        runId={latestRunId}
+                        expanded={Boolean(expandedSteps[row.logicalStepId])}
+                        onToggle={() => toggleStep(row.logicalStepId)}
+                        isLast={idx === stepsQuery.data.steps.length - 1}
+                        routes={taskRunRoutes}
+                      />
+                    ))}
+                  </div>
+                </>
               ) : (
                 <p className="small">No step ledger available for this execution.</p>
               )}
             </section>
           ) : null}
+
+          <InterventionMonitorPanel execution={execution} />
 
           {execution.attentionRequired ? (
             <section className="notice">
@@ -5062,6 +5508,8 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             </section>
           ) : null}
 
+          {isRunsSubroute ? null : <RunComparisonPanel execution={execution} />}
+
           <RemediationRelationshipsPanel
             inbound={inboundRemediationsQuery.data}
             outbound={outboundRemediationsQuery.data}
@@ -5146,6 +5594,16 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                     onClick={(event) => onTaskEditingNavigation(event, 'detail_edit_click')}
                   >
                     Edit task
+                  </a>
+                ) : null}
+                {taskEditingOn && compareHref ? (
+                  <a
+                    className="button secondary"
+                    href={compareHref}
+                    aria-disabled={busy}
+                    onClick={(event) => onTaskEditingNavigation(event, 'detail_compare_click')}
+                  >
+                    Compare run
                   </a>
                 ) : null}
                 {taskEditingOn && actions.canRerun ? (
@@ -5246,97 +5704,14 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             showEmpty={shouldFetchRemediationLinks && artifactsQuery.isSuccess}
           />
 
-          <section className="stack td-timeline-region td-evidence-region">
-            <h3>Timeline</h3>
-            <div className="queue-table-wrapper td-evidence-slab" data-layout="table">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Stage</th>
-                    <th>Timestamp</th>
-                    <th>Detail</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>Started</td>
-                    <td>{formatWhen(execution.startedAt)}</td>
-                    <td>Execution created.</td>
-                  </tr>
-                  <tr>
-                    <td>Last update</td>
-                    <td>{formatWhen(execution.updatedAt)}</td>
-                    <td>State: {formatStatusLabel(execution.state, '')}</td>
-                  </tr>
-                  {execution.waitingReason || execution.attentionRequired ? (
-                    <tr>
-                      <td>Waiting</td>
-                      <td>{formatWhen(execution.updatedAt)}</td>
-                      <td>
-                        {execution.waitingReason || 'Awaiting external input.'}
-                        {execution.attentionRequired ? ' Attention required.' : ''}
-                      </td>
-                    </tr>
-                  ) : null}
-                  {execution.closedAt ? (
-                    <tr>
-                      <td>Closed</td>
-                      <td>{formatWhen(execution.closedAt)}</td>
-                      <td>Close status: {formatStatusLabel(execution.closeStatus || execution.temporalStatus)}</td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
-            </div>
-          </section>
+          <AuditTrailPanel execution={execution} steps={stepsQuery.data} />
 
-          <section className="stack td-artifacts-region td-evidence-region">
-            <h3>Workflow Artifacts</h3>
-            {artifactsQuery.isLoading ? (
-              <p className="loading">Loading artifacts...</p>
-            ) : artifactsQuery.isError ? (
-              <div className="notice error">{(artifactsQuery.error as Error).message}</div>
-            ) : (
-              <div className="queue-table-wrapper td-evidence-slab" data-layout="table">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Artifact</th>
-                      <th>Size</th>
-                      <th>Status</th>
-                      <th>Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(artifactsQuery.data?.artifacts || []).length === 0 ? (
-                      <tr>
-                        <td colSpan={4}>No artifacts.</td>
-                      </tr>
-                    ) : (
-                      (artifactsQuery.data?.artifacts || []).map((artifact) => (
-                        <tr key={artifact.artifactId}>
-                          <td>
-                            <code>{artifact.artifactId}</code>
-                          </td>
-                          <td>{artifact.sizeBytes ?? '—'}</td>
-                          <td>{formatStatusLabel(artifact.status)}</td>
-                          <td>
-                            <a
-                              className="button secondary"
-                              href={artifactDownloadHref(payload.apiBase, artifact)}
-                              title="Download artifact"
-                            >
-                              Download
-                            </a>
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
+          <ArtifactBrowserPanel
+            artifacts={artifactsQuery.data?.artifacts || []}
+            apiBase={payload.apiBase}
+            isLoading={artifactsQuery.isLoading}
+            error={artifactsQuery.isError ? (artifactsQuery.error as Error) : null}
+          />
 
           {showExecutionObservationFallback ? (
             <section className="stack td-observation-region td-evidence-region">

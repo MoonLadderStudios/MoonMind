@@ -29,12 +29,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db import models as db_models
 from moonmind.config.settings import settings
+from moonmind.core.artifacts import assert_model_agnostic_metadata
 
 logger = logging.getLogger(__name__)
 
 _CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 _PREVIEW_MAX_BYTES = 16 * 1024
 _STREAM_CHUNK_BYTES = 64 * 1024
+_RUN_DIGEST_INDEXING_TIMEOUT_SECONDS = 10
 _SINGLE_PUT_READ_RETRY_DELAYS_SECONDS = (0.1, 0.2, 0.4, 0.8, 1.6)
 _SINGLE_PUT_READ_RETRYABLE_S3_ERROR_CODES = {"404", "NoSuchKey", "NotFound"}
 _TASK_INPUT_ATTACHMENT_SOURCES = frozenset(
@@ -1317,6 +1319,13 @@ class TemporalArtifactService:
         redaction_level: db_models.TemporalArtifactRedactionLevel = db_models.TemporalArtifactRedactionLevel.NONE,
     ) -> tuple[db_models.TemporalArtifact, ArtifactUploadDescriptor]:
         now = datetime.now(UTC)
+        try:
+            assert_model_agnostic_metadata(
+                metadata_json,
+                field_name="artifact metadata",
+            )
+        except ValueError as exc:
+            raise TemporalArtifactValidationError(str(exc)) from exc
         _assert_not_reserved_input_attachment_metadata(metadata_json)
         declared_size: int | None = None
         if size_bytes is not None:
@@ -2598,7 +2607,11 @@ class TemporalArtifactActivities:
                 close_status=model.close_status,
                 summary=model.summary,
                 error_category=model.error_category,
+                finish_outcome_code=model.finish_outcome_code,
+                finish_summary=model.finish_summary,
             )
+
+        await self._write_run_digest_best_effort(record)
 
         return {
             "workflowId": record.workflow_id,
@@ -2609,6 +2622,49 @@ class TemporalArtifactActivities:
                 record.close_status,
             ),
         }
+
+    async def _write_run_digest_best_effort(self, record: Any) -> None:
+        """Index a Plane B run digest without making terminal state recording fail."""
+
+        try:
+            import os
+
+            from moonmind.memory.run_digest import TaskHistoryService
+            from moonmind.rag.service import ContextRetrievalService
+            from moonmind.rag.settings import RagRuntimeSettings
+
+            settings = RagRuntimeSettings.from_env(os.environ)
+            executable, reason = settings.retrieval_execution_reason(
+                os.environ,
+                preferred_transport="direct",
+            )
+            if not executable:
+                logger.info(
+                    "Skipping run digest indexing for %s: %s",
+                    getattr(record, "workflow_id", "unknown"),
+                    reason,
+                )
+                return
+
+            retrieval_service = ContextRetrievalService(settings=settings)
+            history_service = TaskHistoryService(
+                qdrant_client=retrieval_service.qdrant_client,
+                embedding_provider=retrieval_service.embedding_client,
+            )
+            await asyncio.wait_for(
+                asyncio.get_running_loop().run_in_executor(
+                    None,
+                    history_service.build_and_upsert_run_digest,
+                    record,
+                ),
+                timeout=_RUN_DIGEST_INDEXING_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Run digest indexing failed for %s: %s",
+                getattr(record, "workflow_id", "unknown"),
+                exc,
+            )
 
     async def artifact_list_for_execution(
         self,
@@ -2736,6 +2792,17 @@ class TemporalArtifactActivities:
 
         profiles = []
         for row in rows:
+            command_behavior = row.command_behavior or {}
+            billing_metadata = (
+                command_behavior.get("billing")
+                if isinstance(command_behavior, dict)
+                else None
+            )
+            pricing_metadata = (
+                command_behavior.get("pricing")
+                if isinstance(command_behavior, dict)
+                else None
+            )
             profiles.append(
                 {
                     "profile_id": row.profile_id,
@@ -2755,7 +2822,8 @@ class TemporalArtifactActivities:
                     "env_template": row.env_template or {},
                     "file_templates": row.file_templates or [],
                     "home_path_overrides": row.home_path_overrides or {},
-                    "command_behavior": row.command_behavior or {},
+                    "command_behavior": command_behavior,
+                    "billing": billing_metadata or pricing_metadata or {},
                     "default_model": row.default_model,
                     "model_overrides": row.model_overrides or {},
                     "max_parallel_runs": row.max_parallel_runs,

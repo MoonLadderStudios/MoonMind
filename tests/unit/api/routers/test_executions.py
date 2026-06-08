@@ -23,10 +23,15 @@ from api_service.api.routers.executions import (
     _get_service,
     _artifact_id_from_ref,
     _build_original_task_input_snapshot_payload,
+    _expand_goal_preset_for_task_submission,
+    _extract_cost_estimate_usd,
+    _hydrate_related_run_metadata,
     _merge_task_preserving_artifact_instructions,
     _recovery_not_available_reason,
     _reuse_original_task_input_snapshot_from_source,
     _task_input_snapshot_descriptor_from_record,
+    _normalize_task_steps,
+    _resolve_step_runtime_selections,
     get_temporal_client,
     _serialize_execution,
     router,
@@ -37,6 +42,7 @@ from api_service.db.base import get_async_session
 from api_service.db.models import (
     Base,
     MoonMindWorkflowState,
+    TemporalExecutionCloseStatus,
     TemporalArtifact,
     TemporalArtifactEncryption,
     TemporalArtifactRedactionLevel,
@@ -123,6 +129,107 @@ def _completed_attachment_artifact(
         created_by_principal=created_by_principal,
     )
 
+@pytest.mark.asyncio
+async def test_task_step_runtime_selection_is_normalized_and_resolved() -> None:
+    steps = _normalize_task_steps(
+        {
+            "steps": [
+                {
+                    "id": "review",
+                    "instructions": "Review with a step model.",
+                    "runtime": {
+                        "mode": "gemini_cli",
+                        "model": "gemini-step-model",
+                        "effort": "low",
+                    },
+                }
+            ]
+        }
+    )
+
+    await _resolve_step_runtime_selections(
+        steps=steps,
+        task_runtime={"mode": "codex_cli", "effort": "high"},
+        task_target_runtime="codex_cli",
+        task_profile_id=None,
+        session=None,
+    )
+
+    assert steps[0]["runtime"] == {
+        "mode": "gemini_cli",
+        "model": "gemini-step-model",
+        "effort": "low",
+        "requestedModel": "gemini-step-model",
+        "modelSource": "task_override",
+    }
+
+
+@pytest.mark.asyncio
+async def test_step_runtime_inherits_task_profile_default_model() -> None:
+    steps = _normalize_task_steps(
+        {
+            "steps": [
+                {
+                    "id": "implement",
+                    "instructions": "Implement using inherited profile defaults.",
+                    "runtime": {"effort": "low"},
+                }
+            ]
+        }
+    )
+    session = SimpleNamespace(
+        get=AsyncMock(
+            return_value=SimpleNamespace(default_model="codex-profile-default")
+        )
+    )
+
+    await _resolve_step_runtime_selections(
+        steps=steps,
+        task_runtime={"mode": "codex_cli", "effort": "high"},
+        task_target_runtime="codex_cli",
+        task_profile_id="profile-codex",
+        session=session,
+    )
+
+    assert steps[0]["runtime"] == {
+        "effort": "low",
+        "mode": "codex_cli",
+        "model": "codex-profile-default",
+        "modelSource": "provider_profile_default",
+        "inheritedProfileId": "profile-codex",
+    }
+
+
+@pytest.mark.asyncio
+async def test_step_runtime_normalizes_explicit_profile_without_session() -> None:
+    steps = _normalize_task_steps(
+        {
+            "steps": [
+                {
+                    "id": "review",
+                    "instructions": "Review with a profile ref in a unit test.",
+                    "runtime": {
+                        "mode": "gemini_cli",
+                        "profileId": "profile-gemini",
+                    },
+                }
+            ]
+        }
+    )
+
+    await _resolve_step_runtime_selections(
+        steps=steps,
+        task_runtime=None,
+        task_target_runtime="codex_cli",
+        task_profile_id=None,
+        session=None,
+    )
+
+    assert steps[0]["runtime"]["mode"] == "gemini_cli"
+    assert steps[0]["runtime"]["profileId"] == "profile-gemini"
+    assert steps[0]["runtime"]["providerProfile"] == "profile-gemini"
+
+
 def _mm639_authored_task_payload() -> dict[str, Any]:
     return {
         "title": "MM-639 durable snapshot",
@@ -202,6 +309,45 @@ def _mm639_authored_task_payload() -> dict[str, Any]:
             },
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_goal_preset_submission_expands_before_planner(tmp_path) -> None:
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/goal_preset_submission.db"
+    engine = create_async_engine(db_url, future=True)
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        async with session_factory() as session:
+            task_payload = {
+                "title": "MM-747 goal",
+                "goal": "Complete Jira issue MM-747 using preset scheduling.",
+            }
+            await _expand_goal_preset_for_task_submission(
+                task_payload=task_payload,
+                request_payload={
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "codex_cli",
+                },
+                session=session,
+                user_id=uuid4(),
+            )
+    finally:
+        await engine.dispose()
+
+    assert task_payload["taskTemplate"] == {
+        "slug": "jira-implement",
+        "version": "1.0.0",
+        "scope": "global",
+    }
+    assert task_payload["inputs"]["jira_issue_key"] == "MM-747"
+    assert task_payload["presetSchedule"]["presetSlug"] == "jira-implement"
+    assert task_payload["steps"][0]["title"] == "Load Jira preset brief"
+    assert task_payload["steps"][1]["title"] == "Assess existing implementation state"
+    assert task_payload["appliedStepTemplates"][0]["slug"] == "jira-implement"
+
 
 class _QueryHandle:
     def __init__(
@@ -327,6 +473,8 @@ def _build_execution_record(
             ),
         },
         artifact_refs=["art_123"],
+        finish_outcome_code=None,
+        finish_summary_json=None,
         manifest_ref=(
             "art_manifest_1"
             if workflow_type is TemporalWorkflowType.MANIFEST_INGEST
@@ -364,6 +512,24 @@ def _build_execution_record(
         entry=entry,
         integration_state=None,
     )
+
+def test_serialize_execution_includes_finish_summary_projection_fields():
+    record = _build_execution_record(state=MoonMindWorkflowState.COMPLETED)
+    record.close_status = TemporalExecutionCloseStatus.COMPLETED
+    record.finish_outcome_code = "NO_CHANGES"
+    record.finish_summary_json = {
+        "schemaVersion": "v1",
+        "finishOutcome": {
+            "code": "NO_CHANGES",
+            "stage": "publish",
+            "reason": "publish skipped: no local changes",
+        },
+    }
+
+    payload = _serialize_execution(record).model_dump(by_alias=True)
+
+    assert payload["finishOutcomeCode"] == "NO_CHANGES"
+    assert payload["finishSummary"] == record.finish_summary_json
 
 def _override_temporal_client(app: FastAPI) -> AsyncMock:
     client = AsyncMock()
@@ -1068,6 +1234,109 @@ def test_execution_facets_exclude_requested_facet_filter_and_keep_task_scope() -
     assert body["blankCount"] == 0
     assert body["source"] == "authoritative"
 
+
+def test_execution_metrics_cost_extraction_unwraps_search_attribute_lists() -> None:
+    assert (
+        _extract_cost_estimate_usd(
+            {
+                "mm_cost_estimate_usd": [
+                    None,
+                    "2.50",
+                ]
+            }
+        )
+        == 2.5
+    )
+
+
+def test_execution_metrics_status_filter_limits_metric_buckets() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = _empty_session_override
+    _override_user_dependencies(app, is_superuser=False)
+
+    class _WorkflowIterator:
+        current_page: list[object] = []
+
+        async def fetch_next_page(self) -> None:
+            return None
+
+    temporal_client = SimpleNamespace(
+        count_workflows=AsyncMock(
+            side_effect=[SimpleNamespace(count=5), SimpleNamespace(count=3)]
+        ),
+        list_workflows=Mock(return_value=_WorkflowIterator()),
+    )
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions/metrics",
+            params={"source": "temporal", "stateIn": "failed"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["totalRuns"] == 5
+    assert body["completedRuns"] == 0
+    assert body["failedRuns"] == 3
+    assert body["canceledRuns"] == 0
+    assert body["terminalRuns"] == 3
+    assert body["successRate"] == 0
+    count_queries = [
+        call.kwargs["query"] for call in temporal_client.count_workflows.await_args_list
+    ]
+    assert len(count_queries) == 2
+    assert all('ExecutionStatus="Failed"' in query for query in count_queries)
+    assert temporal_client.list_workflows.call_args.kwargs["query"].count(
+        'ExecutionStatus="Failed"'
+    ) == 1
+
+
+def test_execution_metrics_counts_workflows_concurrently() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = _empty_session_override
+    _override_user_dependencies(app, is_superuser=False)
+
+    class _WorkflowIterator:
+        current_page: list[object] = []
+
+        async def fetch_next_page(self) -> None:
+            return None
+
+    active_calls = 0
+    max_active_calls = 0
+
+    async def _count_workflows(*, query: str) -> SimpleNamespace:
+        nonlocal active_calls, max_active_calls
+        active_calls += 1
+        max_active_calls = max(max_active_calls, active_calls)
+        await asyncio.sleep(0)
+        active_calls -= 1
+        return SimpleNamespace(count=1)
+
+    temporal_client = SimpleNamespace(
+        count_workflows=AsyncMock(side_effect=_count_workflows),
+        list_workflows=Mock(return_value=_WorkflowIterator()),
+    )
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions/metrics",
+            params={"source": "temporal"},
+        )
+
+    assert response.status_code == 200
+    assert temporal_client.count_workflows.await_count == 4
+    assert max_active_calls > 1
+
+
 def test_execution_status_facet_counts_static_status_values_with_task_scope() -> None:
     app = FastAPI()
     app.include_router(router)
@@ -1540,6 +1809,40 @@ def test_create_task_shaped_execution_rejects_unsupported_runtime_with_attachmen
     assert response.status_code == 422
     assert "Unsupported targetRuntime" in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
+
+
+def test_create_task_shaped_execution_rejects_unsupported_step_runtime(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "targetRuntime": "codex_cli",
+                "task": {
+                    "instructions": "Validate step runtime early.",
+                    "steps": [
+                        {
+                            "id": "bad-runtime",
+                            "instructions": "This should fail before launch.",
+                            "runtime": {"mode": "gemni_cli"},
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert (
+        "Unsupported payload.task.steps[0].runtime.mode"
+        in response.json()["detail"]["message"]
+    )
+    service.create_execution.assert_not_awaited()
+
 
 def test_create_task_shaped_execution_fetches_unique_attachments_in_one_query(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -3090,6 +3393,69 @@ def test_serialize_execution_includes_failed_proposal_outcomes() -> None:
     ]
 
 
+def test_serialize_execution_projects_observability_from_finish_summary() -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.COMPLETED)
+    record.close_status = TemporalExecutionCloseStatus.COMPLETED
+    record.memo["worker_id"] = "worker-7"
+    record.memo["finishSummary"] = {
+        "timestamps": {"durationMs": 12345},
+        "finishOutcome": {"code": "NO_CHANGES", "reason": "No local changes"},
+        "runQuality": {
+            "code": "flaky_test_detected",
+            "reason": "A flaky test was retried before passing.",
+            "tags": ["flaky_test", "retry"],
+            "severity": "high",
+        },
+        "proposals": {"requested": True, "submittedCount": 1},
+        "cost": {"status": "not_recorded", "amountUsd": None},
+    }
+
+    payload = _serialize_execution(record).model_dump(by_alias=True)
+
+    assert payload["runMetrics"] == {
+        "durationMs": 12345,
+        "outcomeCode": "NO_CHANGES",
+        "success": True,
+        "successRateSample": {"success": 1, "sampleSize": 1},
+        "cost": {"status": "not_recorded", "amountUsd": None},
+    }
+    assert payload["improvementSignals"][0]["tags"] == ["flaky_test", "retry"]
+    assert payload["recommendedNextAction"] == "Review generated improvement proposals."
+    assert payload["logContext"] == {
+        "workflowId": "mm:wf-1",
+        "runId": "run-2",
+        "workerId": "worker-7",
+        "namespace": "moonmind",
+    }
+
+
+def test_serialize_execution_omits_success_rate_sample_for_active_run() -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
+
+    payload = _serialize_execution(record).model_dump(by_alias=True)
+
+    assert payload["runMetrics"]["success"] is False
+    assert payload["runMetrics"]["successRateSample"] == {
+        "success": 0,
+        "sampleSize": 0,
+    }
+
+
+def test_serialize_execution_handles_mixed_timezone_duration_inputs() -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    record.close_status = TemporalExecutionCloseStatus.FAILED
+    record.started_at = datetime(2026, 6, 4, 12, 0, tzinfo=UTC)
+    record.updated_at = datetime(2026, 6, 4, 12, 1)
+
+    payload = _serialize_execution(record).model_dump(by_alias=True)
+
+    assert payload["runMetrics"]["durationMs"] is None
+    assert payload["runMetrics"]["successRateSample"] == {
+        "success": 0,
+        "sampleSize": 1,
+    }
+
+
 def test_serialize_execution_exposes_snake_case_publish_merge_automation() -> None:
     record = _build_execution_record()
     record.parameters = {
@@ -3221,6 +3587,122 @@ def test_create_task_shaped_execution_defaults_runtime_into_parameters(
     assert initial_parameters["targetRuntime"] == "codex_cli"
     assert initial_parameters["task"]["runtime"]["mode"] == "codex_cli"
 
+
+def test_create_task_shaped_execution_normalizes_scalar_step_runtime_fields(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+    test_client.app.dependency_overrides[get_async_session] = lambda: None
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "targetRuntime": "codex_cli",
+                "task": {
+                    "title": "Preserve scalar runtime fields",
+                    "instructions": "Normalize step runtime metadata.",
+                    "steps": [
+                        {
+                            "id": "scalar-runtime",
+                            "instructions": "Use a step profile.",
+                            "runtime": {
+                                "mode": "CLAUDE",
+                                "model": 42,
+                                "effort": True,
+                                "profileId": 123,
+                            },
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    runtime = initial_parameters["task"]["steps"][0]["runtime"]
+    assert runtime["mode"] == "claude_code"
+    assert runtime["model"] == "42"
+    assert runtime["requestedModel"] == "42"
+    assert runtime["modelSource"] == "task_override"
+    assert runtime["effort"] == "True"
+    assert runtime["profileId"] == "123"
+    assert runtime["providerProfile"] == "123"
+
+
+def test_create_task_shaped_execution_preserves_preset_schedule_provenance(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "targetRuntime": "codex_cli",
+                "task": {
+                    "title": "MM-747 goal",
+                    "instructions": "Complete Jira issue MM-747.",
+                    "steps": [
+                        {
+                            "id": "step-1",
+                            "title": "Implement",
+                            "instructions": "Implement MM-747.",
+                        }
+                    ],
+                    "taskTemplate": {
+                        "slug": "jira-implement",
+                        "version": "1.0.0",
+                        "scope": "global",
+                    },
+                    "presetSchedule": {
+                        "source": "goal",
+                        "reason": "jira_issue_goal",
+                        "presetSlug": "jira-implement",
+                        "presetVersion": "1.0.0",
+                        "jiraIssueKey": "MM-747",
+                    },
+                    "appliedStepTemplates": [
+                        {
+                            "slug": "jira-implement",
+                            "version": "1.0.0",
+                            "stepIds": ["step-1"],
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    task = initial_parameters["task"]
+    assert task["taskTemplate"] == {
+        "slug": "jira-implement",
+        "version": "1.0.0",
+        "scope": "global",
+    }
+    assert task["presetSchedule"] == {
+        "source": "goal",
+        "reason": "jira_issue_goal",
+        "presetSlug": "jira-implement",
+        "presetVersion": "1.0.0",
+        "jiraIssueKey": "MM-747",
+    }
+    assert task["appliedStepTemplates"][0]["slug"] == "jira-implement"
+
+
 def test_create_task_shaped_execution_preserves_steps_and_uses_step_title_defaults(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -3252,6 +3734,11 @@ def test_create_task_shaped_execution_preserves_steps_and_uses_step_title_defaul
                             "id": "tpl:demo:1.0.0:02",
                             "title": "Implement the restored builder",
                             "instructions": "Restore presets and multi-step submission.",
+                            "runtime": {
+                                "mode": "codex_cli",
+                                "model": "gpt-5.4",
+                                "effort": "high",
+                            },
                         },
                     ],
                 },
@@ -3284,6 +3771,13 @@ def test_create_task_shaped_execution_preserves_steps_and_uses_step_title_defaul
             "id": "tpl:demo:1.0.0:02",
             "title": "Implement the restored builder",
             "instructions": "Restore presets and multi-step submission.",
+            "runtime": {
+                "mode": "codex_cli",
+                "model": "gpt-5.4",
+                "effort": "high",
+                "requestedModel": "gpt-5.4",
+                "modelSource": "task_override",
+            },
         },
     ]
 
@@ -8834,6 +9328,147 @@ def test_failed_step_recovery_request_rejects_edited_task_payload_fields(
     body = response.json()["detail"]
     assert body["code"] == "recovery_payload_not_allowed"
     assert body["fields"] == expected_fields
+
+
+def test_mm773_serialize_execution_surfaces_comparison_source_related_run() -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.COMPLETED)
+    record.parameters = {
+        "targetRuntime": "codex_cli",
+        "model": "gpt-5.4",
+        "task": {
+            "runtime": {"mode": "codex_cli", "model": "gpt-5.4"},
+            "comparison": {
+                "kind": "model_runtime_comparison",
+                "sourceWorkflowId": "mm:source-run",
+                "sourceRunId": "run-source",
+            },
+        },
+    }
+
+    payload = _serialize_execution(record).model_dump(by_alias=True)
+
+    assert payload["relatedRuns"] == [
+        {
+            "workflowId": "mm:source-run",
+            "runId": "run-source",
+            "relationship": "Comparison source",
+            "status": None,
+            "targetRuntime": None,
+            "model": None,
+            "requestedModel": None,
+            "resolvedModel": None,
+            "effort": None,
+            "createdAt": None,
+            "href": "/workflows/mm%3Asource-run?source=temporal",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_mm773_hydrates_related_run_runtime_model_metadata() -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.COMPLETED)
+    record.parameters = {
+        "task": {
+            "comparison": {
+                "kind": "model_runtime_comparison",
+                "sourceWorkflowId": "mm:source-run",
+                "sourceRunId": "run-source",
+            },
+        },
+    }
+    execution = _serialize_execution(record)
+    source = _build_execution_record(state=MoonMindWorkflowState.COMPLETED)
+    source.workflow_id = "mm:source-run"
+    source.run_id = "run-source"
+    source.close_status = TemporalExecutionCloseStatus.COMPLETED
+    source.parameters = {
+        "targetRuntime": "gemini_cli",
+        "model": "gemini-2.5-pro",
+        "requestedModel": "gemini-2.5-pro",
+        "effort": "medium",
+        "task": {"runtime": {"mode": "gemini_cli", "effort": "medium"}},
+    }
+    session = SimpleNamespace(get=AsyncMock(return_value=source))
+
+    hydrated = await _hydrate_related_run_metadata(execution, session=session)
+    related = hydrated.model_dump(by_alias=True)["relatedRuns"][0]
+
+    assert related["workflowId"] == "mm:source-run"
+    assert related["runId"] == "run-source"
+    assert related["status"] == "completed"
+    assert related["targetRuntime"] == "gemini_cli"
+    assert related["model"] == "gemini-2.5-pro"
+    assert related["requestedModel"] == "gemini-2.5-pro"
+    assert related["effort"] == "medium"
+
+
+@pytest.mark.asyncio
+async def test_mm773_hydrates_related_run_metadata_for_same_owner() -> None:
+    user = SimpleNamespace(id=uuid4(), is_superuser=False)
+    record = _build_execution_record(owner_id=str(user.id))
+    record.parameters = {
+        "task": {
+            "comparison": {
+                "kind": "model_runtime_comparison",
+                "sourceWorkflowId": "mm:source-run",
+            },
+        },
+    }
+    execution = _serialize_execution(record, user=user)
+    source = _build_execution_record(
+        state=MoonMindWorkflowState.COMPLETED,
+        owner_id=str(user.id),
+    )
+    source.workflow_id = "mm:source-run"
+    source.close_status = TemporalExecutionCloseStatus.COMPLETED
+    source.parameters = {"targetRuntime": "codex_cli", "model": "gpt-5.4"}
+    session = SimpleNamespace(get=AsyncMock(return_value=source))
+
+    hydrated = await _hydrate_related_run_metadata(
+        execution,
+        session=session,
+        user=user,
+    )
+    related = hydrated.model_dump(by_alias=True)["relatedRuns"][0]
+
+    assert related["status"] == "completed"
+    assert related["targetRuntime"] == "codex_cli"
+    assert related["model"] == "gpt-5.4"
+
+
+@pytest.mark.asyncio
+async def test_mm773_skips_related_run_metadata_for_foreign_owner() -> None:
+    user = SimpleNamespace(id=uuid4(), is_superuser=False)
+    record = _build_execution_record(owner_id=str(user.id))
+    record.parameters = {
+        "task": {
+            "comparison": {
+                "kind": "model_runtime_comparison",
+                "sourceWorkflowId": "mm:source-run",
+            },
+        },
+    }
+    execution = _serialize_execution(record, user=user)
+    source = _build_execution_record(
+        state=MoonMindWorkflowState.COMPLETED,
+        owner_id=str(uuid4()),
+    )
+    source.workflow_id = "mm:source-run"
+    source.close_status = TemporalExecutionCloseStatus.COMPLETED
+    source.parameters = {"targetRuntime": "codex_cli", "model": "gpt-5.4"}
+    session = SimpleNamespace(get=AsyncMock(return_value=source))
+
+    hydrated = await _hydrate_related_run_metadata(
+        execution,
+        session=session,
+        user=user,
+    )
+    related = hydrated.model_dump(by_alias=True)["relatedRuns"][0]
+
+    assert related["workflowId"] == "mm:source-run"
+    assert related["status"] is None
+    assert related["targetRuntime"] is None
+    assert related["model"] is None
 
 
 def test_failed_step_recovery_hydrates_checkpoint_artifact(

@@ -864,7 +864,11 @@ class TaskRuntimeSelection(BaseModel):
     )
     model: str | None = Field(None, alias="model")
     effort: str | None = Field(None, alias="effort")
-    provider_profile: str | None = Field(None, alias="providerProfile")
+    provider_profile: str | None = Field(
+        None,
+        alias="providerProfile",
+        validation_alias=AliasChoices("providerProfile", "profileId"),
+    )
 
     @field_validator("mode", mode="before")
     @classmethod
@@ -1393,8 +1397,10 @@ class TaskStepSpec(BaseModel):
     id: str | None = Field(None, alias="id")
     title: str | None = Field(None, alias="title")
     instructions: str | None = Field(None, alias="instructions")
+    runtime: TaskRuntimeSelection | None = Field(None, alias="runtime")
     skill: TaskSkillSelection | None = Field(None, alias="skill")
     skills: TaskSkillSelectors | None = Field(None, alias="skills")
+    runtime: TaskRuntimeSelection | None = Field(None, alias="runtime")
     source: TaskStepSource | None = Field(None, alias="source")
     input_attachments: list[TaskInputAttachmentRef] = Field(
         default_factory=list, alias="inputAttachments"
@@ -1466,11 +1472,12 @@ class TaskStepSpec(BaseModel):
                 step_ref=_clean_optional_str(payload.get("id")),
             )
         forbidden = {
-            "runtime",
             "targetRuntime",
             "target_runtime",
             "model",
             "effort",
+            "providerProfile",
+            "profileId",
             "repository",
             "repo",
             "git",
@@ -2515,10 +2522,15 @@ def build_authoritative_task_input_snapshot(
     detachment: list[dict[str, Any]] = []
     for ordinal, step in enumerate(steps):
         step_id = _step_identifier(step, ordinal)
+        step_runtime = _safe_mapping(step.get("runtime"))
+        step_runtime_mode = _runtime_mode_from_task(
+            {"runtime": step_runtime},
+            target_runtime=runtime_mode,
+        )
         step_runtime_command = _build_runtime_command_metadata(
             raw_instructions_value=step.get("instructions"),
             source_path=f"steps[{ordinal}].instructions",
-            target_runtime=runtime_mode,
+            target_runtime=step_runtime_mode or runtime_mode,
             target_step_id=step_id,
         )
         _validate_supplied_runtime_command(
@@ -2541,6 +2553,8 @@ def build_authoritative_task_input_snapshot(
             "stepType": _clean_optional_str(step.get("type")),
             "presetProvenance": _safe_mapping(step.get("presetProvenance")),
         }
+        if step_runtime:
+            authored_step["runtime"] = step_runtime
         if step_runtime_command is not None:
             authored_step["runtimeCommand"] = step_runtime_command
         authored_steps.append(authored_step)

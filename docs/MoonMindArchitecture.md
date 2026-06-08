@@ -505,7 +505,7 @@ For external agents:
 
 For non-agent Docker workloads:
 
-1. A plan step invokes an executable tool, normally `tool.type = "skill"`.
+1. A plan step invokes an executable workload tool outside the current `MoonMind.Run` `agent_runtime` dispatch path.
 2. MoonMind resolves the tool and runner policy.
 3. A Docker-capable worker launches the approved workload container through the controlled Docker boundary.
 4. Outputs are captured as tool results and artifacts.

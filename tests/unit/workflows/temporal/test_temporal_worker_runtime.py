@@ -78,7 +78,11 @@ class _FakeTaskInputSnapshotArtifactService:
         return SimpleNamespace(artifact_id="art_task_snapshot_1")
 
 
-def test_opentelemetry_logging_filter_injects_bounded_managed_session_fields() -> None:
+def test_opentelemetry_logging_filter_injects_bounded_managed_session_fields(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("TEMPORAL_WORKER_FLEET", "agent_runtime")
+    monkeypatch.setenv("MOONMIND_WORKER_ID", "worker-otel-1")
     record = logging.LogRecord(
         name="moonmind.test",
         level=logging.INFO,
@@ -107,6 +111,10 @@ def test_opentelemetry_logging_filter_injects_bounded_managed_session_fields() -
 
     assert OpenTelemetryLoggingFilter().filter(record) is True
 
+    assert record.service == "temporal-worker-agent-runtime"
+    assert record.component == "agent_runtime"
+    assert record.worker_fleet == "agent_runtime"
+    assert record.worker_id == "worker-otel-1"
     assert record.managed_session_task_run_id == "wf-run-1"
     assert record.managed_session_runtime_id == "codex_cli"
     assert record.managed_session_id == "sess:wf-run-1:codex_cli"
@@ -143,26 +151,67 @@ def test_opentelemetry_logging_filter_injects_bounded_managed_session_fields() -
     assert "rawLog" not in record.managed_session
     assert "token" not in record.managed_session
 
+
+def test_opentelemetry_logging_filter_caches_default_env_fields(monkeypatch) -> None:
+    calls = 0
+
+    def fake_default_fields() -> dict[str, str]:
+        nonlocal calls
+        calls += 1
+        return {
+            "service": "cached-service",
+            "component": "cached-component",
+            "worker_fleet": "cached-fleet",
+            "worker_id": "cached-worker",
+        }
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.worker_runtime.default_log_fields_from_env",
+        fake_default_fields,
+    )
+    otel_filter = OpenTelemetryLoggingFilter()
+
+    for _ in range(2):
+        record = logging.LogRecord(
+            name="moonmind.test",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=1,
+            msg="event",
+            args=(),
+            exc_info=None,
+        )
+        assert otel_filter.filter(record) is True
+        assert record.service == "cached-service"
+
+    assert calls == 1
+
 def test_opentelemetry_log_format_includes_session_locator_fields() -> None:
+    assert "service=%(service)s" in _OPENTELEMETRY_LOG_FORMAT
+    assert "component=%(component)s" in _OPENTELEMETRY_LOG_FORMAT
+    assert "worker_fleet=%(worker_fleet)s" in _OPENTELEMETRY_LOG_FORMAT
+    assert "worker_id=%(worker_id)s" in _OPENTELEMETRY_LOG_FORMAT
     assert "container_id=%(managed_session_container_id)s" in _OPENTELEMETRY_LOG_FORMAT
     assert "thread_id=%(managed_session_thread_id)s" in _OPENTELEMETRY_LOG_FORMAT
     assert "turn_id=%(managed_session_turn_id)s" in _OPENTELEMETRY_LOG_FORMAT
 
-def test_configure_worker_logging_applies_otel_formatter_to_existing_handlers() -> None:
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(message)s"))
+def test_configure_worker_logging_applies_otel_filter(monkeypatch) -> None:
+    monkeypatch.setenv("MOONMIND_STRUCTURED_LOGS", "1")
+    monkeypatch.setenv("TEMPORAL_WORKER_FLEET", "sandbox")
+    monkeypatch.setenv("MOONMIND_WORKER_ID", "worker-sandbox-1")
     original_handlers = list(logging.root.handlers)
-    logging.root.handlers = [handler]
 
     try:
         _configure_worker_logging(enable_opentelemetry=True)
     finally:
+        handlers = list(logging.root.handlers)
         logging.root.handlers = original_handlers
 
-    assert handler.formatter is not None
-    assert handler.formatter._fmt == _OPENTELEMETRY_LOG_FORMAT
+    assert handlers
+    assert all(handler.formatter is not None for handler in handlers)
     assert any(
         isinstance(existing_filter, OpenTelemetryLoggingFilter)
+        for handler in handlers
         for existing_filter in handler.filters
     )
 
@@ -242,6 +291,73 @@ def test_runtime_planner_promotes_profile_id_to_runtime_node():
     assert runtime_node["profileId"] == "codex-provider-profile"
     assert runtime_node["providerProfile"] == "codex-provider-profile"
 
+
+@pytest.mark.asyncio
+async def test_child_run_auto_sequences_jira_goal_through_implement_preset(tmp_path):
+    async with _template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            expanded_parameters = await _expand_task_template_for_child_run(
+                session=session,
+                initial_parameters={
+                    "requestType": "task",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "codex_cli",
+                    "publishMode": "pr",
+                    "task": {
+                        "title": "MM-747 goal",
+                        "goal": "Implement Jira issue MM-747 using the right preset.",
+                    },
+                },
+            )
+
+    task = expanded_parameters["task"]
+    assert task["taskTemplate"] == {
+        "slug": "jira-implement",
+        "version": "1.0.0",
+        "scope": "global",
+    }
+    assert task["presetSchedule"] == {
+        "source": "goal",
+        "reason": "jira_issue_goal",
+        "presetSlug": "jira-implement",
+        "presetVersion": "1.0.0",
+        "jiraIssueKey": "MM-747",
+    }
+    assert task["inputs"]["jira_issue_key"] == "MM-747"
+    assert task["instructions"] == "Implement Jira issue MM-747 using the right preset."
+    assert expanded_parameters["stepCount"] == len(task["steps"])
+    assert task["steps"][0]["title"] == "Load Jira preset brief"
+    assert task["steps"][1]["title"] == "Assess existing implementation state"
+    assert task["steps"][-1]["title"] == "Finalize Jira status"
+    assert task["appliedStepTemplates"][0]["slug"] == "jira-implement"
+    assert task["authoredPresets"][0]["presetSlug"] == "jira-implement"
+
+
+@pytest.mark.asyncio
+async def test_child_run_goal_scheduled_breakdown_preserves_target_runtime(tmp_path):
+    async with _template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            expanded_parameters = await _expand_task_template_for_child_run(
+                session=session,
+                initial_parameters={
+                    "requestType": "task",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "jules",
+                    "publishMode": "pr",
+                    "task": {
+                        "title": "Break down feature",
+                        "goal": "Split docs/Design.md into Jira stories.",
+                    },
+                },
+            )
+
+    downstream_task = expanded_parameters["task"]["steps"][3]["jiraOrchestration"][
+        "task"
+    ]
+    assert downstream_task["repository"] == "MoonLadderStudios/MoonMind"
+    assert downstream_task["runtime"] == {"mode": "jules"}
+
+
 def test_runtime_planner_maps_explicit_tool_step_to_typed_tool_node():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
@@ -280,9 +396,9 @@ def test_runtime_planner_maps_explicit_tool_step_to_typed_tool_node():
     )
 
     assert plan["nodes"][0]["tool"] == {
-        "type": "skill",
-        "name": "jira.get_issue",
-        "version": "1.0.0",
+        "type": "agent_runtime",
+        "name": "codex_cli",
+        "version": "1.0",
     }
     assert plan["nodes"][0]["inputs"]["selectedSkill"] == "jira.get_issue"
     assert plan["nodes"][0]["inputs"]["type"] == "tool"
@@ -401,9 +517,9 @@ def test_runtime_planner_orders_flattened_tool_and_skill_steps_with_provenance()
     ]
     assert plan["edges"] == [{"from": "fetch-issue", "to": "implement-story"}]
     assert plan["nodes"][0]["tool"] == {
-        "type": "skill",
-        "name": "jira.get_issue",
-        "version": "1.0.0",
+        "type": "agent_runtime",
+        "name": "codex_cli",
+        "version": "1.0",
     }
     assert plan["nodes"][1]["tool"] == {
         "type": "agent_runtime",
@@ -461,11 +577,14 @@ def test_runtime_planner_preserves_authored_task_plan_tool_nodes():
         {
             "id": "update-moonmind-deployment",
             "tool": {
-                "type": "skill",
-                "name": "deployment.update_compose_stack",
+                "type": "agent_runtime",
+                "name": "codex_cli",
                 "version": "1.0.0",
             },
             "inputs": {
+                "instructions": "Execute skill 'deployment.update_compose_stack'",
+                "runtime": {"mode": "codex_cli"},
+                "selectedSkill": "deployment.update_compose_stack",
                 "stack": "moonmind",
                 "image": {
                     "repository": "ghcr.io/moonladderstudios/moonmind",
@@ -563,9 +682,9 @@ def test_runtime_planner_maps_deployment_update_step_to_typed_tool_node():
     )
 
     assert plan["nodes"][0]["tool"] == {
-        "type": "skill",
-        "name": "deployment.update_compose_stack",
-        "version": "1.0.0",
+        "type": "agent_runtime",
+        "name": "codex_cli",
+        "version": "1.0",
     }
     assert plan["nodes"][0]["inputs"]["selectedSkill"] == (
         "deployment.update_compose_stack"
@@ -826,7 +945,8 @@ def test_runtime_planner_materializes_tool_steps_without_source_lookup(
         snapshot=snapshot,
     )
 
-    assert plan["nodes"][0]["tool"]["name"] == "jira.get_issue"
+    assert plan["nodes"][0]["tool"]["name"] == "codex_cli"
+    assert plan["nodes"][0]["inputs"]["selectedSkill"] == "jira.get_issue"
     if source is None:
         assert "source" not in plan["nodes"][0]["inputs"]
     else:
@@ -940,7 +1060,7 @@ def test_runtime_planner_routes_jira_issue_creator_as_agent_skill_step():
     jira = plan["nodes"][1]
 
     assert breakdown["tool"]["type"] == "agent_runtime"
-    assert breakdown["tool"]["name"] == "moonspec-breakdown"
+    assert breakdown["tool"]["name"] == "codex_cli"
     assert breakdown["inputs"]["selectedSkill"] == "moonspec-breakdown"
     assert "Do not create or modify any `spec.md`" in breakdown["inputs"]["instructions"]
     assert breakdown["inputs"]["storyBreakdownPath"].startswith(
@@ -956,7 +1076,7 @@ def test_runtime_planner_routes_jira_issue_creator_as_agent_skill_step():
 
     assert jira["tool"] == {
         "type": "agent_runtime",
-        "name": "jira-issue-creator",
+        "name": "codex_cli",
         "version": "1.0",
     }
     assert jira["inputs"]["selectedSkill"] == "jira-issue-creator"
@@ -1030,8 +1150,8 @@ def test_runtime_planner_shares_story_breakdown_path_for_jira_breakdown_preset()
     )
     assert jira["inputs"]["targetBranch"] == breakdown["inputs"]["targetBranch"]
     assert jira["tool"] == {
-        "type": "skill",
-        "name": "story.create_jira_issues",
+        "type": "agent_runtime",
+        "name": "codex_cli",
         "version": "1.0",
     }
     assert jira["inputs"]["selectedSkill"] == "story.create_jira_issues"
@@ -1185,8 +1305,8 @@ def test_runtime_planner_preserves_authored_branch_for_jira_story_import():
     node = plan["nodes"][0]
 
     assert node["tool"] == {
-        "type": "skill",
-        "name": "story.create_jira_issues",
+        "type": "agent_runtime",
+        "name": "codex_cli",
         "version": "1.0",
     }
     assert node["inputs"]["branch"] == "feature/authored-breakdown"
@@ -1266,7 +1386,7 @@ def test_runtime_planner_routes_jira_orchestrate_task_creator_as_skill_step():
     orchestrate = plan["nodes"][3]
     assert reconcile["tool"] == {
         "type": "agent_runtime",
-        "name": "story-reconcile-implementation",
+        "name": "codex_cli",
         "version": "1.0",
     }
     assert reconcile["inputs"]["selectedSkill"] == "story-reconcile-implementation"
@@ -1279,8 +1399,8 @@ def test_runtime_planner_routes_jira_orchestrate_task_creator_as_skill_step():
         == breakdown["inputs"]["storyBreakdownPath"]
     )
     assert orchestrate["tool"] == {
-        "type": "skill",
-        "name": "story.create_jira_orchestrate_tasks",
+        "type": "agent_runtime",
+        "name": "codex_cli",
         "version": "1.0",
     }
     assert orchestrate["inputs"]["selectedSkill"] == "story.create_jira_orchestrate_tasks"
@@ -1359,8 +1479,8 @@ def test_runtime_planner_routes_jira_implement_task_creator_as_skill_step():
     implement = plan["nodes"][3]
 
     assert implement["tool"] == {
-        "type": "skill",
-        "name": "story.create_jira_implement_tasks",
+        "type": "agent_runtime",
+        "name": "codex_cli",
         "version": "1.0",
     }
     assert implement["inputs"]["selectedSkill"] == "story.create_jira_implement_tasks"
@@ -2196,6 +2316,45 @@ def test_runtime_planner_multi_step_generates_multiple_nodes_with_edges():
     assert len(edges) == 2
     assert edges[0] == {"from": "s1", "to": "s2"}
     assert edges[1] == {"from": "s2", "to": "s3"}
+
+
+def test_mm786_runtime_planner_uses_per_step_runtime_selection():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Objective",
+                "steps": [
+                    {"id": "s1", "instructions": "Use default runtime."},
+                    {
+                        "id": "s2",
+                        "instructions": "Use lower-cost runtime.",
+                        "runtime": {
+                            "mode": "gemini_cli",
+                            "model": "gemini-2.5-flash",
+                            "effort": "low",
+                        },
+                    },
+                ],
+                "runtime": {"mode": "codex_cli", "model": "gpt-5.4"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    nodes = plan["nodes"]
+    assert nodes[0]["tool"]["name"] == "codex_cli"
+    assert nodes[0]["inputs"]["runtime"]["mode"] == "codex_cli"
+    assert nodes[1]["tool"]["name"] == "gemini_cli"
+    assert nodes[1]["inputs"]["runtime"] == {
+        "mode": "gemini_cli",
+        "model": "gemini-2.5-flash",
+        "effort": "low",
+    }
+
 
 def test_runtime_planner_multi_step_preserves_custom_keys():
     planner = _build_runtime_planner()

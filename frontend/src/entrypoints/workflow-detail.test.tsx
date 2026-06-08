@@ -10,6 +10,7 @@ import {
   WorkflowDetailPage,
 } from './workflow-detail';
 import {
+  taskCompareHref,
   taskEditForRerunHref,
   taskEditHref,
 } from '../lib/temporalTaskEditing';
@@ -379,9 +380,11 @@ describe('Workflow Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
-      expect(screen.getByText('Plan work')).toBeTruthy();
-      expect(screen.getByText('Apply patch')).toBeTruthy();
-      expect(screen.getByText('Verify tests')).toBeTruthy();
+      expect(screen.getAllByText('Plan work').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Apply patch').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Verify tests').length).toBeGreaterThan(0);
+      expect(screen.getByRole('heading', { name: 'Step DAG' })).toBeTruthy();
+      expect(screen.getByText('Depends on: plan')).toBeTruthy();
       expect(screen.getByText('Merge Automation').closest('div')?.textContent).toContain('—');
       expect(screen.getByText(/^Current Run ID:?$/)).toBeTruthy();
       expect(screen.getAllByText('02-run').length).toBeGreaterThan(0);
@@ -466,6 +469,95 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.queryByText(/^Task ID:?$/)).toBeNull();
       expect(screen.queryByText(/^Task Detail:?$/)).toBeNull();
       expect(screen.queryByText(/^Step Attempt:?$/)).toBeNull();
+    });
+  });
+
+  it('groups workflow artifacts and folds step and intervention events into the audit timeline', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Artifact browser task',
+      summary: 'Execution summary',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      startedAt: '2026-04-09T00:00:01Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+      interventionAudit: [
+        {
+          action: 'send_message',
+          transport: 'temporal_update',
+          summary: 'Operator sent guidance.',
+          createdAt: '2026-04-09T00:00:05Z',
+        },
+      ],
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => latestStepsSnapshot,
+        } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            artifacts: [
+              {
+                artifactId: 'art-log',
+                contentType: 'text/plain',
+                sizeBytes: 120,
+                status: 'complete',
+                metadata: { filename: 'runtime.log' },
+              },
+              {
+                artifactId: 'art-patch',
+                contentType: 'text/x-diff',
+                sizeBytes: 80,
+                status: 'complete',
+                metadata: { filename: 'fix.patch' },
+              },
+              {
+                artifactId: 'art-report-by-type',
+                contentType: 'text/plain',
+                sizeBytes: 256,
+                status: 'complete',
+                metadata: { filename: 'output.txt', artifact_type: 'report.primary' },
+              },
+            ],
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Workflow Artifacts' })).toBeTruthy();
+      expect(screen.getByText(/Artifact Browser/)).toBeTruthy();
+      expect(screen.getByText('runtime.log')).toBeTruthy();
+      expect(screen.getByText('fix.patch')).toBeTruthy();
+      expect(screen.getByText('output.txt').closest('tr')?.textContent).toContain('reports');
+      expect(screen.getByText('Operator sent guidance.')).toBeTruthy();
+      expect(screen.getAllByText((_, element) => element?.textContent?.includes('Verify tests: ready') ?? false).length).toBeGreaterThan(0);
     });
   });
 
@@ -2387,7 +2479,7 @@ describe('Workflow Detail Entrypoint', () => {
     });
     expect(screen.getByRole('heading', { name: 'Target Diagnostics' })).toBeTruthy();
     expect(screen.getAllByText('Workflow objective').length).toBeGreaterThan(0);
-    expect(screen.getByText('objective.png')).toBeTruthy();
+    expect(screen.getAllByText('objective.png').length).toBeGreaterThan(0);
     expect(screen.getByText('Inspect screenshot')).toBeTruthy();
     expect(screen.getByText('Attachment download failed before step execution.')).toBeTruthy();
     expect(screen.getByText('artifact://diagnostics/input-manifest')).toBeTruthy();
@@ -3356,7 +3448,7 @@ describe('Workflow Detail Entrypoint', () => {
     });
 
     expect(screen.queryByText('PR Link')).toBeNull();
-    expect(screen.queryByRole('link')).toBeNull();
+    expect(document.querySelector('a[href^="javascript:"]')).toBeNull();
   });
 
   it('renders merge automation visibility from the run summary', async () => {
@@ -4192,9 +4284,9 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByRole('heading', { name: 'Objective' })).toBeTruthy();
       expect(screen.getByRole('heading', { name: 'Step 2' })).toBeTruthy();
       expect(screen.getAllByRole('heading', { name: 'Step 2' })).toHaveLength(1);
-      expect(screen.getByText('objective.png')).toBeTruthy();
-      expect(screen.getByText('step.webp')).toBeTruthy();
-      expect(screen.getByText('step-second.jpg')).toBeTruthy();
+      expect(screen.getAllByText('objective.png').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('step.webp').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('step-second.jpg').length).toBeGreaterThan(0);
     });
 
     const objectivePreview = screen.getByAltText('Preview of Objective attachment objective.png');
@@ -4236,6 +4328,8 @@ describe('Workflow Detail Entrypoint', () => {
       status: 'waiting',
       state: 'awaiting_external',
       rawState: 'awaiting_external',
+      waitingReason: 'Agent requested human feedback.',
+      attentionRequired: true,
       createdAt: '2026-03-28T00:00:00Z',
       updatedAt: '2026-03-28T00:00:02Z',
       actions: {
@@ -4277,10 +4371,230 @@ describe('Workflow Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Intervention' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Intervention Monitor' })).toBeTruthy();
+      expect(screen.getAllByText('Agent requested human feedback.').length).toBeGreaterThan(0);
       expect(screen.getByRole('heading', { name: 'Observation' })).toBeTruthy();
-      expect(screen.getByText(/Pause requested\./)).toBeTruthy();
+      expect(screen.getAllByText(/Pause requested\./).length).toBeGreaterThan(0);
       expect(screen.getByText(/Live logs are passive observation only/i)).toBeTruthy();
     });
+  });
+
+  it('renders a side-by-side run comparison for related executions', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Comparison task',
+      summary: 'Compare runs',
+      status: 'completed',
+      state: 'completed',
+      rawState: 'completed',
+      targetRuntime: 'codex_cli',
+      model: 'gpt-5',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: { canEditForRerun: true },
+      relatedRuns: [
+        {
+          workflowId: 'test-456',
+          runId: '02-run',
+          relationship: 'Comparison source',
+          status: 'failed',
+          targetRuntime: 'gemini_cli',
+          model: 'gemini-2.5-pro',
+          effort: 'high',
+          href: '/workflows/test-456?source=temporal',
+        },
+      ],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    const comparisonPayload: BootPayload = {
+      ...mockPayload,
+      initialData: {
+        dashboardConfig: {
+          features: {
+            temporalDashboard: {
+              actionsEnabled: true,
+              temporalTaskEditing: true,
+            },
+          },
+        },
+      },
+    };
+
+    renderWithClient(<WorkflowDetailPage payload={comparisonPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Run Comparison' })).toBeTruthy();
+      expect(screen.getByText('current')).toBeTruthy();
+      expect(screen.getByText('test-456')).toBeTruthy();
+      expect(screen.getAllByText('gpt-5').length).toBeGreaterThan(0);
+      expect(screen.getByText('Gemini CLI')).toBeTruthy();
+      expect(screen.getByText('gemini-2.5-pro')).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'Compare run' }).getAttribute('href')).toBe(
+        taskCompareHref('test-123'),
+      );
+    });
+  });
+
+  it('MM-772 renders the runs subroute as a dedicated execution history view', async () => {
+    window.history.pushState({}, 'Runs Test', '/workflows/test-123/runs?source=temporal');
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'History task',
+      summary: 'Audit history',
+      status: 'completed',
+      state: 'completed',
+      rawState: 'completed',
+      targetRuntime: 'codex_cli',
+      model: 'gpt-5',
+      createdAt: '2026-03-28T00:00:00Z',
+      startedAt: '2026-03-28T00:00:01Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      closedAt: '2026-03-28T00:00:03Z',
+      closeStatus: 'completed',
+      actions: {},
+      interventionAudit: [
+        {
+          action: 'send_message',
+          transport: 'temporal_update',
+          summary: 'Operator guidance recorded.',
+          createdAt: '2026-03-28T00:00:02Z',
+        },
+      ],
+      relatedRuns: [
+        {
+          workflowId: 'test-456',
+          runId: '02-run',
+          relationship: 'rerun',
+          status: 'failed',
+          href: '/workflows/test-456/runs?source=temporal',
+        },
+      ],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('heading', { name: 'Execution History' }).length).toBeGreaterThan(1);
+      expect(screen.getByRole('link', { name: 'Runs' }).getAttribute('aria-current')).toBe('page');
+      expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('href')).toBe('/workflows/test-123?source=temporal');
+      expect(screen.getAllByText(/^Current Run ID:?$/).length).toBeGreaterThan(1);
+      expect(screen.getAllByText('01-run').length).toBeGreaterThan(0);
+      expect(screen.getByText('test-456')).toBeTruthy();
+      expect(screen.getByText('02-run')).toBeTruthy();
+      expect(screen.getByText('Operator guidance recorded.')).toBeTruthy();
+      expect(screen.queryByRole('heading', { name: 'Run Comparison' })).toBeNull();
+    });
+  });
+
+  it('MM-772 renders duplicate related runs without duplicate React keys', async () => {
+    window.history.pushState({}, 'Runs Test', '/workflows/test-123/runs?source=temporal');
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'History task',
+      summary: 'Audit history',
+      status: 'completed',
+      state: 'completed',
+      rawState: 'completed',
+      targetRuntime: 'codex_cli',
+      model: 'gpt-5',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {},
+      relatedRuns: [
+        {
+          workflowId: 'duplicate-workflow',
+          relationship: 'rerun',
+          status: 'failed',
+          href: '/workflows/duplicate-workflow/runs?source=temporal',
+        },
+        {
+          workflowId: 'duplicate-workflow',
+          relationship: 'rerun',
+          status: 'completed',
+          href: '/workflows/duplicate-workflow/runs?source=temporal',
+        },
+      ],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText('duplicate-workflow').length).toBeGreaterThanOrEqual(2);
+    });
+    const duplicateKeyWarnings = consoleErrorSpy.mock.calls.filter(([message]) =>
+      String(message).includes('Encountered two children with the same key'),
+    );
+    expect(duplicateKeyWarnings).toHaveLength(0);
   });
 
   it('routes Pause through the explicit signal endpoint without requiring live log fetches', async () => {

@@ -11,6 +11,7 @@ import os
 import re
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, Literal, Optional
 from urllib.parse import quote, urlsplit
 from uuid import uuid4
@@ -62,6 +63,9 @@ from moonmind.schemas.temporal_models import (
     ExecutionMergeAutomationResolverChildModel,
     ExecutionProjectionDiagnosticModel,
     ExecutionListResponse,
+    ExecutionMetricsCostModel,
+    ExecutionMetricsDurationModel,
+    ExecutionMetricsResponse,
     ExecutionModel,
     ExecutionProgressModel,
     ExecutionReportProjectionModel,
@@ -108,6 +112,12 @@ from moonmind.workflows.temporal.report_artifacts import build_report_projection
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.client import TemporalClientAdapter, query_workflow
 from moonmind.workflows.tasks.model_resolver import resolve_effective_model
+from moonmind.workflows.tasks.preset_goal_scheduler import (
+    GoalPresetSchedule,
+    goal_from_payloads,
+    schedule_preset_from_goal,
+    task_is_already_authored,
+)
 from moonmind.workflows.tasks.runtime_defaults import normalize_runtime_id
 from moonmind.workflows.tasks.runtime_inheritance import (
     RuntimeInheritanceError,
@@ -136,6 +146,16 @@ router = APIRouter(prefix="/api/executions", tags=["executions"])
 _TEMPORAL_SOURCE = "temporal"
 _ALLOWED_OWNER_TYPES = {"user", "system", "service"}
 _TEMPORAL_LIST_SCOPES = {"tasks", "user", "system", "all"}
+_SUPPORTED_TASK_RUNTIMES = frozenset({
+    "codex_cli",
+    "gemini_cli",
+    "claude_code",
+    "codex_cloud",
+    "jules",
+    # Legacy aliases accepted and normalized below.
+    "codex",
+    "claude",
+})
 _TEMPORAL_SCOPE_QUERIES = {
     "tasks": 'WorkflowType="MoonMind.Run" AND mm_entry="user_workflow"',
     "user": '(WorkflowType="MoonMind.Run" OR WorkflowType="MoonMind.ManifestIngest")',
@@ -156,6 +176,16 @@ _DASHBOARD_STATUS_BY_STATE: dict[MoonMindWorkflowState, str] = {
     MoonMindWorkflowState.FAILED: "failed",
     MoonMindWorkflowState.CANCELED: "canceled",
 }
+_SUPPORTED_TASK_RUNTIMES = frozenset({
+    "codex_cli",
+    "gemini_cli",
+    "claude_code",
+    "codex_cloud",
+    "jules",
+    # Legacy aliases accepted and normalized below.
+    "codex",
+    "claude",
+})
 
 _MAX_TASK_TITLE_LENGTH = 150
 _MAX_TASK_SUMMARY_LENGTH = 180
@@ -171,6 +201,21 @@ _EXECUTION_FILTER_VALUE_LIMIT = 50
 _EXECUTION_FILTER_VALUE_MAX_LENGTH = 200
 _EXECUTION_TEXT_FILTER_MAX_LENGTH = 200
 _EXECUTION_FACET_PAGE_SIZE_LIMIT = 200
+_EXECUTION_METRICS_SAMPLE_SIZE_LIMIT = 500
+_EXECUTION_COST_KEYS = frozenset(
+    {
+        "costEstimateUsd",
+        "cost_estimate_usd",
+        "estimatedCostUsd",
+        "estimated_cost_usd",
+        "costUsd",
+        "cost_usd",
+        "totalCostUsd",
+        "total_cost_usd",
+        "mm_cost_estimate_usd",
+        "moonmind.cost_estimate_usd",
+    }
+)
 _EXECUTION_SORT_FIELDS = {
     "workflowId": "WorkflowId",
     "targetRuntime": "mm_target_runtime",
@@ -367,6 +412,35 @@ def _is_execution_admin(user: User | None) -> bool:
 def _owner_id(user: User | None) -> str | None:
     value = getattr(user, "id", None)
     return str(value) if value is not None else None
+
+
+def _effective_execution_owner_scope(
+    *,
+    user: User,
+    owner_type: str | None,
+    owner_id: str | None,
+) -> tuple[str | None, str | None]:
+    if _is_execution_admin(user):
+        return owner_type, owner_id
+
+    normalized_owner_type = str(owner_type or "").strip().lower()
+    if owner_type is not None and normalized_owner_type != "user":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "execution_forbidden",
+                "message": "Cannot list non-user executions.",
+            },
+        )
+    if owner_id is not None and owner_id != _owner_id(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "execution_forbidden",
+                "message": "Cannot list executions for another user.",
+            },
+        )
+    return ("user" if normalized_owner_type == "user" else None), _owner_id(user)
 
 
 def _normalize_temporal_list_scope(
@@ -1919,14 +1993,48 @@ def _serialize_execution(
         else None
     )
     resume_summary = _build_recovery_summary(record, actions=actions)
-    related_runs = _build_recovery_related_runs(record, params=params)
+    related_runs = _build_related_runs(record, params=params)
     target_diagnostics = _build_target_diagnostics(
         record,
         params=params,
         resume_summary=resume_summary,
     )
+    memo_finish_summary = _finish_summary_from_memo(memo)
+    finish_summary_json = getattr(record, "finish_summary_json", None)
+    finish_summary = (
+        dict(finish_summary_json)
+        if isinstance(finish_summary_json, dict)
+        else memo_finish_summary
+    )
     proposal_summary = _proposal_summary_from_memo(memo)
+    if isinstance(finish_summary, Mapping):
+        finish_proposals = finish_summary.get("proposals")
+        if isinstance(finish_proposals, Mapping):
+            proposal_summary = dict(finish_proposals)
     proposal_outcomes = _proposal_outcomes_from_summary(proposal_summary)
+    run_metrics = _run_metrics_from_summary(
+        record=record,
+        finish_summary=finish_summary,
+        close_status=close_status,
+        state_value=state_value,
+    )
+    improvement_signals = _improvement_signals_from_summary(
+        finish_summary=finish_summary,
+        proposal_summary=proposal_summary,
+    )
+    log_context = _execution_log_context(
+        record=record,
+        memo=memo,
+        search_attributes=search_attributes,
+        params=params,
+    )
+    recommended_next_action = _recommended_next_action(
+        finish_summary=finish_summary,
+        close_status=close_status,
+        state_value=state_value,
+        proposal_summary=proposal_summary,
+        pr_url=pr_url,
+    )
 
     started_at = getattr(record, "started_at", None)
     created_at = getattr(record, "created_at", None) or started_at or record.updated_at
@@ -2015,8 +2123,14 @@ def _serialize_execution(
         resume=resume_summary,
         related_runs=related_runs,
         target_diagnostics=target_diagnostics,
+        run_metrics=run_metrics,
+        improvement_signals=improvement_signals,
+        recommended_next_action=recommended_next_action,
+        log_context=log_context,
         proposal_summary=proposal_summary,
         proposal_outcomes=proposal_outcomes,
+        finish_outcome_code=getattr(record, "finish_outcome_code", None),
+        finish_summary=finish_summary,
         debug_fields=debug_fields,
         redirect_path=f"/workflows/{record.workflow_id}?source=temporal",
         integration=(
@@ -2042,16 +2156,273 @@ def _serialize_execution(
     )
 
 
+def _finish_summary_from_memo(memo: Mapping[str, Any]) -> dict[str, Any] | None:
+    finish_summary = memo.get("finishSummary") or memo.get("finish_summary")
+    if isinstance(finish_summary, Mapping):
+        return dict(finish_summary)
+    return None
+
+
 def _proposal_summary_from_memo(memo: Mapping[str, Any]) -> dict[str, Any] | None:
     direct = memo.get("proposals")
     if isinstance(direct, Mapping):
         return dict(direct)
-    finish_summary = memo.get("finishSummary") or memo.get("finish_summary")
+    finish_summary = _finish_summary_from_memo(memo)
     if isinstance(finish_summary, Mapping):
         proposals = finish_summary.get("proposals")
         if isinstance(proposals, Mapping):
             return dict(proposals)
     return None
+
+
+def _int_or_none(value: object) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _run_metrics_from_summary(
+    *,
+    record: Any,
+    finish_summary: Mapping[str, Any] | None,
+    close_status: str | None,
+    state_value: str,
+) -> dict[str, Any]:
+    timestamps = (
+        finish_summary.get("timestamps")
+        if isinstance(finish_summary, Mapping)
+        else None
+    )
+    if not isinstance(timestamps, Mapping):
+        timestamps = {}
+    finish_outcome = (
+        finish_summary.get("finishOutcome")
+        if isinstance(finish_summary, Mapping)
+        else None
+    )
+    if not isinstance(finish_outcome, Mapping):
+        finish_outcome = {}
+    cost = (
+        finish_summary.get("cost")
+        if isinstance(finish_summary, Mapping)
+        else None
+    )
+    if not isinstance(cost, Mapping):
+        cost = {"status": "not_recorded", "amountUsd": None}
+    normalized_close_status = str(close_status or "").strip().lower()
+    terminal = normalized_close_status in {
+        "completed",
+        "failed",
+        "canceled",
+        "terminated",
+        "timed_out",
+    } or state_value in {"completed", "failed", "canceled"}
+    success = normalized_close_status == "completed" or (
+        not normalized_close_status and state_value == "completed"
+    )
+    duration_ms = _int_or_none(timestamps.get("durationMs"))
+    if duration_ms is None:
+        started_at = getattr(record, "started_at", None)
+        closed_at = getattr(record, "closed_at", None)
+        updated_at = getattr(record, "updated_at", None)
+        end_at = closed_at or updated_at
+        if started_at is not None and end_at is not None:
+            try:
+                duration_ms = max(
+                    0, int((end_at - started_at).total_seconds() * 1000)
+                )
+            except (TypeError, AttributeError):
+                duration_ms = None
+    success_rate_sample = (
+        {"success": 1 if success else 0, "sampleSize": 1}
+        if terminal
+        else {"success": 0, "sampleSize": 0}
+    )
+    return {
+        "durationMs": duration_ms,
+        "outcomeCode": finish_outcome.get("code"),
+        "success": success,
+        "successRateSample": success_rate_sample,
+        "cost": dict(cost),
+    }
+
+
+_SIGNAL_TAG_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("retry", ("retry", "reattempt", "self heal", "self-heal")),
+    ("loop_detected", ("loop", "repeated", "no progress", "stuck")),
+    ("flaky_test", ("flaky", "nondeterministic test")),
+    ("missing_ref", ("missing file", "missing ref", "not found")),
+    ("artifact_gap", ("artifact", "diagnostic", "summary missing")),
+)
+
+
+def _signal_tags_from_text(*values: object) -> list[str]:
+    text = " ".join(str(value or "").lower() for value in values if value)
+    tags: list[str] = []
+    for tag, needles in _SIGNAL_TAG_KEYWORDS:
+        if any(needle in text for needle in needles):
+            tags.append(tag)
+    return tags
+
+
+def _compact_signal(
+    *,
+    code: str,
+    source: str,
+    summary: str,
+    tags: list[str],
+    severity: str = "medium",
+) -> dict[str, Any]:
+    return {
+        "code": code[:96],
+        "source": source,
+        "summary": summary[:500],
+        "severity": severity,
+        "tags": tags[:6],
+    }
+
+
+def _improvement_signals_from_summary(
+    *,
+    finish_summary: Mapping[str, Any] | None,
+    proposal_summary: Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    signals: list[dict[str, Any]] = []
+    if isinstance(finish_summary, Mapping):
+        run_quality = finish_summary.get("runQuality")
+        if isinstance(run_quality, Mapping):
+            raw_tags = run_quality.get("tags")
+            tags = [
+                str(tag).strip()
+                for tag in (raw_tags if isinstance(raw_tags, list) else [])
+                if str(tag).strip()
+            ]
+            if not tags:
+                tags = _signal_tags_from_text(
+                    run_quality.get("code"),
+                    run_quality.get("reason"),
+                    run_quality.get("message"),
+                )
+            signals.append(
+                _compact_signal(
+                    code=str(run_quality.get("code") or "run_quality"),
+                    source="finish_summary.runQuality",
+                    summary=str(
+                        run_quality.get("reason")
+                        or run_quality.get("message")
+                        or "Run quality signal captured."
+                    ),
+                    tags=tags or ["artifact_gap"],
+                    severity=str(run_quality.get("severity") or "high"),
+                )
+            )
+        failure = finish_summary.get("failure")
+        if isinstance(failure, Mapping):
+            tags = _signal_tags_from_text(
+                failure.get("category"),
+                failure.get("message"),
+                failure.get("rootCauseType"),
+            )
+            if tags:
+                signals.append(
+                    _compact_signal(
+                        code=str(failure.get("category") or "failure_signal"),
+                        source="finish_summary.failure",
+                        summary=str(failure.get("message") or "Failure signal captured."),
+                        tags=tags,
+                        severity="high",
+                    )
+                )
+        last_step = finish_summary.get("lastStep")
+        if isinstance(last_step, Mapping):
+            tags = _signal_tags_from_text(
+                last_step.get("summary"),
+                last_step.get("lastError"),
+            )
+            if tags:
+                signals.append(
+                    _compact_signal(
+                        code=str(last_step.get("lastError") or "last_step_signal"),
+                        source="finish_summary.lastStep",
+                        summary=str(last_step.get("summary") or "Step signal captured."),
+                        tags=tags,
+                    )
+                )
+    if isinstance(proposal_summary, Mapping):
+        errors = proposal_summary.get("errors") or []
+        if isinstance(errors, list) and errors:
+            signals.append(
+                _compact_signal(
+                    code="proposal_stage_errors",
+                    source="finish_summary.proposals",
+                    summary=str(errors[0]),
+                    tags=["artifact_gap"],
+                )
+            )
+    return signals
+
+
+def _execution_log_context(
+    *,
+    record: Any,
+    memo: Mapping[str, Any],
+    search_attributes: Mapping[str, Any],
+    params: Mapping[str, Any],
+) -> dict[str, Any]:
+    worker_id = (
+        _coerce_temporal_scalar(memo.get("workerId"))
+        or _coerce_temporal_scalar(memo.get("worker_id"))
+        or _coerce_temporal_scalar(search_attributes.get("mm_worker_id"))
+        or _coerce_temporal_scalar(params.get("workerId"))
+        or _coerce_temporal_scalar(params.get("worker_id"))
+    )
+    return {
+        "workflowId": record.workflow_id,
+        "runId": record.run_id,
+        "workerId": worker_id,
+        "namespace": record.namespace,
+    }
+
+
+def _recommended_next_action(
+    *,
+    finish_summary: Mapping[str, Any] | None,
+    close_status: str | None,
+    state_value: str,
+    proposal_summary: Mapping[str, Any] | None,
+    pr_url: str | None,
+) -> str:
+    finish_outcome = (
+        finish_summary.get("finishOutcome")
+        if isinstance(finish_summary, Mapping)
+        else None
+    )
+    code = ""
+    if isinstance(finish_outcome, Mapping):
+        code = str(finish_outcome.get("code") or "").strip().upper()
+    submitted_count = (
+        _int_or_none(proposal_summary.get("submittedCount"))
+        if proposal_summary
+        else None
+    )
+    if submitted_count and submitted_count > 0:
+        return "Review generated improvement proposals."
+    if code in {"PUBLISHED_PR", "PUBLISHED_BRANCH"}:
+        return (
+            "Review published output."
+            if not pr_url
+            else "Review published pull request."
+        )
+    if code == "NO_CHANGES":
+        return "No follow-up required unless the outcome is unexpected."
+    if code == "PUBLISH_DISABLED":
+        return "Review generated artifacts; publishing was disabled."
+    if code == "CANCELLED" or state_value == "canceled":
+        return "Review cancellation reason and rerun if needed."
+    if code == "FAILED" or str(close_status or "").lower() == "failed":
+        return "Review failure diagnostics and create a follow-up proposal if needed."
+    return "Monitor execution until a terminal outcome is available."
 
 
 def _proposal_outcomes_from_summary(
@@ -2295,35 +2666,152 @@ def _build_recovery_summary(
         disabledReason=actions.disabled_reasons.get("canRecoverFromFailedStep"),
     )
 
-def _build_recovery_related_runs(
+def _related_run_href(workflow_id: str) -> str:
+    return f"/workflows/{quote(workflow_id, safe='')}?source=temporal"
+
+
+def _build_related_runs(
     record,
     *,
     params: Mapping[str, Any],
 ) -> list[ExecutionRelatedRunModel]:
+    related_runs: list[ExecutionRelatedRunModel] = []
     recovery_source = params.get("recoverySource")
     if not isinstance(recovery_source, Mapping):
         recovery_source = params.get("recovery_source")
-    if not isinstance(recovery_source, Mapping):
-        return []
-    source_workflow_id = str(
-        recovery_source.get("sourceWorkflowId")
-        or recovery_source.get("source_workflow_id")
-        or ""
-    ).strip()
-    if not source_workflow_id:
-        return []
-    source_run_id = str(
-        recovery_source.get("sourceRunId") or recovery_source.get("source_run_id") or ""
-    ).strip() or None
-    return [
-        ExecutionRelatedRunModel(
-            workflowId=source_workflow_id,
-            runId=source_run_id,
-            relationship="Recovered from failed step",
-            status="failed",
-            href=f"/workflows/{source_workflow_id}",
+    if isinstance(recovery_source, Mapping):
+        source_workflow_id = str(
+            recovery_source.get("sourceWorkflowId")
+            or recovery_source.get("source_workflow_id")
+            or ""
+        ).strip()
+        if source_workflow_id:
+            source_run_id = str(
+                recovery_source.get("sourceRunId")
+                or recovery_source.get("source_run_id")
+                or ""
+            ).strip() or None
+            related_runs.append(
+                ExecutionRelatedRunModel(
+                    workflowId=source_workflow_id,
+                    runId=source_run_id,
+                    relationship="Recovered from failed step",
+                    status="failed",
+                    href=_related_run_href(source_workflow_id),
+                )
+            )
+
+    task_payload = params.get("task") if isinstance(params.get("task"), Mapping) else {}
+    comparison_source = task_payload.get("comparison")
+    if isinstance(comparison_source, Mapping):
+        source_workflow_id = str(
+            comparison_source.get("sourceWorkflowId")
+            or comparison_source.get("source_workflow_id")
+            or ""
+        ).strip()
+        if source_workflow_id:
+            source_run_id = str(
+                comparison_source.get("sourceRunId")
+                or comparison_source.get("source_run_id")
+                or ""
+            ).strip() or None
+            related_runs.append(
+                ExecutionRelatedRunModel(
+                    workflowId=source_workflow_id,
+                    runId=source_run_id,
+                    relationship="Comparison source",
+                    href=_related_run_href(source_workflow_id),
+                )
+            )
+
+    return related_runs
+
+
+def _execution_related_run_metadata(record: TemporalExecutionRecord) -> dict[str, Any]:
+    params = record.parameters if isinstance(record.parameters, Mapping) else {}
+    task_payload = params.get("task") if isinstance(params.get("task"), Mapping) else {}
+    runtime_payload = task_payload.get("runtime")
+    if not isinstance(runtime_payload, Mapping):
+        runtime_payload = {}
+    state_value = _enum_value(getattr(record, "state", None)) or None
+    close_status = _enum_value(getattr(record, "close_status", None)) or None
+    return {
+        "run_id": str(getattr(record, "run_id", "") or "").strip() or None,
+        "status": close_status or state_value,
+        "target_runtime": (
+            _coerce_temporal_scalar(params.get("targetRuntime"))
+            or _coerce_temporal_scalar(runtime_payload.get("mode"))
+            or None
+        ),
+        "model": _coerce_temporal_scalar(params.get("model")) or None,
+        "requested_model": _coerce_temporal_scalar(params.get("requestedModel")) or None,
+        "resolved_model": _coerce_temporal_scalar(params.get("resolvedModel")) or None,
+        "effort": (
+            _coerce_temporal_scalar(params.get("effort"))
+            or _coerce_temporal_scalar(runtime_payload.get("effort"))
+            or None
+        ),
+        "created_at": getattr(record, "created_at", None),
+    }
+
+
+def _execution_record_visible_to_user(
+    record: TemporalExecutionRecord,
+    user: User,
+) -> bool:
+    search_attributes = dict(getattr(record, "search_attributes", None) or {})
+    record_owner_type = _enum_value(getattr(record, "owner_type", None))
+    if record_owner_type is None:
+        record_owner_type = _normalize_owner_type(record, search_attributes)
+    record_owner_id = str(getattr(record, "owner_id", "") or "").strip()
+    if not record_owner_id:
+        record_owner_id = _coerce_temporal_scalar(search_attributes.get("mm_owner_id"))
+    return record_owner_type == "user" and record_owner_id == _owner_id(user)
+
+
+async def _hydrate_related_run_metadata(
+    execution: ExecutionModel,
+    *,
+    session: AsyncSession | None,
+    user: User | None = None,
+) -> ExecutionModel:
+    if session is None or not execution.related_runs:
+        return execution
+    hydrated: list[ExecutionRelatedRunModel] = []
+    for related_run in execution.related_runs:
+        try:
+            record = await session.get(TemporalExecutionRecord, related_run.workflow_id)
+        except Exception as exc:
+            logger.warning(
+                "Failed to hydrate related run %s for execution %s: %s",
+                related_run.workflow_id,
+                execution.workflow_id,
+                exc,
+                exc_info=True,
+            )
+            hydrated.append(related_run)
+            continue
+        if record is None:
+            hydrated.append(related_run)
+            continue
+        if (
+            user is not None
+            and not _is_execution_admin(user)
+            and not _execution_record_visible_to_user(record, user)
+        ):
+            hydrated.append(related_run)
+            continue
+        metadata = _execution_related_run_metadata(record)
+        hydrated.append(
+            related_run.model_copy(
+                update={
+                    key: value
+                    for key, value in metadata.items()
+                    if value is not None
+                }
+            )
         )
-    ]
+    return execution.model_copy(update={"related_runs": hydrated})
 
 def _target_diagnostics_block(
     *,
@@ -4243,11 +4731,12 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
 
     normalized_steps: list[dict[str, Any]] = []
     forbidden = {
-        "runtime",
         "targetRuntime",
         "target_runtime",
         "model",
         "effort",
+        "providerProfile",
+        "profileId",
         "repository",
         "repo",
         "git",
@@ -4283,6 +4772,42 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
         )
         if normalized_skills is not None:
             normalized_step["skills"] = normalized_skills
+
+        runtime_payload = step_payload.get("runtime")
+        if runtime_payload is not None:
+            if not isinstance(runtime_payload, Mapping):
+                raise _invalid_task_request(
+                    f"payload.task.steps[{index}].runtime must be an object."
+                )
+            normalized_runtime: dict[str, str] = {}
+            for source_key, target_key in (
+                ("mode", "mode"),
+                ("targetRuntime", "mode"),
+                ("target_runtime", "mode"),
+                ("model", "model"),
+                ("effort", "effort"),
+                ("profileId", "profileId"),
+                ("providerProfile", "providerProfile"),
+                ("executionProfileRef", "executionProfileRef"),
+                ("execution_profile_ref", "executionProfileRef"),
+            ):
+                value = runtime_payload.get(source_key)
+                if value is not None and not isinstance(value, (Mapping, list)):
+                    normalized_value = str(value).strip()
+                    if not normalized_value:
+                        continue
+                    if target_key == "mode":
+                        normalized_value = normalize_runtime_id(normalized_value)
+                        if normalized_value not in _SUPPORTED_TASK_RUNTIMES:
+                            raise _invalid_task_request(
+                                "Unsupported payload.task.steps"
+                                f"[{index}].runtime.mode: {value!r}. "
+                                "Must be one of: codex_cli, gemini_cli, "
+                                "claude_code, codex_cloud, jules."
+                            )
+                    normalized_runtime[target_key] = normalized_value
+            if normalized_runtime:
+                normalized_step["runtime"] = normalized_runtime
 
         normalized_input_attachments = _normalize_task_input_attachments(
             step_payload.get("inputAttachments")
@@ -4391,6 +4916,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "type",
                 "inputAttachments",
                 "input_attachments",
+                "runtime",
                 "skill",
                 "skills",
                 "tool",
@@ -4401,7 +4927,223 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
 
         normalized_steps.append(normalized_step)
 
+    task_payload["steps"] = normalized_steps
     return normalized_steps
+
+async def _resolve_step_runtime_selections(
+    *,
+    steps: list[dict[str, Any]],
+    task_runtime: Mapping[str, Any] | None,
+    task_target_runtime: str | None,
+    task_profile_id: str | None,
+    session: Any,
+) -> None:
+    if not steps:
+        return
+    task_runtime = task_runtime or {}
+
+    for index, step in enumerate(steps):
+        runtime_payload = (
+            step.get("runtime") if isinstance(step.get("runtime"), Mapping) else {}
+        )
+        if not runtime_payload:
+            continue
+
+        raw_step_runtime = runtime_payload.get("mode") or task_target_runtime
+        canonical_step_runtime: str | None = None
+        if raw_step_runtime:
+            normalized_rt = normalize_runtime_id(raw_step_runtime)
+            if normalized_rt not in _SUPPORTED_TASK_RUNTIMES:
+                raise _invalid_task_request(
+                    f"Unsupported payload.task.steps[{index}].runtime.mode: "
+                    f"{raw_step_runtime!r}. Must be one of: codex_cli, "
+                    "gemini_cli, claude_code, codex_cloud, jules."
+                )
+            canonical_step_runtime = normalized_rt
+
+        raw_step_profile_id = str(
+            runtime_payload.get("profileId")
+            or runtime_payload.get("providerProfile")
+            or runtime_payload.get("executionProfileRef")
+            or ""
+        ).strip() or None
+        raw_requested_model: str | None = runtime_payload.get("model") or None
+        if raw_requested_model is not None:
+            raw_requested_model = str(raw_requested_model)
+
+        effective_profile_id = raw_step_profile_id or task_profile_id
+        provider_profile = None
+        if effective_profile_id and session is not None:
+            from api_service.db.models import ManagedAgentProviderProfile
+
+            provider_profile = await session.get(
+                ManagedAgentProviderProfile, effective_profile_id
+            )
+            if provider_profile is None and raw_step_profile_id:
+                raise _invalid_task_request(
+                    f"Provider profile not found for payload.task.steps[{index}]: "
+                    f"{raw_step_profile_id!r}."
+                )
+            if provider_profile is None and task_profile_id and not raw_step_profile_id:
+                raise _invalid_task_request(
+                    f"Provider profile not found for inherited task profile on "
+                    f"payload.task.steps[{index}]: {task_profile_id!r}."
+                )
+
+        resolved_model, model_source = resolve_effective_model(
+            runtime_id=canonical_step_runtime,
+            profile=provider_profile,
+            requested_model=raw_requested_model,
+            workflow_settings=settings.workflow,
+        )
+
+        resolved_runtime = dict(runtime_payload)
+        if canonical_step_runtime:
+            resolved_runtime["mode"] = canonical_step_runtime
+        if resolved_model:
+            resolved_runtime["model"] = resolved_model
+        if raw_requested_model is not None:
+            resolved_runtime["requestedModel"] = raw_requested_model
+        resolved_runtime["modelSource"] = model_source
+        if raw_step_profile_id:
+            resolved_runtime["profileId"] = raw_step_profile_id
+            resolved_runtime["providerProfile"] = raw_step_profile_id
+        elif task_profile_id and not raw_step_profile_id:
+            resolved_runtime.setdefault("inheritedProfileId", task_profile_id)
+        if "effort" not in resolved_runtime and isinstance(
+            task_runtime.get("effort"), str
+        ):
+            resolved_runtime["effort"] = task_runtime["effort"]
+        step["runtime"] = resolved_runtime
+
+
+def _task_template_seed_dir() -> Path:
+    import api_service
+
+    return Path(api_service.__file__).resolve().parent / "data" / "task_step_templates"
+
+
+def _apply_goal_schedule_metadata(
+    *,
+    task_payload: dict[str, Any],
+    schedule: GoalPresetSchedule,
+    expanded: Mapping[str, Any],
+) -> None:
+    applied_template = (
+        expanded.get("appliedTemplate")
+        if isinstance(expanded.get("appliedTemplate"), Mapping)
+        else {}
+    )
+    applied_template_payload = {
+        "slug": str(applied_template.get("slug") or schedule.slug),
+        "version": str(applied_template.get("version") or schedule.version),
+        "inputs": (
+            dict(applied_template.get("inputs"))
+            if isinstance(applied_template.get("inputs"), Mapping)
+            else dict(schedule.inputs)
+        ),
+        "stepIds": list(applied_template.get("stepIds") or []),
+        "appliedAt": str(applied_template.get("appliedAt") or ""),
+        "capabilities": list(expanded.get("capabilities") or []),
+    }
+    composition = applied_template.get("composition") or expanded.get("composition")
+    if isinstance(composition, Mapping):
+        applied_template_payload["composition"] = dict(composition)
+
+    authored_presets = applied_template.get("authoredPresets") or expanded.get(
+        "authoredPresets"
+    )
+    if isinstance(authored_presets, list):
+        task_payload["authoredPresets"] = [
+            dict(item) if isinstance(item, Mapping) else item
+            for item in authored_presets
+        ]
+
+    task_payload["appliedStepTemplates"] = [applied_template_payload]
+    task_payload["taskTemplate"] = {
+        "slug": str(applied_template.get("slug") or schedule.slug),
+        "version": str(applied_template.get("version") or schedule.version),
+        "scope": "global",
+    }
+    task_payload["presetSchedule"] = {
+        "source": "goal",
+        "reason": schedule.reason,
+        "presetSlug": schedule.slug,
+        "presetVersion": schedule.version,
+        "jiraIssueKey": schedule.issue_key,
+    }
+
+
+async def _expand_goal_preset_for_task_submission(
+    *,
+    task_payload: dict[str, Any],
+    request_payload: Mapping[str, Any],
+    session: Any,
+    user_id: Any,
+) -> None:
+    if task_is_already_authored(task_payload):
+        return
+
+    schedule = schedule_preset_from_goal(
+        goal_from_payloads(task_payload=task_payload, parameter_payload=request_payload)
+    )
+    if schedule is None:
+        return
+
+    from api_service.services.task_templates.catalog import (
+        ExpandOptions,
+        TaskTemplateCatalogService,
+        TaskTemplateNotFoundError,
+    )
+
+    catalog = TaskTemplateCatalogService(session)
+    existing_inputs = (
+        dict(task_payload.get("inputs")) if isinstance(task_payload.get("inputs"), Mapping) else {}
+    )
+    template_inputs = {**schedule.inputs, **existing_inputs}
+    context: dict[str, Any] = {}
+    repository = request_payload.get("repository") or task_payload.get("repository")
+    if isinstance(repository, str) and repository.strip():
+        context["repository"] = repository.strip()
+        context["repo"] = repository.strip()
+    runtime_payload = (
+        task_payload.get("runtime") if isinstance(task_payload.get("runtime"), Mapping) else {}
+    )
+    target_runtime = request_payload.get("targetRuntime") or runtime_payload.get("mode")
+    if isinstance(target_runtime, str) and target_runtime.strip():
+        context["targetRuntime"] = target_runtime.strip()
+
+    expand_kwargs = {
+        "slug": schedule.slug,
+        "scope": "global",
+        "scope_ref": None,
+        "version": schedule.version,
+        "inputs": template_inputs,
+        "context": context,
+        "options": ExpandOptions(should_enforce_step_limit=True),
+        "user_id": user_id,
+    }
+    try:
+        expanded = await catalog.expand_template(**expand_kwargs)
+    except TaskTemplateNotFoundError:
+        await catalog.sync_seed_templates(seed_dir=_task_template_seed_dir())
+        expanded = await catalog.expand_template(**expand_kwargs)
+
+    expanded_steps = expanded.get("steps") if isinstance(expanded, Mapping) else None
+    if not isinstance(expanded_steps, list) or not expanded_steps:
+        raise _invalid_task_request(
+            f"Goal preset '{schedule.slug}' expansion produced no executable steps."
+        )
+
+    task_payload["goal"] = schedule.goal
+    task_payload.setdefault("instructions", schedule.goal)
+    task_payload["inputs"] = template_inputs
+    task_payload["steps"] = list(expanded_steps)
+    _apply_goal_schedule_metadata(
+        task_payload=task_payload,
+        schedule=schedule,
+        expanded=expanded,
+    )
 
 def _normalize_publish_payload(raw_publish: Any) -> dict[str, Any]:
     publish_payload = _coerce_mapping(raw_publish)
@@ -5528,6 +6270,15 @@ async def _create_execution_from_task_request(
 
     if len(depends_on) > 10:
         raise _invalid_task_request(f"{field_name} can have a maximum of 10 items.")
+
+    if session is not None:
+        await _expand_goal_preset_for_task_submission(
+            task_payload=task_payload,
+            request_payload=payload,
+            session=session,
+            user_id=user.id,
+        )
+
     (
         objective_attachment_refs,
         step_attachment_refs,
@@ -5640,8 +6391,6 @@ async def _create_execution_from_task_request(
         normalized_task_for_planner["inputAttachments"] = objective_attachment_refs
     if runtime_payload:
         normalized_task_for_planner["runtime"] = dict(runtime_payload)
-    if normalized_steps:
-        normalized_task_for_planner["steps"] = normalized_steps
     task_title = str(task_payload.get("title") or "").strip()
     if task_title:
         normalized_task_for_planner["title"] = task_title
@@ -5688,6 +6437,12 @@ async def _create_execution_from_task_request(
         value = task_payload.get(key)
         if isinstance(value, str) and value.strip():
             normalized_task_for_planner[key] = value.strip()
+    if isinstance(task_payload.get("taskTemplate"), Mapping):
+        normalized_task_for_planner["taskTemplate"] = dict(task_payload["taskTemplate"])
+    if isinstance(task_payload.get("presetSchedule"), Mapping):
+        normalized_task_for_planner["presetSchedule"] = dict(
+            task_payload["presetSchedule"]
+        )
     for key in ("authoredPresets", "appliedStepTemplates"):
         value = task_payload.get(key)
         if isinstance(value, list):
@@ -5705,12 +6460,6 @@ async def _create_execution_from_task_request(
         normalized_task_for_planner["title"] = derived_task_title
 
     # --- Model resolution ---
-    _SUPPORTED_TASK_RUNTIMES = frozenset({
-        "codex_cli", "gemini_cli", "claude_code", "codex_cloud", "jules",
-        # Legacy aliases accepted and normalized below.
-        "codex", "claude",
-    })
-
     raw_target_runtime = (
         payload.get("targetRuntime")
         or runtime_payload.get("mode")
@@ -5766,6 +6515,16 @@ async def _create_execution_from_task_request(
         requested_model=raw_requested_model,
         workflow_settings=settings.workflow,
     )
+
+    await _resolve_step_runtime_selections(
+        steps=normalized_steps,
+        task_runtime=runtime_payload,
+        task_target_runtime=canonical_target_runtime,
+        task_profile_id=raw_profile_id if _provider_profile is not None else None,
+        session=session,
+    )
+    if normalized_steps:
+        normalized_task_for_planner["steps"] = normalized_steps
 
     initial_parameters = {
         "requestType": request.type,
@@ -6549,29 +7308,11 @@ async def list_executions(
     session: AsyncSession = Depends(get_async_session),
     temporal_client: Client = Depends(get_temporal_client),
 ) -> ExecutionListResponse:
-    if _is_execution_admin(user):
-        effective_owner_type = owner_type
-        effective_owner = owner_id
-    else:
-        normalized_owner_type = str(owner_type or "").strip().lower()
-        if owner_type is not None and owner_type != "user":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={
-                    "code": "execution_forbidden",
-                    "message": "Cannot list non-user executions.",
-                },
-            )
-        if owner_id is not None and owner_id != _owner_id(user):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={
-                    "code": "execution_forbidden",
-                    "message": "Cannot list executions for another user.",
-                },
-            )
-        effective_owner = _owner_id(user)
-        effective_owner_type = "user" if normalized_owner_type == "user" else None
+    effective_owner_type, effective_owner = _effective_execution_owner_scope(
+        user=user,
+        owner_type=owner_type,
+        owner_id=owner_id,
+    )
 
     if source == "temporal":
         try:
@@ -6775,6 +7516,299 @@ async def list_executions(
             default=None,
         ),
     )
+
+def _coerce_metric_float(value: Any) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int | float):
+        candidate = float(value)
+    elif isinstance(value, str):
+        text = value.strip().replace("$", "").replace(",", "")
+        if not text:
+            return None
+        try:
+            candidate = float(text)
+        except ValueError:
+            return None
+    else:
+        return None
+    if candidate < 0:
+        return None
+    return candidate
+
+
+def _extract_cost_estimate_usd(*payloads: Any) -> float | None:
+    stack = [(payload, False) for payload in payloads]
+    while stack:
+        value, cost_context = stack.pop()
+        if cost_context:
+            candidate = _coerce_metric_float(value)
+            if candidate is not None:
+                return candidate
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                if str(key) in _EXECUTION_COST_KEYS:
+                    candidate = _coerce_metric_float(nested)
+                    if candidate is not None:
+                        return candidate
+                    if isinstance(nested, dict | list | tuple):
+                        stack.append((nested, True))
+                elif isinstance(nested, dict | list | tuple):
+                    stack.append((nested, False))
+        elif isinstance(value, (list, tuple)):
+            stack.extend((nested, cost_context) for nested in value)
+    return None
+
+
+def _duration_seconds_from_payload(payload: Mapping[str, Any]) -> float | None:
+    closed_at = payload.get("closed_at")
+    started_at = payload.get("started_at") or payload.get("created_at")
+    if not isinstance(closed_at, datetime) or not isinstance(started_at, datetime):
+        return None
+    duration = (closed_at - started_at).total_seconds()
+    return duration if duration >= 0 else None
+
+
+def _duration_metrics(values: list[float]) -> ExecutionMetricsDurationModel:
+    if not values:
+        return ExecutionMetricsDurationModel()
+    ordered = sorted(values)
+    midpoint = len(ordered) // 2
+    if len(ordered) % 2:
+        median = ordered[midpoint]
+    else:
+        median = (ordered[midpoint - 1] + ordered[midpoint]) / 2
+    return ExecutionMetricsDurationModel(
+        averageSeconds=sum(ordered) / len(ordered),
+        medianSeconds=median,
+        minSeconds=ordered[0],
+        maxSeconds=ordered[-1],
+        observedCount=len(ordered),
+    )
+
+
+def _cost_metrics(values: list[float]) -> ExecutionMetricsCostModel:
+    if not values:
+        return ExecutionMetricsCostModel()
+    total = sum(values)
+    return ExecutionMetricsCostModel(
+        totalEstimateUsd=total,
+        averageEstimateUsd=total / len(values),
+        observedCount=len(values),
+    )
+
+
+@router.get("/metrics", response_model=ExecutionMetricsResponse)
+async def get_execution_metrics(
+    *,
+    request: Request,
+    workflow_type: Optional[str] = Query(None, alias="workflowType"),
+    owner_type: Optional[str] = Query(None, alias="ownerType"),
+    state: Optional[str] = Query(None, alias="state"),
+    state_in: Optional[str] = Query(None, alias="stateIn"),
+    state_not_in: Optional[str] = Query(None, alias="stateNotIn"),
+    owner_id: Optional[str] = Query(None, alias="ownerId"),
+    entry: Optional[str] = Query(None, alias="entry"),
+    repo: Optional[str] = Query(None, alias="repo"),
+    repo_exact: Optional[str] = Query(None, alias="repoExact"),
+    repo_in: Optional[str] = Query(None, alias="repoIn"),
+    repo_not_in: Optional[str] = Query(None, alias="repoNotIn"),
+    integration: Optional[str] = Query(None, alias="integration"),
+    target_runtime: Optional[str] = Query(None, alias="targetRuntime"),
+    target_runtime_in: Optional[str] = Query(None, alias="targetRuntimeIn"),
+    target_runtime_not_in: Optional[str] = Query(None, alias="targetRuntimeNotIn"),
+    target_skill_in: Optional[str] = Query(None, alias="targetSkillIn"),
+    target_skill_not_in: Optional[str] = Query(None, alias="targetSkillNotIn"),
+    scheduled_from: Optional[str] = Query(None, alias="scheduledFrom"),
+    scheduled_to: Optional[str] = Query(None, alias="scheduledTo"),
+    scheduled_blank: Optional[str] = Query(None, alias="scheduledBlank"),
+    created_from: Optional[str] = Query(None, alias="createdFrom"),
+    created_to: Optional[str] = Query(None, alias="createdTo"),
+    finished_from: Optional[str] = Query(None, alias="finishedFrom"),
+    finished_to: Optional[str] = Query(None, alias="finishedTo"),
+    finished_blank: Optional[str] = Query(None, alias="finishedBlank"),
+    scope: Optional[str] = Query(None, alias="scope"),
+    source: Optional[str] = Query(None),
+    sample_size: int = Query(
+        200,
+        alias="sampleSize",
+        ge=1,
+        le=_EXECUTION_METRICS_SAMPLE_SIZE_LIMIT,
+    ),
+    user: User = Depends(get_current_user()),
+    session: AsyncSession = Depends(get_async_session),
+    temporal_client: Client = Depends(get_temporal_client),
+) -> ExecutionMetricsResponse:
+    if source not in {None, _TEMPORAL_SOURCE}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "invalid_execution_query",
+                "message": "metrics currently support source=temporal only.",
+            },
+        )
+
+    effective_owner_type, effective_owner = _effective_execution_owner_scope(
+        user=user,
+        owner_type=owner_type,
+        owner_id=owner_id,
+    )
+
+    def build_query(
+        *,
+        metric_state_in: str | None = None,
+        include_order: bool = False,
+    ) -> str | None:
+        metric_state_values = _split_temporal_values(
+            metric_state_in,
+            alias="metric_state_in",
+        )
+        state_values = _raw_query_values(request, "stateIn", state_in)
+        state_not_values = _raw_query_values(request, "stateNotIn", state_not_in)
+        if metric_state_values:
+            exact_state = str(state or "").strip()
+            if exact_state and not (state_values or state_not_values):
+                metric_state_values = [
+                    value for value in metric_state_values if value == exact_state
+                ]
+            if state_values:
+                allowed = set(state_values)
+                metric_state_values = [
+                    value for value in metric_state_values if value in allowed
+                ]
+            if state_not_values:
+                blocked = set(state_not_values)
+                metric_state_values = [
+                    value for value in metric_state_values if value not in blocked
+                ]
+            if not metric_state_values:
+                return None
+            metric_state_in = ",".join(metric_state_values)
+        count_query, list_query = _build_temporal_execution_query(
+            request=request,
+            workflow_type=workflow_type,
+            state=None if metric_state_values else state,
+            state_in=metric_state_in or state_in,
+            state_not_in=None if metric_state_values else state_not_in,
+            entry=entry,
+            repo=repo,
+            repo_exact=repo_exact,
+            repo_in=repo_in,
+            repo_not_in=repo_not_in,
+            integration=integration,
+            target_runtime=target_runtime,
+            target_runtime_in=target_runtime_in,
+            target_runtime_not_in=target_runtime_not_in,
+            target_skill_in=target_skill_in,
+            target_skill_not_in=target_skill_not_in,
+            scheduled_from=scheduled_from,
+            scheduled_to=scheduled_to,
+            scheduled_blank=scheduled_blank,
+            created_from=created_from,
+            created_to=created_to,
+            finished_from=finished_from,
+            finished_to=finished_to,
+            finished_blank=finished_blank,
+            scope=scope,
+            owner_type=effective_owner_type,
+            owner_id=effective_owner,
+            sort="closedAt",
+            sort_dir="desc",
+            include_order=include_order,
+        )
+        return list_query if include_order else count_query
+
+    try:
+        client = temporal_client
+
+        async def count_matching_workflows(query: str | None) -> int:
+            if query is None:
+                return 0
+            count_result = await client.count_workflows(query=query)
+            return int(count_result.count)
+
+        total, completed, failed, canceled = await asyncio.gather(
+            count_matching_workflows(build_query()),
+            count_matching_workflows(build_query(metric_state_in="completed")),
+            count_matching_workflows(build_query(metric_state_in="failed")),
+            count_matching_workflows(build_query(metric_state_in="canceled")),
+        )
+
+        terminal_query = build_query(
+            metric_state_in="completed,failed,canceled",
+            include_order=True,
+        )
+        page = []
+        if terminal_query is not None:
+            iterator = client.list_workflows(
+                query=terminal_query,
+                page_size=sample_size,
+            )
+            await iterator.fetch_next_page()
+            page = iterator.current_page or []
+        canonical_map: dict[str, TemporalExecutionCanonicalRecord] = {}
+        if page:
+            workflow_ids = [wf.id for wf in page]
+            stmt = select(TemporalExecutionCanonicalRecord).where(
+                TemporalExecutionCanonicalRecord.workflow_id.in_(workflow_ids)
+            )
+            canonical_rows = (await session.execute(stmt)).scalars().all()
+            canonical_map = {row.workflow_id: row for row in canonical_rows}
+
+        durations: list[float] = []
+        costs: list[float] = []
+        from api_service.core.sync import (
+            map_temporal_state_to_projection,
+            merged_parameters_for_projection,
+        )
+
+        for wf in page:
+            payload = await map_temporal_state_to_projection(wf)
+            canonical = canonical_map.get(wf.id)
+            payload["parameters"] = merged_parameters_for_projection(payload, canonical)
+            duration = _duration_seconds_from_payload(payload)
+            if duration is not None:
+                durations.append(duration)
+            cost = _extract_cost_estimate_usd(
+                payload.get("search_attributes"),
+                payload.get("memo"),
+                payload.get("parameters"),
+            )
+            if cost is not None:
+                costs.append(cost)
+
+        terminal = completed + failed + canceled
+        success_rate = completed / terminal if terminal else None
+        return ExecutionMetricsResponse(
+            totalRuns=total,
+            completedRuns=completed,
+            failedRuns=failed,
+            canceledRuns=canceled,
+            terminalRuns=terminal,
+            successRate=success_rate,
+            duration=_duration_metrics(durations),
+            cost=_cost_metrics(costs),
+            sampleSize=len(page),
+            countMode="exact",
+            refreshedAt=datetime.now(UTC),
+        )
+    except TemporalExecutionValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "invalid_execution_query",
+                "message": str(exc),
+            },
+        ) from exc
+    except RPCError as exc:
+        logger.warning("Failed to read Temporal execution metrics: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "temporal_unavailable",
+                "message": "Temporal service unavailable.",
+            },
+        ) from exc
 
 @router.get("/facets", response_model=ExecutionFacetResponse)
 async def list_execution_facets(
@@ -7270,6 +8304,11 @@ async def describe_execution(
         )
     execution = _serialize_execution(record, user=user)
     execution = await _enrich_execution_dependencies(execution, service=service)
+    execution = await _hydrate_related_run_metadata(
+        execution,
+        session=session,
+        user=user,
+    )
     execution = await _hydrate_provider_profile_metadata(execution, session)
     if execution.workflow_type == "MoonMind.Run":
         if _execution_uses_live_workflow_queries(execution):

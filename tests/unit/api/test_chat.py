@@ -9,7 +9,13 @@ from fastapi.testclient import TestClient
 # Assuming the main app's router is imported correctly
 # Ensure the path to chat_router is correct based on your project structure.
 # If chat.py is in api_service.api.routers.chat, this should be fine.
-from api_service.api.routers.chat import router as chat_router
+from api_service.api.routers.chat import (
+    _extract_openai_response_text,
+    _normalize_openai_response_payload,
+    _response_content_to_text,
+    responses_router,
+    router as chat_router,
+)
 from api_service.api.routers.chat import (
     settings as settings_in_chat_router,  # For patch.object
 )
@@ -26,6 +32,7 @@ from moonmind.schemas.chat_models import ChatCompletionRequest, Message
 # Setup TestClient
 app = FastAPI()
 app.include_router(chat_router)  # Router paths are already prefixed
+app.include_router(responses_router)
 
 from api_service.api.dependencies import (  # noqa E402
     get_service_context,
@@ -241,6 +248,8 @@ def test_chat_completions_openai_via_cache(
     json_response = response.json()
     # Assertions need to align with mock_openai_chat_response structure (which should mimic new SDK)
     assert json_response["model"] == mock_openai_chat_response.model
+    assert json_response["usage"]["cost_estimate_usd"] == 0.000045
+    assert json_response["usage"]["pricing_source"] == "built_in"
     assert (
         json_response["choices"][0]["message"]["content"]
         == mock_openai_chat_response.choices[0].message.content
@@ -286,6 +295,28 @@ def test_chat_completions_endpoint_success_corrected_path(
     mock_async_openai_client.assert_called_once_with(api_key="sk-test-user-key")
     mock_client_instance.chat.completions.create.assert_called_once()
 
+
+def test_openai_response_normalization_preserves_zero_token_usage() -> None:
+    payload = _normalize_openai_response_payload(
+        {
+            "model": "gpt-4o-mini",
+            "output_text": "ok",
+            "usage": {
+                "input_tokens": 0,
+                "prompt_tokens": 1_000,
+                "output_tokens": 0,
+                "completion_tokens": 1_000,
+            },
+        },
+        fallback_model="gpt-4o-mini",
+        metadata={},
+    )
+
+    assert payload["usage"]["cost_estimate_usd"] == 0
+    assert payload["metadata"]["billing"]["inputTokens"] == 0
+    assert payload["metadata"]["billing"]["outputTokens"] == 0
+
+
 @patch("google.generativeai.configure")
 @patch("api_service.api.routers.chat.get_google_model")
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
@@ -321,6 +352,8 @@ def test_chat_completions_google_via_cache(
     assert response.status_code == 200
     json_response = response.json()
     assert json_response["model"] == chat_request_google_model.model
+    assert json_response["usage"]["cost_estimate_usd"] is not None
+    assert json_response["usage"]["pricing_source"] == "built_in"
     assert (
         json_response["choices"][0]["message"]["content"]
         == mock_google_chat_response.candidates[0].content.parts[0].text.strip()
@@ -630,3 +663,143 @@ def test_chat_completions_uses_default_model(
     mock_get_provider.assert_called_once_with(actual_default_model)
     mock_async_openai_client.assert_called_once_with(api_key="sk-test-user-key")
     mock_client_instance.chat.completions.create.assert_called_once()
+
+@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
+@patch("api_service.api.routers.chat.get_openai_model")
+@patch("api_service.api.routers.chat.AsyncOpenAI")
+def test_responses_endpoint_uses_openai_responses_api(
+    mock_async_openai_client,
+    mock_get_openai_model,
+    mock_get_user_api_key_helper,
+    mock_get_provider,
+):
+    mock_get_provider.return_value = "OpenAI"
+    mock_get_user_api_key_helper.return_value = "sk-test-user-key"
+    mock_get_openai_model.return_value = "gpt-4.1"
+    mock_response = {
+        "id": "resp_test",
+        "object": "response",
+        "created_at": 123,
+        "status": "completed",
+        "model": "gpt-4.1",
+        "output": [
+            {
+                "id": "msg_test",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "response text",
+                        "annotations": [],
+                    }
+                ],
+            }
+        ],
+        "usage": {"input_tokens": 4, "output_tokens": 2, "total_tokens": 6},
+    }
+    mock_client_instance = AsyncMock()
+    mock_client_instance.responses.create = AsyncMock(return_value=mock_response)
+    mock_async_openai_client.return_value = mock_client_instance
+
+    response = client.post(
+        "/responses",
+        json={
+            "model": "gpt-4.1",
+            "instructions": "Be concise.",
+            "input": "Say hello.",
+            "max_output_tokens": 20,
+            "temperature": 0.2,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == "resp_test"
+    assert payload["output_text"] == "response text"
+    mock_async_openai_client.assert_called_once_with(api_key="sk-test-user-key")
+    mock_client_instance.responses.create.assert_awaited_once_with(
+        model="gpt-4.1",
+        input=[{"role": "user", "content": "Say hello."}],
+        instructions="Be concise.",
+        max_output_tokens=20,
+        temperature=0.2,
+    )
+
+@patch("api_service.api.routers.chat.get_rag_context", new_callable=AsyncMock)
+@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
+@patch("api_service.api.routers.chat.get_openai_model")
+@patch("api_service.api.routers.chat.AsyncOpenAI")
+def test_responses_endpoint_sends_processed_rag_context_to_openai(
+    mock_async_openai_client,
+    mock_get_openai_model,
+    mock_get_user_api_key_helper,
+    mock_get_provider,
+    mock_get_rag_context,
+):
+    mock_get_provider.return_value = "OpenAI"
+    mock_get_user_api_key_helper.return_value = "sk-test-user-key"
+    mock_get_openai_model.return_value = "gpt-4.1"
+    mock_get_rag_context.return_value = "--- Retrieved Context ---\nKnown fact.\n"
+    mock_client_instance = AsyncMock()
+    mock_client_instance.responses.create = AsyncMock(
+        return_value={"output_text": "response text", "model": "gpt-4.1"}
+    )
+    mock_async_openai_client.return_value = mock_client_instance
+
+    response = client.post(
+        "/responses",
+        json={
+            "model": "gpt-4.1",
+            "instructions": "Be concise.",
+            "input": "Use context.",
+        },
+    )
+
+    assert response.status_code == 200
+    call_kwargs = mock_client_instance.responses.create.await_args.kwargs
+    assert call_kwargs["instructions"] == "Be concise."
+    assert call_kwargs["input"][0]["role"] == "user"
+    assert "--- Retrieved Context ---\nKnown fact." in call_kwargs["input"][0]["content"]
+    assert "User's question: Use context." in call_kwargs["input"][0]["content"]
+
+
+def test_response_content_to_text_preserves_falsy_non_none_values():
+    assert _response_content_to_text(0) == "0"
+    assert _response_content_to_text(False) == "False"
+    assert (
+        _response_content_to_text(
+            [{"type": "input_text", "text": 0}, {"type": "text", "text": False}]
+        )
+        == "0\nFalse"
+    )
+
+
+def test_extract_openai_response_text_accepts_text_content_items():
+    assert (
+        _extract_openai_response_text(
+            {
+                "output": [
+                    {
+                        "content": [
+                            {"type": "text", "text": "plain text response"},
+                        ]
+                    }
+                ]
+            }
+        )
+        == "plain text response"
+    )
+
+
+def test_responses_endpoint_rejects_streaming_requests():
+    response = client.post(
+        "/responses",
+        json={"model": "gpt-4.1", "input": "Say hello.", "stream": True},
+    )
+
+    assert response.status_code == 400
+    assert "Streaming Responses API requests" in response.json()["detail"]

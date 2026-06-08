@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
+import json
+import os
 import re
 from dataclasses import dataclass
-from typing import Any, Protocol
+from pathlib import Path
+from typing import Any, Literal, Protocol
 from uuid import UUID, uuid4
 
 from moonmind.workflows.skills.deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
     DEPLOYMENT_UPDATE_TOOL_VERSION,
 )
+
+CurrentImageEvidence = Literal[
+    "desired_state", "environment", "policy", "unavailable"
+]
 
 
 _IMAGE_REFERENCE_PATTERN = re.compile(
@@ -60,6 +67,7 @@ class DeploymentUpdateSubmission:
     operation_kind: str = "update"
     rollback_source_action_id: str | None = None
     confirmation: str | None = None
+    before_build_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -95,7 +103,23 @@ class DeploymentRecentAction:
     run_id: str | None = None
     before_summary: str | None = None
     after_summary: str | None = None
+    before_build_id: str | None = None
+    after_build_id: str | None = None
     rollback_eligibility: RollbackEligibilityDecision | None = None
+
+
+@dataclass(frozen=True)
+class DeploymentCurrentImage:
+    """The current MoonMind image as known from desired-state evidence."""
+
+    requested_image: str | None
+    deployed_image: str | None
+    repository: str | None
+    reference: str | None
+    resolved_digest: str | None
+    source_run_id: str | None
+    updated_at: str | None
+    evidence: CurrentImageEvidence
 
 
 class DeploymentExecutionCreator(Protocol):
@@ -309,6 +333,7 @@ class DeploymentOperationsService:
                     "jiraIssue": "MM-523",
                     "kind": submission.operation_kind,
                     "rollbackSourceActionId": submission.rollback_source_action_id,
+                    "beforeBuildId": submission.before_build_id,
                 },
                 "steps": [deployment_step],
                 # Keep the legacy projection shape until deployment action
@@ -357,3 +382,126 @@ def _is_mutable_reference(*, policy: DeploymentStackPolicy, reference: str) -> b
     if not normalized or normalized.startswith("sha256:"):
         return False
     return policy.allow_mutable_tags and normalized in policy.allowed_references
+
+
+def mutable_references(policy: DeploymentStackPolicy) -> tuple[str, ...]:
+    """Return the policy references that resolve mutably over time."""
+
+    if not policy.allow_mutable_tags:
+        return ()
+    return tuple(
+        reference
+        for reference in policy.allowed_references
+        if _is_mutable_reference(policy=policy, reference=reference)
+    )
+
+
+def _split_image_reference(
+    image: str,
+) -> tuple[str | None, str | None, str | None]:
+    """Split a full image string into (repository, reference, digest)."""
+
+    text = str(image or "").strip()
+    if not text:
+        return None, None, None
+    if "@" in text:
+        repository, _, digest = text.partition("@")
+        digest = digest.strip() or None
+        return repository.strip() or None, None, digest
+    repository, separator, tag = text.rpartition(":")
+    if separator and "/" not in tag:
+        return repository.strip() or None, tag.strip() or None, None
+    return text or None, None, None
+
+
+def _current_image_from_record(
+    record: dict[str, Any],
+    *,
+    policy: DeploymentStackPolicy,
+    evidence: CurrentImageEvidence,
+) -> DeploymentCurrentImage | None:
+    repository = str(record.get("imageRepository") or "").strip() or None
+    reference = str(record.get("requestedReference") or "").strip() or None
+    digest = str(record.get("resolvedDigest") or "").strip() or None
+    if not repository and not reference:
+        return None
+    repository = repository or policy.repository
+    requested_image: str | None = None
+    if repository and reference:
+        separator = "@" if reference.startswith("sha256:") else ":"
+        requested_image = f"{repository}{separator}{reference}"
+    deployed_image = f"{repository}@{digest}" if digest else requested_image
+    return DeploymentCurrentImage(
+        requested_image=requested_image,
+        deployed_image=deployed_image,
+        repository=repository,
+        reference=reference,
+        resolved_digest=digest,
+        source_run_id=str(record.get("sourceRunId") or "").strip() or None,
+        updated_at=str(record.get("createdAt") or "").strip() or None,
+        evidence=evidence,
+    )
+
+
+def resolve_current_deployment_image(
+    policy: DeploymentStackPolicy,
+    *,
+    environ: dict[str, str] | None = None,
+) -> DeploymentCurrentImage:
+    """Resolve the current MoonMind image from desired-state evidence.
+
+    Resolution order, most authoritative first:
+    1. Desired-state JSON sidecar written by the update executor.
+    2. ``MOONMIND_IMAGE`` / ``MOONMIND_IMAGE_REQUESTED`` environment values.
+    3. The policy configured image, reported only as ``policy`` evidence.
+    """
+
+    env = environ if environ is not None else dict(os.environ)
+
+    sidecar_path = str(
+        env.get("MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE") or ""
+    ).strip()
+    if sidecar_path:
+        try:
+            raw = Path(sidecar_path).expanduser().read_text(encoding="utf-8")
+            record = json.loads(raw)
+        except (OSError, ValueError, RuntimeError):
+            record = None
+        if isinstance(record, dict):
+            stack = str(record.get("stack") or "").strip()
+            if not stack or stack == policy.stack:
+                resolved = _current_image_from_record(
+                    record, policy=policy, evidence="desired_state"
+                )
+                if resolved is not None:
+                    return resolved
+
+    deployed = str(env.get("MOONMIND_IMAGE") or "").strip()
+    requested = str(env.get("MOONMIND_IMAGE_REQUESTED") or "").strip()
+    run_id = str(env.get("MOONMIND_DEPLOYMENT_RUN_ID") or "").strip() or None
+    if deployed or requested:
+        repository, reference, digest = _split_image_reference(
+            requested or deployed
+        )
+        _, _, deployed_digest = _split_image_reference(deployed)
+        return DeploymentCurrentImage(
+            requested_image=requested or deployed or None,
+            deployed_image=deployed or requested or None,
+            repository=repository or policy.repository,
+            reference=reference,
+            resolved_digest=digest or deployed_digest,
+            source_run_id=run_id,
+            updated_at=None,
+            evidence="environment",
+        )
+
+    return DeploymentCurrentImage(
+        requested_image=policy.configured_image,
+        deployed_image=None,
+        repository=policy.repository,
+        reference=policy.configured_reference,
+        resolved_digest=None,
+        source_run_id=None,
+        updated_at=None,
+        evidence="policy",
+    )
