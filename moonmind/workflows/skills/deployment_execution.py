@@ -1484,7 +1484,9 @@ def _target_image_build_id(target_image: Mapping[str, Any] | None) -> str | None
     if not isinstance(labels, Mapping):
         return None
     value = labels.get(_OCI_IMAGE_VERSION_LABEL)
-    text = str(value or "").strip()
+    if value is None:
+        return None
+    text = str(value).strip()
     return text or None
 
 
