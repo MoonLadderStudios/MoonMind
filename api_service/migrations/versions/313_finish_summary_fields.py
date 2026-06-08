@@ -1,6 +1,6 @@
 """Add finish summary projection fields.
 
-Revision ID: 313_finish_summary_projection_fields
+Revision ID: 313_finish_summary_fields
 Revises: 312_source_mapping_cutover
 Create Date: 2026-06-03
 """
@@ -14,7 +14,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 
-revision: str = "313_finish_summary_projection_fields"
+revision: str = "313_finish_summary_fields"
 down_revision: Union[str, None] = "312_source_mapping_cutover"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

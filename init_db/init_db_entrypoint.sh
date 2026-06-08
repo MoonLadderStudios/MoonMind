@@ -35,6 +35,34 @@ if version == "202603060001" and not has_projection_version:
     raise SystemExit(42)
 if version == "93f6b4a2d1e0":
     raise SystemExit(43)
+if version == "312_workflow_execution_source_mapping_cutover":
+    print("Detected orphaned Alembic revision stamp 312_workflow_execution_source_mapping_cutover; rewriting alembic_version to 312_source_mapping_cutover before upgrade.")
+    with engine.begin() as connection:
+        updated = connection.execute(
+            text(
+                """
+                update alembic_version
+                set version_num = '312_source_mapping_cutover'
+                where version_num = '312_workflow_execution_source_mapping_cutover'
+                """
+            )
+        ).rowcount
+    if updated != 1:
+        raise SystemExit(1)
+if version == "313_finish_summary_projection_fields":
+    print("Detected oversized Alembic revision stamp 313_finish_summary_projection_fields; rewriting alembic_version to 313_finish_summary_fields before upgrade.")
+    with engine.begin() as connection:
+        updated = connection.execute(
+            text(
+                """
+                update alembic_version
+                set version_num = '313_finish_summary_fields'
+                where version_num = '313_finish_summary_projection_fields'
+                """
+            )
+        ).rowcount
+    if updated != 1:
+        raise SystemExit(1)
 PY
 status=$?
 if [ $status -eq 42 ]; then
