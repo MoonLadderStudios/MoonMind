@@ -577,14 +577,11 @@ def test_runtime_planner_preserves_authored_task_plan_tool_nodes():
         {
             "id": "update-moonmind-deployment",
             "tool": {
-                "type": "agent_runtime",
-                "name": "codex_cli",
+                "type": "skill",
+                "name": "deployment.update_compose_stack",
                 "version": "1.0.0",
             },
             "inputs": {
-                "instructions": "Execute skill 'deployment.update_compose_stack'",
-                "runtime": {"mode": "codex_cli"},
-                "selectedSkill": "deployment.update_compose_stack",
                 "stack": "moonmind",
                 "image": {
                     "repository": "ghcr.io/moonladderstudios/moonmind",
@@ -594,6 +591,7 @@ def test_runtime_planner_preserves_authored_task_plan_tool_nodes():
             },
         }
     ]
+    assert "selectedSkill" not in plan["nodes"][0]["inputs"]
     assert plan["policy"]["failure_mode"] == "FAIL_FAST"
     registry_snapshot = plan["metadata"]["registry_snapshot"]
     assert registry_snapshot["artifact_ref"] == "art_registry_123"
