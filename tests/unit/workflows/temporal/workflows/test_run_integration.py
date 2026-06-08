@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 from datetime import datetime, timezone, timedelta
 from typing import Any, Callable
 
@@ -12,6 +13,7 @@ from moonmind.workflows.temporal.workflows.run import (
     NATIVE_PR_BRANCH_DEFAULTS_PATCH,
     NATIVE_PR_LEASE_CONFLICT_GATE_PATCH,
     NATIVE_PR_PUSH_STATUS_GATE_PATCH,
+    RUN_CONDITIONAL_REGISTRY_READ_PATCH,
     RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
     RUN_PUBLISH_REPAIR_FEEDBACK_PATCH,
     RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH,
@@ -46,6 +48,18 @@ async def _immediate_wait_condition(
     **_kwargs: Any,
 ) -> None:
     assert predicate() is True
+
+def test_run_execution_stage_preserves_conditional_registry_patch_marker() -> None:
+    source = inspect.getsource(MoonMindRunWorkflow._run_execution_stage)
+
+    patch_call = f"workflow.patched({RUN_CONDITIONAL_REGISTRY_READ_PATCH!r})"
+    constant_call = "workflow.patched(RUN_CONDITIONAL_REGISTRY_READ_PATCH)"
+    assert constant_call in source or patch_call in source
+    call_string = constant_call if constant_call in source else patch_call
+    assert source.index('workflow.patched("jules-bundling-v1")') < source.index(
+        call_string
+    )
+    assert source.index(call_string) < source.index("await load_registry_snapshot()")
 
 @pytest.fixture
 def mock_run_workflow(monkeypatch: pytest.MonkeyPatch) -> MoonMindRunWorkflow:
