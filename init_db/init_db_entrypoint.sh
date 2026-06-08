@@ -36,9 +36,33 @@ if version == "202603060001" and not has_projection_version:
 if version == "93f6b4a2d1e0":
     raise SystemExit(43)
 if version == "312_workflow_execution_source_mapping_cutover":
-    raise SystemExit(44)
+    print("Detected orphaned Alembic revision stamp 312_workflow_execution_source_mapping_cutover; rewriting alembic_version to 312_source_mapping_cutover before upgrade.")
+    with engine.begin() as connection:
+        updated = connection.execute(
+            text(
+                """
+                update alembic_version
+                set version_num = '312_source_mapping_cutover'
+                where version_num = '312_workflow_execution_source_mapping_cutover'
+                """
+            )
+        ).rowcount
+    if updated != 1:
+        raise SystemExit(1)
 if version == "313_finish_summary_projection_fields":
-    raise SystemExit(45)
+    print("Detected oversized Alembic revision stamp 313_finish_summary_projection_fields; rewriting alembic_version to 313_finish_summary_fields before upgrade.")
+    with engine.begin() as connection:
+        updated = connection.execute(
+            text(
+                """
+                update alembic_version
+                set version_num = '313_finish_summary_fields'
+                where version_num = '313_finish_summary_projection_fields'
+                """
+            )
+        ).rowcount
+    if updated != 1:
+        raise SystemExit(1)
 PY
 status=$?
 if [ $status -eq 42 ]; then
@@ -64,60 +88,6 @@ with engine.begin() as connection:
             update alembic_version
             set version_num = 'fa1b2c3d4e5f'
             where version_num = '93f6b4a2d1e0'
-            """
-        )
-    ).rowcount
-
-if updated != 1:
-    raise SystemExit(1)
-PY
-    if [ $? -ne 0 ]; then
-        echo 'Alembic restamp failed';
-        exit 1;
-    fi;
-elif [ $status -eq 44 ]; then
-    echo 'Detected orphaned Alembic revision stamp 312_workflow_execution_source_mapping_cutover; rewriting alembic_version to 312_source_mapping_cutover before upgrade.';
-    python - <<'PY'
-import os
-
-from sqlalchemy import create_engine, text
-
-engine = create_engine(os.environ["DATABASE_URL"])
-
-with engine.begin() as connection:
-    updated = connection.execute(
-        text(
-            """
-            update alembic_version
-            set version_num = '312_source_mapping_cutover'
-            where version_num = '312_workflow_execution_source_mapping_cutover'
-            """
-        )
-    ).rowcount
-
-if updated != 1:
-    raise SystemExit(1)
-PY
-    if [ $? -ne 0 ]; then
-        echo 'Alembic restamp failed';
-        exit 1;
-    fi;
-elif [ $status -eq 45 ]; then
-    echo 'Detected oversized Alembic revision stamp 313_finish_summary_projection_fields; rewriting alembic_version to 313_finish_summary_fields before upgrade.';
-    python - <<'PY'
-import os
-
-from sqlalchemy import create_engine, text
-
-engine = create_engine(os.environ["DATABASE_URL"])
-
-with engine.begin() as connection:
-    updated = connection.execute(
-        text(
-            """
-            update alembic_version
-            set version_num = '313_finish_summary_fields'
-            where version_num = '313_finish_summary_projection_fields'
             """
         )
     ).rowcount
