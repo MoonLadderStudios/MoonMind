@@ -969,6 +969,7 @@ class DeploymentUpdateExecutor:
         verification: ComposeVerification | None = None
         final_status: str | None = None
         failure_reason: str | None = None
+        after_build_id: str | None = None
         command_log: dict[str, Any] = {
             "runnerMode": command_plan.runner_mode,
             "pull": {"command": list(command_plan.pull_args)},
@@ -1039,6 +1040,7 @@ class DeploymentUpdateExecutor:
                 _ensure_command_succeeded("pull", pull_result)
                 target_image = await self.runner.inspect_image(requested_image)
                 command_log["targetImage"] = _target_image_audit(target_image)
+                after_build_id = _target_image_build_id(target_image)
                 if not resolved_digest:
                     resolved_digest = _resolved_digest_from_target_image(
                         repository=str(parsed["image"]["repository"]),
@@ -1160,6 +1162,7 @@ class DeploymentUpdateExecutor:
             "stack": parsed["stack"],
             "requestedImage": requested_image,
             "resolvedDigest": resolved_digest,
+            "afterBuildId": after_build_id,
             "updatedServices": list(verification.updated_services),
             "runningServices": [
                 dict(service) for service in verification.running_services
@@ -1461,11 +1464,36 @@ def _service_is_excluded(service_name: str, excluded_services: set[str]) -> bool
     )
 
 
+_OCI_IMAGE_VERSION_LABEL = "org.opencontainers.image.version"
+
+
+def _target_image_build_id(target_image: Mapping[str, Any] | None) -> str | None:
+    """Read the MoonMind build id from the target image's OCI version label.
+
+    The Dockerfile stamps ``org.opencontainers.image.version`` with the same
+    ``MOONMIND_BUILD_ID`` used by the workflow-header version badge, so this
+    lets the executor preserve the deployed build id without re-deriving it.
+    """
+
+    if not isinstance(target_image, Mapping):
+        return None
+    config = target_image.get("Config")
+    if not isinstance(config, Mapping):
+        return None
+    labels = config.get("Labels")
+    if not isinstance(labels, Mapping):
+        return None
+    value = labels.get(_OCI_IMAGE_VERSION_LABEL)
+    text = str(value or "").strip()
+    return text or None
+
+
 def _target_image_audit(target_image: Mapping[str, Any]) -> dict[str, Any]:
     return _compact_mapping(
         {
             "id": target_image.get("Id") or target_image.get("ID"),
             "repoDigests": target_image.get("RepoDigests"),
+            "buildId": _target_image_build_id(target_image),
         }
     )
 

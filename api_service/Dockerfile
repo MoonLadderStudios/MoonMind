@@ -239,6 +239,10 @@ ARG MOONMIND_BUILD_ID
 RUN build_id="${MOONMIND_BUILD_ID:-}" \
     && if [ -z "${build_id}" ]; then build_id="$(date -u +%Y%m%d.%H%M)"; fi \
     && printf '%s\n' "${build_id}" > /app/.moonmind-build-id
+# Stamp the same build id used by the workflow-header version badge as the
+# canonical OCI image version label so deployment updates can read the
+# deployed build id directly from `docker image inspect` on the target image.
+LABEL org.opencontainers.image.version="${MOONMIND_BUILD_ID}"
 
 EXPOSE 8000
 
