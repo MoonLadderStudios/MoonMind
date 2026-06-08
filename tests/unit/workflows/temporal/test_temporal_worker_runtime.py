@@ -396,11 +396,11 @@ def test_runtime_planner_maps_explicit_tool_step_to_typed_tool_node():
     )
 
     assert plan["nodes"][0]["tool"] == {
-        "type": "agent_runtime",
-        "name": "codex_cli",
-        "version": "1.0",
+        "type": "skill",
+        "name": "jira.get_issue",
+        "version": "1.0.0",
     }
-    assert plan["nodes"][0]["inputs"]["selectedSkill"] == "jira.get_issue"
+    assert "selectedSkill" not in plan["nodes"][0]["inputs"]
     assert plan["nodes"][0]["inputs"]["type"] == "tool"
     assert plan["nodes"][0]["inputs"]["issueKey"] == "MM-559"
     assert plan["nodes"][0]["inputs"]["source"] == {
@@ -517,9 +517,9 @@ def test_runtime_planner_orders_flattened_tool_and_skill_steps_with_provenance()
     ]
     assert plan["edges"] == [{"from": "fetch-issue", "to": "implement-story"}]
     assert plan["nodes"][0]["tool"] == {
-        "type": "agent_runtime",
-        "name": "codex_cli",
-        "version": "1.0",
+        "type": "skill",
+        "name": "jira.get_issue",
+        "version": "1.0.0",
     }
     assert plan["nodes"][1]["tool"] == {
         "type": "agent_runtime",
@@ -682,13 +682,11 @@ def test_runtime_planner_maps_deployment_update_step_to_typed_tool_node():
     )
 
     assert plan["nodes"][0]["tool"] == {
-        "type": "agent_runtime",
-        "name": "codex_cli",
-        "version": "1.0",
+        "type": "skill",
+        "name": "deployment.update_compose_stack",
+        "version": "1.0.0",
     }
-    assert plan["nodes"][0]["inputs"]["selectedSkill"] == (
-        "deployment.update_compose_stack"
-    )
+    assert "selectedSkill" not in plan["nodes"][0]["inputs"]
     assert plan["nodes"][0]["inputs"]["image"]["reference"] == "latest"
 
 
@@ -945,8 +943,12 @@ def test_runtime_planner_materializes_tool_steps_without_source_lookup(
         snapshot=snapshot,
     )
 
-    assert plan["nodes"][0]["tool"]["name"] == "codex_cli"
-    assert plan["nodes"][0]["inputs"]["selectedSkill"] == "jira.get_issue"
+    assert plan["nodes"][0]["tool"] == {
+        "type": "skill",
+        "name": "jira.get_issue",
+        "version": "1.0.0",
+    }
+    assert "selectedSkill" not in plan["nodes"][0]["inputs"]
     if source is None:
         assert "source" not in plan["nodes"][0]["inputs"]
     else:
