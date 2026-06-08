@@ -275,6 +275,12 @@ RUN_DEFER_TASK_SCOPED_SESSION_UNTIL_SLOT_PATCH = (
 RUN_TASK_SCOPED_SESSION_CLEAR_BETWEEN_STEPS_PATCH = (
     "run-task-scoped-session-clear-between-steps-v1"
 )
+RUN_TASK_SCOPED_SESSION_CLEAR_ACTIVITY_SIGNAL_PATCH = (
+    "run-task-scoped-session-clear-activity-signal-v1"
+)
+RUN_TASK_SCOPED_SESSION_TERMINATION_ACTIVITY_SIGNAL_PATCH = (
+    "run-task-scoped-session-termination-v4"
+)
 RUN_TERMINAL_STATE_ACTIVITY_PATCH = "run-terminal-state-activity-v1"
 RUN_PAUSE_SAFE_BOUNDARIES_PATCH = "run-pause-safe-boundaries-v1"
 # Replay-stable patch id for stamping mm_started_at when real work begins.
@@ -5635,24 +5641,52 @@ class MoonMindRunWorkflow:
             execution_ordinal=self._step_execution_for(logical_step_id) or 1,
             operation="clear_session",
         )
-        clear_handle = await self._clear_task_scoped_session_via_activity(
-            binding=binding,
-            reason=reason,
-        )
-        session_state = clear_handle.session_state
-        self._codex_session_binding = binding.model_copy(
-            update={"session_epoch": session_state.session_epoch}
-        )
-        await session_handle.signal(
-            "control_action",
-            {
-                "action": "clear_session",
-                "reason": reason,
-                "requestId": request_id,
-                "containerId": session_state.container_id,
-                "threadId": session_state.thread_id,
-            },
-        )
+        if workflow.patched(RUN_TASK_SCOPED_SESSION_CLEAR_ACTIVITY_SIGNAL_PATCH):
+            await self._clear_task_scoped_session_via_activity_then_signal(
+                session_handle=session_handle,
+                binding=binding,
+                reason=reason,
+                request_id=request_id,
+            )
+        else:
+            try:
+                execute_update = getattr(session_handle, "execute_update", None)
+                if execute_update is None:
+                    raise AttributeError(
+                        "'ExternalWorkflowHandle' object has no attribute "
+                        "'execute_update'"
+                    )
+                result = await execute_update(
+                    "ClearSession",
+                    {
+                        "reason": reason,
+                        "requestId": request_id,
+                    },
+                )
+                session_state = self._get_from_result(
+                    result, "sessionState"
+                ) or self._get_from_result(result, "session_state")
+                if isinstance(session_state, Mapping):
+                    session_epoch = self._get_from_result(
+                        session_state, "sessionEpoch"
+                    )
+                    if isinstance(session_epoch, int) and session_epoch >= 1:
+                        self._codex_session_binding = binding.model_copy(
+                            update={"session_epoch": session_epoch}
+                        )
+            except AttributeError as exc:
+                self._get_logger().warning(
+                    "Task-scoped managed-session clear update unsupported for %s; "
+                    "falling back to activity and signal: %s",
+                    binding.session_id,
+                    exc,
+                )
+                await self._clear_task_scoped_session_via_activity_then_signal(
+                    session_handle=session_handle,
+                    binding=binding,
+                    reason=reason,
+                    request_id=request_id,
+                )
         self._codex_session_cleared_before_step_ids.add(logical_step_id)
 
     async def _terminate_task_scoped_sessions(self, *, reason: str) -> None:
@@ -5663,27 +5697,35 @@ class MoonMindRunWorkflow:
                     binding.workflow_id
                 )
                 if workflow.patched(
+                    RUN_TASK_SCOPED_SESSION_TERMINATION_ACTIVITY_SIGNAL_PATCH
+                ):
+                    await self._terminate_task_scoped_session_via_activity_then_signal(
+                        session_handle=session_handle,
+                        binding=binding,
+                        reason=reason,
+                    )
+                elif workflow.patched(
                     RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_EXECUTE_PATCH
                 ):
                     try:
-                        await self._terminate_task_scoped_session_via_activity(
-                            binding=binding,
-                            reason=reason,
-                        )
+                        execute_update = getattr(session_handle, "execute_update", None)
+                        if execute_update is None:
+                            raise AttributeError(
+                                "'ExternalWorkflowHandle' object has no attribute "
+                                "'execute_update'"
+                            )
+                        await execute_update("TerminateSession", {"reason": reason})
                     except Exception as exc:
                         self._get_logger().warning(
-                            "Task-scoped managed-session terminate activity failed for %s; "
-                            "falling back to session signal: %s",
+                            "Task-scoped managed-session terminate update failed for %s: %s",
                             binding.session_id,
                             exc,
                         )
-                    await session_handle.signal(
-                        "control_action",
-                        {
-                            "action": "terminate_session",
-                            "reason": reason,
-                        },
-                    )
+                        await self._terminate_task_scoped_session_via_activity_then_signal(
+                            session_handle=session_handle,
+                            binding=binding,
+                            reason=reason,
+                        )
                 elif workflow.patched(RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_PATCH):
                     await session_handle.signal(
                         "control_action",
@@ -5724,6 +5766,33 @@ class MoonMindRunWorkflow:
             self._codex_session_handle = None
             self._codex_session_binding = None
 
+    async def _clear_task_scoped_session_via_activity_then_signal(
+        self,
+        *,
+        session_handle: workflow.ExternalWorkflowHandle,
+        binding: CodexManagedSessionBinding,
+        reason: str,
+        request_id: str,
+    ) -> None:
+        clear_handle = await self._clear_task_scoped_session_via_activity(
+            binding=binding,
+            reason=reason,
+        )
+        session_state = clear_handle.session_state
+        self._codex_session_binding = binding.model_copy(
+            update={"session_epoch": session_state.session_epoch}
+        )
+        await session_handle.signal(
+            "control_action",
+            {
+                "action": "clear_session",
+                "reason": reason,
+                "requestId": request_id,
+                "containerId": session_state.container_id,
+                "threadId": session_state.thread_id,
+            },
+        )
+
     async def _clear_task_scoped_session_via_activity(
         self,
         *,
@@ -5762,6 +5831,33 @@ class MoonMindRunWorkflow:
             **self._execute_kwargs_for_route(clear_route),
         )
         return CodexManagedSessionHandle.model_validate(clear_payload)
+
+    async def _terminate_task_scoped_session_via_activity_then_signal(
+        self,
+        *,
+        session_handle: workflow.ExternalWorkflowHandle,
+        binding: CodexManagedSessionBinding,
+        reason: str,
+    ) -> None:
+        try:
+            await self._terminate_task_scoped_session_via_activity(
+                binding=binding,
+                reason=reason,
+            )
+        except Exception as exc:
+            self._get_logger().warning(
+                "Task-scoped managed-session terminate activity failed for %s; "
+                "falling back to session signal: %s",
+                binding.session_id,
+                exc,
+            )
+        await session_handle.signal(
+            "control_action",
+            {
+                "action": "terminate_session",
+                "reason": reason,
+            },
+        )
 
     async def _terminate_task_scoped_session_via_activity(
         self,
