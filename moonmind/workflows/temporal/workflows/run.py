@@ -3849,6 +3849,11 @@ class MoonMindRunWorkflow:
             and not pr_publish_optional
         )
         pull_request_url: str | None = None
+        # Keep this patch command in its historical position, after the
+        # jules-bundling marker and before any lazy registry read. Removing or
+        # reordering it strands in-flight MoonMind.Run histories before
+        # cancellation/failure handling.
+        workflow.patched(RUN_CONDITIONAL_REGISTRY_READ_PATCH)
         previous_step_outputs: Mapping[str, Any] = {}
         execution_result: Any = None
         for index, node in enumerate(ordered_nodes, start=1):
