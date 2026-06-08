@@ -2598,6 +2598,74 @@ def test_runtime_send_turn_starts_new_thread_when_rollout_recovery_file_is_empty
     assert "vendorThreadPath" not in updated_state
 
 
+def test_runtime_send_turn_classifies_empty_rollout_thread_read_as_recoverable(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    empty_rollout = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "05"
+        / "18"
+        / "rollout-2026-05-18T23-33-21-vendor-thread-1.jsonl"
+    )
+    empty_rollout.parent.mkdir(parents=True)
+    empty_rollout.write_text("", encoding="utf-8")
+    thread_read_error = (
+        "failed to read thread: thread-store internal error: failed to read "
+        f"thread {empty_rollout}: rollout at {empty_rollout} is empty"
+    )
+    script = write_fake_app_server(
+        tmp_path,
+        fail_thread_read=True,
+        thread_read_fail_after_attempts=1,
+        thread_read_error_message=thread_read_error,
+        start_thread_path=str(empty_rollout),
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "failed"
+    assert response.metadata["failureClass"] == "transient"
+    assert response.metadata["failureCause"] == "app_server_protocol_empty_turn"
+    assert response.metadata["retryRecommendedAction"] == "clear_session"
+    assert f"rollout at {empty_rollout} is empty" in response.metadata["reason"]
+    evidence = response.metadata["turnFailureEvidence"]
+    assert evidence["failureCause"] == "app_server_protocol_empty_turn"
+    assert evidence["session"]["vendorTurnId"] == response.turn_id
+    assert evidence["threadPayloadSummary"] is None
+    assert evidence["rolloutScan"]["rolloutPath"] == str(empty_rollout)
+    assert evidence["rolloutScan"]["entriesScanned"] == 0
+    assert any(
+        entry["direction"] == "request" and entry["method"] == "thread/read"
+        for entry in evidence["appServerRpcTrace"]
+    )
+
+    state_path = Path(request.session_workspace_path) / ".moonmind-codex-session-state.json"
+    updated_state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert updated_state["lastFailureClass"] == "transient"
+
+
 def test_runtime_send_turn_starts_new_thread_when_resumed_rollout_read_is_empty(
     tmp_path: Path,
 ) -> None:
@@ -2615,7 +2683,7 @@ def test_runtime_send_turn_starts_new_thread_when_resumed_rollout_read_is_empty(
     script = write_fake_app_server(
         tmp_path,
         fail_thread_read=True,
-        thread_recovery_error_message=(
+        thread_read_error_message=(
             "failed to read thread: thread-store internal error: failed to read "
             f"thread {empty_rollout}: rollout at {empty_rollout} is empty"
         ),
