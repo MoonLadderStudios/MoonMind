@@ -17,6 +17,7 @@ def write_fake_app_server(
     thread_status_reason: str | None = None,
     fail_thread_resume: bool = False,
     fail_thread_read: bool = False,
+    thread_read_fail_after_attempts: int = 0,
     resume_requires_existing_rollout_path: bool = False,
     start_thread_id: str = "vendor-thread-1",
     start_thread_path: str | None = "/tmp/vendor-thread-1.jsonl",
@@ -53,6 +54,7 @@ STEER_RECORD_PATH = __STEER_RECORD_PATH__
 CODEX_HOME_RECORD_PATH = __CODEX_HOME_RECORD_PATH__
 FAIL_THREAD_RESUME = __FAIL_THREAD_RESUME__
 FAIL_THREAD_READ = __FAIL_THREAD_READ__
+THREAD_READ_FAIL_AFTER_ATTEMPTS = __THREAD_READ_FAIL_AFTER_ATTEMPTS__
 THREAD_RESUME_ERROR_MESSAGE = __THREAD_RESUME_ERROR_MESSAGE__
 THREAD_READ_ERROR_MESSAGE = __THREAD_READ_ERROR_MESSAGE__
 RESUME_REQUIRES_EXISTING_ROLLOUT_PATH = __RESUME_REQUIRES_EXISTING_ROLLOUT_PATH__
@@ -72,6 +74,7 @@ SKILL_OUTCOME_PAYLOAD = __SKILL_OUTCOME_PAYLOAD__
 SKILL_OUTCOME_PAYLOAD_IS_RAW = __SKILL_OUTCOME_PAYLOAD_IS_RAW__
 turn_completed = False
 thread_read_failed = False
+thread_read_attempts = 0
 
 for line in sys.stdin:
     message = json.loads(line)
@@ -248,7 +251,12 @@ __COMPLETION_BLOCK__
         sys.stdout.flush()
     elif method == "thread/read":
         thread_id = message["params"]["threadId"]
-        if FAIL_THREAD_READ and thread_id == "vendor-thread-1" and not thread_read_failed:
+        if (
+            FAIL_THREAD_READ
+            and thread_id == "vendor-thread-1"
+            and not thread_read_failed
+            and thread_read_attempts >= THREAD_READ_FAIL_AFTER_ATTEMPTS
+        ):
             thread_read_failed = True
             sys.stdout.write(json.dumps({
                 "id": msg_id,
@@ -259,6 +267,7 @@ __COMPLETION_BLOCK__
             }) + "\\n")
             sys.stdout.flush()
             continue
+        thread_read_attempts += 1
         if START_THREAD_PATH and ROLLOUT_ENTRIES_ON_READ:
             os.makedirs(os.path.dirname(START_THREAD_PATH), exist_ok=True)
             with open(START_THREAD_PATH, "a", encoding="utf-8") as rollout_handle:
@@ -339,6 +348,10 @@ __COMPLETION_BLOCK__
         )
         .replace("__FAIL_THREAD_RESUME__", "True" if fail_thread_resume else "False")
         .replace("__FAIL_THREAD_READ__", "True" if fail_thread_read else "False")
+        .replace(
+            "__THREAD_READ_FAIL_AFTER_ATTEMPTS__",
+            repr(thread_read_fail_after_attempts),
+        )
         .replace("__THREAD_RESUME_ERROR_MESSAGE__", repr(thread_recovery_error_message))
         .replace("__THREAD_READ_ERROR_MESSAGE__", repr(thread_read_error_message))
         .replace(

@@ -2619,6 +2619,7 @@ def test_runtime_send_turn_classifies_empty_rollout_thread_read_as_recoverable(
     script = write_fake_app_server(
         tmp_path,
         fail_thread_read=True,
+        thread_read_fail_after_attempts=1,
         thread_read_error_message=thread_read_error,
         start_thread_path=str(empty_rollout),
     )
