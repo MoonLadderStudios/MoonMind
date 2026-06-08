@@ -20,6 +20,8 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_skill_models import SkillSelector
     from moonmind.schemas.managed_session_models import (
         CodexManagedSessionBinding,
+        CodexManagedSessionClearRequest,
+        CodexManagedSessionHandle,
         CodexManagedSessionSnapshot,
         CodexManagedSessionWorkflowInput,
         TerminateCodexManagedSessionRequest,
@@ -5626,28 +5628,31 @@ class MoonMindRunWorkflow:
             return
         session_handle = workflow.get_external_workflow_handle(binding.workflow_id)
         reason = f"Clearing task-scoped context before step {logical_step_id}"
-        result = await session_handle.execute_update(
-            "ClearSession",
+        request_id = step_execution_operation_idempotency_key(
+            workflow_id=workflow.info().workflow_id,
+            run_id=workflow.info().run_id,
+            logical_step_id=logical_step_id,
+            execution_ordinal=self._step_execution_for(logical_step_id) or 1,
+            operation="clear_session",
+        )
+        clear_handle = await self._clear_task_scoped_session_via_activity(
+            binding=binding,
+            reason=reason,
+        )
+        session_state = clear_handle.session_state
+        self._codex_session_binding = binding.model_copy(
+            update={"session_epoch": session_state.session_epoch}
+        )
+        await session_handle.signal(
+            "control_action",
             {
+                "action": "clear_session",
                 "reason": reason,
-                "requestId": step_execution_operation_idempotency_key(
-                    workflow_id=workflow.info().workflow_id,
-                    run_id=workflow.info().run_id,
-                    logical_step_id=logical_step_id,
-                    execution_ordinal=self._step_execution_for(logical_step_id) or 1,
-                    operation="clear_session",
-                ),
+                "requestId": request_id,
+                "containerId": session_state.container_id,
+                "threadId": session_state.thread_id,
             },
         )
-        session_state = self._get_from_result(
-            result, "sessionState"
-        ) or self._get_from_result(result, "session_state")
-        if isinstance(session_state, Mapping):
-            session_epoch = self._get_from_result(session_state, "sessionEpoch")
-            if isinstance(session_epoch, int) and session_epoch >= 1:
-                self._codex_session_binding = binding.model_copy(
-                    update={"session_epoch": session_epoch}
-                )
         self._codex_session_cleared_before_step_ids.add(logical_step_id)
 
     async def _terminate_task_scoped_sessions(self, *, reason: str) -> None:
@@ -5661,35 +5666,24 @@ class MoonMindRunWorkflow:
                     RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_EXECUTE_PATCH
                 ):
                     try:
-                        await session_handle.execute_update(
-                            "TerminateSession",
-                            {"reason": reason},
+                        await self._terminate_task_scoped_session_via_activity(
+                            binding=binding,
+                            reason=reason,
                         )
                     except Exception as exc:
                         self._get_logger().warning(
-                            "Task-scoped managed-session terminate update failed for %s: %s",
+                            "Task-scoped managed-session terminate activity failed for %s; "
+                            "falling back to session signal: %s",
                             binding.session_id,
                             exc,
                         )
-                        try:
-                            await self._terminate_task_scoped_session_via_activity(
-                                binding=binding,
-                                reason=reason,
-                            )
-                        except Exception as activity_exc:
-                            self._get_logger().warning(
-                                "Task-scoped managed-session terminate activity failed for %s; "
-                                "falling back to session signal: %s",
-                                binding.session_id,
-                                activity_exc,
-                            )
-                        await session_handle.signal(
-                            "control_action",
-                            {
-                                "action": "terminate_session",
-                                "reason": reason,
-                            },
-                        )
+                    await session_handle.signal(
+                        "control_action",
+                        {
+                            "action": "terminate_session",
+                            "reason": reason,
+                        },
+                    )
                 elif workflow.patched(RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_PATCH):
                     await session_handle.signal(
                         "control_action",
@@ -5729,6 +5723,45 @@ class MoonMindRunWorkflow:
         finally:
             self._codex_session_handle = None
             self._codex_session_binding = None
+
+    async def _clear_task_scoped_session_via_activity(
+        self,
+        *,
+        binding: CodexManagedSessionBinding,
+        reason: str,
+    ) -> CodexManagedSessionHandle:
+        snapshot_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            "agent_runtime.load_session_snapshot"
+        )
+        snapshot_payload = await workflow.execute_activity(
+            snapshot_route.activity_type,
+            binding.model_dump(mode="json", by_alias=True),
+            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+            **self._execute_kwargs_for_route(snapshot_route),
+        )
+        snapshot = CodexManagedSessionSnapshot.model_validate(snapshot_payload)
+        if not snapshot.container_id or not snapshot.thread_id:
+            raise ValueError("Task-scoped managed session cannot be cleared before launch")
+        clear_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            "agent_runtime.clear_session"
+        )
+        next_thread_id = (
+            f"thread:{snapshot.binding.session_id}:{snapshot.binding.session_epoch + 1}"
+        )
+        clear_payload = await workflow.execute_activity(
+            clear_route.activity_type,
+            CodexManagedSessionClearRequest(
+                sessionId=snapshot.binding.session_id,
+                sessionEpoch=snapshot.binding.session_epoch,
+                containerId=snapshot.container_id,
+                threadId=snapshot.thread_id,
+                newThreadId=next_thread_id,
+                reason=reason,
+            ).model_dump(mode="json", by_alias=True),
+            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+            **self._execute_kwargs_for_route(clear_route),
+        )
+        return CodexManagedSessionHandle.model_validate(clear_payload)
 
     async def _terminate_task_scoped_session_via_activity(
         self,

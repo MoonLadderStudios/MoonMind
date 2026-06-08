@@ -176,13 +176,38 @@ async def test_run_clears_existing_task_scoped_codex_session_before_next_step(
 ) -> None:
     workflow = MoonMindRunWorkflow()
     _configure_workflow_runtime(monkeypatch)
-    update_calls: list[tuple[str, Any]] = []
+    activity_calls: list[tuple[str, Any]] = []
+    signal_calls: list[tuple[str, Any]] = []
 
     class _FakeHandle:
-        async def execute_update(
-            self, update_name: str, payload: Any = None
-        ) -> dict[str, Any]:
-            update_calls.append((update_name, payload))
+        async def signal(self, signal_name: str, payload: Any = None) -> None:
+            signal_calls.append((signal_name, payload))
+
+    async def fake_execute_activity(
+        activity_name: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        activity_calls.append((activity_name, payload))
+        if activity_name == "agent_runtime.load_session_snapshot":
+            return {
+                "binding": {
+                    "workflowId": "wf-run-1:session:codex_cli",
+                    "taskRunId": "wf-run-1",
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 1,
+                    "runtimeId": "codex_cli",
+                    "executionProfileRef": "codex-default",
+                },
+                "status": "active",
+                "containerId": "container-1",
+                "threadId": "thread-1",
+                "activeTurnId": None,
+                "lastControlAction": None,
+                "lastControlReason": None,
+                "terminationRequested": False,
+            }
+        if activity_name == "agent_runtime.clear_session":
             return {
                 "sessionState": {
                     "sessionId": "sess:wf-run-1:codex_cli",
@@ -190,14 +215,19 @@ async def test_run_clears_existing_task_scoped_codex_session_before_next_step(
                     "containerId": "container-1",
                     "threadId": "thread:sess:wf-run-1:codex_cli:2",
                 },
-                "latestResetBoundaryRef": "artifact://reset-boundary-1",
+                "status": "ready",
+                "imageRef": "codex:latest",
+                "controlUrl": "docker-exec://container-1",
+                "metadata": {},
             }
+        raise AssertionError(f"unexpected activity {activity_name}")
 
     monkeypatch.setattr(
         run_module.workflow,
         "patched",
         lambda patch_id: patch_id == RUN_TASK_SCOPED_SESSION_CLEAR_BETWEEN_STEPS_PATCH,
     )
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
     _use_external_handle(monkeypatch, _FakeHandle())
     workflow._codex_session_binding = CodexManagedSessionBinding(
         workflowId="wf-run-1:session:codex_cli",
@@ -213,12 +243,37 @@ async def test_run_clears_existing_task_scoped_codex_session_before_next_step(
         logical_step_id="step-2",
     )
 
-    assert update_calls == [
+    assert [name for name, _ in activity_calls] == [
+        "agent_runtime.load_session_snapshot",
+        "agent_runtime.clear_session",
+    ]
+    assert {
+        key: activity_calls[1][1][key]
+        for key in (
+            "sessionId",
+            "sessionEpoch",
+            "containerId",
+            "threadId",
+            "newThreadId",
+            "reason",
+        )
+    } == {
+        "sessionId": "sess:wf-run-1:codex_cli",
+        "sessionEpoch": 1,
+        "containerId": "container-1",
+        "threadId": "thread-1",
+        "newThreadId": "thread:sess:wf-run-1:codex_cli:2",
+        "reason": "Clearing task-scoped context before step step-2",
+    }
+    assert signal_calls == [
         (
-            "ClearSession",
+            "control_action",
             {
+                "action": "clear_session",
                 "reason": "Clearing task-scoped context before step step-2",
                 "requestId": "wf-run-1:run-1:step-2:execution:1:clear_session",
+                "containerId": "container-1",
+                "threadId": "thread:sess:wf-run-1:codex_cli:2",
             },
         )
     ]
@@ -233,13 +288,38 @@ async def test_run_does_not_clear_task_scoped_session_twice_for_same_step_retry(
 ) -> None:
     workflow = MoonMindRunWorkflow()
     _configure_workflow_runtime(monkeypatch)
-    update_calls: list[tuple[str, Any]] = []
+    activity_calls: list[tuple[str, Any]] = []
+    signal_calls: list[tuple[str, Any]] = []
 
     class _FakeHandle:
-        async def execute_update(
-            self, update_name: str, payload: Any = None
-        ) -> dict[str, Any]:
-            update_calls.append((update_name, payload))
+        async def signal(self, signal_name: str, payload: Any = None) -> None:
+            signal_calls.append((signal_name, payload))
+
+    async def fake_execute_activity(
+        activity_name: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        activity_calls.append((activity_name, payload))
+        if activity_name == "agent_runtime.load_session_snapshot":
+            return {
+                "binding": {
+                    "workflowId": "wf-run-1:session:codex_cli",
+                    "taskRunId": "wf-run-1",
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 1,
+                    "runtimeId": "codex_cli",
+                    "executionProfileRef": "codex-default",
+                },
+                "status": "active",
+                "containerId": "container-1",
+                "threadId": "thread-1",
+                "activeTurnId": None,
+                "lastControlAction": None,
+                "lastControlReason": None,
+                "terminationRequested": False,
+            }
+        if activity_name == "agent_runtime.clear_session":
             return {
                 "sessionState": {
                     "sessionId": "sess:wf-run-1:codex_cli",
@@ -247,13 +327,19 @@ async def test_run_does_not_clear_task_scoped_session_twice_for_same_step_retry(
                     "containerId": "container-1",
                     "threadId": "thread:sess:wf-run-1:codex_cli:2",
                 },
+                "status": "ready",
+                "imageRef": "codex:latest",
+                "controlUrl": "docker-exec://container-1",
+                "metadata": {},
             }
+        raise AssertionError(f"unexpected activity {activity_name}")
 
     monkeypatch.setattr(
         run_module.workflow,
         "patched",
         lambda patch_id: patch_id == RUN_TASK_SCOPED_SESSION_CLEAR_BETWEEN_STEPS_PATCH,
     )
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
     _use_external_handle(monkeypatch, _FakeHandle())
     workflow._codex_session_binding = CodexManagedSessionBinding(
         workflowId="wf-run-1:session:codex_cli",
@@ -273,7 +359,11 @@ async def test_run_does_not_clear_task_scoped_session_twice_for_same_step_retry(
         logical_step_id="step-2",
     )
 
-    assert len(update_calls) == 1
+    assert [name for name, _ in activity_calls] == [
+        "agent_runtime.load_session_snapshot",
+        "agent_runtime.clear_session",
+    ]
+    assert len(signal_calls) == 1
 
 
 def test_run_pending_agent_step_refs_include_session_task_run_id() -> None:
@@ -300,12 +390,12 @@ def test_run_pending_agent_step_refs_include_session_task_run_id() -> None:
     }
 
 @pytest.mark.asyncio
-async def test_run_termination_v3_executes_session_update(
+async def test_run_termination_v3_executes_activity_then_signal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflow = MoonMindRunWorkflow()
     _configure_workflow_runtime(monkeypatch)
-    update_calls: list[tuple[str, Any]] = []
+    activity_calls: list[tuple[str, Any]] = []
     signal_calls: list[tuple[str, Any]] = []
     patch_calls: list[str] = []
 
@@ -314,56 +404,8 @@ async def test_run_termination_v3_executes_session_update(
         return patch_id == RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_EXECUTE_PATCH
 
     class _FakeHandle:
-        async def execute_update(self, update_name: str, payload: Any = None) -> None:
-            update_calls.append((update_name, payload))
-
         async def signal(self, signal_name: str, payload: Any = None) -> None:
             signal_calls.append((signal_name, payload))
-
-    monkeypatch.setattr(run_module.workflow, "patched", fake_patched)
-
-    external_handle = _FakeHandle()
-    _use_external_handle(monkeypatch, external_handle)
-    workflow._codex_session_handle = object()
-    workflow._codex_session_binding = CodexManagedSessionBinding(
-        workflowId="wf-run-1:session:codex_cli",
-        taskRunId="wf-run-1",
-        sessionId="sess:wf-run-1:codex_cli",
-        sessionEpoch=1,
-        runtimeId="codex_cli",
-        executionProfileRef="codex-default",
-    )
-
-    await workflow._terminate_task_scoped_sessions(reason="success")
-
-    assert update_calls == [("TerminateSession", {"reason": "success"})]
-    assert signal_calls == []
-    assert patch_calls == [RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_EXECUTE_PATCH]
-    assert workflow._codex_session_handle is None
-    assert workflow._codex_session_binding is None
-
-@pytest.mark.asyncio
-async def test_run_termination_v3_update_failure_falls_back_to_activity_then_signal(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    workflow = MoonMindRunWorkflow()
-    _configure_workflow_runtime(monkeypatch)
-    update_calls: list[tuple[str, Any]] = []
-    signal_calls: list[tuple[str, Any]] = []
-    activity_calls: list[tuple[str, Any]] = []
-    warnings: list[str] = []
-
-    class _FakeHandle:
-        async def execute_update(self, update_name: str, payload: Any = None) -> None:
-            update_calls.append((update_name, payload))
-            raise RuntimeError("terminate update failed")
-
-        async def signal(self, signal_name: str, payload: Any = None) -> None:
-            signal_calls.append((signal_name, payload))
-
-    class _FakeLogger:
-        def warning(self, message: str, *args: Any) -> None:
-            warnings.append(message % args)
 
     async def fake_execute_activity(
         activity_name: str,
@@ -405,6 +447,86 @@ async def test_run_termination_v3_update_failure_falls_back_to_activity_then_sig
             }
         raise AssertionError(f"unexpected activity {activity_name}")
 
+    monkeypatch.setattr(run_module.workflow, "patched", fake_patched)
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+
+    external_handle = _FakeHandle()
+    _use_external_handle(monkeypatch, external_handle)
+    workflow._codex_session_handle = object()
+    workflow._codex_session_binding = CodexManagedSessionBinding(
+        workflowId="wf-run-1:session:codex_cli",
+        taskRunId="wf-run-1",
+        sessionId="sess:wf-run-1:codex_cli",
+        sessionEpoch=1,
+        runtimeId="codex_cli",
+        executionProfileRef="codex-default",
+    )
+
+    await workflow._terminate_task_scoped_sessions(reason="success")
+
+    assert [name for name, _ in activity_calls] == [
+        "agent_runtime.load_session_snapshot",
+        "agent_runtime.terminate_session",
+    ]
+    assert signal_calls == [
+        (
+            "control_action",
+            {
+                "action": "terminate_session",
+                "reason": "success",
+            },
+        )
+    ]
+    assert patch_calls == [RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_EXECUTE_PATCH]
+    assert workflow._codex_session_handle is None
+    assert workflow._codex_session_binding is None
+
+@pytest.mark.asyncio
+async def test_run_termination_v3_activity_failure_falls_back_to_signal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    _configure_workflow_runtime(monkeypatch)
+    signal_calls: list[tuple[str, Any]] = []
+    activity_calls: list[tuple[str, Any]] = []
+    warnings: list[str] = []
+
+    class _FakeHandle:
+        async def signal(self, signal_name: str, payload: Any = None) -> None:
+            signal_calls.append((signal_name, payload))
+
+    class _FakeLogger:
+        def warning(self, message: str, *args: Any) -> None:
+            warnings.append(message % args)
+
+    async def fake_execute_activity(
+        activity_name: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        activity_calls.append((activity_name, payload))
+        if activity_name == "agent_runtime.load_session_snapshot":
+            return {
+                "binding": {
+                    "workflowId": "wf-run-1:session:codex_cli",
+                    "taskRunId": "wf-run-1",
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 1,
+                    "runtimeId": "codex_cli",
+                    "executionProfileRef": "codex-default",
+                },
+                "status": "active",
+                "containerId": "container-1",
+                "threadId": "thread-1",
+                "activeTurnId": None,
+                "lastControlAction": None,
+                "lastControlReason": None,
+                "terminationRequested": False,
+            }
+        if activity_name == "agent_runtime.terminate_session":
+            raise RuntimeError("terminate activity failed")
+        raise AssertionError(f"unexpected activity {activity_name}")
+
     monkeypatch.setattr(
         run_module.workflow,
         "patched",
@@ -432,7 +554,6 @@ async def test_run_termination_v3_update_failure_falls_back_to_activity_then_sig
 
     await workflow._terminate_task_scoped_sessions(reason="success")
 
-    assert update_calls == [("TerminateSession", {"reason": "success"})]
     assert [name for name, _ in activity_calls] == [
         "agent_runtime.load_session_snapshot",
         "agent_runtime.terminate_session",
@@ -447,8 +568,8 @@ async def test_run_termination_v3_update_failure_falls_back_to_activity_then_sig
         )
     ]
     assert warnings == [
-        "Task-scoped managed-session terminate update failed for sess:wf-run-1:codex_cli: "
-        "terminate update failed"
+        "Task-scoped managed-session terminate activity failed for sess:wf-run-1:codex_cli; "
+        "falling back to session signal: terminate activity failed"
     ]
     assert workflow._codex_session_handle is None
     assert workflow._codex_session_binding is None
