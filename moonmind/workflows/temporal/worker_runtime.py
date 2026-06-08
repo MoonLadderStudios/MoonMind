@@ -1426,9 +1426,7 @@ def _build_runtime_planner():
                 ).strip()
                 if not authored_tool_name:
                     raise RuntimeError("task.plan tool name is required")
-                is_legacy_agent_skill_plan_entry = (
-                    not has_authored_tool and authored_tool_type == "skill"
-                )
+                is_legacy_agent_skill_plan_entry = not has_authored_tool
                 tool_type = (
                     "agent_runtime"
                     if is_legacy_agent_skill_plan_entry
