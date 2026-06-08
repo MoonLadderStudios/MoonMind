@@ -577,14 +577,11 @@ def test_runtime_planner_preserves_authored_task_plan_tool_nodes():
         {
             "id": "update-moonmind-deployment",
             "tool": {
-                "type": "agent_runtime",
-                "name": "codex_cli",
+                "type": "skill",
+                "name": "deployment.update_compose_stack",
                 "version": "1.0.0",
             },
             "inputs": {
-                "instructions": "Execute skill 'deployment.update_compose_stack'",
-                "runtime": {"mode": "codex_cli"},
-                "selectedSkill": "deployment.update_compose_stack",
                 "stack": "moonmind",
                 "image": {
                     "repository": "ghcr.io/moonladderstudios/moonmind",
@@ -594,9 +591,56 @@ def test_runtime_planner_preserves_authored_task_plan_tool_nodes():
             },
         }
     ]
+    assert "selectedSkill" not in plan["nodes"][0]["inputs"]
     assert plan["policy"]["failure_mode"] == "FAIL_FAST"
     registry_snapshot = plan["metadata"]["registry_snapshot"]
     assert registry_snapshot["artifact_ref"] == "art_registry_123"
+
+
+def test_runtime_planner_maps_legacy_task_plan_skill_without_type_to_agent_runtime_node():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={},
+        parameters={
+            "task": {
+                "instructions": "Run a legacy skill plan entry.",
+                "runtime": {"mode": "codex_cli"},
+                "plan": [
+                    {
+                        "id": "implement-story",
+                        "skill": {
+                            "name": "moonspec-implement",
+                            "version": "1.0.0",
+                        },
+                        "inputs": {"story": "MM-573"},
+                    }
+                ],
+            },
+        },
+        snapshot=snapshot,
+    )
+
+    assert plan["nodes"] == [
+        {
+            "id": "implement-story",
+            "tool": {
+                "type": "agent_runtime",
+                "name": "codex_cli",
+                "version": "1.0.0",
+            },
+            "inputs": {
+                "instructions": "Execute skill 'moonspec-implement'",
+                "runtime": {"mode": "codex_cli"},
+                "selectedSkill": "moonspec-implement",
+                "story": "MM-573",
+            },
+        }
+    ]
 
 
 def test_runtime_planner_preserves_authored_task_plan_node_metadata():

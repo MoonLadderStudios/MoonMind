@@ -1410,6 +1410,7 @@ def _build_runtime_planner():
             for idx, plan_entry in enumerate(explicit_plan, start=1):
                 if not isinstance(plan_entry, Mapping):
                     raise RuntimeError("task.plan entries must be objects")
+                has_authored_tool = isinstance(plan_entry.get("tool"), Mapping)
                 tool_payload = _coerce_mapping(
                     plan_entry.get("tool")
                 ) or _coerce_mapping(plan_entry.get("skill"))
@@ -1425,10 +1426,17 @@ def _build_runtime_planner():
                 ).strip()
                 if not authored_tool_name:
                     raise RuntimeError("task.plan tool name is required")
+                is_legacy_agent_skill_plan_entry = not has_authored_tool
                 tool_type = (
-                    "agent_runtime" if authored_tool_type == "skill" else authored_tool_type
+                    "agent_runtime"
+                    if is_legacy_agent_skill_plan_entry
+                    else authored_tool_type
                 )
-                tool_name = runtime_mode if authored_tool_type == "skill" else authored_tool_name
+                tool_name = (
+                    runtime_mode
+                    if is_legacy_agent_skill_plan_entry
+                    else authored_tool_name
+                )
                 tool_version = str(tool_payload.get("version") or "1.0").strip()
                 if not tool_version:
                     raise RuntimeError("task.plan tool version is required")
@@ -1437,7 +1445,7 @@ def _build_runtime_planner():
                     node_inputs = _coerce_mapping(
                         tool_payload.get("inputs") or tool_payload.get("args")
                     )
-                if authored_tool_type == "skill":
+                if is_legacy_agent_skill_plan_entry:
                     node_inputs = {
                         "instructions": f"Execute skill '{authored_tool_name}'",
                         "runtime": dict(runtime_node),
