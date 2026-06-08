@@ -1373,12 +1373,24 @@ def _iter_requested_registry_tools(
     return tuple(selected)
 
 def _default_skill_registry_payload(
-    *, parameters: Mapping[str, Any] | None = None
+    *,
+    parameters: Mapping[str, Any] | None = None,
+    inputs: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    requested: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for payload in (parameters, inputs):
+        for name, version in _iter_requested_registry_tools(payload):
+            key = (name, version)
+            if key in seen:
+                continue
+            seen.add(key)
+            requested.append(key)
+
     return {
         "skills": [
             _default_registry_skill_payload(name=name, version=version)
-            for name, version in _iter_requested_registry_tools(parameters)
+            for name, version in requested
         ]
     }
 
@@ -1703,7 +1715,10 @@ class TemporalPlanActivities:
                 artifact_locator=_artifact_id_from_ref(registry_snapshot_ref),
             )
         else:
-            registry_payload = _default_skill_registry_payload(parameters=parameters)
+            registry_payload = _default_skill_registry_payload(
+                parameters=parameters,
+                inputs=inputs_payload if isinstance(inputs_payload, Mapping) else None,
+            )
             fallback_ref = await _write_json_artifact(
                 self._artifact_service,
                 principal=principal,

@@ -590,6 +590,31 @@ async def test_default_skill_registry_payload_uses_dood_tool_definitions():
         == "mm.tool.execute"
     )
 
+async def test_default_skill_registry_payload_includes_input_sourced_tool_steps():
+    payload = _default_skill_registry_payload(
+        parameters={"task": {"tool": {"name": "auto", "version": "1.0"}}},
+        inputs={
+            "task": {
+                "steps": [
+                    {
+                        "type": "tool",
+                        "tool": {
+                            "id": "jira.get_issue",
+                            "version": "1.0.0",
+                            "inputs": {"issueKey": "MM-579"},
+                        },
+                    }
+                ]
+            }
+        },
+    )
+
+    skills = payload.get("skills")
+    assert isinstance(skills, list)
+    assert [(item["name"], item["version"]) for item in skills] == [
+        ("jira.get_issue", "1.0.0")
+    ]
+
 async def test_default_skill_registry_payload_uses_curated_pentest_tool_definition():
     payload = _default_skill_registry_payload(
         parameters={
@@ -1192,6 +1217,88 @@ async def test_plan_generate_accepts_auto_placeholder_without_registry_entries(
 
             assert plan_payload["nodes"][0]["tool"]["type"] == "agent_runtime"
             assert registry_payload == {"skills": []}
+
+async def test_plan_generate_fallback_registry_includes_input_artifact_tool_steps(
+    tmp_path: Path,
+):
+    from moonmind.workflows.temporal.worker_runtime import _build_runtime_planner
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            inputs_artifact, _upload = await service.create(
+                principal="user-1",
+                content_type="application/json",
+            )
+            await service.write_complete(
+                artifact_id=inputs_artifact.artifact_id,
+                principal="user-1",
+                payload=(
+                    json.dumps(
+                        {
+                            "task": {
+                                "instructions": "Fetch the Jira issue.",
+                                "runtime": {"mode": "codex_cli"},
+                                "steps": [
+                                    {
+                                        "id": "fetch-issue",
+                                        "type": "tool",
+                                        "instructions": "Fetch MM-579.",
+                                        "tool": {
+                                            "id": "jira.get_issue",
+                                            "version": "1.0.0",
+                                            "inputs": {"issueKey": "MM-579"},
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    )
+                    + "\n"
+                ).encode("utf-8"),
+                content_type="application/json",
+            )
+
+            planner = TemporalPlanActivities(
+                artifact_service=service,
+                planner=_build_runtime_planner(),
+            )
+            result = await planner.plan_generate(
+                principal="user-1",
+                inputs_ref=inputs_artifact.artifact_id,
+                parameters={
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "codex_cli",
+                    "task": {
+                        "tool": {"type": "skill", "name": "auto", "version": "1.0"}
+                    },
+                },
+            )
+
+            _artifact, plan_payload_raw = await service.read(
+                artifact_id=result.plan_ref.artifact_id,
+                principal="user-1",
+            )
+            plan_payload = json.loads(plan_payload_raw.decode("utf-8"))
+            registry_ref = plan_payload["metadata"]["registry_snapshot"]["artifact_ref"]
+            _registry_artifact, registry_payload_raw = await service.read(
+                artifact_id=registry_ref,
+                principal="user-1",
+            )
+            registry_payload = json.loads(registry_payload_raw.decode("utf-8"))
+
+            assert plan_payload["nodes"][0]["tool"] == {
+                "type": "skill",
+                "name": "jira.get_issue",
+                "version": "1.0.0",
+            }
+            assert [
+                (item["name"], item["version"])
+                for item in registry_payload["skills"]
+            ] == [("jira.get_issue", "1.0.0")]
 
 async def test_default_registry_payload_uses_extended_timeouts_for_pr_resolver():
     payload = _default_registry_skill_payload(name="pr-resolver", version="1.0")
