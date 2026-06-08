@@ -630,10 +630,16 @@ async def test_run_termination_v3_activity_failure_falls_back_to_signal(
         )
     ]
     assert warnings == [
-        "Task-scoped managed-session terminate update failed for sess:wf-run-1:codex_cli: "
-        "'ExternalWorkflowHandle' object has no attribute 'execute_update'",
-        "Task-scoped managed-session terminate activity failed for sess:wf-run-1:codex_cli; "
-        "falling back to session signal: terminate activity failed"
+        (
+            "Task-scoped managed-session terminate update failed for "
+            "sess:wf-run-1:codex_cli: 'ExternalWorkflowHandle' object has no "
+            "attribute 'execute_update'"
+        ),
+        (
+            "Task-scoped managed-session terminate activity failed for "
+            "sess:wf-run-1:codex_cli; falling back to session signal: "
+            "terminate activity failed"
+        ),
     ]
     assert workflow._codex_session_handle is None
     assert workflow._codex_session_binding is None
