@@ -93,6 +93,19 @@ def test_alembic_revision_ids_fit_default_version_column():
         )
 
 
+def test_init_db_repairs_known_orphaned_revision_stamps():
+    """Local databases may be stamped with revision ids that were shortened."""
+    entrypoint_path = Path("init_db/init_db_entrypoint.sh")
+    assert entrypoint_path.exists(), "init-db entrypoint is missing"
+
+    entrypoint = entrypoint_path.read_text(encoding="utf-8")
+
+    assert "312_workflow_execution_source_mapping_cutover" in entrypoint
+    assert "312_source_mapping_cutover" in entrypoint
+    assert "313_finish_summary_projection_fields" in entrypoint
+    assert "313_finish_summary_fields" in entrypoint
+
+
 def test_docker_compose_has_temporal_worker_auto_start_configured():
     """Verify that temporal workers are configured to start by default without sleeping."""
     compose_path = Path("docker-compose.yaml")
