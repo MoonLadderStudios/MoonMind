@@ -4145,6 +4145,7 @@ class MoonMindRunWorkflow:
                         route = DEFAULT_ACTIVITY_CATALOG.resolve_skill(definition)
                         execute_payload = {
                             "registry_snapshot_ref": snapshot.artifact_ref,
+                            "principal": self._principal(),
                             "invocation_payload": {
                                 "id": node_id,
                                 "tool": {

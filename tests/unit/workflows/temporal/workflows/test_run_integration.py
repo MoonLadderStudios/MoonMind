@@ -548,6 +548,8 @@ async def test_run_execution_stage_rejects_dood_skill_tool_in_run_dispatch(
     }
     assert payload["context"]["workflow_id"] == "wf-1"
     assert payload["context"]["node_id"] == "workload-step"
+    assert payload["principal"] == "owner-1"
+    assert payload["registry_snapshot_ref"] == "art:sha256:456"
     assert tool_calls[0][2]["task_queue"] == "mm.activity.agent_runtime"
 
 @pytest.mark.asyncio
