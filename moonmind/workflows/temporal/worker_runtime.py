@@ -1005,6 +1005,8 @@ def _selected_step_tool_version(step_entry: Mapping[str, Any]) -> str:
     return str(step_tool.get("version") or "1.0").strip() or "1.0"
 
 def _selected_step_tool_type(step_entry: Mapping[str, Any], tool_name: str) -> str:
+    if _selected_step_type(step_entry) == "tool":
+        return "skill"
     return "agent_runtime"
 
 def _jira_agent_skill_selected(tool_name: str) -> bool:
@@ -1645,8 +1647,13 @@ def _build_runtime_planner():
                 )
                 tool_type = _selected_step_tool_type(step_entry, step_tool_name)
                 tool_version = _selected_step_tool_version(step_entry)
-                effective_step_skill_name = step_tool_name or selected_skill_name
-                if step_tool_name:
+                is_agent_runtime_step = tool_type == "agent_runtime"
+                effective_step_skill_name = (
+                    step_tool_name or selected_skill_name
+                    if is_agent_runtime_step
+                    else ""
+                )
+                if step_tool_name and is_agent_runtime_step:
                     step_node_inputs["selectedSkill"] = step_tool_name
                     if (
                         _jira_agent_skill_selected(step_tool_name)
@@ -1679,13 +1686,15 @@ def _build_runtime_planner():
                             story_output_mode=story_output_mode,
                         )
                     )
+                if not is_agent_runtime_step:
+                    step_node_inputs.pop("selectedSkill", None)
 
                 nodes.append({
                     "id": step_id,
                     "tool": {
                         "type": tool_type,
-                        "name": step_runtime,
-                        "version": "1.0",
+                        "name": step_runtime if is_agent_runtime_step else step_tool_name,
+                        "version": "1.0" if is_agent_runtime_step else tool_version,
                     },
                     "inputs": step_node_inputs,
                 })
