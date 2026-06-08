@@ -29,8 +29,9 @@ from moonmind.workflows.skills.tool_plan_contracts import parse_tool_definition
 
 
 class HermeticRunner:
-    def __init__(self) -> None:
+    def __init__(self, *, target_build_id: str | None = None) -> None:
         self.commands: list[tuple[str, tuple[str, ...]]] = []
+        self.target_build_id = target_build_id
 
     async def capture_state(self, *, stack: str, phase: str) -> Mapping[str, Any]:
         return {"stack": stack, "phase": phase}
@@ -48,7 +49,15 @@ class HermeticRunner:
         return {"ok": True}
 
     async def inspect_image(self, requested_image: str) -> Mapping[str, Any]:
-        return {"Id": "sha256:" + "a" * 64, "RepoTags": [requested_image]}
+        payload: dict[str, Any] = {
+            "Id": "sha256:" + "a" * 64,
+            "RepoTags": [requested_image],
+        }
+        if self.target_build_id is not None:
+            payload["Config"] = {
+                "Labels": {"org.opencontainers.image.version": self.target_build_id}
+            }
+        return payload
 
     async def verify(
         self,
@@ -167,6 +176,45 @@ async def test_deployment_update_tool_dispatch_returns_structured_result() -> No
     assert [event["state"] for event in result.progress["events"]][-1] == "SUCCEEDED"
     assert runner.commands[0][0] == "pull"
     assert runner.commands[1][0] == "up"
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+@pytest.mark.integration_ci
+async def test_deployment_update_tool_dispatch_surfaces_after_build_id_within_output_schema() -> None:
+    runner = HermeticRunner(target_build_id="20260606.0128")
+    executor = DeploymentUpdateExecutor(
+        lock_manager=DeploymentUpdateLockManager(),
+        desired_state_store=InMemoryDesiredStateStore(),
+        evidence_writer=InMemoryEvidenceWriter(),
+        runner=runner,
+    )
+    dispatcher = ToolActivityDispatcher()
+    register_deployment_update_tool_handler(dispatcher, executor=executor)
+
+    result = await execute_tool_activity(
+        invocation_payload=_payload(),
+        registry_snapshot=_snapshot(),
+        dispatcher=dispatcher,
+        context={"deployment_runner_mode": "privileged_worker"},
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["status"] == "SUCCEEDED"
+    # The new build-id field must be carried on the serialized output payload.
+    assert result.outputs["afterBuildId"] == "20260606.0128"
+
+    # Workflow-boundary contract: every serialized output key must be a declared
+    # property of the tool's output schema. The schema sets
+    # ``additionalProperties: False``, so an undeclared ``afterBuildId`` would be
+    # rejected during execution. This asserts the schema and the payload agree.
+    definition = parse_tool_definition(
+        build_deployment_update_tool_definition_payload()
+    )
+    output_properties = set(definition.output_schema["properties"])
+    assert "afterBuildId" in output_properties
+    undeclared = set(result.outputs) - output_properties
+    assert undeclared == set(), f"undeclared output keys: {sorted(undeclared)}"
 
 
 @pytest.mark.asyncio

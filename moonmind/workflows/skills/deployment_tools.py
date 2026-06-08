@@ -87,6 +87,7 @@ def build_deployment_update_tool_definition_payload() -> dict[str, Any]:
                     "stack": {"type": "string"},
                     "requestedImage": {"type": "string"},
                     "resolvedDigest": {"type": "string"},
+                    "afterBuildId": {"type": "string"},
                     "updatedServices": {
                         "type": "array",
                         "items": {"type": "string"},

@@ -25,6 +25,8 @@ from moonmind.workflows.skills.deployment_execution import (
     _service_is_excluded,
     _service_name_matches,
     _tail_text,
+    _target_image_audit,
+    _target_image_build_id,
     build_compose_command_plan,
     build_deployment_update_handler,
 )
@@ -60,6 +62,7 @@ class RecordingRunner:
         verification_succeeded: bool = True,
         verification_status: str | None = None,
         target_repo_digests: tuple[str, ...] = (),
+        target_build_id: str | None = None,
         block_on_before: bool = False,
     ) -> None:
         self.events = events
@@ -67,6 +70,7 @@ class RecordingRunner:
         self.verification_succeeded = verification_succeeded
         self.verification_status = verification_status
         self.target_repo_digests = target_repo_digests
+        self.target_build_id = target_build_id
         self._before_event = None
         self._release_event = None
         if block_on_before:
@@ -108,11 +112,16 @@ class RecordingRunner:
 
     async def inspect_image(self, requested_image: str) -> Mapping[str, Any]:
         self.events.append("runner:inspect-image")
-        return {
+        payload: dict[str, Any] = {
             "Id": "sha256:" + "b" * 64,
             "RepoTags": [requested_image],
             "RepoDigests": list(self.target_repo_digests),
         }
+        if self.target_build_id is not None:
+            payload["Config"] = {
+                "Labels": {"org.opencontainers.image.version": self.target_build_id}
+            }
+        return payload
 
     async def verify(
         self,
@@ -1209,6 +1218,60 @@ async def test_evidence_payloads_are_recursively_redacted_before_publication() -
         payload for kind, payload in evidence.records if kind == "command-log"
     )
     assert command_payload["pull"]["result"]["stdout"] == "[REDACTED];mode=ok"
+
+
+def test_target_image_audit_preserves_build_id_from_oci_version_label() -> None:
+    audit = _target_image_audit(
+        {
+            "Id": "sha256:" + "c" * 64,
+            "RepoDigests": ["ghcr.io/moonladderstudios/moonmind@sha256:" + "d" * 64],
+            "Config": {
+                "Labels": {"org.opencontainers.image.version": "20260606.0128"},
+            },
+        }
+    )
+
+    assert audit["id"] == "sha256:" + "c" * 64
+    assert audit["buildId"] == "20260606.0128"
+
+
+def test_target_image_build_id_returns_none_when_label_missing() -> None:
+    assert _target_image_build_id({"Id": "sha256:" + "e" * 64}) is None
+    assert _target_image_build_id({"Config": {"Labels": {}}}) is None
+    assert _target_image_build_id({"Config": {"Labels": None}}) is None
+    assert _target_image_build_id(None) is None
+
+
+@pytest.mark.asyncio
+async def test_successful_update_surfaces_after_build_id_from_target_image() -> None:
+    events: list[str] = []
+    runner = RecordingRunner(events, target_build_id="20260606.0128")
+    executor, _store, evidence, _runner, _events = _executor(
+        runner=runner, events=events
+    )
+
+    result = await executor.execute(_inputs())
+
+    assert result.outputs["status"] == "SUCCEEDED"
+    assert result.outputs["afterBuildId"] == "20260606.0128"
+    command_payload = next(
+        payload for kind, payload in evidence.records if kind == "command-log"
+    )
+    assert command_payload["targetImage"]["buildId"] == "20260606.0128"
+
+
+@pytest.mark.asyncio
+async def test_update_without_build_label_reports_no_after_build_id() -> None:
+    events: list[str] = []
+    runner = RecordingRunner(events)
+    executor, _store, _evidence, _runner, _events = _executor(
+        runner=runner, events=events
+    )
+
+    result = await executor.execute(_inputs())
+
+    assert result.outputs["status"] == "SUCCEEDED"
+    assert result.outputs["afterBuildId"] is None
 
 
 @pytest.mark.asyncio
