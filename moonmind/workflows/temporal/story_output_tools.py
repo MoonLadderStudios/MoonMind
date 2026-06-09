@@ -1650,6 +1650,8 @@ async def create_jira_issues_from_stories(
     previous_outputs = _mapping(
         (_context or {}).get("previousOutputs")
         or (_context or {}).get("previous_outputs")
+        or inputs.get("previousOutputs")
+        or inputs.get("previous_outputs")
     )
     story_output = _mapping(inputs.get("storyOutput") or inputs.get("story_output"))
     previous_story_output = _mapping(
