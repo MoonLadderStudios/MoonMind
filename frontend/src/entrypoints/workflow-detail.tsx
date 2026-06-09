@@ -4434,8 +4434,8 @@ function RunComparisonPanel({
               <td>{formatRuntimeLabel(execution.targetRuntime)}</td>
               <td>{execution.model || execution.resolvedModel || execution.requestedModel || '—'}</td>
             </tr>
-            {execution.relatedRuns.map((run) => (
-              <tr key={`${run.relationship}-${run.workflowId}-${run.runId || ''}`}>
+            {execution.relatedRuns.map((run, index) => (
+              <tr key={`${run.relationship}-${run.workflowId}-${run.runId || ''}-${index}`}>
                 <td>{formatStatusLabel(run.relationship)}</td>
                 <td><a href={run.href}><code>{run.workflowId}</code></a></td>
                 <td><code>{run.runId || '—'}</code></td>
@@ -4469,6 +4469,9 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const encodedTaskId = taskId ? encodeURIComponent(taskId) : null;
   const search = useMemo(() => new URLSearchParams(window.location.search), []);
   const detailSubroute = workflowDetailSubrouteFromPath(window.location.pathname);
+  const isOverviewSubroute = detailSubroute === 'overview';
+  const isStepsSubroute = detailSubroute === 'steps';
+  const isArtifactsSubroute = detailSubroute === 'artifacts';
   const isRunsSubroute = detailSubroute === 'runs';
   const sourceTemporal = search.get('source') === 'temporal';
 
@@ -5117,15 +5120,44 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             <ExecutionHistoryPanel execution={execution} />
           ) : null}
 
-          <div className="td-summary-block">
-            <h4>Summary</h4>
-            <p className="whitespace-pre-wrap">{displayedSummary}</p>
-            {runSummary?.finishOutcome?.reason && runSummary.finishOutcome.reason !== displayedSummary ? (
-              <p className="small" style={{ marginTop: '0.4rem' }}>
-                Outcome: {runSummary.finishOutcome.reason}
-              </p>
-            ) : null}
-          </div>
+          {isOverviewSubroute ? (
+            <>
+              <section className="stack td-overview-region td-evidence-region">
+                <div className="step-tl-section-header">
+                  <h3>Workflow Overview</h3>
+                  <span className="step-tl-count">Focused summary</span>
+                </div>
+                <div className="grid-2">
+                  <Card label="Steps">
+                    {stepsQuery.isLoading
+                      ? 'Loading'
+                      : stepsQuery.data
+                        ? `${stepsQuery.data.steps.length} step${stepsQuery.data.steps.length === 1 ? '' : 's'}`
+                        : hasStepsEndpoint
+                          ? 'Unavailable'
+                          : 'No ledger'}
+                  </Card>
+                  <Card label="Artifacts">
+                    {artifactsQuery.isLoading
+                      ? 'Loading'
+                      : artifactsQuery.isError
+                        ? 'Unavailable'
+                        : String(artifactsQuery.data?.artifacts.length ?? 0)}
+                  </Card>
+                  <Card label="Reports">{primaryReport ? 'Available' : 'No report'}</Card>
+                  <Card label="Related Runs">{String(execution.relatedRuns?.length ?? 0)}</Card>
+                </div>
+              </section>
+
+              <div className="td-summary-block">
+                <h4>Summary</h4>
+                <p className="whitespace-pre-wrap">{displayedSummary}</p>
+                {runSummary?.finishOutcome?.reason && runSummary.finishOutcome.reason !== displayedSummary ? (
+                  <p className="small" style={{ marginTop: '0.4rem' }}>
+                    Outcome: {runSummary.finishOutcome.reason}
+                  </p>
+                ) : null}
+              </div>
 
           <div className="td-facts-region">
             <SkillProvenanceBadge
@@ -5345,8 +5377,10 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           {displayedMergeAutomation ? (
             <MergeAutomationPanel mergeAutomation={displayedMergeAutomation} />
           ) : null}
+            </>
+          ) : null}
 
-          {hasStepsEndpoint ? (
+          {(isOverviewSubroute || isStepsSubroute) && hasStepsEndpoint ? (
             <section className="stack td-steps-region td-evidence-region">
               <div className="step-tl-section-header">
                 <h3>Workflow Steps</h3>
@@ -5389,6 +5423,15 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
               )}
             </section>
           ) : null}
+          {isStepsSubroute && !hasStepsEndpoint ? (
+            <section className="stack td-steps-region td-evidence-region">
+              <div className="step-tl-section-header">
+                <h3>Workflow Steps</h3>
+                <span className="step-tl-count">No step endpoint</span>
+              </div>
+              <p className="small">No step ledger available for this execution.</p>
+            </section>
+          ) : null}
 
           <InterventionMonitorPanel execution={execution} />
 
@@ -5398,7 +5441,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             </section>
           ) : null}
 
-          {hasDependencySection ? (
+          {isOverviewSubroute && hasDependencySection ? (
             <section className="stack">
               <div>
                 <h3>Dependencies</h3>
@@ -5508,7 +5551,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             </section>
           ) : null}
 
-          {isRunsSubroute ? null : <RunComparisonPanel execution={execution} />}
+          {(isOverviewSubroute || isRunsSubroute) ? <RunComparisonPanel execution={execution} /> : null}
 
           <RemediationRelationshipsPanel
             inbound={inboundRemediationsQuery.data}
@@ -5687,33 +5730,37 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             />
           ) : null}
 
-          <InputImagesSection
-            artifacts={artifactsQuery.data?.artifacts || []}
-            apiBase={payload.apiBase}
-          />
+          {isOverviewSubroute ? <AuditTrailPanel execution={execution} steps={stepsQuery.data} /> : null}
 
-          <ReportPresentationSection
-            primaryReport={primaryReport}
-            relatedArtifacts={relatedReports}
-            apiBase={payload.apiBase}
-          />
+          {(isOverviewSubroute || isArtifactsSubroute) ? (
+            <>
+              <InputImagesSection
+                artifacts={artifactsQuery.data?.artifacts || []}
+                apiBase={payload.apiBase}
+              />
 
-          <RemediationEvidencePanel
-            artifacts={artifactsQuery.data?.artifacts || []}
-            apiBase={payload.apiBase}
-            showEmpty={shouldFetchRemediationLinks && artifactsQuery.isSuccess}
-          />
+              <ReportPresentationSection
+                primaryReport={primaryReport}
+                relatedArtifacts={relatedReports}
+                apiBase={payload.apiBase}
+              />
 
-          <AuditTrailPanel execution={execution} steps={stepsQuery.data} />
+              <RemediationEvidencePanel
+                artifacts={artifactsQuery.data?.artifacts || []}
+                apiBase={payload.apiBase}
+                showEmpty={shouldFetchRemediationLinks && artifactsQuery.isSuccess}
+              />
 
-          <ArtifactBrowserPanel
-            artifacts={artifactsQuery.data?.artifacts || []}
-            apiBase={payload.apiBase}
-            isLoading={artifactsQuery.isLoading}
-            error={artifactsQuery.isError ? (artifactsQuery.error as Error) : null}
-          />
+              <ArtifactBrowserPanel
+                artifacts={artifactsQuery.data?.artifacts || []}
+                apiBase={payload.apiBase}
+                isLoading={artifactsQuery.isLoading}
+                error={artifactsQuery.isError ? (artifactsQuery.error as Error) : null}
+              />
+            </>
+          ) : null}
 
-          {showExecutionObservationFallback ? (
+          {(isOverviewSubroute || isStepsSubroute) && showExecutionObservationFallback ? (
             <section className="stack td-observation-region td-evidence-region">
               <div>
                 <h3>Observation</h3>

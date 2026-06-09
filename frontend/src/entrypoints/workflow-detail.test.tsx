@@ -4523,13 +4523,131 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getAllByRole('heading', { name: 'Execution History' }).length).toBeGreaterThan(1);
       expect(screen.getByRole('link', { name: 'Runs' }).getAttribute('aria-current')).toBe('page');
       expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('href')).toBe('/workflows/test-123?source=temporal');
-      expect(screen.getAllByText(/^Current Run ID:?$/).length).toBeGreaterThan(1);
+      expect(screen.getAllByText(/^Current Run ID:?$/).length).toBeGreaterThan(0);
       expect(screen.getAllByText('01-run').length).toBeGreaterThan(0);
-      expect(screen.getByText('test-456')).toBeTruthy();
-      expect(screen.getByText('02-run')).toBeTruthy();
-      expect(screen.getByText('Operator guidance recorded.')).toBeTruthy();
-      expect(screen.queryByRole('heading', { name: 'Run Comparison' })).toBeNull();
+      expect(screen.getAllByText('test-456').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('02-run').length).toBeGreaterThan(0);
+      expect(screen.getByText(/^Audit Entries:?$/)).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Run Comparison' })).toBeTruthy();
     });
+  });
+
+  it('MM-804 renders direct workflow detail subroutes with focused primary content and preserved query links', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Subroute task',
+      summary: 'Subroute summary',
+      status: 'completed',
+      state: 'completed',
+      rawState: 'completed',
+      targetRuntime: 'codex_cli',
+      model: 'gpt-5',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {},
+      relatedRuns: [
+        {
+          workflowId: 'test-456',
+          runId: '02-run',
+          relationship: 'rerun',
+          status: 'failed',
+          href: '/workflows/test-456/runs?source=temporal',
+        },
+      ],
+    };
+
+    const renderRoute = async (pathname: string) => {
+      window.history.pushState({}, 'Subroute Test', `${pathname}?source=temporal`);
+      fetchSpy.mockReset();
+      fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/executions/test-123/steps')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => latestStepsSnapshot,
+          } as Response);
+        }
+        if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              artifacts: [
+                {
+                  artifactId: 'art-report',
+                  status: 'complete',
+                  contentType: 'text/markdown',
+                  sizeBytes: 128,
+                  metadata: { title: 'Primary report', artifact_class: 'report.final' },
+                  defaultReadRef: { artifactId: 'art-report-preview' },
+                },
+              ],
+            }),
+          } as Response);
+        }
+        if (url.includes('/artifacts')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              artifacts: [
+                {
+                  artifactId: 'art-output',
+                  status: 'complete',
+                  contentType: 'text/markdown',
+                  sizeBytes: 64,
+                  metadata: { filename: 'output.md' },
+                },
+              ],
+            }),
+          } as Response);
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => mockExecution,
+        } as Response);
+      });
+      return renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+    };
+
+    const overview = await renderRoute('/workflows/test-123');
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('aria-current')).toBe('page');
+      expect(screen.getByRole('heading', { name: 'Workflow Overview' })).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'Steps' }).getAttribute('href')).toBe('/workflows/test-123/steps?source=temporal');
+    });
+    overview.unmount();
+
+    const steps = await renderRoute('/workflows/test-123/steps');
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Steps' }).getAttribute('aria-current')).toBe('page');
+      expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
+      expect(screen.queryByRole('heading', { name: 'Workflow Artifacts' })).toBeNull();
+    });
+    steps.unmount();
+
+    const artifacts = await renderRoute('/workflows/test-123/artifacts');
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Artifacts' }).getAttribute('aria-current')).toBe('page');
+      expect(screen.getByRole('heading', { name: 'Report' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Workflow Artifacts' })).toBeTruthy();
+      expect(screen.queryByRole('heading', { name: 'Workflow Steps' })).toBeNull();
+    });
+    artifacts.unmount();
+
+    const runs = await renderRoute('/workflows/test-123/runs');
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Runs' }).getAttribute('aria-current')).toBe('page');
+      expect(screen.getAllByRole('heading', { name: 'Execution History' }).length).toBeGreaterThan(1);
+      expect(screen.getByRole('heading', { name: 'Run Comparison' })).toBeTruthy();
+      expect(screen.queryByRole('heading', { name: 'Workflow Artifacts' })).toBeNull();
+    });
+    runs.unmount();
   });
 
   it('MM-772 renders duplicate related runs without duplicate React keys', async () => {
