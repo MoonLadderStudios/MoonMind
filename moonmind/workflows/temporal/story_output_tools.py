@@ -920,11 +920,16 @@ def _issue_mappings_from_inputs(
     context: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     jira_payload = _mapping(inputs.get("jira"))
-    previous_outputs = _mapping(
+    input_previous_outputs = _mapping(
+        inputs.get("previousOutputs")
+        or inputs.get("previous_outputs")
+    )
+    context_previous_outputs = _mapping(
         (context or {}).get("previousOutputs")
         or (context or {}).get("previous_outputs")
     )
-    previous_jira_payload = _mapping(previous_outputs.get("jira"))
+    input_previous_jira_payload = _mapping(input_previous_outputs.get("jira"))
+    context_previous_jira_payload = _mapping(context_previous_outputs.get("jira"))
     candidates = (
         jira_payload.get("issueMappings")
         or jira_payload.get("issue_mappings")
@@ -932,12 +937,18 @@ def _issue_mappings_from_inputs(
         or inputs.get("issue_mappings")
         or jira_payload.get("createdIssues")
         or inputs.get("createdIssues")
-        or previous_jira_payload.get("issueMappings")
-        or previous_jira_payload.get("issue_mappings")
-        or previous_jira_payload.get("createdIssues")
-        or previous_outputs.get("issueMappings")
-        or previous_outputs.get("issue_mappings")
-        or previous_outputs.get("createdIssues")
+        or input_previous_jira_payload.get("issueMappings")
+        or input_previous_jira_payload.get("issue_mappings")
+        or input_previous_jira_payload.get("createdIssues")
+        or input_previous_outputs.get("issueMappings")
+        or input_previous_outputs.get("issue_mappings")
+        or input_previous_outputs.get("createdIssues")
+        or context_previous_jira_payload.get("issueMappings")
+        or context_previous_jira_payload.get("issue_mappings")
+        or context_previous_jira_payload.get("createdIssues")
+        or context_previous_outputs.get("issueMappings")
+        or context_previous_outputs.get("issue_mappings")
+        or context_previous_outputs.get("createdIssues")
         or []
     )
     mappings = [dict(item) for item in _list(candidates) if isinstance(item, Mapping)]

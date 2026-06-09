@@ -1666,6 +1666,45 @@ async def test_create_jira_orchestrate_tasks_uses_previous_step_mappings_and_own
     assert "Source Jira issue: MM-404." in task["instructions"]
 
 @pytest.mark.asyncio
+async def test_create_jira_orchestrate_tasks_uses_input_previous_outputs_mappings():
+    creator = _FakeExecutionCreator()
+
+    result = await create_jira_orchestrate_tasks_from_issue_mappings(
+        {
+            "jiraOrchestration": {
+                "task": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "runtime": {"mode": "codex_cli"},
+                    "publish": {"mode": "pr"},
+                },
+                "traceability": {"sourceIssueKey": "MM-705"},
+            },
+            "previousOutputs": {
+                "jira": {
+                    "issueMappings": [
+                        {
+                            "storyId": "STORY-003",
+                            "storyIndex": 1,
+                            "summary": "Remaining work",
+                            "issueKey": "MM-810",
+                        }
+                    ]
+                }
+            },
+        },
+        execution_creator=creator,
+    )
+
+    orchestration = result.outputs["jiraOrchestration"]
+    assert orchestration["status"] == "completed"
+    assert orchestration["storyCount"] == 1
+    assert orchestration["createdTaskCount"] == 1
+    assert orchestration["tasks"][0]["jiraIssueKey"] == "MM-810"
+    assert creator.requests[0]["initial_parameters"]["task"]["inputs"][
+        "jira_issue_key"
+    ] == "MM-810"
+
+@pytest.mark.asyncio
 async def test_create_jira_orchestrate_tasks_handles_one_and_zero_story_results():
     one_creator = _FakeExecutionCreator()
 
