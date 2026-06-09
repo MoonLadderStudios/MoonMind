@@ -2825,7 +2825,10 @@ async def test_run_execution_stage_moonspec_verify_blocks_native_pr_creation(
         **_kwargs: object,
     ) -> object:
         return {
-            "summary": "Verdict: ADDITIONAL_WORK_NEEDED",
+            "summary": (
+                "Opened https://github.com/MoonLadderStudios/MoonMind/pull/999. "
+                "Verdict: ADDITIONAL_WORK_NEEDED"
+            ),
             "metadata": {
                 "verdict": "ADDITIONAL_WORK_NEEDED",
                 "operator_summary": "Overview route still renders full detail sections.",
@@ -2899,6 +2902,7 @@ async def test_run_execution_stage_moonspec_verify_blocks_native_pr_creation(
     )
 
     assert not create_pr_called
+    assert workflow._pull_request_url is None
     assert workflow._publish_status == "not_required"
     assert workflow._publish_context["publicationBlockedBy"] == "moonspec_verify"
     assert status == "failed"

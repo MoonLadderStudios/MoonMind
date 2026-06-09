@@ -177,6 +177,16 @@ _MOONSPEC_GATE_BLOCKING_VERDICTS = frozenset(
         "FAILED_UNRECOVERABLE",
     }
 )
+_MOONSPEC_GATE_VERDICT_TEXT_PATTERN = re.compile(
+    r"\b("
+    r"FULLY_IMPLEMENTED|"
+    r"ADDITIONAL_WORK_NEEDED|"
+    r"NO_DETERMINATION|"
+    r"FAILED_UNRECOVERABLE|"
+    r"BLOCKED"
+    r")\b",
+    re.IGNORECASE,
+)
 
 class RunWorkflowInput(TypedDict, total=False):
     """Input payload for the MoonMind.Run workflow."""
@@ -2357,16 +2367,10 @@ class MoonMindRunWorkflow:
         if not isinstance(value, str) or not value.strip():
             return None
         text = value[:4000]
-        for verdict in (
-            "FULLY_IMPLEMENTED",
-            "ADDITIONAL_WORK_NEEDED",
-            "NO_DETERMINATION",
-            "FAILED_UNRECOVERABLE",
-            "BLOCKED",
-        ):
-            if re.search(rf"\b{re.escape(verdict)}\b", text, re.IGNORECASE):
-                return verdict
-        return None
+        match = _MOONSPEC_GATE_VERDICT_TEXT_PATTERN.search(text)
+        if not match:
+            return None
+        return self._normalize_moonspec_verify_verdict(match.group(1))
 
     def _record_moonspec_verify_gate(
         self,
@@ -2377,23 +2381,31 @@ class MoonMindRunWorkflow:
         verdict = self._extract_moonspec_verify_verdict(outputs)
         if not verdict:
             return
-        reason = self._sanitize_operator_summary(
-            self._coerce_text(
-                outputs.get("operator_summary")
-                or outputs.get("operatorSummary")
-                or outputs.get("summary")
-                or outputs.get("message"),
-                max_chars=700,
+        reason = None
+        for source in self._moonspec_verify_sources(outputs):
+            reason = self._sanitize_operator_summary(
+                self._coerce_text(
+                    source.get("operator_summary")
+                    or source.get("operatorSummary")
+                    or source.get("summary")
+                    or source.get("message"),
+                    max_chars=700,
+                )
             )
-        )
-        diagnostics_ref = self._coerce_text(
-            outputs.get("diagnostics_ref")
-            or outputs.get("diagnosticsRef")
-            or outputs.get("verificationReportRef")
-            or outputs.get("verification_report_ref")
-            or outputs.get("reportRef"),
-            max_chars=400,
-        )
+            if reason:
+                break
+        diagnostics_ref = None
+        for source in self._moonspec_verify_sources(outputs):
+            diagnostics_ref = self._coerce_text(
+                source.get("diagnostics_ref")
+                or source.get("diagnosticsRef")
+                or source.get("verificationReportRef")
+                or source.get("verification_report_ref")
+                or source.get("reportRef"),
+                max_chars=400,
+            )
+            if diagnostics_ref:
+                break
         self._moonspec_gate_verdict = verdict
         self._moonspec_gate_reason = reason
         gate_context: dict[str, Any] = {
@@ -4885,6 +4897,13 @@ class MoonMindRunWorkflow:
         if self._cancel_requested:
             return
 
+        if (
+            workflow.patched(RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH)
+            and self._apply_blocking_moonspec_gate_to_publish()
+        ):
+            require_pull_request_url = False
+            pull_request_url = None
+
         if require_pull_request_url and pull_request_url is None:
             repair_candidate_outputs: Mapping[str, Any] = {}
             if execution_result is not None:
@@ -6339,9 +6358,9 @@ class MoonMindRunWorkflow:
         if workflow.patched(NATIVE_PR_BRANCH_DEFAULTS_PATCH):
             head_candidates = (
                 agent_outputs.get("push_branch"),
+                self._publish_context.get("branch"),
                 agent_outputs.get("branch"),
                 agent_outputs.get("targetBranch"),
-                self._publish_context.get("branch"),
                 workspace_spec.get("targetBranch"),
                 last_node_inputs.get("targetBranch"),
             )
@@ -6358,9 +6377,9 @@ class MoonMindRunWorkflow:
         else:
             head_candidates = (
                 agent_outputs.get("push_branch"),
+                self._publish_context.get("branch"),
                 agent_outputs.get("branch"),
                 agent_outputs.get("targetBranch"),
-                self._publish_context.get("branch"),
                 workspace_spec.get("targetBranch"),
                 parameters.get("targetBranch"),
                 last_node_inputs.get("targetBranch"),

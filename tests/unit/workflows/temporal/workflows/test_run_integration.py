@@ -2050,6 +2050,35 @@ def test_moonspec_verify_gate_blocks_pr_publish_completion(
     )
 
 
+def test_moonspec_verify_text_verdict_uses_first_matching_occurrence(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    verdict = mock_run_workflow._extract_moonspec_verify_verdict_from_text(
+        "Current verdict: ADDITIONAL_WORK_NEEDED. Prior run was FULLY_IMPLEMENTED."
+    )
+
+    assert verdict == "ADDITIONAL_WORK_NEEDED"
+
+
+def test_moonspec_verify_gate_records_nested_summary_and_report(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="tpl:jira-orchestrate:1.0.0:13:verify",
+        outputs={
+            "verification": {
+                "verdict": "ADDITIONAL_WORK_NEEDED",
+                "operator_summary": "Nested verifier summary.",
+                "diagnostics_ref": "art_nested_verify_report",
+            }
+        },
+    )
+
+    gate_context = mock_run_workflow._publish_context["moonSpecGate"]
+    assert gate_context["summary"] == "Nested verifier summary."
+    assert gate_context["diagnosticsRef"] == "art_nested_verify_report"
+
+
 def test_moonspec_verify_gate_accepts_fully_implemented_publish(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
@@ -2074,7 +2103,7 @@ def test_native_pr_branch_resolution_prefers_publish_context_branch(
 
     head_branch, base_branch = mock_run_workflow._resolve_native_pr_branches(
         parameters={"targetBranch": "generated-target"},
-        agent_outputs={},
+        agent_outputs={"targetBranch": "generated-target"},
         workspace_spec={
             "targetBranch": "change-jira-issue-mm-804-to-status-in-pr-c31f93a5",
             "startingBranch": "main",
