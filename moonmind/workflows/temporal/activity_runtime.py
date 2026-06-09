@@ -1336,6 +1336,7 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
     if name in {
         "pr-resolver",
         "batch-pr-resolver",
+        "batch-dependabot-resolver",
         "fix-comments",
         "fix-ci",
         "fix-merge-conflicts",

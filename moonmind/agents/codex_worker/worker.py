@@ -4039,7 +4039,7 @@ class CodexWorker:
             skill_id: str, skill_args: Mapping[str, Any]
         ) -> dict[str, Any]:
             effective_args = dict(skill_args)
-            if skill_id != "batch-pr-resolver":
+            if skill_id not in {"batch-pr-resolver", "batch-dependabot-resolver"}:
                 return effective_args
 
             runtime_node = task.get("runtime")
