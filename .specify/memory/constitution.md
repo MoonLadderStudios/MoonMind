@@ -196,10 +196,10 @@ MoonMind development MUST be docs-first, with clear contracts and traceability. 
 Non-negotiable rules:
 
 - Durable, desired-state knowledge — architecture, contracts, operator-visible behavior, and target semantics — MUST live in the owning long-lived `docs/` files (and this constitution). These are the canonical surfaces that future readers and agents are expected to trust.
-- Per-feature Spec Kit / MoonSpec artifacts under `specs/<id>-<feature>/` (`spec.md`, `plan.md`, `tasks.md`, `research.md`, contracts) are **optional execution artifacts** — execution helpers and supplemental history. They MUST NOT be treated as canonical long-term architecture or behavior documentation.
+- Per-feature Spec Kit / MoonSpec artifacts under `specs/<id>-<feature>/` (`spec.md`, `plan.md`, `tasks.md`, `research.md`, `contracts`) are **optional execution artifacts** — execution helpers and supplemental history. They MUST NOT be treated as canonical long-term architecture or behavior documentation.
 - When a non-trivial change lands, its durable decisions MUST be reflected in the owning `docs/` files; the `specs/` packet (if one was produced) remains supplemental execution evidence, not the system of record.
-- When a feature does use the optional execution workflow, `spec.md` SHOULD remain technology-agnostic with implementation detail in `plan.md`, and `plan.md` SHOULD include a “Constitution Check” with PASS/FAIL coverage for each principle (documenting any violation and mitigation in “Complexity Tracking”).
-- Documentation MUST NOT silently drift from reality: when behavior changes, update the owning long-lived `docs/` first; refresh any in-flight `specs/` execution packet only as supplemental history.
+- When a feature does use the optional execution workflow, `spec.md` SHOULD remain technology-agnostic with implementation details in `plan.md`, and `plan.md` MUST include a “Constitution Check” with PASS/FAIL coverage for each principle (documenting any violation and mitigation in “Complexity Tracking”).
+- Documentation MUST NOT silently drift from reality: when behavior changes, update the owning long-lived `docs/` files first; refresh any in-flight `specs/` execution packet only as supplemental history.
 
 Rationale: Canonical docs are how MoonMind stays maintainable while evolving quickly. Spec packets are disposable execution scaffolding; the long-lived docs and matrices are what operators and agents must be able to rely on.
 
