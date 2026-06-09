@@ -112,8 +112,24 @@ def test_title_matches_default_regex() -> None:
     module = _load_module()
     pattern = module["DEFAULT_TITLE_REGEX"]
     assert module["_title_matches"]("Bump anthropic from 0.105.2 to 0.107.1", pattern)
+    assert module["_title_matches"](
+        "Bump eslint from 8.0.0 to 9.0.0 in /frontend", pattern
+    )
     assert not module["_title_matches"]("Bump the pip group with 2 updates", pattern)
     assert not module["_title_matches"]("Refactor things", pattern)
+
+
+def test_infer_repo_from_remote_returns_none_when_git_remote_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_module()
+
+    def fail_command(_cmd: list[str]) -> str:
+        raise RuntimeError("command failed")
+
+    monkeypatch.setitem(module, "_run_command", fail_command)
+
+    assert module["_infer_repo_from_remote"]() is None
 
 
 def test_title_matches_invalid_regex_raises() -> None:

@@ -30,7 +30,7 @@ cap, and a Dependabot-specific summary artifact.
   `github-actions`. Matched against the Dependabot branch ecosystem segment with alias
   normalization (`npm`↔`npm_and_yarn`, `github-actions`↔`github_actions`). Omit to allow all.
 - `titleRegex` (string, optional): Override for the version-bump title matcher.
-  Default `^Bump .+ from \S+ to \S+$` (matches e.g. `Bump anthropic from 0.105.2 to 0.107.1`).
+  Default `^Bump .+ from \S+ to \S+(?: in /.+)?$` (matches e.g. `Bump anthropic from 0.105.2 to 0.107.1` and subdirectory suffixes like `in /frontend`).
 - `includeSecurityUpdates` (boolean, optional): Default `true`. When `false`, PRs labeled
   `security` are skipped.
 - `maxPrs` (number, optional): Safety cap on the number of resolver workflows queued per run.

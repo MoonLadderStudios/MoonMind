@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 API_EXECUTIONS_ENDPOINT = "/api/executions"
 IDEMPOTENCY_KEY_MAX_LENGTH = 128
-DEFAULT_TITLE_REGEX = r"^Bump .+ from \S+ to \S+$"
+DEFAULT_TITLE_REGEX = r"^Bump .+ from \S+ to \S+(?: in /.+)?$"
 DEPENDABOT_BRANCH_PREFIX = "dependabot/"
 
 # Friendly package-manager names (as an operator would type them) mapped to the
@@ -91,7 +91,10 @@ def _normalize_repo(value: str | None) -> str | None:
 
 
 def _infer_repo_from_remote() -> str | None:
-    remote = _run_command(["git", "remote", "get-url", "origin"]).strip()
+    try:
+        remote = _run_command(["git", "remote", "get-url", "origin"]).strip()
+    except RuntimeError:
+        return None
     if remote.startswith("git@github.com:"):
         body = remote.split(":", 1)[1]
         if body.endswith(".git"):
@@ -186,8 +189,10 @@ def _run_pr_list(repo: str, state: str) -> list[dict[str, Any]]:
             "--state",
             state,
             "--json",
-            "number,title,author,headRefName,headRefOid,"
-            "headRepository,headRepositoryOwner,isCrossRepository,labels",
+            (
+                "number,title,author,headRefName,headRefOid,"
+                + "headRepository,headRepositoryOwner,isCrossRepository,labels"
+            ),
             "--limit",
             "100000",
         ]
@@ -1006,6 +1011,14 @@ async def main(argv: list[str] | None = None) -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(asyncio.run(main()))
-    except Exception:
-        print("error: batch-dependabot-resolver failed. See logs for details.", flush=True)
+    except Exception as exc:
+        import sys
+        import traceback
+
+        traceback.print_exc(file=sys.stderr)
+        print(
+            f"error: batch-dependabot-resolver failed: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
         raise SystemExit(1)
