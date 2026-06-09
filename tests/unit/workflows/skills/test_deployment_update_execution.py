@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, Mapping
 
 import pytest
@@ -18,6 +19,7 @@ from moonmind.workflows.skills.deployment_execution import (
     HostDockerComposeRunner,
     InMemoryDesiredStateStore,
     TemporalDeploymentEvidenceWriter,
+    _command_plan_targeting_services,
     _ensure_command_succeeded,
     _ensure_runner_survives_update,
     _is_host_absolute_path,
@@ -983,6 +985,37 @@ def test_runner_guard_blocks_when_no_specific_services_targeted(monkeypatch) -> 
     assert exc_info.value.error_code == "DEPLOYMENT_RUNNER_UNSAFE"
 
 
+def test_targeted_update_plan_skips_compose_dependencies() -> None:
+    plan = ComposeCommandPlan(
+        runner_mode="privileged_worker",
+        pull_args=("docker", "compose", "pull"),
+        up_args=("docker", "compose", "up", "-d", "--remove-orphans", "--wait"),
+    )
+    targeted = _command_plan_targeting_services(
+        plan,
+        before_state={
+            "configuredServiceImages": {
+                "api": "ghcr.io/moonladderstudios/moonmind:latest",
+                "docker-proxy": "tecnativa/docker-socket-proxy:0.1.1",
+            }
+        },
+        requested_repository="ghcr.io/moonladderstudios/moonmind",
+        excluded_services=(),
+    )
+
+    assert targeted.pull_args == ("docker", "compose", "pull", "api")
+    assert targeted.up_args == (
+        "docker",
+        "compose",
+        "up",
+        "-d",
+        "--remove-orphans",
+        "--wait",
+        "--no-deps",
+        "api",
+    )
+
+
 @pytest.mark.parametrize(
     "candidate",
     [
@@ -1554,6 +1587,79 @@ async def test_host_compose_runner_aliases_host_project_path_for_file_reads(
     assert captured["cwd"] == str(local_dir)
     assert "--project-directory" in captured["args"]
     assert str(host_dir) in captured["args"]
+
+
+@pytest.mark.asyncio
+async def test_host_compose_runner_rewrites_windows_bind_sources_via_resolved_config(
+    tmp_path, monkeypatch
+):
+    local_dir = tmp_path / "workspace" / "host_project"
+    local_dir.mkdir(parents=True)
+    (local_dir / "docker-compose.yaml").write_text(
+        "services:\n"
+        "  api:\n"
+        "    image: example/app:latest\n"
+        "    env_file:\n"
+        "      - .env\n",
+        encoding="utf-8",
+    )
+    (local_dir / ".env").write_text("POSTGRES_PASSWORD=secret\n", encoding="utf-8")
+    calls: list[tuple[str, ...]] = []
+    generated_compose: dict[str, Any] = {}
+
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self, stdout: bytes = b"ok") -> None:
+            self._stdout = stdout
+
+        async def communicate(self):
+            return self._stdout, b""
+
+    async def fake_create_subprocess_exec(
+        *args: str,
+        cwd: str,
+        env: Mapping[str, str],
+        stdout: Any,
+        stderr: Any,
+    ):
+        calls.append(args)
+        if args[-2:] == ("config", "json") or args[-2:] == ("--format", "json"):
+            payload = {
+                "services": {
+                    "api": {
+                        "image": "example/app:latest",
+                        "volumes": [
+                            {
+                                "type": "bind",
+                                "source": str(local_dir / "moonmind"),
+                                "target": "/app/moonmind",
+                            }
+                        ],
+                    }
+                }
+            }
+            return FakeProcess(json.dumps(payload).encode("utf-8"))
+        compose_path = Path(args[args.index("-f") + 1])
+        generated_compose.update(json.loads(compose_path.read_text(encoding="utf-8")))
+        return FakeProcess()
+
+    monkeypatch.setattr(
+        asyncio, "create_subprocess_exec", fake_create_subprocess_exec
+    )
+    runner = HostDockerComposeRunner(
+        project_dir="D:\\code\\MoonMind",
+        local_project_dir=str(local_dir),
+    )
+
+    result = await runner._run_compose_command(("docker", "compose", "up", "-d"))
+
+    assert result["exitCode"] == 0
+    assert len(calls) == 2
+    assert calls[0][calls[0].index("--project-directory") + 1] == str(local_dir)
+    assert calls[1][calls[1].index("--project-directory") + 1] == str(local_dir)
+    volume = generated_compose["services"]["api"]["volumes"][0]
+    assert volume["source"] == "/mnt/d/code/MoonMind/moonmind"
 
 
 @pytest.mark.asyncio
