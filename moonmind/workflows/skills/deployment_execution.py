@@ -29,6 +29,7 @@ DEPLOYMENT_FINAL_STATUSES = frozenset({"SUCCEEDED", "FAILED", "PARTIALLY_VERIFIE
 FILE_LOCK_STALE_AFTER_SECONDS = 6 * 60 * 60
 _REDACTED = "[REDACTED]"
 _STACK_PATH_COMPONENT_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+_WSL_HOST_MOUNT_ROOT = Path("/mnt")
 _SENSITIVE_KEY_PATTERN = re.compile(
     r"("
     r"token|secret|password|passwd|credential|authorization|"
@@ -403,6 +404,19 @@ def _is_host_absolute_path(path: Path | str) -> bool:
     return False
 
 
+def _wsl_linux_host_path(path: str) -> str | None:
+    """Translate a Windows drive path into WSL's Linux host path."""
+
+    normalized = path.strip()
+    if len(normalized) < 3 or normalized[1] != ":" or not normalized[0].isalpha():
+        return None
+    tail = normalized[2:].replace("\\", "/").lstrip("/")
+    drive = normalized[0].lower()
+    if tail:
+        return str(_WSL_HOST_MOUNT_ROOT / drive / Path(tail))
+    return str(_WSL_HOST_MOUNT_ROOT / drive)
+
+
 def _remap_host_compose_path(
     compose_file: Path, host_dir: Path, local_dir: Path
 ) -> Path | None:
@@ -587,8 +601,36 @@ class HostDockerComposeRunner:
     def _host_dir(self) -> Path:
         return Path(self.project_dir).expanduser()
 
-    def _compose_base_command(self) -> list[str]:
+    def _compose_file_path(self) -> Path:
         host_dir = self._host_dir()
+        local_dir = self._local_dir()
+        if self.compose_file:
+            compose_file = Path(self.compose_file).expanduser()
+            is_abs = _is_host_absolute_path(compose_file)
+            if is_abs and not compose_file.exists():
+                # Treat absolute host paths that don't exist locally as
+                # host-side paths and remap them into the local mount,
+                # preserving any subpath beneath ``host_dir`` so configs
+                # like ``/host/repo/deploy/docker-compose.yaml`` resolve to
+                # ``<local_dir>/deploy/docker-compose.yaml`` rather than
+                # collapsing to the basename.
+                candidate = _remap_host_compose_path(compose_file, host_dir, local_dir)
+                if candidate is not None and candidate.exists():
+                    compose_file = candidate
+            elif not is_abs:
+                compose_file = local_dir / compose_file
+        else:
+            compose_file = local_dir / "docker-compose.yaml"
+        return compose_file
+
+    def _compose_base_command(
+        self,
+        *,
+        project_dir: Path | None = None,
+        compose_file: Path | None = None,
+        include_env_file: bool = True,
+    ) -> list[str]:
+        host_dir = project_dir or self._host_dir()
         if not _is_host_absolute_path(host_dir):
             raise ToolFailure(
                 error_code="POLICY_VIOLATION",
@@ -610,23 +652,7 @@ class HostDockerComposeRunner:
                     "failureClass": "policy_violation",
                 },
             )
-        if self.compose_file:
-            compose_file = Path(self.compose_file).expanduser()
-            is_abs = _is_host_absolute_path(compose_file)
-            if is_abs and not compose_file.exists():
-                # Treat absolute host paths that don't exist locally as
-                # host-side paths and remap them into the local mount,
-                # preserving any subpath beneath ``host_dir`` so configs
-                # like ``/host/repo/deploy/docker-compose.yaml`` resolve to
-                # ``<local_dir>/deploy/docker-compose.yaml`` rather than
-                # collapsing to the basename.
-                candidate = _remap_host_compose_path(compose_file, host_dir, local_dir)
-                if candidate is not None and candidate.exists():
-                    compose_file = candidate
-            elif not is_abs:
-                compose_file = local_dir / compose_file
-        else:
-            compose_file = local_dir / "docker-compose.yaml"
+        compose_file = compose_file or self._compose_file_path()
         if not compose_file.exists():
             raise ToolFailure(
                 error_code="POLICY_VIOLATION",
@@ -647,13 +673,20 @@ class HostDockerComposeRunner:
             "-f",
             str(compose_file),
         ]
-        if self.env_file:
+        if include_env_file and self.env_file:
             env_file = Path(self.env_file).expanduser()
             if env_file.exists():
                 command.extend(["--env-file", str(env_file)])
         return command
 
-    def _compose_command(self, command: Sequence[str]) -> list[str]:
+    def _compose_command(
+        self,
+        command: Sequence[str],
+        *,
+        project_dir: Path | None = None,
+        compose_file: Path | None = None,
+        include_env_file: bool = True,
+    ) -> list[str]:
         parts = list(command)
         if len(parts) < 3 or parts[0:2] != ["docker", "compose"]:
             raise ToolFailure(
@@ -665,7 +698,156 @@ class HostDockerComposeRunner:
                     "failureClass": "policy_violation",
                 },
             )
-        return [*self._compose_base_command(), *parts[2:]]
+        return [
+            *self._compose_base_command(
+                project_dir=project_dir,
+                compose_file=compose_file,
+                include_env_file=include_env_file,
+            ),
+            *parts[2:],
+        ]
+
+    def _uses_windows_host_project_dir(self) -> bool:
+        text = str(self.project_dir).strip()
+        return len(text) >= 2 and text[1] == ":" and text[0].isalpha()
+
+    def _host_bind_source_for_local_path(self, local_source: str) -> str:
+        local_dir = str(self._local_dir()).replace("\\", "/").rstrip("/")
+        normalized = local_source.replace("\\", "/")
+        if normalized == local_dir:
+            suffix = ""
+        elif normalized.startswith(local_dir + "/"):
+            suffix = normalized[len(local_dir) + 1 :]
+        else:
+            return local_source
+        host_dir = (
+            _wsl_linux_host_path(str(self.project_dir))
+            or str(self.project_dir)
+        ).rstrip("\\/")
+        if not suffix:
+            return host_dir
+        separator = "/" if "/" in host_dir else "\\"
+        return host_dir + separator + suffix.replace("/", separator)
+
+    def _rewrite_local_bind_sources_to_host(
+        self, compose_config: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        rewritten = dict(compose_config)
+        services = rewritten.get("services")
+        if not isinstance(services, Mapping):
+            return rewritten
+        rewritten_services: dict[str, Any] = {}
+        for service_name, raw_service in services.items():
+            if not isinstance(raw_service, Mapping):
+                rewritten_services[str(service_name)] = raw_service
+                continue
+            service = dict(raw_service)
+            volumes = service.get("volumes")
+            if isinstance(volumes, list):
+                rewritten_volumes: list[Any] = []
+                for raw_volume in volumes:
+                    if isinstance(raw_volume, Mapping):
+                        volume = dict(raw_volume)
+                        source = volume.get("source")
+                        if isinstance(source, str):
+                            volume["source"] = self._host_bind_source_for_local_path(
+                                source
+                            )
+                        rewritten_volumes.append(volume)
+                    else:
+                        rewritten_volumes.append(raw_volume)
+                service["volumes"] = rewritten_volumes
+            rewritten_services[str(service_name)] = service
+        rewritten["services"] = rewritten_services
+        return rewritten
+
+    async def _write_windows_host_resolved_compose_file(
+        self, env: Mapping[str, str]
+    ) -> Path:
+        resolved = [
+            *self._compose_base_command(project_dir=self._local_dir()),
+            "config",
+            "--format",
+            "json",
+        ]
+        process = await asyncio.create_subprocess_exec(
+            *resolved,
+            cwd=str(self._local_dir()),
+            env=dict(env),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=self.command_timeout_seconds,
+            )
+        except asyncio.TimeoutError as exc:
+            with contextlib.suppress(ProcessLookupError):
+                process.kill()
+            await process.wait()
+            raise ToolFailure(
+                error_code="DEPLOYMENT_COMMAND_FAILED",
+                message="Deployment compose config command timed out.",
+                retryable=False,
+                details={
+                    "command": resolved,
+                    "timeoutSeconds": self.command_timeout_seconds,
+                    "failureClass": "compose_config_validation_failure",
+                },
+            ) from exc
+        if process.returncode != 0:
+            raise ToolFailure(
+                error_code="DEPLOYMENT_COMMAND_FAILED",
+                message=(
+                    "Deployment compose config command failed while preparing "
+                    "host-safe compose input."
+                ),
+                retryable=False,
+                details={
+                    "command": resolved,
+                    "exit_code": process.returncode,
+                    "stderr": _tail_text(stderr, max_chars=2000),
+                    "failureClass": "compose_config_validation_failure",
+                },
+            )
+        try:
+            parsed = json.loads(stdout.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ToolFailure(
+                error_code="DEPLOYMENT_COMMAND_FAILED",
+                message="Deployment compose config returned invalid JSON.",
+                retryable=False,
+                details={
+                    "command": resolved,
+                    "stdout": _tail_text(stdout, max_chars=2000),
+                    "stderr": _tail_text(stderr, max_chars=2000),
+                    "failureClass": "compose_config_validation_failure",
+                },
+            ) from exc
+        if not isinstance(parsed, Mapping):
+            raise ToolFailure(
+                error_code="DEPLOYMENT_COMMAND_FAILED",
+                message="Deployment compose config returned an invalid payload.",
+                retryable=False,
+                details={
+                    "command": resolved,
+                    "stderr": _tail_text(stderr, max_chars=2000),
+                    "failureClass": "compose_config_validation_failure",
+                },
+            )
+        rewritten = self._rewrite_local_bind_sources_to_host(parsed)
+        handle = tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            prefix="moonmind-compose-",
+            suffix=".json",
+            delete=False,
+        )
+        with handle:
+            json.dump(rewritten, handle, separators=(",", ":"))
+            handle.write("\n")
+        return Path(handle.name)
 
     def _ensure_host_project_read_alias(self) -> None:
         """Expose the local checkout at the host path for Compose-side file reads."""
@@ -746,10 +928,20 @@ class HostDockerComposeRunner:
         max_stderr_chars: int | None = 512,
     ) -> Mapping[str, Any]:
         self._ensure_host_project_read_alias()
-        resolved = self._compose_command(command)
         env = os.environ.copy()
         if requested_image:
             env["MOONMIND_IMAGE"] = requested_image
+        temp_compose_file: Path | None = None
+        if self._uses_windows_host_project_dir() and self.local_project_dir:
+            temp_compose_file = await self._write_windows_host_resolved_compose_file(env)
+            resolved = self._compose_command(
+                command,
+                project_dir=self._local_dir(),
+                compose_file=temp_compose_file,
+                include_env_file=False,
+            )
+        else:
+            resolved = self._compose_command(command)
         process = await asyncio.create_subprocess_exec(
             *resolved,
             cwd=str(self._local_dir()),
@@ -776,6 +968,10 @@ class HostDockerComposeRunner:
                     "failureClass": "compose_config_validation_failure",
                 },
             ) from exc
+        finally:
+            if temp_compose_file is not None:
+                with contextlib.suppress(OSError):
+                    temp_compose_file.unlink()
         return {
             "command": resolved,
             "exitCode": process.returncode,
@@ -1352,7 +1548,7 @@ def _command_plan_targeting_services(
     return ComposeCommandPlan(
         runner_mode=command_plan.runner_mode,
         pull_args=(*command_plan.pull_args, *services),
-        up_args=(*command_plan.up_args, *services),
+        up_args=(*command_plan.up_args, "--no-deps", *services),
     )
 
 
