@@ -312,11 +312,170 @@ describe('Workflow Detail Entrypoint', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     virtuosoPropsSpy.mockClear();
-    window.history.pushState({}, 'Test', '/workflows/test-123?source=temporal');
+    window.history.pushState({}, 'Test', '/workflows/test-123/steps?source=temporal');
     window.sessionStorage.clear();
     fetchSpy = vi.spyOn(window, 'fetch');
     fetchSpy.mockClear();
     vi.mocked(navigateTo).mockReset();
+  });
+
+  function mockWorkflowDetailSubrouteFetch() {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'MM-801 routed workflow',
+      summary: 'Focused route summary',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+      relatedRuns: [
+        {
+          workflowId: 'test-456',
+          runId: '03-run',
+          relationship: 'rerun',
+          status: 'failed',
+          href: '/workflows/test-456/runs?source=temporal',
+        },
+      ],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => latestStepsSnapshot,
+        } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            artifacts: [
+              {
+                artifactId: 'report-001',
+                contentType: 'text/markdown',
+                sizeBytes: 128,
+                status: 'complete',
+                metadata: { title: 'Final report' },
+                links: [{ linkType: 'report.primary' }],
+                defaultReadRef: { artifactId: 'report-001' },
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            artifacts: [
+              {
+                artifactId: 'report-001',
+                contentType: 'text/markdown',
+                sizeBytes: 128,
+                status: 'complete',
+                metadata: { title: 'Final report' },
+                links: [{ linkType: 'report.primary' }],
+                defaultReadRef: { artifactId: 'report-001' },
+              },
+              {
+                artifactId: 'evidence-001',
+                contentType: 'application/json',
+                sizeBytes: 256,
+                status: 'complete',
+                metadata: { filename: 'evidence.json' },
+              },
+            ],
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+  }
+
+  it('MM-801 renders Overview as a concise summary with route preview cards', async () => {
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
+    mockWorkflowDetailSubrouteFetch();
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Workflow Preview' })).toBeTruthy();
+      expect(screen.getByText('Focused route summary')).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('aria-current')).toBe('page');
+      expect(screen.getByRole('link', { name: 'Steps' }).getAttribute('href')).toBe('/workflows/test-123/steps?source=temporal');
+      expect(screen.getByText('3 steps')).toBeTruthy();
+      expect(screen.queryByRole('heading', { name: 'Workflow Steps' })).toBeNull();
+      expect(screen.queryByRole('heading', { name: 'Workflow Artifacts' })).toBeNull();
+      expect(screen.queryByRole('heading', { name: 'Execution History' })).toBeNull();
+    });
+  });
+
+  it('MM-801 renders Steps as the focused step DAG and ledger route', async () => {
+    window.history.pushState({}, 'Steps Test', '/workflows/test-123/steps?source=temporal');
+    mockWorkflowDetailSubrouteFetch();
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('heading', { name: 'Workflow Steps' }).length).toBeGreaterThan(0);
+      expect(screen.getByRole('heading', { name: 'Step DAG' })).toBeTruthy();
+      expect(screen.getAllByText('Plan work').length).toBeGreaterThan(0);
+      expect(screen.getByRole('link', { name: 'Steps' }).getAttribute('aria-current')).toBe('page');
+      expect(screen.queryByRole('heading', { name: 'Workflow Preview' })).toBeNull();
+      expect(screen.queryByRole('heading', { name: 'Workflow Artifacts' })).toBeNull();
+      expect(screen.queryByRole('heading', { name: 'Execution History' })).toBeNull();
+    });
+  });
+
+  it('MM-801 renders Artifacts as the focused report and artifact route', async () => {
+    window.history.pushState({}, 'Artifacts Test', '/workflows/test-123/artifacts?source=temporal');
+    mockWorkflowDetailSubrouteFetch();
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('heading', { name: 'Workflow Artifacts' }).length).toBeGreaterThan(0);
+      expect(screen.getByRole('heading', { name: 'Report' })).toBeTruthy();
+      expect(screen.getAllByText('Final report').length).toBeGreaterThan(0);
+      expect(screen.getByText('evidence.json')).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'Artifacts' }).getAttribute('aria-current')).toBe('page');
+      expect(screen.queryByRole('heading', { name: 'Workflow Preview' })).toBeNull();
+      expect(screen.queryByRole('heading', { name: 'Step DAG' })).toBeNull();
+      expect(screen.queryByRole('heading', { name: 'Execution History' })).toBeNull();
+    });
+  });
+
+  it('MM-801 renders Runs as the focused execution history and comparison route', async () => {
+    window.history.pushState({}, 'Runs Test', '/workflows/test-123/runs?source=temporal');
+    mockWorkflowDetailSubrouteFetch();
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('heading', { name: 'Execution History' }).length).toBeGreaterThan(0);
+      expect(screen.getByRole('heading', { name: 'Run Comparison' })).toBeTruthy();
+      expect(screen.getAllByText('test-456').length).toBeGreaterThan(0);
+      expect(screen.getByRole('link', { name: 'Runs' }).getAttribute('aria-current')).toBe('page');
+      expect(screen.queryByRole('heading', { name: 'Workflow Preview' })).toBeNull();
+      expect(screen.queryByRole('heading', { name: 'Workflow Steps' })).toBeNull();
+      expect(screen.queryByRole('heading', { name: 'Workflow Artifacts' })).toBeNull();
+    });
   });
 
   it('returns null for route templates with missing parameters', () => {
@@ -334,6 +493,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders a Steps section above Timeline and Artifacts and loads steps before execution-wide artifacts', async () => {
+    window.history.pushState({}, 'Steps Test', '/workflows/test-123/steps?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -385,21 +545,17 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getAllByText('Verify tests').length).toBeGreaterThan(0);
       expect(screen.getByRole('heading', { name: 'Step DAG' })).toBeTruthy();
       expect(screen.getByText('Depends on: plan')).toBeTruthy();
-      expect(screen.getByText('Merge Automation').closest('div')?.textContent).toContain('—');
-      expect(screen.getByText(/^Current Run ID:?$/)).toBeTruthy();
       expect(screen.getAllByText('02-run').length).toBeGreaterThan(0);
     });
 
     const stepsHeading = screen.getByRole('heading', { name: 'Workflow Steps' });
     const timelineHeading = screen.getByRole('heading', { name: 'Timeline' });
-    const artifactsHeading = screen.getByRole('heading', { name: 'Workflow Artifacts' });
+    expect(screen.queryByRole('heading', { name: 'Workflow Artifacts' })).toBeNull();
 
-    const positions: [number, number] = [
+    const positions: [number] = [
       stepsHeading.compareDocumentPosition(timelineHeading),
-      timelineHeading.compareDocumentPosition(artifactsHeading),
     ];
     expect(positions[0] & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(positions[1] & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
     await waitFor(() => {
       const urls = fetchSpy.mock.calls.map(([input]) => String(input));
@@ -465,7 +621,7 @@ describe('Workflow Detail Entrypoint', () => {
       }
       expect(screen.getByRole('button', { name: 'Show Workflow Inputs' })).toBeTruthy();
       expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
-      expect(screen.getByRole('heading', { name: 'Workflow Artifacts' })).toBeTruthy();
+      expect(screen.queryByRole('heading', { name: 'Workflow Artifacts' })).toBeNull();
       expect(screen.queryByText(/^Task ID:?$/)).toBeNull();
       expect(screen.queryByText(/^Task Detail:?$/)).toBeNull();
       expect(screen.queryByText(/^Step Attempt:?$/)).toBeNull();
@@ -473,6 +629,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('groups workflow artifacts and folds step and intervention events into the audit timeline', async () => {
+    window.history.pushState({}, 'Artifacts Test', '/workflows/test-123/artifacts?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -556,8 +713,6 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByText('runtime.log')).toBeTruthy();
       expect(screen.getByText('fix.patch')).toBeTruthy();
       expect(screen.getByText('output.txt').closest('tr')?.textContent).toContain('reports');
-      expect(screen.getByText('Operator sent guidance.')).toBeTruthy();
-      expect(screen.getAllByText((_, element) => element?.textContent?.includes('Verify tests: ready') ?? false).length).toBeGreaterThan(0);
     });
   });
 
@@ -887,6 +1042,7 @@ describe('Workflow Detail Entrypoint', () => {
 
 
   it('renders planning detail pills with the shared shimmer selector contract and keeps dependency pills inactive when appropriate', async () => {
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -1237,7 +1393,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getAllByRole('heading', { name: 'Summary' }).length).toBeGreaterThan(0);
       expect(screen.getByRole('heading', { name: 'Checks' })).toBeTruthy();
       expect(screen.getByRole('heading', { name: 'Logs & Diagnostics' })).toBeTruthy();
-      expect(screen.getAllByRole('heading', { name: 'Workflow Artifacts' }).length).toBeGreaterThan(0);
+      expect(screen.getByRole('heading', { name: 'Artifacts' })).toBeTruthy();
       expect(screen.getByRole('heading', { name: 'Metadata' })).toBeTruthy();
       expect(screen.getByText('Auto-approved')).toBeTruthy();
       expect(screen.getByText('art-step-summary')).toBeTruthy();
@@ -2157,6 +2313,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders workflow details on successful fetch', async () => {
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -2627,6 +2784,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders remediation create action, relationships, evidence, and degraded states', async () => {
+    window.history.pushState({}, 'Artifacts Test', '/workflows/test-123/artifacts?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -3010,6 +3168,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders degraded remediation states for missing links, evidence, and live follow data', async () => {
+    window.history.pushState({}, 'Artifacts Test', '/workflows/test-remediation-degraded/artifacts?source=temporal');
     const mockExecution = {
       taskId: 'test-remediation-degraded',
       workflowId: 'test-remediation-degraded',
@@ -3152,6 +3311,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders workflow detail as separated matte evidence and action regions', async () => {
+    window.history.pushState({}, 'Artifacts Test', '/workflows/test-123/artifacts?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -3225,7 +3385,6 @@ describe('Workflow Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Example task')).toBeTruthy();
-      expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
       expect(screen.getByRole('heading', { name: 'Workflow Artifacts' })).toBeTruthy();
       expect(screen.getByText('artifact-output')).toBeTruthy();
     });
@@ -3239,14 +3398,10 @@ describe('Workflow Detail Entrypoint', () => {
     const actions = document.querySelector<HTMLElement>('.td-actions-region');
 
     expect(root).not.toBeNull();
-    expect(summary).not.toBeNull();
     expect(facts).not.toBeNull();
-    expect(steps).not.toBeNull();
-    expect(timeline).not.toBeNull();
     expect(artifacts).not.toBeNull();
     expect(actions).not.toBeNull();
     expect(artifacts?.querySelector('.td-evidence-slab.queue-table-wrapper')).not.toBeNull();
-    expect(timeline?.querySelector('.td-evidence-slab.queue-table-wrapper')).not.toBeNull();
     expect(root?.querySelector('.td-evidence-region .panel--floating')).toBeNull();
     expect(root?.querySelector('.td-evidence-region .queue-floating-bar')).toBeNull();
   });
@@ -3303,6 +3458,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders structured run summary details from the summary artifact', async () => {
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -3665,6 +3821,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders prerequisite and dependent panels for dependency-aware runs', async () => {
+    window.history.pushState({}, 'Overview Test', '/workflows/mm%3Adependent-1?source=temporal');
     const mockExecution = {
       taskId: 'mm:dependent-1',
       workflowId: 'mm:dependent-1',
@@ -3816,6 +3973,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders artifact rows from snake_case temporal artifact payloads', async () => {
+    window.history.pushState({}, 'Artifacts Test', '/workflows/test-123/artifacts?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -3872,6 +4030,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders server-selected primary report before generic artifacts and keeps related report content openable', async () => {
+    window.history.pushState({}, 'Artifacts Test', '/workflows/test-123/artifacts?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -4004,6 +4163,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('does not fabricate report status when no primary report is returned', async () => {
+    window.history.pushState({}, 'Artifacts Test', '/workflows/test-123/artifacts?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -4150,6 +4310,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders artifact download link using explicit downloadUrl when present', async () => {
+    window.history.pushState({}, 'Artifacts Test', '/workflows/test-123/artifacts?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -4205,6 +4366,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('groups task image inputs by persisted target and preserves download when preview fails', async () => {
+    window.history.pushState({}, 'Artifacts Test', '/workflows/test-123/artifacts?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -4380,6 +4542,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders a side-by-side run comparison for related executions', async () => {
+    window.history.pushState({}, 'Runs Test', '/workflows/test-123/runs?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -4447,8 +4610,8 @@ describe('Workflow Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Run Comparison' })).toBeTruthy();
-      expect(screen.getByText('current')).toBeTruthy();
-      expect(screen.getByText('test-456')).toBeTruthy();
+      expect(screen.getAllByText('current').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('test-456').length).toBeGreaterThan(0);
       expect(screen.getAllByText('gpt-5').length).toBeGreaterThan(0);
       expect(screen.getByText('Gemini CLI')).toBeTruthy();
       expect(screen.getByText('gemini-2.5-pro')).toBeTruthy();
@@ -4520,15 +4683,14 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
-      expect(screen.getAllByRole('heading', { name: 'Execution History' }).length).toBeGreaterThan(1);
+      expect(screen.getAllByRole('heading', { name: 'Execution History' })).toHaveLength(1);
       expect(screen.getByRole('link', { name: 'Runs' }).getAttribute('aria-current')).toBe('page');
       expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('href')).toBe('/workflows/test-123?source=temporal');
-      expect(screen.getAllByText(/^Current Run ID:?$/).length).toBeGreaterThan(1);
+      expect(screen.getAllByText(/^Current Run ID:?$/).length).toBeGreaterThan(0);
       expect(screen.getAllByText('01-run').length).toBeGreaterThan(0);
-      expect(screen.getByText('test-456')).toBeTruthy();
-      expect(screen.getByText('02-run')).toBeTruthy();
-      expect(screen.getByText('Operator guidance recorded.')).toBeTruthy();
-      expect(screen.queryByRole('heading', { name: 'Run Comparison' })).toBeNull();
+      expect(screen.getAllByText('test-456').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('02-run').length).toBeGreaterThan(0);
+      expect(screen.getByRole('heading', { name: 'Run Comparison' })).toBeTruthy();
     });
   });
 
@@ -5397,7 +5559,7 @@ describe('LiveLogsPanel', () => {
   let originalScrollIntoViewDescriptor: PropertyDescriptor | undefined;
 
   beforeEach(() => {
-    window.history.pushState({}, 'Test', '/workflows/wf-1?source=temporal');
+    window.history.pushState({}, 'Test', '/workflows/wf-1/steps?source=temporal');
     window.sessionStorage.clear();
     fetchSpy = vi.spyOn(window, 'fetch');
     MockEventSource.reset();
