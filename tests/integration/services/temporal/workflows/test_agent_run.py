@@ -114,6 +114,11 @@ _COMMON_AGENT_RUN_ACTIVITIES = [
     mock_provider_profile_reset_manager,
 ]
 
+_managed_launch_requests: list[dict] = []
+_managed_status_mode = "default"
+_managed_status_poll_count = 0
+_managed_fetch_result_count = 0
+
 @_activity.defn(name="agent_runtime.launch")
 async def mock_agent_runtime_launch(request: dict) -> dict:
     """Simulate launching a managed agent container."""
@@ -138,6 +143,25 @@ async def mock_agent_runtime_build_launch_context(request: dict) -> dict:
 @_activity.defn(name="agent_runtime.status")
 async def mock_agent_runtime_status(request: dict) -> dict:
     """Simulate polling the agent's execution status."""
+    global _managed_status_poll_count
+    _managed_status_poll_count += 1
+    if _managed_status_mode == "silent_then_completed":
+        status = "completed" if _managed_status_poll_count >= 3 else "running"
+        metadata: dict[str, Any] = {"runtimeId": "claude_code"}
+        if status == "completed":
+            metadata["finishedAt"] = datetime.now(tz=UTC).isoformat()
+            metadata["exitCode"] = 0
+        return {
+            "runId": request.get("runId")
+            or request.get("run_id")
+            or "test-managed-run",
+            "agentKind": "managed",
+            "agentId": request.get("agentId")
+            or request.get("agent_id")
+            or "claude_code",
+            "status": status,
+            "metadata": metadata,
+        }
     return {
         "status": "running",
         "container_id": request.get("container_id", "test-container-001"),
@@ -146,6 +170,16 @@ async def mock_agent_runtime_status(request: dict) -> dict:
 @_activity.defn(name="agent_runtime.fetch_result")
 async def mock_agent_runtime_fetch_result(request: dict) -> dict:
     """Simulate fetching the agent's final result."""
+    global _managed_fetch_result_count
+    _managed_fetch_result_count += 1
+    if _managed_status_mode == "silent_then_completed":
+        return {
+            "summary": "Managed run completed during no-progress grace.",
+            "metadata": {
+                "normalizedStatus": "completed",
+                "fetchRunId": request.get("runId") or request.get("run_id"),
+            },
+        }
     return {
         "summary": "Completed via test mock",
         "artifacts": [],
@@ -158,8 +192,6 @@ _COMMON_AGENT_RUN_ACTIVITIES.extend([
     mock_agent_runtime_status,
     mock_agent_runtime_fetch_result,
 ])
-
-_managed_launch_requests: list[dict] = []
 
 @pytest.mark.integration_ci
 async def test_workload_auth_volume_guardrails_reject_inheritance_and_allow_declared_exception(
@@ -1089,6 +1121,106 @@ async def test_agent_run_escalates_external_no_progress_to_parent_intervention(
         for change in parent_state["state_changes"]
     )
     assert "codex_cloud_fetch_result" not in _external_activity_calls
+
+@pytest.mark.asyncio
+async def test_agent_run_reconciles_managed_completion_during_no_progress_grace(
+    monkeypatch,
+):
+    global _managed_status_mode, _managed_status_poll_count, _managed_fetch_result_count
+    _managed_launch_requests.clear()
+    _managed_status_mode = "silent_then_completed"
+    _managed_status_poll_count = 0
+    _managed_fetch_result_count = 0
+
+    def test_policy(request: AgentExecutionRequest) -> dict[str, Any]:
+        return {
+            "runtime": request.agent_id,
+            "noProgressTimeoutSeconds": 1,
+            "noProgressGraceSeconds": 5,
+            "stuckAction": "request_intervention",
+            "retryPolicy": "test_managed_grace_reconciliation",
+        }
+
+    monkeypatch.setattr(
+        MoonMindAgentRun,
+        "_resiliency_policy_for_request",
+        staticmethod(test_policy),
+    )
+
+    try:
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with (
+                Worker(
+                    env.client,
+                    task_queue="agent-run-task-queue",
+                    workflows=[
+                        MoonMindAgentRun,
+                        MockProviderProfileManager,
+                        TestAgentRunParent,
+                    ],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ),
+                Worker(
+                    env.client,
+                    task_queue="mm.activity.artifacts",
+                    activities=[
+                        mock_provider_profile_list,
+                        mock_provider_profile_ensure_manager,
+                        mock_provider_profile_reset_manager,
+                    ],
+                ),
+                Worker(
+                    env.client,
+                    task_queue="mm.activity.agent_runtime",
+                    activities=[
+                        mock_agent_runtime_build_launch_context,
+                        mock_agent_runtime_launch,
+                        mock_agent_runtime_status,
+                        mock_agent_runtime_fetch_result,
+                        mock_publish_artifacts,
+                        mock_cancel,
+                    ],
+                ),
+            ):
+                manager_id = "provider-profile-manager:claude_code"
+                await env.client.start_workflow(
+                    MockProviderProfileManager.run,
+                    {"runtime_id": "claude_code"},
+                    id=manager_id,
+                    task_queue="agent-run-task-queue",
+                )
+
+                parent_handle = await env.client.start_workflow(
+                    TestAgentRunParent.run,
+                    AgentExecutionRequest(
+                        agent_kind="managed",
+                        agent_id="claude_code",
+                        execution_profile_ref="default-managed",
+                        correlation_id="managed-grace:corr",
+                        idempotency_key="managed-grace:idem",
+                    ),
+                    id="test-parent-managed-no-progress-grace",
+                    task_queue="agent-run-task-queue",
+                )
+
+                result = await asyncio.wait_for(parent_handle.result(), timeout=15)
+                parent_state = await parent_handle.query(TestAgentRunParent.get_state)
+
+        assert isinstance(result, AgentRunResult)
+        assert result.failure_class is None
+        assert result.provider_error_code is None
+        assert result.summary == "Managed run completed during no-progress grace."
+        assert result.metadata["resiliencyPolicy"]["retryPolicy"] == (
+            "test_managed_grace_reconciliation"
+        )
+        assert _managed_status_poll_count >= 3
+        assert _managed_fetch_result_count == 1
+        assert not any(
+            change["state"] == "intervention_requested"
+            for change in parent_state["state_changes"]
+        )
+    finally:
+        _managed_status_mode = "default"
 
 @pytest.mark.asyncio
 async def test_agent_run_external_agent_workflow():
