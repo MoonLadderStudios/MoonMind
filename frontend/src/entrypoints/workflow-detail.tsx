@@ -2211,13 +2211,21 @@ function ReportPresentationSection({
   primaryReport,
   relatedArtifacts,
   apiBase,
+  showEmpty = false,
 }: {
   primaryReport: z.infer<typeof ArtifactSummarySchema> | null;
   relatedArtifacts: z.infer<typeof ArtifactSummarySchema>[];
   apiBase: string;
+  showEmpty?: boolean;
 }) {
   if (!primaryReport) {
-    return null;
+    if (!showEmpty) return null;
+    return (
+      <section className="stack td-report-region td-evidence-region">
+        <h3>Report</h3>
+        <p className="notice subtle">No report artifact available.</p>
+      </section>
+    );
   }
 
   const reportType = metadataString(primaryReport.metadata, 'report_type', 'reportType');
@@ -4369,6 +4377,9 @@ function ExecutionHistoryPanel({
         <Card label="Workflow State">{formatStatusLabel(currentStatus)}</Card>
         <Card label="Related Runs">{String(execution.relatedRuns?.length ?? 0)}</Card>
       </div>
+      {(execution.relatedRuns?.length ?? 0) === 0 ? (
+        <p className="notice subtle">No related runs available.</p>
+      ) : null}
       <div className="queue-table-wrapper td-evidence-slab" data-layout="table">
         <table>
           <thead>
@@ -5399,24 +5410,30 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                 <div className="notice error">{(stepsQuery.error as Error).message}</div>
               ) : stepsQuery.data ? (
                 <>
-                  <StepDagOverview snapshot={stepsQuery.data} />
-                  <div className="step-tl-list">
-                    {stepsQuery.data.steps.map((row, idx) => (
-                      <StepLedgerRowCard
-                        key={row.logicalStepId}
-                        apiBase={payload.apiBase}
-                        logStreamingEnabled={logStreamingEnabled}
-                        sessionTimelineEnabled={sessionTimelineEnabled}
-                        structuredHistoryEnabled={structuredHistoryEnabled}
-                        row={row}
-                        runId={latestRunId}
-                        expanded={Boolean(expandedSteps[row.logicalStepId])}
-                        onToggle={() => toggleStep(row.logicalStepId)}
-                        isLast={idx === stepsQuery.data.steps.length - 1}
-                        routes={taskRunRoutes}
-                      />
-                    ))}
-                  </div>
+                  {stepsQuery.data.steps.length === 0 ? (
+                    <p className="small">No steps recorded for this run.</p>
+                  ) : (
+                    <>
+                      <StepDagOverview snapshot={stepsQuery.data} />
+                      <div className="step-tl-list">
+                        {stepsQuery.data.steps.map((row, idx) => (
+                          <StepLedgerRowCard
+                            key={row.logicalStepId}
+                            apiBase={payload.apiBase}
+                            logStreamingEnabled={logStreamingEnabled}
+                            sessionTimelineEnabled={sessionTimelineEnabled}
+                            structuredHistoryEnabled={structuredHistoryEnabled}
+                            row={row}
+                            runId={latestRunId}
+                            expanded={Boolean(expandedSteps[row.logicalStepId])}
+                            onToggle={() => toggleStep(row.logicalStepId)}
+                            isLast={idx === stepsQuery.data.steps.length - 1}
+                            routes={taskRunRoutes}
+                          />
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </>
               ) : (
                 <p className="small">No step ledger available for this execution.</p>
@@ -5743,6 +5760,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                 primaryReport={primaryReport}
                 relatedArtifacts={relatedReports}
                 apiBase={payload.apiBase}
+                showEmpty={isArtifactsSubroute && latestReportQuery.isSuccess}
               />
 
               <RemediationEvidencePanel

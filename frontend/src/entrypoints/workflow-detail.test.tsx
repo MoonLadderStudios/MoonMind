@@ -4650,6 +4650,108 @@ describe('Workflow Detail Entrypoint', () => {
     runs.unmount();
   });
 
+  it('MM-804 keeps focused fallback states and shared controls on workflow detail subroutes', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Focused fallback task',
+      summary: 'Fallback state coverage',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      targetRuntime: 'codex_cli',
+      model: 'gpt-5',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: { canPause: true },
+      interventionAudit: [],
+      relatedRuns: [],
+    };
+
+    const renderFallbackRoute = async (
+      pathname: string,
+      stepsResponse: 'empty' | 'error' = 'empty',
+    ) => {
+      window.history.pushState({}, 'Fallback Subroute Test', `${pathname}?source=temporal`);
+      fetchSpy.mockReset();
+      fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/executions/test-123/steps')) {
+          if (stepsResponse === 'error') {
+            return Promise.resolve({
+              ok: false,
+              status: 503,
+              statusText: 'Service Unavailable',
+            } as Response);
+          }
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ ...latestStepsSnapshot, steps: [] }),
+          } as Response);
+        }
+        if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+          return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+        }
+        if (url.includes('/artifacts')) {
+          return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => mockExecution,
+        } as Response);
+      });
+      return renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
+    };
+
+    const emptySteps = await renderFallbackRoute('/workflows/test-123/steps');
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Steps' }).getAttribute('aria-current')).toBe('page');
+      expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
+      expect(screen.getByText('No steps recorded for this run.')).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Pause' })).toBeTruthy();
+      expect(screen.getByLabelText('Live updates')).toBeTruthy();
+    });
+    emptySteps.unmount();
+
+    const erroredSteps = await renderFallbackRoute('/workflows/test-123/steps', 'error');
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Steps' }).getAttribute('aria-current')).toBe('page');
+      expect(screen.getByText(/Steps: 503 Service Unavailable/)).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Pause' })).toBeTruthy();
+      expect(screen.getByLabelText('Live updates')).toBeTruthy();
+    });
+    erroredSteps.unmount();
+
+    const artifacts = await renderFallbackRoute('/workflows/test-123/artifacts');
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Artifacts' }).getAttribute('aria-current')).toBe('page');
+      expect(screen.getByRole('heading', { name: 'Report' })).toBeTruthy();
+      expect(screen.getByText('No report artifact available.')).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Workflow Artifacts' })).toBeTruthy();
+      expect(screen.getByText('No artifacts.')).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Pause' })).toBeTruthy();
+      expect(screen.getByLabelText('Live updates')).toBeTruthy();
+    });
+    artifacts.unmount();
+
+    const runs = await renderFallbackRoute('/workflows/test-123/runs');
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Runs' }).getAttribute('aria-current')).toBe('page');
+      expect(screen.getAllByRole('heading', { name: 'Execution History' }).length).toBeGreaterThan(1);
+      expect(screen.getByText('No related runs available.')).toBeTruthy();
+      expect(screen.queryByRole('heading', { name: 'Workflow Artifacts' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Pause' })).toBeTruthy();
+      expect(screen.getByLabelText('Live updates')).toBeTruthy();
+    });
+    runs.unmount();
+  });
+
   it('MM-772 renders duplicate related runs without duplicate React keys', async () => {
     window.history.pushState({}, 'Runs Test', '/workflows/test-123/runs?source=temporal');
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
