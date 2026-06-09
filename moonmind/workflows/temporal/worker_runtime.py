@@ -140,6 +140,7 @@ from moonmind.workflows.temporal.runtime.managed_session_supervisor import (
 from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
 from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
 from moonmind.workflows.temporal.story_output_tools import (
+    DOCUMENT_UPDATE_TASKS_TOOL_NAME,
     JIRA_STORY_TOOL_NAMES,
     register_story_output_tool_handlers,
 )
@@ -907,7 +908,12 @@ def _normalize_runtime_mode(raw_mode: Any) -> str:
     return normalized
 
 _JIRA_AGENT_SKILLS = JIRA_AGENT_SKILLS
-_JIRA_STORY_OUTPUT_TOOLS = JIRA_STORY_TOOL_NAMES
+_STORY_OUTPUT_TASK_TOOLS = frozenset(
+    {
+        *JIRA_STORY_TOOL_NAMES,
+        DOCUMENT_UPDATE_TASKS_TOOL_NAME,
+    }
+)
 _MOONSPEC_BREAKDOWN_TOOLS = frozenset({"moonspec-breakdown"})
 
 def _requires_branch_publish_for_story_output(value: Any) -> bool:
@@ -1005,12 +1011,17 @@ def _selected_step_tool_version(step_entry: Mapping[str, Any]) -> str:
     return str(step_tool.get("version") or "1.0").strip() or "1.0"
 
 def _selected_step_tool_type(step_entry: Mapping[str, Any]) -> str:
+    if _selected_step_tool_name(step_entry).lower() in _STORY_OUTPUT_TASK_TOOLS:
+        return "skill"
     if _selected_step_type(step_entry) == "tool":
         return "skill"
     return "agent_runtime"
 
 def _jira_agent_skill_selected(tool_name: str) -> bool:
     return tool_name.lower() in _JIRA_AGENT_SKILLS
+
+def _story_output_task_tool_selected(tool_name: str) -> bool:
+    return tool_name.lower() in _STORY_OUTPUT_TASK_TOOLS
 
 def _task_uses_only_jira_agent_skill(
     *, selected_skill_name: str, raw_steps: Any
@@ -1023,9 +1034,13 @@ def _task_uses_only_jira_agent_skill(
             for step in raw_steps
         ]
         return bool(effective_step_tool_names) and all(
-            _jira_agent_skill_selected(name) for name in effective_step_tool_names
+            _jira_agent_skill_selected(name)
+            or _story_output_task_tool_selected(name)
+            for name in effective_step_tool_names
         )
-    return _jira_agent_skill_selected(selected_skill_name)
+    return _jira_agent_skill_selected(
+        selected_skill_name
+    ) or _story_output_task_tool_selected(selected_skill_name)
 
 def _append_agent_skill_instructions(instructions: str, *, selected_skill: str) -> str:
     selected = selected_skill.strip()
@@ -1546,7 +1561,7 @@ def _build_runtime_planner():
                         ).strip().lower()
                         break
             should_prepare_story_breakdown = should_prepare_story_breakdown or bool(
-                step_tool_names & (_JIRA_STORY_OUTPUT_TOOLS | _MOONSPEC_BREAKDOWN_TOOLS)
+                step_tool_names & (_STORY_OUTPUT_TASK_TOOLS | _MOONSPEC_BREAKDOWN_TOOLS)
             )
         elif selected_skill_name:
             creates_story_breakdown_artifact = (
@@ -1656,6 +1671,9 @@ def _build_runtime_planner():
                 tool_type = _selected_step_tool_type(step_entry)
                 tool_version = _selected_step_tool_version(step_entry)
                 is_agent_runtime_step = tool_type == "agent_runtime"
+                is_story_output_tool = (
+                    step_tool_name.lower() in _STORY_OUTPUT_TASK_TOOLS
+                )
                 effective_step_skill_name = (
                     step_tool_name or selected_skill_name
                     if is_agent_runtime_step
@@ -1696,6 +1714,8 @@ def _build_runtime_planner():
                     )
                 if not is_agent_runtime_step:
                     step_node_inputs.pop("selectedSkill", None)
+                if is_story_output_tool:
+                    step_node_inputs["publishMode"] = "none"
 
                 nodes.append({
                     "id": step_id,
@@ -1757,7 +1777,9 @@ def _build_runtime_planner():
                 prev_step_id = step_id
         else:
             node_id = str(task_payload.get("id") or "node-1").strip() or "node-1"
-            if selected_skill_name.lower() in _MOONSPEC_BREAKDOWN_TOOLS:
+            selected_skill_lower = selected_skill_name.lower()
+            is_story_output_tool = selected_skill_lower in _STORY_OUTPUT_TASK_TOOLS
+            if selected_skill_lower in _MOONSPEC_BREAKDOWN_TOOLS:
                 if (
                     story_output_mode == "jira"
                     and _requires_branch_publish_for_story_output(
@@ -1779,14 +1801,24 @@ def _build_runtime_planner():
                 str(node_inputs.get("instructions") or ""),
                 selected_skill=selected_skill_name,
             )
-            node_tool_type = "agent_runtime"
-            node_tool_name = runtime_mode
+            node_tool_type = "skill" if is_story_output_tool else "agent_runtime"
+            node_tool_name = (
+                selected_skill_name if is_story_output_tool else runtime_mode
+            )
+            node_tool_version = (
+                _selected_step_tool_version({"tool": selected_skill_payload})
+                if is_story_output_tool
+                else "1.0"
+            )
+            if is_story_output_tool:
+                node_inputs.pop("selectedSkill", None)
+                node_inputs["publishMode"] = "none"
             nodes.append({
                 "id": node_id,
                 "tool": {
                     "type": node_tool_type,
                     "name": node_tool_name,
-                    "version": "1.0",
+                    "version": node_tool_version,
                 },
                 "inputs": node_inputs,
             })
@@ -1834,9 +1866,13 @@ def _build_runtime_planner():
             publish_tool = str(
                 publish_node.get("tool", {}).get("name") or ""
             ).strip().lower()
+            publish_tool_type = str(
+                publish_node.get("tool", {}).get("type") or ""
+            ).strip().lower()
             publish_selected_skill = _plan_node_selected_skill(publish_node)
             if (
-                publish_tool not in _TOOLS_WITH_AUTO_PR_CREATION
+                publish_tool_type == "agent_runtime"
+                and publish_tool not in _TOOLS_WITH_AUTO_PR_CREATION
                 and (
                     not _jira_agent_skill_selected(publish_selected_skill)
                     or publish_selected_skill.lower() in _MOONSPEC_BREAKDOWN_TOOLS

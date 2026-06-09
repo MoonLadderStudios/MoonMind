@@ -1196,11 +1196,12 @@ def test_runtime_planner_shares_story_breakdown_path_for_jira_breakdown_preset()
     )
     assert jira["inputs"]["targetBranch"] == breakdown["inputs"]["targetBranch"]
     assert jira["tool"] == {
-        "type": "agent_runtime",
-        "name": "codex_cli",
+        "type": "skill",
+        "name": "story.create_jira_issues",
         "version": "1.0",
     }
-    assert jira["inputs"]["selectedSkill"] == "story.create_jira_issues"
+    assert "selectedSkill" not in jira["inputs"]
+    assert jira["inputs"]["publishMode"] == "none"
     assert jira["inputs"]["storyOutput"]["jira"]["dependencyMode"] == (
         "linear_blocker_chain"
     )
@@ -1351,10 +1352,12 @@ def test_runtime_planner_preserves_authored_branch_for_jira_story_import():
     node = plan["nodes"][0]
 
     assert node["tool"] == {
-        "type": "agent_runtime",
-        "name": "codex_cli",
+        "type": "skill",
+        "name": "story.create_jira_issues",
         "version": "1.0",
     }
+    assert "selectedSkill" not in node["inputs"]
+    assert node["inputs"]["publishMode"] == "none"
     assert node["inputs"]["branch"] == "feature/authored-breakdown"
     assert node["inputs"]["storyBreakdownPath"] == (
         "artifacts/story-breakdowns/import/stories.json"
@@ -1445,11 +1448,12 @@ def test_runtime_planner_routes_jira_orchestrate_task_creator_as_skill_step():
         == breakdown["inputs"]["storyBreakdownPath"]
     )
     assert orchestrate["tool"] == {
-        "type": "agent_runtime",
-        "name": "codex_cli",
+        "type": "skill",
+        "name": "story.create_jira_orchestrate_tasks",
         "version": "1.0",
     }
-    assert orchestrate["inputs"]["selectedSkill"] == "story.create_jira_orchestrate_tasks"
+    assert "selectedSkill" not in orchestrate["inputs"]
+    assert orchestrate["inputs"]["publishMode"] == "none"
     assert orchestrate["inputs"]["jiraOrchestration"]["traceability"] == {
         "sourceIssueKey": "MM-404"
     }
@@ -1525,11 +1529,12 @@ def test_runtime_planner_routes_jira_implement_task_creator_as_skill_step():
     implement = plan["nodes"][3]
 
     assert implement["tool"] == {
-        "type": "agent_runtime",
-        "name": "codex_cli",
+        "type": "skill",
+        "name": "story.create_jira_implement_tasks",
         "version": "1.0",
     }
-    assert implement["inputs"]["selectedSkill"] == "story.create_jira_implement_tasks"
+    assert "selectedSkill" not in implement["inputs"]
+    assert implement["inputs"]["publishMode"] == "none"
     assert implement["inputs"]["jiraOrchestration"]["task"]["publish"] == {
         "mode": "pr",
         "mergeAutomation": {"enabled": True},
@@ -1537,6 +1542,100 @@ def test_runtime_planner_routes_jira_implement_task_creator_as_skill_step():
     assert implement["inputs"]["jiraOrchestration"]["traceability"] == {
         "sourceIssueKey": "MM-404"
     }
+
+
+def test_runtime_planner_routes_document_update_task_creator_as_tool_step():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "title": "Document Update Orchestrate",
+                "instructions": "Discover docs and create update tasks.",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+                "steps": [
+                    {
+                        "id": "discover",
+                        "instructions": "Discover documents.",
+                    },
+                    {
+                        "id": "create-update-tasks",
+                        "tool": {
+                            "type": "skill",
+                            "name": "story.create_document_update_tasks",
+                        },
+                        "instructions": "Create document update tasks.",
+                        "documentUpdateOrchestration": {
+                            "task": {
+                                "repository": "MoonLadderStudios/MoonMind",
+                                "runtime": {"mode": "codex_cli"},
+                                "publish": {"mode": "none"},
+                            },
+                        },
+                    },
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    create_tasks = plan["nodes"][1]
+
+    assert create_tasks["tool"] == {
+        "type": "skill",
+        "name": "story.create_document_update_tasks",
+        "version": "1.0",
+    }
+    assert "selectedSkill" not in create_tasks["inputs"]
+    assert create_tasks["inputs"]["publishMode"] == "none"
+
+
+def test_runtime_planner_routes_single_document_update_task_creator_as_tool_step():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "title": "Create document update tasks",
+                "instructions": "Create document update tasks from known paths.",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+                "tool": {
+                    "type": "skill",
+                    "name": "story.create_document_update_tasks",
+                },
+                "documentUpdateOrchestration": {
+                    "task": {
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "runtime": {"mode": "codex_cli"},
+                        "publish": {"mode": "none"},
+                    },
+                },
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    node = plan["nodes"][0]
+
+    assert node["tool"] == {
+        "type": "skill",
+        "name": "story.create_document_update_tasks",
+        "version": "1.0",
+    }
+    assert "selectedSkill" not in node["inputs"]
+    assert node["inputs"]["publishMode"] == "none"
 
 
 def test_runtime_planner_dedupes_repeated_identical_preset_steps():
