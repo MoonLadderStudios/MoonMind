@@ -131,9 +131,9 @@ class TestResolveEffectiveModelRuntimeDefault:
     @pytest.mark.parametrize(
         "runtime_id,expected_model",
         [
-            ("codex_cli", "gpt-5.4"),
-            ("gemini_cli", "gemini-3.1-pro-preview"),
-            ("claude_code", "claude-opus-4-7"),
+            ("codex_cli", "gpt-5.5"),
+            ("gemini_cli", "gemini-3.1-pro"),
+            ("claude_code", "claude-opus-4-8"),
         ],
     )
     def test_runtime_default_for_each_canonical_id(self, runtime_id, expected_model):
@@ -187,7 +187,7 @@ class TestResolveEffectiveModelNone:
             profile=None,
             requested_model=None,
         )
-        assert model == "gpt-5.4"
+        assert model == "gpt-5.5"
         assert source == "runtime_default"
 
 # ---------------------------------------------------------------------------
@@ -229,5 +229,5 @@ class TestPrecedenceOrder:
             profile=profile,
             requested_model=None,
         )
-        assert model == "gpt-5.4"
+        assert model == "gpt-5.5"
         assert source == "runtime_default"

@@ -685,7 +685,7 @@ async def test_start_falls_back_to_runtime_default_model_when_profile_blank() ->
     await adapter.start(request)
 
     profile_payload = captured_payload.get("profile") or {}
-    assert profile_payload.get("defaultModel") == "gpt-5.4"
+    assert profile_payload.get("defaultModel") == "gpt-5.5"
     assert profile_payload.get("defaultEffort") == "high"
 
 async def test_start_applies_proxy_mode_when_tagged_proxy_first(monkeypatch: pytest.MonkeyPatch) -> None:

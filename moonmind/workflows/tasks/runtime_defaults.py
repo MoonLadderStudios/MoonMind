@@ -15,9 +15,9 @@ DEFAULT_REPOSITORY = "MoonLadderStudios/MoonMind"
 
 # Canonical runtime ids as primary keys.
 _DEFAULT_RUNTIME_MODELS: dict[str, str] = {
-    "codex_cli": "gpt-5.4",
-    "gemini_cli": "gemini-3.1-pro-preview",
-    "claude_code": "claude-opus-4-7",
+    "codex_cli": "gpt-5.5",
+    "gemini_cli": "gemini-3.1-pro",
+    "claude_code": "claude-opus-4-8",
 }
 _DEFAULT_RUNTIME_EFFORTS: dict[str, str] = {
     "codex_cli": "high",
