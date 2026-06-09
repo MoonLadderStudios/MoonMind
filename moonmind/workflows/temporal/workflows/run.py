@@ -168,6 +168,25 @@ _ALREADY_IMPLEMENTED_UNCERTAINTY_PATTERN = re.compile(
     r"(?:without|no)\s+confirmation)\b",
     re.IGNORECASE,
 )
+_MOONSPEC_GATE_PASSING_VERDICTS = frozenset({"FULLY_IMPLEMENTED"})
+_MOONSPEC_GATE_BLOCKING_VERDICTS = frozenset(
+    {
+        "ADDITIONAL_WORK_NEEDED",
+        "NO_DETERMINATION",
+        "BLOCKED",
+        "FAILED_UNRECOVERABLE",
+    }
+)
+_MOONSPEC_GATE_VERDICT_TEXT_PATTERN = re.compile(
+    r"\b("
+    r"FULLY_IMPLEMENTED|"
+    r"ADDITIONAL_WORK_NEEDED|"
+    r"NO_DETERMINATION|"
+    r"FAILED_UNRECOVERABLE|"
+    r"BLOCKED"
+    r")\b",
+    re.IGNORECASE,
+)
 
 class RunWorkflowInput(TypedDict, total=False):
     """Input payload for the MoonMind.Run workflow."""
@@ -289,6 +308,9 @@ RUN_STEP_EXECUTION_MANIFEST_PATCH = "run-step-" + "attempt-manifest-v1"
 RUN_STEP_EXECUTION_NAMING_PATCH = "run-step-execution-naming-v1"
 RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH = (
     "run-already-implemented-jira-completion-v1"
+)
+RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH = (
+    "run-moonspec-verify-publication-gate-v1"
 )
 MM_STARTED_AT_SEARCH_ATTRIBUTE = "mm_started_at"
 _PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code", "gemini_cli")
@@ -556,6 +578,8 @@ class MoonMindRunWorkflow:
         self._last_step_id: Optional[str] = None
         self._last_step_summary: Optional[str] = None
         self._plan_blocked_message: Optional[str] = None
+        self._moonspec_gate_verdict: Optional[str] = None
+        self._moonspec_gate_reason: Optional[str] = None
         self._last_diagnostics_ref: Optional[str] = None
         # Bounded, redacted structured failure diagnostic captured at the
         # failure boundary. Surfaced in reports/run_summary.json and reused by
@@ -2249,6 +2273,183 @@ class MoonMindRunWorkflow:
             retry_label = "retry" if retry_count == 1 else "retries"
             return f"Approved after {retry_count} {retry_label}"
         return "Approved by structured review"
+
+    def _is_moonspec_verify_step(
+        self,
+        *,
+        tool_name: str,
+        node_inputs: Mapping[str, Any],
+    ) -> bool:
+        normalized_tool = str(tool_name or "").strip().lower()
+        if normalized_tool == "moonspec-verify":
+            return True
+        for key in ("selectedSkill", "skillId", "skill", "targetSkill"):
+            value = node_inputs.get(key)
+            if isinstance(value, str) and value.strip().lower() == "moonspec-verify":
+                return True
+            if isinstance(value, Mapping):
+                nested = value.get("id") or value.get("name")
+                if (
+                    isinstance(nested, str)
+                    and nested.strip().lower() == "moonspec-verify"
+                ):
+                    return True
+        return False
+
+    def _extract_moonspec_verify_verdict(
+        self,
+        outputs: Mapping[str, Any],
+    ) -> str | None:
+        for source in self._moonspec_verify_sources(outputs):
+            for key in (
+                "verdict",
+                "gateVerdict",
+                "gate_verdict",
+                "moonSpecVerdict",
+                "moonspecVerdict",
+                "verificationVerdict",
+                "verification_verdict",
+            ):
+                verdict = self._normalize_moonspec_verify_verdict(source.get(key))
+                if verdict:
+                    return verdict
+        for key in (
+            "operator_summary",
+            "operatorSummary",
+            "summary",
+            "message",
+            "stdout_tail",
+            "stderr_tail",
+            "lastAssistantText",
+            "last_assistant_text",
+        ):
+            verdict = self._extract_moonspec_verify_verdict_from_text(outputs.get(key))
+            if verdict:
+                return verdict
+        return None
+
+    def _moonspec_verify_sources(
+        self,
+        outputs: Mapping[str, Any],
+    ) -> Iterable[Mapping[str, Any]]:
+        for key in (
+            "moonSpecVerify",
+            "moonspecVerify",
+            "moonspec_verify",
+            "verification",
+            "verificationResult",
+            "verification_result",
+            "gate",
+            "review",
+        ):
+            candidate = outputs.get(key)
+            if isinstance(candidate, Mapping):
+                yield candidate
+        yield outputs
+
+    @staticmethod
+    def _normalize_moonspec_verify_verdict(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip().upper().replace("-", "_").replace(" ", "_")
+        if normalized == "PASS":
+            normalized = "FULLY_IMPLEMENTED"
+        elif normalized == "FAIL":
+            normalized = "ADDITIONAL_WORK_NEEDED"
+        if (
+            normalized in _MOONSPEC_GATE_PASSING_VERDICTS
+            or normalized in _MOONSPEC_GATE_BLOCKING_VERDICTS
+        ):
+            return normalized
+        return None
+
+    def _extract_moonspec_verify_verdict_from_text(self, value: Any) -> str | None:
+        if not isinstance(value, str) or not value.strip():
+            return None
+        text = value[:4000]
+        match = _MOONSPEC_GATE_VERDICT_TEXT_PATTERN.search(text)
+        if not match:
+            return None
+        return self._normalize_moonspec_verify_verdict(match.group(1))
+
+    def _record_moonspec_verify_gate(
+        self,
+        *,
+        node_id: str,
+        outputs: Mapping[str, Any],
+    ) -> None:
+        verdict = self._extract_moonspec_verify_verdict(outputs)
+        if not verdict:
+            return
+        reason = None
+        for source in self._moonspec_verify_sources(outputs):
+            reason = self._sanitize_operator_summary(
+                self._coerce_text(
+                    source.get("operator_summary")
+                    or source.get("operatorSummary")
+                    or source.get("summary")
+                    or source.get("message"),
+                    max_chars=700,
+                )
+            )
+            if reason:
+                break
+        diagnostics_ref = None
+        for source in self._moonspec_verify_sources(outputs):
+            diagnostics_ref = self._coerce_text(
+                source.get("diagnostics_ref")
+                or source.get("diagnosticsRef")
+                or source.get("verificationReportRef")
+                or source.get("verification_report_ref")
+                or source.get("reportRef"),
+                max_chars=400,
+            )
+            if diagnostics_ref:
+                break
+        self._moonspec_gate_verdict = verdict
+        self._moonspec_gate_reason = reason
+        gate_context: dict[str, Any] = {
+            "logicalStepId": node_id,
+            "verdict": verdict,
+        }
+        if reason:
+            gate_context["summary"] = reason
+        if diagnostics_ref:
+            gate_context["diagnosticsRef"] = diagnostics_ref
+        self._publish_context["moonSpecGate"] = gate_context
+
+    def _blocking_moonspec_gate_reason(self) -> str | None:
+        verdict = self._normalize_moonspec_verify_verdict(self._moonspec_gate_verdict)
+        if verdict is None:
+            return None
+        if verdict in _MOONSPEC_GATE_PASSING_VERDICTS:
+            return None
+        gate_context = self._publish_context.get("moonSpecGate")
+        diagnostics_ref = None
+        if isinstance(gate_context, Mapping):
+            diagnostics_ref = self._coerce_text(
+                gate_context.get("diagnosticsRef"), max_chars=400
+            )
+        parts = [
+            "MoonSpec verification did not approve publication",
+            f"verdict {verdict}",
+        ]
+        if self._moonspec_gate_reason:
+            parts.append(self._moonspec_gate_reason)
+        if diagnostics_ref:
+            parts.append(f"verification report {diagnostics_ref}")
+        reason = ". ".join(part.rstrip(".") for part in parts if part)
+        return f"{reason}." if reason else None
+
+    def _apply_blocking_moonspec_gate_to_publish(self) -> bool:
+        reason = self._blocking_moonspec_gate_reason()
+        if not reason:
+            return False
+        self._plan_blocked_message = reason
+        self._publish_status = "not_required"
+        self._publish_reason = reason
+        self._publish_context["publicationBlockedBy"] = "moonspec_verify"
+        return True
 
     def _review_gate_budget_metadata(
         self,
@@ -4588,6 +4789,19 @@ class MoonMindRunWorkflow:
                 parameters=parameters,
                 execution_result=execution_result,
             )
+            if workflow.patched(RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH):
+                outputs_for_gate = self._get_from_result(execution_result, "outputs")
+                if (
+                    isinstance(outputs_for_gate, Mapping)
+                    and self._is_moonspec_verify_step(
+                        tool_name=tool_name,
+                        node_inputs=node_inputs,
+                    )
+                ):
+                    self._record_moonspec_verify_gate(
+                        node_id=node_id,
+                        outputs=outputs_for_gate,
+                    )
             if self._publish_status == "not_required":
                 require_pull_request_url = False
                 pull_request_url = None
@@ -4683,6 +4897,13 @@ class MoonMindRunWorkflow:
         if self._cancel_requested:
             return
 
+        if (
+            workflow.patched(RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH)
+            and self._apply_blocking_moonspec_gate_to_publish()
+        ):
+            require_pull_request_url = False
+            pull_request_url = None
+
         if require_pull_request_url and pull_request_url is None:
             repair_candidate_outputs: Mapping[str, Any] = {}
             if execution_result is not None:
@@ -4751,6 +4972,14 @@ class MoonMindRunWorkflow:
                 self._get_logger().info(
                     "Skipping native PR creation: agent '%s' handles its own PRs.",
                     last_agent_id,
+                )
+            elif (
+                workflow.patched(RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH)
+                and self._apply_blocking_moonspec_gate_to_publish()
+            ):
+                self._get_logger().info(
+                    "Skipping native PR creation: latest MoonSpec verification gate "
+                    "did not approve publication."
                 )
             else:
                 agent_outputs = {}
@@ -6129,6 +6358,7 @@ class MoonMindRunWorkflow:
         if workflow.patched(NATIVE_PR_BRANCH_DEFAULTS_PATCH):
             head_candidates = (
                 agent_outputs.get("push_branch"),
+                self._publish_context.get("branch"),
                 agent_outputs.get("branch"),
                 agent_outputs.get("targetBranch"),
                 workspace_spec.get("targetBranch"),
@@ -6139,6 +6369,7 @@ class MoonMindRunWorkflow:
                 agent_outputs.get("push_base_branch"),
                 agent_outputs.get("baseBranch"),
                 agent_outputs.get("base_branch"),
+                self._publish_context.get("baseRef"),
                 workspace_spec.get("startingBranch"),
                 last_node_inputs.get("startingBranch"),
                 "main",
@@ -6146,6 +6377,7 @@ class MoonMindRunWorkflow:
         else:
             head_candidates = (
                 agent_outputs.get("push_branch"),
+                self._publish_context.get("branch"),
                 agent_outputs.get("branch"),
                 agent_outputs.get("targetBranch"),
                 workspace_spec.get("targetBranch"),
@@ -6157,6 +6389,7 @@ class MoonMindRunWorkflow:
             base_candidates = (
                 agent_outputs.get("baseBranch"),
                 agent_outputs.get("base_branch"),
+                self._publish_context.get("baseRef"),
                 workspace_spec.get("startingBranch"),
                 workspace_spec.get("branch"),
                 last_node_inputs.get("startingBranch"),
