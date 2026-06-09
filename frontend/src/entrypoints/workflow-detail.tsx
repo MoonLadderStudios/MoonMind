@@ -5391,7 +5391,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             </>
           ) : null}
 
-          {(isOverviewSubroute || isStepsSubroute) && hasStepsEndpoint ? (
+          {isStepsSubroute && hasStepsEndpoint ? (
             <section className="stack td-steps-region td-evidence-region">
               <div className="step-tl-section-header">
                 <h3>Workflow Steps</h3>
@@ -5749,7 +5749,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
 
           {isOverviewSubroute ? <AuditTrailPanel execution={execution} steps={stepsQuery.data} /> : null}
 
-          {(isOverviewSubroute || isArtifactsSubroute) ? (
+          {isArtifactsSubroute ? (
             <>
               <InputImagesSection
                 artifacts={artifactsQuery.data?.artifacts || []}
