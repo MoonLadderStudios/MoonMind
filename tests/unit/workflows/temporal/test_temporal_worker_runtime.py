@@ -1544,6 +1544,100 @@ def test_runtime_planner_routes_jira_implement_task_creator_as_skill_step():
     }
 
 
+def test_runtime_planner_routes_document_update_task_creator_as_tool_step():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "title": "Document Update Orchestrate",
+                "instructions": "Discover docs and create update tasks.",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+                "steps": [
+                    {
+                        "id": "discover",
+                        "instructions": "Discover documents.",
+                    },
+                    {
+                        "id": "create-update-tasks",
+                        "tool": {
+                            "type": "skill",
+                            "name": "story.create_document_update_tasks",
+                        },
+                        "instructions": "Create document update tasks.",
+                        "documentUpdateOrchestration": {
+                            "task": {
+                                "repository": "MoonLadderStudios/MoonMind",
+                                "runtime": {"mode": "codex_cli"},
+                                "publish": {"mode": "none"},
+                            },
+                        },
+                    },
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    create_tasks = plan["nodes"][1]
+
+    assert create_tasks["tool"] == {
+        "type": "skill",
+        "name": "story.create_document_update_tasks",
+        "version": "1.0",
+    }
+    assert "selectedSkill" not in create_tasks["inputs"]
+    assert create_tasks["inputs"]["publishMode"] == "none"
+
+
+def test_runtime_planner_routes_single_document_update_task_creator_as_tool_step():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "title": "Create document update tasks",
+                "instructions": "Create document update tasks from known paths.",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+                "tool": {
+                    "type": "skill",
+                    "name": "story.create_document_update_tasks",
+                },
+                "documentUpdateOrchestration": {
+                    "task": {
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "runtime": {"mode": "codex_cli"},
+                        "publish": {"mode": "none"},
+                    },
+                },
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    node = plan["nodes"][0]
+
+    assert node["tool"] == {
+        "type": "skill",
+        "name": "story.create_document_update_tasks",
+        "version": "1.0",
+    }
+    assert "selectedSkill" not in node["inputs"]
+    assert node["inputs"]["publishMode"] == "none"
+
+
 def test_runtime_planner_dedupes_repeated_identical_preset_steps():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
