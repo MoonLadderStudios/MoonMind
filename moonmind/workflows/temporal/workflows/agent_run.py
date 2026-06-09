@@ -698,7 +698,6 @@ class MoonMindAgentRun:
             "updatedAt",
             "lastUpdatedAt",
             "lastOutputAt",
-            "lastHeartbeatAt",
             "lastLogAt",
             "lastLogOffset",
             "finishedAt",
@@ -1416,19 +1415,22 @@ class MoonMindAgentRun:
                 return None
 
             try:
-                await workflow.wait_condition(
+                completed = await workflow.wait_condition(
                     lambda: self.completion_event.is_set(),
                     timeout=timedelta(seconds=min(poll_interval, remaining)),
                 )
-                if self.final_result is not None:
-                    return self.final_result
-            except asyncio.TimeoutError:
-                status_obj = await self._poll_managed_status(
-                    request=request,
-                    adapter=adapter,
-                    uses_codex_session_adapter=uses_codex_session_adapter,
-                    use_managed_status_activity=use_managed_status_activity,
-                )
+            except (asyncio.TimeoutError, TimeoutError):
+                completed = False
+
+            if completed or self.completion_event.is_set():
+                return self.final_result
+
+            status_obj = await self._poll_managed_status(
+                request=request,
+                adapter=adapter,
+                uses_codex_session_adapter=uses_codex_session_adapter,
+                use_managed_status_activity=use_managed_status_activity,
+            )
 
     async def _ensure_manager_and_signal(
         self,
@@ -2822,117 +2824,87 @@ class MoonMindAgentRun:
 
                         try:
                             # Add bounded wait
-                            await workflow.wait_condition(
+                            completed = await workflow.wait_condition(
                                 lambda: self.completion_event.is_set(),
                                 timeout=timedelta(seconds=min(poll_interval, remaining_timeout))
                             )
+                        except (asyncio.TimeoutError, TimeoutError):
+                            completed = False
+
+                        if completed or self.completion_event.is_set():
                             break  # Callback received
-                        except asyncio.TimeoutError:
-                            if request.agent_kind == "external":
-                                # Poll via Temporal activity (determinism-safe).
-                                act_name = f"integration.{self._external_agent_id}.status"
-                                status_dict = await self._execute_routed_activity(
-                                    act_name,
-                                    ExternalAgentRunInput(runId=str(self.run_id or "")),
-                                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
 
-                                )
-                                status_obj = self._coerce_external_status_payload(
-                                    status_payload=status_dict,
-                                    fallback_agent_id=request.agent_id,
-                                )
+                        if request.agent_kind == "external":
+                            # Poll via Temporal activity (determinism-safe).
+                            act_name = f"integration.{self._external_agent_id}.status"
+                            status_dict = await self._execute_routed_activity(
+                                act_name,
+                                ExternalAgentRunInput(runId=str(self.run_id or "")),
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+
+                            )
+                            status_obj = self._coerce_external_status_payload(
+                                status_payload=status_dict,
+                                fallback_agent_id=request.agent_id,
+                            )
+                        else:
+                            status_obj = await self._poll_managed_status(
+                                request=request,
+                                adapter=adapter,
+                                uses_codex_session_adapter=uses_codex_session_adapter,
+                                use_managed_status_activity=use_managed_status_activity,
+                            )
+
+                        self.run_status = status_obj.status
+                        if workflow.patched(AGENT_RUN_RESILIENCY_POLICY_PATCH_ID):
+                            progress_signature = self._status_progress_signature(
+                                status_obj
+                            )
+                            if progress_signature == last_progress_signature:
+                                stagnant_poll_count += 1
                             else:
-                                status_obj = await self._poll_managed_status(
-                                    request=request,
-                                    adapter=adapter,
-                                    uses_codex_session_adapter=uses_codex_session_adapter,
-                                    use_managed_status_activity=use_managed_status_activity,
-                                )
-
-                            self.run_status = status_obj.status
-                            if workflow.patched(AGENT_RUN_RESILIENCY_POLICY_PATCH_ID):
-                                progress_signature = self._status_progress_signature(
-                                    status_obj
-                                )
-                                if progress_signature == last_progress_signature:
-                                    stagnant_poll_count += 1
-                                else:
-                                    last_progress_signature = progress_signature
-                                    stagnant_poll_count = 0
-                                max_stagnant_polls = self._max_no_progress_polls(
-                                    policy=resiliency_policy,
-                                    poll_interval=poll_interval,
-                                )
-                                if stagnant_poll_count >= max_stagnant_polls:
-                                    if (
-                                        request.agent_kind == "managed"
-                                        and workflow.patched(
-                                            AGENT_RUN_MANAGED_NO_PROGRESS_RECONCILIATION_PATCH_ID
-                                        )
-                                    ):
-                                        reconciled_result = (
-                                            await self._reconcile_managed_no_progress(
-                                                request=request,
-                                                adapter=adapter,
-                                                uses_codex_session_adapter=uses_codex_session_adapter,
-                                                use_managed_status_activity=(
-                                                    use_managed_status_activity
-                                                ),
-                                                resiliency_policy=resiliency_policy,
-                                                poll_interval=poll_interval,
-                                                initial_status=status_obj,
-                                                overall_start=overall_start,
-                                                timeout_seconds=timeout_seconds,
-                                            )
-                                        )
-                                        if reconciled_result is not None:
-                                            self.final_result = reconciled_result
-                                            break
-
-                                    self.run_status = "intervention_requested"
-                                    self.final_result = self._intervention_result(
-                                        summary=(
-                                            "Agent run made no observable progress "
-                                            f"for {resiliency_policy.get('noProgressTimeoutSeconds', _DEFAULT_NO_PROGRESS_TIMEOUT_SECONDS)}s; "
-                                            "human intervention is required before retrying."
-                                        ),
-                                        request=request,
-                                        metadata={
-                                            "reason": "stuck_no_progress",
-                                            "resiliencyPolicy": dict(resiliency_policy),
-                                            "lastStatus": status_obj.model_dump(
-                                                mode="json",
-                                                by_alias=True,
+                                last_progress_signature = progress_signature
+                                stagnant_poll_count = 0
+                            max_stagnant_polls = self._max_no_progress_polls(
+                                policy=resiliency_policy,
+                                poll_interval=poll_interval,
+                            )
+                            if stagnant_poll_count >= max_stagnant_polls:
+                                if (
+                                    request.agent_kind == "managed"
+                                    and workflow.patched(
+                                        AGENT_RUN_MANAGED_NO_PROGRESS_RECONCILIATION_PATCH_ID
+                                    )
+                                ):
+                                    reconciled_result = (
+                                        await self._reconcile_managed_no_progress(
+                                            request=request,
+                                            adapter=adapter,
+                                            uses_codex_session_adapter=uses_codex_session_adapter,
+                                            use_managed_status_activity=(
+                                                use_managed_status_activity
                                             ),
-                                        },
+                                            resiliency_policy=resiliency_policy,
+                                            poll_interval=poll_interval,
+                                            initial_status=status_obj,
+                                            overall_start=overall_start,
+                                            timeout_seconds=timeout_seconds,
+                                        )
                                     )
-                                    await self._signal_parent_child_state_changed(
-                                        parent_info,
-                                        "intervention_requested",
-                                        (
-                                            "Agent run made no observable progress "
-                                            "and needs human review."
-                                        ),
-                                    )
-                                    break
+                                    if reconciled_result is not None:
+                                        self.final_result = reconciled_result
+                                        break
 
-                            if (
-                                workflow.patched(AGENT_RUN_RESILIENCY_POLICY_PATCH_ID)
-                                and status_obj.status == RunStatus.awaiting_feedback
-                                and not (
-                                    request.agent_kind == "external"
-                                    and self._external_agent_id == "jules"
-                                )
-                            ):
                                 self.run_status = "intervention_requested"
                                 self.final_result = self._intervention_result(
                                     summary=(
-                                        "Agent requested human feedback; "
-                                        "operator intervention is required."
+                                        "Agent run made no observable progress "
+                                        f"for {resiliency_policy.get('noProgressTimeoutSeconds', _DEFAULT_NO_PROGRESS_TIMEOUT_SECONDS)}s; "
+                                        "human intervention is required before retrying."
                                     ),
                                     request=request,
                                     metadata={
-                                        "reason": "agent_requested_feedback",
+                                        "reason": "stuck_no_progress",
                                         "resiliencyPolicy": dict(resiliency_policy),
                                         "lastStatus": status_obj.model_dump(
                                             mode="json",
@@ -2943,113 +2915,147 @@ class MoonMindAgentRun:
                                 await self._signal_parent_child_state_changed(
                                     parent_info,
                                     "intervention_requested",
-                                    "Agent requested human feedback.",
+                                    (
+                                        "Agent run made no observable progress "
+                                        "and needs human review."
+                                    ),
                                 )
                                 break
 
-                            # --- Jules auto-answer sub-flow (spec 094) ---
-                            # Only react when Jules explicitly signals
-                            # awaiting_user_feedback (normalized to
-                            # awaiting_feedback).  Probing during "running"
-                            # caused every progress message to be treated as
-                            # a question and spammed with auto-answers.
-                            if (
-                                getattr(status_obj, "status", None)
-                                == RunStatus.awaiting_feedback
-                                and request.agent_kind == "external"
+                        if (
+                            workflow.patched(AGENT_RUN_RESILIENCY_POLICY_PATCH_ID)
+                            and status_obj.status == RunStatus.awaiting_feedback
+                            and not (
+                                request.agent_kind == "external"
                                 and self._external_agent_id == "jules"
-                            ):
-                                # Probe for an unanswered question first (cheap GET).
-                                activities_result = await self._execute_routed_activity(
-                                    "integration.jules.list_activities",
-                                    {"session_id": self.run_id},
+                            )
+                        ):
+                            self.run_status = "intervention_requested"
+                            self.final_result = self._intervention_result(
+                                summary=(
+                                    "Agent requested human feedback; "
+                                    "operator intervention is required."
+                                ),
+                                request=request,
+                                metadata={
+                                    "reason": "agent_requested_feedback",
+                                    "resiliencyPolicy": dict(resiliency_policy),
+                                    "lastStatus": status_obj.model_dump(
+                                        mode="json",
+                                        by_alias=True,
+                                    ),
+                                },
+                            )
+                            await self._signal_parent_child_state_changed(
+                                parent_info,
+                                "intervention_requested",
+                                "Agent requested human feedback.",
+                            )
+                            break
+
+                        # --- Jules auto-answer sub-flow (spec 094) ---
+                        # Only react when Jules explicitly signals
+                        # awaiting_user_feedback (normalized to
+                        # awaiting_feedback).  Probing during "running"
+                        # caused every progress message to be treated as
+                        # a question and spammed with auto-answers.
+                        if (
+                            getattr(status_obj, "status", None)
+                            == RunStatus.awaiting_feedback
+                            and request.agent_kind == "external"
+                            and self._external_agent_id == "jules"
+                        ):
+                            # Probe for an unanswered question first (cheap GET).
+                            activities_result = await self._execute_routed_activity(
+                                "integration.jules.list_activities",
+                                {"session_id": self.run_id},
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
+
+                            act_id = activities_result.get("activityId") if isinstance(activities_result, dict) else None
+                            question = activities_result.get("latestAgentQuestion") if isinstance(activities_result, dict) else None
+
+                            if question and act_id and act_id not in self._answered_activity_ids:
+                                # New question detected — read config via activity (determinism-safe)
+                                auto_answer_config = await self._execute_routed_activity(
+                                    "integration.jules.get_auto_answer_config",
+                                    [],
                                     cancellation_type=ActivityCancellationType.TRY_CANCEL,
                                 )
+                                aa_enabled = auto_answer_config.get("enabled", True) if isinstance(auto_answer_config, dict) else True
+                                aa_max = auto_answer_config.get("max_answers", 3) if isinstance(auto_answer_config, dict) else 3
 
-                                act_id = activities_result.get("activityId") if isinstance(activities_result, dict) else None
-                                question = activities_result.get("latestAgentQuestion") if isinstance(activities_result, dict) else None
-
-                                if question and act_id and act_id not in self._answered_activity_ids:
-                                    # New question detected — read config via activity (determinism-safe)
-                                    auto_answer_config = await self._execute_routed_activity(
-                                        "integration.jules.get_auto_answer_config",
-                                        [],
-                                        cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                                if not aa_enabled or self._auto_answer_count >= aa_max:
+                                    # Opt-out or max cycles exhausted → escalate
+                                    self.run_status = "intervention_requested"
+                                    auto_answer_reason = (
+                                        "jules_auto_answer_disabled"
+                                        if not aa_enabled
+                                        else "jules_auto_answer_exhausted"
                                     )
-                                    aa_enabled = auto_answer_config.get("enabled", True) if isinstance(auto_answer_config, dict) else True
-                                    aa_max = auto_answer_config.get("max_answers", 3) if isinstance(auto_answer_config, dict) else 3
-
-                                    if not aa_enabled or self._auto_answer_count >= aa_max:
-                                        # Opt-out or max cycles exhausted → escalate
-                                        self.run_status = "intervention_requested"
-                                        auto_answer_reason = (
-                                            "jules_auto_answer_disabled"
-                                            if not aa_enabled
-                                            else "jules_auto_answer_exhausted"
-                                        )
-                                        self.final_result = self._intervention_result(
-                                            summary=(
-                                                "Jules requested human feedback; "
-                                                "operator intervention is required."
+                                    self.final_result = self._intervention_result(
+                                        summary=(
+                                            "Jules requested human feedback; "
+                                            "operator intervention is required."
+                                        ),
+                                        request=request,
+                                        metadata={
+                                            "reason": "agent_requested_feedback",
+                                            "julesAutoAnswerReason": auto_answer_reason,
+                                            "julesAutoAnswerCount": self._auto_answer_count,
+                                            "julesAutoAnswerMax": aa_max,
+                                            "resiliencyPolicy": dict(resiliency_policy),
+                                            "lastStatus": status_obj.model_dump(
+                                                mode="json",
+                                                by_alias=True,
                                             ),
-                                            request=request,
-                                            metadata={
-                                                "reason": "agent_requested_feedback",
-                                                "julesAutoAnswerReason": auto_answer_reason,
-                                                "julesAutoAnswerCount": self._auto_answer_count,
-                                                "julesAutoAnswerMax": aa_max,
-                                                "resiliencyPolicy": dict(resiliency_policy),
-                                                "lastStatus": status_obj.model_dump(
-                                                    mode="json",
-                                                    by_alias=True,
-                                                ),
-                                            },
-                                        )
-                                        self._get_logger().warning(
-                                            "Jules auto-answer %s for session %s (count=%d, max=%d)",
-                                            "disabled" if not aa_enabled else "exhausted",
-                                            self.run_id,
-                                            self._auto_answer_count,
-                                            aa_max,
-                                        )
-                                        await self._signal_parent_child_state_changed(
-                                            parent_info,
-                                            "intervention_requested",
-                                            "Jules requested human feedback.",
-                                        )
-                                        break
-
-                                    # Dispatch question-answer cycle
-                                    task_context = request.agent_id or ""
-                                    answer_result = await self._execute_routed_activity(
-                                        "integration.jules.answer_question",
-                                        {
-                                            "session_id": self.run_id,
-                                            "question": question,
-                                            "task_context": task_context,
                                         },
-                                        cancellation_type=ActivityCancellationType.TRY_CANCEL,
                                     )
-                                    if isinstance(answer_result, dict) and answer_result.get("answered"):
-                                        self._answered_activity_ids.add(act_id)
-                                        self._auto_answer_count += 1
-                                        self._get_logger().info(
-                                            "Jules auto-answer #%d sent for session %s (activity %s)",
-                                            self._auto_answer_count,
-                                            self.run_id,
-                                            act_id,
-                                        )
-                                    else:
-                                        self._get_logger().warning(
-                                            "Jules auto-answer failed for session %s: %s",
-                                            self.run_id,
-                                            answer_result.get("error") if isinstance(answer_result, dict) else "unknown",
-                                        )
+                                    self._get_logger().warning(
+                                        "Jules auto-answer %s for session %s (count=%d, max=%d)",
+                                        "disabled" if not aa_enabled else "exhausted",
+                                        self.run_id,
+                                        self._auto_answer_count,
+                                        aa_max,
+                                    )
+                                    await self._signal_parent_child_state_changed(
+                                        parent_info,
+                                        "intervention_requested",
+                                        "Jules requested human feedback.",
+                                    )
+                                    break
 
-                            # --- end auto-answer sub-flow ---
+                                # Dispatch question-answer cycle
+                                task_context = request.agent_id or ""
+                                answer_result = await self._execute_routed_activity(
+                                    "integration.jules.answer_question",
+                                    {
+                                        "session_id": self.run_id,
+                                        "question": question,
+                                        "task_context": task_context,
+                                    },
+                                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                                )
+                                if isinstance(answer_result, dict) and answer_result.get("answered"):
+                                    self._answered_activity_ids.add(act_id)
+                                    self._auto_answer_count += 1
+                                    self._get_logger().info(
+                                        "Jules auto-answer #%d sent for session %s (activity %s)",
+                                        self._auto_answer_count,
+                                        self.run_id,
+                                        act_id,
+                                    )
+                                else:
+                                    self._get_logger().warning(
+                                        "Jules auto-answer failed for session %s: %s",
+                                        self.run_id,
+                                        answer_result.get("error") if isinstance(answer_result, dict) else "unknown",
+                                    )
 
-                            if status_obj.status in _TERMINAL_RUN_STATUSES:
-                                break
+                        # --- end auto-answer sub-flow ---
+
+                        if status_obj.status in _TERMINAL_RUN_STATUSES:
+                            break
 
                 elapsed = (workflow.now() - overall_start).total_seconds()
 

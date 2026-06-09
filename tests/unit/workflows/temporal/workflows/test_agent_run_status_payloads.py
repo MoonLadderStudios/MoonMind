@@ -113,6 +113,52 @@ def test_status_progress_signature_tracks_metadata_progress_keys() -> None:
         MoonMindAgentRun._status_progress_signature(second)
     )
 
+def test_status_progress_signature_ignores_heartbeat_only_changes() -> None:
+    first = AgentRunStatus(
+        runId="run-1",
+        agentKind="managed",
+        agentId="claude_code",
+        status="running",
+        metadata={
+            "runtimeId": "claude_code",
+            "lastHeartbeatAt": "2026-06-09T20:00:00Z",
+        },
+    )
+    second = AgentRunStatus(
+        runId="run-1",
+        agentKind="managed",
+        agentId="claude_code",
+        status="running",
+        metadata={
+            "runtimeId": "claude_code",
+            "lastHeartbeatAt": "2026-06-09T20:00:30Z",
+        },
+    )
+
+    assert MoonMindAgentRun._status_progress_signature(first) == (
+        MoonMindAgentRun._status_progress_signature(second)
+    )
+
+def test_status_progress_signature_tracks_log_output_progress() -> None:
+    first = AgentRunStatus(
+        runId="run-1",
+        agentKind="managed",
+        agentId="claude_code",
+        status="running",
+        metadata={"lastLogOffset": 128},
+    )
+    second = AgentRunStatus(
+        runId="run-1",
+        agentKind="managed",
+        agentId="claude_code",
+        status="running",
+        metadata={"lastLogOffset": 256},
+    )
+
+    assert MoonMindAgentRun._status_progress_signature(first) != (
+        MoonMindAgentRun._status_progress_signature(second)
+    )
+
 def test_intervention_result_uses_terminal_operator_review_metadata() -> None:
     workflow_instance = MoonMindAgentRun()
     workflow_instance.run_id = "run-1"
