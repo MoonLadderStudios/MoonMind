@@ -63,7 +63,7 @@ def test_serialized_workflow_execution_exposes_agent_run_id_not_task_run_id() ->
         memo={
             "title": "Agent-backed workflow",
             "summary": "Running.",
-            "taskRunId": "agent-run-1",
+            "agentRunId": "agent-run-1",
         },
         owner_id="user-1",
         entry="user_workflow",

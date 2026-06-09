@@ -22,7 +22,7 @@ describe('Workflows Entrypoint', () => {
       json: async () => ({
         items: [
           {
-            taskId: 'task-123',
+            workflowId: 'task-123',
             source: 'temporal',
             title: 'Example task',
             status: 'completed',
@@ -81,7 +81,7 @@ describe('Workflows Entrypoint', () => {
         json: async () => ({
           items: [
             {
-              taskId: 'task-123',
+              workflowId: 'task-123',
               source: 'temporal',
               title: 'Example task',
               status: 'completed',
@@ -114,7 +114,7 @@ describe('Workflows Entrypoint', () => {
 
     await screen.findAllByText('Example task');
     expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=tasks',
+      '/api/executions?source=temporal&pageSize=50',
     );
 
     const scheduledHeaderButton = await screen.findByRole('button', {
@@ -148,7 +148,7 @@ describe('Workflows Entrypoint', () => {
         json: async () => ({
           items: [
             {
-              taskId: 'task-123',
+              workflowId: 'task-123',
               source: 'temporal',
               title: 'Example task',
               status: 'completed',
@@ -175,7 +175,7 @@ describe('Workflows Entrypoint', () => {
       json: async () => ({
         items: [
           {
-            taskId: 'task-needs-human',
+            workflowId: 'task-needs-human',
             source: 'temporal',
             title: 'Needs operator input',
             status: 'intervention_requested',
@@ -256,7 +256,7 @@ describe('Workflows Entrypoint', () => {
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-        '/api/executions?source=temporal&pageSize=50&scope=tasks&workflowIdContains=task-123&stateIn=completed&repoExact=owner%2Frepo&targetRuntimeIn=codex_cloud&titleContains=Example',
+        '/api/executions?source=temporal&pageSize=50&workflowIdContains=task-123&stateIn=completed&repoExact=owner%2Frepo&targetRuntimeIn=codex_cloud&titleContains=Example',
       );
     });
   });
@@ -267,7 +267,7 @@ describe('Workflows Entrypoint', () => {
       json: async () => ({
         items: [
           {
-            taskId: 'task-123',
+            workflowId: 'task-123',
             source: 'temporal',
             title: 'Example task',
             status: 'completed',
@@ -339,7 +339,7 @@ describe('Workflows Entrypoint', () => {
     expect(screen.queryByLabelText('Workflow Type')).toBeNull();
     expect(screen.queryByLabelText('Entry')).toBeNull();
     expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=tasks',
+      '/api/executions?source=temporal&pageSize=50',
     );
   });
 
@@ -355,7 +355,7 @@ describe('Workflows Entrypoint', () => {
     await screen.findAllByText('Example task');
 
     expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=tasks&stateIn=completed&repoExact=moon%2Fdemo',
+      '/api/executions?source=temporal&pageSize=50&stateIn=completed&repoExact=moon%2Fdemo',
     );
     expect(screen.getByText(/Workflow scope filters are not available on Workflows/i)).toBeTruthy();
     expect(window.location.search).toBe('?stateIn=completed&repoExact=moon%2Fdemo&limit=50');
@@ -375,7 +375,7 @@ describe('Workflows Entrypoint', () => {
     await screen.findAllByText('Example task');
 
     expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=tasks&targetRuntimeIn=codex_cli%2Cclaude_code',
+      '/api/executions?source=temporal&pageSize=50&targetRuntimeIn=codex_cli%2Cclaude_code',
     );
     expect(window.location.search).toBe('?targetRuntimeIn=codex_cli%2Cclaude_code&limit=50');
     expect(screen.getByRole('button', { name: 'Runtime filter: Codex CLI +1' })).toBeTruthy();
@@ -393,7 +393,7 @@ describe('Workflows Entrypoint', () => {
     await screen.findAllByText('Example task');
 
     expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=tasks&targetRuntimeIn=claude_code',
+      '/api/executions?source=temporal&pageSize=50&targetRuntimeIn=claude_code',
     );
     expect(window.location.search).toBe('?targetRuntimeIn=claude_code&limit=50');
     expect(screen.getByRole('button', { name: 'Runtime filter: Claude Code' })).toBeTruthy();
@@ -411,7 +411,7 @@ describe('Workflows Entrypoint', () => {
     await screen.findAllByText('Example task');
 
     expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=tasks&targetRuntimeIn=codex%2Cclaude',
+      '/api/executions?source=temporal&pageSize=50&targetRuntimeIn=codex%2Cclaude',
     );
     expect(window.location.search).toBe('?targetRuntimeIn=codex%2Cclaude&limit=50');
     expect(screen.getByRole('button', { name: 'Runtime filter: Codex CLI +1' })).toBeTruthy();
@@ -429,7 +429,7 @@ describe('Workflows Entrypoint', () => {
     await screen.findAllByText('Example task');
 
     expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=tasks&targetRuntimeNotIn=codex%2Cclaude',
+      '/api/executions?source=temporal&pageSize=50&targetRuntimeNotIn=codex%2Cclaude',
     );
     expect(window.location.search).toBe('?targetRuntimeNotIn=codex%2Cclaude&limit=50');
     expect(screen.getByRole('button', { name: 'Runtime filter: not (Codex CLI +1)' })).toBeTruthy();
@@ -471,7 +471,7 @@ describe('Workflows Entrypoint', () => {
       json: async () => ({
         items: [
           {
-            taskId: 'task-planning',
+            workflowId: 'task-planning',
             source: 'temporal',
             title: 'Planning task',
             status: 'running',
@@ -480,7 +480,7 @@ describe('Workflows Entrypoint', () => {
             createdAt: '2026-03-28T00:00:00Z',
           },
           {
-            taskId: 'task-executing',
+            workflowId: 'task-executing',
             source: 'temporal',
             title: 'Executing task',
             status: 'running',
@@ -489,7 +489,7 @@ describe('Workflows Entrypoint', () => {
             createdAt: '2026-03-28T00:00:00Z',
           },
           {
-            taskId: 'task-waiting',
+            workflowId: 'task-waiting',
             source: 'temporal',
             title: 'Waiting task',
             status: 'waiting',
@@ -498,7 +498,7 @@ describe('Workflows Entrypoint', () => {
             createdAt: '2026-03-28T00:00:00Z',
           },
           {
-            taskId: 'task-awaiting',
+            workflowId: 'task-awaiting',
             source: 'temporal',
             title: 'Awaiting task',
             status: 'awaiting_action',
@@ -507,7 +507,7 @@ describe('Workflows Entrypoint', () => {
             createdAt: '2026-03-28T00:00:00Z',
           },
           {
-            taskId: 'task-finalizing',
+            workflowId: 'task-finalizing',
             source: 'temporal',
             title: 'Finalizing task',
             status: 'running',
@@ -594,7 +594,7 @@ describe('Workflows Entrypoint', () => {
       json: async () => ({
         items: [
           {
-            taskId: 'task-late',
+            workflowId: 'task-late',
             source: 'temporal',
             title: 'Late scheduled task',
             status: 'queued',
@@ -605,7 +605,7 @@ describe('Workflows Entrypoint', () => {
             createdAt: '2026-04-15T01:00:00Z',
           },
           {
-            taskId: 'task-early',
+            workflowId: 'task-early',
             source: 'temporal',
             title: 'Early scheduled task',
             status: 'queued',
@@ -647,7 +647,7 @@ describe('Workflows Entrypoint', () => {
       expect(executionListCalls().length).toBe(baselineCalls + 1);
     });
     expect(lastExecutionListUrl()).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=tasks&repoExact=owner%2Frepo',
+      '/api/executions?source=temporal&pageSize=50&repoExact=owner%2Frepo',
     );
     await screen.findAllByText('Example task');
 
@@ -721,7 +721,7 @@ describe('Workflows Entrypoint', () => {
       expect(executionListCalls().length).toBe(baselineCalls + 1);
     });
     expect(lastExecutionListUrl()).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=tasks&stateIn=completed',
+      '/api/executions?source=temporal&pageSize=50&stateIn=completed',
     );
   });
 
@@ -748,7 +748,7 @@ describe('Workflows Entrypoint', () => {
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-        '/api/executions?source=temporal&pageSize=50&scope=tasks&stateIn=failed',
+        '/api/executions?source=temporal&pageSize=50&stateIn=failed',
       );
     });
   });
@@ -799,7 +799,7 @@ describe('Workflows Entrypoint', () => {
 
     await waitFor(() => {
       expect(lastExecutionListUrl()).toBe(
-        '/api/executions?source=temporal&pageSize=50&scope=tasks&titleContains=Example',
+        '/api/executions?source=temporal&pageSize=50&titleContains=Example',
       );
       expect(screen.queryByRole('dialog', { name: 'Title filter' })).toBeNull();
       expect(
@@ -822,7 +822,7 @@ describe('Workflows Entrypoint', () => {
     fireEvent.keyDown(clearButton, { key: 'Enter' });
 
     expect(executionListCalls().length).toBe(baselineCalls);
-    expect(lastExecutionListUrl()).toBe('/api/executions?source=temporal&pageSize=50&scope=tasks');
+    expect(lastExecutionListUrl()).toBe('/api/executions?source=temporal&pageSize=50');
     expect(screen.getByRole('dialog', { name: 'Title filter' })).toBeTruthy();
   });
 
@@ -855,7 +855,7 @@ describe('Workflows Entrypoint', () => {
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-        '/api/executions?source=temporal&pageSize=50&scope=tasks&stateNotIn=canceled',
+        '/api/executions?source=temporal&pageSize=50&stateNotIn=canceled',
       );
     });
     expect(window.location.search).toBe('?stateNotIn=canceled&limit=50');
@@ -865,7 +865,7 @@ describe('Workflows Entrypoint', () => {
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-        '/api/executions?source=temporal&pageSize=50&scope=tasks',
+        '/api/executions?source=temporal&pageSize=50',
       );
     });
   });
@@ -883,7 +883,7 @@ describe('Workflows Entrypoint', () => {
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-        '/api/executions?source=temporal&pageSize=50&scope=tasks&stateIn=completed%2Cfailed',
+        '/api/executions?source=temporal&pageSize=50&stateIn=completed%2Cfailed',
       );
     });
     expect(screen.getByRole('button', { name: 'Status filter: completed, failed' })).toBeTruthy();
@@ -912,7 +912,7 @@ describe('Workflows Entrypoint', () => {
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-        '/api/executions?source=temporal&pageSize=50&scope=tasks&stateNotIn=completed%2Cfailed%2Cplanning%2Ccanceled',
+        '/api/executions?source=temporal&pageSize=50&stateNotIn=completed%2Cfailed%2Cplanning%2Ccanceled',
       );
     });
     expect(screen.getByRole('button', { name: 'Status filter: not (completed, failed, planning +1)' })).toBeTruthy();
@@ -924,7 +924,7 @@ describe('Workflows Entrypoint', () => {
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-        '/api/executions?source=temporal&pageSize=50&scope=tasks&nextPageToken=stale-token',
+        '/api/executions?source=temporal&pageSize=50&nextPageToken=stale-token',
       );
     });
     await screen.findAllByText('Example task');
@@ -933,7 +933,7 @@ describe('Workflows Entrypoint', () => {
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-        '/api/executions?source=temporal&pageSize=100&scope=tasks',
+        '/api/executions?source=temporal&pageSize=100',
       );
     });
     expect(window.location.search).toBe('?limit=100');
@@ -945,7 +945,7 @@ describe('Workflows Entrypoint', () => {
       json: async () => ({
         items: [
           {
-            taskId: 'task-123',
+            workflowId: 'task-123',
             source: 'temporal',
             title: 'Example task',
             status: 'completed',
@@ -1000,7 +1000,7 @@ describe('Workflows Entrypoint', () => {
         json: async () => ({
           items: [
             {
-              taskId: 'task-123',
+              workflowId: 'task-123',
               source: 'temporal',
               title: 'Example task',
               status: 'completed',
@@ -1032,7 +1032,7 @@ describe('Workflows Entrypoint', () => {
       json: async () => ({
         items: [
           {
-            taskId: 'task-123',
+            workflowId: 'task-123',
             source: 'temporal',
             title: 'Example task',
             status: 'completed',
@@ -1081,7 +1081,7 @@ describe('Workflows Entrypoint', () => {
         json: async () => ({
           items: [
             {
-              taskId: 'task-123',
+              workflowId: 'task-123',
               source: 'temporal',
               title: 'Example task',
               status: 'completed',
@@ -1224,7 +1224,7 @@ describe('Workflows Entrypoint', () => {
     expect(screen.getByRole('dialog', { name: 'Repository filter' })).toBeTruthy();
     await waitFor(() => {
       expect(lastExecutionListUrl()).toBe(
-        '/api/executions?source=temporal&pageSize=50&scope=tasks&stateIn=completed&repoExact=owner%2Frepo&targetRuntimeIn=codex_cli',
+        '/api/executions?source=temporal&pageSize=50&stateIn=completed&repoExact=owner%2Frepo&targetRuntimeIn=codex_cli',
       );
     });
 
@@ -1284,7 +1284,7 @@ describe('Workflows Entrypoint', () => {
         json: async () => ({
           items: [
             {
-              taskId: 'task-123',
+              workflowId: 'task-123',
               source: 'temporal',
               title: 'Example task',
               status: 'completed',
@@ -1317,7 +1317,7 @@ describe('Workflows Entrypoint', () => {
       json: async () => ({
         items: [
           {
-            taskId: 'task-blocked',
+            workflowId: 'task-blocked',
             source: 'temporal',
             title: 'Blocked task',
             status: 'waiting',
@@ -1342,7 +1342,7 @@ describe('Workflows Entrypoint', () => {
       json: async () => ({
         items: [
           {
-            taskId: 'task-321',
+            workflowId: 'task-321',
             source: 'temporal',
             targetRuntime: 'codex_cli',
             title: 'Readable runtime task',
@@ -1369,7 +1369,7 @@ describe('Workflows Entrypoint', () => {
       json: async () => ({
         items: [
           {
-            taskId: longWorkflowId,
+            workflowId: longWorkflowId,
             source: 'temporal',
             targetRuntime: 'codex_cli',
             targetSkill: 'pr-resolver',

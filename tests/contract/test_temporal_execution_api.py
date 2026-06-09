@@ -1059,7 +1059,7 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(
             assert body["redirectPath"] == f"/workflows/{body['workflowId']}?source=temporal"
             assert body["searchAttributes"]["mm_repo"] == "MoonLadderStudios/MoonMind"
             assert body["memo"]["input_ref"] == input_artifact_ref
-            snapshot = body["taskInputSnapshot"]
+            snapshot = body["workflowInputSnapshot"]
             assert snapshot["available"] is True
             assert snapshot["snapshotVersion"] == 1
             assert snapshot["sourceKind"] == "create"

@@ -4505,8 +4505,8 @@ export interface components {
             title: string;
             /** Summary */
             summary: string;
-            /** Taskinstructions */
-            taskInstructions?: string | null;
+            /** Workflowinstructions */
+            workflowInstructions?: string | null;
             /**
              * Status
              * @enum {string}
@@ -4551,7 +4551,7 @@ export interface components {
             };
             /** Inputartifactref */
             inputArtifactRef?: string | null;
-            taskInputSnapshot?: components["schemas"]["TaskInputSnapshotDescriptorModel"];
+            workflowInputSnapshot?: components["schemas"]["WorkflowInputSnapshotDescriptorModel"];
             /** Targetruntime */
             targetRuntime?: string | null;
             /** Targetskill */
@@ -4593,8 +4593,6 @@ export interface components {
             mergeAutomation?: components["schemas"]["ExecutionMergeAutomationModel"] | null;
             /** Resolvedskillsetref */
             resolvedSkillsetRef?: string | null;
-            /** Taskskills */
-            taskSkills?: string[] | null;
             skillRuntime?: components["schemas"]["ExecutionSkillRuntimeModel"] | null;
             /** Artifactrefs */
             artifactRefs?: string[];
@@ -7371,10 +7369,10 @@ export interface components {
          */
         SummaryType: "readme";
         /**
-         * TaskInputSnapshotDescriptorModel
-         * @description Compact pointer to the authoritative original task input snapshot.
+         * WorkflowInputSnapshotDescriptorModel
+         * @description Compact pointer to the authoritative original workflow input snapshot.
          */
-        TaskInputSnapshotDescriptorModel: {
+        WorkflowInputSnapshotDescriptorModel: {
             /**
              * Available
              * @default false

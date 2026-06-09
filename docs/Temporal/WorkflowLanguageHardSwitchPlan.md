@@ -2,7 +2,7 @@
 
 **Status:** Proposed hard-switch implementation plan
 **Owner:** MoonMind Platform / Mission Control / Runtime
-**Scope:** Remove MoonMind's product-level `task` terminology and replace it with Temporal-aligned workflow terminology. Replace `Step Execution` with `Step Execution`.
+**Scope:** Remove MoonMind's product-level `task` terminology and replace it with Temporal-aligned workflow terminology. Replace step-attempt terminology with `Step Execution`.
 **Non-goal:** Preserve legacy task routes, names, pipelines, or compatibility payloads.
 
 ---
@@ -81,7 +81,7 @@ The existing MoonMind docs already show the desired direction:
 - `docs/Temporal/ActivityCatalogAndWorkerTopology.md` states that Workflow Executions orchestrate, Activities perform side effects, and Task Queues are internal routing labels rather than product semantics.
 - `docs/Temporal/TaskExecutionCompatibilityModel.md` exists as a bridge from task-oriented surfaces to Temporal-backed Workflow Executions. This plan removes that bridge rather than preserving it.
 - `docs/UI/MissionControlArchitecture.md` currently frames Mission Control as a task console backed by Temporal. This plan replaces that posture with a Workflow Execution console.
-- `docs/Steps/StepExecutionsAndCheckpointing.md` defines Step Execution as one semantic execution of a logical step. This plan renames that concept to **Step Execution**.
+- `docs/Steps/StepExecutionsAndCheckpointing.md` defines Step Execution as one semantic execution of a logical step. This plan removes remaining step-attempt language in favor of **Step Execution**.
 
 The hard switch reduces ambiguity, makes MoonMind feel Temporal-native, and prevents future APIs, docs, and UI flows from reintroducing parallel task semantics.
 
@@ -94,7 +94,7 @@ The hard switch reduces ambiguity, makes MoonMind feel Temporal-native, and prev
 3. **Run ID is the current Temporal run instance.** Use `runId` for the current/latest run. Do not route primary product pages by `runId`.
 4. **Workflow Type is the root orchestration category.** Do not introduce provider-specific workflow categories such as `Codex workflow` or `Gemini workflow`.
 5. **Step remains MoonMind's user-facing unit of work.** A Step is not a Temporal Activity and not a Temporal Task.
-6. **Step Execution replaces Step Execution.** One semantic execution of a logical Step is a Step Execution.
+6. **Step Execution replaces step attempt.** One semantic execution of a logical Step is a Step Execution.
 7. **Activity remains a Temporal implementation concept.** Activities perform side effects and nondeterministic work.
 8. **Task Queue remains internal routing plumbing.** Never present Task Queues as product-level queues.
 9. **No legacy aliases.** Do not preserve `taskId`, `/tasks/*`, task dashboards, or task-shaped payloads.

@@ -84,7 +84,7 @@ def test_task_run_observability_endpoints_reject_invalid_task_run_id(
         response = test_client.get(f"/api/agent-runs/invalid-run-id{suffix}")
 
     assert response.status_code == 422
-    assert response.json()["detail"] == "Invalid task run id"
+    assert response.json()["detail"] == "Invalid agent run id"
     load_record.assert_called_once_with("invalid-run-id")
 
 # ---------------------------------------------------------------------------
@@ -2858,7 +2858,7 @@ def test_get_task_run_artifact_session_projection_forbids_cross_owner_access() -
     assert response.status_code == 403
     assert (
         response.json()["detail"]
-        == "You do not have permission to access this task run or its session projection."
+        == "You do not have permission to access this agent run or its session projection."
     )
 
 def test_post_task_run_artifact_session_control_routes_send_follow_up_and_returns_projection(

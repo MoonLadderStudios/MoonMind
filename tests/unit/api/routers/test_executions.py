@@ -5377,8 +5377,8 @@ def test_create_execution_persists_task_input_snapshot_for_direct_run_submission
 
     assert response.status_code == 201
     body = response.json()
-    assert body["taskInputSnapshot"]["available"] is True
-    assert body["taskInputSnapshot"]["artifactRef"] == "art_snapshot_direct"
+    assert body["workflowInputSnapshot"]["available"] is True
+    assert body["workflowInputSnapshot"]["artifactRef"] == "art_snapshot_direct"
     assert body["actions"]["canUpdateInputs"] is True
     persist_mock.assert_awaited_once()
     session.commit.assert_awaited_once()
@@ -6040,7 +6040,7 @@ def test_serialize_execution_surfaces_task_template_slug_as_primary_skill() -> N
     dumped = payload.model_dump(by_alias=True)
 
     assert dumped["targetSkill"] == "jira-orchestrate"
-    assert dumped["taskSkills"] == ["jira-orchestrate"]
+    assert dumped["skillRuntime"]["selectedSkills"] == ["jira-orchestrate"]
     assert dumped["skillRuntime"]["selectedSkills"] == ["jira-orchestrate"]
 
 def test_serialize_execution_surfaces_applied_template_slug_as_primary_skill() -> None:
@@ -6063,7 +6063,7 @@ def test_serialize_execution_surfaces_applied_template_slug_as_primary_skill() -
     dumped = payload.model_dump(by_alias=True)
 
     assert dumped["targetSkill"] == "jira-orchestrate"
-    assert dumped["taskSkills"] == ["jira-orchestrate"]
+    assert dumped["skillRuntime"]["selectedSkills"] == ["jira-orchestrate"]
 
 def test_serialize_execution_uses_latest_applied_template_as_primary_skill() -> None:
     record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
@@ -6090,7 +6090,7 @@ def test_serialize_execution_uses_latest_applied_template_as_primary_skill() -> 
     dumped = payload.model_dump(by_alias=True)
 
     assert dumped["targetSkill"] == "latest-preset"
-    assert dumped["taskSkills"] == ["latest-preset"]
+    assert dumped["skillRuntime"]["selectedSkills"] == ["latest-preset"]
     assert dumped["skillRuntime"]["selectedSkills"] == ["latest-preset"]
 
 def test_serialize_execution_surfaces_compact_skill_runtime_metadata() -> None:
@@ -6130,7 +6130,7 @@ def test_serialize_execution_surfaces_compact_skill_runtime_metadata() -> None:
     payload = _serialize_execution(record)
     dumped = payload.model_dump(by_alias=True)
 
-    assert dumped["taskSkills"] == ["operator-default", "pr-resolver"]
+    assert dumped["skillRuntime"]["selectedSkills"] == ["operator-default", "pr-resolver"]
     skill_runtime = dumped["skillRuntime"]
     assert skill_runtime["resolvedSkillsetRef"] == "artifact:resolved-skills-1"
     assert skill_runtime["selectedSkills"] == ["pr-resolver"]
@@ -6292,11 +6292,11 @@ def test_serialize_execution_ignores_stale_waiting_reason_for_executing_run(
     assert payload.debug_fields is not None
     assert payload.debug_fields.waiting_reason is None
 
-def test_serialize_execution_surfaces_task_run_id_from_memo() -> None:
+def test_serialize_execution_surfaces_agent_run_id_from_memo() -> None:
     record = SimpleNamespace(
         close_status=None,
         search_attributes={"mm_entry": "run"},
-        memo={"title": "Task run", "summary": "OK", "taskRunId": "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"},
+        memo={"title": "Agent run", "summary": "OK", "agentRunId": "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"},
         owner_id="user-1",
         entry="run",
         workflow_type=SimpleNamespace(value="MoonMind.Run"),
@@ -6318,7 +6318,6 @@ def test_serialize_execution_surfaces_task_run_id_from_memo() -> None:
 
     payload = _serialize_execution(record)
 
-    assert payload.task_run_id == "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"
     assert payload.agent_run_id == "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"
     dumped = payload.model_dump(by_alias=True)
     assert "taskRunId" not in dumped
@@ -9675,9 +9674,9 @@ def test_mm644_failed_task_edit_for_rerun_requires_authoritative_snapshot(
 
     eligible_body = _serialize_execution(eligible).model_dump(by_alias=True)
 
-    assert eligible_body["taskInputSnapshot"]["available"] is True
-    assert eligible_body["taskInputSnapshot"]["artifactRef"] == "art_snapshot_1"
-    assert eligible_body["taskInputSnapshot"]["reconstructionMode"] == "authoritative"
+    assert eligible_body["workflowInputSnapshot"]["available"] is True
+    assert eligible_body["workflowInputSnapshot"]["artifactRef"] == "art_snapshot_1"
+    assert eligible_body["workflowInputSnapshot"]["reconstructionMode"] == "authoritative"
     assert eligible_body["actions"]["canEditForRerun"] is True
 
     missing_snapshot = _build_execution_record(
@@ -9686,7 +9685,7 @@ def test_mm644_failed_task_edit_for_rerun_requires_authoritative_snapshot(
     )
     missing_body = _serialize_execution(missing_snapshot).model_dump(by_alias=True)
 
-    assert missing_body["taskInputSnapshot"]["available"] is False
+    assert missing_body["workflowInputSnapshot"]["available"] is False
     assert missing_body["actions"]["canEditForRerun"] is False
     assert (
         missing_body["actions"]["disabledReasons"]["canEditForRerun"]

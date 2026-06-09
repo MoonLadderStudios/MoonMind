@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MM-731 workflow terminology guardrails.
+"""Workflow terminology guardrails.
 
 The checks are intentionally scoped to executable/public surfaces where legacy
 Task or Step Attempt terminology would re-enter API, schema, link, or UI
@@ -70,6 +70,36 @@ RUNTIME_RULES = (
         pattern=re.compile(r"\b(Create Task|Task Detail|Task ID|Step Attempt)\b"),
         message="Use workflow-native UI copy.",
     ),
+    Rule(
+        name="workflow-list-task-compatibility",
+        paths=("frontend/src/entrypoints/workflow-list.tsx",),
+        pattern=re.compile(
+            r"\b(TASK_WORKFLOW_TYPE|taskId|taskSkills|scope=tasks|Failed to fetch tasks)\b"
+        ),
+        message="Workflow list must not depend on task-shaped compatibility fields.",
+    ),
+    Rule(
+        name="agent-run-router-task-run-copy",
+        paths=("api_service/api/routers/task_runs.py",),
+        pattern=re.compile(r"\b(Invalid task run id|requested task run|this task run)\b"),
+        message="Agent-run routes must use agent-run wording in operator-visible text.",
+    ),
+    Rule(
+        name="execution-schema-task-public-fields",
+        paths=("moonmind/schemas/temporal_models.py",),
+        pattern=re.compile(
+            r"\b(TASK_RUN_ID_|taskInstructions\b|taskInputSnapshot\b|taskSkills\b)"
+        ),
+        message="Execution schemas must expose workflow-native public fields.",
+    ),
+    Rule(
+        name="generated-execution-task-public-fields",
+        paths=("frontend/src/generated/openapi.ts",),
+        pattern=re.compile(
+            r"\b(taskInstructions\b|taskInputSnapshot\b|TaskInputSnapshotDescriptorModel\b)"
+        ),
+        message="Generated execution client types must expose workflow-native public fields.",
+    ),
 )
 
 DOC_RULES = (
@@ -79,6 +109,7 @@ DOC_RULES = (
             "docs/Temporal/WorkflowExecutionProductModel.md",
             "docs/Temporal/WorkflowTypeCatalogAndLifecycle.md",
             "docs/Temporal/ManagedAndExternalAgentExecutionModel.md",
+            "docs/Api/ExecutionsApiContract.md",
             "docs/MoonMindArchitecture.md",
         ),
         pattern=re.compile(
@@ -86,6 +117,20 @@ DOC_RULES = (
             re.IGNORECASE,
         ),
         message="Canonical docs must not use unqualified MoonMind task terminology.",
+    ),
+    Rule(
+        name="execution-api-contract-task-compatibility",
+        paths=("docs/Api/ExecutionsApiContract.md",),
+        pattern=re.compile(
+            r"\b(taskId == workflowId|taskRunId|taskInstructions|taskInputSnapshot|taskSkills|MoonMind\.Run)\b"
+        ),
+        message="Executions API contract must describe workflow-native fields.",
+    ),
+    Rule(
+        name="hard-switch-plan-tautology",
+        paths=("docs/Temporal/WorkflowLanguageHardSwitchPlan.md",),
+        pattern=re.compile(r"Step Execution (?:replaces|with) Step Execution"),
+        message="Hard-switch plan must not contain mechanical terminology tautologies.",
     ),
 )
 

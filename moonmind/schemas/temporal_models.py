@@ -20,7 +20,6 @@ from moonmind.schemas.temporal_artifact_models import CompactArtifactRefModel
 from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
 
 SUPPORTED_WORKFLOW_TYPES = (
-    "MoonMind.Run",
     "MoonMind.UserWorkflow",
     "MoonMind.ManifestIngest",
     "MoonMind.MergeAutomation",
@@ -53,9 +52,9 @@ SUPPORTED_SIGNAL_NAMES = (
     "DependencyResolved",
     "BypassDependencies",
 )
-TASK_RUN_ID_MEMO_KEYS = ("taskRunId", "task_run_id")
-TASK_RUN_ID_SEARCH_ATTR_KEYS = ("mm_task_run_id",)
-TASK_RUN_ID_PARAM_KEYS = ("taskRunId", "task_run_id")
+AGENT_RUN_ID_MEMO_KEYS = ("agentRunId",)
+AGENT_RUN_ID_SEARCH_ATTR_KEYS = ("mm_agent_run_id",)
+AGENT_RUN_ID_PARAM_KEYS = ("agentRunId",)
 
 STEP_EXECUTION_MANIFEST_CONTENT_TYPE = (
     "application/vnd.moonmind.step-execution+json;version=1"
@@ -1578,8 +1577,8 @@ class ExecutionMergeAutomationModel(BaseModel):
             self.child_workflow_id = self.workflow_id
         return self
 
-class TaskInputSnapshotDescriptorModel(BaseModel):
-    """Compact pointer to the authoritative original task input snapshot."""
+class WorkflowInputSnapshotDescriptorModel(BaseModel):
+    """Compact pointer to the authoritative original workflow input snapshot."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -1602,7 +1601,7 @@ class TaskInputSnapshotDescriptorModel(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _authoritative_requires_ref(self) -> "TaskInputSnapshotDescriptorModel":
+    def _authoritative_requires_ref(self) -> "WorkflowInputSnapshotDescriptorModel":
         if self.reconstruction_mode == "authoritative" and not self.artifact_ref:
             raise ValueError("authoritative reconstruction requires artifactRef")
         return self
@@ -1999,7 +1998,7 @@ class ExecutionModel(BaseModel):
     owner_id: str = Field(..., alias="ownerId")
     title: str = Field(..., alias="title")
     summary: str = Field(..., alias="summary")
-    task_instructions: Optional[str] = Field(None, alias="taskInstructions")
+    workflow_instructions: Optional[str] = Field(None, alias="workflowInstructions")
     status: Literal[
         "queued",
         "running",
@@ -2037,9 +2036,9 @@ class ExecutionModel(BaseModel):
         default_factory=dict, alias="inputParameters"
     )
     input_artifact_ref: Optional[str] = Field(None, alias="inputArtifactRef")
-    task_input_snapshot: TaskInputSnapshotDescriptorModel = Field(
-        default_factory=TaskInputSnapshotDescriptorModel,
-        alias="taskInputSnapshot",
+    workflow_input_snapshot: WorkflowInputSnapshotDescriptorModel = Field(
+        default_factory=WorkflowInputSnapshotDescriptorModel,
+        alias="workflowInputSnapshot",
     )
     target_runtime: Optional[str] = Field(None, alias="targetRuntime")
     target_skill: Optional[str] = Field(None, alias="targetSkill")
@@ -2066,7 +2065,6 @@ class ExecutionModel(BaseModel):
         alias="mergeAutomation",
     )
     resolved_skillset_ref: Optional[str] = Field(None, alias="resolvedSkillsetRef")
-    task_skills: Optional[list[str]] = Field(None, alias="taskSkills")
     skill_runtime: Optional[ExecutionSkillRuntimeModel] = Field(
         None, alias="skillRuntime"
     )

@@ -33,8 +33,23 @@ def test_runtime_check_rejects_attempt_route_and_legacy_ui_copy(tmp_path: Path) 
         'const label = "Create Task";\n',
     )
     _write(
+        tmp_path / "frontend/src/entrypoints/workflow-list.tsx",
+        'const row = item.taskId || item.workflowId;\n'
+        'params.set("scope", "tasks");\n',
+    )
+    _write(
+        tmp_path / "api_service/api/routers/task_runs.py",
+        'raise HTTPException(detail="Invalid task run id")\n',
+    )
+    _write(
+        tmp_path / "moonmind/schemas/temporal_models.py",
+        'TASK_RUN_ID_MEMO_KEYS = ("taskRunId",)\n'
+        'task_skills = Field(None, alias="taskSkills")\n',
+    )
+    _write(
         tmp_path / "frontend/src/generated/openapi.ts",
-        'attempts?: components["schemas"]["StepExecutionProjectionModel"][];\n',
+        'attempts?: components["schemas"]["StepExecutionProjectionModel"][];\n'
+        'taskInputSnapshot?: components["schemas"]["TaskInputSnapshotDescriptorModel"];\n',
     )
     _write(
         tmp_path / "tests/unit/api/test_executions_temporal.py",
@@ -51,6 +66,10 @@ def test_runtime_check_rejects_attempt_route_and_legacy_ui_copy(tmp_path: Path) 
         "execution-attempt-route",
         "execution-attempt-schema-field",
         "legacy-ui-copy",
+        "workflow-list-task-compatibility",
+        "agent-run-router-task-run-copy",
+        "execution-schema-task-public-fields",
+        "generated-execution-task-public-fields",
         "execution-response-legacy-fields",
     }
 
@@ -88,11 +107,22 @@ def test_docs_check_allows_qualified_terms_and_rejects_unqualified_task(
         tmp_path / "docs/Temporal/WorkflowExecutionProductModel.md",
         "Temporal Task and Jira task are qualified.\nMoonMind task is not.\n",
     )
+    _write(
+        tmp_path / "docs/Api/ExecutionsApiContract.md",
+        "The bridge rule is taskId == workflowId and refs.taskRunId is returned.\n",
+    )
+    _write(
+        tmp_path / "docs/Temporal/WorkflowLanguageHardSwitchPlan.md",
+        "Step Execution replaces Step Execution.\n",
+    )
 
     findings = verify_workflow_terminology.run("docs", root=tmp_path)
 
-    assert len(findings) == 1
-    assert findings[0].rule == "canonical-doc-unqualified-task"
+    assert {finding.rule for finding in findings} == {
+        "canonical-doc-unqualified-task",
+        "execution-api-contract-task-compatibility",
+        "hard-switch-plan-tautology",
+    }
 
 
 def test_docs_check_rejects_unqualified_term_on_line_with_allowed_term(

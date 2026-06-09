@@ -77,7 +77,7 @@ async def _load_managed_run_record(
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Invalid task run id",
+            detail="Invalid agent run id",
         ) from exc
 
 @lru_cache(maxsize=1)
@@ -183,7 +183,7 @@ async def _require_task_run_access(task_run_id: str, user: User) -> None:
     if owner_type != "user" or owner_id != str(user.id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have permission to access this task run or its session projection.",
+            detail="You do not have permission to access this agent run or its session projection.",
         )
 
 def _session_projection_not_found() -> None:
@@ -191,7 +191,7 @@ def _session_projection_not_found() -> None:
         status_code=status.HTTP_404_NOT_FOUND,
         detail={
             "code": "session_projection_not_found",
-            "message": "Managed session projection was not found for the requested task run.",
+            "message": "Managed session projection was not found for the requested agent run.",
         },
     )
 
@@ -1120,14 +1120,14 @@ def _resolve_legacy_log_artifact_path(
     "/{id}/observability-summary",
     response_model=dict,
     responses={
-        404: {"description": "Observability record not found for this task run"},
+        404: {"description": "Observability record not found for this agent run"},
     },
 )
 async def get_observability_summary(
     id: str,
     _user: User = Depends(get_current_user()),
 ) -> dict:
-    """Fetch the observability summary for a task run from the shared agent jobs volume."""
+    """Fetch the observability summary for an agent run from the shared agent jobs volume."""
     store = ManagedRunStore(_get_agent_runtime_store_root())
     started = time.perf_counter()
 
@@ -1136,7 +1136,7 @@ async def get_observability_summary(
         if not record:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Observability record not found for this task run",
+                detail="Observability record not found for this agent run",
             )
         await _require_observability_access(record, _user)
 
@@ -1178,8 +1178,8 @@ async def get_observability_summary(
     "/{task_run_id}/artifact-sessions/{session_id}",
     response_model=ArtifactSessionProjectionModel,
     responses={
-        403: {"description": "You do not have permission to access this task run"},
-        404: {"description": "Session projection not found for this task run"},
+        403: {"description": "You do not have permission to access this agent run"},
+        404: {"description": "Session projection not found for this agent run"},
     },
 )
 async def get_task_run_artifact_session(
@@ -1202,8 +1202,8 @@ async def get_task_run_artifact_session(
     "/{task_run_id}/artifact-sessions/{session_id}/control",
     response_model=ArtifactSessionControlResponse,
     responses={
-        403: {"description": "You do not have permission to access this task run"},
-        404: {"description": "Session projection not found for this task run"},
+        403: {"description": "You do not have permission to access this agent run"},
+        404: {"description": "Session projection not found for this agent run"},
         409: {"description": "The managed session cannot accept this control action"},
     },
 )
@@ -1269,7 +1269,7 @@ async def control_task_run_artifact_session(
     "/{id}/observability/events",
     response_model=dict,
     responses={
-        404: {"description": "Observability record not found for this task run"},
+        404: {"description": "Observability record not found for this agent run"},
     },
 )
 async def get_task_run_observability_events(
@@ -1282,7 +1282,7 @@ async def get_task_run_observability_events(
     thread_id: list[str] | None = Query(default=None, alias="threadId"),
     _user: User = Depends(get_current_user()),
 ) -> dict:
-    """Return structured observability history for one task run."""
+    """Return structured observability history for one agent run."""
     if session_epoch is not None and any(item < 1 for item in session_epoch):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -1298,7 +1298,7 @@ async def get_task_run_observability_events(
     if not record:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Observability record not found for this task run",
+            detail="Observability record not found for this agent run",
         )
     await _require_observability_access(record, _user)
     started = time.perf_counter()
@@ -1359,7 +1359,7 @@ async def get_task_run_observability_events(
     "/{id}/logs/stream",
     responses={
         403: {"description": "Requires superuser privileges"},
-        404: {"description": "Observability record not found for this task run"},
+        404: {"description": "Observability record not found for this agent run"},
         410: {"description": "Run is no longer active"},
     },
 )
@@ -1376,7 +1376,7 @@ async def stream_task_run_live_logs(
     if not record:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Observability record not found for this task run",
+            detail="Observability record not found for this agent run",
         )
     await _require_observability_access(record, _user)
 
@@ -1472,7 +1472,7 @@ async def stream_task_run_log(
     if not record:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Observability record not found for this task run",
+            detail="Observability record not found for this agent run",
         )
     await _require_observability_access(record, _user)
 
@@ -1607,7 +1607,7 @@ async def get_task_run_diagnostics(
     id: str,
     _user: User = Depends(get_current_user()),
 ):
-    """Return the diagnostics.json payload for a task run."""
+    """Return the diagnostics.json payload for an agent run."""
     store = ManagedRunStore(_get_agent_runtime_store_root())
     record = await _load_managed_run_record(store, id)
     

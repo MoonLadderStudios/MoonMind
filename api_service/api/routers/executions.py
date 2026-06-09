@@ -78,7 +78,7 @@ from moonmind.schemas.temporal_models import (
     ExecutionSkillVersionSummaryModel,
     RecoverFromFailedStepRequest,
     RecoverFromFailedStepResponse,
-    TaskInputSnapshotDescriptorModel,
+    WorkflowInputSnapshotDescriptorModel,
     PollIntegrationRequest,
     RescheduleExecutionRequest,
     ScheduleCreatedResponse,
@@ -91,9 +91,9 @@ from moonmind.schemas.temporal_models import (
     StepLedgerSnapshotModel,
     UpdateExecutionRequest,
     UpdateExecutionResponse,
-    TASK_RUN_ID_MEMO_KEYS,
-    TASK_RUN_ID_PARAM_KEYS,
-    TASK_RUN_ID_SEARCH_ATTR_KEYS,
+    AGENT_RUN_ID_MEMO_KEYS,
+    AGENT_RUN_ID_PARAM_KEYS,
+    AGENT_RUN_ID_SEARCH_ATTR_KEYS,
     normalize_dependency_ids,
 )
 from moonmind.workflows.temporal import (
@@ -1742,9 +1742,9 @@ def _serialize_execution(
     task_run_id = None
     # The sources are checked in order of preference.
     sources_to_check = (
-        [memo.get(k) for k in TASK_RUN_ID_MEMO_KEYS]
-        + [search_attributes.get(k) for k in TASK_RUN_ID_SEARCH_ATTR_KEYS]
-        + [params.get(k) for k in TASK_RUN_ID_PARAM_KEYS]
+        [memo.get(k) for k in AGENT_RUN_ID_MEMO_KEYS]
+        + [search_attributes.get(k) for k in AGENT_RUN_ID_SEARCH_ATTR_KEYS]
+        + [params.get(k) for k in AGENT_RUN_ID_PARAM_KEYS]
     )
     for value in sources_to_check:
         if value:
@@ -2057,7 +2057,7 @@ def _serialize_execution(
         owner_id=owner_id,
         title=title,
         summary=summary,
-        task_instructions=_derive_full_task_instructions(task_payload),
+        workflow_instructions=_derive_full_task_instructions(task_payload),
         status=dashboard_status,
         dashboard_status=dashboard_status,
         state=state_value,
@@ -2071,7 +2071,7 @@ def _serialize_execution(
         memo=memo,
         input_parameters=params,
         input_artifact_ref=getattr(record, "input_ref", None),
-        task_input_snapshot=_task_input_snapshot_descriptor_from_record(record),
+        workflow_input_snapshot=_task_input_snapshot_descriptor_from_record(record),
         target_runtime=target_runtime,
         target_skill=target_skill,
         model=param_model,
@@ -2088,7 +2088,6 @@ def _serialize_execution(
         merge_automation_selected=merge_automation_selected,
         merge_automation=merge_automation,
         resolved_skillset_ref=resolved_skillset_ref,
-        task_skills=task_skills,
         skill_runtime=skill_runtime,
         artifact_refs=(
             list(record.artifact_refs or []) if include_artifact_refs else []
@@ -5567,11 +5566,11 @@ def _task_input_snapshot_ref_from_memo(
 
 def _task_input_snapshot_descriptor_from_record(
     record,
-) -> TaskInputSnapshotDescriptorModel:
+) -> WorkflowInputSnapshotDescriptorModel:
     memo = dict(getattr(record, "memo", None) or {})
     artifact_ref = _task_input_snapshot_ref_from_memo(memo)
     if artifact_ref:
-        return TaskInputSnapshotDescriptorModel(
+        return WorkflowInputSnapshotDescriptorModel(
             available=True,
             artifactRef=artifact_ref,
             snapshotVersion=int(
@@ -5614,7 +5613,7 @@ def _task_input_snapshot_descriptor_from_record(
     }
     if attachment_aware:
         disabled_reasons["attachments"] = "original_task_input_snapshot_missing"
-    return TaskInputSnapshotDescriptorModel(
+    return WorkflowInputSnapshotDescriptorModel(
         available=False,
         artifactRef=None,
         snapshotVersion=None,

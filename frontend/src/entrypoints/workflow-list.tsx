@@ -47,7 +47,7 @@ const RUNTIME_FILTER_VALUE_ALIASES: Record<string, string> = {
   gemini_cli: 'gemini_cli',
   jules: 'jules',
 };
-const TASK_WORKFLOW_TYPE = 'MoonMind.Run';
+const USER_WORKFLOW_TYPE = 'MoonMind.UserWorkflow';
 const TASK_ENTRY = 'user_workflow';
 
 const TIMESTAMP_SORT_FIELDS = new Set(['scheduledFor', 'createdAt', 'closedAt']);
@@ -106,7 +106,6 @@ type ColumnFilters = {
 
 const ExecutionRowSchema = z
   .object({
-    taskId: z.string().optional(),
     workflowId: z.string().optional(),
     source: z.string(),
     workflowType: z.string().optional(),
@@ -114,7 +113,9 @@ const ExecutionRowSchema = z
     integration: z.string().nullable().optional(),
     targetRuntime: z.string().nullable().optional(),
     targetSkill: z.string().nullable().optional(),
-    taskSkills: z.array(z.string()).nullable().optional(),
+    skillRuntime: z.object({
+      selectedSkills: z.array(z.string()).nullable().optional(),
+    }).nullable().optional(),
     title: z.string(),
     status: z.string(),
     state: z.string(),
@@ -140,7 +141,7 @@ const ExecutionListResponseSchema = z.object({
 type ExecutionRow = z.infer<typeof ExecutionRowSchema>;
 
 function rowWorkflowId(row: ExecutionRow): string {
-  return row.workflowId || row.taskId || '';
+  return row.workflowId || '';
 }
 
 const ExecutionFacetResponseSchema = z.object({
@@ -188,10 +189,14 @@ function hasUnsupportedWorkflowScopeState(params: URLSearchParams): boolean {
   const workflowType = (params.get('workflowType') || '').trim();
   const entry = (params.get('entry') || '').trim().toLowerCase();
   return Boolean(
-    (scope && scope !== 'tasks') ||
-      (workflowType && workflowType !== TASK_WORKFLOW_TYPE) ||
+    scope ||
+      (workflowType && workflowType !== USER_WORKFLOW_TYPE) ||
       (entry && entry !== TASK_ENTRY),
   );
+}
+
+function rowSelectedSkills(row: ExecutionRow): string[] {
+  return row.skillRuntime?.selectedSkills || [];
 }
 
 function dependencyListSummary(row: ExecutionRow): string {
@@ -296,7 +301,7 @@ async function taskListErrorMessage(response: Response): Promise<string> {
     // Fall back to status text below when the body is empty or not JSON.
   }
   const statusText = sanitizeApiErrorMessage(response.statusText || '');
-  return statusText ? `Failed to fetch: ${statusText}` : 'Failed to fetch tasks.';
+  return statusText ? `Failed to fetch: ${statusText}` : 'Failed to fetch workflows.';
 }
 
 function emptyValueFilter(): ValueFilter {
@@ -669,7 +674,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       const params = new URLSearchParams();
       params.set('source', 'temporal');
       params.set('pageSize', String(pageSize));
-      params.set('scope', 'tasks');
       if (listCursor) params.set('nextPageToken', listCursor);
       appendFilterParams(params, filters);
       const response = await fetch(`${payload.apiBase}/executions?${params}`);
@@ -694,7 +698,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       params.set('source', 'temporal');
       params.set('facet', openFacet as string);
       params.set('pageSize', '50');
-      params.set('scope', 'tasks');
       appendFilterParams(params, filters);
       const response = await fetch(`${payload.apiBase}/executions/facets?${params}`);
       if (!response.ok) {
@@ -1008,7 +1011,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
         ...filters.targetSkill.values,
         ...draftFilters.targetSkill.values,
         ...facetValues,
-        ...(data?.items || []).flatMap((row) => [row.targetSkill, ...(row.taskSkills || [])]),
+        ...(data?.items || []).flatMap((row) => [row.targetSkill, ...rowSelectedSkills(row)]),
       ]);
     }
     if (field === 'repository') {
@@ -1547,7 +1550,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                           </td>
                           <td className="queue-table-cell-compact">{formatRuntimeLabel(row.targetRuntime)}</td>
                           <td className="queue-table-cell-compact">
-                            {formatTaskSkills(row.taskSkills, row.targetSkill)}
+                            {formatTaskSkills(rowSelectedSkills(row), row.targetSkill)}
                           </td>
                           <td className="queue-table-cell-compact">{row.repository || '—'}</td>
                           <td className="queue-table-cell-status">
@@ -1611,7 +1614,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                       </div>
                       <div>
                         <dt>Skill</dt>
-                        <dd>{formatTaskSkills(row.taskSkills, row.targetSkill)}</dd>
+                        <dd>{formatTaskSkills(rowSelectedSkills(row), row.targetSkill)}</dd>
                       </div>
                       <div>
                         <dt>Repository</dt>

@@ -19,9 +19,9 @@ It exists to make three things explicit:
 
 1. the HTTP surface exposed by the API service,
 2. the execution lifecycle semantics that callers can rely on,
-3. how this execution-oriented surface relates to task-oriented UI and compatibility routes.
+3. the workflow-native identifiers and response fields used by Mission Control and integrations.
 
-This is an **adapter-first** contract: it describes lifecycle operations for Temporal-managed work. Product prioritization of `/api/executions` vs `/tasks/*` is a separate concern; open work is tracked in the file linked above.
+This is a **workflow-native** contract: it describes lifecycle operations for Temporal-managed Workflow Executions.
 
 ---
 
@@ -36,22 +36,22 @@ This document covers:
 - ownership and authorization rules,
 - filtering, pagination, and count semantics,
 - update/signal/cancel behavior for Temporal-managed executions,
-- how callers should interpret identifiers when task-shaped and execution-shaped surfaces coexist.
+- how callers should interpret workflow identifiers and run identifiers.
 
 ### 2.2 Out of scope
 
 This document does **not** define:
 
-- the `/tasks/*` product API,
+- deprecated task-shaped product APIs,
 - legacy compatibility routes,
 - artifact upload/download APIs,
 - direct Temporal server APIs,
 - worker-internal lifecycle helpers used only inside workflow/activity execution.
 
-### 2.3 Relationship to task-oriented surfaces
+### 2.3 Relationship to Workflow Execution surfaces
 
-- MoonMind may present **task-oriented** UI and compatibility APIs alongside this API.
-- `/api/executions` is the **execution-oriented** surface for Temporal-managed work.
+- MoonMind presents user-submitted work as **Workflow Executions**.
+- `/api/executions` is the workflow-native surface for Temporal-managed work.
 - Callers should treat `workflowId` as the canonical execution handle for this API.
 - This contract should remain stable even if backing reads move closer to Temporal Visibility.
 
@@ -85,10 +85,10 @@ That implementation detail is important for current behavior, but it is **not** 
 
 | Term | Meaning in this document |
 | --- | --- |
-| execution | A Temporal-managed MoonMind workflow execution exposed through `/api/executions` |
-| workflow execution | The Temporal-native term for the same durable execution |
-| task | A compatibility/product term still used in current UI and some public surfaces |
-| workflow type | The root Temporal workflow category, e.g. `MoonMind.Run` |
+| execution | A Temporal-managed MoonMind Workflow Execution exposed through `/api/executions` |
+| Workflow Execution | The Temporal-native durable runtime unit and MoonMind product entity |
+| task | Reserved for explicitly qualified Temporal internals or external systems such as Jira tasks |
+| workflow type | The root Temporal workflow category, e.g. `MoonMind.UserWorkflow` |
 | run | A single Temporal run instance under a durable `workflowId` |
 
 ### 4.2 Identifiers
@@ -97,7 +97,6 @@ That implementation detail is important for current behavior, but it is **not** 
 | --- | --- | --- |
 | `workflowId` | Canonical durable execution identifier for this API | Primary |
 | `runId` | Current run instance identifier | Detail/debug use |
-| `taskId` | Task-oriented compatibility identifier | Out of scope for this API |
 | `namespace` | Temporal namespace associated with the execution | Returned for detail/debugging |
 
 ### 4.3 ID rules
@@ -105,7 +104,7 @@ That implementation detail is important for current behavior, but it is **not** 
 - `workflowId` is the primary path key for `/api/executions`.
 - `runId` may change across Continue-As-New or rerun semantics.
 - Clients must **not** treat `runId` as the durable identity of an execution.
-- In adjacent task-oriented compatibility surfaces, the settled bridge rule is `taskId == workflowId` for Temporal-backed work, but this API does not expose `taskId` directly.
+- This API does not expose `taskId` aliases. Adjacent external systems can be linked through explicit external reference fields.
 
 ---
 
@@ -169,7 +168,7 @@ For direct fetch/update/signal/cancel operations, non-admin callers receive `404
 
 The current allowed values for `workflowType` are:
 
-- `MoonMind.Run`
+- `MoonMind.UserWorkflow`
 - `MoonMind.ManifestIngest`
 
 ### 7.2 Domain state model
@@ -221,11 +220,14 @@ The current allowed values for `state` are:
 | `state` | string | yes | MoonMind domain lifecycle state |
 | `temporalStatus` | `running \| completed \| failed \| canceled` | yes | Simplified lifecycle state |
 | `closeStatus` | string or `null` | no | Terminal close status when closed |
-| `taskRunId` | string or `null` | no | Managed-run observability binding when one top-level run is directly associated with the execution detail |
+| `agentRunId` | string or `null` | no | Managed agent observability binding when one top-level agent run is directly associated with the execution detail |
 | `progress` | object or `null` | no | Lightweight execution progress summary; full step ledger is a separate read |
 | `searchAttributes` | object | yes | Indexed execution metadata |
 | `memo` | object | yes | Small display-oriented metadata |
 | `artifactRefs` | string[] | yes | Artifact references linked to this execution |
+| `workflowInstructions` | string or `null` | no | Workflow instructions reconstructed from compact execution input metadata |
+| `workflowInputSnapshot` | object | yes | Compact pointer to the authoritative original workflow input snapshot |
+| `skillRuntime` | object or `null` | no | Selected skill runtime metadata; selected skills appear as `skillRuntime.selectedSkills` |
 | `startedAt` | datetime | yes | Initial execution timestamp |
 | `updatedAt` | datetime | yes | Last meaningful lifecycle/progress update |
 | `closedAt` | datetime or `null` | no | Terminal close timestamp |
@@ -318,7 +320,7 @@ Current implementation always returns `countMode = "exact"`.
 
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `workflowType` | `MoonMind.Run \| MoonMind.ManifestIngest` | yes | Root workflow type |
+| `workflowType` | `MoonMind.UserWorkflow \| MoonMind.ManifestIngest` | yes | Root workflow type |
 | `title` | string or `null` | no | Display title; defaulted if omitted |
 | `inputArtifactRef` | string or `null` | no | Input artifact reference |
 | `planArtifactRef` | string or `null` | no | Plan artifact reference |
@@ -368,11 +370,11 @@ Example:
  "namespace": "moonmind",
  "workflowId": "mm:3cf79b7f-0fc2-4ab4-a0f8-f2d8a65d8c4a",
  "runId": "84ee7f53-06c5-49e5-9f56-bb42f5d79f33",
- "workflowType": "MoonMind.Run",
+ "workflowType": "MoonMind.UserWorkflow",
  "state": "initializing",
  "temporalStatus": "running",
  "closeStatus": null,
- "taskRunId": null,
+ "agentRunId": null,
  "progress": {
  "total": 0,
  "pending": 0,
@@ -385,7 +387,7 @@ Example:
  "mm_owner_id": "<user-id>",
  "mm_state": "initializing",
  "mm_updated_at": "2026-03-06T12:00:00Z",
- "mm_entry": "run"
+ "mm_entry": "user_workflow"
  },
  "memo": {
  "title": "Run",
@@ -478,7 +480,7 @@ Example:
  "namespace": "moonmind",
  "workflowId": "mm:3cf79b7f-0fc2-4ab4-a0f8-f2d8a65d8c4a",
  "runId": "84ee7f53-06c5-49e5-9f56-bb42f5d79f33",
- "workflowType": "MoonMind.Run",
+ "workflowType": "MoonMind.UserWorkflow",
  "state": "executing",
  "temporalStatus": "running",
  "closeStatus": null,
@@ -486,7 +488,7 @@ Example:
  "mm_owner_id": "<user-id>",
  "mm_state": "executing",
  "mm_updated_at": "2026-03-06T12:05:00Z",
- "mm_entry": "run"
+ "mm_entry": "user_workflow"
  },
  "memo": {
  "title": "Refactor proposal",
@@ -574,7 +576,7 @@ Representative response:
  "refs": {
  "childWorkflowId": null,
  "childRunId": null,
- "taskRunId": null
+ "agentRunId": null
  },
  "artifacts": {
  "outputSummary": null,
@@ -608,7 +610,7 @@ Per-step required fields:
 - `checks[]`
 - `refs.childWorkflowId`
 - `refs.childRunId`
-- `refs.taskRunId`
+- `refs.agentRunId`
 - `artifacts.outputSummary`
 - `artifacts.outputPrimary`
 - `artifacts.runtimeStdout`
@@ -624,7 +626,7 @@ Rules:
 - `logicalStepId` comes from the plan node and is stable within that plan
 - `attempt` is scoped to `(workflowId, runId, logicalStepId)`
 - `checks[]` is the structured place for review/check verdicts and retry summaries
-- `taskRunId` may appear on a step row even when the top-level execution detail also exposes a managed-run binding
+- `agentRunId` may appear on a step row even when the top-level execution detail also exposes a managed agent binding
 
 ### 11.6 Step-route error responses
 
@@ -924,15 +926,16 @@ Malformed request bodies, wrong JSON types, and invalid query/path coercions may
 
 ---
 
-## 16. Compatibility with task-shaped clients
+## 16. External and Qualified Task References
 
-`/api/executions` is execution-oriented. Task-shaped clients and routes may still exist; when they map to Temporal-backed work:
+`/api/executions` is workflow-native. External systems may still provide qualified task identifiers, such as Jira task keys or provider task IDs. Those values are external references, not MoonMind product identity.
 
-- `workflowId` is the canonical Temporal execution identity,
-- compatibility adapters may transform execution responses into task-shaped payloads,
-- for task-shaped create and promotion payloads, `task.tool` / `step.tool` are canonical while `task.skill` / `step.skill` remain compatibility aliases where supported,
-- when a tool selector is present on Temporal-backed task-shaped submit payloads, `task.tool.type` must be `skill`,
-- task-oriented compatibility surfaces preserve `taskId == workflowId` for Temporal-backed work.
+Rules:
+
+- `workflowId` is the canonical Workflow Execution identity.
+- `runId` is the current Temporal run identifier.
+- external task IDs must be qualified by source and stored as external references.
+- response payloads must not expose `taskId` aliases for MoonMind Workflow Executions.
 
 The JSON shapes in this document should remain stable even if the backing implementation shifts among projection, Visibility, or mixed adapters.
 
@@ -1014,4 +1017,4 @@ Its contract is:
 - authenticated and ownership-scoped,
 - grounded in `workflowId` as the durable handle,
 - explicit about update/signal/cancel semantics,
-- usable alongside task-oriented surfaces where those still exist; it is not inherently a replacement for every `/tasks/*` flow.
+- the workflow-native source of truth for MoonMind Workflow Execution lifecycle operations.
