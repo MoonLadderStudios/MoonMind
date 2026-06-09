@@ -127,7 +127,9 @@ def test_infer_repo_from_remote_returns_none_when_git_remote_unavailable(
     def fail_command(_cmd: list[str]) -> str:
         raise RuntimeError("command failed")
 
-    monkeypatch.setitem(module, "_run_command", fail_command)
+    monkeypatch.setitem(
+        module["_infer_repo_from_remote"].__globals__, "_run_command", fail_command
+    )
 
     assert module["_infer_repo_from_remote"]() is None
 
