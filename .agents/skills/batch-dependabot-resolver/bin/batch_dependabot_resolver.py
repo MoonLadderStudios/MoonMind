@@ -1,0 +1,1024 @@
+#!/usr/bin/env python3
+"""Discover open Dependabot version-bump PRs and enqueue one `pr-resolver` task each.
+
+This skill is a narrower discovery/filter layer over the `batch-pr-resolver`
+mechanism. It reuses the same `gh pr list` discovery, fork/cross-repo safety,
+child `pr-resolver` queue payload shape, runtime inheritance, and
+`/api/executions` submission path, and adds Dependabot-specific matching
+(author/branch/title/package-manager), a cross-run-stable idempotency key
+(repository + PR number + head SHA), a dry-run mode, an optional `maxPrs`
+safety cap, and a Dependabot-specific summary artifact.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import hashlib
+import json
+import logging
+import os
+import re
+import subprocess
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+import httpx
+from moonmind.workflows.tasks.runtime_defaults import normalize_runtime_id
+from moonmind.workflows.tasks.task_contract import resolve_publish_mode_for_skill
+
+logger = logging.getLogger(__name__)
+
+API_EXECUTIONS_ENDPOINT = "/api/executions"
+IDEMPOTENCY_KEY_MAX_LENGTH = 128
+DEFAULT_TITLE_REGEX = r"^Bump .+ from \S+ to \S+(?: in /.+)?$"
+DEPENDABOT_BRANCH_PREFIX = "dependabot/"
+
+# Friendly package-manager names (as an operator would type them) mapped to the
+# canonical ecosystem token Dependabot encodes as the second branch segment.
+_PACKAGE_MANAGER_ALIASES = {
+    "npm_and_yarn": "npm",
+    "yarn": "npm",
+    "actions": "github_actions",
+}
+
+
+@dataclass
+class JobSubmission:
+    queue_request: dict[str, Any]
+    pr_number: int | str
+    branch: str
+
+
+@dataclass(frozen=True)
+class RuntimeSelection:
+    mode: str | None = None
+    model: str | None = None
+    effort: str | None = None
+    provider_profile: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Shell + repo resolution (parity with batch-pr-resolver)
+# ---------------------------------------------------------------------------
+
+
+def _run_command(cmd: list[str]) -> str:
+    """Run a command and return trimmed stdout text."""
+
+    try:
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"required command not found: {cmd[0]}") from exc
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").strip()
+        message = stderr or (exc.stdout or "").strip() or str(exc)
+        raise RuntimeError(f"command failed: {' '.join(cmd)}: {message}") from exc
+    return (result.stdout or "").strip()
+
+
+def _normalize_repo(value: str | None) -> str | None:
+    if not value:
+        return None
+    candidate = str(value).strip()
+    if not candidate:
+        return None
+    if re.fullmatch(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", candidate):
+        return candidate
+    return None
+
+
+def _infer_repo_from_remote() -> str | None:
+    try:
+        remote = _run_command(["git", "remote", "get-url", "origin"]).strip()
+    except RuntimeError:
+        return None
+    if remote.startswith("git@github.com:"):
+        body = remote.split(":", 1)[1]
+        if body.endswith(".git"):
+            body = body[:-4]
+        if "/" in body:
+            return body
+    match = re.search(
+        r"github\.com[:/](?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?$", remote
+    )
+    if match:
+        return match.group("repo")
+    return None
+
+
+def _repo_context_candidates(task_context_path: str | None = None) -> list[Path]:
+    candidates: list[Path] = []
+    if task_context_path:
+        candidates.append(Path(task_context_path))
+    for env_key in ("MOONMIND_TASK_CONTEXT_PATH", "TASK_CONTEXT_PATH"):
+        env_value = str(os.getenv(env_key, "")).strip()
+        if env_value:
+            candidates.append(Path(env_value))
+    candidates.extend(
+        [Path("../artifacts/task_context.json"), Path("artifacts/task_context.json")]
+    )
+    return candidates
+
+
+def _load_parent_repository(task_context_path: str | None = None) -> str | None:
+    seen: set[str] = set()
+    for candidate in _repo_context_candidates(task_context_path):
+        identity = str(candidate.expanduser())
+        if identity in seen:
+            continue
+        seen.add(identity)
+        if not candidate.exists() or not candidate.is_file():
+            continue
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        normalized = _normalize_repo(payload.get("repository"))
+        if normalized:
+            return normalized
+    return None
+
+
+def _resolve_repo(raw_repo: str | None, task_context_path: str | None = None) -> str:
+    if raw_repo is not None:
+        normalized = _normalize_repo(raw_repo)
+        if normalized:
+            return normalized
+        raise RuntimeError("Invalid --repo value; expected owner/repo format.")
+
+    from_context = _load_parent_repository(task_context_path)
+    if from_context:
+        return from_context
+
+    inferred_repo = _infer_repo_from_remote()
+    if inferred_repo:
+        return inferred_repo
+
+    for env_key in ("WORKFLOW_GITHUB_REPOSITORY", "GITHUB_REPOSITORY", "MOONMIND_REPO"):
+        normalized = _normalize_repo(os.getenv(env_key, ""))
+        if normalized:
+            return normalized
+    return ""
+
+
+def _parse_repo_parts(repo: str) -> tuple[str, str]:
+    parts = (repo or "").strip().split("/", 1)
+    if len(parts) != 2:
+        return "", ""
+    return parts[0], parts[1]
+
+
+# ---------------------------------------------------------------------------
+# Discovery
+# ---------------------------------------------------------------------------
+
+
+def _run_pr_list(repo: str, state: str) -> list[dict[str, Any]]:
+    raw = _run_command(
+        [
+            "gh",
+            "pr",
+            "list",
+            "--repo",
+            repo,
+            "--state",
+            state,
+            "--json",
+            (
+                "number,title,author,headRefName,headRefOid,"
+                + "headRepository,headRepositoryOwner,isCrossRepository,labels"
+            ),
+            "--limit",
+            "100000",
+        ]
+    )
+    parsed = json.loads(raw or "[]")
+    if not isinstance(parsed, list):
+        raise RuntimeError("Unexpected `gh pr list` payload shape.")
+    return parsed
+
+
+def _is_local_head(pr: dict[str, Any], repo: str) -> bool:
+    target_repo = repo.strip().lower()
+    target_owner, target_repo_name = _parse_repo_parts(target_repo)
+
+    is_cross = pr.get("isCrossRepository")
+    if isinstance(is_cross, bool) and is_cross:
+        return False
+
+    head_repo = pr.get("headRepository")
+    if isinstance(head_repo, dict):
+        name_with_owner = str(head_repo.get("nameWithOwner") or "").strip().lower()
+        if name_with_owner:
+            return name_with_owner == target_repo
+
+        head_repo_name = str(head_repo.get("name") or "").strip().lower()
+        if head_repo_name:
+            head_owner = (
+                str(
+                    (
+                        pr.get("headRepositoryOwner")
+                        if isinstance(pr.get("headRepositoryOwner"), dict)
+                        else {}
+                    ).get("login", "")
+                )
+                .strip()
+                .lower()
+            )
+            if head_owner:
+                return head_owner == target_owner and head_repo_name == target_repo_name
+            return False
+
+    owner_obj = pr.get("headRepositoryOwner")
+    if isinstance(owner_obj, dict):
+        head_owner = str(owner_obj.get("login") or "").strip().lower()
+        if head_owner:
+            return head_owner == target_owner
+
+    return False
+
+
+def _extract_branch(pr: dict[str, Any]) -> str:
+    branch = str(pr.get("headRefName") or "").strip()
+    if not branch:
+        raise RuntimeError(f"PR #{pr.get('number')}: missing headRefName")
+    return branch
+
+
+def _extract_head_sha(pr: dict[str, Any]) -> str | None:
+    return str(pr.get("headRefOid") or "").strip() or None
+
+
+# ---------------------------------------------------------------------------
+# Dependabot matchers
+# ---------------------------------------------------------------------------
+
+
+def _is_dependabot_author(pr: dict[str, Any]) -> bool:
+    author = pr.get("author")
+    if not isinstance(author, dict):
+        return False
+    for key in ("login", "name"):
+        value = str(author.get(key) or "").strip().lower()
+        if not value:
+            continue
+        normalized = value.removeprefix("app/")
+        if normalized.endswith("[bot]"):
+            normalized = normalized[: -len("[bot]")]
+        if normalized.strip() == "dependabot":
+            return True
+    return False
+
+
+def _is_dependabot_branch(branch: str | None) -> bool:
+    return str(branch or "").strip().lower().startswith(DEPENDABOT_BRANCH_PREFIX)
+
+
+def _title_matches(title: str | None, pattern: str) -> bool:
+    try:
+        return re.search(pattern, str(title or "").strip()) is not None
+    except re.error as exc:
+        raise RuntimeError(f"invalid titleRegex {pattern!r}: {exc}") from exc
+
+
+def _branch_package_manager(branch: str | None) -> str | None:
+    parts = str(branch or "").strip().split("/")
+    if len(parts) >= 3 and parts[0].lower() == "dependabot" and parts[1]:
+        return parts[1]
+    return None
+
+
+def _canonical_package_manager(token: str | None) -> str:
+    candidate = str(token or "").strip().lower().replace("-", "_")
+    return _PACKAGE_MANAGER_ALIASES.get(candidate, candidate)
+
+
+def _matches_package_managers(branch: str | None, allowlist: list[str] | None) -> bool:
+    if not allowlist:
+        return True
+    manager = _branch_package_manager(branch)
+    if manager is None:
+        return False
+    allowed = {_canonical_package_manager(item) for item in allowlist if str(item).strip()}
+    if not allowed:
+        return True
+    return _canonical_package_manager(manager) in allowed
+
+
+def _is_security_update(pr: dict[str, Any]) -> bool:
+    labels = pr.get("labels")
+    if not isinstance(labels, list):
+        return False
+    for label in labels:
+        if isinstance(label, dict):
+            name = str(label.get("name") or "").strip().lower()
+        else:
+            name = str(label or "").strip().lower()
+        if name == "security":
+            return True
+    return False
+
+
+def _classify_pr(
+    pr: dict[str, Any],
+    *,
+    repo: str,
+    title_pattern: str,
+    package_managers: list[str] | None,
+    include_security_updates: bool,
+) -> tuple[str | None, str]:
+    """Return (skip_reason_or_None, branch). None reason means the PR matched."""
+
+    branch = _extract_branch(pr)
+    if not _is_local_head(pr, repo=repo):
+        return "fork-pr", branch
+    if not _is_dependabot_author(pr):
+        return "not-dependabot-author", branch
+    if not _is_dependabot_branch(branch):
+        return "non-dependabot-branch", branch
+    if not _title_matches(pr.get("title"), title_pattern):
+        return "title-mismatch", branch
+    if package_managers and not _matches_package_managers(branch, package_managers):
+        return "package-manager-filtered", branch
+    if not include_security_updates and _is_security_update(pr):
+        return "security-update-excluded", branch
+    if not _extract_head_sha(pr):
+        return "missing-head-sha", branch
+    return None, branch
+
+
+# ---------------------------------------------------------------------------
+# Idempotency
+# ---------------------------------------------------------------------------
+
+
+def _idempotency_key(repo: str, pr_number: int | str, head_sha: str | None) -> str | None:
+    """Stable cross-run idempotency key for an unchanged Dependabot PR.
+
+    A missing head SHA yields ``None`` so the caller skips the PR rather than
+    queuing an unkeyed (duplicate-prone) workflow.
+    """
+
+    head = str(head_sha or "").strip()
+    if not head:
+        return None
+    readable = f"batch-dependabot-resolver:{repo}:pr:{pr_number}:head:{head}"
+    if len(readable) <= IDEMPOTENCY_KEY_MAX_LENGTH:
+        return readable
+    components = {"repo": repo, "pr": str(pr_number), "head": head}
+    canonical = json.dumps(components, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    fallback = f"batch-dependabot-resolver:pr:{pr_number}:sha256:{digest}"
+    if len(fallback) > IDEMPOTENCY_KEY_MAX_LENGTH:
+        raise RuntimeError("generated idempotency key exceeds storage limit")
+    return fallback
+
+
+# ---------------------------------------------------------------------------
+# Runtime inheritance (parity with batch-pr-resolver)
+# ---------------------------------------------------------------------------
+
+
+def _normalize_runtime_mode(value: str | None) -> str | None:
+    candidate = str(value or "").strip().lower()
+    return candidate if candidate else None
+
+
+def _runtime_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _runtime_modes_match(left: str | None, right: str | None) -> bool:
+    if not left or not right:
+        return False
+    return normalize_runtime_id(left) == normalize_runtime_id(right)
+
+
+def _load_parent_runtime_selection(
+    task_context_path: str | None = None,
+) -> RuntimeSelection | None:
+    seen: set[str] = set()
+    for candidate in _repo_context_candidates(task_context_path):
+        identity = str(candidate.expanduser())
+        if identity in seen:
+            continue
+        seen.add(identity)
+        if not candidate.exists() or not candidate.is_file():
+            continue
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+
+        runtime_config = (
+            payload.get("runtimeConfig")
+            if isinstance(payload.get("runtimeConfig"), dict)
+            else {}
+        )
+        runtime_node = (
+            payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
+        )
+        mode = _normalize_runtime_mode(
+            runtime_config.get("mode")
+            or runtime_node.get("mode")
+            or payload.get("runtime")
+        )
+        if not mode:
+            continue
+
+        model = _runtime_text(runtime_config.get("model") or runtime_node.get("model"))
+        effort = _runtime_text(
+            runtime_config.get("effort") or runtime_node.get("effort")
+        )
+        provider_profile = _runtime_text(
+            runtime_config.get("providerProfile")
+            or runtime_config.get("profileId")
+            or runtime_node.get("providerProfile")
+            or runtime_node.get("profileId")
+        )
+        return RuntimeSelection(
+            mode=mode, model=model, effort=effort, provider_profile=provider_profile
+        )
+    return None
+
+
+def _resolve_runtime_selection(args: argparse.Namespace) -> RuntimeSelection:
+    inherited = _load_parent_runtime_selection(args.task_context_path)
+    configured_default_mode = _normalize_runtime_mode(
+        os.getenv("MOONMIND_DEFAULT_TASK_RUNTIME")
+    )
+    runtime_execution_profile_ref = _runtime_text(
+        os.getenv("MOONMIND_EXECUTION_PROFILE_REF")
+    )
+    runtime_execution_profile_runtime = _runtime_text(
+        os.getenv("MOONMIND_EXECUTION_PROFILE_RUNTIME")
+    )
+    # Resolution order, most to least specific: explicit args, the parent
+    # runtime copied from task_context.json, the caller's own execution profile
+    # (the runtime this skill is currently executing under), and finally the
+    # generic system default.
+    execution_profile_mode = (
+        _normalize_runtime_mode(runtime_execution_profile_runtime)
+        if runtime_execution_profile_ref
+        else None
+    )
+    runtime_mode = (
+        _normalize_runtime_mode(args.runtime_mode)
+        or (inherited.mode if inherited else None)
+        or execution_profile_mode
+        or configured_default_mode
+    )
+    runtime_model = _runtime_text(args.runtime_model)
+    runtime_effort = _runtime_text(args.runtime_effort)
+    runtime_provider_profile = _runtime_text(
+        getattr(args, "runtime_provider_profile", None)
+    )
+    if runtime_model is None and inherited is not None:
+        runtime_model = inherited.model
+    if runtime_effort is None and inherited is not None:
+        runtime_effort = inherited.effort
+    if runtime_provider_profile is None and inherited is not None:
+        runtime_provider_profile = inherited.provider_profile
+    if runtime_provider_profile is None and _runtime_modes_match(
+        runtime_mode, runtime_execution_profile_runtime
+    ):
+        runtime_provider_profile = runtime_execution_profile_ref
+
+    return RuntimeSelection(
+        mode=runtime_mode,
+        model=runtime_model,
+        effort=runtime_effort,
+        provider_profile=runtime_provider_profile,
+    )
+
+
+def _task_workflow_id_from_env() -> str | None:
+    for env_key in (
+        "MOONMIND_TASK_WORKFLOW_ID",
+        "MOONMIND_WORKFLOW_ID",
+        "TEMPORAL_WORKFLOW_ID",
+    ):
+        value = _runtime_text(os.getenv(env_key))
+        if value:
+            return value
+    return None
+
+
+def _task_run_id_from_env() -> str | None:
+    for env_key in ("MOONMIND_TASK_RUN_ID", "MOONMIND_RUN_ID", "TASK_RUN_ID"):
+        value = _runtime_text(os.getenv(env_key))
+        if value:
+            return value
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Artifacts (parity with batch-pr-resolver)
+# ---------------------------------------------------------------------------
+
+
+def _session_artifact_spool_path() -> Path | None:
+    raw = _runtime_text(os.getenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH"))
+    if not raw:
+        return None
+    return Path(raw)
+
+
+def _resolve_path(path: Path) -> Path:
+    try:
+        return path.resolve(strict=False)
+    except OSError:
+        return path
+
+
+def _default_artifacts_dir_requested(raw_artifacts_dir: str) -> bool:
+    raw = str(raw_artifacts_dir or "").strip()
+    if not raw:
+        return True
+    candidate = Path(raw)
+    return not candidate.is_absolute() and candidate.parts == ("artifacts",)
+
+
+def _artifacts_dir_from_task_context_path(path: Path) -> Path | None:
+    resolved = _resolve_path(path)
+    if resolved.name == "task_context.json" and resolved.parent.name == "artifacts":
+        return resolved.parent
+    return None
+
+
+def _resolve_artifacts_dir(
+    raw_artifacts_dir: str,
+    task_context_path: str | None = None,
+) -> Path:
+    raw = str(raw_artifacts_dir or "").strip()
+    if not _default_artifacts_dir_requested(raw):
+        return Path(raw)
+
+    spool_path = _session_artifact_spool_path()
+    if spool_path is not None:
+        return spool_path
+
+    for candidate in _repo_context_candidates(task_context_path):
+        artifacts_dir = _artifacts_dir_from_task_context_path(candidate)
+        if artifacts_dir is not None:
+            return artifacts_dir
+
+    return Path(raw or "artifacts")
+
+
+# ---------------------------------------------------------------------------
+# Child queue request
+# ---------------------------------------------------------------------------
+
+
+def _build_queue_request(
+    repo: str,
+    pr_number: int | str,
+    branch: str,
+    *,
+    head_sha: str | None,
+    runtime: RuntimeSelection,
+    merge_method: str,
+    max_iterations: int,
+    priority: int,
+    max_attempts: int,
+    skill_version: str = "1.0",
+    inherit_runtime_from_caller: bool = False,
+) -> dict[str, Any]:
+    publish_mode = resolve_publish_mode_for_skill("pr-resolver", "none")
+    runtime_payload: dict[str, Any] = {}
+    if runtime.mode:
+        runtime_payload["mode"] = runtime.mode
+    if runtime.model:
+        runtime_payload["model"] = runtime.model
+    if runtime.effort:
+        runtime_payload["effort"] = runtime.effort
+    if runtime.provider_profile:
+        runtime_payload["executionProfileRef"] = runtime.provider_profile
+
+    payload_dict: dict[str, Any] = {
+        "repository": repo,
+        "requiredCapabilities": ["gh"],
+        "task": {
+            "title": branch,
+            "instructions": f"Resolve PR #{pr_number} on branch `{branch}`.",
+            "skill": {
+                "name": "pr-resolver",
+                "version": skill_version,
+            },
+            "inputs": {
+                "repo": repo,
+                "pr": str(pr_number),
+                "branch": branch,
+                "mergeMethod": merge_method,
+                "maxIterations": max_iterations,
+            },
+            "git": {
+                "startingBranch": branch,
+                "targetBranch": branch,
+            },
+            "publish": {"mode": publish_mode},
+        },
+    }
+
+    idempotency_key = _idempotency_key(repo, pr_number, head_sha)
+    if idempotency_key:
+        payload_dict["idempotencyKey"] = idempotency_key
+
+    if inherit_runtime_from_caller:
+        payload_dict["runtimeInheritance"] = "caller"
+    if runtime.mode:
+        payload_dict["targetRuntime"] = runtime.mode
+    if runtime_payload:
+        payload_dict["task"]["runtime"] = runtime_payload
+
+    return {
+        "type": "task",
+        "priority": priority,
+        "maxAttempts": max_attempts,
+        "payload": payload_dict,
+    }
+
+
+def _build_request_records(
+    repo: str,
+    open_prs: list[dict[str, Any]],
+    args: argparse.Namespace,
+    runtime: RuntimeSelection,
+) -> tuple[list[JobSubmission], list[dict[str, Any]], int]:
+    """Partition discovered PRs into queue submissions and skip records.
+
+    Returns (queue_requests, skipped, matched_count) where ``matched_count`` is
+    the number of PRs passing every Dependabot filter *before* the ``maxPrs``
+    cap is applied.
+    """
+
+    skipped: list[dict[str, Any]] = []
+
+    def _get_pr_number(pr_data: dict[str, Any]) -> int:
+        try:
+            return int(pr_data.get("number", 0))
+        except (ValueError, TypeError):
+            return 0
+
+    open_prs_sorted = sorted(open_prs, key=_get_pr_number)
+    inherit_from_caller = _task_workflow_id_from_env() is not None
+    package_managers = list(args.package_managers or [])
+
+    matched: list[tuple[int | str | None, str, str | None]] = []
+    for pr in open_prs_sorted:
+        number = pr.get("number")
+        reason, branch = _classify_pr(
+            pr,
+            repo=repo,
+            title_pattern=args.title_regex,
+            package_managers=package_managers,
+            include_security_updates=args.include_security_updates,
+        )
+        if reason is not None:
+            skipped.append({"pr": number, "branch": branch, "reason": reason})
+            continue
+        matched.append((number, branch, _extract_head_sha(pr)))
+
+    matched_count = len(matched)
+
+    if args.max_prs is not None and matched_count > args.max_prs:
+        for number, branch, _head_sha in matched[args.max_prs :]:
+            skipped.append({"pr": number, "branch": branch, "reason": "max-prs-cap"})
+        matched = matched[: args.max_prs]
+
+    queue_requests: list[JobSubmission] = []
+    for number, branch, head_sha in matched:
+        queue_request = _build_queue_request(
+            repo,
+            number,
+            branch,
+            head_sha=head_sha,
+            runtime=runtime,
+            merge_method=args.merge_method,
+            max_iterations=args.max_iterations,
+            priority=args.priority,
+            max_attempts=args.max_attempts,
+            skill_version=args.skill_version,
+            inherit_runtime_from_caller=inherit_from_caller,
+        )
+        queue_requests.append(
+            JobSubmission(queue_request=queue_request, pr_number=number, branch=branch)
+        )
+
+    return queue_requests, skipped, matched_count
+
+
+# ---------------------------------------------------------------------------
+# Submission
+# ---------------------------------------------------------------------------
+
+
+def _read_worker_token() -> str | None:
+    token = str(os.getenv("MOONMIND_WORKER_TOKEN", "")).strip()
+    if token:
+        return token
+    token_file = str(os.getenv("MOONMIND_WORKER_TOKEN_FILE", "")).strip()
+    if token_file:
+        path = Path(token_file)
+        if path.exists():
+            return path.read_text(encoding="utf-8").strip() or None
+    return None
+
+
+async def _submit_jobs_via_http(
+    queue_requests: list[JobSubmission],
+    *,
+    moonmind_url: str,
+    worker_token: str | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    created: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if worker_token:
+        headers["X-MoonMind-Worker-Token"] = worker_token
+    task_workflow_id = _task_workflow_id_from_env()
+    if task_workflow_id:
+        headers["X-MoonMind-Task-Workflow-Id"] = task_workflow_id
+    task_run_id = _task_run_id_from_env()
+    if task_run_id:
+        headers["X-MoonMind-Task-Run-Identifier"] = task_run_id
+    base = moonmind_url.rstrip("/")
+    async with httpx.AsyncClient(
+        base_url=base, timeout=30.0, headers=headers
+    ) as client:
+        for submission in queue_requests:
+            request = submission.queue_request
+            body = {
+                "type": str(request["type"]),
+                "payload": request["payload"],
+                "priority": int(request.get("priority", 0)),
+                "maxAttempts": int(request.get("maxAttempts", 3)),
+            }
+            try:
+                response = await client.post(API_EXECUTIONS_ENDPOINT, json=body)
+                response.raise_for_status()
+                data = response.json()
+                job_id = (
+                    str(
+                        data.get("workflowId")
+                        or data.get("taskId")
+                        or data.get("id")
+                        or ""
+                    )
+                    or "(unknown)"
+                )
+                created.append(
+                    {
+                        "pr": submission.pr_number,
+                        "branch": submission.branch,
+                        "jobId": job_id,
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001 - record per-PR submission errors
+                errors.append(
+                    {
+                        "pr": submission.pr_number,
+                        "branch": submission.branch,
+                        "error": str(exc),
+                    }
+                )
+    return created, errors
+
+
+async def _submit_jobs(
+    queue_requests: list[JobSubmission],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    moonmind_url = str(os.getenv("MOONMIND_URL", "")).strip()
+    if moonmind_url:
+        worker_token = _read_worker_token()
+        return await _submit_jobs_via_http(
+            queue_requests,
+            moonmind_url=moonmind_url,
+            worker_token=worker_token,
+        )
+
+    message = (
+        "MOONMIND_URL is not set; batch-dependabot-resolver requires the MoonMind "
+        "Temporal execution API and cannot submit via the removed legacy DB queue."
+    )
+    return [], [
+        {
+            "pr": submission.pr_number,
+            "branch": submission.branch,
+            "error": message,
+        }
+        for submission in queue_requests
+    ]
+
+
+def _would_queue_records(queue_requests: list[JobSubmission]) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for submission in queue_requests:
+        payload = submission.queue_request.get("payload", {})
+        records.append(
+            {
+                "pr": submission.pr_number,
+                "branch": submission.branch,
+                "idempotencyKey": payload.get("idempotencyKey"),
+            }
+        )
+    return records
+
+
+# ---------------------------------------------------------------------------
+# Artifact writing
+# ---------------------------------------------------------------------------
+
+
+def _write_artifacts(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2))
+
+
+def _write_run_artifacts(artifacts_dir: Path, payload: dict[str, Any]) -> None:
+    """Write the result payload and (when applicable) the no-op outcome file.
+
+    ``skill_outcome.json`` with ``status: "no_op"`` is written only when the run
+    queued zero executions, hit no submission errors, and was not a dry run —
+    i.e. a deliberate "no matching Dependabot PRs" outcome.
+    """
+
+    _write_artifacts(artifacts_dir / "batch_dependabot_resolver_result.json", payload)
+    if (
+        payload.get("created") == 0
+        and not payload.get("errors")
+        and not payload.get("dryRun")
+    ):
+        _write_artifacts(
+            artifacts_dir / "skill_outcome.json",
+            {
+                "schema_version": 1,
+                "status": "no_op",
+                "reason": "no_dependabot_prs_matched",
+                "evidence": {
+                    "requested": payload.get("requested"),
+                    "skipped": payload.get("skipped"),
+                },
+            },
+        )
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def _flatten_package_managers(values: list[str] | None) -> list[str]:
+    if not values:
+        return []
+    flattened: list[str] = []
+    for value in values:
+        for token in str(value).split(","):
+            token = token.strip()
+            if token:
+                flattened.append(token)
+    return flattened
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Discover open Dependabot version-bump PRs and submit one pr-resolver "
+            "task for each matching PR."
+        )
+    )
+    parser.add_argument("--repo", default=None, help="Target repo in owner/repo format.")
+    parser.add_argument("--state", default="open", help="PR state filter (default: open).")
+    parser.add_argument("--merge-method", default="squash")
+    parser.add_argument("--max-iterations", type=int, default=3)
+    parser.add_argument("--max-attempts", type=int, default=3)
+    parser.add_argument("--priority", type=int, default=0)
+    parser.add_argument(
+        "--package-managers",
+        action="append",
+        default=None,
+        help="Allowlist of package managers (repeatable or comma-separated).",
+    )
+    parser.add_argument(
+        "--title-regex",
+        default=DEFAULT_TITLE_REGEX,
+        help="Version-bump title matcher (default: Bump <dep> from <old> to <new>).",
+    )
+    parser.add_argument(
+        "--include-security-updates",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Include Dependabot security-update PRs (default: true).",
+    )
+    parser.add_argument(
+        "--max-prs",
+        type=int,
+        default=None,
+        help="Optional safety cap on the number of resolver workflows queued.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Compute and report matches without submitting any executions.",
+    )
+    parser.add_argument("--runtime-mode", default=None)
+    parser.add_argument("--runtime-model", default=None)
+    parser.add_argument("--runtime-effort", default=None)
+    parser.add_argument("--runtime-provider-profile", default=None)
+    parser.add_argument("--task-context-path", default=None)
+    parser.add_argument("--skill-version", default="1.0")
+    parser.add_argument("--artifacts-dir", default="artifacts")
+    args = parser.parse_args(argv)
+    args.package_managers = _flatten_package_managers(args.package_managers)
+    return args
+
+
+async def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
+    repo = _resolve_repo(args.repo, args.task_context_path)
+    if not repo:
+        raise RuntimeError("No repository provided and none could be inferred.")
+    if args.state.strip() != "open":
+        print(f"warning: non-open state requested: {args.state}")
+    runtime = _resolve_runtime_selection(args)
+
+    open_prs = _run_pr_list(repo=repo, state=args.state)
+    queue_requests, skipped, matched_count = _build_request_records(
+        repo, open_prs, args, runtime
+    )
+
+    if args.dry_run:
+        created: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        would_queue = _would_queue_records(queue_requests)
+    else:
+        created, errors = await _submit_jobs(queue_requests)
+        would_queue = []
+
+    payload = {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "actor": os.getenv("GITHUB_ACTOR") or os.getenv("USER") or "unknown",
+        "repository": repo,
+        "state": args.state,
+        "dryRun": bool(args.dry_run),
+        "filters": {
+            "titleRegex": args.title_regex,
+            "packageManagers": list(args.package_managers or []),
+            "includeSecurityUpdates": bool(args.include_security_updates),
+            "maxPrs": args.max_prs,
+        },
+        "runtime": {
+            "mode": runtime.mode,
+            "model": runtime.model,
+            "effort": runtime.effort,
+            "executionProfileRef": runtime.provider_profile,
+        },
+        "requested": len(open_prs),
+        "matched": matched_count,
+        "created": len(created),
+        "queued": created,
+        "wouldQueue": would_queue,
+        "skipped": skipped,
+        "errors": errors,
+    }
+    if not args.dry_run and payload["created"] == 0:
+        payload["message"] = "No matching Dependabot PRs were queued."
+
+    artifacts_dir = _resolve_artifacts_dir(args.artifacts_dir, args.task_context_path)
+    _write_run_artifacts(artifacts_dir, payload)
+
+    print(json.dumps(payload, indent=2))
+    print(
+        f"matched={matched_count} queued={payload['created']} "
+        f"would_queue={len(would_queue)} skipped={len(skipped)} "
+        f"errors={len(errors)} repo={repo} dry_run={bool(args.dry_run)}"
+    )
+    if errors:
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(asyncio.run(main()))
+    except Exception as exc:
+        import sys
+        import traceback
+
+        traceback.print_exc(file=sys.stderr)
+        print(
+            f"error: batch-dependabot-resolver failed: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise SystemExit(1)
