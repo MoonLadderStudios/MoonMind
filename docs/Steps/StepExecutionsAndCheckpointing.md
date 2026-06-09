@@ -1220,7 +1220,7 @@ Step Executions with Checkpointing supports MoonMind's core principles:
 1. **Orchestrate, Don't Recreate**: agents execute attempts; MoonMind owns orchestration, state, and evidence.
 2. **Own Your Data**: attempt context, outputs, diffs, and checkpoints are operator-controlled artifacts.
 3. **Resilient by Default**: repeated work is explicit, bounded, idempotency-aware, and recoverable.
-4. **Spec-Driven Development**: gates and attempts preserve traceability from requirement to implementation to evidence.
+4. **Docs-First Development and Traceability**: gates and attempts preserve traceability from requirement to implementation to evidence, anchored in long-lived `docs/` rather than disposable spec packets.
 5. **Continuous Improvement**: failed attempts produce structured evidence and improvement signals rather than disappearing into logs.
 
 The key desired-state rule is simple:
