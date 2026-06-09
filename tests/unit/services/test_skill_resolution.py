@@ -74,6 +74,25 @@ async def test_built_in_loader_discovers_packaged_agent_skills():
     assert discovered["moonspec-breakdown"].provenance.source_kind == AgentSkillSourceKind.BUILT_IN
     assert discovered["moonspec-breakdown"].provenance.source_path
 
+async def test_built_in_loader_resolves_batch_dependabot_resolver_by_name(tmp_path):
+    """FR-012: batch-dependabot-resolver MUST be resolvable by name through the
+    built-in fallback list so a recurring queue_task schedule can target it.
+
+    Point skills_root at an empty directory so the packaged-folder scan finds
+    nothing; only the built-in fallback name list can supply the skill. This
+    exercises the fallback wiring directly (parity with batch-pr-resolver),
+    rather than incidentally rediscovering the checked-in skill folder.
+    """
+    loader = BuiltInSkillLoader(skills_root=tmp_path)
+    context = SkillResolutionContext(snapshot_id="snap-dependabot")
+
+    results = await loader.load_skills(SkillSelector(include=[]), context)
+
+    resolved_names = {entry.skill_name for entry in results}
+    assert "batch-dependabot-resolver" in resolved_names
+    # Parity: the general-purpose batch resolver is guaranteed by the same path.
+    assert "batch-pr-resolver" in resolved_names
+
 async def test_builtin_loader_ignores_cwd_agents_skills_projection(
     monkeypatch,
     tmp_path,

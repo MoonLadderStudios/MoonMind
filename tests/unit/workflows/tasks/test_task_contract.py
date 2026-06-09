@@ -989,6 +989,17 @@ def test_jira_side_effect_skills_reject_repository_publish_modes(
     assert resolve_publish_mode_for_skill(skill_id, "none") == "none"
 
 
+@pytest.mark.parametrize(
+    "skill_id",
+    ["pr-resolver", "batch-pr-resolver", "batch-dependabot-resolver"],
+)
+def test_self_managed_publish_skills_force_none(skill_id: str) -> None:
+    assert resolve_publish_mode_for_skill(skill_id, None) == "none"
+    assert resolve_publish_mode_for_skill(skill_id, "none") == "none"
+    with pytest.raises(TaskContractError):
+        resolve_publish_mode_for_skill(skill_id, "pr")
+
+
 def test_jira_issue_updater_allows_explicit_repository_publish_modes() -> None:
     assert resolve_publish_mode_for_skill("jira-issue-updater", "pr") == "pr"
     assert resolve_publish_mode_for_skill("jira-issue-updater", "branch") == "branch"

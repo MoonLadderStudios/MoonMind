@@ -49,7 +49,9 @@ _CONTAINER_VOLUME_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _CONTAINER_RESERVED_ENV_KEYS = frozenset({"ARTIFACT_DIR", "JOB_ID", "REPOSITORY"})
 _PROPOSAL_POLICY_TARGETS = ("project", "moonmind")
 _PROPOSAL_SEVERITIES = ("low", "medium", "high", "critical")
-_SELF_MANAGED_PUBLISH_SKILLS = frozenset({"pr-resolver", "batch-pr-resolver"})
+_SELF_MANAGED_PUBLISH_SKILLS = frozenset(
+    {"pr-resolver", "batch-pr-resolver", "batch-dependabot-resolver"}
+)
 _NON_REPOSITORY_SIDE_EFFECT_SKILLS = frozenset(
     {"jira-issue-creator", "jira-issue-updater", "jira-pr-verify", "jira-verify"}
 )
