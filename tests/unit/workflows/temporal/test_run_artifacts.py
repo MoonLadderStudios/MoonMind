@@ -2730,6 +2730,183 @@ async def test_run_execution_stage_jira_implement_not_required_skips_native_pr(
 
 
 @pytest.mark.asyncio
+async def test_run_execution_stage_moonspec_verify_blocks_native_pr_creation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "MoonLadderStudios/MoonMind"
+    create_pr_called = False
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, object] | None = None,
+        **_kwargs: object,
+    ) -> object:
+        nonlocal create_pr_called
+        if activity_type == "repo.create_pr":
+            create_pr_called = True
+            return {"url": "https://github.com/MoonLadderStudios/MoonMind/pull/999"}
+        if activity_type == "agent_skill.resolve":
+            return {
+                "manifestRef": "art_skill_snapshot_1",
+                "skills": [{"name": "moonspec-verify"}],
+            }
+
+        if activity_type == "artifact.read":
+            artifact_ref = (
+                payload.get("artifact_ref")
+                if isinstance(payload, dict)
+                else getattr(payload, "artifact_ref", None)
+            )
+            if artifact_ref == "artifact://registry/1":
+                return json.dumps(
+                    {
+                        "skills": [
+                            {
+                                "name": "auto",
+                                "version": "1.0.0",
+                                "description": "Auto",
+                                "inputs": {"schema": {"type": "object"}},
+                                "outputs": {"schema": {"type": "object"}},
+                                "executor": {
+                                    "activity_type": "mm.tool.execute",
+                                    "selector": {"mode": "by_capability"},
+                                },
+                                "requirements": {"capabilities": ["sandbox"]},
+                                "policies": {
+                                    "timeouts": {
+                                        "start_to_close_seconds": 1800,
+                                        "schedule_to_close_seconds": 3600,
+                                    },
+                                    "retries": {"max_attempts": 1},
+                                },
+                            }
+                        ]
+                    }
+                ).encode("utf-8")
+            return json.dumps(
+                {
+                    "plan_version": "1.0",
+                    "metadata": {
+                        "title": "MoonSpec Verify",
+                        "created_at": "2026-03-12T00:00:00Z",
+                        "registry_snapshot": {
+                            "digest": "reg:sha256:" + ("a" * 64),
+                            "artifact_ref": "artifact://registry/1",
+                        },
+                    },
+                    "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+                    "nodes": [
+                        {
+                            "id": "tpl:jira-orchestrate:1.0.0:13:verify",
+                            "tool": {
+                                "type": "agent_runtime",
+                                "name": "auto",
+                                "version": "1.0.0",
+                            },
+                            "inputs": {
+                                "runtime": {"mode": "codex"},
+                                "selectedSkill": "moonspec-verify",
+                                "targetBranch": "generated-target",
+                                "instructions": "Run MoonSpec verify.",
+                            },
+                            "options": {},
+                        }
+                    ],
+                    "edges": [],
+                }
+            ).encode("utf-8")
+        return {"status": "COMPLETED", "outputs": {}}
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _args: object,
+        **_kwargs: object,
+    ) -> object:
+        return {
+            "summary": "Verdict: ADDITIONAL_WORK_NEEDED",
+            "metadata": {
+                "verdict": "ADDITIONAL_WORK_NEEDED",
+                "operator_summary": "Overview route still renders full detail sections.",
+                "diagnostics_ref": "art_verify_report",
+                "push_status": "pushed",
+                "branch": "804-workflow-detail-tabs",
+                "baseRef": "origin/main",
+            },
+            "output_refs": [],
+        }
+
+    async def fake_bind_task_scoped_session(
+        self: MoonMindRunWorkflow,
+        request: object,
+    ) -> object:
+        return request
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "execute_activity", fake_execute_activity
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        _immediate_wait_condition,
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_maybe_bind_task_scoped_session",
+        fake_bind_task_scoped_session,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            run_workflow_module.RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+            run_workflow_module.NATIVE_PR_BRANCH_DEFAULTS_PATCH,
+            run_workflow_module.RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH,
+        },
+    )
+
+    await workflow._run_execution_stage(
+        parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
+        plan_ref="art_plan_1",
+    )
+
+    status, message, publish_failure = workflow._determine_publish_completion(
+        parameters={"publishMode": "pr"}
+    )
+
+    assert not create_pr_called
+    assert workflow._publish_status == "not_required"
+    assert workflow._publish_context["publicationBlockedBy"] == "moonspec_verify"
+    assert status == "failed"
+    assert publish_failure is True
+    assert "MoonSpec verification did not approve publication" in message
+
+
+@pytest.mark.asyncio
 async def test_run_execution_stage_publish_mode_pr_jules_skips_native_pr(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
