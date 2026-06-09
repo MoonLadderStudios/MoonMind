@@ -167,6 +167,7 @@ from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
 )
 from moonmind.workflows.temporal.story_output_tools import (
     JIRA_CHECK_BLOCKERS_TOOL_NAME,
+    JIRA_LOAD_PRESET_BRIEF_TOOL_NAME,
 )
 
 class CmdRes:
@@ -1207,6 +1208,62 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
                         "decision": {"type": "string", "enum": ["continue", "blocked"]},
                         "blockingIssues": {"type": "array"},
                         "resolvedBlockingIssues": {"type": "array"},
+                        "summary": {"type": "string"},
+                    },
+                    "additionalProperties": True,
+                }
+            },
+            "executor": {
+                "activity_type": "mm.tool.execute",
+                "selector": {"mode": "by_capability"},
+            },
+            "requirements": {"capabilities": ["integration:jira"]},
+            "policies": {
+                "timeouts": {
+                    "start_to_close_seconds": 60,
+                    "schedule_to_close_seconds": 120,
+                },
+                "retries": {"max_attempts": 1},
+            },
+        }
+
+    if name == JIRA_LOAD_PRESET_BRIEF_TOOL_NAME:
+        return {
+            "name": name,
+            "version": version,
+            "description": (
+                "Load a compact Jira preset brief through MoonMind's trusted "
+                "Jira service."
+            ),
+            "inputs": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "issueKey": {"type": "string"},
+                        "issue_key": {"type": "string"},
+                        "jiraIssueKey": {"type": "string"},
+                        "jira_issue_key": {"type": "string"},
+                        "jira": {"type": "object"},
+                        "issue": {"type": "object"},
+                    },
+                    "additionalProperties": True,
+                }
+            },
+            "outputs": {
+                "schema": {
+                    "type": "object",
+                    "required": [
+                        "trustedSource",
+                        "jiraIssueKey",
+                        "jiraPresetBrief",
+                        "summary",
+                    ],
+                    "properties": {
+                        "trustedSource": {"type": "string"},
+                        "jiraIssueKey": {"type": "string"},
+                        "jiraPresetBrief": {"type": "string"},
+                        "jiraStepInstructions": {"type": "string"},
+                        "jiraIssue": {"type": "object"},
                         "summary": {"type": "string"},
                     },
                     "additionalProperties": True,
