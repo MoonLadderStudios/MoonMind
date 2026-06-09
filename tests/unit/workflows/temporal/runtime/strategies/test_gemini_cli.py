@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from moonmind.workflows.temporal.runtime.strategies import (
     RUNTIME_STRATEGIES,
     GeminiCliStrategy,
@@ -75,8 +77,28 @@ class TestGeminiCliProperties:
 # build_command tests (DOC-REQ-003 validation)
 # ---------------------------------------------------------------------------
 
+_RUNTIME_MODEL_ENV_KEYS = (
+    "MOONMIND_CODEX_MODEL",
+    "CODEX_MODEL",
+    "MOONMIND_GEMINI_MODEL",
+    "GEMINI_MODEL",
+    "MOONMIND_CLAUDE_MODEL",
+    "CLAUDE_MODEL",
+)
+
 class TestGeminiCliBuildCommand:
     """Verify strategy produces identical output to the legacy elif block."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_runtime_model_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Assert in-code runtime defaults, not environment overrides.
+
+        Managed-agent containers (where the unit suite runs) may set
+        ``MOONMIND_GEMINI_MODEL`` etc., which would otherwise mask the in-code
+        defaults these "default tests" intend to assert.
+        """
+        for key in _RUNTIME_MODEL_ENV_KEYS:
+            monkeypatch.delenv(key, raising=False)
 
     def test_basic_prompt(self) -> None:
         s = GeminiCliStrategy()
@@ -86,7 +108,7 @@ class TestGeminiCliBuildCommand:
         # When profile.default_model is None, gemini_cli runtime default applies.
         assert cmd == [
             "gemini",
-            "--model", "gemini-3.1-pro-preview",
+            "--model", "gemini-3.1-pro",
             "--yolo", "--prompt", "Fix the bug",
         ]
 
@@ -124,7 +146,7 @@ class TestGeminiCliBuildCommand:
         # No --effort, but runtime default model applies since default_model is None.
         assert cmd == [
             "gemini",
-            "--model", "gemini-3.1-pro-preview",
+            "--model", "gemini-3.1-pro",
             "--yolo", "--prompt", "Think hard",
         ]
 
@@ -156,7 +178,7 @@ class TestGeminiCliBuildCommand:
         # Runtime default model still applies.
         assert cmd == [
             "gemini",
-            "--model", "gemini-3.1-pro-preview",
+            "--model", "gemini-3.1-pro",
             "--yolo", "--prompt", "Think hard",
         ]
 
@@ -166,7 +188,7 @@ class TestGeminiCliBuildCommand:
         request = _make_request()
         cmd = s.build_command(profile, request)
         # No prompt but runtime default model still applies.
-        assert cmd == ["gemini", "--model", "gemini-3.1-pro-preview"]
+        assert cmd == ["gemini", "--model", "gemini-3.1-pro"]
 
     def test_custom_command_template(self) -> None:
         s = GeminiCliStrategy()
@@ -176,7 +198,7 @@ class TestGeminiCliBuildCommand:
         # Runtime default model applies since default_model is None.
         assert cmd == [
             "gemini", "--sandbox",
-            "--model", "gemini-3.1-pro-preview",
+            "--model", "gemini-3.1-pro",
             "--yolo", "--prompt", "Test",
         ]
 

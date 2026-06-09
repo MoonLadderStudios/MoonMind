@@ -631,7 +631,7 @@ class WorkflowSettings(BaseSettings):
     )
     codex_environment: Optional[str] = Field(None, alias="CODEX_ENV")
     codex_model: Optional[str] = Field(
-        "gpt-5.3-codex",
+        "gpt-5.5",
         validation_alias=AliasChoices("MOONMIND_CODEX_MODEL", "CODEX_MODEL"),
     )
     codex_effort: Optional[str] = Field(
@@ -1377,7 +1377,7 @@ class WorkflowSettings(BaseSettings):
                 dict.fromkeys((*self.allowed_skills, self.default_skill))
             )
         if not self.codex_model:
-            self.codex_model = "gpt-5.3-codex"
+            self.codex_model = "gpt-5.5"
         if not self.codex_effort:
             self.codex_effort = "high"
         if not self.claude_volume_name:
