@@ -649,7 +649,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "is_default": True,
             "provider_id": "google",
             "provider_label": "Google",
-            "default_model": None,  # inherits runtime default: gemini-3.1-pro-preview
+            "default_model": None,  # inherits runtime default: gemini-3.1-pro
             "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
             "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME,
             "volume_ref": get_provider_default("gemini_cli", "volume_ref"),
@@ -664,7 +664,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "is_default": True,
             "provider_id": "openai",
             "provider_label": "OpenAI",
-            "default_model": None,  # inherits runtime default: gpt-5.4
+            "default_model": None,  # inherits runtime default: gpt-5.5
             "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
             "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME,
             "volume_ref": get_provider_default("codex_cli", "volume_ref"),
@@ -677,7 +677,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "is_default": True,
             "provider_id": "anthropic",
             "provider_label": "Anthropic",
-            "default_model": None,  # inherits runtime default: claude-opus-4-7
+            "default_model": None,  # inherits runtime default: claude-opus-4-8
             "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
             "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME,
             "volume_ref": get_provider_default("claude_code", "volume_ref"),

@@ -576,7 +576,7 @@ class TestWorkflowSettings:
         """Task defaults should provide stable queue execution baselines."""
 
         settings = WorkflowSettings(_env_file=None)
-        assert settings.codex_model == "gpt-5.3-codex"
+        assert settings.codex_model == "gpt-5.5"
         assert settings.codex_effort == "high"
         assert settings.default_task_runtime == "codex_cli"
         assert settings.default_publish_mode == "pr"

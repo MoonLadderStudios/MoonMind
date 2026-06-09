@@ -118,6 +118,27 @@ class TestClaudeCodeProperties:
     def test_default_auth_mode(self) -> None:
         assert ClaudeCodeStrategy().default_auth_mode == "api_key"
 
+_RUNTIME_MODEL_ENV_KEYS = (
+    "MOONMIND_CODEX_MODEL",
+    "CODEX_MODEL",
+    "MOONMIND_GEMINI_MODEL",
+    "GEMINI_MODEL",
+    "MOONMIND_CLAUDE_MODEL",
+    "CLAUDE_MODEL",
+)
+
+@pytest.fixture
+def _clear_runtime_model_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Assert in-code runtime defaults, not environment overrides.
+
+    Managed-agent containers (where the unit suite runs) may set
+    ``MOONMIND_CODEX_MODEL`` / ``MOONMIND_GEMINI_MODEL`` etc., which would
+    otherwise mask the in-code defaults these "default tests" intend to assert.
+    """
+    for key in _RUNTIME_MODEL_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+@pytest.mark.usefixtures("_clear_runtime_model_env")
 class TestClaudeCodeBuildCommand:
     def test_basic_prompt(self) -> None:
         s = ClaudeCodeStrategy()
@@ -127,7 +148,7 @@ class TestClaudeCodeBuildCommand:
         # When no profile default_model is set, the claude_code runtime default applies.
         assert cmd == [
             "claude",
-            "--model", "claude-opus-4-7",
+            "--model", "claude-opus-4-8",
             "-p", "--dangerously-skip-permissions", "Refactor this",
         ]
 
@@ -167,7 +188,7 @@ class TestClaudeCodeBuildCommand:
         request = _make_request()
         cmd = s.build_command(profile, request)
         # No instruction_ref but runtime default model still applies.
-        assert cmd == ["claude", "--model", "claude-opus-4-7", "-p", "--dangerously-skip-permissions"]
+        assert cmd == ["claude", "--model", "claude-opus-4-8", "-p", "--dangerously-skip-permissions"]
 
     def test_anthropic_model_env_suppresses_model_flag(self) -> None:
         """When ANTHROPIC_MODEL is in env_overrides (MiniMax profile), --model must be omitted."""
@@ -689,6 +710,7 @@ class TestCodexCliProperties:
 
         assert observed is None
 
+@pytest.mark.usefixtures("_clear_runtime_model_env")
 class TestCodexCliBuildCommand:
     def test_basic_prompt(self) -> None:
         s = CodexCliStrategy()
@@ -698,7 +720,7 @@ class TestCodexCliBuildCommand:
         request = _make_request(instruction_ref="Fix the bug")
         cmd = s.build_command(profile, request)
         # When no profile default_model set, codex_cli runtime default applies.
-        assert cmd == ["codex", "exec", "-m", "gpt-5.4", "Fix the bug"]
+        assert cmd == ["codex", "exec", "-m", "gpt-5.5", "Fix the bug"]
 
     def test_with_model(self) -> None:
         s = CodexCliStrategy()
@@ -744,7 +766,7 @@ class TestCodexCliBuildCommand:
         )
         request = _make_request(instruction_ref="Go")
         cmd = s.build_command(profile, request)
-        assert cmd == ["codex", "exec", "-m", "gpt-5.4", "Go"]
+        assert cmd == ["codex", "exec", "-m", "gpt-5.5", "Go"]
 
     def test_no_prompt(self) -> None:
         s = CodexCliStrategy()
@@ -754,7 +776,7 @@ class TestCodexCliBuildCommand:
         request = _make_request()
         cmd = s.build_command(profile, request)
         # No instruction_ref but runtime default model still applies.
-        assert cmd == ["codex", "exec", "-m", "gpt-5.4"]
+        assert cmd == ["codex", "exec", "-m", "gpt-5.5"]
 
     def test_suppress_default_model_flag_omits_default_m_flag(self) -> None:
         s = CodexCliStrategy()
