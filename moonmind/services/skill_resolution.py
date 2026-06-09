@@ -90,6 +90,7 @@ class BuiltInSkillLoader(SkillLoader):
             "moonmind-default-reviewer",
             "pr-resolver",
             "batch-pr-resolver",
+            "batch-dependabot-resolver",
             "fix-comments",
             "fix-ci",
             "fix-merge-conflicts",
