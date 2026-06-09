@@ -137,10 +137,14 @@ class TestResolveEffectiveModelRuntimeDefault:
         ],
     )
     def test_runtime_default_for_each_canonical_id(self, runtime_id, expected_model):
+        # Pass an empty env so the test asserts the in-code runtime default
+        # rather than any ambient MOONMIND_*_MODEL / *_MODEL override that may
+        # be set in the managed-agent container the unit suite runs inside.
         model, source = resolve_effective_model(
             runtime_id=runtime_id,
             profile=None,
             requested_model=None,
+            env={},
         )
         assert model == expected_model
         assert source == "runtime_default"
@@ -186,6 +190,7 @@ class TestResolveEffectiveModelNone:
             runtime_id=None,
             profile=None,
             requested_model=None,
+            env={},
         )
         assert model == "gpt-5.5"
         assert source == "runtime_default"
@@ -228,6 +233,7 @@ class TestPrecedenceOrder:
             runtime_id="codex_cli",
             profile=profile,
             requested_model=None,
+            env={},
         )
         assert model == "gpt-5.5"
         assert source == "runtime_default"
