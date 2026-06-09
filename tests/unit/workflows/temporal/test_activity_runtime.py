@@ -39,6 +39,7 @@ from moonmind.workflows.temporal.activity_catalog import (
     AGENT_RUNTIME_FLEET,
     ARTIFACTS_FLEET,
     DEPLOYMENT_FLEET,
+    INTEGRATIONS_FLEET,
     SANDBOX_FLEET,
     build_default_activity_catalog,
 )
@@ -804,6 +805,41 @@ async def test_default_skill_registry_payload_uses_curated_deployment_tool_defin
     route = build_default_activity_catalog().resolve_skill(parsed[0])
     assert route.fleet == DEPLOYMENT_FLEET
     assert route.task_queue == "mm.activity.deployment"
+
+async def test_default_skill_registry_payload_routes_jira_preset_brief_to_integrations():
+    payload = _default_skill_registry_payload(
+        parameters={
+            "task": {
+                "steps": [
+                    {
+                        "tool": {
+                            "type": "skill",
+                            "name": "jira.load_preset_brief",
+                            "version": "1.0",
+                        }
+                    }
+                ]
+            }
+        }
+    )
+
+    skills = payload.get("skills")
+    assert isinstance(skills, list)
+    assert len(skills) == 1
+    definition = skills[0]
+
+    assert definition["name"] == "jira.load_preset_brief"
+    assert definition["requirements"]["capabilities"] == ["integration:jira"]
+    assert definition["policies"]["timeouts"] == {
+        "start_to_close_seconds": 60,
+        "schedule_to_close_seconds": 120,
+    }
+
+    parsed = parse_skill_registry(payload)
+    assert parsed[0].required_capabilities == ("integration:jira",)
+    route = build_default_activity_catalog().resolve_skill(parsed[0])
+    assert route.fleet == INTEGRATIONS_FLEET
+    assert route.task_queue == "mm.activity.integrations"
 
 async def test_curated_pentest_activity_binding_is_registered_on_agent_runtime_fleet():
     bindings = build_activity_bindings(
