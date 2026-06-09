@@ -82,6 +82,41 @@ _PR_RESOLVER_RESULT_PATH_LIST = ", ".join(
 )
 
 
+def managed_run_status_metadata(record: ManagedRunRecord) -> dict[str, Any]:
+    """Return compact status metadata that is safe for workflow history."""
+
+    metadata: dict[str, Any] = {"runtimeId": record.runtime_id}
+    timestamp_fields = {
+        "startedAt": record.started_at,
+        "finishedAt": record.finished_at,
+        "lastHeartbeatAt": record.last_heartbeat_at,
+        "lastLogAt": record.last_log_at,
+    }
+    for key, value in timestamp_fields.items():
+        if value is not None:
+            metadata[key] = value.isoformat()
+
+    scalar_fields = {
+        "pid": record.pid,
+        "exitCode": record.exit_code,
+        "lastLogOffset": record.last_log_offset,
+        "stdoutArtifactRef": record.stdout_artifact_ref,
+        "stderrArtifactRef": record.stderr_artifact_ref,
+        "diagnosticsRef": record.diagnostics_ref,
+        "observabilityEventsRef": record.observability_events_ref,
+        "liveStreamCapable": record.live_stream_capable,
+        "sessionId": record.session_id,
+        "sessionEpoch": record.session_epoch,
+        "containerId": record.container_id,
+        "threadId": record.thread_id,
+        "activeTurnId": record.active_turn_id,
+    }
+    for key, value in scalar_fields.items():
+        if value is not None:
+            metadata[key] = value
+    return metadata
+
+
 def _normalize_pr_resolver_text(value: Any) -> str:
     """Return one normalized resolver status candidate."""
 
@@ -659,6 +694,7 @@ class ManagedAgentAdapter:
                     agentKind="managed",
                     agentId=record.agent_id,
                     status=record.status,
+                    metadata=managed_run_status_metadata(record),
                 )
         return AgentRunStatus(
             runId=run_id,

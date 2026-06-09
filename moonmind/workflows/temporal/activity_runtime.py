@@ -69,6 +69,7 @@ from moonmind.workflows.adapters.managed_agent_adapter import (
     ManagedAgentAdapter,
     ManagedProfileLaunchContext,
     build_managed_profile_launch_context,
+    managed_run_status_metadata,
 )
 from moonmind.utils.logging import SecretRedactor, redact_sensitive_payload, redact_sensitive_text
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
@@ -6563,7 +6564,7 @@ class TemporalAgentRuntimeActivities:
             agentKind="managed",
             agentId=record.agent_id or agent_id,
             status=record.status,
-            metadata={"runtimeId": record.runtime_id},
+            metadata=managed_run_status_metadata(record),
         )
         return status
 

@@ -636,7 +636,22 @@ def _session_record(session_id: str, *, status: str) -> dict[str, Any]:
 async def test_status_running_record_returns_typed_model(tmp_path: Path) -> None:
     """T1.1 — running record yields typed AgentRunStatus."""
     store = _make_store(tmp_path)
-    _save_record(store, run_id="run-1", status="running", runtime_id="codex_cli")
+    now = datetime.now(tz=UTC)
+    store.save(
+        ManagedRunRecord(
+            runId="run-1",
+            agentId="codex_cli",
+            runtimeId="codex_cli",
+            status="running",
+            startedAt=now,
+            lastHeartbeatAt=now + timedelta(seconds=30),
+            lastLogAt=now + timedelta(seconds=20),
+            lastLogOffset=128,
+            stdoutArtifactRef="run-1/stdout.log",
+            diagnosticsRef="run-1/diagnostics.json",
+            activeTurnId="turn-1",
+        )
+    )
 
     activities = TemporalAgentRuntimeActivities(run_store=store)
     result = await activities.agent_runtime_status({"run_id": "run-1", "agent_id": "codex_cli"})
@@ -644,6 +659,13 @@ async def test_status_running_record_returns_typed_model(tmp_path: Path) -> None
     assert isinstance(result, AgentRunStatus), f"Expected AgentRunStatus, got {type(result)}"
     assert result.status == "running"
     assert result.agent_kind == "managed"
+    assert result.metadata["runtimeId"] == "codex_cli"
+    assert result.metadata["lastHeartbeatAt"] == (now + timedelta(seconds=30)).isoformat()
+    assert result.metadata["lastLogAt"] == (now + timedelta(seconds=20)).isoformat()
+    assert result.metadata["lastLogOffset"] == 128
+    assert result.metadata["stdoutArtifactRef"] == "run-1/stdout.log"
+    assert result.metadata["diagnosticsRef"] == "run-1/diagnostics.json"
+    assert result.metadata["activeTurnId"] == "turn-1"
 
 async def test_status_completed_record_returns_typed_model(tmp_path: Path) -> None:
     """T1.2 — completed record yields typed AgentRunStatus with correct status."""
