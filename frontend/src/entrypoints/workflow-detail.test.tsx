@@ -3390,10 +3390,7 @@ describe('Workflow Detail Entrypoint', () => {
     });
 
     const root = document.querySelector<HTMLElement>('.workflow-detail-page');
-    const summary = document.querySelector<HTMLElement>('.td-summary-block');
     const facts = document.querySelector<HTMLElement>('.td-facts-region');
-    const steps = document.querySelector<HTMLElement>('.td-steps-region.td-evidence-region');
-    const timeline = document.querySelector<HTMLElement>('.td-timeline-region.td-evidence-region');
     const artifacts = document.querySelector<HTMLElement>('.td-artifacts-region.td-evidence-region');
     const actions = document.querySelector<HTMLElement>('.td-actions-region');
 
