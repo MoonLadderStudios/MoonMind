@@ -149,6 +149,9 @@ PIN_PROVIDER_PROFILE_BEFORE_SLOT_REQUEST_PATCH_ID = (
     "agent-run-pin-provider-profile-before-slot-request-v1"
 )
 AGENT_RUN_RESILIENCY_POLICY_PATCH_ID = "agent-run-resiliency-policy-v1"
+AGENT_RUN_MANAGED_NO_PROGRESS_RECONCILIATION_PATCH_ID = (
+    "agent-run-managed-no-progress-reconciliation-v1"
+)
 MANAGED_SESSION_START_AFTER_SLOT_PATCH_ID = (
     "agent-run-managed-session-start-after-slot-v1"
 )
@@ -667,12 +670,14 @@ class MoonMindAgentRun:
             return {
                 "runtime": runtime_id,
                 "noProgressTimeoutSeconds": 1500,
+                "noProgressGraceSeconds": 600,
                 "stuckAction": "request_intervention",
                 "retryPolicy": "managed_runtime_polling_with_profile_cooldown",
             }
         return {
             "runtime": runtime_id,
             "noProgressTimeoutSeconds": _DEFAULT_NO_PROGRESS_TIMEOUT_SECONDS,
+            "noProgressGraceSeconds": 300,
             "stuckAction": "request_intervention",
             "retryPolicy": "managed_runtime_polling_with_profile_cooldown",
         }
@@ -693,6 +698,16 @@ class MoonMindAgentRun:
             "updatedAt",
             "lastUpdatedAt",
             "lastOutputAt",
+            "lastHeartbeatAt",
+            "lastLogAt",
+            "lastLogOffset",
+            "finishedAt",
+            "exitCode",
+            "stdoutArtifactRef",
+            "stderrArtifactRef",
+            "diagnosticsRef",
+            "observabilityEventsRef",
+            "activeTurnId",
         )
         return (
             status_obj.status,
@@ -710,6 +725,10 @@ class MoonMindAgentRun:
             or _DEFAULT_NO_PROGRESS_TIMEOUT_SECONDS
         )
         return max(1, timeout_seconds // max(1, poll_interval))
+
+    @staticmethod
+    def _no_progress_grace_seconds(policy: Mapping[str, Any]) -> int:
+        return max(0, int(policy.get("noProgressGraceSeconds") or 0))
 
     def _intervention_result(
         self,
@@ -1324,6 +1343,92 @@ class MoonMindAgentRun:
                 == "pr-resolver"
             ),
         )
+
+    async def _poll_managed_status(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        adapter: AgentAdapter,
+        uses_codex_session_adapter: bool,
+        use_managed_status_activity: bool,
+    ) -> AgentRunStatusModel:
+        if uses_codex_session_adapter:
+            return await adapter.status(self.run_id)
+        if use_managed_status_activity:
+            status_payload = await self._execute_routed_activity(
+                "agent_runtime.status",
+                AgentRuntimeStatusInput(
+                    runId=str(self.run_id or ""),
+                    agentId=request.agent_id,
+                ),
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+            )
+            return self._coerce_managed_status_payload(
+                status_payload=status_payload,
+                run_id=str(self.run_id or ""),
+                fallback_agent_id=request.agent_id,
+            )
+
+        # Legacy replay-compatibility path: older histories recorded timer-only
+        # polling for managed runs. Avoid mutable run-store reads here.
+        return AgentRunStatusModel(
+            runId=str(self.run_id or ""),
+            agentKind="managed",
+            agentId=request.agent_id,
+            status=RunStatus.running,
+        )
+
+    async def _reconcile_managed_no_progress(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        adapter: AgentAdapter,
+        uses_codex_session_adapter: bool,
+        use_managed_status_activity: bool,
+        resiliency_policy: Mapping[str, Any],
+        poll_interval: int,
+        initial_status: AgentRunStatusModel,
+        overall_start: datetime,
+        timeout_seconds: int,
+    ) -> AgentRunResult | None:
+        grace_seconds = self._no_progress_grace_seconds(resiliency_policy)
+        if grace_seconds <= 0:
+            return None
+
+        deadline = workflow.now() + timedelta(seconds=grace_seconds)
+        status_obj = initial_status
+        while True:
+            self.run_status = status_obj.status
+            if status_obj.status in _TERMINAL_RUN_STATUSES:
+                return await self._fetch_managed_result(
+                    request=request,
+                    adapter=adapter,
+                    uses_codex_session_adapter=uses_codex_session_adapter,
+                    use_managed_status_activity=use_managed_status_activity,
+                )
+
+            remaining_grace = (deadline - workflow.now()).total_seconds()
+            remaining_overall = timeout_seconds - (
+                workflow.now() - overall_start
+            ).total_seconds()
+            remaining = min(remaining_grace, remaining_overall)
+            if remaining <= 0:
+                return None
+
+            try:
+                await workflow.wait_condition(
+                    lambda: self.completion_event.is_set(),
+                    timeout=timedelta(seconds=min(poll_interval, remaining)),
+                )
+                if self.final_result is not None:
+                    return self.final_result
+            except asyncio.TimeoutError:
+                status_obj = await self._poll_managed_status(
+                    request=request,
+                    adapter=adapter,
+                    uses_codex_session_adapter=uses_codex_session_adapter,
+                    use_managed_status_activity=use_managed_status_activity,
+                )
 
     async def _ensure_manager_and_signal(
         self,
@@ -2737,34 +2842,12 @@ class MoonMindAgentRun:
                                     fallback_agent_id=request.agent_id,
                                 )
                             else:
-                                if uses_codex_session_adapter:
-                                    status_obj = await adapter.status(self.run_id)
-                                elif use_managed_status_activity:
-                                    status_payload = await self._execute_routed_activity(
-                                        "agent_runtime.status",
-                                        AgentRuntimeStatusInput(
-                                            runId=str(self.run_id or ""),
-                                            agentId=request.agent_id,
-                                        ),
-                                        cancellation_type=ActivityCancellationType.TRY_CANCEL,
-
-                                    )
-                                    status_obj = self._coerce_managed_status_payload(
-                                        status_payload=status_payload,
-                                        run_id=str(self.run_id or ""),
-                                        fallback_agent_id=request.agent_id,
-                                    )
-                                else:
-                                    # Legacy replay-compatibility path: older histories
-                                    # recorded timer-only polling for managed runs.
-                                    # Avoid consulting mutable run-store state during
-                                    # replay to keep command sequencing stable.
-                                    status_obj = AgentRunStatusModel(
-                                        runId=str(self.run_id or ""),
-                                        agentKind="managed",
-                                        agentId=request.agent_id,
-                                        status=RunStatus.running,
-                                    )
+                                status_obj = await self._poll_managed_status(
+                                    request=request,
+                                    adapter=adapter,
+                                    uses_codex_session_adapter=uses_codex_session_adapter,
+                                    use_managed_status_activity=use_managed_status_activity,
+                                )
 
                             self.run_status = status_obj.status
                             if workflow.patched(AGENT_RUN_RESILIENCY_POLICY_PATCH_ID):
@@ -2781,6 +2864,31 @@ class MoonMindAgentRun:
                                     poll_interval=poll_interval,
                                 )
                                 if stagnant_poll_count >= max_stagnant_polls:
+                                    if (
+                                        request.agent_kind == "managed"
+                                        and workflow.patched(
+                                            AGENT_RUN_MANAGED_NO_PROGRESS_RECONCILIATION_PATCH_ID
+                                        )
+                                    ):
+                                        reconciled_result = (
+                                            await self._reconcile_managed_no_progress(
+                                                request=request,
+                                                adapter=adapter,
+                                                uses_codex_session_adapter=uses_codex_session_adapter,
+                                                use_managed_status_activity=(
+                                                    use_managed_status_activity
+                                                ),
+                                                resiliency_policy=resiliency_policy,
+                                                poll_interval=poll_interval,
+                                                initial_status=status_obj,
+                                                overall_start=overall_start,
+                                                timeout_seconds=timeout_seconds,
+                                            )
+                                        )
+                                        if reconciled_result is not None:
+                                            self.final_result = reconciled_result
+                                            break
+
                                     self.run_status = "intervention_requested"
                                     self.final_result = self._intervention_result(
                                         summary=(
