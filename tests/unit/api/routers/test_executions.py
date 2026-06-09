@@ -6130,7 +6130,7 @@ def test_serialize_execution_surfaces_compact_skill_runtime_metadata() -> None:
     payload = _serialize_execution(record)
     dumped = payload.model_dump(by_alias=True)
 
-    assert dumped["skillRuntime"]["selectedSkills"] == ["operator-default", "pr-resolver"]
+    assert "taskSkills" not in dumped
     skill_runtime = dumped["skillRuntime"]
     assert skill_runtime["resolvedSkillsetRef"] == "artifact:resolved-skills-1"
     assert skill_runtime["selectedSkills"] == ["pr-resolver"]

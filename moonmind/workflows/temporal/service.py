@@ -47,9 +47,9 @@ from moonmind.schemas.temporal_models import (
     SUPPORTED_SIGNAL_NAMES,
     SUPPORTED_UPDATE_NAMES,
     DependencyResolvedSignalPayload,
-    TASK_RUN_ID_MEMO_KEYS,
-    TASK_RUN_ID_PARAM_KEYS,
-    TASK_RUN_ID_SEARCH_ATTR_KEYS,
+    AGENT_RUN_ID_MEMO_KEYS,
+    AGENT_RUN_ID_PARAM_KEYS,
+    AGENT_RUN_ID_SEARCH_ATTR_KEYS,
     RecoveryCheckpointModel,
     RecoverySourceModel,
 )
@@ -190,6 +190,13 @@ PENDING_REMEDIATION_APPROVAL_STATUSES = frozenset(
 import logging
 
 logger = logging.getLogger(__name__)
+
+_RUNTIME_BINDING_MEMO_KEYS = (*AGENT_RUN_ID_MEMO_KEYS, "taskRunId", "task_run_id")
+_RUNTIME_BINDING_SEARCH_ATTR_KEYS = (
+    *AGENT_RUN_ID_SEARCH_ATTR_KEYS,
+    "mm_task_run_id",
+)
+_RUNTIME_BINDING_PARAM_KEYS = (*AGENT_RUN_ID_PARAM_KEYS, "taskRunId", "task_run_id")
 
 def _get_managed_session_store_root() -> str:
     import os
@@ -2762,7 +2769,7 @@ class TemporalExecutionService:
         recovery_provenance: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         params = cls._strip_recovery_reference_parameters(parameters)
-        for key in TASK_RUN_ID_PARAM_KEYS:
+        for key in _RUNTIME_BINDING_PARAM_KEYS:
             params.pop(key, None)
 
         if isinstance(params.get("task"), Mapping):
@@ -2935,7 +2942,7 @@ class TemporalExecutionService:
             )
 
         params = dict(record.parameters or {})
-        for key in TASK_RUN_ID_PARAM_KEYS:
+        for key in _RUNTIME_BINDING_PARAM_KEYS:
             params.pop(key, None)
         params["recoverySource"] = RecoverySourceModel(
             sourceWorkflowId=record.workflow_id,
@@ -3068,15 +3075,15 @@ class TemporalExecutionService:
                 attention_required=False,
             )
         memo = dict(record.memo or {})
-        for key in TASK_RUN_ID_MEMO_KEYS:
+        for key in _RUNTIME_BINDING_MEMO_KEYS:
             memo.pop(key, None)
         record.memo = memo
         attrs = dict(record.search_attributes or {})
-        for key in TASK_RUN_ID_SEARCH_ATTR_KEYS:
+        for key in _RUNTIME_BINDING_SEARCH_ATTR_KEYS:
             attrs.pop(key, None)
         record.search_attributes = attrs
         params = dict(record.parameters or {})
-        for key in TASK_RUN_ID_PARAM_KEYS:
+        for key in _RUNTIME_BINDING_PARAM_KEYS:
             params.pop(key, None)
         record.parameters = params
         record.closed_at = None
