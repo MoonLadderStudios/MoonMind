@@ -830,6 +830,148 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             "prohibited",
         )
 
+    def test_managed_reattempt_records_session_reset_launch_evidence(self) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+        now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+        wf._initialize_step_ledger(
+            ordered_nodes=[
+                {
+                    "id": "implement",
+                    "tool": {"type": "agent_runtime", "name": "codex_cli"},
+                    "inputs": {"title": "Implement"},
+                }
+            ],
+            dependency_map={"implement": []},
+            updated_at=now,
+        )
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            return_value=False,
+        ):
+            wf._mark_step_running("implement", updated_at=now, summary="Attempt 1")
+            wf._record_step_result_evidence(
+                "implement",
+                execution_result={
+                    "status": "FAILED",
+                    "outputs": {
+                        "latestCheckpointRef": "artifact://checkpoint/attempt-1"
+                    },
+                },
+                updated_at=now,
+            )
+            wf._mark_step_terminal(
+                "implement",
+                status="failed",
+                updated_at=now,
+                summary="Attempt 1 failed",
+            )
+            wf._mark_step_running("implement", updated_at=now, summary="Attempt 2")
+
+        class MockInfo:
+            namespace = "default"
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ), patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            return_value=False,
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "instructions": "Retry in a clean context.",
+                    "runtime": {"mode": "codex_cli"},
+                },
+                node_id="implement",
+                tool_name="codex_cli",
+                attempt_reason="runtime_recovered",
+            )
+
+        step_execution = request.step_execution
+        assert step_execution is not None
+        self.assertEqual(step_execution.runtime_context_policy, "fresh_agent_run")
+        self.assertEqual(step_execution.execution_ordinal, 2)
+        self.assertEqual(
+            step_execution.runtime_session_reset,
+            {
+                "requestedPolicy": "reuse_session_new_epoch",
+                "resolvedPolicy": "fresh_agent_run",
+                "semantics": "new_epoch_cleared_context",
+                "clearContext": True,
+                "newEpoch": True,
+                "runtimeId": "codex_cli",
+                "sourceExecutionOrdinal": {
+                    "workflowId": "test-wf-id",
+                    "runId": "test-run-id",
+                    "logicalStepId": "implement",
+                    "executionOrdinal": 1,
+                },
+                "availableCheckpointEvidence": {
+                    "stateCheckpointRef": "artifact://checkpoint/attempt-1"
+                },
+            },
+        )
+
+    def test_external_request_records_continuation_evidence(self) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+        wf._prepared_artifact_refs = ["prepared-context://steps/delegate/input"]
+        wf._step_side_effect_records["delegate"] = [
+            {
+                "effectClass": "external_provider",
+                "operation": "provider_run_started",
+                "target": "jules",
+                "disposition": "occurred",
+            }
+        ]
+
+        class MockInfo:
+            namespace = "default"
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "instructions": "Continue delegated work.",
+                    "runtime": {"mode": "jules"},
+                },
+                node_id="delegate",
+                tool_name="jules",
+            )
+
+        step_execution = request.step_execution
+        assert step_execution is not None
+        continuation = step_execution.external_provider_continuation
+        assert continuation is not None
+        self.assertEqual(
+            continuation["attemptIdentity"],
+            {
+                "workflowId": "test-wf-id",
+                "runId": "test-run-id",
+                "logicalStepId": "delegate",
+                "executionOrdinal": 1,
+                "stepExecutionId": "test-wf-id:test-run-id:delegate:execution:1",
+            },
+        )
+        self.assertEqual(
+            continuation["contextRefs"]["contextBundleRef"],
+            step_execution.context_bundle_ref,
+        )
+        self.assertEqual(
+            continuation["knownSideEffects"]["records"][0]["operation"],
+            "provider_run_started",
+        )
+        self.assertEqual(continuation["checkpointEvidence"], {"available": False})
+
     def test_build_agent_execution_request_propagates_story_output_handoff(self) -> None:
         from unittest.mock import patch
 

@@ -1457,11 +1457,28 @@ class MoonMindRunWorkflow:
             "agent_runtime"
         ):
             agent_id = str(tool.get("name") or "").strip()
+            agent_kind = self._agent_kind_for_id(agent_id)
             execution["runtimeContextPolicy"] = (
                 "fresh_agent_run"
-                if self._agent_kind_for_id(agent_id) == "managed"
+                if agent_kind == "managed"
                 else "external_provider_continuation"
             )
+            execution_ordinal = self._step_execution_for(logical_step_id) or 1
+            if agent_kind == "managed":
+                reset = self._managed_reattempt_session_reset_evidence(
+                    logical_step_id,
+                    agent_id=agent_id,
+                    execution_ordinal=execution_ordinal,
+                )
+                if reset:
+                    execution["runtimeSessionReset"] = reset
+            else:
+                execution["externalProviderContinuation"] = (
+                    self._external_provider_continuation_evidence(
+                        logical_step_id,
+                        execution_ordinal=execution_ordinal,
+                    )
+                )
         if isinstance(refs, Mapping):
             for source_key, target_key in (
                 ("childWorkflowId", "childWorkflowId"),
@@ -1476,6 +1493,90 @@ class MoonMindRunWorkflow:
             if isinstance(diagnostics_ref, str) and diagnostics_ref.strip():
                 execution["diagnosticsRef"] = diagnostics_ref.strip()
         return execution
+
+    def _managed_reattempt_session_reset_evidence(
+        self,
+        logical_step_id: str,
+        *,
+        agent_id: str,
+        execution_ordinal: int,
+    ) -> dict[str, Any] | None:
+        if execution_ordinal <= 1:
+            return None
+        source_execution_ordinal = self._step_execution_source_identity(
+            logical_step_id,
+            attempt=execution_ordinal,
+        )
+        evidence: dict[str, Any] = {
+            "requestedPolicy": "reuse_session_new_epoch",
+            "resolvedPolicy": "fresh_agent_run",
+            "semantics": "new_epoch_cleared_context",
+            "clearContext": True,
+            "newEpoch": True,
+            "runtimeId": agent_id,
+        }
+        if source_execution_ordinal:
+            evidence["sourceExecutionOrdinal"] = source_execution_ordinal
+        previous_checkpoint_ref = self._previous_step_checkpoint_refs.get(
+            logical_step_id
+        )
+        if previous_checkpoint_ref:
+            evidence["availableCheckpointEvidence"] = {
+                "stateCheckpointRef": previous_checkpoint_ref
+            }
+        else:
+            evidence["availableCheckpointEvidence"] = {"available": False}
+        return evidence
+
+    def _external_provider_continuation_evidence(
+        self,
+        logical_step_id: str,
+        *,
+        execution_ordinal: int,
+        context_bundle_ref: str | None = None,
+        prepared_input_refs: Sequence[str] = (),
+    ) -> dict[str, Any]:
+        identity = StepExecutionIdentityModel(
+            workflowId=workflow.info().workflow_id,
+            runId=workflow.info().run_id,
+            logicalStepId=logical_step_id,
+            executionOrdinal=execution_ordinal,
+        )
+        context_refs: dict[str, Any] = {}
+        if context_bundle_ref:
+            context_refs["contextBundleRef"] = context_bundle_ref
+        prepared_refs = [
+            str(ref).strip() for ref in prepared_input_refs if str(ref).strip()
+        ]
+        if not prepared_refs:
+            prepared_refs = list(self._prepared_artifact_refs)
+        if prepared_refs:
+            context_refs["preparedInputRefs"] = prepared_refs
+
+        checkpoint_ref = self._step_checkpoint_refs.get(
+            logical_step_id
+        ) or self._previous_step_checkpoint_refs.get(logical_step_id)
+        checkpoint_evidence: dict[str, Any] = (
+            {"stateCheckpointRef": checkpoint_ref}
+            if checkpoint_ref
+            else {"available": False}
+        )
+        records = [
+            dict(record)
+            for record in self._step_side_effect_records.get(logical_step_id, ())
+        ]
+        return {
+            "attemptIdentity": {
+                "workflowId": identity.workflow_id,
+                "runId": identity.run_id,
+                "logicalStepId": identity.logical_step_id,
+                "executionOrdinal": identity.execution_ordinal,
+                "stepExecutionId": build_step_execution_id(identity),
+            },
+            "contextRefs": context_refs,
+            "knownSideEffects": {"records": records} if records else {"records": []},
+            "checkpointEvidence": checkpoint_evidence,
+        }
 
     def _step_execution_compact_output_refs(
         self,
@@ -8685,6 +8786,39 @@ class MoonMindRunWorkflow:
             skill_source_policy["resolvedSkillsetRef"] = resolved_skillset_ref
         if selected_skill:
             skill_source_policy["selectedSkill"] = selected_skill
+        step_execution_payload: dict[str, Any] = {
+            "schemaVersion": "v1",
+            "workflowId": wf_info.workflow_id,
+            "runId": wf_info.run_id,
+            "logicalStepId": node_id,
+            "executionOrdinal": step_execution_identity.execution_ordinal,
+            "stepExecutionId": build_step_execution_id(step_execution_identity),
+            "reason": attempt_reason,
+            "runtimeContextPolicy": runtime_context_policy,
+            "contextBundleRef": attempt_context.context_bundle_ref,
+            "contextBundleDigest": attempt_context.context_bundle_digest,
+            "preparedInputRefs": list(attempt_context.prepared_input_refs),
+            "resolvedSkillsetRef": resolved_skillset_ref,
+            "runtimeSelection": dict(runtime_selection),
+            "skillSourcePolicy": skill_source_policy,
+        }
+        if agent_kind == "managed":
+            session_reset = self._managed_reattempt_session_reset_evidence(
+                node_id,
+                agent_id=agent_id,
+                execution_ordinal=step_execution_identity.execution_ordinal,
+            )
+            if session_reset:
+                step_execution_payload["runtimeSessionReset"] = session_reset
+        else:
+            step_execution_payload["externalProviderContinuation"] = (
+                self._external_provider_continuation_evidence(
+                    node_id,
+                    execution_ordinal=step_execution_identity.execution_ordinal,
+                    context_bundle_ref=attempt_context.context_bundle_ref,
+                    prepared_input_refs=attempt_context.prepared_input_refs,
+                )
+            )
 
         return AgentExecutionRequest(
             agent_kind=agent_kind,
@@ -8696,22 +8830,7 @@ class MoonMindRunWorkflow:
             or node_inputs.get("instructionRef"),
             runtime_command=node_inputs.get("runtimeCommand")
             or node_inputs.get("runtime_command"),
-            step_execution={
-                "schemaVersion": "v1",
-                "workflowId": wf_info.workflow_id,
-                "runId": wf_info.run_id,
-                "logicalStepId": node_id,
-                "executionOrdinal": step_execution_identity.execution_ordinal,
-                "stepExecutionId": build_step_execution_id(step_execution_identity),
-                "reason": attempt_reason,
-                "runtimeContextPolicy": runtime_context_policy,
-                "contextBundleRef": attempt_context.context_bundle_ref,
-                "contextBundleDigest": attempt_context.context_bundle_digest,
-                "preparedInputRefs": list(attempt_context.prepared_input_refs),
-                "resolvedSkillsetRef": resolved_skillset_ref,
-                "runtimeSelection": dict(runtime_selection),
-                "skillSourcePolicy": skill_source_policy,
-            },
+            step_execution=step_execution_payload,
             resolved_skillset_ref=resolved_skillset_ref,
             input_refs=input_refs,
             workspace_spec=workspace_spec,
