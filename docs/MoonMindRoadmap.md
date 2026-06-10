@@ -86,7 +86,7 @@ The README was reframed (2026-06-09) around three headline value propositions �
 - [x] **3.1** Tracker-native proposal delivery/review — specs 312/313 shipped; `/proposals` remains admin/recovery coverage
 - [ ] **3.2** Automatic RAG context injection per step — Target-aware *prepared file* context is wired (specs 325/349), but retrieval-backed context packs (`rag/context_pack.py`) are still not injected into step execution (tracked with 5.3)
 - [x] **3.3** Context clearing between steps — MM-745
-- [ ] **3.4** Multi-step workflow visualization in Mission Control — Workflow detail subroute tabs shipped (MM-801), but no step-DAG rendering yet
+- [x] **3.4** Multi-step workflow visualization in Mission Control — Workflow detail Steps renders the step ledger as a visible dependency DAG with explicit edge labels (MM-746)
 - [x] **3.5 / 3.6** Preset-driven scheduling; schedules UI overhaul — shipped
 
 ---
@@ -149,7 +149,7 @@ All six items (run digests, fix patterns/error signatures, Mem0 long-term adapte
 - [x] **7.1** Settings migrated to Mission Control — specs 339/341/358/359
 - [ ] **7.2** Artifact browsing UI — API exists (`temporal_artifacts.py`); dashboard browsing of files/logs/patches still partial
 - [ ] **7.5** Side-by-side comparison view — Comparison runs preserve lineage (MM-773), but no side-by-side UI
-- [ ] **7.6** Multi-step / step DAG visualization — Same gap as 3.4
+- [x] **7.6** Multi-step / step DAG visualization — Mission Control workflow detail Steps renders step nodes and dependency edges from the step ledger (MM-746)
 - [ ] **7.7** Remediation panels — Tracked as 13.4
 
 ---

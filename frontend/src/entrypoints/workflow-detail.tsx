@@ -4241,26 +4241,103 @@ function StepDagOverview({
 }: {
   snapshot: z.infer<typeof StepLedgerSnapshotSchema>;
 }) {
+  const stepIds = new Set(snapshot.steps.map((step) => step.logicalStepId));
+  const dependencyEdges = snapshot.steps.flatMap((step) =>
+    step.dependsOn.map((sourceId) => ({
+      sourceId,
+      targetId: step.logicalStepId,
+      isKnownSource: stepIds.has(sourceId),
+    })),
+  );
+  const hasDependencies = dependencyEdges.length > 0;
+
   return (
     <section className="step-dag-panel" aria-label="Step DAG visualization">
       <h4>Step DAG</h4>
-      <div className="step-dag-grid">
-        {snapshot.steps.map((step) => (
-          <article key={step.logicalStepId} className="step-dag-node">
-            <div className="step-dag-node-header">
-              <strong>{step.title}</strong>
-              <span {...executionStatusPillProps(step.status)}>
-                {formatStatusLabel(step.status)}
-              </span>
+      <div className="step-dag-canvas">
+        {hasDependencies ? (
+          <svg
+            className="step-dag-edge-layer"
+            aria-hidden="true"
+            focusable="false"
+            viewBox="0 0 100 100"
+            preserveAspectRatio="none"
+          >
+            <defs>
+              <marker
+                id="step-dag-arrowhead"
+                viewBox="0 0 10 10"
+                refX="8"
+                refY="5"
+                markerWidth="5"
+                markerHeight="5"
+                orient="auto-start-reverse"
+              >
+                <path d="M 0 0 L 10 5 L 0 10 z" />
+              </marker>
+            </defs>
+            <path className="step-dag-edge-main" d="M 4 50 H 96" />
+            {snapshot.steps.map((step, index) => {
+              const x =
+                snapshot.steps.length > 1
+                  ? 6 + (index / (snapshot.steps.length - 1)) * 88
+                  : 50;
+              return (
+                <path
+                  key={step.logicalStepId}
+                  className="step-dag-edge-branch"
+                  d={`M ${x} 50 V 82`}
+                />
+              );
+            })}
+          </svg>
+        ) : null}
+        <div className="step-dag-grid" role="list" aria-label="Step dependency nodes">
+          {snapshot.steps.map((step) => (
+            <article key={step.logicalStepId} className="step-dag-node" role="listitem">
+              <div className="step-dag-node-header">
+                <strong>{step.title}</strong>
+                <span {...executionStatusPillProps(step.status)}>
+                  {formatStatusLabel(step.status)}
+                </span>
+              </div>
+              <div className="small">
+                <code>{step.logicalStepId}</code>
+              </div>
+              <div className="small">
+                Depends on: {step.dependsOn.length > 0 ? step.dependsOn.join(', ') : 'start'}
+              </div>
+            </article>
+          ))}
+        </div>
+        <div className="step-dag-edges" aria-label="Step dependency edges">
+          {hasDependencies ? (
+            dependencyEdges.map((edge) => (
+              <div
+                key={`${edge.sourceId}->${edge.targetId}`}
+                className={
+                  edge.isKnownSource
+                    ? 'step-dag-edge-label'
+                    : 'step-dag-edge-label step-dag-edge-label-missing'
+                }
+                aria-label={`${edge.sourceId} to ${edge.targetId}`}
+              >
+                <code>{edge.sourceId}</code>
+                <span aria-hidden="true">-&gt;</span>
+                <code>{edge.targetId}</code>
+              </div>
+            ))
+          ) : (
+            <div
+              className="step-dag-edge-label"
+              aria-label={`start to ${snapshot.steps[0]?.logicalStepId ?? 'none'}`}
+            >
+              <code>start</code>
+              <span aria-hidden="true">-&gt;</span>
+              <code>{snapshot.steps[0]?.logicalStepId ?? 'none'}</code>
             </div>
-            <div className="small">
-              <code>{step.logicalStepId}</code>
-            </div>
-            <div className="small">
-              Depends on: {step.dependsOn.length > 0 ? step.dependsOn.join(', ') : 'start'}
-            </div>
-          </article>
-        ))}
+          )}
+        </div>
       </div>
     </section>
   );

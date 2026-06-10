@@ -436,6 +436,9 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getAllByRole('heading', { name: 'Workflow Steps' }).length).toBeGreaterThan(0);
       expect(screen.getByRole('heading', { name: 'Step DAG' })).toBeTruthy();
       expect(screen.getAllByText('Plan work').length).toBeGreaterThan(0);
+      expect(screen.getByLabelText('plan to apply')).toBeTruthy();
+      expect(screen.getByLabelText('apply to verify')).toBeTruthy();
+      expect(screen.getByLabelText('Step dependency edges')).toBeTruthy();
       expect(screen.getByRole('link', { name: 'Steps' }).getAttribute('aria-current')).toBe('page');
       expect(screen.queryByRole('heading', { name: 'Workflow Preview' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Workflow Artifacts' })).toBeNull();
@@ -681,6 +684,8 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getAllByText('Verify tests').length).toBeGreaterThan(0);
       expect(screen.getByRole('heading', { name: 'Step DAG' })).toBeTruthy();
       expect(screen.getByText('Depends on: plan')).toBeTruthy();
+      expect(screen.getByLabelText('plan to apply')).toBeTruthy();
+      expect(screen.getByLabelText('apply to verify')).toBeTruthy();
       expect(screen.getAllByText('02-run').length).toBeGreaterThan(0);
     });
 

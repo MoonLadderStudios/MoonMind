@@ -3009,7 +3009,46 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   font-weight: 700;
 }
 
+.step-dag-canvas {
+  position: relative;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.step-dag-edge-layer {
+  position: absolute;
+  inset: 0.25rem 0.4rem 3.2rem;
+  z-index: 0;
+  overflow: visible;
+  pointer-events: none;
+  color: rgb(71 85 105);
+}
+
+.dark .step-dag-edge-layer {
+  color: rgb(148 163 184);
+}
+
+.step-dag-edge-layer marker path {
+  fill: currentColor;
+}
+
+.step-dag-edge-main,
+.step-dag-edge-branch {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 1.35;
+  marker-end: url("#step-dag-arrowhead");
+}
+
+.step-dag-edge-branch {
+  opacity: 0.72;
+  stroke-dasharray: 2.5 2.5;
+}
+
 .step-dag-grid {
+  position: relative;
+  z-index: 1;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 0.75rem;
@@ -3022,30 +3061,12 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   border-radius: 0.75rem;
   padding: 0.85rem;
   background: white;
+  box-shadow: 0 16px 32px rgb(15 23 42 / 0.08);
 }
 
 .dark .step-dag-node {
   border-color: rgb(51 65 85);
   background: rgb(15 23 42);
-}
-
-.step-dag-node::after {
-  content: "";
-  position: absolute;
-  right: -0.55rem;
-  top: 50%;
-  width: 0.55rem;
-  border-top: 2px solid rgb(148 163 184);
-}
-
-.step-dag-node:last-child::after {
-  display: none;
-}
-
-@media (max-width: 720px) {
-  .step-dag-node::after {
-    display: none;
-  }
 }
 
 .step-dag-node-header {
@@ -3054,6 +3075,55 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
+}
+
+.step-dag-edges {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.step-dag-edge-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2rem;
+  border: 1px solid rgb(203 213 225);
+  border-radius: 999px;
+  padding: 0.25rem 0.65rem;
+  background: rgb(255 255 255 / 0.88);
+  color: rgb(51 65 85);
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.dark .step-dag-edge-label {
+  border-color: rgb(51 65 85);
+  background: rgb(15 23 42 / 0.9);
+  color: rgb(203 213 225);
+}
+
+.step-dag-edge-label-missing {
+  border-color: rgb(245 158 11 / 0.55);
+  color: rgb(146 64 14);
+}
+
+.dark .step-dag-edge-label-missing {
+  border-color: rgb(251 191 36 / 0.45);
+  color: rgb(252 211 77);
+}
+
+@media (max-width: 720px) {
+  .step-dag-edge-layer {
+    display: none;
+  }
+
+  .step-dag-edge-label {
+    white-space: normal;
+  }
 }
 
 .step-tl-row {
