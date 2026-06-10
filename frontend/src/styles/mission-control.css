@@ -3235,6 +3235,46 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   margin-top: 0.35rem;
 }
 
+/* MM-815: compact preserved/resumed provenance marker shown in the default row */
+.step-provenance-marker {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.12rem 0.48rem;
+  border: 1px solid rgb(var(--mm-accent) / 0.45);
+  background: rgb(var(--mm-accent) / 0.12);
+  color: rgb(var(--mm-accent));
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+/* MM-815: latest evidence refs surfaced (ref-only) in the default step row */
+.step-evidence-refs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.5rem;
+  margin-top: 0.35rem;
+}
+
+.step-evidence-label {
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: rgb(var(--mm-muted));
+}
+
+.step-evidence-ref {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: 100%;
+  font-size: 0.68rem;
+  color: rgb(var(--mm-ink) / 0.78);
+}
+
 .step-check-badge {
   display: inline-flex;
   align-items: center;
