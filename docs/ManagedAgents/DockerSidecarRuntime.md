@@ -131,9 +131,9 @@ If the agent uses `/workspace` and the sidecar uses `/mnt/workspace`, normal Doc
 MoonMind workspaces follow the canonical layout from `DockerOutOfDocker.md §10`:
 
 - `agent_workspaces` is the named volume.
-- `/work/agent_jobs/<task_run_id>` is the run root.
-- `/work/agent_jobs/<task_run_id>/repo` is the checked-out repository.
-- `/work/agent_jobs/<task_run_id>/artifacts/<step_id>` is the durable artifact area.
+- `/work/agent_jobs/<agent_run_id>` is the run root.
+- `/work/agent_jobs/<agent_run_id>/repo` is the checked-out repository.
+- `/work/agent_jobs/<agent_run_id>/artifacts/<step_id>` is the durable artifact area.
 
 The sidecar runtime keeps this convention. The "workspace" mount in this document is `agent_workspaces` mounted at `/work/agent_jobs` in both containers; `/workspace` is shown in examples as a synonym for the per-run repo path made visible to the agent via `MOONMIND_REPO_DIR`. Deployments may choose to expose either the run root or the repo path as the agent's working directory; the invariant in §5.1 applies to whatever path is actually shared.
 
@@ -350,7 +350,7 @@ services:
   session-agent:
     image: moonmind/managed-agent:<pinned>
     environment:
-      MOONMIND_REPO_DIR: /work/agent_jobs/<task_run_id>/repo
+      MOONMIND_REPO_DIR: /work/agent_jobs/<agent_run_id>/repo
       DOCKER_HOST: unix:///var/run/moonmind-docker/docker.sock
     volumes:
       - session-workspace:/work/agent_jobs
@@ -405,7 +405,7 @@ spec:
     - name: agent
       image: moonmind/managed-agent:<pinned>
       env:
-        - { name: MOONMIND_REPO_DIR, value: /work/agent_jobs/<task_run_id>/repo }
+        - { name: MOONMIND_REPO_DIR, value: /work/agent_jobs/<agent_run_id>/repo }
         - { name: DOCKER_HOST,       value: unix:///var/run/moonmind-docker/docker.sock }
       volumeMounts:
         - { name: workspace,     mountPath: /work/agent_jobs }
@@ -440,7 +440,7 @@ Session request (excerpt):
 runtimeProfileRef: default-docker-sidecar
 
 repo:
-  mountPath: /work/agent_jobs/<task_run_id>/repo
+  mountPath: /work/agent_jobs/<agent_run_id>/repo
   checkout: { provider: github, repository: owner/repo, ref: main }
 
 capabilities:
@@ -497,7 +497,7 @@ Inside the agent container, with sidecar mode enabled:
 
 ```bash
 $ echo "$MOONMIND_REPO_DIR"
-/work/agent_jobs/<task_run_id>/repo
+/work/agent_jobs/<agent_run_id>/repo
 
 $ echo "$DOCKER_HOST"
 unix:///var/run/moonmind-docker/docker.sock
@@ -726,7 +726,7 @@ Every per-session sidecar deployment must be discoverable and traceable. The two
 - `moonmind.kind=managed-session` (agent) / `moonmind.kind=session-docker-sidecar` (sidecar)
 - `moonmind.session_id=<session_id>`
 - `moonmind.session_epoch=<session_epoch>`
-- `moonmind.task_run_id=<task_run_id>` (when bound)
+- `moonmind.agent_run_id=<agent_run_id>` (when bound)
 - `moonmind.workload_mode=docker-sidecar | docker-sidecar-rootless`
 
 The session-status surface (§13) reports daemon readiness, version, and probe results. Durable evidence for agent work continues to flow through the existing artifact pipeline; the sidecar itself is not the system of record. Per-container stdout/stderr capture for the daemon belongs in worker logs, not in the workflow artifact area, unless explicitly attached for debugging.

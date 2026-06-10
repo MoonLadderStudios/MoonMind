@@ -200,7 +200,7 @@ def _serialize_review_delivery(proposal: WorkflowProposal) -> dict[str, object]:
         "externalUrl": getattr(proposal, "external_url", None),
         "deliveredAt": getattr(proposal, "delivered_at", None),
         "lastSyncedAt": getattr(proposal, "last_synced_at", None),
-        "taskSnapshotRef": getattr(proposal, "task_snapshot_ref", None),
+        "workflowSnapshotRef": getattr(proposal, "workflow_snapshot_ref", None),
         "storedSnapshotNotice": bool(delivery.get("storedSnapshotNotice")),
     }
     for key in ("created", "duplicateSource", "warnings", "error"):
@@ -250,7 +250,7 @@ def _serialize_proposal(
         id=origin_id_value,
         metadata=proposal.origin_metadata or {},
     )
-    preview = _build_workflow_preview(proposal.task_create_request or {})
+    preview = _build_workflow_preview(proposal.workflow_create_request or {})
     data = {
         "id": proposal.id,
         "status": proposal.status,
@@ -266,7 +266,7 @@ def _serialize_proposal(
         "externalUrl": getattr(proposal, "external_url", None),
         "deliveredAt": getattr(proposal, "delivered_at", None),
         "lastSyncedAt": getattr(proposal, "last_synced_at", None),
-        "taskSnapshotRef": getattr(proposal, "task_snapshot_ref", None),
+        "workflowSnapshotRef": getattr(proposal, "workflow_snapshot_ref", None),
         "providerMetadata": getattr(proposal, "provider_metadata", None) or {},
         "resolvedPolicy": getattr(proposal, "resolved_policy", None) or {},
         "reviewDelivery": _serialize_review_delivery(proposal),
@@ -281,7 +281,7 @@ def _serialize_proposal(
         "createdAt": proposal.created_at,
         "updatedAt": proposal.updated_at,
         "origin": origin,
-        "taskCreateRequest": proposal.task_create_request or {},
+        "workflowCreateRequest": proposal.workflow_create_request or {},
         "taskPreview": preview,
         "promotionResult": _serialize_promotion_result(proposal),
         "similar": _serialize_similar(similar),
@@ -363,7 +363,7 @@ async def create_proposal(
             summary=payload.summary,
             category=payload.category,
             tags=payload.tags,
-            task_create_request=payload.task_create_request,
+            workflow_create_request=payload.workflow_create_request,
             origin_source=payload.origin.source,
             origin_id=origin_id_uuid,
             origin_external_id=origin_external_id,
@@ -484,7 +484,7 @@ async def _create_promoted_execution(
 ) -> str:
     initial_parameters = dict(final_request.get("payload") or {})
     execution_record = await execution_service.create_execution(
-        workflow_type="MoonMind.Run",
+        workflow_type="MoonMind.UserWorkflow",
         owner_id=getattr(user, "id"),
         owner_type="user",
         title=_promotion_title(proposal, initial_parameters),

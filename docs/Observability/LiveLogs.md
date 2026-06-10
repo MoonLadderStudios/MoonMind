@@ -143,14 +143,14 @@ A separate continuity drill-down surface may also exist, but Live Logs must stil
 The default operator workflow should be:
 1. open workflow
 2. inspect the relevant expanded step row in the Steps section
-3. open Live Logs for that step's managed run when `taskRunId` is present
+3. open Live Logs for that step's managed run when `agentRunId` is present
 4. inspect the current session snapshot shown at the top of the panel
 5. read the merged session-aware timeline
 6. inspect Stdout, Stderr, Diagnostics, or continuity artifacts as needed
 7. use separate Intervention controls if action is required
 
 Integration rules:
-- Logs and Diagnostics should open inside the expanded step when a step row has `taskRunId`
+- Logs and Diagnostics should open inside the expanded step when a step row has `agentRunId`
 - the default fetch sequence remains `observability-summary` → structured or merged initial tail → optional SSE live follow
 - workflow-level observability panels remain valid for top-level managed runs, but step-contextual consumption is still the primary operator flow for plan-driven work
 
@@ -894,11 +894,11 @@ Requirements:
 
 ## 13.3 Legacy live-session model and deprecation rule
 
-The persisted `TaskRunLiveSession` row and terminal-relay metadata are **legacy compatibility only** for historical runs created before the MoonMind-native observability model existed.
+The persisted `AgentRunLiveSession` row and terminal-relay metadata are **legacy compatibility only** for historical runs created before the MoonMind-native observability model existed.
 
 Deprecation rules:
 - managed-run observability for new runs must not depend on `attachRo`, `webRo`, socket paths, or terminal-relay metadata
-- the deprecated `/api/agent-runs/{taskRunId}/live-session*` route family is not part of the supported managed-run observability surface
+- the deprecated `/api/agent-runs/{agentRunId}/live-session*` route family is not part of the supported managed-run observability surface
 - historical runs that only persisted legacy `logArtifactRef` should degrade through read-only merged-log fallback rather than through terminal relays
 - any code path that reads terminal-session fields for managed-run log viewing is a migration target, not a supported architecture path
 

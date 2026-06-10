@@ -494,8 +494,8 @@ Rules:
 
 * the default Steps view is for the latest/current run only
 * the plan artifact is the canonical planned-step source; the step-ledger API is the canonical live-state source
-* step rows may carry `childWorkflowId`, `childRunId`, and `taskRunId` (the `taskRunId` ref slot renames to an agent-run identifier in the hard switch)
-* when a step has a `taskRunId` ref, the Logs & Diagnostics area should embed or deep-link the existing `/api/agent-runs/*` observability surfaces for that step
+* step rows may carry `childWorkflowId`, `childRunId`, and `agentRunId` (the `agentRunId` ref slot renames to an agent-run identifier in the hard switch)
+* when a step has a `agentRunId` ref, the Logs & Diagnostics area should embed or deep-link the existing `/api/agent-runs/*` observability surfaces for that step
 * the client must not infer step completion or “latest output” by parsing logs or sorting raw artifacts locally
 * preset-derived step metadata may be rendered as Manual, Preset, or Preset path chips, but those chips explain provenance only and do not change step order, dependency semantics, or completion rules
 
@@ -796,7 +796,7 @@ The backend resolves those into workflow start inputs and immutable runtime cont
 
 Representative mappings:
 
-* user workflow submit flows → `MoonMind.Run` (renames to `MoonMind.UserWorkflow` in the hard switch)
+* user workflow submit flows → `MoonMind.UserWorkflow` (renames to `MoonMind.UserWorkflow` in the hard switch)
 * manifest-oriented submit flows → `MoonMind.ManifestIngest`
 
 The UI should submit **selection intent**, not full mutable skill bodies inline.
@@ -924,7 +924,7 @@ For Temporal-backed workflow surfaces:
 
 Pending hard-switch renames still visible in live contracts (do not rewrite ahead of the code change):
 
-* the step-ref slot `taskRunId` (renames to an agent-run identifier)
+* the step-ref slot `agentRunId` (renames to an agent-run identifier)
 * the execution field `taskInstructions` (renames in the hard switch)
 * the `{temporalRunId}` artifacts endpoint template token (renames to `{runId}`)
 * frontend fallback parsing of legacy `taskId`/`temporalRunId` response fields (removed when the frontend rename lands)

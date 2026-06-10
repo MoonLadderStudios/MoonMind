@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# WP4 docs-scope banned-term terminology check (Task -> Workflow hard switch).
+# WP4 docs/instruction-scope banned-term terminology check (Task -> Workflow hard switch).
 #
 # Fails (exit 1) with file:line output when banned legacy "task" product
-# terminology appears in the documentation scope:
+# terminology appears in the documentation or agent-instruction scope:
 #   - docs/**/*.md, excluding:
 #       docs/tmp/**                                  (migration/rollout notes)
 #       docs/ReleaseNotes/**                         (historical)
 #       docs/Temporal/WorkflowLanguageHardSwitchPlan.md (defines the banned terms)
 #   - README.md
 #   - AGENTS.md (CLAUDE.md / GEMINI.md are symlinks to it)
+#   - .agents/skills/**/*.md
 #
 # Banned patterns (case-insensitive unless noted):
 #   docs/Tasks/ and ../Tasks/ path references (case-sensitive; stale doc links)
@@ -18,6 +19,7 @@
 #   task-scoped
 #   task console
 #   task dashboard
+#   specs/<feature>/ and MoonSpec feature artifact guidance in canonical docs
 #
 # False-positive avoidance and known limitations:
 #   - Inline backtick code spans and fenced code blocks are stripped before
@@ -26,7 +28,7 @@
 #   - Reserved qualified terms (Temporal Task, Workflow Task, Activity Task,
 #     Task Queue, Jira task, Codex provider task) do not overlap the banned
 #     patterns above, so no reserved-term allowlisting is needed yet.
-#   - This is a docs-scope gate only. WP9 extends enforcement to code scope
+#   - This is a docs/instruction-scope gate only. WP9 extends enforcement to code scope
 #     (taskId/task_id product fields, /tasks routes, OpenAPI surfaces) per
 #     docs/Temporal/WorkflowLanguageHardSwitchPlan.md section 18.
 #   - Multi-line constructs (a banned phrase split across a hard line wrap)
@@ -61,6 +63,8 @@ BANNED = [
     ("task-scoped", re.compile(r"task-scoped", re.IGNORECASE)),
     ("task console", re.compile(r"task console", re.IGNORECASE)),
     ("task dashboard", re.compile(r"task dashboard", re.IGNORECASE)),
+    ("specs/<feature>/ guidance", re.compile(r"specs/<feature>")),
+    ("MoonSpec feature artifact guidance", re.compile(r"MoonSpec feature artifacts?", re.IGNORECASE)),
 ]
 
 INLINE_CODE = re.compile(r"`[^`]*`")
@@ -68,6 +72,8 @@ INLINE_CODE = re.compile(r"`[^`]*`")
 
 def in_scope(rel: str) -> bool:
     if rel in ("README.md", "AGENTS.md"):
+        return True
+    if rel.startswith(".agents/skills/") and rel.endswith(".md"):
         return True
     if not rel.startswith("docs/") or not rel.endswith(".md"):
         return False
@@ -78,6 +84,9 @@ def in_scope(rel: str) -> bool:
 
 def iter_files():
     yield from (p for p in (ROOT / "docs").rglob("*.md"))
+    agents_skills = ROOT / ".agents" / "skills"
+    if agents_skills.exists():
+        yield from (p for p in agents_skills.rglob("*.md"))
     for name in ("README.md", "AGENTS.md"):
         p = ROOT / name
         if p.exists():

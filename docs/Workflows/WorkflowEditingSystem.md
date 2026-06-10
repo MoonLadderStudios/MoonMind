@@ -80,7 +80,7 @@ The editable object is a Temporal execution identified by `workflowId`.
 
 The initial supported workflow type is:
 
-- `MoonMind.Run`
+- `MoonMind.UserWorkflow`
 
 Any other workflow type is out of scope until explicitly added.
 
@@ -354,7 +354,7 @@ At minimum, the detail payload should make available:
 - capability flags such as `actions.canUpdateInputs` and `actions.canRerun`
 - any template, runtime, model, repository, and publish information required to reconstruct the form
 
-For failed and canceled `MoonMind.Run` executions, the read contract must expose enough input state for the submit page to build an editable rerun draft whenever `actions.canRerun` is `true`.
+For failed and canceled `MoonMind.UserWorkflow` executions, the read contract must expose enough input state for the submit page to build an editable rerun draft whenever `actions.canRerun` is `true`.
 
 ### 11.2 Update contract requirements
 

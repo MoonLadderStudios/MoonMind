@@ -296,7 +296,7 @@ Workflow is waiting on an external callback.
 Current:
 
 ```text
-MoonMind.Run
+MoonMind.UserWorkflow
 ```
 
 Recommended replacement:
@@ -307,7 +307,7 @@ MoonMind.UserWorkflow
 
 Rationale:
 
-- `MoonMind.Run` collides conceptually with `runId`.
+- `MoonMind.UserWorkflow` collides conceptually with `runId`.
 - `MoonMind.Workflow` is readable but awkward in exact docs: `Workflow Execution of Workflow Type MoonMind.Workflow`.
 - `MoonMind.UserWorkflow` makes clear that this is the user-submitted, step-ledger-owning workflow type.
 
@@ -315,7 +315,7 @@ Rationale:
 
 | Workflow Type | Status | Meaning |
 | --- | --- | --- |
-| `MoonMind.UserWorkflow` | Rename from `MoonMind.Run` | User-requested, Step-ledger-owning Workflow Execution. |
+| `MoonMind.UserWorkflow` | Rename from `MoonMind.UserWorkflow` | User-requested, Step-ledger-owning Workflow Execution. |
 | `MoonMind.ManifestIngest` | Keep | Manifest ingest, validation, compilation, and orchestration. |
 | `MoonMind.AgentRun` | Keep | Durable lifecycle wrapper for one true managed or external agent execution. |
 | `MoonMind.AgentSession` | Keep | Managed runtime session workflow. |
@@ -1315,7 +1315,7 @@ This is consistent with the constitution's Temporal-facing contract rules in `.s
 
 MM-730 implements this cutover as an explicit runtime gate:
 
-- `TEMPORAL_USER_WORKFLOW_CONTRACT_MODE=legacy_run` is the default and serves only `MoonMind.Run` on the legacy workflow Task Queue.
+- `TEMPORAL_USER_WORKFLOW_CONTRACT_MODE=legacy_run` is the default and serves only `MoonMind.UserWorkflow` on the legacy workflow Task Queue.
 - `TEMPORAL_USER_WORKFLOW_CONTRACT_MODE=renamed_contract` serves only `MoonMind.UserWorkflow` for new user Workflow Execution starts and requires `TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE` to be distinct from `TEMPORAL_WORKFLOW_TASK_QUEUE`.
 - `renamed_contract` startup fails unless `TEMPORAL_USER_WORKFLOW_CUTOVER_RECORD_PATH` points to a JSON record for MM-730 that lists every environment's `drain`, `pause_resume`, or `terminate_restart` decision and includes workflow, activity, signal, and update cutover strategies.
 - `renamed_contract` startup also requires `TEMPORAL_USER_WORKFLOW_RELEASE_NOTES_PATH` to include the breaking release note that Tasks are no longer exposed as a product/runtime concept and compatibility redirects/aliases are not kept.
@@ -1388,7 +1388,7 @@ The hard switch is complete when:
 5. `Workflow Execution` is the canonical product/runtime entity.
 6. `workflowId` is the only product route key.
 7. `runId` is the current/latest Temporal run identifier.
-8. `MoonMind.Run` is replaced by `MoonMind.UserWorkflow`, or at minimum is no longer described as standard task execution.
+8. `MoonMind.UserWorkflow` is replaced by `MoonMind.UserWorkflow`, or at minimum is no longer described as standard task execution.
 9. Step docs say Workflow Executions are composed from Steps.
 10. `Step Execution` fully replaces `Step Execution`.
 11. Step execution artifacts use `stepExecutionId`, `executionOrdinal`, and step-execution content types.

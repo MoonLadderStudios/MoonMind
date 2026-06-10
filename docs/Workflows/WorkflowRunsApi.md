@@ -68,14 +68,14 @@ MoonMind currently uses three related identifiers around Workflow runs:
 
 - **`workflowId`** — the canonical durable execution identifier for `/api/executions`
 - **`taskId`** — the legacy product identifier (renames in the hard switch); for Temporal-backed work, `taskId == workflowId`
-- **`taskRunId`** — the managed-run observability record identifier used by `/api/agent-runs` (the wire key keeps its legacy name until the MoonMind.UserWorkflow v2 cutover); it may appear on top-level execution detail and on individual step rows
+- **`agentRunId`** — the managed-run observability record identifier used by `/api/agent-runs` (the wire key keeps its legacy name until the MoonMind.UserWorkflow v2 cutover); it may appear on top-level execution detail and on individual step rows
 
 The normal control-plane flow is:
 
 1. Create or list work through `/api/executions`
 2. Use `workflowId` for lifecycle actions and detail fetches
 3. Read the step ledger from `/api/executions/{workflowId}/steps`
-4. Resolve the relevant step's `taskRunId` when managed-run observability is available
+4. Resolve the relevant step's `agentRunId` when managed-run observability is available
 5. Use `/api/agent-runs/{agentRunId}` for logs, diagnostics, and live follow
 
 ## 4. Observability Behavior
@@ -93,7 +93,7 @@ Full log bodies and diagnostics come from managed-run artifact storage and spool
 
 `POST /api/executions` is the active create surface. It accepts the execution-oriented request model and, during migration, may also normalize legacy `task`-typed payloads into the same Temporal-backed execution contract.
 
-Execution requests ultimately dispatch into `MoonMind.Run` or another allowed workflow type, then fan out across Temporal worker fleets grouped by capability and security boundary:
+Execution requests ultimately dispatch into `MoonMind.UserWorkflow` or another allowed workflow type, then fan out across Temporal worker fleets grouped by capability and security boundary:
 
 | Fleet | Task Queue | Capabilities | Purpose |
 |-------|-----------|--------------|---------|

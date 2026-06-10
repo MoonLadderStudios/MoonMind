@@ -153,70 +153,70 @@ class TestTemporalDashboardSettings:
 
 class TestFeatureFlagsSettings:
     def test_preset_catalog_reads_prefixed_env(self, monkeypatch):
-        monkeypatch.setenv("FEATURE_FLAGS__TASK_TEMPLATE_CATALOG", "1")
-        monkeypatch.delenv("TASK_TEMPLATE_CATALOG", raising=False)
+        monkeypatch.setenv("FEATURE_FLAGS__PRESET_CATALOG", "1")
+        monkeypatch.delenv("PRESET_CATALOG", raising=False)
         monkeypatch.delenv(
-            "FEATURE_FLAGS__DISABLE_TASK_TEMPLATE_CATALOG", raising=False
+            "FEATURE_FLAGS__DISABLE_PRESET_CATALOG", raising=False
         )
-        monkeypatch.delenv("DISABLE_TASK_TEMPLATE_CATALOG", raising=False)
+        monkeypatch.delenv("DISABLE_PRESET_CATALOG", raising=False)
 
         settings = FeatureFlagsSettings(_env_file=None)
         assert settings.preset_catalog is True
         assert settings.preset_catalog_enabled is True
 
-        monkeypatch.delenv("FEATURE_FLAGS__TASK_TEMPLATE_CATALOG", raising=False)
+        monkeypatch.delenv("FEATURE_FLAGS__PRESET_CATALOG", raising=False)
 
     def test_preset_catalog_keeps_legacy_env_fallback(self, monkeypatch):
-        monkeypatch.setenv("TASK_TEMPLATE_CATALOG", "1")
-        monkeypatch.delenv("FEATURE_FLAGS__TASK_TEMPLATE_CATALOG", raising=False)
+        monkeypatch.setenv("PRESET_CATALOG", "1")
+        monkeypatch.delenv("FEATURE_FLAGS__PRESET_CATALOG", raising=False)
         monkeypatch.delenv(
-            "FEATURE_FLAGS__DISABLE_TASK_TEMPLATE_CATALOG", raising=False
+            "FEATURE_FLAGS__DISABLE_PRESET_CATALOG", raising=False
         )
-        monkeypatch.delenv("DISABLE_TASK_TEMPLATE_CATALOG", raising=False)
+        monkeypatch.delenv("DISABLE_PRESET_CATALOG", raising=False)
 
         settings = FeatureFlagsSettings(_env_file=None)
         assert settings.preset_catalog is True
         assert settings.preset_catalog_enabled is True
 
-        monkeypatch.delenv("TASK_TEMPLATE_CATALOG", raising=False)
+        monkeypatch.delenv("PRESET_CATALOG", raising=False)
 
     def test_preset_catalog_defaults_enabled_without_env(self, monkeypatch):
-        monkeypatch.delenv("FEATURE_FLAGS__TASK_TEMPLATE_CATALOG", raising=False)
-        monkeypatch.delenv("TASK_TEMPLATE_CATALOG", raising=False)
+        monkeypatch.delenv("FEATURE_FLAGS__PRESET_CATALOG", raising=False)
+        monkeypatch.delenv("PRESET_CATALOG", raising=False)
         monkeypatch.delenv(
-            "FEATURE_FLAGS__DISABLE_TASK_TEMPLATE_CATALOG", raising=False
+            "FEATURE_FLAGS__DISABLE_PRESET_CATALOG", raising=False
         )
-        monkeypatch.delenv("DISABLE_TASK_TEMPLATE_CATALOG", raising=False)
+        monkeypatch.delenv("DISABLE_PRESET_CATALOG", raising=False)
 
         settings = FeatureFlagsSettings(_env_file=None)
         assert settings.preset_catalog is True
         assert settings.preset_catalog_enabled is True
 
     def test_preset_catalog_can_be_disabled_with_prefixed_env(self, monkeypatch):
-        monkeypatch.delenv("FEATURE_FLAGS__TASK_TEMPLATE_CATALOG", raising=False)
-        monkeypatch.delenv("TASK_TEMPLATE_CATALOG", raising=False)
-        monkeypatch.setenv("FEATURE_FLAGS__DISABLE_TASK_TEMPLATE_CATALOG", "1")
-        monkeypatch.delenv("DISABLE_TASK_TEMPLATE_CATALOG", raising=False)
+        monkeypatch.delenv("FEATURE_FLAGS__PRESET_CATALOG", raising=False)
+        monkeypatch.delenv("PRESET_CATALOG", raising=False)
+        monkeypatch.setenv("FEATURE_FLAGS__DISABLE_PRESET_CATALOG", "1")
+        monkeypatch.delenv("DISABLE_PRESET_CATALOG", raising=False)
 
         settings = FeatureFlagsSettings(_env_file=None)
         assert settings.preset_catalog_enabled is False
 
         monkeypatch.delenv(
-            "FEATURE_FLAGS__DISABLE_TASK_TEMPLATE_CATALOG", raising=False
+            "FEATURE_FLAGS__DISABLE_PRESET_CATALOG", raising=False
         )
 
     def test_preset_catalog_can_be_disabled_with_legacy_env(self, monkeypatch):
-        monkeypatch.delenv("FEATURE_FLAGS__TASK_TEMPLATE_CATALOG", raising=False)
-        monkeypatch.delenv("TASK_TEMPLATE_CATALOG", raising=False)
+        monkeypatch.delenv("FEATURE_FLAGS__PRESET_CATALOG", raising=False)
+        monkeypatch.delenv("PRESET_CATALOG", raising=False)
         monkeypatch.delenv(
-            "FEATURE_FLAGS__DISABLE_TASK_TEMPLATE_CATALOG", raising=False
+            "FEATURE_FLAGS__DISABLE_PRESET_CATALOG", raising=False
         )
-        monkeypatch.setenv("DISABLE_TASK_TEMPLATE_CATALOG", "1")
+        monkeypatch.setenv("DISABLE_PRESET_CATALOG", "1")
 
         settings = FeatureFlagsSettings(_env_file=None)
         assert settings.preset_catalog_enabled is False
 
-        monkeypatch.delenv("DISABLE_TASK_TEMPLATE_CATALOG", raising=False)
+        monkeypatch.delenv("DISABLE_PRESET_CATALOG", raising=False)
 
     def test_live_logs_session_timeline_rollout_defaults_off(self, monkeypatch):
         monkeypatch.delenv(
@@ -468,8 +468,6 @@ class TestWorkflowSettings:
             "WORKFLOW_SKILLS_WORKSPACE_ROOT",
             "WORKFLOW_REPO_ROOT",
             "WORKFLOW_REPO_ROOT",
-            "WORKFLOW_TASKS_ROOT",
-            "WORKFLOW_TASKS_ROOT",
         ):
             monkeypatch.delenv(key, raising=False)
 
@@ -886,22 +884,18 @@ class TestWorkflowSettings:
     ):
         """Workflow proposal env flags should be parsed instead of treated as extra fields."""
 
-        monkeypatch.setenv("MOONMIND_ENABLE_TASK_PROPOSALS", "true")
-        monkeypatch.delenv("ENABLE_TASK_PROPOSALS", raising=False)
+        monkeypatch.setenv("MOONMIND_ENABLE_PROPOSALS", "true")
         monkeypatch.setenv("MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS", "2400")
         settings = AppSettings(_env_file=None, **app_settings_defaults)
         assert settings.workflow.enable_proposals is True
         assert settings.workflow.stage_command_timeout_seconds == 2400
 
-        monkeypatch.delenv("MOONMIND_ENABLE_TASK_PROPOSALS", raising=False)
+        monkeypatch.delenv("MOONMIND_ENABLE_PROPOSALS", raising=False)
         monkeypatch.delenv("MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS", raising=False)
-        monkeypatch.setenv("ENABLE_TASK_PROPOSALS", "true")
         monkeypatch.setenv("WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS", "1800")
         settings = AppSettings(_env_file=None, **app_settings_defaults)
-        assert settings.workflow.enable_proposals is True
         assert settings.workflow.stage_command_timeout_seconds == 1800
 
-        monkeypatch.delenv("ENABLE_TASK_PROPOSALS", raising=False)
         monkeypatch.delenv("WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS", raising=False)
 
     def test_app_settings_accepts_codex_worker_env(
@@ -1026,8 +1020,8 @@ def test_workflow_proposal_policy_env_overrides(app_settings_defaults, monkeypat
     """Environment variables should override policy defaults everywhere."""
 
     monkeypatch.setenv("MOONMIND_PROPOSAL_TARGETS", "both")
-    monkeypatch.setenv("TASK_PROPOSALS_MAX_ITEMS_PROJECT", "5")
-    monkeypatch.setenv("TASK_PROPOSALS_MAX_ITEMS_MOONMIND", "4")
+    monkeypatch.setenv("WORKFLOW_PROPOSALS_MAX_ITEMS_PROJECT", "5")
+    monkeypatch.setenv("WORKFLOW_PROPOSALS_MAX_ITEMS_MOONMIND", "4")
     monkeypatch.setenv("MOONMIND_MIN_SEVERITY_FOR_MOONMIND", "medium")
 
     settings = AppSettings(_env_file=None, **app_settings_defaults)
@@ -1042,8 +1036,8 @@ def test_workflow_proposal_policy_env_overrides(app_settings_defaults, monkeypat
     assert settings.workflow.proposal_moonmind_severity_floor == "medium"
 
     monkeypatch.delenv("MOONMIND_PROPOSAL_TARGETS", raising=False)
-    monkeypatch.delenv("TASK_PROPOSALS_MAX_ITEMS_PROJECT", raising=False)
-    monkeypatch.delenv("TASK_PROPOSALS_MAX_ITEMS_MOONMIND", raising=False)
+    monkeypatch.delenv("WORKFLOW_PROPOSALS_MAX_ITEMS_PROJECT", raising=False)
+    monkeypatch.delenv("WORKFLOW_PROPOSALS_MAX_ITEMS_MOONMIND", raising=False)
     monkeypatch.delenv("MOONMIND_MIN_SEVERITY_FOR_MOONMIND", raising=False)
 
 def test_workflow_settings_accept_queue_aliases(monkeypatch) -> None:

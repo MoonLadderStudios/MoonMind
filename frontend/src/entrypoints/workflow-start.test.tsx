@@ -48,7 +48,7 @@ const mockPayload: BootPayload = {
       },
       system: {
         defaultRepository: "MoonLadderStudios/MoonMind",
-        defaultTaskRuntime: "codex_cli",
+        defaultAgentRuntime: "codex_cli",
         defaultTaskModel: "gpt-5.4",
         defaultTaskEffort: "medium",
         defaultPublishMode: "pr",
@@ -63,17 +63,17 @@ const mockPayload: BootPayload = {
           gemini_cli: "high",
           claude_code: "low",
         },
-        supportedTaskRuntimes: ["codex_cli", "gemini_cli", "claude_code"],
+        supportedAgentRuntimes: ["codex_cli", "gemini_cli", "claude_code"],
         providerProfiles: {
           list: "/api/v1/provider-profiles",
         },
-        taskTemplateCatalog: {
+        presetCatalog: {
           enabled: true,
           templateSaveEnabled: true,
-          list: "/api/task-step-templates",
-          detail: "/api/task-step-templates/{slug}",
-          expand: "/api/task-step-templates/{slug}:expand",
-          saveFromTask: "/api/task-step-templates/save-from-task",
+          list: "/api/presets",
+          detail: "/api/presets/{slug}",
+          expand: "/api/presets/{slug}:expand",
+          saveFromWorkflow: "/api/presets/save-from-workflow",
         },
       },
       features: {
@@ -199,7 +199,7 @@ function withRuntimeCommandPreview(payload: BootPayload = mockPayload): BootPayl
         ...initialData.dashboardConfig,
         system: {
           ...system,
-          supportedTaskRuntimes: [
+          supportedAgentRuntimes: [
             "codex_cli",
             "gemini_cli",
             "claude_code",
@@ -401,7 +401,7 @@ function withoutOptionalAuthoringIntegrations(
   const {
     jiraIntegration: _jiraIntegration,
     attachmentPolicy: _attachmentPolicy,
-    taskTemplateCatalog: _taskTemplateCatalog,
+    presetCatalog: _presetCatalog,
     ...system
   } = initialData.dashboardConfig.system || {};
   return {
@@ -478,7 +478,7 @@ describe("WorkflowStart schedule mode entry", () => {
             }),
           } as Response);
         }
-        if (url.startsWith("/api/task-step-templates")) {
+        if (url.startsWith("/api/presets")) {
           return Promise.resolve({
             ok: true,
             json: async () => ({ items: [] }),
@@ -637,7 +637,7 @@ describe.skip("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
-        if (url.startsWith("/api/task-step-templates?scope=personal")) {
+        if (url.startsWith("/api/presets?scope=personal")) {
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -654,7 +654,7 @@ describe.skip("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
-        if (url.startsWith("/api/task-step-templates?scope=global")) {
+        if (url.startsWith("/api/presets?scope=global")) {
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -689,7 +689,7 @@ describe.skip("Task Create Entrypoint", () => {
           } as Response);
         }
         if (
-          path === "/api/task-step-templates/speckit-demo" &&
+          path === "/api/presets/speckit-demo" &&
           init?.method === "DELETE"
         ) {
           return Promise.resolve({
@@ -699,7 +699,7 @@ describe.skip("Task Create Entrypoint", () => {
           } as Response);
         }
         if (
-          path === "/api/task-step-templates/personal-demo" &&
+          path === "/api/presets/personal-demo" &&
           init?.method === "DELETE"
         ) {
           return Promise.resolve({
@@ -709,7 +709,7 @@ describe.skip("Task Create Entrypoint", () => {
           } as Response);
         }
         if (
-          url.startsWith("/api/task-step-templates/speckit-demo?scope=global")
+          url.startsWith("/api/presets/speckit-demo?scope=global")
         ) {
           return Promise.resolve({
             ok: true,
@@ -732,7 +732,7 @@ describe.skip("Task Create Entrypoint", () => {
           } as Response);
         }
         if (
-          url.startsWith("/api/task-step-templates/objective-demo?scope=global")
+          url.startsWith("/api/presets/objective-demo?scope=global")
         ) {
           return Promise.resolve({
             ok: true,
@@ -754,7 +754,7 @@ describe.skip("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
-        if (url.startsWith("/api/task-step-templates/pr-resolver?scope=global")) {
+        if (url.startsWith("/api/presets/pr-resolver?scope=global")) {
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -770,7 +770,7 @@ describe.skip("Task Create Entrypoint", () => {
         }
         if (
           url.startsWith(
-            "/api/task-step-templates/speckit-demo:expand?scope=global",
+            "/api/presets/speckit-demo:expand?scope=global",
           )
         ) {
           return Promise.resolve({
@@ -802,7 +802,7 @@ describe.skip("Task Create Entrypoint", () => {
         }
         if (
           url.startsWith(
-            "/api/task-step-templates/objective-demo:expand?scope=global",
+            "/api/presets/objective-demo:expand?scope=global",
           )
         ) {
           return Promise.resolve({
@@ -834,7 +834,7 @@ describe.skip("Task Create Entrypoint", () => {
         }
         if (
           url.startsWith(
-            "/api/task-step-templates/pr-resolver:expand?scope=global",
+            "/api/presets/pr-resolver:expand?scope=global",
           )
         ) {
           return Promise.resolve({
@@ -893,10 +893,10 @@ describe.skip("Task Create Entrypoint", () => {
             json: async () => items,
           } as Response);
         }
-        if (url.startsWith("/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.Run&entry=user_workflow")) {
+        if (url.startsWith("/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.UserWorkflow&entry=user_workflow")) {
           const depItems = Array.from({ length: 12 }, (_, i) => ({
             taskId: `mm:dep-${i + 1}`,
-            workflowType: "MoonMind.Run",
+            workflowType: "MoonMind.UserWorkflow",
             entry: "user_workflow",
             title: i === 0 ? "Build shared schema" : `Dependency task ${i + 1}`,
             state: i % 3 === 0 ? "completed" : "executing",
@@ -913,7 +913,7 @@ describe.skip("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               workflowId: "mm:edit-123",
-              workflowType: "MoonMind.Run",
+              workflowType: "MoonMind.UserWorkflow",
               state: "executing",
               targetRuntime: "gemini_cli",
               profileId: "profile:gemini-default",
@@ -968,7 +968,7 @@ describe.skip("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               workflowId: "mm:merge-automation-edit",
-              workflowType: "MoonMind.Run",
+              workflowType: "MoonMind.UserWorkflow",
               state: "executing",
               targetRuntime: "codex_cli",
               profileId: "profile:codex-default",
@@ -1002,7 +1002,7 @@ describe.skip("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               workflowId: "mm:multi-step-edit",
-              workflowType: "MoonMind.Run",
+              workflowType: "MoonMind.UserWorkflow",
               state: "executing",
               targetRuntime: "codex_cli",
               profileId: "profile:codex-default",
@@ -1065,7 +1065,7 @@ describe.skip("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               workflowId: "mm:preset-step-input-edit",
-              workflowType: "MoonMind.Run",
+              workflowType: "MoonMind.UserWorkflow",
               state: "executing",
               targetRuntime: "codex_cli",
               inputParameters: {
@@ -1100,7 +1100,7 @@ describe.skip("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               workflowId: "mm:auto-primary-skill",
-              workflowType: "MoonMind.Run",
+              workflowType: "MoonMind.UserWorkflow",
               state: "executing",
               targetRuntime: "codex_cli",
               targetSkill: "moonspec-orchestrate",
@@ -1127,7 +1127,7 @@ describe.skip("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               workflowId: "mm:artifact-edit",
-              workflowType: "MoonMind.Run",
+              workflowType: "MoonMind.UserWorkflow",
               state: "executing",
               targetRuntime: "codex_cli",
               profileId: "profile:codex-secondary",
@@ -1161,7 +1161,7 @@ describe.skip("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               workflowId: "mm:regular-draft-artifact-edit",
-              workflowType: "MoonMind.Run",
+              workflowType: "MoonMind.UserWorkflow",
               state: "executing",
               targetRuntime: "codex_cli",
               model: "gpt-5.4",
@@ -1190,7 +1190,7 @@ describe.skip("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               workflowId: "mm:attachment-edit",
-              workflowType: "MoonMind.Run",
+              workflowType: "MoonMind.UserWorkflow",
               state: "executing",
               targetRuntime: "codex_cli",
               profileId: "profile:codex-secondary",
@@ -1230,7 +1230,7 @@ describe.skip("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               workflowId: "mm:rerun-123",
-              workflowType: "MoonMind.Run",
+              workflowType: "MoonMind.UserWorkflow",
               state: "completed",
               targetRuntime: "codex_cli",
               profileId: "profile:codex-secondary",
@@ -1264,7 +1264,7 @@ describe.skip("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               workflowId: "mm:target-only-branch-rerun",
-              workflowType: "MoonMind.Run",
+              workflowType: "MoonMind.UserWorkflow",
               state: "completed",
               targetRuntime: "codex_cli",
               repository: "MoonLadderStudios/MoonMind",
@@ -1291,7 +1291,7 @@ describe.skip("Task Create Entrypoint", () => {
             json: async () => ({
               workflowId: "mm:complex-rerun",
               runId: "run-complex-source",
-              workflowType: "MoonMind.Run",
+              workflowType: "MoonMind.UserWorkflow",
               state: "completed",
               targetRuntime: "codex_cli",
               targetSkill: "jira-breakdown-orchestrate",
@@ -1389,7 +1389,7 @@ describe.skip("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               workflowId: "mm:valid-skill-rerun",
-              workflowType: "MoonMind.Run",
+              workflowType: "MoonMind.UserWorkflow",
               state: "completed",
               targetRuntime: "codex_cli",
               repository: "MoonLadderStudios/MoonMind",
@@ -1436,7 +1436,7 @@ describe.skip("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               workflowId: "mm:no-edit",
-              workflowType: "MoonMind.Run",
+              workflowType: "MoonMind.UserWorkflow",
               state: "executing",
               inputParameters: {
                 task: { instructions: "Existing task instructions." },
@@ -1453,7 +1453,7 @@ describe.skip("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               workflowId: "mm:stale-edit",
-              workflowType: "MoonMind.Run",
+              workflowType: "MoonMind.UserWorkflow",
               state: "executing",
               inputParameters: {
                 task: { instructions: "Editable before submit." },
@@ -1470,7 +1470,7 @@ describe.skip("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               workflowId: "mm:no-rerun",
-              workflowType: "MoonMind.Run",
+              workflowType: "MoonMind.UserWorkflow",
               state: "completed",
               inputParameters: {
                 task: { instructions: "Terminal task instructions." },
@@ -1487,7 +1487,7 @@ describe.skip("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               workflowId: "mm:stale-rerun",
-              workflowType: "MoonMind.Run",
+              workflowType: "MoonMind.UserWorkflow",
               state: "completed",
               targetRuntime: "codex_cli",
               model: "gpt-5.4",
@@ -1516,7 +1516,7 @@ describe.skip("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               workflowId: "mm:missing-artifact",
-              workflowType: "MoonMind.Run",
+              workflowType: "MoonMind.UserWorkflow",
               state: "completed",
               inputArtifactRef: "missing-input",
               inputParameters: { task: {} },
@@ -1534,7 +1534,7 @@ describe.skip("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               workflowId: "mm:malformed-artifact",
-              workflowType: "MoonMind.Run",
+              workflowType: "MoonMind.UserWorkflow",
               state: "completed",
               inputArtifactRef: "malformed-input",
               inputParameters: { task: {} },
@@ -1550,7 +1550,7 @@ describe.skip("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               workflowId: "mm:incomplete",
-              workflowType: "MoonMind.Run",
+              workflowType: "MoonMind.UserWorkflow",
               state: "executing",
               inputParameters: {
                 targetRuntime: "codex_cli",
@@ -1577,7 +1577,7 @@ describe.skip("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               workflowId: "mm:custom-endpoints",
-              workflowType: "MoonMind.Run",
+              workflowType: "MoonMind.UserWorkflow",
               state: "completed",
               targetRuntime: "codex_cli",
               profileId: "profile:codex-secondary",
@@ -1612,7 +1612,7 @@ describe.skip("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               workflowId: "mm:custom-edit",
-              workflowType: "MoonMind.Run",
+              workflowType: "MoonMind.UserWorkflow",
               state: "executing",
               targetRuntime: "codex_cli",
               profileId: "profile:codex-default",
@@ -1771,7 +1771,7 @@ describe.skip("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               workflowId: "mm:continue-edit",
-              workflowType: "MoonMind.Run",
+              workflowType: "MoonMind.UserWorkflow",
               state: "executing",
               targetRuntime: "codex_cli",
               model: "gpt-5.4",
@@ -1811,7 +1811,7 @@ describe.skip("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               workflowId: "mm:validation-edit",
-              workflowType: "MoonMind.Run",
+              workflowType: "MoonMind.UserWorkflow",
               state: "executing",
               targetRuntime: "codex_cli",
               model: "gpt-5.4",
@@ -1853,7 +1853,7 @@ describe.skip("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               workflowId: "mm:artifact-failure",
-              workflowType: "MoonMind.Run",
+              workflowType: "MoonMind.UserWorkflow",
               state: "executing",
               targetRuntime: "codex_cli",
               model: "gpt-5.4",
@@ -1916,7 +1916,7 @@ describe.skip("Task Create Entrypoint", () => {
               }),
           } as Response);
         }
-        if (url === "/api/task-step-templates/save-from-task") {
+        if (url === "/api/presets/save-from-workflow") {
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -2767,7 +2767,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("reconstructs a create-form draft from Temporal execution fields", () => {
     const draft = buildTemporalSubmissionDraftFromExecution({
       workflowId: "mm:edit-123",
-      workflowType: "MoonMind.Run",
+      workflowType: "MoonMind.UserWorkflow",
       targetRuntime: "gemini_cli",
       profileId: "profile:gemini-default",
       model: "gemini-2.5-pro",
@@ -2817,7 +2817,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("reconstructs pr publish with merge automation into draft state", () => {
     const draft = buildTemporalSubmissionDraftFromExecution({
       workflowId: "mm:merge-edit",
-      workflowType: "MoonMind.Run",
+      workflowType: "MoonMind.UserWorkflow",
       targetRuntime: "codex_cli",
       repository: "MoonLadderStudios/MoonMind",
       publishMode: "pr",
@@ -2838,7 +2838,7 @@ describe.skip("Task Create Entrypoint", () => {
     const draft = buildTemporalSubmissionDraftFromExecution(
       {
         workflowId: "mm:rerun-123",
-        workflowType: "MoonMind.Run",
+        workflowType: "MoonMind.UserWorkflow",
         inputArtifactRef: "historical-input",
         inputParameters: {
           targetRuntime: "codex_cli",
@@ -2888,7 +2888,7 @@ describe.skip("Task Create Entrypoint", () => {
     const draft = buildTemporalSubmissionDraftFromExecution(
       {
         workflowId: "mm:target-only-legacy",
-        workflowType: "MoonMind.Run",
+        workflowType: "MoonMind.UserWorkflow",
         inputParameters: {
           targetRuntime: "codex_cli",
           task: {
@@ -2933,7 +2933,7 @@ describe.skip("Task Create Entrypoint", () => {
     const draft = buildTemporalSubmissionDraftFromExecution(
       {
         workflowId: "mm:attachment-snapshot",
-        workflowType: "MoonMind.Run",
+        workflowType: "MoonMind.UserWorkflow",
         taskInputSnapshot: {
           available: true,
           artifactRef: "art-snapshot",
@@ -3035,7 +3035,7 @@ describe.skip("Task Create Entrypoint", () => {
     const draft = buildTemporalSubmissionDraftFromExecution(
       {
         workflowId: "mm:draft-attachment-refs",
-        workflowType: "MoonMind.Run",
+        workflowType: "MoonMind.UserWorkflow",
         taskInputSnapshot: {
           available: true,
           artifactRef: "art-snapshot",
@@ -3102,7 +3102,7 @@ describe.skip("Task Create Entrypoint", () => {
       buildTemporalSubmissionDraftFromExecution(
         {
           workflowId: "mm:unbound-attachments",
-          workflowType: "MoonMind.Run",
+          workflowType: "MoonMind.UserWorkflow",
           taskInputSnapshot: {
             available: true,
             artifactRef: "art-snapshot",
@@ -3145,7 +3145,7 @@ describe.skip("Task Create Entrypoint", () => {
       buildTemporalSubmissionDraftFromExecution(
         {
           workflowId: "mm:duplicate-artifact-binding",
-          workflowType: "MoonMind.Run",
+          workflowType: "MoonMind.UserWorkflow",
           taskInputSnapshot: {
             available: true,
             artifactRef: "art-snapshot",
@@ -3202,7 +3202,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("reconstructs primary skill from object-shaped task skill selectors", () => {
     const draft = buildTemporalSubmissionDraftFromExecution({
       workflowId: "mm:skill-selectors",
-      workflowType: "MoonMind.Run",
+      workflowType: "MoonMind.UserWorkflow",
       inputParameters: {
         task: {
           instructions: "Resolve the selected PR.",
@@ -3220,7 +3220,7 @@ describe.skip("Task Create Entrypoint", () => {
     const draft = buildTemporalSubmissionDraftFromExecution(
       {
         workflowId: "mm:snapshot-skill-only",
-        workflowType: "MoonMind.Run",
+        workflowType: "MoonMind.UserWorkflow",
         taskInputSnapshot: {
           available: true,
           artifactRef: "art_snapshot_skill_only",
@@ -3286,7 +3286,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("includes step-level instructions when reconstructing a draft", () => {
     const draft = buildTemporalSubmissionDraftFromExecution({
       workflowId: "mm:step-instructions",
-      workflowType: "MoonMind.Run",
+      workflowType: "MoonMind.UserWorkflow",
       inputParameters: {
         task: {
           instructions: "Top-level objective.",
@@ -3310,7 +3310,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("reconstructs ordered editable steps from Temporal execution fields", () => {
     const draft = buildTemporalSubmissionDraftFromExecution({
       workflowId: "mm:ordered-steps",
-      workflowType: "MoonMind.Run",
+      workflowType: "MoonMind.UserWorkflow",
       inputParameters: {
         task: {
           instructions: "Primary operator objective.",
@@ -3394,7 +3394,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("reconstructs explicit Step Type draft payloads for editing", () => {
     const draft = buildTemporalSubmissionDraftFromExecution({
       workflowId: "mm:step-types",
-      workflowType: "MoonMind.Run",
+      workflowType: "MoonMind.UserWorkflow",
       inputParameters: {
         task: {
           instructions: "Edit explicit Step Type payloads.",
@@ -3489,7 +3489,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("reconstructs template attachments for editable Temporal steps", () => {
     const draft = buildTemporalSubmissionDraftFromExecution({
       workflowId: "mm:template-attachments",
-      workflowType: "MoonMind.Run",
+      workflowType: "MoonMind.UserWorkflow",
       inputParameters: {
         task: {
           instructions: "Edit a template-backed task.",
@@ -3526,7 +3526,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("does not synthesize a task objective into an editable step", () => {
     const draft = buildTemporalSubmissionDraftFromExecution({
       workflowId: "mm:objective-differs",
-      workflowType: "MoonMind.Run",
+      workflowType: "MoonMind.UserWorkflow",
       inputParameters: {
         task: {
           instructions: "Preset-level objective text.",
@@ -3554,7 +3554,7 @@ describe.skip("Task Create Entrypoint", () => {
     const draft = buildTemporalSubmissionDraftFromExecution(
       {
         workflowId: "mm:partial-inline-steps",
-        workflowType: "MoonMind.Run",
+        workflowType: "MoonMind.UserWorkflow",
         inputArtifactRef: "full-input",
         inputParameters: {
           task: {
@@ -3594,7 +3594,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("uses null for optional draft fields that cannot be reconstructed", () => {
     const draft = buildTemporalSubmissionDraftFromExecution({
       workflowId: "mm:minimal",
-      workflowType: "MoonMind.Run",
+      workflowType: "MoonMind.UserWorkflow",
       inputParameters: {
         task: {
           instructions: "Only instructions are available.",
@@ -3619,7 +3619,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("reconstructs enabled report output from Temporal input parameters", () => {
     const draft = buildTemporalSubmissionDraftFromExecution({
       workflowId: "mm:report-output",
-      workflowType: "MoonMind.Run",
+      workflowType: "MoonMind.UserWorkflow",
       inputParameters: {
         reportOutput: {
           enabled: true,
@@ -3638,7 +3638,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(() =>
       buildTemporalSubmissionDraftFromExecution({
         workflowId: "mm:incomplete",
-        workflowType: "MoonMind.Run",
+        workflowType: "MoonMind.UserWorkflow",
         inputParameters: {
           targetRuntime: "codex_cli",
           task: {
@@ -3735,7 +3735,7 @@ describe.skip("Task Create Entrypoint", () => {
         fetchSpy.mock.calls.some(([url, init]) => {
           if (
             !String(url).startsWith(
-              "/api/task-step-templates/speckit-demo:expand?scope=global",
+              "/api/presets/speckit-demo:expand?scope=global",
             )
           ) {
             return false;
@@ -3934,7 +3934,7 @@ describe.skip("Task Create Entrypoint", () => {
     const draft = buildTemporalSubmissionDraftFromExecution(
       {
         workflowId: "mm:slash-rerun",
-        workflowType: "MoonMind.Run",
+        workflowType: "MoonMind.UserWorkflow",
         runId: "run-source",
         targetRuntime: "codex_cli",
         inputParameters: {
@@ -4412,7 +4412,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     expect(
       await screen.findByText(
-        "This execution cannot be edited here because only MoonMind.Run is supported.",
+        "This execution cannot be edited here because only MoonMind.UserWorkflow is supported.",
       ),
     ).toBeTruthy();
     expect(
@@ -6500,7 +6500,7 @@ describe.skip("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("/api/task-step-templates?scope=global")) {
+      if (url.startsWith("/api/presets?scope=global")) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -6564,7 +6564,7 @@ describe.skip("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("/api/task-step-templates?scope=global")) {
+      if (url.startsWith("/api/presets?scope=global")) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -6624,7 +6624,7 @@ describe.skip("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("/api/task-step-templates?scope=global")) {
+      if (url.startsWith("/api/presets?scope=global")) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -6642,7 +6642,7 @@ describe.skip("Task Create Entrypoint", () => {
         } as Response);
       }
       if (
-        url.startsWith("/api/task-step-templates/jira-orchestrate?scope=global")
+        url.startsWith("/api/presets/jira-orchestrate?scope=global")
       ) {
         return Promise.resolve({
           ok: true,
@@ -6716,7 +6716,7 @@ describe.skip("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("/api/task-step-templates?scope=global")) {
+      if (url.startsWith("/api/presets?scope=global")) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -6734,7 +6734,7 @@ describe.skip("Task Create Entrypoint", () => {
         } as Response);
       }
       if (
-        url.startsWith("/api/task-step-templates/moonspec-orchestrate?scope=global")
+        url.startsWith("/api/presets/moonspec-orchestrate?scope=global")
       ) {
         return Promise.resolve({
           ok: true,
@@ -6806,7 +6806,7 @@ describe.skip("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("/api/task-step-templates?scope=global")) {
+      if (url.startsWith("/api/presets?scope=global")) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -6823,7 +6823,7 @@ describe.skip("Task Create Entrypoint", () => {
           }),
         } as Response);
       }
-      if (url.startsWith("/api/task-step-templates/jira-orchestrate?scope=global")) {
+      if (url.startsWith("/api/presets/jira-orchestrate?scope=global")) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -6846,7 +6846,7 @@ describe.skip("Task Create Entrypoint", () => {
       }
       if (
         url.startsWith(
-          "/api/task-step-templates/jira-orchestrate:expand?scope=global",
+          "/api/presets/jira-orchestrate:expand?scope=global",
         )
       ) {
         return Promise.resolve({
@@ -6931,7 +6931,7 @@ describe.skip("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("/api/task-step-templates?scope=global")) {
+      if (url.startsWith("/api/presets?scope=global")) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -6950,7 +6950,7 @@ describe.skip("Task Create Entrypoint", () => {
       }
       if (
         url.startsWith(
-          "/api/task-step-templates/jira-breakdown-orchestrate?scope=global",
+          "/api/presets/jira-breakdown-orchestrate?scope=global",
         )
       ) {
         return Promise.resolve({
@@ -7015,7 +7015,7 @@ describe.skip("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("/api/task-step-templates?scope=global")) {
+      if (url.startsWith("/api/presets?scope=global")) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -7032,7 +7032,7 @@ describe.skip("Task Create Entrypoint", () => {
           }),
         } as Response);
       }
-      if (url.startsWith("/api/task-step-templates/jira-breakdown?scope=global")) {
+      if (url.startsWith("/api/presets/jira-breakdown?scope=global")) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -7076,7 +7076,7 @@ describe.skip("Task Create Entrypoint", () => {
         } as Response);
       }
       if (
-        url.startsWith("/api/task-step-templates/jira-breakdown:expand?scope=global")
+        url.startsWith("/api/presets/jira-breakdown:expand?scope=global")
       ) {
         const body = JSON.parse(String(init?.body || "{}"));
         return Promise.resolve({
@@ -7121,7 +7121,7 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       const expandCall = fetchSpy.mock.calls.find(([url]) =>
         String(url).startsWith(
-          "/api/task-step-templates/jira-breakdown:expand?scope=global",
+          "/api/presets/jira-breakdown:expand?scope=global",
         ),
       );
       expect(expandCall).toBeTruthy();
@@ -7134,7 +7134,7 @@ describe.skip("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("/api/task-step-templates?scope=global")) {
+      if (url.startsWith("/api/presets?scope=global")) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -7151,7 +7151,7 @@ describe.skip("Task Create Entrypoint", () => {
           }),
         } as Response);
       }
-      if (url.startsWith("/api/task-step-templates/option-demo?scope=global")) {
+      if (url.startsWith("/api/presets/option-demo?scope=global")) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -7185,7 +7185,7 @@ describe.skip("Task Create Entrypoint", () => {
           }),
         } as Response);
       }
-      if (url.startsWith("/api/task-step-templates/option-demo:expand?scope=global")) {
+      if (url.startsWith("/api/presets/option-demo:expand?scope=global")) {
         const body = JSON.parse(String(init?.body || "{}"));
         return Promise.resolve({
           ok: true,
@@ -7224,7 +7224,7 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       const expandCall = fetchSpy.mock.calls.find(([url]) =>
         String(url).startsWith(
-          "/api/task-step-templates/option-demo:expand?scope=global",
+          "/api/presets/option-demo:expand?scope=global",
         ),
       );
       expect(expandCall).toBeTruthy();
@@ -7238,7 +7238,7 @@ describe.skip("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("/api/task-step-templates?scope=global")) {
+      if (url.startsWith("/api/presets?scope=global")) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -7263,7 +7263,7 @@ describe.skip("Task Create Entrypoint", () => {
           }),
         } as Response);
       }
-      if (url.startsWith("/api/task-step-templates/preset-a?scope=global")) {
+      if (url.startsWith("/api/presets/preset-a?scope=global")) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -7292,7 +7292,7 @@ describe.skip("Task Create Entrypoint", () => {
           }),
         } as Response);
       }
-      if (url.startsWith("/api/task-step-templates/preset-b?scope=global")) {
+      if (url.startsWith("/api/presets/preset-b?scope=global")) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -7321,7 +7321,7 @@ describe.skip("Task Create Entrypoint", () => {
           }),
         } as Response);
       }
-      if (url.startsWith("/api/task-step-templates/preset-b:expand?scope=global")) {
+      if (url.startsWith("/api/presets/preset-b:expand?scope=global")) {
         const body = JSON.parse(String(init?.body || "{}"));
         return Promise.resolve({
           ok: true,
@@ -7374,7 +7374,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     await waitFor(() => {
       const expandCall = fetchSpy.mock.calls.find(([url]) =>
-        String(url).startsWith("/api/task-step-templates/preset-b:expand?scope=global"),
+        String(url).startsWith("/api/presets/preset-b:expand?scope=global"),
       );
       expect(expandCall).toBeTruthy();
       const body = JSON.parse(String(expandCall?.[1]?.body || "{}"));
@@ -7386,7 +7386,7 @@ describe.skip("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("/api/task-step-templates?scope=global")) {
+      if (url.startsWith("/api/presets?scope=global")) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -7762,10 +7762,10 @@ describe.skip("Task Create Entrypoint", () => {
     (
       disabledPayload.initialData as {
         dashboardConfig: {
-          system: { taskTemplateCatalog: { templateSaveEnabled: boolean } };
+          system: { presetCatalog: { templateSaveEnabled: boolean } };
         };
       }
-    ).dashboardConfig.system.taskTemplateCatalog.templateSaveEnabled = false;
+    ).dashboardConfig.system.presetCatalog.templateSaveEnabled = false;
 
     renderWithClient(<WorkflowStartPage payload={disabledPayload} />);
 
@@ -7805,7 +7805,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(
       fetchSpy.mock.calls.some(
         ([url, init]) =>
-          String(url).startsWith("/api/task-step-templates/speckit-demo") &&
+          String(url).startsWith("/api/presets/speckit-demo") &&
           init?.method === "DELETE",
       ),
     ).toBe(false);
@@ -7829,7 +7829,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
-        "/api/task-step-templates/personal-demo?scope=personal",
+        "/api/presets/personal-demo?scope=personal",
         expect.objectContaining({
           method: "DELETE",
         }),
@@ -7860,7 +7860,7 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       const saveCall = fetchSpy.mock.calls.find(
         ([url, init]) =>
-          String(url) === "/api/task-step-templates/save-from-task" &&
+          String(url) === "/api/presets/save-from-workflow" &&
           init?.method === "POST",
       );
       expect(saveCall).toBeTruthy();
@@ -8156,7 +8156,7 @@ describe.skip("Task Create Entrypoint", () => {
       }) as Response;
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("/api/task-step-templates?scope=global")) {
+      if (url.startsWith("/api/presets?scope=global")) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -8181,12 +8181,12 @@ describe.skip("Task Create Entrypoint", () => {
           }),
         } as Response);
       }
-      if (url.startsWith("/api/task-step-templates/preset-a?scope=global")) {
+      if (url.startsWith("/api/presets/preset-a?scope=global")) {
         return new Promise<Response>((resolve) => {
           resolvePresetA = resolve;
         });
       }
-      if (url.startsWith("/api/task-step-templates/preset-b?scope=global")) {
+      if (url.startsWith("/api/presets/preset-b?scope=global")) {
         return new Promise<Response>((resolve) => {
           resolvePresetB = resolve;
         });
@@ -8269,7 +8269,7 @@ describe.skip("Task Create Entrypoint", () => {
       const url = String(input);
       if (
         url.startsWith(
-          "/api/task-step-templates/speckit-demo:expand?scope=global",
+          "/api/presets/speckit-demo:expand?scope=global",
         )
       ) {
         return Promise.resolve({
@@ -8356,7 +8356,7 @@ describe.skip("Task Create Entrypoint", () => {
       const url = String(input);
       if (
         url.startsWith(
-          "/api/task-step-templates/speckit-demo:expand?scope=global",
+          "/api/presets/speckit-demo:expand?scope=global",
         )
       ) {
         return Promise.resolve({
@@ -8446,7 +8446,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(
       fetchSpy.mock.calls.some(([url]) =>
         String(url).startsWith(
-          "/api/task-step-templates/speckit-demo:expand?scope=global",
+          "/api/presets/speckit-demo:expand?scope=global",
         ),
       ),
     ).toBe(true);
@@ -9402,10 +9402,10 @@ describe.skip("Task Create Entrypoint", () => {
             json: async () => providerProfileItems,
           } as Response);
         }
-        if (url.startsWith("/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.Run&entry=user_workflow")) {
+        if (url.startsWith("/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.UserWorkflow&entry=user_workflow")) {
           const depItems = Array.from({ length: 12 }, (_, i) => ({
             taskId: `mm:dep-${i + 1}`,
-            workflowType: "MoonMind.Run",
+            workflowType: "MoonMind.UserWorkflow",
             entry: "user_workflow",
             title: i === 0 ? "Build shared schema" : `Dependency task ${i + 1}`,
             state: i % 3 === 0 ? "completed" : "executing",
@@ -9594,10 +9594,10 @@ describe.skip("Task Create Entrypoint", () => {
                 json: async () => ({ artifact_id: "art-001" }),
               } as Response);
             }
-            if (url.startsWith("/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.Run&entry=user_workflow")) {
+            if (url.startsWith("/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.UserWorkflow&entry=user_workflow")) {
               const depItems = Array.from({ length: 12 }, (_, i) => ({
                 taskId: `mm:dep-${i + 1}`,
-                workflowType: "MoonMind.Run",
+                workflowType: "MoonMind.UserWorkflow",
                 entry: "user_workflow",
                 title: i === 0 ? "Build shared schema" : `Dependency task ${i + 1}`,
                 state: i % 3 === 0 ? "completed" : "executing",
@@ -9725,7 +9725,7 @@ describe.skip("Task Create Entrypoint", () => {
       const url = String(input);
       if (
         url.startsWith(
-          "/api/task-step-templates/speckit-demo:expand?scope=global",
+          "/api/presets/speckit-demo:expand?scope=global",
         )
       ) {
         return Promise.resolve({
@@ -9890,7 +9890,7 @@ describe.skip("Task Create Entrypoint", () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (
-        url.startsWith("/api/task-step-templates/speckit-demo?scope=global")
+        url.startsWith("/api/presets/speckit-demo?scope=global")
       ) {
         return Promise.resolve({
           ok: true,
@@ -9920,7 +9920,7 @@ describe.skip("Task Create Entrypoint", () => {
       }
       if (
         url.startsWith(
-          "/api/task-step-templates/speckit-demo:expand?scope=global",
+          "/api/presets/speckit-demo:expand?scope=global",
         )
       ) {
         return Promise.resolve({
@@ -9971,7 +9971,7 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
         expect.stringContaining(
-          "/api/task-step-templates/speckit-demo:expand?scope=global",
+          "/api/presets/speckit-demo:expand?scope=global",
         ),
         expect.objectContaining({ method: "POST" }),
       );
@@ -9980,7 +9980,7 @@ describe.skip("Task Create Entrypoint", () => {
     const expandCall = fetchSpy.mock.calls
       .filter(([url]) =>
         String(url).startsWith(
-          "/api/task-step-templates/speckit-demo:expand?scope=global",
+          "/api/presets/speckit-demo:expand?scope=global",
         ),
       )
       .at(-1);
@@ -10216,7 +10216,7 @@ describe.skip("Task Create Entrypoint", () => {
       const url = String(input);
       if (
         url.startsWith(
-          "/api/task-step-templates/speckit-demo:expand?scope=global",
+          "/api/presets/speckit-demo:expand?scope=global",
         )
       ) {
         return Promise.resolve({
@@ -10390,7 +10390,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
     expect(
       fetchSpy.mock.calls.some(
-        ([url]) => String(url) === "/api/task-step-templates/save-from-task",
+        ([url]) => String(url) === "/api/presets/save-from-workflow",
       ),
     ).toBe(false);
 
@@ -10440,7 +10440,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
-        "/api/task-step-templates/save-from-task",
+        "/api/presets/save-from-workflow",
         expect.objectContaining({
           method: "POST",
         }),
@@ -10448,7 +10448,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
 
     const saveCall = fetchSpy.mock.calls
-      .filter(([url]) => String(url) === "/api/task-step-templates/save-from-task")
+      .filter(([url]) => String(url) === "/api/presets/save-from-workflow")
       .at(-1);
     const request = JSON.parse(String(saveCall?.[1]?.body)) as {
       steps: Array<{
@@ -10564,7 +10564,7 @@ describe.skip("Task Create Entrypoint", () => {
       const url = String(input);
       if (
         url.startsWith(
-          "/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.Run&entry=user_workflow",
+          "/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.UserWorkflow&entry=user_workflow",
         )
       ) {
         return Promise.resolve({
@@ -13004,7 +13004,7 @@ describe.skip("Task Create Entrypoint", () => {
             json: async () => ({ items: { worker: [] } }),
           } as Response);
         }
-        if (url.startsWith("/api/task-step-templates")) {
+        if (url.startsWith("/api/presets")) {
           return Promise.resolve({
             ok: true,
             json: async () => ({ items: [] }),
@@ -13067,7 +13067,7 @@ describe.skip("Task Create Entrypoint", () => {
             json: async () => ({ items: { worker: [] } }),
           } as Response);
         }
-        if (url.startsWith("/api/task-step-templates")) {
+        if (url.startsWith("/api/presets")) {
           return Promise.resolve({
             ok: true,
             json: async () => ({ items: [] }),
@@ -13169,7 +13169,7 @@ describe("Task Create MM-641 authoring validation", () => {
             ],
           } as Response);
         }
-        if (url.startsWith("/api/task-step-templates")) {
+        if (url.startsWith("/api/presets")) {
           return Promise.resolve({
             ok: true,
             json: async () => ({ items: [] }),
@@ -13177,7 +13177,7 @@ describe("Task Create MM-641 authoring validation", () => {
         }
         if (
           url.startsWith(
-            "/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.Run&entry=user_workflow",
+            "/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.UserWorkflow&entry=user_workflow",
           )
         ) {
           return Promise.resolve({
@@ -13186,7 +13186,7 @@ describe("Task Create MM-641 authoring validation", () => {
               items: [
                 {
                   taskId: "mm:dep-641",
-                  workflowType: "MoonMind.Run",
+                  workflowType: "MoonMind.UserWorkflow",
                   entry: "user_workflow",
                   title: "Prepare MM-641 source brief",
                   state: "completed",
@@ -13551,7 +13551,7 @@ describe("Task Create submit arrow animation", () => {
               ok: true,
               json: async () => ({ items: { worker: ["speckit-orchestrate"] } }),
             } as Response);
-          case url.startsWith("/api/task-step-templates"):
+          case url.startsWith("/api/presets"):
             return Promise.resolve({
               ok: true,
               json: async () => ({ items: [] }),
@@ -13660,7 +13660,7 @@ describe("Task Create submit arrow animation", () => {
               ok: true,
               json: async () => ({ items: { worker: ["speckit-orchestrate"] } }),
             } as Response);
-          case url.startsWith("/api/task-step-templates"):
+          case url.startsWith("/api/presets"):
             return Promise.resolve({
               ok: true,
               json: async () => ({ items: [] }),
@@ -13754,7 +13754,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       expect(
         fetchSpy.mock.calls.some(([url]) =>
           String(url).startsWith(
-            "/api/task-step-templates/mm-578-preset?scope=global",
+            "/api/presets/mm-578-preset?scope=global",
           ),
         ),
       ).toBe(true);
@@ -13788,13 +13788,13 @@ describe("Task Create MM-578 Preset expansion", () => {
         }),
       } as Response);
     }
-    if (url.startsWith("/api/task-step-templates?scope=personal")) {
+    if (url.startsWith("/api/presets?scope=personal")) {
       return Promise.resolve({
         ok: true,
         json: async () => ({ items: [] }),
       } as Response);
     }
-    if (url.startsWith("/api/task-step-templates?scope=global")) {
+    if (url.startsWith("/api/presets?scope=global")) {
       return Promise.resolve({
         ok: true,
         json: async () => ({
@@ -13811,7 +13811,7 @@ describe("Task Create MM-578 Preset expansion", () => {
         }),
       } as Response);
     }
-    if (url.startsWith("/api/task-step-templates/mm-578-preset?scope=global")) {
+    if (url.startsWith("/api/presets/mm-578-preset?scope=global")) {
       return Promise.resolve({
         ok: true,
         json: async () => ({
@@ -13834,7 +13834,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     }
     if (
       url.startsWith(
-        "/api/task-step-templates/mm-578-preset:expand?scope=global",
+        "/api/presets/mm-578-preset:expand?scope=global",
       )
     ) {
       return Promise.resolve({
@@ -13928,7 +13928,7 @@ describe("Task Create MM-578 Preset expansion", () => {
         ok: true,
         json: async () => ({
           workflowId: "mm:auto-preset-edit",
-          workflowType: "MoonMind.Run",
+          workflowType: "MoonMind.UserWorkflow",
           state: "executing",
           targetRuntime: "codex_cli",
           repository: "MoonLadderStudios/MoonMind",
@@ -13997,7 +13997,7 @@ describe("Task Create MM-578 Preset expansion", () => {
   it("submits Jira Orchestrate preset runs with the executable first-step skill", async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.startsWith("/api/task-step-templates?scope=global")) {
+      if (url.startsWith("/api/presets?scope=global")) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -14014,7 +14014,7 @@ describe("Task Create MM-578 Preset expansion", () => {
           }),
         } as Response);
       }
-      if (url.startsWith("/api/task-step-templates/jira-orchestrate?scope=global")) {
+      if (url.startsWith("/api/presets/jira-orchestrate?scope=global")) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -14037,7 +14037,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       }
       if (
         url.startsWith(
-          "/api/task-step-templates/jira-orchestrate:expand?scope=global",
+          "/api/presets/jira-orchestrate:expand?scope=global",
         )
       ) {
         return Promise.resolve({
@@ -14112,7 +14112,7 @@ describe("Task Create MM-578 Preset expansion", () => {
   it("defaults parent publish mode to none when selecting Jira Breakdown and Orchestrate as a Preset step", async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.startsWith("/api/task-step-templates?scope=global")) {
+      if (url.startsWith("/api/presets?scope=global")) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -14131,7 +14131,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       }
       if (
         url.startsWith(
-          "/api/task-step-templates/jira-breakdown-orchestrate?scope=global",
+          "/api/presets/jira-breakdown-orchestrate?scope=global",
         )
       ) {
         return Promise.resolve({
@@ -14164,7 +14164,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       }
       if (
         url.startsWith(
-          "/api/task-step-templates/jira-breakdown-orchestrate:expand?scope=global",
+          "/api/presets/jira-breakdown-orchestrate:expand?scope=global",
         )
       ) {
         return Promise.resolve({
@@ -14275,7 +14275,7 @@ describe("Task Create MM-578 Preset expansion", () => {
   it("does not force none publish mode from stale Jira Breakdown preset provenance", async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.startsWith("/api/task-step-templates?scope=global")) {
+      if (url.startsWith("/api/presets?scope=global")) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -14294,7 +14294,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       }
       if (
         url.startsWith(
-          "/api/task-step-templates/jira-breakdown-orchestrate?scope=global",
+          "/api/presets/jira-breakdown-orchestrate?scope=global",
         )
       ) {
         return Promise.resolve({
@@ -14319,7 +14319,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       }
       if (
         url.startsWith(
-          "/api/task-step-templates/jira-breakdown-orchestrate:expand?scope=global",
+          "/api/presets/jira-breakdown-orchestrate:expand?scope=global",
         )
       ) {
         return Promise.resolve({
@@ -14699,7 +14699,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     expect(
       fetchSpy.mock.calls.filter(([url]) =>
         String(url).startsWith(
-          "/api/task-step-templates/mm-578-preset:expand?scope=global",
+          "/api/presets/mm-578-preset:expand?scope=global",
         ),
       ),
     ).toHaveLength(3);
@@ -14726,7 +14726,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       const url = String(input);
       if (
         url.startsWith(
-          "/api/task-step-templates/mm-578-preset:expand?scope=global",
+          "/api/presets/mm-578-preset:expand?scope=global",
         )
       ) {
         expansionCount += 1;
@@ -14875,7 +14875,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     expect(
       fetchSpy.mock.calls.some(([url]) =>
         String(url).startsWith(
-          "/api/task-step-templates/mm-578-preset:expand?scope=global",
+          "/api/presets/mm-578-preset:expand?scope=global",
         ),
       ),
     ).toBe(false);
@@ -14889,7 +14889,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       const url = String(input);
       if (
         url.startsWith(
-          "/api/task-step-templates/mm-578-preset:expand?scope=global",
+          "/api/presets/mm-578-preset:expand?scope=global",
         )
       ) {
         return Promise.resolve({
@@ -14964,7 +14964,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       const url = String(input);
       if (
         url.startsWith(
-          "/api/task-step-templates/mm-578-preset:expand?scope=global",
+          "/api/presets/mm-578-preset:expand?scope=global",
         )
       ) {
         return new Promise<Response>((resolve) => {
@@ -14989,7 +14989,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     expect(
       fetchSpy.mock.calls.filter(([url]) =>
         String(url).startsWith(
-          "/api/task-step-templates/mm-578-preset:expand?scope=global",
+          "/api/presets/mm-578-preset:expand?scope=global",
         ),
       ),
     ).toHaveLength(1);
@@ -15035,7 +15035,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       const url = String(input);
       if (
         url.startsWith(
-          "/api/task-step-templates/mm-578-preset:expand?scope=global",
+          "/api/presets/mm-578-preset:expand?scope=global",
         )
       ) {
         return Promise.resolve({
@@ -15131,13 +15131,13 @@ describe("Task Create schema-driven capability inputs", () => {
         }),
       } as Response);
     }
-    if (url.startsWith("/api/task-step-templates?scope=personal")) {
+    if (url.startsWith("/api/presets?scope=personal")) {
       return Promise.resolve({
         ok: true,
         json: async () => ({ items: [] }),
       } as Response);
     }
-    if (url.startsWith("/api/task-step-templates?scope=global")) {
+    if (url.startsWith("/api/presets?scope=global")) {
       return Promise.resolve({
         ok: true,
         json: async () => ({
@@ -15162,7 +15162,7 @@ describe("Task Create schema-driven capability inputs", () => {
         }),
       } as Response);
     }
-    if (url.startsWith("/api/task-step-templates/jira-schema-preset?scope=global")) {
+    if (url.startsWith("/api/presets/jira-schema-preset?scope=global")) {
       return Promise.resolve({
         ok: true,
         json: async () => ({
@@ -15198,7 +15198,7 @@ describe("Task Create schema-driven capability inputs", () => {
         }),
       } as Response);
     }
-    if (url.startsWith("/api/task-step-templates/generic-schema-preset?scope=global")) {
+    if (url.startsWith("/api/presets/generic-schema-preset?scope=global")) {
       return Promise.resolve({
         ok: true,
         json: async () => ({
@@ -15264,7 +15264,7 @@ describe("Task Create schema-driven capability inputs", () => {
         }),
       } as Response);
     }
-    if (url.startsWith("/api/task-step-templates/jira-schema-preset:expand?scope=global")) {
+    if (url.startsWith("/api/presets/jira-schema-preset:expand?scope=global")) {
       const payload = JSON.parse(String(init?.body || "{}")) as {
         inputs?: Record<string, unknown>;
       };
@@ -15366,7 +15366,7 @@ describe("Task Create schema-driven capability inputs", () => {
     await waitFor(() => {
       expect(
         fetchSpy.mock.calls.some(([url, request]) => {
-          if (!String(url).startsWith("/api/task-step-templates/jira-schema-preset:expand")) {
+          if (!String(url).startsWith("/api/presets/jira-schema-preset:expand")) {
             return false;
           }
           const payload = JSON.parse(String(request?.body || "{}")) as {
@@ -15398,7 +15398,7 @@ describe("Task Create schema-driven capability inputs", () => {
     });
     expect(
       fetchSpy.mock.calls.some(([url]) =>
-        String(url).startsWith("/api/task-step-templates/jira-schema-preset:expand"),
+        String(url).startsWith("/api/presets/jira-schema-preset:expand"),
       ),
     ).toBe(false);
   });
@@ -15583,7 +15583,7 @@ describe("Task Create governed Tool authoring", () => {
             json: async () => ({ items: [], defaultBranch: "main", error: null }),
           } as Response);
         }
-        if (url.startsWith("/api/task-step-templates")) {
+        if (url.startsWith("/api/presets")) {
           return Promise.resolve({
             ok: true,
             json: async () => ({ items: [] }),
@@ -15897,7 +15897,7 @@ describe("Task Create runtime command previews", () => {
             }),
           } as Response);
         }
-        if (url.startsWith("/api/task-step-templates")) {
+        if (url.startsWith("/api/presets")) {
           return Promise.resolve({
             ok: true,
             json: async () => ({ items: [] }),

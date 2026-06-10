@@ -80,7 +80,7 @@ async def _create_target_and_remediation(
         session, client_adapter=mock_client_adapter
     )
     target = await execution_service.create_execution(
-        workflow_type="MoonMind.Run",
+        workflow_type="MoonMind.UserWorkflow",
         owner_id=owner,
         title="Target",
         input_artifact_ref=None,
@@ -91,7 +91,7 @@ async def _create_target_and_remediation(
         idempotency_key=None,
     )
     remediation = await execution_service.create_execution(
-        workflow_type="MoonMind.Run",
+        workflow_type="MoonMind.UserWorkflow",
         owner_id=owner,
         title="Remediate target",
         input_artifact_ref=None,
@@ -304,7 +304,7 @@ async def test_remediation_context_builder_creates_bounded_linked_artifact(
         )
 
         target = await execution_service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Target needing help",
             input_artifact_ref=None,
@@ -329,7 +329,7 @@ async def test_remediation_context_builder_creates_bounded_linked_artifact(
         await session.commit()
 
         remediation = await execution_service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Remediate target",
             input_artifact_ref=None,
@@ -346,11 +346,11 @@ async def test_remediation_context_builder_creates_bounded_linked_artifact(
                                 {
                                     "logicalStepId": "run-tests",
                                     "attempt": "1",
-                                    "taskRunId": "tr_selected",
+                                    "agentRunId": "tr_selected",
                                     "ignored": "not copied",
                                 }
                             ],
-                            "taskRunIds": [
+                            "agentRunIds": [
                                 f"tr_{index:02d}" for index in range(25)
                             ],
                         },
@@ -437,11 +437,11 @@ async def test_remediation_context_builder_creates_bounded_linked_artifact(
             {
                 "logicalStepId": "run-tests",
                 "attempt": 1,
-                "taskRunId": "tr_selected",
+                "agentRunId": "tr_selected",
             }
         ]
-        assert len(payload["evidence"]["taskRuns"]) == 20
-        assert payload["evidence"]["taskRuns"][0] == {"taskRunId": "tr_00"}
+        assert len(payload["evidence"]["agentRuns"]) == 20
+        assert payload["evidence"]["agentRuns"][0] == {"agentRunId": "tr_00"}
         assert payload["evidence"]["targetArtifactRefs"] == [
             {"artifact_id": "art_target_summary"},
             {"artifact_id": "art_input_ref", "kind": "input"},
@@ -458,14 +458,14 @@ async def test_remediation_context_builder_creates_bounded_linked_artifact(
             "status": "unavailable",
             "mode": "snapshot_then_follow",
             "supported": False,
-            "taskRunId": "tr_00",
+            "agentRunId": "tr_00",
             "resumeCursor": None,
             "reason": "target is terminal",
             "fallbacks": [],
         }
         assert payload["boundedness"] == {
             "maxTailLines": 2000,
-            "maxTaskRunIds": 20,
+            "maxAgentRunIds": 20,
             "rawLogBodiesIncluded": False,
             "artifactContentsIncluded": False,
         }
@@ -482,7 +482,7 @@ async def test_remediation_context_builder_creates_bounded_linked_artifact(
         assert "token=" not in serialized.lower()
 
 @pytest.mark.asyncio
-async def test_remediation_context_builder_enriches_task_run_evidence_and_live_follow(
+async def test_remediation_context_builder_enriches_agent_run_evidence_and_live_follow(
     tmp_path, mock_client_adapter
 ):
     async with temporal_db(tmp_path) as session:
@@ -500,7 +500,7 @@ async def test_remediation_context_builder_enriches_task_run_evidence_and_live_f
         )
 
         target = await execution_service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Target with evidence",
             input_artifact_ref=None,
@@ -523,7 +523,7 @@ async def test_remediation_context_builder_enriches_task_run_evidence_and_live_f
                     {
                         "logicalStepId": "run-tests",
                         "attempt": 2,
-                        "taskRunId": "tr_live",
+                        "agentRunId": "tr_live",
                         "status": "failed",
                         "summary": "Integration tests failed",
                         "artifactRefs": [
@@ -531,9 +531,9 @@ async def test_remediation_context_builder_enriches_task_run_evidence_and_live_f
                         ],
                     }
                 ],
-                "taskRuns": [
+                "agentRuns": [
                     {
-                        "taskRunId": "tr_live",
+                        "agentRunId": "tr_live",
                         "observabilitySummaryRef": {"artifact_id": "art_obs"},
                         "stdoutRef": {"artifact_id": "art_stdout"},
                         "stderrRef": {"artifact_id": "art_stderr"},
@@ -556,7 +556,7 @@ async def test_remediation_context_builder_enriches_task_run_evidence_and_live_f
         await session.commit()
 
         remediation = await execution_service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Remediate target",
             input_artifact_ref=None,
@@ -572,10 +572,10 @@ async def test_remediation_context_builder_enriches_task_run_evidence_and_live_f
                                 {
                                     "logicalStepId": "run-tests",
                                     "attempt": "2",
-                                    "taskRunId": "tr_live",
+                                    "agentRunId": "tr_live",
                                 }
                             ],
-                            "taskRunIds": ["tr_live"],
+                            "agentRunIds": ["tr_live"],
                         },
                         "mode": "snapshot_then_follow",
                         "evidencePolicy": {
@@ -597,7 +597,7 @@ async def test_remediation_context_builder_enriches_task_run_evidence_and_live_f
             {
                 "logicalStepId": "run-tests",
                 "attempt": 2,
-                "taskRunId": "tr_live",
+                "agentRunId": "tr_live",
                 "status": "failed",
                 "summary": "Integration tests failed",
                 "artifactRefs": [
@@ -605,9 +605,9 @@ async def test_remediation_context_builder_enriches_task_run_evidence_and_live_f
                 ],
             }
         ]
-        assert result.payload["evidence"]["taskRuns"] == [
+        assert result.payload["evidence"]["agentRuns"] == [
             {
-                "taskRunId": "tr_live",
+                "agentRunId": "tr_live",
                 "observabilitySummaryRef": {"artifact_id": "art_obs"},
                 "stdoutRef": {"artifact_id": "art_stdout"},
                 "stderrRef": {"artifact_id": "art_stderr"},
@@ -636,7 +636,7 @@ async def test_remediation_context_builder_enriches_task_run_evidence_and_live_f
             "status": "active",
             "mode": "snapshot_then_follow",
             "supported": True,
-            "taskRunId": "tr_live",
+            "agentRunId": "tr_live",
             "resumeCursor": {"sequence": 12},
             "fallbacks": ["merged_logs", "stdout", "stderr", "diagnostics"],
         }
@@ -661,7 +661,7 @@ async def test_remediation_context_builder_matches_selected_step_by_full_identit
                     {
                         "logicalStepId": "plan",
                         "attempt": 1,
-                        "taskRunId": "tr_shared",
+                        "agentRunId": "tr_shared",
                         "status": "succeeded",
                         "summary": "Plan passed",
                         "artifactRefs": [
@@ -671,7 +671,7 @@ async def test_remediation_context_builder_matches_selected_step_by_full_identit
                     {
                         "logicalStepId": "implement",
                         "attempt": 2,
-                        "taskRunId": "tr_shared",
+                        "agentRunId": "tr_shared",
                         "status": "failed",
                         "summary": "Implementation failed",
                         "artifactRefs": [
@@ -695,10 +695,10 @@ async def test_remediation_context_builder_matches_selected_step_by_full_identit
                             {
                                 "logicalStepId": "implement",
                                 "attempt": 2,
-                                "taskRunId": "tr_shared",
+                                "agentRunId": "tr_shared",
                             }
                         ],
-                        "taskRunIds": ["tr_shared"],
+                        "agentRunIds": ["tr_shared"],
                     }
                 }
             },
@@ -718,7 +718,7 @@ async def test_remediation_context_builder_matches_selected_step_by_full_identit
             {
                 "logicalStepId": "implement",
                 "attempt": 2,
-                "taskRunId": "tr_shared",
+                "agentRunId": "tr_shared",
                 "status": "failed",
                 "summary": "Implementation failed",
                 "artifactRefs": [
@@ -744,9 +744,9 @@ async def test_remediation_context_builder_records_historical_degraded_evidence(
         target_source.memo = {
             **target_source.memo,
             "remediationEvidence": {
-                "taskRuns": [
+                "agentRuns": [
                     {
-                        "taskRunId": "tr_history",
+                        "agentRunId": "tr_history",
                         "mergedLogsRef": {"artifact_id": "art_merged"},
                     }
                 ]
@@ -762,7 +762,7 @@ async def test_remediation_context_builder_records_historical_degraded_evidence(
                 "remediation": {
                     "target": {
                         "workflowId": target.workflow_id,
-                        "taskRunIds": ["tr_history"],
+                        "agentRunIds": ["tr_history"],
                     },
                     "mode": "snapshot_then_follow",
                     "evidencePolicy": {"allowLiveFollow": False},
@@ -780,9 +780,9 @@ async def test_remediation_context_builder_records_historical_degraded_evidence(
             artifact_service=artifact_service,
         ).build_context(remediation_workflow_id=remediation.workflow_id)
 
-        assert result.payload["evidence"]["taskRuns"] == [
+        assert result.payload["evidence"]["agentRuns"] == [
             {
-                "taskRunId": "tr_history",
+                "agentRunId": "tr_history",
                 "mergedLogsRef": {"artifact_id": "art_merged"},
             }
         ]
@@ -833,7 +833,7 @@ async def test_remediation_context_builder_records_historical_degraded_evidence(
             "status": "policy_denied",
             "mode": "snapshot_then_follow",
             "supported": False,
-            "taskRunId": "tr_history",
+            "agentRunId": "tr_history",
             "resumeCursor": None,
             "reason": "policy denies live observation",
             "fallbacks": ["merged_logs"],
@@ -856,9 +856,9 @@ async def test_remediation_context_builder_marks_unsupported_live_follow_degrade
         target_source.memo = {
             **target_source.memo,
             "remediationEvidence": {
-                "taskRuns": [
+                "agentRuns": [
                     {
-                        "taskRunId": "tr_no_live",
+                        "agentRunId": "tr_no_live",
                         "stdoutRef": {"artifact_id": "art_stdout"},
                         "stderrRef": {"artifact_id": "art_stderr"},
                         "mergedLogsRef": {"artifact_id": "art_merged"},
@@ -885,7 +885,7 @@ async def test_remediation_context_builder_marks_unsupported_live_follow_degrade
                 "remediation": {
                     "target": {
                         "workflowId": target.workflow_id,
-                        "taskRunIds": ["tr_no_live"],
+                        "agentRunIds": ["tr_no_live"],
                     },
                     "mode": "snapshot_then_follow",
                 }
@@ -909,16 +909,16 @@ async def test_remediation_context_builder_marks_unsupported_live_follow_degrade
         assert result.payload["evidence"]["availability"][-1] == {
             "class": "live_follow",
             "status": "unsupported",
-            "reason": "task run does not support live follow",
+            "reason": "agent run does not support live follow",
             "fallback": "merged_logs",
         }
         assert result.payload["liveFollow"] == {
             "status": "unsupported",
             "mode": "snapshot_then_follow",
             "supported": False,
-            "taskRunId": "tr_no_live",
+            "agentRunId": "tr_no_live",
             "resumeCursor": {"sequence": 42},
-            "reason": "task run does not support live follow",
+            "reason": "agent run does not support live follow",
             "fallbacks": ["merged_logs", "stdout", "stderr", "diagnostics"],
         }
 
@@ -1610,7 +1610,7 @@ async def test_remediation_context_builder_rejects_non_remediation_workflow(
             store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
         )
         ordinary = await execution_service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title="Ordinary run",
             input_artifact_ref=None,
@@ -1647,21 +1647,21 @@ class RecordingLogReader:
     async def read_logs(
         self,
         *,
-        task_run_id,
+        agent_run_id,
         stream,
         cursor=None,
         tail_lines=None,
     ):
         self.calls.append(
             {
-                "task_run_id": task_run_id,
+                "agent_run_id": agent_run_id,
                 "stream": stream,
                 "cursor": cursor,
                 "tail_lines": tail_lines,
             }
         )
         return RemediationLogReadResult(
-            task_run_id=task_run_id,
+            agent_run_id=agent_run_id,
             stream=stream,
             lines=("line 1", "line 2"),
             next_cursor="cursor-2",
@@ -1671,12 +1671,12 @@ class RecordingLiveFollower:
     def __init__(self) -> None:
         self.calls = []
 
-    async def follow_logs(self, *, task_run_id, from_sequence=None):
+    async def follow_logs(self, *, agent_run_id, from_sequence=None):
         self.calls.append(
-            {"task_run_id": task_run_id, "from_sequence": from_sequence}
+            {"agent_run_id": agent_run_id, "from_sequence": from_sequence}
         )
         return RemediationLiveFollowResult(
-            task_run_id=task_run_id,
+            agent_run_id=agent_run_id,
             events=(
                 RemediationLiveFollowEvent(
                     sequence=43,
@@ -1783,7 +1783,7 @@ async def test_remediation_evidence_tools_read_only_context_declared_evidence(
         )
 
         target = await execution_service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Target",
             input_artifact_ref=None,
@@ -1820,7 +1820,7 @@ async def test_remediation_evidence_tools_read_only_context_declared_evidence(
         await session.commit()
 
         remediation = await execution_service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Remediate target",
             input_artifact_ref=None,
@@ -1832,7 +1832,7 @@ async def test_remediation_evidence_tools_read_only_context_declared_evidence(
                     "remediation": {
                         "target": {
                             "workflowId": target.workflow_id,
-                            "taskRunIds": ["tr_allowed"],
+                            "agentRunIds": ["tr_allowed"],
                         },
                         "evidencePolicy": {"tailLines": 100},
                     },
@@ -1875,14 +1875,14 @@ async def test_remediation_evidence_tools_read_only_context_declared_evidence(
 
         logs = await tools.read_target_logs(
             remediation_workflow_id=remediation.workflow_id,
-            task_run_id="tr_allowed",
+            agent_run_id="tr_allowed",
             stream="merged",
             tail_lines=999999,
         )
         assert logs.lines == ("line 1", "line 2")
         assert reader.calls == [
             {
-                "task_run_id": "tr_allowed",
+                "agent_run_id": "tr_allowed",
                 "stream": "merged",
                 "cursor": None,
                 "tail_lines": 100,
@@ -1898,7 +1898,7 @@ async def test_remediation_evidence_tools_read_only_context_declared_evidence(
         with pytest.raises(RemediationEvidenceToolError, match="not listed"):
             await tools.read_target_logs(
                 remediation_workflow_id=remediation.workflow_id,
-                task_run_id="tr_blocked",
+                agent_run_id="tr_blocked",
                 stream="stdout",
             )
 
@@ -1920,7 +1920,7 @@ async def test_remediation_evidence_tools_gate_live_follow_by_context_policy(
             store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
         )
         target = await execution_service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Target",
             input_artifact_ref=None,
@@ -1931,7 +1931,7 @@ async def test_remediation_evidence_tools_gate_live_follow_by_context_policy(
             idempotency_key=None,
         )
         remediation = await execution_service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Remediate target",
             input_artifact_ref=None,
@@ -1943,7 +1943,7 @@ async def test_remediation_evidence_tools_gate_live_follow_by_context_policy(
                     "remediation": {
                         "target": {
                             "workflowId": target.workflow_id,
-                            "taskRunIds": ["tr_live"],
+                            "agentRunIds": ["tr_live"],
                         },
                         "mode": "snapshot_then_follow",
                     },
@@ -1974,14 +1974,14 @@ async def test_remediation_evidence_tools_gate_live_follow_by_context_policy(
         with pytest.raises(RemediationEvidenceToolError, match="not supported"):
             await tools.follow_target_logs(
                 remediation_workflow_id=remediation.workflow_id,
-                task_run_id="tr_live",
+                agent_run_id="tr_live",
             )
 
         context = dict(result.payload)
         context["liveFollow"] = {
             "mode": "snapshot_then_follow",
             "supported": True,
-            "taskRunId": "tr_live",
+            "agentRunId": "tr_live",
             "resumeCursor": {"sequence": 42},
         }
         live_context_artifact, _upload = await artifact_service.create(
@@ -2011,10 +2011,10 @@ async def test_remediation_evidence_tools_gate_live_follow_by_context_policy(
 
         live = await tools.follow_target_logs(
             remediation_workflow_id=remediation.workflow_id,
-            task_run_id="tr_live",
+            agent_run_id="tr_live",
         )
         assert live.events[0].text == "live line"
-        assert follower.calls == [{"task_run_id": "tr_live", "from_sequence": 42}]
+        assert follower.calls == [{"agent_run_id": "tr_live", "from_sequence": 42}]
         assert recorded_cursors == [
             (remediation.workflow_id, {"sequence": 43}),
         ]
@@ -2022,7 +2022,7 @@ async def test_remediation_evidence_tools_gate_live_follow_by_context_policy(
         with pytest.raises(RemediationEvidenceToolError, match="not listed"):
             await tools.follow_target_logs(
                 remediation_workflow_id=remediation.workflow_id,
-                task_run_id="tr_other",
+                agent_run_id="tr_other",
             )
 
 @pytest.mark.asyncio
@@ -2043,7 +2043,7 @@ async def test_remediation_evidence_tools_prepare_action_request_rereads_target_
             store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
         )
         target = await execution_service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Target before action",
             input_artifact_ref=None,
@@ -2055,7 +2055,7 @@ async def test_remediation_evidence_tools_prepare_action_request_rereads_target_
             summary="Initial target summary",
         )
         remediation = await execution_service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Remediate target",
             input_artifact_ref=None,
@@ -2067,7 +2067,7 @@ async def test_remediation_evidence_tools_prepare_action_request_rereads_target_
                     "remediation": {
                         "target": {
                             "workflowId": target.workflow_id,
-                            "taskRunIds": ["tr_action"],
+                            "agentRunIds": ["tr_action"],
                         },
                         "actionPolicyRef": "admin_healer_default",
                     },
@@ -2558,7 +2558,7 @@ async def test_remediation_context_builder_rejects_missing_target_record(
             store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
         )
         remediation = await execution_service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title="Remediation without valid target",
             input_artifact_ref=None,
@@ -3288,7 +3288,7 @@ async def test_remediation_mutation_guard_persists_locks_and_ledger_across_servi
         other = await TemporalExecutionService(
             session, client_adapter=mock_client_adapter
         ).create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=target.owner_id,
             title="Second remediator",
             input_artifact_ref=None,

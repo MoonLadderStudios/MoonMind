@@ -638,7 +638,7 @@ async def test_agent_run_managed_preserves_workflow_scoped_session_metadata(
             return {
                 "binding": {
                     "workflowId": "wf-run-1:session:codex_cli",
-                    "taskRunId": "wf-run-1",
+                    "agentRunId": "wf-run-1",
                     "sessionId": "sess:wf-run-1:codex_cli",
                     "sessionEpoch": 1,
                     "runtimeId": "codex_cli",
@@ -720,7 +720,7 @@ async def test_agent_run_managed_preserves_workflow_scoped_session_metadata(
             executionProfileRef="codex-default",
             managedSession={
                 "workflowId": "wf-run-1:session:codex_cli",
-                "taskRunId": "wf-run-1",
+                "agentRunId": "wf-run-1",
                 "sessionId": "sess:wf-run-1:codex_cli",
                 "sessionEpoch": 1,
                 "runtimeId": "codex_cli",
@@ -736,7 +736,7 @@ async def test_agent_run_managed_preserves_workflow_scoped_session_metadata(
     assert fetch_payload.agent_id == "codex_cli"
     assert result.metadata["managedSession"] == {
         "workflowId": "wf-run-1:session:codex_cli",
-        "taskRunId": "wf-run-1",
+        "agentRunId": "wf-run-1",
         "sessionId": "sess:wf-run-1:codex_cli",
         "sessionEpoch": 1,
         "runtimeId": "codex_cli",

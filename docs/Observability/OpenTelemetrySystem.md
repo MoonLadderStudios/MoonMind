@@ -262,7 +262,7 @@ Each activity invocation should create a span with:
 - `temporal.attempt`
 - `moonmind.correlation_id`
 - `moonmind.worker_fleet`
-- `moonmind.runtime`
+- `MoonMind.UserWorkflowtime`
 - `moonmind.provider`
 - `moonmind.repo`
 - `moonmind.integration`
@@ -390,7 +390,7 @@ Where relevant and safe:
 - `moonmind.repo`
 - `moonmind.artifact_id`
 - `moonmind.artifact_link_type`
-- `moonmind.task_run_id`
+- `moonmind.agent_run_id`
 - `moonmind.child_workflow_id`
 - `moonmind.child_run_id`
 

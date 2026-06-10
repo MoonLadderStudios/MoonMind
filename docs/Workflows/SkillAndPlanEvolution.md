@@ -1,6 +1,6 @@
 # Skill & Plan Design Evolution (MoonMind & Temporal)
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
+**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 **Executive Summary:** The MoonMind system uses **tools** and **plans** atop Temporal to manage agent work. A *Tool* (`ToolDefinition`) is a named capability with input/output schemas, execution bindings, retries, etc. (not a workflow). A *Plan* is a DAG of tool invocations (Steps) with explicit dependencies and policies. This design leverages Temporal's deterministic workflows (orchestration) vs activities (side-effects). The codebase has completed a rename from `Skill*` to `Tool*` for Temporal contract objects; the term "Skill" is now reserved for agent instruction bundles (`.agents/skills/SKILL.md` files).
 
@@ -56,7 +56,7 @@ MoonMind currently uses **Skill** and **Plan**. Comparable systems use varied te
 
 - **Schema & Contracts:** Implement strict JSON-schema validation for Tools and Plans. Use a central **Tool Registry loader** that validates required fields (name, version, I/O schemas, executor, policies). On startup, register a digest of the tool set for snapshot pinning. Store plans as versioned artifacts.
 
-- **Plan Execution (Workflow):** Write the Plan Executor as a Temporal Workflow (`MoonMind.Run`). Pseudocode:
+- **Plan Execution (Workflow):** Write the Plan Executor as a Temporal Workflow (`MoonMind.UserWorkflow`). Pseudocode:
 
  ```python
  @workflow.defn
@@ -130,7 +130,7 @@ Two dispatch paths exist for plan nodes:
 
 ## Engineering roadmap
 
-The platform converges on a **registry-backed tool set**, **`plan.validate`**, a **deterministic interpreter** in `MoonMind.Run`, **`mm.tool.execute` dispatch**, **progress queries**, **metrics**, and **role-aware security**. Sequencing and gap list: .
+The platform converges on a **registry-backed tool set**, **`plan.validate`**, a **deterministic interpreter** in `MoonMind.UserWorkflow`, **`mm.tool.execute` dispatch**, **progress queries**, **metrics**, and **role-aware security**. Sequencing and gap list: .
 
 ## Diagram: Plan Execution (Mermaid)
 ```mermaid

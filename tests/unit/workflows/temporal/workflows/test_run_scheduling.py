@@ -50,7 +50,7 @@ async def test_run_workflow_scheduled(mock_run_environment):
             handle = await env.client.start_workflow(
                 MoonMindRunWorkflow.run,
                 {
-                    "workflow_type": "MoonMind.Run",
+                    "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {},
                     "plan_artifact_ref": "ref-123",
                     "scheduled_for": future_time
@@ -76,7 +76,7 @@ async def test_run_workflow_rescheduled(mock_run_environment):
             handle = await env.client.start_workflow(
                 MoonMindRunWorkflow.run,
                 {
-                    "workflow_type": "MoonMind.Run",
+                    "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {},
                     "plan_artifact_ref": "ref-123",
                     "scheduled_for": future_time
@@ -105,7 +105,7 @@ async def test_run_workflow_rescheduled_past(mock_run_environment):
             handle = await env.client.start_workflow(
                 MoonMindRunWorkflow.run,
                 {
-                    "workflow_type": "MoonMind.Run",
+                    "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {},
                     "plan_artifact_ref": "ref-123",
                     "scheduled_for": future_time
@@ -141,7 +141,7 @@ async def test_run_workflow_scheduled_cancel(mock_run_environment):
             handle = await env.client.start_workflow(
                 MoonMindRunWorkflow.run,
                 {
-                    "workflow_type": "MoonMind.Run",
+                    "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {},
                     "plan_artifact_ref": "ref-123",
                     "scheduled_for": future_time
@@ -168,7 +168,7 @@ async def test_run_workflow_invalid_scheduled_for(mock_run_environment):
                 handle = await env.client.start_workflow(
                     MoonMindRunWorkflow.run,
                     {
-                        "workflow_type": "MoonMind.Run",
+                        "workflow_type": "MoonMind.UserWorkflow",
                         "initial_parameters": {},
                         "plan_artifact_ref": "ref-123",
                         "scheduled_for": "not-a-valid-date"
@@ -227,7 +227,7 @@ async def test_run_workflow_waits_on_dependencies_before_planning(
             handle = await env.client.start_workflow(
                 MoonMindRunWorkflow.run,
                 {
-                    "workflow_type": "MoonMind.Run",
+                    "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {"task": {"dependsOn": ["dep-1", "dep-2"]}},
                     "plan_artifact_ref": "ref-123",
                 },
@@ -299,7 +299,7 @@ async def test_run_workflow_dependency_pause_gate_blocks_planning_until_resume(
             handle = await env.client.start_workflow(
                 MoonMindRunWorkflow.run,
                 {
-                    "workflow_type": "MoonMind.Run",
+                    "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {"task": {"dependsOn": ["dep-1"]}},
                     "plan_artifact_ref": "ref-123",
                 },
@@ -371,7 +371,7 @@ async def test_run_workflow_dependency_cancel_interrupts_wait(
             handle = await env.client.start_workflow(
                 MoonMindRunWorkflow.run,
                 {
-                    "workflow_type": "MoonMind.Run",
+                    "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {"task": {"dependsOn": ["dep-1"]}},
                     "plan_artifact_ref": "ref-123",
                 },
@@ -410,7 +410,7 @@ async def test_run_workflow_dependency_gate_unpatched_skips_wait(
             handle = await env.client.start_workflow(
                 MoonMindRunWorkflow.run,
                 {
-                    "workflow_type": "MoonMind.Run",
+                    "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {"task": {"dependsOn": ["dep-1"]}},
                     "plan_artifact_ref": "ref-123",
                 },
@@ -471,7 +471,7 @@ async def test_run_workflow_handles_failed_dependency_with_degraded_outcome(
             handle = await env.client.start_workflow(
                 MoonMindRunWorkflow.run,
                 {
-                    "workflow_type": "MoonMind.Run",
+                    "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {"task": {"dependsOn": ["dep-1"]}},
                     "plan_artifact_ref": "ref-123",
                 },

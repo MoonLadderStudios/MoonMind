@@ -1,6 +1,6 @@
 # Workflow Scheduling Guide
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
+**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 **Status:** Active
 **Owner:** MoonMind Platform
@@ -40,7 +40,7 @@ This section describes the canonical scheduling mechanisms for Temporal-managed 
 
 ### 4.1 One-Time Deferred Execution (workflow-level delay)
 
-Conceptually, Temporal's `start_delay` parameter on `client.start_workflow()` is the canonical way to implement one-time deferred execution. **MoonMind's current implementation does not use `start_delay`** for `MoonMind.Run` workflows. Instead, it starts the workflow immediately and passes the scheduled time into the workflow, which then waits internally until that time before doing any work.
+Conceptually, Temporal's `start_delay` parameter on `client.start_workflow()` is the canonical way to implement one-time deferred execution. **MoonMind's current implementation does not use `start_delay`** for `MoonMind.UserWorkflow` workflows. Instead, it starts the workflow immediately and passes the scheduled time into the workflow, which then waits internally until that time before doing any work.
 
 When a deferred one-time execution is created:
 
@@ -54,7 +54,7 @@ When a deferred one-time execution is created:
 #### Backend behavior
 
 1. API validates `scheduledFor` is a valid future UTC timestamp.
-2. API includes `scheduledFor` in the workflow input/payload (e.g., as part of the `MoonMind.Run` options).
+2. API includes `scheduledFor` in the workflow input/payload (e.g., as part of the `MoonMind.UserWorkflow` options).
 3. API calls `TemporalClientAdapter.start_workflow()` **without** the `start_delay` parameter.
 4. The workflow implementation's first step is to wait/sleep until `scheduledFor` before performing any activities or emitting user-visible side effects.
 5. The execution record can expose `mm_state=scheduled` until the start time for UI purposes, even though Temporal sees the execution as started and idle.
@@ -66,7 +66,7 @@ When a deferred one-time execution is created:
 {
  "workflowId": "mm:01HX...",
  "runId": "temporal-run-uuid",
- "workflowType": "MoonMind.Run",
+ "workflowType": "MoonMind.UserWorkflow",
  "state": "scheduled",
  "scheduledFor": "2026-03-19T02:00:00Z",
  "title": "Fix auth bug in login page",
@@ -133,7 +133,7 @@ Temporal Schedules are the authoritative recurring scheduling system for Tempora
  "timezone": "America/Los_Angeles",
  "scopeType": "personal",
  "target": {
- "workflowType": "MoonMind.Run",
+ "workflowType": "MoonMind.UserWorkflow",
  "initialParameters": {
  "runtime": "gemini_cli",
  "model": "gemini-2.5-pro",
@@ -159,7 +159,7 @@ Temporal Schedules are the authoritative recurring scheduling system for Tempora
 | `timezone` | `string` | No (default: `UTC`) | IANA timezone name |
 | `scopeType` | `"personal"` or `"global"` | No (default: `"personal"`) | Scope — personal requires owner, global requires operator |
 | `target` | `object` | Yes | Target configuration |
-| `target.workflowType` | `string` | Yes | Workflow type to start (e.g., `MoonMind.Run`) |
+| `target.workflowType` | `string` | Yes | Workflow type to start (e.g., `MoonMind.UserWorkflow`) |
 | `target.initialParameters` | `object` | No | Runtime, model, effort, repository, publish mode |
 | `policy` | `object` | No | Overlap, catchup, jitter policies |
 
@@ -190,7 +190,7 @@ Temporal Schedules are the authoritative recurring scheduling system for Tempora
 
 ### 5.1 Concept
 
-A one-time execution starts a single Temporal workflow and runs it through to completion. This is the standard path for ad-hoc workflow executions — the user submits a request and MoonMind starts a `MoonMind.Run` or `MoonMind.ManifestIngest` workflow.
+A one-time execution starts a single Temporal workflow and runs it through to completion. This is the standard path for ad-hoc workflow executions — the user submits a request and MoonMind starts a `MoonMind.UserWorkflow` or `MoonMind.ManifestIngest` workflow.
 
 ### 5.2 Backend: Starting a One-Time Workflow
 
@@ -204,7 +204,7 @@ POST /api/executions
 
 ```json
 {
- "workflowType": "MoonMind.Run",
+ "workflowType": "MoonMind.UserWorkflow",
  "title": "Fix auth bug in login page",
  "inputArtifactRef": "art_abc123",
  "planArtifactRef": null,
@@ -225,7 +225,7 @@ POST /api/executions
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `workflowType` | `string` | Yes | `MoonMind.Run` or `MoonMind.ManifestIngest` |
+| `workflowType` | `string` | Yes | `MoonMind.UserWorkflow` or `MoonMind.ManifestIngest` |
 | `title` | `string` | No | Human-readable title for the execution |
 | `inputArtifactRef` | `string` | No | Reference to input artifact containing instructions |
 | `planArtifactRef` | `string` | No | Pre-computed plan artifact |
@@ -250,7 +250,7 @@ POST /api/executions
 {
  "workflowId": "mm:01HX...",
  "runId": "temporal-run-uuid",
- "workflowType": "MoonMind.Run",
+ "workflowType": "MoonMind.UserWorkflow",
  "state": "initializing",
  "title": "Fix auth bug in login page",
  "startedAt": "2026-03-18T21:48:00Z"
@@ -442,7 +442,7 @@ curl -X POST http://localhost:8000/api/executions \
  -H "Content-Type: application/json" \
  -H "Authorization: Bearer $TOKEN" \
  -d '{
- "workflowType": "MoonMind.Run",
+ "workflowType": "MoonMind.UserWorkflow",
  "title": "Fix login bug",
  "initialParameters": {
  "runtime": "gemini_cli",
@@ -459,7 +459,7 @@ curl -X POST http://localhost:8000/api/executions \
  -H "Content-Type: application/json" \
  -H "Authorization: Bearer $TOKEN" \
  -d '{
- "workflowType": "MoonMind.Run",
+ "workflowType": "MoonMind.UserWorkflow",
  "title": "Deploy staging environment",
  "initialParameters": {
  "runtime": "gemini_cli",
@@ -484,7 +484,7 @@ curl -X POST http://localhost:8000/api/recurring-workflows \
  "cron": "0 2 * * *",
  "timezone": "America/Los_Angeles",
  "scopeType": "personal",
- "workflowType": "MoonMind.Run",
+ "workflowType": "MoonMind.UserWorkflow",
  "initialParameters": {
  "runtime": "gemini_cli",
  "model": "gemini-2.5-pro",

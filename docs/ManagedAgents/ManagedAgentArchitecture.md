@@ -154,7 +154,7 @@ Temporal remains the durable orchestrator.
 
 The intended workflow shape is:
 
-- `MoonMind.Run` owns the workflow execution envelope and step ordering,
+- `MoonMind.UserWorkflow` owns the workflow execution envelope and step ordering,
 - `MoonMind.AgentSession` owns one workflow-scoped managed session container,
 - `MoonMind.AgentRun` owns one true agent execution step that attaches to or uses that session,
 - `MoonMind.ManagedSessionReconcile` performs bounded reconciliation work,

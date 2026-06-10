@@ -1153,7 +1153,7 @@ A Skill step that requires true agent execution compiles into an agent runtime e
 
 The desired flow is:
 
-1. `MoonMind.Run` owns workflow-level orchestration and step order.
+1. `MoonMind.UserWorkflow` owns workflow-level orchestration and step order.
 2. Skill resolution happens before runtime launch.
 3. The parent workflow passes compact refs into the agent-run path.
 4. `MoonMind.AgentRun` consumes an `AgentExecutionRequest`.
@@ -1375,7 +1375,7 @@ Status: Superseded
 The desired-state skill injection contract has moved into
 `docs/Steps/SkillSystem.md`.
 
-Use `AgentSkillSystem.md` for:
+Use `docs/Steps/SkillSystem.md` for:
 - runtime skill materialization,
 - `.agents/skills` path policy,
 - activation summaries,

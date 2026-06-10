@@ -35,15 +35,15 @@ This document outlines **Workflow Cancellation** in MoonMind so that:
 
 ## 3. Architecture
 
-MoonMind Workflow runs are durably orchestrated by Temporal Workflows (e.g., `MoonMind.Run`). The cancellation flow mirrors standard Temporal patterns.
+MoonMind Workflow runs are durably orchestrated by Temporal Workflows (e.g., `MoonMind.UserWorkflow`). The cancellation flow mirrors standard Temporal patterns.
 
 * Mission Control UI issues a cancel command to the Control Plane API (`POST /api/queue/jobs/{job_id}/cancel`).
 * If the Workflow Execution is purely queued in the database and hasn't started a workflow, the API marks it `cancelled` in Postgres directly.
-* If a Temporal Workflow Execution `MoonMind.Run` is currently active for this run, the API sends a standard **Temporal Cancellation Request** to the workflow via the Temporal Client.
+* If a Temporal Workflow Execution `MoonMind.UserWorkflow` is currently active for this run, the API sends a standard **Temporal Cancellation Request** to the workflow via the Temporal Client.
 
 ### 3.1 Temporal Workflow Graceful Cancellation
 
-* The `MoonMind.Run` workflow receives the Cancellation Request.
+* The `MoonMind.UserWorkflow` workflow receives the Cancellation Request.
 * The workflow must catch the resulting `CancelledError` (in the Python Temporal SDK).
 * The workflow runs compensating actions (uploading incomplete staged artifacts, emitting a final `task.step.failed` event, cleaning up resources, **releasing provider-profile slots**).
 * The workflow exits.

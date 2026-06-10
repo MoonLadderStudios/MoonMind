@@ -889,7 +889,7 @@ def _approved_pentest_scope() -> dict[str, object]:
 def _pentest_activity_payload(**overrides: object) -> dict[str, object]:
     request: dict[str, object] = {
         "pentest_enabled": True,
-        "task_run_id": "run-123",
+        "agent_run_id": "run-123",
         "step_id": "step-pentest",
         "attempt": 1,
         "target": "https://lab.example.test",
@@ -911,7 +911,7 @@ def _pentest_activity_payload(**overrides: object) -> dict[str, object]:
 def _pentest_artifact_activity_payload(**overrides: object) -> dict[str, object]:
     request: dict[str, object] = {
         "pentest_enabled": True,
-        "task_run_id": "run-123",
+        "agent_run_id": "run-123",
         "step_id": "step-pentest",
         "attempt": 1,
         "target": "https://lab.example.test",

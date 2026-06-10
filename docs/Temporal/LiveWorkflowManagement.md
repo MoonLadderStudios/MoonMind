@@ -6,7 +6,7 @@
 > Route examples below are historical references only; `/api/agent-runs/{id}/live-session*` is not a supported managed-run log API surface after the Phase 6 cutoff.
 > Please see [`docs/ManagedAgents/LiveLogs.md`](../ManagedAgents/LiveLogs.md) for the active architecture.
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
+**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 Status: Deprecated (Replaced by Phase 6 Live Logs) 
 Owners: MoonMind Engineering 
@@ -243,7 +243,7 @@ The Workflow Execution detail page (`/workflows/{workflowId}`) should include tw
 }
 ```
 
-**Desired experience:** operators get artifact-backed log tailing in the Workflow Execution detail UI, optional live handoff controls (RO/RW, pause/resume, operator messages) when session metadata exists, and post-session artifacts such as **`transcript.log`**. Sequencing of UI/backend pieces is tracked in MoonSpec feature artifacts or local planning notes when needed.
+**Desired experience:** operators get artifact-backed log tailing in the Workflow Execution detail UI, optional live handoff controls (RO/RW, pause/resume, operator messages) when session metadata exists, and post-session artifacts such as **`transcript.log`**. Sequencing of UI/backend pieces is tracked under `docs/tmp/` or in local-only planning notes when needed.
 
 ---
 

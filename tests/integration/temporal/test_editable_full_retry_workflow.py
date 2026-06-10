@@ -41,7 +41,7 @@ async def test_changed_edited_full_retry_creates_fresh_execution_with_provenance
         async with maker() as session:
             service = TemporalExecutionService(session, client_adapter=AsyncMock())
             source = await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=uuid4(),
                 title="MM-644 failed source",
                 input_artifact_ref="artifact://input/source",

@@ -18,7 +18,7 @@ from api_service.services.settings_change_subscribers import (
     OperationalRefreshIntent,
     ProviderProfileManagerSubscriber,
     ProviderProfileRefreshIntent,
-    TaskCreationDefaultsSubscriber,
+    WorkflowCreationDefaultsSubscriber,
     WorkerReloadIntent,
     WorkerReloadSubscriber,
     register_default_subscribers,
@@ -54,14 +54,14 @@ def _reset_default_publisher_around_test():
 
 @pytest.mark.asyncio
 async def test_task_creation_defaults_subscriber_increments_and_records():
-    subscriber = TaskCreationDefaultsSubscriber()
+    subscriber = WorkflowCreationDefaultsSubscriber()
     start_version = subscriber.version
 
     event = _event(
         key="workflow.default_runtime",
-        apply_mode="next_task",
-        affected_systems=("task_creation", "workflow_runtime"),
-        refresh_targets=("settings_catalog", "task_creation_defaults"),
+        apply_mode="next_workflow",
+        affected_systems=("workflow_creation", "workflow_runtime"),
+        refresh_targets=("settings_catalog", "workflow_creation_defaults"),
     )
 
     await subscriber(event)
@@ -69,8 +69,8 @@ async def test_task_creation_defaults_subscriber_increments_and_records():
 
     assert subscriber.version == start_version + 2
     assert list(subscriber.recent_events)[-2:] == [event, event]
-    assert subscriber.name == "task_creation_defaults"
-    assert subscriber.refresh_targets == frozenset({"task_creation_defaults"})
+    assert subscriber.name == "workflow_creation_defaults"
+    assert subscriber.refresh_targets == frozenset({"workflow_creation_defaults"})
 
 
 @pytest.mark.asyncio
@@ -144,11 +144,11 @@ async def test_provider_profile_manager_subscriber_records_intent_and_version():
     event = _event(
         key="workflow.default_provider_profile_ref",
         apply_mode="next_launch",
-        affected_systems=("task_creation", "workflow_runtime", "provider_profiles"),
+        affected_systems=("workflow_creation", "workflow_runtime", "provider_profiles"),
         refresh_targets=(
             "provider_profile_manager",
             "settings_catalog",
-            "task_creation_defaults",
+            "workflow_creation_defaults",
         ),
     )
 
@@ -189,8 +189,8 @@ def test_register_default_subscribers_attaches_four_subscribers_to_publisher():
 
     register_default_subscribers(publisher)
 
-    assert {sub.name for sub in publisher.subscribers_for("task_creation_defaults")} == {
-        "task_creation_defaults"
+    assert {sub.name for sub in publisher.subscribers_for("workflow_creation_defaults")} == {
+        "workflow_creation_defaults"
     }
     assert {sub.name for sub in publisher.subscribers_for("worker_reloaders")} == {
         "worker_reloaders"
@@ -209,7 +209,7 @@ def test_register_default_subscribers_is_idempotent():
     register_default_subscribers(publisher)
     register_default_subscribers(publisher)
 
-    assert len(publisher.subscribers_for("task_creation_defaults")) == 1
+    assert len(publisher.subscribers_for("workflow_creation_defaults")) == 1
     assert len(publisher.subscribers_for("worker_reloaders")) == 1
     assert len(publisher.subscribers_for("provider_profile_manager")) == 1
     assert len(publisher.subscribers_for("operational_controls")) == 1
@@ -218,7 +218,7 @@ def test_register_default_subscribers_is_idempotent():
 def test_subscriber_ledgers_are_bounded():
     """Bounded deques must prevent unbounded memory growth in long-lived processes."""
 
-    task_sub = TaskCreationDefaultsSubscriber()
+    task_sub = WorkflowCreationDefaultsSubscriber()
     worker_sub = WorkerReloadSubscriber()
     profile_sub = ProviderProfileManagerSubscriber()
     ops_sub = OperationalControlsSubscriber()

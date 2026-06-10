@@ -24,11 +24,11 @@ def _make_event(
     key: str = "workflow.default_runtime",
     scope: str = "workspace",
     source: str | None = None,
-    apply_mode: str = "next_task",
-    affected_systems: Iterable[str] = ("task_creation", "workflow_runtime"),
+    apply_mode: str = "next_workflow",
+    affected_systems: Iterable[str] = ("workflow_creation", "workflow_runtime"),
     refresh_targets: Iterable[str] = (
         "settings_catalog",
-        "task_creation_defaults",
+        "workflow_creation_defaults",
     ),
 ) -> SettingsChangeEvent:
     return SettingsChangeEvent(
@@ -77,8 +77,8 @@ def test_subscribers_for_unknown_target_returns_empty_list():
 
 def test_register_rejects_duplicate_name():
     publisher = SettingsChangePublisher()
-    subscriber_a = _RecordingSubscriber(name="task_creation_defaults", refresh_targets={"task_creation_defaults"})
-    subscriber_b = _RecordingSubscriber(name="task_creation_defaults", refresh_targets={"task_creation_defaults"})
+    subscriber_a = _RecordingSubscriber(name="workflow_creation_defaults", refresh_targets={"workflow_creation_defaults"})
+    subscriber_b = _RecordingSubscriber(name="workflow_creation_defaults", refresh_targets={"workflow_creation_defaults"})
 
     publisher.register(subscriber_a)
 
@@ -109,8 +109,8 @@ def test_unregister_is_idempotent():
 async def test_publish_fans_out_to_each_matching_subscriber():
     publisher = SettingsChangePublisher()
     task_sub = _RecordingSubscriber(
-        name="task_creation_defaults",
-        refresh_targets={"task_creation_defaults"},
+        name="workflow_creation_defaults",
+        refresh_targets={"workflow_creation_defaults"},
     )
     catalog_sub = _RecordingSubscriber(
         name="settings_catalog_listener",
@@ -125,7 +125,7 @@ async def test_publish_fans_out_to_each_matching_subscriber():
     publisher.register(other_sub)
 
     event = _make_event(
-        refresh_targets=("settings_catalog", "task_creation_defaults"),
+        refresh_targets=("settings_catalog", "workflow_creation_defaults"),
     )
 
     await publisher.publish([event])
@@ -141,7 +141,7 @@ async def test_publish_dedupes_subscriber_when_event_lists_multiple_matching_tar
     multi_sub = _RecordingSubscriber(
         name="multi_target",
         refresh_targets={
-            "task_creation_defaults",
+            "workflow_creation_defaults",
             "provider_profile_manager",
             "settings_catalog",
         },
@@ -151,7 +151,7 @@ async def test_publish_dedupes_subscriber_when_event_lists_multiple_matching_tar
     event = _make_event(
         refresh_targets=(
             "settings_catalog",
-            "task_creation_defaults",
+            "workflow_creation_defaults",
             "provider_profile_manager",
         ),
     )
@@ -166,7 +166,7 @@ async def test_publish_no_subscribers_for_target_is_a_no_op():
     publisher = SettingsChangePublisher()
 
     event = _make_event(
-        refresh_targets=("task_creation_defaults",),
+        refresh_targets=("workflow_creation_defaults",),
     )
 
     await publisher.publish([event])
@@ -176,8 +176,8 @@ async def test_publish_no_subscribers_for_target_is_a_no_op():
 async def test_publish_with_empty_refresh_targets_is_a_no_op():
     publisher = SettingsChangePublisher()
     sub = _RecordingSubscriber(
-        name="task_creation_defaults",
-        refresh_targets={"task_creation_defaults"},
+        name="workflow_creation_defaults",
+        refresh_targets={"workflow_creation_defaults"},
     )
     publisher.register(sub)
 
@@ -193,17 +193,17 @@ async def test_publish_isolates_subscriber_failures(caplog: pytest.LogCaptureFix
     publisher = SettingsChangePublisher()
     failing_sub = _RecordingSubscriber(
         name="failing",
-        refresh_targets={"task_creation_defaults"},
+        refresh_targets={"workflow_creation_defaults"},
         side_effect=RuntimeError("boom"),
     )
     real_sub = _RecordingSubscriber(
         name="real",
-        refresh_targets={"task_creation_defaults"},
+        refresh_targets={"workflow_creation_defaults"},
     )
     publisher.register(failing_sub)
     publisher.register(real_sub)
 
-    event = _make_event(refresh_targets=("task_creation_defaults",))
+    event = _make_event(refresh_targets=("workflow_creation_defaults",))
 
     with caplog.at_level(logging.ERROR, logger="api_service.services.settings_change_publisher"):
         await publisher.publish([event])
@@ -245,8 +245,8 @@ def test_reset_default_settings_change_publisher_replaces_singleton():
 
 def test_subscriber_protocol_runtime_checkable():
     sub = _RecordingSubscriber(
-        name="task_creation_defaults",
-        refresh_targets={"task_creation_defaults"},
+        name="workflow_creation_defaults",
+        refresh_targets={"workflow_creation_defaults"},
     )
 
     assert isinstance(sub, SettingsChangeSubscriber)

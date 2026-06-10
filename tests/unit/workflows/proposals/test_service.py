@@ -64,7 +64,7 @@ async def test_create_proposal_defers_runtime_defaults_until_promotion() -> None
         origin_source=WorkflowProposalOriginSource.QUEUE,
         origin_id=None,
         origin_metadata={},
-        task_create_request={},
+        workflow_create_request={},
     )
     repo.create_proposal.return_value = record
     service = WorkflowProposalService(repo, redactor=SecretRedactor([], "***"))
@@ -75,8 +75,8 @@ async def test_create_proposal_defers_runtime_defaults_until_promotion() -> None
         summary="Ensure coverage",
         category="Tests",
         tags=["Auth"],
-        task_create_request={
-            "type": "task",
+        workflow_create_request={
+            "type": "workflow",
             "priority": 0,
             "maxAttempts": 3,
             "payload": {"repository": "Moon/Repo"},
@@ -96,10 +96,10 @@ async def test_create_proposal_defers_runtime_defaults_until_promotion() -> None
     assert len(kwargs["dedup_hash"]) == 64
     assert kwargs["review_priority"] is WorkflowProposalReviewPriority.NORMAL
     assert kwargs["priority_override_reason"] is None
-    assert kwargs["task_create_request"]["payload"]["task"]["publish"]["mode"] == "pr"
-    assert kwargs["task_create_request"]["payload"]["task"]["runtime"]["mode"] is None
-    assert kwargs["task_create_request"]["payload"]["task"]["runtime"]["model"] is None
-    assert kwargs["task_create_request"]["payload"].get("targetRuntime") is None
+    assert kwargs["workflow_create_request"]["payload"]["workflow"]["publish"]["mode"] == "pr"
+    assert kwargs["workflow_create_request"]["payload"]["workflow"]["runtime"]["mode"] is None
+    assert kwargs["workflow_create_request"]["payload"]["workflow"]["runtime"]["model"] is None
+    assert kwargs["workflow_create_request"]["payload"].get("targetRuntime") is None
     service._emit_notification.assert_awaited_once()
     assert proposal is record
 
@@ -125,7 +125,7 @@ async def test_create_proposal_accepts_enum_origin_source() -> None:
         origin_source=WorkflowProposalOriginSource.QUEUE,
         origin_id=None,
         origin_metadata={},
-        task_create_request={},
+        workflow_create_request={},
     )
     repo.create_proposal.return_value = record
     service = WorkflowProposalService(repo, redactor=SecretRedactor([], "***"))
@@ -136,8 +136,8 @@ async def test_create_proposal_accepts_enum_origin_source() -> None:
         summary="Ensure coverage",
         category="Tests",
         tags=["Auth"],
-        task_create_request={
-            "type": "task",
+        workflow_create_request={
+            "type": "workflow",
             "priority": 0,
             "maxAttempts": 3,
             "payload": {"repository": "Moon/Repo"},
@@ -175,7 +175,7 @@ async def test_create_proposal_normalizes_managed_runtime_ids() -> None:
         origin_source=WorkflowProposalOriginSource.QUEUE,
         origin_id=None,
         origin_metadata={},
-        task_create_request={},
+        workflow_create_request={},
     )
     repo.create_proposal.return_value = record
     service = WorkflowProposalService(repo, redactor=SecretRedactor([], "***"))
@@ -186,14 +186,14 @@ async def test_create_proposal_normalizes_managed_runtime_ids() -> None:
         summary="Ensure coverage",
         category="Tests",
         tags=["Auth"],
-        task_create_request={
-            "type": "task",
+        workflow_create_request={
+            "type": "workflow",
             "priority": 0,
             "maxAttempts": 3,
             "payload": {
                 "repository": "Moon/Repo",
                 "targetRuntime": "codex_cli",
-                "task": {
+                "workflow": {
                     "instructions": "Add regression coverage",
                     "runtime": {"mode": "claude_code"},
                 },
@@ -207,8 +207,8 @@ async def test_create_proposal_normalizes_managed_runtime_ids() -> None:
     )
 
     kwargs = repo.create_proposal.await_args.kwargs
-    assert kwargs["task_create_request"]["payload"]["targetRuntime"] == "codex"
-    assert kwargs["task_create_request"]["payload"]["task"]["runtime"]["mode"] == "claude"
+    assert kwargs["workflow_create_request"]["payload"]["targetRuntime"] == "codex"
+    assert kwargs["workflow_create_request"]["payload"]["workflow"]["runtime"]["mode"] == "claude"
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("runtime_field", ["targetRuntime", "target_runtime", "runtime"])
@@ -235,7 +235,7 @@ async def test_create_proposal_normalizes_legacy_task_runtime_fields(
         origin_source=WorkflowProposalOriginSource.QUEUE,
         origin_id=None,
         origin_metadata={},
-        task_create_request={},
+        workflow_create_request={},
     )
     repo.create_proposal.return_value = record
     service = WorkflowProposalService(repo, redactor=SecretRedactor([], "***"))
@@ -246,13 +246,13 @@ async def test_create_proposal_normalizes_legacy_task_runtime_fields(
         summary="Ensure coverage",
         category="Tests",
         tags=["Auth"],
-        task_create_request={
-            "type": "task",
+        workflow_create_request={
+            "type": "workflow",
             "priority": 0,
             "maxAttempts": 3,
             "payload": {
                 "repository": "Moon/Repo",
-                "task": {
+                "workflow": {
                     "instructions": "Add regression coverage",
                     runtime_field: "claude_code",
                 },
@@ -266,7 +266,7 @@ async def test_create_proposal_normalizes_legacy_task_runtime_fields(
     )
 
     kwargs = repo.create_proposal.await_args.kwargs
-    assert kwargs["task_create_request"]["payload"]["task"]["runtime"]["mode"] == "claude"
+    assert kwargs["workflow_create_request"]["payload"]["workflow"]["runtime"]["mode"] == "claude"
 
 @pytest.mark.asyncio
 async def test_create_proposal_enforces_moonmind_metadata() -> None:
@@ -279,8 +279,8 @@ async def test_create_proposal_enforces_moonmind_metadata() -> None:
             summary="Missing metadata should fail",
             category="run_quality",
             tags=["loop_detected"],
-            task_create_request={
-                "type": "task",
+            workflow_create_request={
+                "type": "workflow",
                 "priority": 0,
                 "maxAttempts": 3,
                 "payload": {"repository": "MoonLadderStudios/MoonMind"},
@@ -314,7 +314,7 @@ async def test_create_proposal_overrides_priority_for_moonmind() -> None:
         origin_source=WorkflowProposalOriginSource.QUEUE,
         origin_id=None,
         origin_metadata={},
-        task_create_request={},
+        workflow_create_request={},
     )
     repo.create_proposal.return_value = record
     service = WorkflowProposalService(repo, redactor=SecretRedactor([], "***"))
@@ -325,8 +325,8 @@ async def test_create_proposal_overrides_priority_for_moonmind() -> None:
         summary="Detected loop",
         category="run_quality",
         tags=["loop_detected"],
-        task_create_request={
-            "type": "task",
+        workflow_create_request={
+            "type": "workflow",
             "priority": 0,
             "maxAttempts": 3,
             "payload": {"repository": "MoonLadderStudios/MoonMind"},
@@ -368,7 +368,7 @@ async def test_create_proposal_accepts_snake_case_moonmind_signal_metadata() -> 
         origin_source=WorkflowProposalOriginSource.WORKFLOW,
         origin_id=None,
         origin_metadata={},
-        task_create_request={},
+        workflow_create_request={},
     )
     repo.create_proposal.return_value = record
     service = WorkflowProposalService(repo, redactor=SecretRedactor([], "***"))
@@ -379,8 +379,8 @@ async def test_create_proposal_accepts_snake_case_moonmind_signal_metadata() -> 
         summary="Detected retry signal",
         category="run_quality",
         tags=["retry"],
-        task_create_request={
-            "type": "task",
+        workflow_create_request={
+            "type": "workflow",
             "priority": 0,
             "maxAttempts": 3,
             "payload": {"repository": "MoonLadderStudios/MoonMind"},
@@ -424,7 +424,7 @@ async def test_create_proposal_honors_requested_priority_when_higher() -> None:
         origin_source=WorkflowProposalOriginSource.QUEUE,
         origin_id=None,
         origin_metadata={},
-        task_create_request={},
+        workflow_create_request={},
     )
     repo.create_proposal.return_value = record
     service = WorkflowProposalService(repo, redactor=SecretRedactor([], "***"))
@@ -435,8 +435,8 @@ async def test_create_proposal_honors_requested_priority_when_higher() -> None:
         summary="Retry flake",
         category="run_quality",
         tags=["retry"],
-        task_create_request={
-            "type": "task",
+        workflow_create_request={
+            "type": "workflow",
             "priority": 0,
             "maxAttempts": 3,
             "payload": {"repository": "MoonLadderStudios/MoonMind"},
@@ -520,11 +520,11 @@ async def test_promote_proposal_applies_runtime_override() -> None:
         promoted_by_user_id=None,
         decided_by_user_id=None,
         decision_note=None,
-        task_create_request={
+        workflow_create_request={
             "payload": {
                 "repository": "Moon/Repo",
                 "targetRuntime": "gemini_cli",
-                "task": {
+                "workflow": {
                     "instructions": "Refactor logic",
                     "runtime": {"mode": "gemini_cli"},
                     "authoredPresets": [
@@ -562,23 +562,23 @@ async def test_promote_proposal_applies_runtime_override() -> None:
     assert updated_proposal.status is WorkflowProposalStatus.PROMOTED
 
     assert final_request["payload"]["targetRuntime"] == "claude"
-    assert final_request["payload"]["task"]["runtime"]["mode"] == "claude"
-    assert final_request["payload"]["task"]["authoredPresets"] == [
+    assert final_request["payload"]["workflow"]["runtime"]["mode"] == "claude"
+    assert final_request["payload"]["workflow"]["authoredPresets"] == [
         {
             "presetId": "runtime-quality-followup",
             "presetVersion": "2026-04-17",
         }
     ]
-    assert final_request["payload"]["task"]["steps"][0]["source"] == {
+    assert final_request["payload"]["workflow"]["steps"][0]["source"] == {
         "kind": "preset-derived",
         "presetId": "runtime-quality-followup",
         "presetVersion": "2026-04-17",
     }
     assert (
-        updated_proposal.task_create_request["payload"]["task"]["runtime"]["mode"]
+        updated_proposal.workflow_create_request["payload"]["workflow"]["runtime"]["mode"]
         == "gemini_cli"
     )
-    assert updated_proposal.task_create_request["payload"]["targetRuntime"] == "gemini_cli"
+    assert updated_proposal.workflow_create_request["payload"]["targetRuntime"] == "gemini_cli"
 
 
 @pytest.mark.asyncio
@@ -592,10 +592,10 @@ async def test_promote_proposal_rejects_unsupported_runtime_before_commit() -> N
         promoted_by_user_id=None,
         decided_by_user_id=None,
         decision_note=None,
-        task_create_request={
+        workflow_create_request={
             "payload": {
                 "repository": "Moon/Repo",
-                "task": {
+                "workflow": {
                     "instructions": "Refactor logic",
                     "runtime": {"mode": "gemini_cli"},
                 },
@@ -626,10 +626,10 @@ async def test_promote_proposal_preserves_preset_provenance() -> None:
         promoted_by_user_id=None,
         decided_by_user_id=None,
         decision_note=None,
-        task_create_request={
+        workflow_create_request={
             "payload": {
                 "repository": "Moon/Repo",
-                "task": {
+                "workflow": {
                     "instructions": "Add regression coverage",
                     "authoredPresets": [
                         {
@@ -670,7 +670,7 @@ async def test_promote_proposal_preserves_preset_provenance() -> None:
 
     repo.commit.assert_awaited()
     assert updated_proposal.status is WorkflowProposalStatus.PROMOTED
-    task = final_request["payload"]["task"]
+    task = final_request["payload"]["workflow"]
     assert task["authoredPresets"] == [
         {
             "presetId": "runtime-quality-followup",
@@ -716,10 +716,10 @@ async def test_promote_proposal_uses_reviewed_flattened_payload_without_reexpans
         promoted_by_user_id=None,
         decided_by_user_id=None,
         decision_note=None,
-        task_create_request={
+        workflow_create_request={
             "payload": {
                 "repository": "Moon/Repo",
-                "task": {
+                "workflow": {
                     "instructions": "Promote reviewed MM-573 payload.",
                     "taskTemplate": {
                         "slug": "jira-orchestrate",
@@ -746,7 +746,7 @@ async def test_promote_proposal_uses_reviewed_flattened_payload_without_reexpans
 
     repo.commit.assert_awaited()
     assert updated_proposal.status is WorkflowProposalStatus.PROMOTED
-    task = final_request["payload"]["task"]
+    task = final_request["payload"]["workflow"]
     assert len(task["steps"]) == 1
     assert task["steps"][0]["id"] == reviewed_steps[0]["id"]
     assert task["steps"][0]["type"] == reviewed_steps[0]["type"]
@@ -766,10 +766,10 @@ async def test_promote_proposal_preserves_canonical_proposal_intent() -> None:
         promoted_by_user_id=None,
         decided_by_user_id=None,
         decision_note=None,
-        task_create_request={
+        workflow_create_request={
             "payload": {
                 "repository": "Moon/Repo",
-                "task": {
+                "workflow": {
                     "instructions": "Add regression coverage",
                     "proposalPolicy": {
                         "targets": ["project"],
@@ -789,7 +789,7 @@ async def test_promote_proposal_preserves_canonical_proposal_intent() -> None:
     repo.commit.assert_awaited()
     assert updated_proposal.status is WorkflowProposalStatus.PROMOTED
     assert "proposeTasks" not in final_request["payload"]
-    task = final_request["payload"]["task"]
+    task = final_request["payload"]["workflow"]
     assert task["proposeTasks"] is False
     assert task["proposalPolicy"] == {"targets": ["project"]}
 
@@ -805,10 +805,10 @@ async def test_promote_proposal_rejects_preset_derived_steps_without_flat_type()
         promoted_by_user_id=None,
         decided_by_user_id=None,
         decision_note=None,
-        task_create_request={
+        workflow_create_request={
             "payload": {
                 "repository": "Moon/Repo",
-                "task": {
+                "workflow": {
                     "instructions": "Add regression coverage",
                     "steps": [
                         {
@@ -847,10 +847,10 @@ async def test_promote_proposal_rejects_unresolved_preset_steps() -> None:
         promoted_by_user_id=None,
         decided_by_user_id=None,
         decision_note=None,
-        task_create_request={
+        workflow_create_request={
             "payload": {
                 "repository": "Moon/Repo",
-                "task": {
+                "workflow": {
                     "instructions": "Apply preset later",
                     "steps": [
                         {
@@ -905,7 +905,7 @@ async def test_create_proposal_returns_existing_open_duplicate_before_create() -
         origin_metadata={},
         provider="jira",
         provider_metadata={"jira": {"projectKey": "MM"}},
-        task_create_request={"payload": {"repository": "Moon/Repo"}},
+        workflow_create_request={"payload": {"repository": "Moon/Repo"}},
     )
     repo.find_open_duplicate.return_value = existing
     service = WorkflowProposalService(repo, redactor=SecretRedactor([], "***"))
@@ -916,8 +916,8 @@ async def test_create_proposal_returns_existing_open_duplicate_before_create() -
         summary="Ensure coverage",
         category="Tests",
         tags=["tests"],
-        task_create_request={
-            "type": "task",
+        workflow_create_request={
+            "type": "workflow",
             "priority": 0,
             "maxAttempts": 3,
             "payload": {"repository": "Moon/Repo"},
@@ -974,10 +974,10 @@ async def test_create_proposal_merges_duplicate_delivery_metadata() -> None:
         external_url=None,
         delivered_at=None,
         last_synced_at=None,
-        task_snapshot_ref=None,
+        workflow_snapshot_ref=None,
         provider_metadata={"jira": {"projectKey": "MM"}, "audit": "kept"},
         resolved_policy={"provider": "jira", "decision": "kept"},
-        task_create_request={"payload": {"repository": "Moon/Repo"}},
+        workflow_create_request={"payload": {"repository": "Moon/Repo"}},
     )
     delivered_at = datetime.now(UTC)
     last_synced_at = datetime.now(UTC)
@@ -990,8 +990,8 @@ async def test_create_proposal_merges_duplicate_delivery_metadata() -> None:
         summary="Ensure coverage",
         category="Tests",
         tags=["tests"],
-        task_create_request={
-            "type": "task",
+        workflow_create_request={
+            "type": "workflow",
             "priority": 0,
             "maxAttempts": 3,
             "payload": {"repository": "Moon/Repo"},
@@ -1007,7 +1007,7 @@ async def test_create_proposal_merges_duplicate_delivery_metadata() -> None:
         external_url="https://example.atlassian.net/browse/MM-597",
         delivered_at=delivered_at,
         last_synced_at=last_synced_at,
-        task_snapshot_ref="artifact://task-snapshot",
+        workflow_snapshot_ref="artifact://task-snapshot",
         provider_metadata={"jira": {"issueType": "Task"}},
         resolved_policy={"target": "project"},
     )
@@ -1028,7 +1028,7 @@ async def test_create_proposal_merges_duplicate_delivery_metadata() -> None:
     assert existing.external_url == "https://example.atlassian.net/browse/MM-597"
     assert existing.delivered_at is delivered_at
     assert existing.last_synced_at is last_synced_at
-    assert existing.task_snapshot_ref == "artifact://task-snapshot"
+    assert existing.workflow_snapshot_ref == "artifact://task-snapshot"
     repo.create_proposal.assert_not_awaited()
     repo.commit.assert_awaited_once()
     service._emit_notification.assert_not_awaited()
@@ -1076,7 +1076,7 @@ async def test_create_proposal_persists_provider_metadata_separately() -> None:
         origin_metadata={"workflow_id": "wf-1"},
         provider="jira",
         provider_metadata={"jira": {"projectKey": "MM", "labels": ["moonmind"]}},
-        task_create_request={},
+        workflow_create_request={},
     )
     repo.find_open_duplicate.return_value = None
     repo.create_proposal.return_value = record
@@ -1088,8 +1088,8 @@ async def test_create_proposal_persists_provider_metadata_separately() -> None:
         summary="Ensure coverage",
         category="Tests",
         tags=["Auth"],
-        task_create_request={
-            "type": "task",
+        workflow_create_request={
+            "type": "workflow",
             "priority": 0,
             "maxAttempts": 3,
             "payload": {"repository": "Moon/Repo"},
@@ -1124,7 +1124,7 @@ def test_delivery_record_migration_declares_canonical_columns() -> None:
         "external_url",
         "delivered_at",
         "last_synced_at",
-        "task_snapshot_ref",
+        "workflow_snapshot_ref",
         "origin_external_id",
         "provider_metadata",
         "resolved_policy",
@@ -1164,10 +1164,10 @@ async def test_create_proposal_invokes_delivery_and_persists_external_issue() ->
         external_url=None,
         delivered_at=None,
         last_synced_at=None,
-        task_snapshot_ref="artifact://snapshot",
+        workflow_snapshot_ref="artifact://snapshot",
         provider_metadata={},
         resolved_policy={"provider": "github"},
-        task_create_request={"payload": {"repository": "Moon/Repo"}},
+        workflow_create_request={"payload": {"repository": "Moon/Repo"}},
     )
     repo.find_open_duplicate.return_value = None
     repo.create_proposal.return_value = record
@@ -1184,8 +1184,8 @@ async def test_create_proposal_invokes_delivery_and_persists_external_issue() ->
         summary="Ensure coverage",
         category="Tests",
         tags=["tests"],
-        task_create_request={
-            "type": "task",
+        workflow_create_request={
+            "type": "workflow",
             "priority": 0,
             "maxAttempts": 3,
             "payload": {"repository": "Moon/Repo"},
@@ -1198,7 +1198,7 @@ async def test_create_proposal_invokes_delivery_and_persists_external_issue() ->
         proposed_by_user_id=None,
         provider="github",
         resolved_policy={"provider": "github"},
-        task_snapshot_ref="artifact://snapshot",
+        workflow_snapshot_ref="artifact://snapshot",
     )
 
     assert proposal.external_key == "42"
@@ -1206,7 +1206,7 @@ async def test_create_proposal_invokes_delivery_and_persists_external_issue() ->
     assert proposal.delivered_at == datetime(2026, 5, 7, 12, 30, tzinfo=UTC)
     assert proposal.last_synced_at == datetime(2026, 5, 7, 12, 30, tzinfo=UTC)
     assert proposal.provider_metadata["delivery"]["marker"] == "moonmind-proposal"
-    assert delivery.requests[0].task_snapshot_ref == "artifact://snapshot"
+    assert delivery.requests[0].workflow_snapshot_ref == "artifact://snapshot"
     assert repo.commit.await_count >= 2
 
 
@@ -1229,8 +1229,8 @@ async def test_redeliver_proposal_reuses_trusted_delivery_adapter() -> None:
         origin_metadata={},
         provider_metadata={"delivery": {"status": "failed"}},
         resolved_policy={},
-        task_snapshot_ref="artifact://snapshot",
-        task_create_request={"payload": {"repository": "Moon/Repo"}},
+        workflow_snapshot_ref="artifact://snapshot",
+        workflow_create_request={"payload": {"repository": "Moon/Repo"}},
         delivered_at=None,
         last_synced_at=None,
     )
@@ -1270,8 +1270,8 @@ async def test_sync_proposal_delivery_records_recovery_audit_without_adapter_syn
         origin_metadata={},
         provider_metadata={"delivery": {"status": "delivered"}},
         resolved_policy={},
-        task_snapshot_ref="artifact://snapshot",
-        task_create_request={"payload": {"repository": "Moon/Repo"}},
+        workflow_snapshot_ref="artifact://snapshot",
+        workflow_create_request={"payload": {"repository": "Moon/Repo"}},
         delivered_at=None,
         last_synced_at=None,
     )
@@ -1356,10 +1356,10 @@ async def test_create_proposal_records_sanitized_delivery_failure() -> None:
         external_url=None,
         delivered_at=None,
         last_synced_at=None,
-        task_snapshot_ref="artifact://snapshot",
+        workflow_snapshot_ref="artifact://snapshot",
         provider_metadata={},
         resolved_policy={"provider": "github"},
-        task_create_request={"payload": {"repository": "Moon/Repo"}},
+        workflow_create_request={"payload": {"repository": "Moon/Repo"}},
     )
     repo.find_open_duplicate.return_value = None
     repo.create_proposal.return_value = record
@@ -1375,8 +1375,8 @@ async def test_create_proposal_records_sanitized_delivery_failure() -> None:
         summary="Ensure coverage",
         category="Tests",
         tags=["tests"],
-        task_create_request={
-            "type": "task",
+        workflow_create_request={
+            "type": "workflow",
             "priority": 0,
             "maxAttempts": 3,
             "payload": {"repository": "Moon/Repo"},
@@ -1389,7 +1389,7 @@ async def test_create_proposal_records_sanitized_delivery_failure() -> None:
         proposed_by_user_id=None,
         provider="github",
         resolved_policy={"provider": "github"},
-        task_snapshot_ref="artifact://snapshot",
+        workflow_snapshot_ref="artifact://snapshot",
     )
 
     assert proposal.provider_metadata["delivery"]["status"] == "failed"
@@ -1434,10 +1434,10 @@ async def test_create_proposal_records_sanitized_unexpected_delivery_failure() -
         external_url=None,
         delivered_at=None,
         last_synced_at=None,
-        task_snapshot_ref="artifact://snapshot",
+        workflow_snapshot_ref="artifact://snapshot",
         provider_metadata={},
         resolved_policy={"provider": "github"},
-        task_create_request={"payload": {"repository": "Moon/Repo"}},
+        workflow_create_request={"payload": {"repository": "Moon/Repo"}},
     )
     repo.find_open_duplicate.return_value = None
     repo.create_proposal.return_value = record
@@ -1453,8 +1453,8 @@ async def test_create_proposal_records_sanitized_unexpected_delivery_failure() -
         summary="Ensure coverage",
         category="Tests",
         tags=["tests"],
-        task_create_request={
-            "type": "task",
+        workflow_create_request={
+            "type": "workflow",
             "priority": 0,
             "maxAttempts": 3,
             "payload": {"repository": "Moon/Repo"},
@@ -1467,7 +1467,7 @@ async def test_create_proposal_records_sanitized_unexpected_delivery_failure() -
         proposed_by_user_id=None,
         provider="github",
         resolved_policy={"provider": "github"},
-        task_snapshot_ref="artifact://snapshot",
+        workflow_snapshot_ref="artifact://snapshot",
     )
 
     error = proposal.provider_metadata["delivery"]["error"]
@@ -1639,11 +1639,11 @@ async def test_promote_proposal_allows_provider_accepted_snapshot_with_runtime_c
         promoted_by_user_id=None,
         decided_by_user_id=None,
         decision_note=None,
-        task_create_request={
+        workflow_create_request={
             "payload": {
                 "repository": "Moon/Repo",
                 "targetRuntime": "gemini_cli",
-                "task": {
+                "workflow": {
                     "instructions": "Implement MM-599",
                     "runtime": {"mode": "gemini_cli"},
                     "authoredPresets": [{"presetId": "runtime-quality-followup"}],
@@ -1673,7 +1673,7 @@ async def test_promote_proposal_allows_provider_accepted_snapshot_with_runtime_c
 
     assert updated.status is WorkflowProposalStatus.PROMOTED
     assert final_request["payload"]["targetRuntime"] == "codex"
-    task = final_request["payload"]["task"]
+    task = final_request["payload"]["workflow"]
     assert task["runtime"]["mode"] == "codex"
     assert task["authoredPresets"] == [{"presetId": "runtime-quality-followup"}]
     assert task["steps"][0]["source"]["kind"] == "preset-derived"

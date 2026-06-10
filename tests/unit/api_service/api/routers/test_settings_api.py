@@ -127,12 +127,12 @@ async def test_settings_catalog_endpoint_returns_grouped_descriptors():
     assert descriptor["type"] == "enum"
     assert descriptor["ui"] == "select"
     assert descriptor["source"] in {"config_file", "environment"}
-    assert descriptor["apply_mode"] == "next_task"
+    assert descriptor["apply_mode"] == "next_workflow"
     assert descriptor["activation_state"] == "active"
     assert descriptor["active"] is True
     assert descriptor["pending_value"] is None
     assert descriptor["completion_guidance"] == (
-        "New tasks will use this value when they are created."
+        "New workflows will use this value when they are created."
     )
     assert descriptor["audit"] == {
         "store_old_value": True,
@@ -1515,7 +1515,7 @@ async def test_mm655_effective_setting_endpoint_exposes_complete_contract(monkey
         settings_path=("settings", "configured"),
         apply_mode="worker_reload",
         requires_reload=True,
-        applies_to=("worker", "task_creation"),
+        applies_to=("worker", "workflow_creation"),
         order=1,
     )
 
@@ -1545,7 +1545,7 @@ async def test_mm655_effective_setting_endpoint_exposes_complete_contract(monkey
     assert body["read_only"] is False
     assert body["read_only_reason"] is None
     assert body["requires_reload"] is True
-    assert body["applies_to"] == ["worker", "task_creation"]
+    assert body["applies_to"] == ["worker", "workflow_creation"]
 
 
 @pytest.mark.asyncio

@@ -510,10 +510,10 @@ The canonical shared workflow workspace remains a named volume such as:
 
 Recommended layout:
 
-* `run_root = /work/agent_jobs/<task_run_id>`
-* `repo_dir = /work/agent_jobs/<task_run_id>/repo`
-* `artifacts_dir = /work/agent_jobs/<task_run_id>/artifacts/<step_id>`
-* `scratch_dir = /work/agent_jobs/<task_run_id>/scratch/<step_id>`
+* `run_root = /work/agent_jobs/<agent_run_id>`
+* `repo_dir = /work/agent_jobs/<agent_run_id>/repo`
+* `artifacts_dir = /work/agent_jobs/<agent_run_id>/artifacts/<step_id>`
+* `scratch_dir = /work/agent_jobs/<agent_run_id>/scratch/<step_id>`
 
 ### 10.2 Path ownership
 
@@ -603,7 +603,7 @@ It remains generic and does not gain unrestricted fields such as:
 Minimum request shape:
 
 * `profileId`
-* `taskRunId`
+* `agentRunId`
 * `stepId`
 * `attempt`
 * `repoDir`
@@ -651,7 +651,7 @@ This tool allows a trusted workflow to select the runtime image at execution tim
 Minimum request shape:
 
 * `image` (required)
-* `taskRunId`
+* `agentRunId`
 * `stepId`
 * `attempt`
 * `repoDir`
@@ -697,7 +697,7 @@ It is denied in:
 Minimum request shape:
 
 * `command` (required)
-* `taskRunId`
+* `agentRunId`
 * `stepId`
 * `attempt`
 * `repoDir`
@@ -757,7 +757,7 @@ A runner profile defines at least:
 id: unreal-5_3-linux
 kind: one_shot
 image: ghcr.io/moonladderstudios/moonmind-unreal-runner:5.3
-workdir_template: /work/agent_jobs/${task_run_id}/repo
+workdir_template: /work/agent_jobs/${agent_run_id}/repo
 entrypoint: ["/bin/bash", "-lc"]
 required_mounts:
  - type: volume
@@ -794,7 +794,7 @@ cleanup:
 id: dotnet-sdk-8
 kind: one_shot
 image: mcr.microsoft.com/dotnet/sdk:8.0
-workdir_template: /work/agent_jobs/${task_run_id}/repo
+workdir_template: /work/agent_jobs/${agent_run_id}/repo
 entrypoint: ["/bin/bash", "-lc"]
 required_mounts:
  - type: volume
@@ -899,7 +899,7 @@ Every MoonMind-launched workload container must be labeled so the platform can t
 Recommended labels include:
 
 * `moonmind.kind=workload`
-* `moonmind.task_run_id=<task_run_id>`
+* `moonmind.agent_run_id=<agent_run_id>`
 * `moonmind.step_id=<step_id>`
 * `moonmind.attempt=<attempt>`
 * `moonmind.tool_name=<tool_name>`
@@ -911,7 +911,7 @@ Recommended labels include:
 
 Recommended container name shape:
 
-* `mm-workload-<task_run_id>-<step_id>-<attempt>`
+* `mm-workload-<agent_run_id>-<step_id>-<attempt>`
 
 ### 13.7 Exit contract
 
@@ -983,7 +983,7 @@ DooD results include bounded audit metadata such as:
 * `profileId`
 * `image`
 * `commandSummary`
-* `taskRunId`
+* `agentRunId`
 * `stepId`
 * `attempt`
 * `dockerHost`

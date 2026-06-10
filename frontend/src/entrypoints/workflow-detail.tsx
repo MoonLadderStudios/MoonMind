@@ -63,11 +63,11 @@ function isCodexManagedRuntime(runtimeId: string | null | undefined): boolean {
 function shouldEnableSessionTimelineViewer({
   config,
   targetRuntime,
-  taskRunId,
+  agentRunId,
 }: {
   config: DashboardConfig | undefined;
   targetRuntime: string | null | undefined;
-  taskRunId: string | null | undefined;
+  agentRunId: string | null | undefined;
 }): boolean {
   const rollout = normalizeLiveLogsSessionTimelineRollout(
     config?.features?.liveLogsSessionTimelineRollout,
@@ -82,7 +82,7 @@ function shouldEnableSessionTimelineViewer({
     return isCodexManagedRuntime(targetRuntime);
   }
   if (rollout === 'all_managed') {
-    return Boolean(String(taskRunId || '').trim());
+    return Boolean(String(agentRunId || '').trim());
   }
   return config?.features?.liveLogsSessionTimelineEnabled === true;
 }
@@ -338,7 +338,7 @@ const MergeAutomationSchema = z
         z
           .object({
             workflowId: z.string(),
-            taskRunId: z.string().nullable().optional(),
+            agentRunId: z.string().nullable().optional(),
             status: z.string().nullable().optional(),
             detailHref: z.string().nullable().optional(),
           })
@@ -533,8 +533,8 @@ const ExecutionDetailSchema = z
     startedAt: z.string().nullable().optional(),
     updatedAt: z.string().optional(),
     closedAt: z.string().nullable().optional(),
-    taskRunId: z.string().nullable().optional(),
-    task_run_id: z.string().nullable().optional(),
+    agentRunId: z.string().nullable().optional(),
+    agent_run_id: z.string().nullable().optional(),
     stepsHref: z.string().nullable().optional(),
     debugFields: z
       .object({
@@ -743,7 +743,7 @@ const ArtifactRefSummarySchema = z
   .passthrough();
 
 const ArtifactSessionProjectionSchema = z.object({
-  task_run_id: z.string(),
+  agent_run_id: z.string(),
   session_id: z.string(),
   session_epoch: z.number(),
   grouped_artifacts: z
@@ -934,12 +934,12 @@ const StepLedgerRefsSchema = z
   .object({
     childWorkflowId: z.string().nullable().optional(),
     childRunId: z.string().nullable().optional(),
-    taskRunId: z.string().nullable().optional(),
+    agentRunId: z.string().nullable().optional(),
   })
   .default({
     childWorkflowId: null,
     childRunId: null,
-    taskRunId: null,
+    agentRunId: null,
   });
 
 const StepLedgerArtifactsSchema = z
@@ -968,7 +968,7 @@ const StepLedgerArtifactsSchema = z
 
 const StepLedgerWorkloadSchema = z
   .object({
-    taskRunId: z.string().nullable().optional(),
+    agentRunId: z.string().nullable().optional(),
     stepId: z.string().nullable().optional(),
     executionOrdinal: z.number().nullable().optional(),
     toolName: z.string().nullable().optional(),
@@ -1126,7 +1126,7 @@ function resolveApiBaseTemplate(apiBase: string, expandedTemplate: string): stri
   return joinApiBasePath(normalizedApiBase, template);
 }
 
-function taskRunRoute(
+function agentRunRoute(
   apiBase: string,
   template: string | null | undefined,
   fallback: string,
@@ -1139,8 +1139,8 @@ function taskRunRoute(
   return joinApiBasePath(apiBase, fallback);
 }
 
-function agentRunRouteParams(taskRunId: string, extra: Record<string, string | null | undefined> = {}) {
-  return { taskRunId, agentRunId: taskRunId, ...extra };
+function agentRunRouteParams(agentRunId: string, extra: Record<string, string | null | undefined> = {}) {
+  return { agentRunId, ...extra };
 }
 
 function formatWhen(iso: string | null | undefined): string {
@@ -1341,7 +1341,7 @@ function MergeAutomationPanel({
   const workflowId = mergeAutomation.workflowId || mergeAutomation.childWorkflowId || '';
   const resolverChildren: Array<{
     workflowId: string;
-    taskRunId?: string | null;
+    agentRunId?: string | null;
     status?: string | null;
     detailHref?: string | null;
   }> = mergeAutomation.resolverChildren?.length
@@ -1396,10 +1396,10 @@ function MergeAutomationPanel({
                   <code className="text-xs break-all">{child.workflowId}</code>
                 </a>
                 {child.status ? <span className="small"> {formatStatusLabel(child.status)}</span> : null}
-                {child.taskRunId ? (
+                {child.agentRunId ? (
                   <span className="small">
                     {' '}
-                    logs: <code className="text-xs break-all">{child.taskRunId}</code>
+                    logs: <code className="text-xs break-all">{child.agentRunId}</code>
                   </span>
                 ) : null}
               </li>
@@ -1508,15 +1508,15 @@ function buildObservabilityRequestError(status: number): ObservabilityRequestErr
 
 async function fetchMergedTail(
   apiBase: string,
-  taskRunId: string,
+  agentRunId: string,
   routeTemplate?: string | null,
 ): Promise<string> {
   const resp = await fetch(
-    taskRunRoute(
+    agentRunRoute(
       apiBase,
       routeTemplate,
-      `/agent-runs/${encodeURIComponent(taskRunId)}/logs/merged`,
-      agentRunRouteParams(taskRunId),
+      `/agent-runs/${encodeURIComponent(agentRunId)}/logs/merged`,
+      agentRunRouteParams(agentRunId),
     ),
     { credentials: 'include' },
   );
@@ -1529,16 +1529,16 @@ async function fetchMergedTail(
 
 async function fetchStream(
   apiBase: string,
-  taskRunId: string,
+  agentRunId: string,
   stream: 'stdout' | 'stderr',
   routeTemplate?: string | null,
 ): Promise<string> {
   const resp = await fetch(
-    taskRunRoute(
+    agentRunRoute(
       apiBase,
       routeTemplate,
-      `/agent-runs/${encodeURIComponent(taskRunId)}/logs/${stream}`,
-      agentRunRouteParams(taskRunId),
+      `/agent-runs/${encodeURIComponent(agentRunId)}/logs/${stream}`,
+      agentRunRouteParams(agentRunId),
     ),
     { credentials: 'include' },
   );
@@ -1551,15 +1551,15 @@ async function fetchStream(
 
 async function fetchDiagnostics(
   apiBase: string,
-  taskRunId: string,
+  agentRunId: string,
   routeTemplate?: string | null,
 ): Promise<string> {
   const resp = await fetch(
-    taskRunRoute(
+    agentRunRoute(
       apiBase,
       routeTemplate,
-      `/agent-runs/${encodeURIComponent(taskRunId)}/diagnostics`,
-      agentRunRouteParams(taskRunId),
+      `/agent-runs/${encodeURIComponent(agentRunId)}/diagnostics`,
+      agentRunRouteParams(agentRunId),
     ),
     { credentials: 'include' },
   );
@@ -1588,28 +1588,28 @@ async function fetchRunSummaryArtifact(
 }
 
 function deriveCodexSessionId(
-  taskRunId: string | null | undefined,
+  agentRunId: string | null | undefined,
   runtimeId: string | null | undefined,
 ): string | null {
   const normalizedRuntime = String(runtimeId || '').trim().toLowerCase();
-  if (!taskRunId || (normalizedRuntime !== 'codex' && normalizedRuntime !== 'codex_cli')) {
+  if (!agentRunId || (normalizedRuntime !== 'codex' && normalizedRuntime !== 'codex_cli')) {
     return null;
   }
-  return `sess:${taskRunId}:codex_cli`;
+  return `sess:${agentRunId}:codex_cli`;
 }
 
 async function fetchArtifactSessionProjection(
   apiBase: string,
-  taskRunId: string,
+  agentRunId: string,
   sessionId: string,
   routeTemplate?: string | null,
 ): Promise<z.infer<typeof ArtifactSessionProjectionSchema> | null> {
   const resp = await fetch(
-    taskRunRoute(
+    agentRunRoute(
       apiBase,
       routeTemplate,
-      `/agent-runs/${encodeURIComponent(taskRunId)}/artifact-sessions/${encodeURIComponent(sessionId)}`,
-      agentRunRouteParams(taskRunId, { sessionId }),
+      `/agent-runs/${encodeURIComponent(agentRunId)}/artifact-sessions/${encodeURIComponent(sessionId)}`,
+      agentRunRouteParams(agentRunId, { sessionId }),
     ),
     { credentials: 'include' },
   );
@@ -1622,17 +1622,17 @@ async function fetchArtifactSessionProjection(
 
 async function controlArtifactSession(
   apiBase: string,
-  taskRunId: string,
+  agentRunId: string,
   sessionId: string,
   body: { action: 'send_follow_up' | 'clear_session'; message?: string; reason?: string },
   routeTemplate?: string | null,
 ): Promise<z.infer<typeof ArtifactSessionControlResponseSchema>> {
   const resp = await fetch(
-    taskRunRoute(
+    agentRunRoute(
       apiBase,
       routeTemplate,
-      `/agent-runs/${encodeURIComponent(taskRunId)}/artifact-sessions/${encodeURIComponent(sessionId)}/control`,
-      agentRunRouteParams(taskRunId, { sessionId }),
+      `/agent-runs/${encodeURIComponent(agentRunId)}/artifact-sessions/${encodeURIComponent(sessionId)}/control`,
+      agentRunRouteParams(agentRunId, { sessionId }),
     ),
     {
       method: 'POST',
@@ -1647,18 +1647,18 @@ async function controlArtifactSession(
   return ArtifactSessionControlResponseSchema.parse(await resp.json());
 }
 
-/** Fetch the observability summary for a task run. */
+/** Fetch the observability summary for a agent run. */
 async function fetchObservabilitySummary(
   apiBase: string,
-  taskRunId: string,
+  agentRunId: string,
   routeTemplate?: string | null,
 ): Promise<z.infer<typeof ObservabilitySummarySchema> | null> {
   const resp = await fetch(
-    taskRunRoute(
+    agentRunRoute(
       apiBase,
       routeTemplate,
-      `/agent-runs/${encodeURIComponent(taskRunId)}/observability-summary`,
-      agentRunRouteParams(taskRunId),
+      `/agent-runs/${encodeURIComponent(agentRunId)}/observability-summary`,
+      agentRunRouteParams(agentRunId),
     ),
     { credentials: 'include' },
   );
@@ -1672,15 +1672,15 @@ async function fetchObservabilitySummary(
 
 async function fetchObservabilityEvents(
   apiBase: string,
-  taskRunId: string,
+  agentRunId: string,
   routeTemplate?: string | null,
 ): Promise<z.infer<typeof ObservabilityEventsResponseSchema> | null> {
   const resp = await fetch(
-    taskRunRoute(
+    agentRunRoute(
       apiBase,
       routeTemplate,
-      `/agent-runs/${encodeURIComponent(taskRunId)}/observability/events`,
-      agentRunRouteParams(taskRunId),
+      `/agent-runs/${encodeURIComponent(agentRunId)}/observability/events`,
+      agentRunRouteParams(agentRunId),
     ),
     { credentials: 'include' },
   );
@@ -2383,7 +2383,7 @@ function renderTimelineRow(
   );
 }
 
-type TaskRunRouteTemplates = {
+type AgentRunRouteTemplates = {
   observabilitySummary?: string | undefined;
   observabilityEvents?: string | undefined;
   logsStream?: string | undefined;
@@ -2395,7 +2395,7 @@ type TaskRunRouteTemplates = {
   artifactSessionControl?: string | undefined;
 };
 
-function readTaskRunRouteTemplates(config: DashboardConfig | undefined): TaskRunRouteTemplates {
+function readAgentRunRouteTemplates(config: DashboardConfig | undefined): AgentRunRouteTemplates {
   const sourceRoutes = config?.sources?.agentRuns;
   return {
     observabilitySummary: sourceRoutes?.observabilitySummary,
@@ -2520,7 +2520,7 @@ function StepMetadataList({
       <li><strong>Depends on:</strong> {row.dependsOn.length > 0 ? row.dependsOn.join(', ') : 'None'}</li>
       <li><strong>Child workflow:</strong> {row.refs.childWorkflowId ? <code className="text-xs break-all">{row.refs.childWorkflowId}</code> : '—'}</li>
       <li><strong>Child run:</strong> {row.refs.childRunId ? <code className="text-xs break-all">{row.refs.childRunId}</code> : '—'}</li>
-      <li><strong>Workflow run:</strong> {row.refs.taskRunId ? <code className="text-xs break-all">{row.refs.taskRunId}</code> : '—'}</li>
+      <li><strong>Workflow run:</strong> {row.refs.agentRunId ? <code className="text-xs break-all">{row.refs.agentRunId}</code> : '—'}</li>
       <li><strong>Started:</strong> {formatWhen(row.startedAt)}</li>
       <li><strong>Updated:</strong> {formatWhen(row.updatedAt)}</li>
     </ul>
@@ -2555,7 +2555,7 @@ function StepWorkloadDetails({
         <li><strong>Duration:</strong> {formatOptionalValue(workload.durationSeconds)}s</li>
         <li><strong>Tool:</strong> <code className="text-xs break-all">{formatOptionalValue(workload.toolName)}</code></li>
         <li><strong>Step:</strong> <code className="text-xs break-all">{formatOptionalValue(workload.stepId)}</code></li>
-        <li><strong>Workflow run:</strong> <code className="text-xs break-all">{formatOptionalValue(workload.taskRunId)}</code></li>
+        <li><strong>Workflow run:</strong> <code className="text-xs break-all">{formatOptionalValue(workload.agentRunId)}</code></li>
         {workload.timeoutReason ? <li><strong>Timeout reason:</strong> {workload.timeoutReason}</li> : null}
         {workload.cancelReason ? <li><strong>Cancel reason:</strong> {workload.cancelReason}</li> : null}
         {workload.artifactPublication?.status === 'failed' ? (
@@ -2588,7 +2588,7 @@ function StepObservabilityGroup({
   sessionTimelineEnabled: boolean;
   structuredHistoryEnabled: boolean;
   row: z.infer<typeof StepLedgerRowSchema>;
-  routes: TaskRunRouteTemplates;
+  routes: AgentRunRouteTemplates;
 }) {
   if (!logStreamingEnabled) {
     return (
@@ -2596,11 +2596,11 @@ function StepObservabilityGroup({
     );
   }
 
-  const taskRunId = row.refs.taskRunId;
-  if (!taskRunId) {
+  const agentRunId = row.refs.agentRunId;
+  if (!agentRunId) {
     return (
       <p className="small">
-        {renderMissingTaskRunCopy(
+        {renderMissingAgentRunCopy(
           row.status === 'running' || row.status === 'awaiting_external'
             ? 'waiting_for_launch'
             : 'binding_missing',
@@ -2613,7 +2613,7 @@ function StepObservabilityGroup({
     <div className="stack">
       <LiveLogsPanel
         apiBase={apiBase}
-        taskRunId={taskRunId}
+        agentRunId={agentRunId}
         isTerminal={stepTerminal(row.status)}
         autoExpand
         routes={routes}
@@ -2622,19 +2622,19 @@ function StepObservabilityGroup({
       />
       <StaticLogPanel
         apiBase={apiBase}
-        taskRunId={taskRunId}
+        agentRunId={agentRunId}
         stream="stdout"
         routes={routes}
       />
       <StaticLogPanel
         apiBase={apiBase}
-        taskRunId={taskRunId}
+        agentRunId={agentRunId}
         stream="stderr"
         routes={routes}
       />
       <DiagnosticsPanel
         apiBase={apiBase}
-        taskRunId={taskRunId}
+        agentRunId={agentRunId}
         routes={routes}
       />
     </div>
@@ -2731,7 +2731,7 @@ function StepLedgerRowCard({
   expanded: boolean;
   onToggle: () => void;
   isLast: boolean;
-  routes: TaskRunRouteTemplates;
+  routes: AgentRunRouteTemplates;
 }) {
   const lastError = formatStepLastError(row.lastError);
   const { icon, cssClass } = stepStatusIcon(row.status);
@@ -2829,7 +2829,7 @@ function StepLedgerRowCard({
 
 function LiveLogsPanel({
   apiBase,
-  taskRunId,
+  agentRunId,
   isTerminal,
   autoExpand = false,
   routes,
@@ -2837,10 +2837,10 @@ function LiveLogsPanel({
   structuredHistoryEnabled,
 }: {
   apiBase: string;
-  taskRunId: string;
+  agentRunId: string;
   isTerminal: boolean;
   autoExpand?: boolean;
-  routes: TaskRunRouteTemplates;
+  routes: AgentRunRouteTemplates;
   sessionTimelineEnabled: boolean;
   structuredHistoryEnabled: boolean;
 }) {
@@ -2858,12 +2858,12 @@ function LiveLogsPanel({
     isTerminalRef.current = isTerminal;
   }, [isTerminal]);
 
-  // Reset log state whenever we switch to a different task run.
+  // Reset log state whenever we switch to a different agent run.
   useEffect(() => {
     setLogContent([]);
     lastSeqRef.current = null;
     setViewerState('starting');
-  }, [taskRunId]);
+  }, [agentRunId]);
 
   useEffect(() => {
     if (autoExpand) {
@@ -2873,17 +2873,17 @@ function LiveLogsPanel({
 
   // Query for observability summary
   const summaryQuery = useQuery({
-    queryKey: ['observability-summary', taskRunId],
-    queryFn: () => fetchObservabilitySummary(apiBase, taskRunId, routes.observabilitySummary),
-    enabled: !!taskRunId && expanded,
+    queryKey: ['observability-summary', agentRunId],
+    queryFn: () => fetchObservabilitySummary(apiBase, agentRunId, routes.observabilitySummary),
+    enabled: !!agentRunId && expanded,
     // The summary indicates stream availability; refetch occasionally if not terminal
     staleTime: 1000 * 10,
   });
 
   const historyQuery = useQuery({
-    queryKey: ['task-run-observability-events', taskRunId],
-    queryFn: () => fetchObservabilityEvents(apiBase, taskRunId, routes.observabilityEvents),
-    enabled: structuredHistoryEnabled && !!taskRunId && expanded && summaryQuery.isSuccess,
+    queryKey: ['agent-run-observability-events', agentRunId],
+    queryFn: () => fetchObservabilityEvents(apiBase, agentRunId, routes.observabilityEvents),
+    enabled: structuredHistoryEnabled && !!agentRunId && expanded && summaryQuery.isSuccess,
     staleTime: Infinity,
     retry: false,
   });
@@ -2893,10 +2893,10 @@ function LiveLogsPanel({
 
   // Legacy fallback: keep merged text available for older runs or partial failures.
   const tailQuery = useQuery({
-    queryKey: ['task-run-tail', taskRunId],
-    queryFn: () => fetchMergedTail(apiBase, taskRunId, routes.logsMerged),
+    queryKey: ['agent-run-tail', agentRunId],
+    queryFn: () => fetchMergedTail(apiBase, agentRunId, routes.logsMerged),
     enabled:
-      !!taskRunId &&
+      !!agentRunId &&
       expanded &&
       summaryQuery.isSuccess &&
       (!structuredHistoryEnabled || historyUnavailable || historyEmpty),
@@ -2987,7 +2987,7 @@ function LiveLogsPanel({
 
   // Connect to SSE only after tail succeeds, if streaming is supported and active
   useEffect(() => {
-    if (!taskRunId || !expanded || !summaryQuery.isSuccess || !isVisible) return;
+    if (!agentRunId || !expanded || !summaryQuery.isSuccess || !isVisible) return;
     if ((structuredHistoryEnabled && !historyQuery.isSuccess && !tailQuery.isSuccess) || (!structuredHistoryEnabled && !tailQuery.isSuccess)) return;
 
     const summary = summaryQuery.data;
@@ -3000,11 +3000,11 @@ function LiveLogsPanel({
     let cancelled = false;
 
     const since = lastSeqRef.current != null ? `?since=${lastSeqRef.current}` : '';
-    const streamUrl = taskRunRoute(
+    const streamUrl = agentRunRoute(
       apiBase,
       routes.logsStream,
-      `/agent-runs/${encodeURIComponent(taskRunId)}/logs/stream`,
-      agentRunRouteParams(taskRunId),
+      `/agent-runs/${encodeURIComponent(agentRunId)}/logs/stream`,
+      agentRunRouteParams(agentRunId),
     );
     const url = `${streamUrl}${since}`;
     const es = new EventSource(url, { withCredentials: true });
@@ -3055,7 +3055,7 @@ function LiveLogsPanel({
     summaryQuery.data,
     summaryQuery.isSuccess,
     tailQuery.isSuccess,
-    taskRunId,
+    agentRunId,
   ]);
 
   // Close the stream once the task reaches a terminal state.
@@ -3090,11 +3090,11 @@ function LiveLogsPanel({
     copyTextToClipboard(logContent.map((line) => getCopyableRowText(line)).join('\n'));
   };
 
-  const downloadUrl = taskRunRoute(
+  const downloadUrl = agentRunRoute(
     apiBase,
     routes.logsMerged,
-    `/agent-runs/${encodeURIComponent(taskRunId)}/logs/merged`,
-    agentRunRouteParams(taskRunId),
+    `/agent-runs/${encodeURIComponent(agentRunId)}/logs/merged`,
+    agentRunRouteParams(agentRunId),
   );
   const summaryErrorMessage = summaryQuery.isError ? (summaryQuery.error as Error).message : null;
   const liveStatusValue =
@@ -3139,7 +3139,7 @@ function LiveLogsPanel({
           </div>
         ) : null}
         <p className="small">
-          Workflow run <code className="text-xs">{taskRunId}</code> — {statusLabel}
+          Workflow run <code className="text-xs">{agentRunId}</code> — {statusLabel}
         </p>
         {sessionTimelineEnabled ? (
           <p className="small">
@@ -3321,28 +3321,28 @@ function InterventionPanel({
 
 function StaticLogPanel({
   apiBase,
-  taskRunId,
+  agentRunId,
   stream,
   routes,
 }: {
   apiBase: string;
-  taskRunId: string;
+  agentRunId: string;
   stream: 'stdout' | 'stderr';
-  routes: TaskRunRouteTemplates;
+  routes: AgentRunRouteTemplates;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [wrapLines, setWrapLines] = useState(true);
 
   const streamQuery = useQuery({
-    queryKey: ['task-run-stream', taskRunId, stream],
+    queryKey: ['agent-run-stream', agentRunId, stream],
     queryFn: () =>
       fetchStream(
         apiBase,
-        taskRunId,
+        agentRunId,
         stream,
         stream === 'stdout' ? routes.logsStdout : routes.logsStderr,
       ),
-    enabled: !!taskRunId && expanded,
+    enabled: !!agentRunId && expanded,
     retry: false,
   });
 
@@ -3353,11 +3353,11 @@ function StaticLogPanel({
     copyTextToClipboard(streamQuery.data);
   };
 
-  const downloadUrl = taskRunRoute(
+  const downloadUrl = agentRunRoute(
     apiBase,
     stream === 'stdout' ? routes.logsStdout : routes.logsStderr,
-    `/agent-runs/${encodeURIComponent(taskRunId)}/logs/${stream}`,
-    agentRunRouteParams(taskRunId),
+    `/agent-runs/${encodeURIComponent(agentRunId)}/logs/${stream}`,
+    agentRunRouteParams(agentRunId),
   );
 
   return (
@@ -3406,20 +3406,20 @@ function StaticLogPanel({
 
 function DiagnosticsPanel({
   apiBase,
-  taskRunId,
+  agentRunId,
   routes,
 }: {
   apiBase: string;
-  taskRunId: string;
-  routes: TaskRunRouteTemplates;
+  agentRunId: string;
+  routes: AgentRunRouteTemplates;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [wrapLines, setWrapLines] = useState(true);
 
   const diagQuery = useQuery({
-    queryKey: ['task-run-diagnostics', taskRunId],
-    queryFn: () => fetchDiagnostics(apiBase, taskRunId, routes.diagnostics),
-    enabled: !!taskRunId && expanded,
+    queryKey: ['agent-run-diagnostics', agentRunId],
+    queryFn: () => fetchDiagnostics(apiBase, agentRunId, routes.diagnostics),
+    enabled: !!agentRunId && expanded,
     retry: false,
   });
 
@@ -3428,11 +3428,11 @@ function DiagnosticsPanel({
     copyTextToClipboard(diagQuery.data);
   };
 
-  const downloadUrl = taskRunRoute(
+  const downloadUrl = agentRunRoute(
     apiBase,
     routes.diagnostics,
-    `/agent-runs/${encodeURIComponent(taskRunId)}/diagnostics`,
-    agentRunRouteParams(taskRunId),
+    `/agent-runs/${encodeURIComponent(agentRunId)}/diagnostics`,
+    agentRunRouteParams(agentRunId),
   );
 
   return (
@@ -3602,7 +3602,7 @@ function TargetDiagnosticsPanel({
 
 function SessionContinuityPanel({
   apiBase,
-  taskRunId,
+  agentRunId,
   targetRuntime,
   isTerminal,
   onCancel,
@@ -3611,26 +3611,26 @@ function SessionContinuityPanel({
   routes,
 }: {
   apiBase: string;
-  taskRunId: string;
+  agentRunId: string;
   targetRuntime: string | null | undefined;
   isTerminal: boolean;
   onCancel: () => void;
   invalidateWorkflowDetail: () => void;
   cancelBusy: boolean;
-  routes: TaskRunRouteTemplates;
+  routes: AgentRunRouteTemplates;
 }) {
   const queryClient = useQueryClient();
-  const sessionId = deriveCodexSessionId(taskRunId, targetRuntime);
+  const sessionId = deriveCodexSessionId(agentRunId, targetRuntime);
   const [followUpMessage, setFollowUpMessage] = useState('');
   const [panelError, setPanelError] = useState<string | null>(null);
 
   const projectionQuery = useQuery({
-    queryKey: ['task-run-session-projection', taskRunId, sessionId],
+    queryKey: ['agent-run-session-projection', agentRunId, sessionId],
     queryFn: () => {
       if (!sessionId) return Promise.resolve(null);
-      return fetchArtifactSessionProjection(apiBase, taskRunId, sessionId, routes.artifactSession);
+      return fetchArtifactSessionProjection(apiBase, agentRunId, sessionId, routes.artifactSession);
     },
-    enabled: Boolean(taskRunId && sessionId),
+    enabled: Boolean(agentRunId && sessionId),
     refetchInterval: (query) => {
       return getSessionProjectionRefetchInterval(
         isTerminal,
@@ -3644,12 +3644,12 @@ function SessionContinuityPanel({
   const controlMutation = useMutation({
     mutationFn: async (body: { action: 'send_follow_up' | 'clear_session'; message?: string; reason?: string }) => {
       if (!sessionId) throw new Error('Managed session is unavailable.');
-      return controlArtifactSession(apiBase, taskRunId, sessionId, body, routes.artifactSessionControl);
+      return controlArtifactSession(apiBase, agentRunId, sessionId, body, routes.artifactSessionControl);
     },
     onSuccess: (result) => {
       setPanelError(null);
       void queryClient.setQueryData(
-        ['task-run-session-projection', taskRunId, sessionId],
+        ['agent-run-session-projection', agentRunId, sessionId],
         result.projection,
       );
       invalidateWorkflowDetail();
@@ -3808,9 +3808,9 @@ function SessionContinuityPanel({
   );
 }
 
-type MissingTaskRunState = 'waiting_for_launch' | 'binding_missing' | 'launch_failed';
+type MissingAgentRunState = 'waiting_for_launch' | 'binding_missing' | 'launch_failed';
 
-function inferMissingTaskRunState(execution: z.infer<typeof ExecutionDetailSchema>): MissingTaskRunState {
+function inferMissingAgentRunState(execution: z.infer<typeof ExecutionDetailSchema>): MissingAgentRunState {
   const lifecycleState = (execution.rawState || execution.state || execution.status || '').toLowerCase();
   const temporalStatus = (execution.temporalStatus || execution.closeStatus || '').toLowerCase();
   const hasProgress = Boolean(
@@ -3834,7 +3834,7 @@ function inferMissingTaskRunState(execution: z.infer<typeof ExecutionDetailSchem
   return 'waiting_for_launch';
 }
 
-function renderMissingTaskRunCopy(state: MissingTaskRunState): string {
+function renderMissingAgentRunCopy(state: MissingAgentRunState): string {
   if (state === 'launch_failed') {
     return 'This execution ended before a managed runtime observability record was created.';
   }
@@ -4520,7 +4520,7 @@ function RunComparisonPanel({
 export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const queryClient = useQueryClient();
   const cfg = readDashboardConfig(payload);
-  const taskRunRoutes = readTaskRunRouteTemplates(cfg);
+  const agentRunRoutes = readAgentRunRouteTemplates(cfg);
   const detailPoll = cfg?.pollIntervalsMs?.detail ?? 2000;
   const actionsOn = Boolean(cfg?.features?.temporalDashboard?.actionsEnabled);
   const taskEditingOn = Boolean(cfg?.features?.temporalDashboard?.temporalTaskEditing);
@@ -4583,39 +4583,39 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const runId = execution?.temporalRunId || execution?.runId || '';
   const namespace = execution?.namespace || '';
   const summaryArtifactRef = execution?.summaryArtifactRef || execution?.summary_artifact_ref || '';
-  const explicitTaskRunId = execution?.taskRunId || execution?.task_run_id || '';
-  const resolvedTaskRunId = explicitTaskRunId;
+  const explicitAgentRunId = execution?.agentRunId || execution?.agent_run_id || '';
+  const resolvedAgentRunId = explicitAgentRunId;
   const shouldFetchRemediationLinks = Boolean(execution && workflowId);
   const sessionTimelineEnabled = shouldEnableSessionTimelineViewer({
     config: cfg,
     targetRuntime: execution?.targetRuntime,
-    taskRunId: resolvedTaskRunId,
+    agentRunId: resolvedAgentRunId,
   });
-  const previousTaskRunIdRef = useRef(resolvedTaskRunId);
-  const [showTaskRunAttachNotice, setShowTaskRunAttachNotice] = useState(false);
+  const previousAgentRunIdRef = useRef(resolvedAgentRunId);
+  const [showAgentRunAttachNotice, setShowAgentRunAttachNotice] = useState(false);
 
   useEffect(() => {
-    if (!resolvedTaskRunId) {
-      previousTaskRunIdRef.current = '';
-      setShowTaskRunAttachNotice(false);
+    if (!resolvedAgentRunId) {
+      previousAgentRunIdRef.current = '';
+      setShowAgentRunAttachNotice(false);
       return;
     }
 
-    if (!previousTaskRunIdRef.current) {
-      previousTaskRunIdRef.current = resolvedTaskRunId;
-      setShowTaskRunAttachNotice(true);
+    if (!previousAgentRunIdRef.current) {
+      previousAgentRunIdRef.current = resolvedAgentRunId;
+      setShowAgentRunAttachNotice(true);
       const timeout = window.setTimeout(() => {
-        setShowTaskRunAttachNotice(false);
+        setShowAgentRunAttachNotice(false);
       }, 250);
       return () => window.clearTimeout(timeout);
     }
 
-    previousTaskRunIdRef.current = resolvedTaskRunId;
-    setShowTaskRunAttachNotice(false);
+    previousAgentRunIdRef.current = resolvedAgentRunId;
+    setShowAgentRunAttachNotice(false);
     return undefined;
-  }, [resolvedTaskRunId]);
+  }, [resolvedAgentRunId]);
 
-  const missingTaskRunState = execution && !resolvedTaskRunId ? inferMissingTaskRunState(execution) : null;
+  const missingAgentRunState = execution && !resolvedAgentRunId ? inferMissingAgentRunState(execution) : null;
 
   const stepsQuery = useQuery({
     queryKey: ['workflow-detail-steps', workflowId, execution?.stepsHref],
@@ -4716,7 +4716,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       summary: null,
       state: null,
       closeStatus: null,
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
     }));
   }, [execution]);
   const hasDependencySection = Boolean(
@@ -5320,9 +5320,9 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
               <Fact label="Current Run ID">
                 <code className="text-xs break-all">{latestRunId || '—'}</code>
               </Fact>
-              {resolvedTaskRunId ? (
+              {resolvedAgentRunId ? (
                 <Fact label="Workflow Run">
-                  <code className="text-xs break-all">{resolvedTaskRunId}</code>
+                  <code className="text-xs break-all">{resolvedAgentRunId}</code>
                 </Fact>
               ) : null}
               <Fact label="Workflow ID">
@@ -5502,7 +5502,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                         expanded={Boolean(expandedSteps[row.logicalStepId])}
                         onToggle={() => toggleStep(row.logicalStepId)}
                         isLast={idx === stepsQuery.data.steps.length - 1}
-                        routes={taskRunRoutes}
+                        routes={agentRunRoutes}
                       />
                     ))}
                   </div>
@@ -5834,16 +5834,16 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
 
           <TargetDiagnosticsPanel diagnostics={execution.targetDiagnostics} />
 
-          {resolvedTaskRunId ? (
+          {resolvedAgentRunId ? (
             <SessionContinuityPanel
               apiBase={payload.apiBase}
-              taskRunId={resolvedTaskRunId}
+              agentRunId={resolvedAgentRunId}
               targetRuntime={execution.targetRuntime}
               isTerminal={isTerminalExecution}
               onCancel={onCancel}
               invalidateWorkflowDetail={invalidate}
               cancelBusy={cancelMutation.isPending}
-              routes={taskRunRoutes}
+              routes={agentRunRoutes}
             />
           ) : null}
 
@@ -5860,42 +5860,42 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                 </p>
               </div>
               {logStreamingEnabled ? (
-                resolvedTaskRunId ? (
+                resolvedAgentRunId ? (
                   <>
-                    {showTaskRunAttachNotice ? (
+                    {showAgentRunAttachNotice ? (
                       <p className="small">Waiting for managed runtime launch to create live logs.</p>
                     ) : null}
                     <LiveLogsPanel
                       apiBase={payload.apiBase}
-                      taskRunId={resolvedTaskRunId}
+                      agentRunId={resolvedAgentRunId}
                       isTerminal={isTerminalExecution}
-                      autoExpand={showTaskRunAttachNotice}
-                      routes={taskRunRoutes}
+                      autoExpand={showAgentRunAttachNotice}
+                      routes={agentRunRoutes}
                       sessionTimelineEnabled={sessionTimelineEnabled}
                       structuredHistoryEnabled={structuredHistoryEnabled}
                     />
                     <StaticLogPanel
                       apiBase={payload.apiBase}
-                      taskRunId={resolvedTaskRunId}
+                      agentRunId={resolvedAgentRunId}
                       stream="stdout"
-                      routes={taskRunRoutes}
+                      routes={agentRunRoutes}
                     />
                     <StaticLogPanel
                       apiBase={payload.apiBase}
-                      taskRunId={resolvedTaskRunId}
+                      agentRunId={resolvedAgentRunId}
                       stream="stderr"
-                      routes={taskRunRoutes}
+                      routes={agentRunRoutes}
                     />
                     <DiagnosticsPanel
                       apiBase={payload.apiBase}
-                      taskRunId={resolvedTaskRunId}
-                      routes={taskRunRoutes}
+                      agentRunId={resolvedAgentRunId}
+                      routes={agentRunRoutes}
                     />
                   </>
                 ) : (
                   <>
                     <h3>Live Logs</h3>
-                    <p className="small">{missingTaskRunState ? renderMissingTaskRunCopy(missingTaskRunState) : 'Waiting for workflow details...'}</p>
+                    <p className="small">{missingAgentRunState ? renderMissingAgentRunCopy(missingAgentRunState) : 'Waiting for workflow details...'}</p>
                   </>
                 )
               ) : (

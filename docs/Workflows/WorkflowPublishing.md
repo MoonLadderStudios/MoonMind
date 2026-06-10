@@ -35,14 +35,14 @@ Example:
 
 For PR publication, the authored `branch` is the selected repository branch and PR base. MoonMind creates or obtains a runtime-generated work branch for the PR head, pushes changes there, and creates a pull request back to the authored base branch.
 
-When merge automation is explicitly enabled for a PR-publishing Workflow Execution, successful PR publication starts a parent-owned `MoonMind.MergeAutomation` child workflow. The original `MoonMind.Run` remains in `awaiting_external` while merge automation waits for configured external readiness signals and runs `pr-resolver` with publish mode `none`; downstream dependencies on the original Workflow Execution are satisfied only after merge automation succeeds.
+When merge automation is explicitly enabled for a PR-publishing Workflow Execution, successful PR publication starts a parent-owned `MoonMind.MergeAutomation` child workflow. The original `MoonMind.UserWorkflow` remains in `awaiting_external` while merge automation waits for configured external readiness signals and runs `pr-resolver` with publish mode `none`; downstream dependencies on the original Workflow Execution are satisfied only after merge automation succeeds.
 
-For Jira-backed PR-publishing Workflow Executions, the authored or preset-provided Jira issue key must be preserved as the canonical `jiraIssueKey` in merge automation input. When that key is present, `MoonMind.Run` enables `mergeAutomationConfig.postMergeJira` by default so `MoonMind.MergeAutomation` can complete the same authoritative issue after verified merge success. If operators provide an explicit `postMergeJira.issueKey`, it overrides the canonical key for the post-merge completion step.
+For Jira-backed PR-publishing Workflow Executions, the authored or preset-provided Jira issue key must be preserved as the canonical `jiraIssueKey` in merge automation input. When that key is present, `MoonMind.UserWorkflow` enables `mergeAutomationConfig.postMergeJira` by default so `MoonMind.MergeAutomation` can complete the same authoritative issue after verified merge success. If operators provide an explicit `postMergeJira.issueKey`, it overrides the canonical key for the post-merge completion step.
 
 The publish path must not infer post-merge completion targets through fuzzy summary search or by transitioning every issue key found in PR metadata. PR metadata is only a strict fallback when stronger configured or captured Jira context is unavailable.
 
 If a Jira-oriented PR-publishing Workflow Execution completes with no repository changes
-because the issue is already implemented, `MoonMind.Run` completes that
+because the issue is already implemented, `MoonMind.UserWorkflow` completes that
 authoritative Jira issue through the same trusted Jira transition boundary used
 for post-merge completion. Ambiguous no-change results that do not explicitly
 confirm the issue is already implemented remain non-mutating and must say so in
@@ -218,6 +218,16 @@ Higher-level presets may require a pull request URL before they can complete a t
 - The workflow records the confirmed pull request URL before any downstream Jira transition depends on it.
 
 Provider-native publishing may supply pull request metadata directly when the provider has a reliable native contract. MoonMind should still capture the resulting pull request URL, readiness state, branch information, and metadata in the run record so retries, audit, merge automation, and Jira transitions remain deterministic.
+
+### MoonSpec Verification Gate
+
+Workflows that include MoonSpec verification gates must use the latest structured verification verdict to decide publication eligibility.
+
+`FULLY_IMPLEMENTED` permits PR publication and downstream trusted side effects. `ADDITIONAL_WORK_NEEDED` keeps the workflow in the bounded remediation loop while a later MoonSpec remediation step remains. Once that retry budget is exhausted, `ADDITIONAL_WORK_NEEDED` blocks publication.
+
+Non-retryable blocking verdicts, including `NO_DETERMINATION`, `BLOCKED`, and `FAILED_UNRECOVERABLE`, block publication without waiting for additional remediation attempts unless the workflow explicitly models the missing evidence as recoverable work inside the same bounded plan.
+
+When MoonSpec verification blocks publication, the workflow records `publicationBlockedBy: "moonspec_verify"` in publish context, preserves the latest verification report and evidence refs, and marks downstream publication or Jira handoff steps skipped rather than creating a pull request with known incomplete work.
 
 ### Agent Instructions
 

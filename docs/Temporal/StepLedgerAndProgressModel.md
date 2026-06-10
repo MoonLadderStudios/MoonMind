@@ -11,7 +11,7 @@ This document is the single owner for MoonMind's operator-facing **step ledger**
 It defines:
 
 - the canonical source of planned steps
-- the live step-state ledger maintained by `MoonMind.Run`
+- the live step-state ledger maintained by `MoonMind.UserWorkflow`
 - the bounded progress summary exposed on execution detail
 - step identity, status, attempts, checks, refs, and artifact semantics
 - latest-run behavior for workflow detail
@@ -33,7 +33,7 @@ MoonMind exposes step state through three layers:
    - UI and APIs must treat the plan artifact as the source of planned node order, titles, IDs, and dependencies.
 
 2. **Live step-state layer**
-   - `MoonMind.Run` maintains a compact in-memory step ledger for the current/latest run.
+   - `MoonMind.UserWorkflow` maintains a compact in-memory step ledger for the current/latest run.
    - The workflow exposes that ledger through a Query such as `GetStepLedger`.
    - The ledger carries only bounded state, summaries, refs, and identifiers.
 
@@ -134,7 +134,7 @@ Rules:
 
 ## 6. Step ledger query contract
 
-`MoonMind.Run` should expose a Query such as `GetStepLedger`.
+`MoonMind.UserWorkflow` should expose a Query such as `GetStepLedger`.
 
 Representative response:
 
@@ -161,7 +161,7 @@ Representative response:
       "refs": {
         "childWorkflowId": null,
         "childRunId": null,
-        "taskRunId": null
+        "agentRunId": null
       },
       "artifacts": {
         "outputSummary": null,
@@ -301,7 +301,7 @@ Rules:
 
 ### 11.1 Parent/child boundary
 
-`MoonMind.Run` owns:
+`MoonMind.UserWorkflow` owns:
 
 - plan ordering
 - step status
@@ -320,7 +320,7 @@ Therefore the parent step ledger should carry refs such as:
 
 - `childWorkflowId`
 - `childRunId`
-- `taskRunId`
+- `agentRunId`
 
 ### 11.2 Artifact ref groups
 
@@ -478,7 +478,7 @@ Step 2: Run tests - Running, resumed here
 
 OpenTelemetry remains supplemental:
 
-- spans and metrics may carry `workflowId`, `runId`, `logicalStepId`, `attempt`, and `taskRunId`
+- spans and metrics may carry `workflowId`, `runId`, `logicalStepId`, `attempt`, and `agentRunId`
 - telemetry is not the source of product-facing step truth
 - step detail must be driven by workflow state plus artifact/observability refs
 

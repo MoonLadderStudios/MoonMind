@@ -29,7 +29,7 @@ async def test_effective_values_contract_reports_metadata_and_operator_lock(monk
         settings_path=("settings", "configured"),
         apply_mode="worker_reload",
         requires_reload=True,
-        applies_to=("worker", "task_creation"),
+        applies_to=("worker", "workflow_creation"),
         order=1,
     )
     locked_entry = SettingRegistryEntry(
@@ -74,7 +74,7 @@ async def test_effective_values_contract_reports_metadata_and_operator_lock(monk
     assert values["test.configured"]["default_value"] == "built-in"
     assert values["test.configured"]["inheritance_state"] == "inherited"
     assert values["test.configured"]["requires_reload"] is True
-    assert values["test.configured"]["applies_to"] == ["worker", "task_creation"]
+    assert values["test.configured"]["applies_to"] == ["worker", "workflow_creation"]
     assert values["test.locked"]["source"] == "operator_lock"
     assert values["test.locked"]["read_only"] is True
     assert values["test.locked"]["read_only_reason"] == "Controlled by operator policy."

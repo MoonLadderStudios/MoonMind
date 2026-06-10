@@ -718,7 +718,7 @@ Rules:
 
 ## 12. Activity Surface and Worker Boundaries
 
-`MoonMind.Run` owns orchestration. Activities own side effects. Runtime adapters execute attempts but do not own attempt semantics.
+`MoonMind.UserWorkflow` owns orchestration. Activities own side effects. Runtime adapters execute attempts but do not own attempt semantics.
 
 Suggested Activity families for implementation:
 
@@ -768,7 +768,7 @@ else:
   stop with remaining work and evidence
 ```
 
-The loop belongs to `MoonMind.Run`, not only to agent instructions.
+The loop belongs to `MoonMind.UserWorkflow`, not only to agent instructions.
 
 Agent instructions may say what to do inside an attempt, but the parent workflow must own:
 
@@ -848,6 +848,12 @@ Budget dimensions may include:
 
 When a budget is exhausted, MoonMind must stop with a deterministic terminal disposition such as `needs_human`, `blocked`, or `failed_with_remaining_work`. It must publish the latest evidence and recommended next action.
 
+For Jira Orchestrate, the MoonSpec remediation loop is represented as bounded plan steps instead of an open-ended agent instruction. The default preset creates one initial implementation/verification pair, followed by six remediation attempts, each paired with a MoonSpec verification gate.
+
+Remediation steps carry `annotations.jiraOrchestrateRole = "moonspec-remediation"` plus attempt and maximum-attempt metadata. Verification steps carry `annotations.jiraOrchestrateRole = "moonspec-verification-gate"` and mark only the final remediation verification as `moonSpecFinalRemediationGate`.
+
+`ADDITIONAL_WORK_NEEDED` is retryable only while a later MoonSpec remediation step remains in the plan. When no later remediation step remains, or when the gate reports a non-retryable blocking verdict such as `NO_DETERMINATION`, `BLOCKED`, or `FAILED_UNRECOVERABLE`, the parent workflow stops before publication and skips downstream handoff steps.
+
 ---
 
 ## 14. Dependency Invalidation and Preserved Output Reuse
@@ -924,7 +930,7 @@ Step 3: Run tests — resumed attempt 2, local attempt 1 running now
 
 Managed runtimes execute attempts; MoonMind owns attempt semantics.
 
-For a managed agent runtime attempt, `MoonMind.Run` should:
+For a managed agent runtime attempt, `MoonMind.UserWorkflow` should:
 
 1. create the Step Execution record;
 2. prepare and record the immutable context bundle;
@@ -1096,7 +1102,9 @@ Desired behavior:
 8. move Jira to Code Review
 ```
 
-If the post-remediation gate remains `ADDITIONAL_WORK_NEEDED` after budget exhaustion, `MoonMind.Run` stops before pull request creation and Jira movement. The final state includes the latest verification report, remaining work, attempted remediation evidence, side-effect dispositions, and a recommended next action.
+The default Jira Orchestrate budget allows up to six remediation/verification pairs after the initial verification gate. The loop may exit earlier when any MoonSpec verification returns `FULLY_IMPLEMENTED`.
+
+If the post-remediation gate remains `ADDITIONAL_WORK_NEEDED` after budget exhaustion, `MoonMind.UserWorkflow` stops before pull request creation and Jira movement. The final state includes the latest verification report, remaining work, attempted remediation evidence, side-effect dispositions, and a recommended next action.
 
 ### 20.2 Failed-step recovery
 

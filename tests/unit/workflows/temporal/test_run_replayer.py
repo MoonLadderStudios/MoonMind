@@ -17,7 +17,7 @@ async def test_workflow_determinism_replay(mock_run_environment):
             handle = await env.client.start_workflow(
                 MoonMindRunWorkflow.run,
                 {
-                    "workflow_type": "MoonMind.Run",
+                    "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {},
                     "plan_artifact_ref": "ref-123",
                 },

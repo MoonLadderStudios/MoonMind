@@ -7,7 +7,7 @@
 **Last updated:** 2026-04-04 (UTC) 
 **Audience:** backend, dashboard, integrations
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
+**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 ---
 
@@ -88,7 +88,7 @@ That implementation detail is important for current behavior, but it is **not** 
 | execution | A Temporal-managed MoonMind workflow execution exposed through `/api/executions` |
 | workflow execution | The Temporal-native term for the same durable execution |
 | task | Reserved for Temporal internals and qualified external systems; no longer a MoonMind product entity |
-| workflow type | The root Temporal workflow category, e.g. `MoonMind.Run` |
+| workflow type | The root Temporal workflow category, e.g. `MoonMind.UserWorkflow` |
 | run | A single Temporal run instance under a durable `workflowId` |
 
 ### 4.2 Identifiers
@@ -169,7 +169,7 @@ For direct fetch/update/signal/cancel operations, non-admin callers receive `404
 
 The current allowed values for `workflowType` are:
 
-- `MoonMind.Run`
+- `MoonMind.UserWorkflow`
 - `MoonMind.ManifestIngest`
 
 ### 7.2 Domain state model
@@ -221,7 +221,7 @@ The current allowed values for `state` are:
 | `state` | string | yes | MoonMind domain lifecycle state |
 | `temporalStatus` | `running \| completed \| failed \| canceled` | yes | Simplified lifecycle state |
 | `closeStatus` | string or `null` | no | Terminal close status when closed |
-| `taskRunId` | string or `null` | no | Managed-run observability binding when one top-level run is directly associated with the execution detail |
+| `agentRunId` | string or `null` | no | Managed-run observability binding when one top-level run is directly associated with the execution detail |
 | `progress` | object or `null` | no | Lightweight execution progress summary; full step ledger is a separate read |
 | `searchAttributes` | object | yes | Indexed execution metadata |
 | `memo` | object | yes | Small display-oriented metadata |
@@ -318,7 +318,7 @@ Current implementation always returns `countMode = "exact"`.
 
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `workflowType` | `MoonMind.Run \| MoonMind.ManifestIngest` | yes | Root workflow type |
+| `workflowType` | `MoonMind.UserWorkflow \| MoonMind.ManifestIngest` | yes | Root workflow type |
 | `title` | string or `null` | no | Display title; defaulted if omitted |
 | `inputArtifactRef` | string or `null` | no | Input artifact reference |
 | `planArtifactRef` | string or `null` | no | Plan artifact reference |
@@ -368,11 +368,11 @@ Example:
  "namespace": "moonmind",
  "workflowId": "mm:3cf79b7f-0fc2-4ab4-a0f8-f2d8a65d8c4a",
  "runId": "84ee7f53-06c5-49e5-9f56-bb42f5d79f33",
- "workflowType": "MoonMind.Run",
+ "workflowType": "MoonMind.UserWorkflow",
  "state": "initializing",
  "temporalStatus": "running",
  "closeStatus": null,
- "taskRunId": null,
+ "agentRunId": null,
  "progress": {
  "total": 0,
  "pending": 0,
@@ -478,7 +478,7 @@ Example:
  "namespace": "moonmind",
  "workflowId": "mm:3cf79b7f-0fc2-4ab4-a0f8-f2d8a65d8c4a",
  "runId": "84ee7f53-06c5-49e5-9f56-bb42f5d79f33",
- "workflowType": "MoonMind.Run",
+ "workflowType": "MoonMind.UserWorkflow",
  "state": "executing",
  "temporalStatus": "running",
  "closeStatus": null,
@@ -574,7 +574,7 @@ Representative response:
  "refs": {
  "childWorkflowId": null,
  "childRunId": null,
- "taskRunId": null
+ "agentRunId": null
  },
  "artifacts": {
  "outputSummary": null,
@@ -608,7 +608,7 @@ Per-step required fields:
 - `checks[]`
 - `refs.childWorkflowId`
 - `refs.childRunId`
-- `refs.taskRunId`
+- `refs.agentRunId`
 - `artifacts.outputSummary`
 - `artifacts.outputPrimary`
 - `artifacts.runtimeStdout`
@@ -624,7 +624,7 @@ Rules:
 - `logicalStepId` comes from the plan node and is stable within that plan
 - `attempt` is scoped to `(workflowId, runId, logicalStepId)`
 - `checks[]` is the structured place for review/check verdicts and retry summaries
-- `taskRunId` may appear on a step row even when the top-level execution detail also exposes a managed-run binding
+- `agentRunId` may appear on a step row even when the top-level execution detail also exposes a managed-run binding
 
 ### 11.6 Step-route error responses
 

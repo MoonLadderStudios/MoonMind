@@ -12,7 +12,7 @@ The system exists to let users:
 
 - attach images to the workflow objective target or to individual steps from the Create page
 - store uploaded bytes securely in the Artifact Store
-- submit lightweight artifact references into `MoonMind.Run`
+- submit lightweight artifact references into `MoonMind.UserWorkflow`
 - preserve attachment targeting through create, edit, and rerun flows
 - generate deterministic image-derived context for text-first runtimes
 - materialize raw image bytes into the workspace when a runtime or step requires direct file access
@@ -101,7 +101,7 @@ sequenceDiagram
     participant C as Create Page
     participant A as Artifact API
     participant E as Executions API
-    participant W as MoonMind.Run
+    participant W as MoonMind.UserWorkflow
     participant P as Prepare / Artifact Activities
     participant V as Vision Activity
     participant R as Runtime Step Executor
@@ -112,7 +112,7 @@ sequenceDiagram
     C->>A: Complete upload(s)
     C->>E: Submit task-typed request with inputAttachments refs
     E->>E: Validate policy + persist workflow input snapshot
-    E->>W: Start or update MoonMind.Run with refs
+    E->>W: Start or update MoonMind.UserWorkflow with refs
     W->>P: Download and materialize image inputs
     P->>P: Write attachments manifest
     W->>V: Generate target-aware image context

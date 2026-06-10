@@ -1,6 +1,6 @@
 # Llama Index Manifest System – Schema & Operator Guide
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
+**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 > **Status:** Draft v0 (Temporal-aligned)
 > **Last updated:** 2026‑03‑20
@@ -495,7 +495,7 @@ See [ManifestIngestDesign.md](ManifestIngestDesign.md) for the full workflow inp
 
 Manifest execution is orchestrated by the `MoonMind.ManifestIngest` Temporal workflow:
 
-* **Pipeline:** `Read manifest (Activity) → Parse + Validate → Compile to DAG → Fan-out child MoonMind.Run workflows → Aggregate → Write summary/index artifacts`
+* **Pipeline:** `Read manifest (Activity) → Parse + Validate → Compile to DAG → Fan-out child MoonMind.UserWorkflow workflows → Aggregate → Write summary/index artifacts`
 * **Durability:** Temporal provides automatic retries, timeout enforcement, and crash recovery. Long-lived ingests use Continue-As-New to manage event history limits.
 * **Concurrency:** configurable via `executionPolicy.maxConcurrency` (default 50, hard cap 500). Enforced by the workflow using an internal semaphore.
 * **Failure modes:** `fail_fast` (stop on first failure) or `best_effort` / `continue_and_report` (complete independent nodes, report partial failures).
@@ -584,7 +584,7 @@ Manifest execution is orchestrated by the `MoonMind.ManifestIngest` Temporal wor
 
 ## Roadmap & Versioning
 
-The manifest schema is **v0** with backwards‑compatible minor additions within `v0`. Breaking changes bump `version` and ship an upgrade script (`manifest migrate`). Product milestones beyond the current schema (scheduled jobs, lineage, multi‑tenant policy, dataset registries, evaluation dashboards) and legacy example migration are tracked in MoonSpec feature artifacts or local planning notes when needed.
+The manifest schema is **v0** with backwards‑compatible minor additions within `v0`. Breaking changes bump `version` and ship an upgrade script (`manifest migrate`). Product milestones beyond the current schema (scheduled jobs, lineage, multi‑tenant policy, dataset registries, evaluation dashboards) and legacy example migration are tracked under `docs/tmp/` or in local-only planning notes when needed.
 
 ---
 

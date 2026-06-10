@@ -158,7 +158,7 @@ def test_codex_managed_session_state_requires_epoch_at_least_one() -> None:
 
 def test_launch_codex_managed_session_request_freezes_remote_container_defaults() -> None:
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-123",
+        agentRunId="task-123",
         sessionId="sess-123",
         threadId="thread-1",
         workspacePath="/work/task/repo",
@@ -178,7 +178,7 @@ def test_launch_managed_session_request_rejects_claude_code_runtime_family() -> 
     with pytest.raises(ValidationError, match="Input should be 'codex'"):
         LaunchCodexManagedSessionRequest(
             runtimeFamily="claude_code",
-            taskRunId="task-123",
+            agentRunId="task-123",
             sessionId="sess-123",
             threadId="thread-1",
             workspacePath="/work/task/repo",
@@ -190,7 +190,7 @@ def test_launch_managed_session_request_rejects_claude_code_runtime_family() -> 
 
 def test_mm693_launch_request_serializes_docker_capability_contract() -> None:
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-123",
+        agentRunId="task-123",
         sessionId="sess-123",
         threadId="thread-1",
         workspacePath="/work/task/repo",
@@ -222,7 +222,7 @@ def test_mm693_launch_request_serializes_docker_capability_contract() -> None:
 def test_launch_codex_managed_session_request_rejects_local_control_mode() -> None:
     with pytest.raises(ValidationError, match="Input should be 'remote_container'"):
         LaunchCodexManagedSessionRequest(
-            taskRunId="task-123",
+            agentRunId="task-123",
             sessionId="sess-123",
             threadId="thread-1",
             workspacePath="/work/task/repo",
@@ -236,7 +236,7 @@ def test_launch_codex_managed_session_request_rejects_local_control_mode() -> No
 def test_launch_codex_managed_session_request_requires_absolute_paths() -> None:
     with pytest.raises(ValidationError, match="workspacePath must be an absolute path"):
         LaunchCodexManagedSessionRequest(
-            taskRunId="task-123",
+            agentRunId="task-123",
             sessionId="sess-123",
             threadId="thread-1",
             workspacePath="relative/repo",
@@ -252,7 +252,7 @@ def test_launch_codex_managed_session_request_rejects_invalid_auth_target() -> N
         match="environment.MANAGED_AUTH_VOLUME_PATH must be an absolute path",
     ):
         LaunchCodexManagedSessionRequest(
-            taskRunId="task-123",
+            agentRunId="task-123",
             sessionId="sess-123",
             threadId="thread-1",
             workspacePath="/work/task/repo",
@@ -268,7 +268,7 @@ def test_launch_codex_managed_session_request_rejects_invalid_auth_target() -> N
         match="environment.MANAGED_AUTH_VOLUME_PATH must not equal codexHomePath",
     ):
         LaunchCodexManagedSessionRequest(
-            taskRunId="task-123",
+            agentRunId="task-123",
             sessionId="sess-123",
             threadId="thread-1",
             workspacePath="/work/task/repo",
@@ -286,7 +286,7 @@ def test_launch_codex_managed_session_request_rejects_reserved_session_environme
         "MOONMIND_SESSION_WORKSPACE_PATH",
     ):
         LaunchCodexManagedSessionRequest(
-            taskRunId="task-123",
+            agentRunId="task-123",
             sessionId="sess-123",
             threadId="thread-1",
             workspacePath="/work/task/repo",
@@ -304,7 +304,7 @@ def test_managed_github_credential_descriptor_serializes_without_secret_value() 
         required=True,
     )
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-123",
+        agentRunId="task-123",
         sessionId="sess-123",
         threadId="thread-1",
         workspacePath="/work/task/repo",

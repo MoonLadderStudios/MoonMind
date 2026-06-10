@@ -2190,7 +2190,7 @@ async def test_publish_repair_runs_one_managed_child_and_returns_result(
 ) -> None:
     binding = CodexManagedSessionBinding(
         workflowId="wf-1:session:codex_cli",
-        taskRunId="wf-1",
+        agentRunId="wf-1",
         sessionId="sess:wf-1:codex_cli",
         runtimeId="codex_cli",
     )

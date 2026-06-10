@@ -477,7 +477,7 @@ turning the resulting exception chain into the bounded, redacted failure
 reason that operators see in `reports/run_summary.json` and in the terminal
 execution state.
 
-`MoonMind.Run` captures a structured **failure diagnostic** at the first
+`MoonMind.UserWorkflow` captures a structured **failure diagnostic** at the first
 failure boundary that surfaces a non-generic root cause — typically the
 `except Exception` blocks around a `MoonMind.AgentRun` child workflow
 execution, a plan-step activity execution, the merge-automation child

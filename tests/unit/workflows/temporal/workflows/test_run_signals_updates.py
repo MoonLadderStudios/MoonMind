@@ -266,7 +266,7 @@ async def test_run_workflow_pause_resume(mock_run_environment):
             handle = await env.client.start_workflow(
                 MoonMindRunWorkflow.run,
                 {
-                    "workflow_type": "MoonMind.Run",
+                    "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {},
                     "plan_artifact_ref": "ref-123",
                 },
@@ -296,7 +296,7 @@ async def test_run_workflow_update_parameters(mock_run_environment):
             handle = await env.client.start_workflow(
                 MoonMindRunWorkflow.run,
                 {
-                    "workflow_type": "MoonMind.Run",
+                    "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {},
                     "plan_artifact_ref": "ref-123",
                 },
@@ -326,7 +326,7 @@ async def test_run_workflow_cancel_signal(mock_run_environment):
             handle = await env.client.start_workflow(
                 MoonMindRunWorkflow.run,
                 {
-                    "workflow_type": "MoonMind.Run",
+                    "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {},
                     "plan_artifact_ref": "ref-123",
                 },
@@ -466,7 +466,7 @@ async def test_run_workflow_send_message_update_uses_temporal_boundary(
             handle = await env.client.start_workflow(
                 MoonMindRunWorkflow.run,
                 {
-                    "workflow_type": "MoonMind.Run",
+                    "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {},
                     "plan_artifact_ref": "ref-123",
                 },
@@ -501,7 +501,7 @@ async def test_run_workflow_send_message_update_rejects_non_canonical_payload(
             handle = await env.client.start_workflow(
                 MoonMindRunWorkflow.run,
                 {
-                    "workflow_type": "MoonMind.Run",
+                    "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {},
                     "plan_artifact_ref": "ref-123",
                 },
@@ -537,7 +537,7 @@ async def test_run_workflow_send_message_update_rejects_blank_message(
             handle = await env.client.start_workflow(
                 MoonMindRunWorkflow.run,
                 {
-                    "workflow_type": "MoonMind.Run",
+                    "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {},
                     "plan_artifact_ref": "ref-123",
                 },

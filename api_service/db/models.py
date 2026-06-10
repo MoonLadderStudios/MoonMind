@@ -171,15 +171,15 @@ class RecurringWorkflowDefinition(Base):
     """Persistent recurring schedule definition."""
 
     # legacy_run contract: table/index/enum-type names rename in WP7
-    __tablename__ = "recurring_task_definitions"
+    __tablename__ = "recurring_workflow_definitions"
     __table_args__ = (
         Index(
-            "ix_recurring_task_definitions_enabled_next_run_at",
+            "ix_recurring_workflow_definitions_enabled_next_run_at",
             "enabled",
             "next_run_at",
         ),
         Index(
-            "ix_recurring_task_definitions_owner_enabled",
+            "ix_recurring_workflow_definitions_owner_enabled",
             "owner_user_id",
             "enabled",
         ),
@@ -192,7 +192,7 @@ class RecurringWorkflowDefinition(Base):
     schedule_type: Mapped[RecurringWorkflowScheduleType] = mapped_column(
         Enum(
             RecurringWorkflowScheduleType,
-            name="recurringtaskscheduletype",
+            name="recurringworkflowscheduletype",
             native_enum=True,
             validate_strings=True,
             values_callable=_enum_values,
@@ -221,7 +221,7 @@ class RecurringWorkflowDefinition(Base):
     scope_type: Mapped[RecurringWorkflowScopeType] = mapped_column(
         Enum(
             RecurringWorkflowScopeType,
-            name="recurringtaskscopetype",
+            name="recurringworkflowscopetype",
             native_enum=True,
             validate_strings=True,
             values_callable=_enum_values,
@@ -263,20 +263,20 @@ class RecurringWorkflowRun(Base):
     """Persistent recurring run dispatch decision row."""
 
     # legacy_run contract: table/index/enum-type names rename in WP7
-    __tablename__ = "recurring_task_runs"
+    __tablename__ = "recurring_workflow_runs"
     __table_args__ = (
         UniqueConstraint(
             "definition_id",
             "scheduled_for",
-            name="uq_recurring_task_runs_definition_scheduled_for",
+            name="uq_recurring_workflow_runs_definition_scheduled_for",
         ),
         Index(
-            "ix_recurring_task_runs_definition_created_at",
+            "ix_recurring_workflow_runs_definition_created_at",
             "definition_id",
             "created_at",
         ),
         Index(
-            "ix_recurring_task_runs_outcome_dispatch_after",
+            "ix_recurring_workflow_runs_outcome_dispatch_after",
             "outcome",
             "dispatch_after",
         ),
@@ -285,7 +285,7 @@ class RecurringWorkflowRun(Base):
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     definition_id: Mapped[UUID] = mapped_column(
         Uuid,
-        ForeignKey("recurring_task_definitions.id", ondelete="CASCADE"),
+        ForeignKey("recurring_workflow_definitions.id", ondelete="CASCADE"),
         nullable=False,
     )
     scheduled_for: Mapped[datetime] = mapped_column(
@@ -295,7 +295,7 @@ class RecurringWorkflowRun(Base):
     trigger: Mapped[RecurringWorkflowRunTrigger] = mapped_column(
         Enum(
             RecurringWorkflowRunTrigger,
-            name="recurringtaskruntrigger",
+            name="recurringworkflowruntrigger",
             native_enum=True,
             validate_strings=True,
             values_callable=_enum_values,
@@ -306,7 +306,7 @@ class RecurringWorkflowRun(Base):
     outcome: Mapped[RecurringWorkflowRunOutcome] = mapped_column(
         Enum(
             RecurringWorkflowRunOutcome,
-            name="recurringtaskrunoutcome",
+            name="recurringworkflowrunoutcome",
             native_enum=True,
             validate_strings=True,
             values_callable=_enum_values,
@@ -569,14 +569,14 @@ class Preset(Base):
     """Top-level catalog entry for reusable presets."""
 
     # legacy_run contract: table/index/constraint names rename in WP7
-    __tablename__ = "task_step_templates"
+    __tablename__ = "presets"
     __table_args__ = (
         UniqueConstraint(
-            "slug", "scope_type", "scope_ref", name="uq_task_step_template_slug_scope"
+            "slug", "scope_type", "scope_ref", name="uq_preset_slug_scope"
         ),
-        Index("ix_task_step_templates_scope", "scope_type", "scope_ref"),
-        Index("ix_task_step_templates_slug", "slug"),
-        Index("ix_task_step_templates_active", "is_active"),
+        Index("ix_presets_scope", "scope_type", "scope_ref"),
+        Index("ix_presets_slug", "slug"),
+        Index("ix_presets_active", "is_active"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -584,7 +584,7 @@ class Preset(Base):
     scope_type: Mapped[PresetScopeType] = mapped_column(
         Enum(
             PresetScopeType,
-            name="tasktemplatescopetype",
+            name="presetscopetype",
             native_enum=True,
             validate_strings=True,
             values_callable=_enum_values,
@@ -601,8 +601,8 @@ class Preset(Base):
     latest_version_id: Mapped[Optional[UUID]] = mapped_column(
         Uuid,
         ForeignKey(
-            "task_step_template_versions.id",
-            name="fk_task_template_latest_version",
+            "preset_versions.id",
+            name="fk_preset_latest_version",
             use_alter=True,
             ondelete="SET NULL",
         ),
@@ -642,17 +642,17 @@ class PresetVersion(Base):
     """Immutable release of a template blueprint."""
 
     # legacy_run contract: table/index/constraint names rename in WP7
-    __tablename__ = "task_step_template_versions"
+    __tablename__ = "preset_versions"
     __table_args__ = (
         UniqueConstraint(
-            "template_id", "version", name="uq_task_step_template_version_label"
+            "template_id", "version", name="uq_preset_version_label"
         ),
-        Index("ix_task_step_template_versions_template", "template_id"),
+        Index("ix_preset_versions_template", "template_id"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     template_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("task_step_templates.id", ondelete="CASCADE"), nullable=False
+        Uuid, ForeignKey("presets.id", ondelete="CASCADE"), nullable=False
     )
     version: Mapped[str] = mapped_column(String(32), nullable=False)
     inputs_schema: Mapped[list[dict[str, Any]]] = mapped_column(
@@ -671,7 +671,7 @@ class PresetVersion(Base):
     release_status: Mapped[PresetReleaseStatus] = mapped_column(
         Enum(
             PresetReleaseStatus,
-            name="tasktemplatereleasestatus",
+            name="presetreleasestatus",
             native_enum=True,
             validate_strings=True,
             values_callable=_enum_values,
@@ -710,10 +710,10 @@ class PresetFavorite(Base):
     """User favorites for quick preset access."""
 
     # legacy_run contract: table/index/constraint names rename in WP7
-    __tablename__ = "task_step_template_favorites"
+    __tablename__ = "preset_favorites"
     __table_args__ = (
-        UniqueConstraint("user_id", "template_id", name="uq_task_template_favorite"),
-        Index("ix_task_step_template_favorites_user", "user_id"),
+        UniqueConstraint("user_id", "template_id", name="uq_preset_favorite"),
+        Index("ix_preset_favorites_user", "user_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -721,7 +721,7 @@ class PresetFavorite(Base):
         Uuid, ForeignKey("user.id", ondelete="CASCADE"), nullable=False
     )
     template_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("task_step_templates.id", ondelete="CASCADE"), nullable=False
+        Uuid, ForeignKey("presets.id", ondelete="CASCADE"), nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -735,13 +735,13 @@ class PresetRecent(Base):
     """Tracks most recent template applications per user."""
 
     # legacy_run contract: table/index/constraint names rename in WP7
-    __tablename__ = "task_step_template_recents"
+    __tablename__ = "preset_recents"
     __table_args__ = (
-        Index("ix_task_step_template_recents_user", "user_id"),
+        Index("ix_preset_recents_user", "user_id"),
         UniqueConstraint(
             "user_id",
             "template_version_id",
-            name="uq_task_template_recent_user_version",
+            name="uq_preset_recent_user_version",
         ),
     )
 
@@ -751,7 +751,7 @@ class PresetRecent(Base):
     )
     template_version_id: Mapped[UUID] = mapped_column(
         Uuid,
-        ForeignKey("task_step_template_versions.id", ondelete="CASCADE"),
+        ForeignKey("preset_versions.id", ondelete="CASCADE"),
         nullable=False,
     )
     applied_at: Mapped[datetime] = mapped_column(
@@ -846,7 +846,7 @@ from moonmind.core.artifacts import (
 class TemporalWorkflowType(str, enum.Enum):
     """Supported root workflow type catalog entries."""
 
-    RUN = "MoonMind.Run"
+    USER_WORKFLOW = "MoonMind.UserWorkflow"
     MANIFEST_INGEST = "MoonMind.ManifestIngest"
     PROVIDER_PROFILE_MANAGER = "MoonMind.ProviderProfileManager"
 
@@ -2138,10 +2138,10 @@ class ManagedAgentOAuthSession(Base):
         onupdate=func.now(),
     )
 
-class AgentJobLiveSessionProvider(str, enum.Enum):
+class AgentRunLiveSessionProvider(str, enum.Enum):
     NONE = "none"
 
-class AgentJobLiveSessionStatus(str, enum.Enum):
+class AgentRunLiveSessionStatus(str, enum.Enum):
     DISABLED = "disabled"
     STARTING = "starting"
     READY = "ready"
@@ -2149,32 +2149,32 @@ class AgentJobLiveSessionStatus(str, enum.Enum):
     ENDED = "ended"
     ERROR = "error"
 
-class TaskRunLiveSession(Base):
+class AgentRunLiveSession(Base):
     """Legacy terminal-relay metadata kept only for historical compatibility.
 
     Managed-run observability must use stdout/stderr artifacts and MoonMind log
     streaming. New log-viewing code must not depend on this model.
     """
 
-    __tablename__ = "task_run_live_sessions"
+    __tablename__ = "agent_run_live_sessions"
     __table_args__ = (
-        Index("ix_task_run_live_sessions_status_expires_at", "status", "expires_at"),
+        Index("ix_agent_run_live_sessions_status_expires_at", "status", "expires_at"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-    task_run_id: Mapped[UUID] = mapped_column(Uuid, unique=True, index=True)
-    provider: Mapped[AgentJobLiveSessionProvider] = mapped_column(
+    agent_run_id: Mapped[UUID] = mapped_column(Uuid, unique=True, index=True)
+    provider: Mapped[AgentRunLiveSessionProvider] = mapped_column(
         Enum(
-            AgentJobLiveSessionProvider,
-            name="agentjoblivesessionprovider",
+            AgentRunLiveSessionProvider,
+            name="agentrunlivesessionprovider",
             values_callable=lambda enum_cls: [member.value for member in enum_cls],
             validate_strings=True,
         )
     )
-    status: Mapped[AgentJobLiveSessionStatus] = mapped_column(
+    status: Mapped[AgentRunLiveSessionStatus] = mapped_column(
         Enum(
-            AgentJobLiveSessionStatus,
-            name="agentjoblivesessionstatus",
+            AgentRunLiveSessionStatus,
+            name="agentrunlivesessionstatus",
             values_callable=lambda enum_cls: [member.value for member in enum_cls],
             validate_strings=True,
         )

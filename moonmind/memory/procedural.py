@@ -96,7 +96,7 @@ class EvidenceRun(BaseModel):
 
     workflow_id: str | None = Field(default=None, alias="workflowId")
     run_id: str | None = Field(default=None, alias="runId")
-    task_run_id: str | None = Field(default=None, alias="taskRunId")
+    agent_run_id: str | None = Field(default=None, alias="agentRunId")
     commit_sha: str | None = Field(default=None, alias="commitSha")
     artifact_refs: list[str] = Field(default_factory=list, alias="artifactRefs")
     outcome: EvidenceOutcome = "unknown"
@@ -112,7 +112,7 @@ class EvidenceRun(BaseModel):
             [
                 self.workflow_id,
                 self.run_id,
-                self.task_run_id,
+                self.agent_run_id,
                 self.commit_sha,
                 self.artifact_refs,
             ]

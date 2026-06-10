@@ -81,7 +81,7 @@ def _build_proposal() -> SimpleNamespace:
         origin_id=uuid4(),
         origin_external_id=None,
         origin_metadata={},
-        task_create_request={"payload": {"repository": "Moon/Repo"}},
+        workflow_create_request={"payload": {"repository": "Moon/Repo"}},
         similar=[],
     )
 
@@ -99,8 +99,8 @@ def test_create_proposal_with_user_auth(client: tuple[TestClient, AsyncMock, Asy
             "tags": ["auth"],
             "reviewPriority": "high",
             "origin": {"source": "queue", "id": str(uuid4())},
-            "taskCreateRequest": {
-                "type": "task",
+            "workflowCreateRequest": {
+                "type": "workflow",
                 "priority": 0,
                 "maxAttempts": 3,
                 "payload": {"repository": "Moon/Repo"},
@@ -131,8 +131,8 @@ def test_create_proposal_accepts_workflow_origin(
             "category": "tests",
             "tags": ["auth"],
             "origin": {"source": "workflow", "id": str(uuid4())},
-            "taskCreateRequest": {
-                "type": "task",
+            "workflowCreateRequest": {
+                "type": "workflow",
                 "priority": 0,
                 "maxAttempts": 3,
                 "payload": {"repository": "Moon/Repo"},
@@ -201,7 +201,7 @@ def test_list_proposals_serializes_delivery_record_fields(
     proposal.external_url = "https://jira.example/browse/MM-901"
     proposal.delivered_at = datetime(2026, 5, 7, 12, 30, tzinfo=UTC)
     proposal.last_synced_at = datetime(2026, 5, 7, 12, 45, tzinfo=UTC)
-    proposal.task_snapshot_ref = "artifact://proposals/MM-901.json"
+    proposal.workflow_snapshot_ref = "artifact://proposals/MM-901.json"
     proposal.provider_metadata = {"jira": {"project_key": "MM", "labels": ["moonmind"]}}
     proposal.resolved_policy = {"provider": "jira", "target": "project"}
     service.list_proposals.return_value = ([proposal], None)
@@ -213,7 +213,7 @@ def test_list_proposals_serializes_delivery_record_fields(
     assert item["provider"] == "jira"
     assert item["externalKey"] == "MM-901"
     assert item["externalUrl"] == "https://jira.example/browse/MM-901"
-    assert item["taskSnapshotRef"] == "artifact://proposals/MM-901.json"
+    assert item["workflowSnapshotRef"] == "artifact://proposals/MM-901.json"
     assert item["providerMetadata"] == {
         "jira": {"project_key": "MM", "labels": ["moonmind"]}
     }
@@ -232,7 +232,7 @@ def test_list_proposals_serializes_review_delivery_state(
     proposal.external_url = "https://github.example/Moon/Repo/issues/42"
     proposal.delivered_at = datetime(2026, 5, 7, 12, 30, tzinfo=UTC)
     proposal.last_synced_at = datetime(2026, 5, 7, 12, 45, tzinfo=UTC)
-    proposal.task_snapshot_ref = "artifact://proposals/42.json"
+    proposal.workflow_snapshot_ref = "artifact://proposals/42.json"
     proposal.provider_metadata = {
         "delivery": {
             "status": "delivered",
@@ -254,7 +254,7 @@ def test_list_proposals_serializes_review_delivery_state(
         "externalUrl": "https://github.example/Moon/Repo/issues/42",
         "deliveredAt": "2026-05-07T12:30:00Z",
         "lastSyncedAt": "2026-05-07T12:45:00Z",
-        "taskSnapshotRef": "artifact://proposals/42.json",
+        "workflowSnapshotRef": "artifact://proposals/42.json",
         "storedSnapshotNotice": True,
         "created": True,
     }
@@ -267,7 +267,7 @@ def test_promote_proposal_returns_proposal(
     final_request = {
         "payload": {
             "repository": "Moon/Repo",
-            "task": {"instructions": "do something"}
+            "workflow": {"instructions": "do something"}
         }
     }
     service.promote_proposal.return_value = (proposal, final_request)
@@ -296,7 +296,7 @@ def test_promote_proposal_uses_first_non_empty_instruction_line_for_title(
     final_request = {
         "payload": {
             "repository": "Moon/Repo",
-            "task": {
+            "workflow": {
                 "instructions": "\n\n  First line with spaces   \nSecond line\nThird line"
             },
         }
@@ -312,7 +312,7 @@ def test_promote_proposal_uses_first_non_empty_instruction_line_for_title(
     call_kwargs = execution_service.create_execution.await_args.kwargs
     assert call_kwargs["title"] == "First line with spaces"
 
-def test_promote_proposal_rejects_task_create_request_override(
+def test_promote_proposal_rejects_workflow_create_request_override(
     client: tuple[TestClient, AsyncMock, AsyncMock],
 ) -> None:
     test_client, service, execution_service = client
@@ -321,13 +321,13 @@ def test_promote_proposal_rejects_task_create_request_override(
     response = test_client.post(
         f"/api/proposals/{proposal.id}/promote",
         json={
-            "taskCreateRequestOverride": {
-                "type": "task",
+            "workflowCreateRequestOverride": {
+                "type": "workflow",
                 "priority": 0,
                 "maxAttempts": 3,
                 "payload": {
                     "repository": "Moon/Repo",
-                    "task": {"instructions": "edit"},
+                    "workflow": {"instructions": "edit"},
                 },
             }
         },
@@ -387,11 +387,11 @@ def test_get_proposal_preview_includes_preset_provenance(
 ) -> None:
     test_client, service, _execution_service = client
     proposal = _build_proposal()
-    proposal.task_create_request = {
-        "type": "task",
+    proposal.workflow_create_request = {
+        "type": "workflow",
         "payload": {
             "repository": "Moon/Repo",
-            "task": {
+            "workflow": {
                 "instructions": "Add regression coverage",
                 "authoredPresets": [
                     {
@@ -446,7 +446,7 @@ def test_get_proposal_preview_includes_operator_outcome_fields(
     proposal.external_url = "https://jira.example/browse/MM-901"
     proposal.delivered_at = datetime(2026, 5, 7, 12, 30, tzinfo=UTC)
     proposal.last_synced_at = datetime(2026, 5, 7, 12, 45, tzinfo=UTC)
-    proposal.task_snapshot_ref = "artifact://proposals/MM-901.json"
+    proposal.workflow_snapshot_ref = "artifact://proposals/MM-901.json"
     proposal.provider_metadata = {
         "delivery": {
             "status": "updated",
@@ -464,13 +464,13 @@ def test_get_proposal_preview_includes_operator_outcome_fields(
             }
         ],
     }
-    proposal.task_create_request = {
-        "type": "task",
+    proposal.workflow_create_request = {
+        "type": "workflow",
         "priority": 1,
         "maxAttempts": 3,
         "payload": {
             "repository": "Moon/Repo",
-            "task": {
+            "workflow": {
                 "instructions": "Add regression coverage",
                 "runtime": {"mode": "codex"},
                 "publish": {"mode": "pr"},
@@ -520,13 +520,13 @@ def test_promote_proposal_with_runtime_mode_shortcut(
     """runtimeMode shortcut is passed as a bounded promotion control."""
     test_client, service, execution_service = client
     proposal = _build_proposal()
-    proposal.task_create_request = {
-        "type": "task",
+    proposal.workflow_create_request = {
+        "type": "workflow",
         "priority": 0,
         "maxAttempts": 3,
         "payload": {
             "repository": "Moon/Repo",
-            "task": {
+            "workflow": {
                 "instructions": "do stuff",
                 "runtime": {"mode": "codex"},
             },
@@ -535,7 +535,7 @@ def test_promote_proposal_with_runtime_mode_shortcut(
     final_request = {
         "payload": {
             "repository": "Moon/Repo",
-            "task": {
+            "workflow": {
                 "instructions": "do stuff",
                 "runtime": {"mode": "gemini_cli"}
             }
@@ -610,7 +610,7 @@ def test_provider_decision_promotes_through_canonical_execution_path(
     final_request = {
         "payload": {
             "repository": "Moon/Repo",
-            "task": {
+            "workflow": {
                 "instructions": "Implement MM-599\nIgnore edited issue text",
                 "authoredPresets": [{"presetId": "runtime-quality-followup"}],
                 "steps": [

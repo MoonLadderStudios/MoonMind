@@ -421,7 +421,7 @@ def test_get_observability_summary_prefers_fresh_session_record(
     session_record = CodexManagedSessionRecord(
         sessionId="sess-fresh",
         sessionEpoch=2,
-        taskRunId=str(run_id),
+        agentRunId=str(run_id),
         containerId="ctr-fresh",
         threadId="thread-fresh",
         runtimeId="codex_cli",
@@ -2600,7 +2600,7 @@ def _build_session_record() -> CodexManagedSessionRecord:
     return CodexManagedSessionRecord(
         sessionId="sess:wf-task-1:codex_cli",
         sessionEpoch=2,
-        taskRunId="wf-task-1",
+        agentRunId="wf-task-1",
         containerId="container-123",
         threadId="thread-2",
         runtimeId="codex_cli",
@@ -2694,7 +2694,7 @@ def test_get_agent_run_artifact_session_projection_returns_grouped_projection(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["task_run_id"] == "wf-task-1"
+    assert body["agent_run_id"] == "wf-task-1"
     assert body["session_id"] == "sess:wf-task-1:codex_cli"
     assert body["session_epoch"] == 2
     assert body["latest_summary_ref"]["artifact_id"] == "art_summary"
@@ -2776,7 +2776,7 @@ def test_get_agent_run_artifact_session_projection_returns_404_for_task_mismatch
     client: tuple[TestClient, AsyncMock],
 ) -> None:
     test_client, _artifact_service = client
-    record = _build_session_record().model_copy(update={"task_run_id": "wf-task-2"})
+    record = _build_session_record().model_copy(update={"agent_run_id": "wf-task-2"})
 
     with patch("api_service.api.routers.agent_runs.ManagedSessionStore.load", return_value=record):
         response = test_client.get(

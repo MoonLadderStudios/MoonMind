@@ -29,7 +29,7 @@ def _profile_payload(
         "image": "python:3.12-slim",
         "entrypoint": ["/bin/bash"],
         "command_wrapper": ["-lc"],
-        "workdir_template": f"{workspace_root}/${{task_run_id}}/repo",
+        "workdir_template": f"{workspace_root}/${{agent_run_id}}/repo",
         "required_mounts": [
             {
                 "type": "volume",
@@ -95,7 +95,7 @@ def _validated_request(
 ):
     payload: dict[str, object] = {
         "profileId": "local-python",
-        "taskRunId": "task-1",
+        "agentRunId": "task-1",
         "stepId": "step-test",
         "attempt": 2,
         "toolName": "container.run_workload",
@@ -157,7 +157,7 @@ def _validated_helper_request(
 ):
     payload: dict[str, object] = {
         "profileId": "redis-helper",
-        "taskRunId": "task-helper",
+        "agentRunId": "task-helper",
         "stepId": "step-service",
         "attempt": 1,
         "toolName": "container.run_workload",
@@ -307,7 +307,7 @@ def test_unrestricted_docker_request_replaces_leading_docker_binary(
     request = UnrestrictedDockerRequest.model_validate(
         {
             "toolName": "container.run_docker",
-            "taskRunId": "task-1",
+            "agentRunId": "task-1",
             "stepId": "docker-cli",
             "attempt": 1,
             "repoDir": "/work/agent_jobs/task-1/repo",
@@ -328,7 +328,7 @@ def test_unrestricted_helper_request_reuses_unrestricted_arg_builder(
     request = UnrestrictedDockerRequest.model_validate(
         {
             "toolName": "container.run_docker",
-            "taskRunId": "task-1",
+            "agentRunId": "task-1",
             "stepId": "docker-helper",
             "attempt": 1,
             "repoDir": "/work/agent_jobs/task-1/repo",
@@ -364,7 +364,7 @@ async def test_unrestricted_launcher_timeout_stops_and_kills_without_remove_on_e
         UnrestrictedDockerRequest.model_validate(
             {
                 "toolName": "container.run_docker",
-                "taskRunId": "task-unrestricted",
+                "agentRunId": "task-unrestricted",
                 "stepId": "docker-cli",
                 "attempt": 1,
                 "repoDir": "/work/agent_jobs/task-unrestricted/repo",
@@ -408,7 +408,7 @@ async def test_unrestricted_launcher_cancel_stops_and_kills_without_remove_on_ex
         UnrestrictedDockerRequest.model_validate(
             {
                 "toolName": "container.run_docker",
-                "taskRunId": "task-unrestricted",
+                "agentRunId": "task-unrestricted",
                 "stepId": "docker-cli",
                 "attempt": 1,
                 "repoDir": "/work/agent_jobs/task-unrestricted/repo",
@@ -444,7 +444,7 @@ def test_unreal_profile_launch_args_include_cache_volumes_and_safe_posture() -> 
         WorkloadRequest.model_validate(
             {
                 "profileId": "unreal-5_3-linux",
-                "taskRunId": "task-1",
+                "agentRunId": "task-1",
                 "stepId": "unreal-tests",
                 "attempt": 1,
                 "toolName": "unreal.run_tests",
@@ -541,7 +541,7 @@ def test_launcher_rejects_artifacts_dir_outside_profile_mount(
         WorkloadRequest.model_validate(
             {
                 "profileId": "local-python",
-                "taskRunId": "task-1",
+                "agentRunId": "task-1",
                 "stepId": "step-test",
                 "attempt": 2,
                 "toolName": "container.run_workload",
@@ -607,7 +607,7 @@ async def test_launcher_publishes_runtime_artifacts_and_diagnostics_metadata(
         _validated_request(
             tmp_path,
             workspace_root=workspace_root,
-            taskRunId="task-phase4",
+            agentRunId="task-phase4",
             repoDir=str(workspace_root / "task-phase4" / "repo"),
             artifactsDir=str(artifact_dir),
         )
@@ -625,7 +625,7 @@ async def test_launcher_publishes_runtime_artifacts_and_diagnostics_metadata(
     assert diagnostics["exitCode"] == 0
     assert diagnostics["durationSeconds"] == result.duration_seconds
     assert diagnostics["stepId"] == "step-test"
-    assert diagnostics["taskRunId"] == "task-phase4"
+    assert diagnostics["agentRunId"] == "task-phase4"
     assert diagnostics["sessionContext"] is None
     assert result.output_refs["runtime.stdout"] == result.stdout_ref
     assert result.output_refs["runtime.stderr"] == result.stderr_ref
@@ -659,7 +659,7 @@ async def test_launcher_diagnostics_omit_env_values_and_auth_paths(
         _validated_request(
             tmp_path,
             workspace_root=workspace_root,
-            taskRunId="task-redaction",
+            agentRunId="task-redaction",
             repoDir=str(workspace_root / "task-redaction" / "repo"),
             artifactsDir=str(artifact_dir),
             envOverrides={
@@ -689,7 +689,7 @@ async def test_launcher_redacts_secret_like_runtime_output_and_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace_root = tmp_path / "workspace"
-    artifact_dir = workspace_root / "task-runtime-redaction" / "artifacts" / "step-test"
+    artifact_dir = workspace_root / "agent-runtime-redaction" / "artifacts" / "step-test"
     artifact_dir.mkdir(parents=True, exist_ok=True)
     raw_secret = "sk-test-workload-secret-value"
     private_key = "-----BEGIN PRIVATE KEY-----\\nabc123\\n-----END PRIVATE KEY-----"
@@ -712,8 +712,8 @@ async def test_launcher_redacts_secret_like_runtime_output_and_metadata(
         _validated_request(
             tmp_path,
             workspace_root=workspace_root,
-            taskRunId="task-runtime-redaction",
-            repoDir=str(workspace_root / "task-runtime-redaction" / "repo"),
+            agentRunId="agent-runtime-redaction",
+            repoDir=str(workspace_root / "agent-runtime-redaction" / "repo"),
             artifactsDir=str(artifact_dir),
         )
     )
@@ -754,7 +754,7 @@ async def test_launcher_publishes_failure_artifacts_with_session_association(
         _validated_request(
             tmp_path,
             workspace_root=workspace_root,
-            taskRunId="task-phase4-session",
+            agentRunId="task-phase4-session",
             repoDir=str(workspace_root / "task-phase4-session" / "repo"),
             artifactsDir=str(artifact_dir),
             sessionId="session-1",
@@ -848,7 +848,7 @@ async def test_launcher_preserves_refs_when_artifact_publication_partly_fails(
         _validated_request(
             tmp_path,
             workspace_root=workspace_root,
-            taskRunId="task-partial-artifacts",
+            agentRunId="task-partial-artifacts",
             repoDir=str(workspace_root / "task-partial-artifacts" / "repo"),
             artifactsDir=str(artifact_dir),
         )
@@ -894,7 +894,7 @@ async def test_launcher_links_declared_output_artifacts_under_artifacts_dir(
         _validated_request(
             tmp_path,
             workspace_root=workspace_root,
-            taskRunId="task-phase4-outputs",
+            agentRunId="task-phase4-outputs",
             repoDir=str(workspace_root / "task-phase4-outputs" / "repo"),
             artifactsDir=str(artifact_dir),
             declaredOutputs={
@@ -1020,7 +1020,7 @@ async def test_launcher_runs_unrestricted_requests_without_profile_concurrency_m
         UnrestrictedDockerRequest.model_validate(
             {
                 "toolName": "container.run_docker",
-                "taskRunId": "task-unrestricted",
+                "agentRunId": "task-unrestricted",
                 "stepId": "docker-cli",
                 "attempt": 1,
                 "repoDir": "/work/agent_jobs/task-unrestricted/repo",
@@ -1073,7 +1073,7 @@ async def test_launcher_exposes_explicit_mode_access_and_report_publication_meta
         UnrestrictedDockerRequest.model_validate(
             {
                 "toolName": "container.run_docker",
-                "taskRunId": "task-unrestricted-artifacts",
+                "agentRunId": "task-unrestricted-artifacts",
                 "stepId": "docker-cli",
                 "attempt": 1,
                 "repoDir": str(workspace_root / "task-unrestricted-artifacts" / "repo"),
@@ -1181,7 +1181,7 @@ async def test_launcher_enforces_profile_concurrency_limit(
         launcher.run(
             _validated_request(
                 tmp_path,
-                taskRunId="task-concurrency-a",
+                agentRunId="task-concurrency-a",
                 repoDir="/work/agent_jobs/task-concurrency-a/repo",
                 artifactsDir="/work/agent_jobs/task-concurrency-a/artifacts/step-test",
             )
@@ -1193,7 +1193,7 @@ async def test_launcher_enforces_profile_concurrency_limit(
         await launcher.run(
             _validated_request(
                 tmp_path,
-                taskRunId="task-concurrency-b",
+                agentRunId="task-concurrency-b",
                 repoDir="/work/agent_jobs/task-concurrency-b/repo",
                 artifactsDir="/work/agent_jobs/task-concurrency-b/artifacts/step-test",
             )
@@ -1222,7 +1222,7 @@ async def test_container_janitor_lists_orphans_by_labels(
     orphans = await janitor.find_by_labels(
         {
             "moonmind.kind": "workload",
-            "moonmind.task_run_id": "task-1",
+            "moonmind.agent_run_id": "task-1",
         }
     )
 
@@ -1234,7 +1234,7 @@ async def test_container_janitor_lists_orphans_by_labels(
         "--filter",
         "label=moonmind.kind=workload",
         "--filter",
-        "label=moonmind.task_run_id=task-1",
+        "label=moonmind.agent_run_id=task-1",
         "--format",
         "{{.ID}}",
     ]
@@ -1351,7 +1351,7 @@ async def test_launcher_holds_helper_concurrency_lease_until_stop(
     first = _validated_helper_request(tmp_path)
     second = _validated_helper_request(
         tmp_path,
-        taskRunId="task-helper-b",
+        agentRunId="task-helper-b",
         repoDir="/work/agent_jobs/task-helper-b/repo",
         artifactsDir="/work/agent_jobs/task-helper-b/artifacts/step-service",
     )
@@ -1439,7 +1439,7 @@ async def test_launcher_kills_timed_out_readiness_probe_process(
             )
         ],
         profileId="redis-helper",
-        taskRunId="task-helper",
+        agentRunId="task-helper",
         stepId="step-service",
         attempt=1,
         toolName="container.run_workload",

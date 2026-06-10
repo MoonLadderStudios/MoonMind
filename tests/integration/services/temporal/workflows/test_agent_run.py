@@ -204,7 +204,7 @@ async def test_workload_auth_volume_guardrails_reject_inheritance_and_allow_decl
         "image": "python:3.12-slim",
         "entrypoint": ["/bin/bash"],
         "commandWrapper": ["-lc"],
-        "workdirTemplate": f"{workspace_root}/${{task_run_id}}/repo",
+        "workdirTemplate": f"{workspace_root}/${{agent_run_id}}/repo",
         "requiredMounts": [
             {
                 "type": "volume",
@@ -240,7 +240,7 @@ async def test_workload_auth_volume_guardrails_reject_inheritance_and_allow_decl
         WorkloadRequest.model_validate(
             {
                 "profileId": "local-python",
-                "taskRunId": "task-1",
+                "agentRunId": "task-1",
                 "stepId": "workload-guardrail",
                 "attempt": 1,
                 "toolName": "container.run_workload",
@@ -1297,7 +1297,7 @@ async def test_agent_run_external_agent_workflow():
     reason=(
         "Slot release on cancellation requires both manager-side lease verification "
         "(Task 1) and parent-initiated defensive release (Task 4). This test runs "
-        "MoonMindAgentRun without a MoonMind.Run parent, so only the manager-side "
+        "MoonMindAgentRun without a MoonMind.UserWorkflow parent, so only the manager-side "
         "verification path (via _verify_lease_holders on next loop iteration) can "
         "reclaim the slot. Full reliability also needs Task 4's parent fallback, "
         "which this test setup does not exercise."
@@ -1314,10 +1314,10 @@ async def test_cancellation_releases_provider_profile_slot():
     The fix implements two complementary paths:
     1. Manager-side: _verify_lease_holders() reclaims slots from terminated
        workflows on each manager loop iteration (Task 1).
-    2. Parent-side: MoonMind.Run sends release_slot defensively when a child
+    2. Parent-side: MoonMind.UserWorkflow sends release_slot defensively when a child
        exits in a terminal state (Task 4).
 
-    This test runs AgentRun without a MoonMind.Run parent, so only the
+    This test runs AgentRun without a MoonMind.UserWorkflow parent, so only the
     manager-side path is exercised. The slot should be reclaimed within one
     manager loop iteration (~60s max in production, immediate in this test
     via time-skipping).

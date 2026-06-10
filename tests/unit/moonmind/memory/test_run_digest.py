@@ -29,7 +29,7 @@ def _record(**overrides: object) -> SimpleNamespace:
         "workflow_id": "mm:run:123",
         "run_id": "temporal-run-1",
         "namespace": "default",
-        "workflow_type": "MoonMind.Run",
+        "workflow_type": "MoonMind.UserWorkflow",
         "state": "completed",
         "close_status": "completed",
         "title": "Implement MM-762 run digests",
@@ -41,7 +41,7 @@ def _record(**overrides: object) -> SimpleNamespace:
             "task": {"git": {"repository": "MoonLadderStudios/MoonMind"}},
             "publishMode": "pr",
         },
-        "search_attributes": {"mm_task_run_id": "task-run-1"},
+        "search_attributes": {"mm_agent_run_id": "agent-run-1"},
         "artifact_refs": ["art_summary", "art_patch"],
         "input_ref": "art_input",
         "plan_ref": "art_plan",
@@ -65,7 +65,7 @@ def test_build_run_digest_uses_terminal_execution_evidence_without_raw_logs() ->
     assert digest.repo == "MoonLadderStudios/MoonMind"
     assert digest.security_scope == "repo:MoonLadderStudios/MoonMind"
     assert digest.evidence.workflow_id == "mm:run:123"
-    assert digest.evidence.task_run_id == "task-run-1"
+    assert digest.evidence.agent_run_id == "agent-run-1"
     assert digest.evidence.summary_artifact_ref == "art_summary"
     assert digest.evidence.artifact_refs == ("art_summary", "art_patch")
     assert "raw log" not in digest.to_context_text().lower()
@@ -85,7 +85,7 @@ def test_payload_for_digest_marks_retrieval_record_kind_and_provenance() -> None
     assert payload["trust_class"] == "derived"
     assert payload["run_ref.kind"] == "workflow"
     assert payload["run_ref.id"] == "mm:run:123"
-    assert payload["taskRunId"] == "task-run-1"
+    assert payload["agentRunId"] == "agent-run-1"
     assert payload["workflow_id"] == "mm:run:123"
     assert payload["run_id"] == "temporal-run-1"
     assert "Workflow completed successfully" in payload["text"]

@@ -211,7 +211,7 @@ class ArtifactSessionProjectionModel(BaseModel):
 
     # legacy_run contract — serialized projection field name; renames to
     # agent-run naming at the MoonMind.UserWorkflow v2 cutover (MM-730).
-    task_run_id: str
+    agent_run_id: str
     session_id: str
     session_epoch: int
     grouped_artifacts: list[ArtifactSessionGroupModel] = Field(default_factory=list)

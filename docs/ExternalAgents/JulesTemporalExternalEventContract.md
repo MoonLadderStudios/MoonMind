@@ -1,6 +1,6 @@
 # Jules Temporal External Event Contract
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
+**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 Status: **Implemented core contract; callback ingress remains future-facing**
 Owner: MoonMind Platform
@@ -81,7 +81,7 @@ MoonMind contains the following Jules integration components:
 - **Temporal activities:** Jules integration activities registered in `moonmind/workflows/temporal/activity_catalog.py`
 - **Worker fleet:** Jules capability on the integrations fleet
 
-All true agent execution now flows through `MoonMind.AgentRun`, dispatched per plan step from `MoonMind.Run` when `tool.type == "agent_runtime"`.
+All true agent execution now flows through `MoonMind.AgentRun`, dispatched per plan step from `MoonMind.UserWorkflow` when `tool.type == "agent_runtime"`.
 
 ### Current execution stance
 

@@ -96,14 +96,8 @@ from moonmind.workflows.temporal.workflows.manifest_ingest import (
 )
 from moonmind.workflows.temporal.jules_bundle import JULES_AGENT_IDS
 from moonmind.workflows.temporal.jira_agent_skills import JIRA_AGENT_SKILLS
-from moonmind.workflows.temporal.hard_switch_cutover import (
-    RENAMED_USER_WORKFLOW_TYPE,
-    registered_user_workflow_type,
-)
-from moonmind.workflows.temporal.workflows.run import (
-    MoonMindRunWorkflow as MoonMindRun,
-    MoonMindUserWorkflow as MoonMindUserWorkflow,
-)
+from moonmind.workflows.temporal.hard_switch_cutover import registered_user_workflow_type
+from moonmind.workflows.temporal.workflows.run import MoonMindUserWorkflow
 from moonmind.workflows.temporal.worker_healthcheck import start_healthcheck_server
 from moonmind.workflows.temporal.workflows.agent_session import (
     MoonMindAgentSessionWorkflow as MoonMindAgentSession,
@@ -150,13 +144,13 @@ from moonmind.workloads.tool_bridge import register_workload_tool_handlers
 logger = logging.getLogger(__name__)
 
 _TASK_INPUT_SNAPSHOT_CONTENT_TYPE = (
-    "application/vnd.moonmind.task-input-snapshot+json;version=1"
+    "application/vnd.moonmind.workflow-input-snapshot+json;version=1"
 )
 _TASK_INPUT_SNAPSHOT_LINK_TYPE = "input.original_snapshot"
 _WORKFLOW_INPUT_SNAPSHOT_VERSION = 1
 
 _MANAGED_SESSION_LOG_FIELD_MAP: tuple[tuple[str, str], ...] = (
-    ("taskRunId", "managed_session_task_run_id"),
+    ("agentRunId", "managed_session_agent_run_id"),
     ("runtimeId", "managed_session_runtime_id"),
     ("sessionId", "managed_session_id"),
     ("sessionEpoch", "managed_session_epoch"),
@@ -176,7 +170,7 @@ _OPENTELEMETRY_LOG_FORMAT = (
     "[workflow_id=%(temporal_workflow_id)s run_id=%(temporal_run_id)s "
     "activity_id=%(temporal_activity_id)s] "
     "[managed_session_id=%(managed_session_id)s "
-    "task_run_id=%(managed_session_task_run_id)s "
+    "agent_run_id=%(managed_session_agent_run_id)s "
     "runtime_id=%(managed_session_runtime_id)s "
     "epoch=%(managed_session_epoch)s "
     "status=%(managed_session_status)s "
@@ -209,11 +203,11 @@ async def _expand_preset_for_child_run(
     session: Any,
     initial_parameters: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    """Expand stored task-template provenance into executable child-run steps.
+    """Expand stored preset provenance into executable child-run steps.
 
     Internal story-output tools create child executions directly, bypassing the
     API/UI submit path that normally expands presets. The stored run contract
-    must still contain the flattened steps before ``MoonMind.Run`` plans it.
+    must still contain the flattened steps before ``MoonMind.UserWorkflow`` plans it.
     """
 
     parameters = dict(initial_parameters or {})
@@ -386,12 +380,12 @@ def _build_child_run_task_input_snapshot_payload(
         "snapshotVersion": _WORKFLOW_INPUT_SNAPSHOT_VERSION,
         "source": {"kind": "create"},
         "draft": {
-            "taskShape": _child_task_snapshot_shape(task_payload),
+            "workflowShape": _child_task_snapshot_shape(task_payload),
             "repository": parameters.get("repository"),
             "targetRuntime": parameters.get("targetRuntime"),
             "requiredCapabilities": list(parameters.get("requiredCapabilities") or []),
-            "task": dict(task_payload),
-            "authoredTaskInput": build_authoritative_workflow_input_snapshot(
+            "workflow": dict(task_payload),
+            "authoredWorkflowInput": build_authoritative_workflow_input_snapshot(
                 task_payload=task_payload,
                 repository=parameters.get("repository"),
                 target_runtime=parameters.get("targetRuntime"),
@@ -406,7 +400,7 @@ def _build_child_run_task_input_snapshot_payload(
         "excluded": {
             "schedule": (
                 "Schedule controls are creation-only and are not editable through "
-                "task edit/rerun."
+                "workflow edit/rerun."
             )
         },
     }
@@ -432,15 +426,15 @@ async def _create_child_run_task_input_snapshot_artifact(
             "workflow_id": canonical.workflow_id,
             "run_id": canonical.run_id,
             "link_type": _TASK_INPUT_SNAPSHOT_LINK_TYPE,
-            "label": "Original task input snapshot",
+            "label": "Original workflow input snapshot",
         },
         metadata_json={
             "artifact_class": _TASK_INPUT_SNAPSHOT_LINK_TYPE,
             "snapshot_version": _WORKFLOW_INPUT_SNAPSHOT_VERSION,
-            "workflow_type": "MoonMind.Run",
+            "workflow_type": "MoonMind.UserWorkflow",
             "source_kind": "create",
-            "draft_shape": snapshot_payload["draft"]["taskShape"],
-            "schema_name": "OriginalTaskInputSnapshot",
+            "draft_shape": snapshot_payload["draft"]["workflowShape"],
+            "schema_name": "OriginalWorkflowInputSnapshot",
             "created_by": principal,
             "attachment_refs": [],
         },
@@ -478,7 +472,7 @@ async def _persist_child_run_task_input_snapshot(
     parameters: Mapping[str, Any],
     artifact_service: TemporalArtifactService | None = None,
 ) -> str:
-    """Persist the original task payload for worker-created child runs.
+    """Persist the original workflow payload for worker-created child runs.
 
     Jira Orchestrate creates child executions from a worker activity, bypassing
     the API route that normally stores the authoritative edit/rerun snapshot.
@@ -487,10 +481,12 @@ async def _persist_child_run_task_input_snapshot(
     parameters alone.
     """
 
-    if _enum_value(getattr(record, "workflow_type", None)) != "MoonMind.Run":
+    if _enum_value(getattr(record, "workflow_type", None)) != "MoonMind.UserWorkflow":
         return ""
-    task_payload = _coerce_mapping(parameters.get("task"))
-    if not task_payload:
+    workflow_payload = _coerce_mapping(
+        parameters.get("workflow") or parameters.get("task")
+    )
+    if not workflow_payload:
         return ""
 
     workflow_id = str(getattr(record, "workflow_id", "") or "").strip()
@@ -511,7 +507,7 @@ async def _persist_child_run_task_input_snapshot(
     principal = _owner_principal_for_child_snapshot(canonical)
     snapshot_payload = _build_child_run_task_input_snapshot_payload(
         parameters=parameters,
-        task_payload=task_payload,
+        task_payload=workflow_payload,
     )
     artifact_id = await _create_child_run_task_input_snapshot_artifact(
         service=service,
@@ -2310,14 +2306,9 @@ async def main_async() -> None:
     runtime_resources: AsyncExitStack | None = None
 
     if topology.fleet == WORKFLOW_FLEET:
-        user_workflow_type = registered_user_workflow_type(settings.temporal)
-        user_workflow_class = (
-            MoonMindUserWorkflow
-            if user_workflow_type == RENAMED_USER_WORKFLOW_TYPE
-            else MoonMindRun
-        )
+        registered_user_workflow_type(settings.temporal)
         workflows = [
-            user_workflow_class,
+            MoonMindUserWorkflow,
             MoonMindManifestIngest,
             MoonMindProviderProfileManager,
             MoonMindAgentSession,

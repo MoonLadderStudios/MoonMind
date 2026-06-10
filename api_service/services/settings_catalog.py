@@ -30,7 +30,7 @@ SettingSection = Literal["providers-secrets", "user-workspace", "operations"]
 SettingApplyMode = Literal[
     "immediate",
     "next_request",
-    "next_task",
+    "next_workflow",
     "next_launch",
     "worker_reload",
     "process_restart",
@@ -532,7 +532,7 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         default_value="codex",
         settings_path=("workflow", "default_runtime"),
         env_aliases=("WORKFLOW_DEFAULT_RUNTIME", "MOONMIND_DEFAULT_RUNTIME"),
-        apply_mode="next_task",
+        apply_mode="next_workflow",
         options=(
             ("codex", "Codex"),
             ("codex_cli", "Codex CLI"),
@@ -540,7 +540,7 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
             ("gemini_cli", "Gemini CLI"),
             ("jules", "Jules"),
         ),
-        applies_to=("task_creation", "workflow_runtime"),
+        applies_to=("workflow_creation", "workflow_runtime"),
         order=10,
     ),
     SettingRegistryEntry(
@@ -555,9 +555,9 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         default_value="pr",
         settings_path=("workflow", "default_publish_mode"),
         env_aliases=("WORKFLOW_DEFAULT_PUBLISH_MODE", "MOONMIND_DEFAULT_PUBLISH_MODE"),
-        apply_mode="next_task",
+        apply_mode="next_workflow",
         options=(("none", "None"), ("branch", "Branch"), ("pr", "Pull Request")),
-        applies_to=("task_creation", "publishing"),
+        applies_to=("workflow_creation", "publishing"),
         order=20,
     ),
     SettingRegistryEntry(
@@ -594,7 +594,7 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         default_value=100,
         settings_path=("workflow", "skills_canary_percent"),
         env_aliases=("WORKFLOW_SKILLS_CANARY_PERCENT",),
-        apply_mode="next_task",
+        apply_mode="next_workflow",
         constraints=SettingConstraints(minimum=0, maximum=100),
         applies_to=("workflow_runtime", "skills"),
         order=40,
@@ -603,7 +603,7 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         key="live_sessions.default_enabled",
         title="Live Sessions Enabled By Default",
         description=(
-            "Whether live task sessions are enabled by default for queue task runs."
+            "Whether live task sessions are enabled by default for queue agent runs."
         ),
         category="Live Sessions",
         section="user-workspace",
@@ -613,8 +613,8 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         default_value=True,
         settings_path=("workflow", "live_session_enabled_default"),
         env_aliases=("MOONMIND_LIVE_SESSION_ENABLED_DEFAULT",),
-        apply_mode="next_task",
-        applies_to=("task_creation", "live_sessions"),
+        apply_mode="next_workflow",
+        applies_to=("workflow_creation", "live_sessions"),
         order=50,
     ),
     SettingRegistryEntry(
@@ -654,7 +654,7 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         default_value=None,
         env_aliases=("MOONMIND_DEFAULT_PROVIDER_PROFILE_REF",),
         apply_mode="next_launch",
-        applies_to=("task_creation", "workflow_runtime", "provider_profiles"),
+        applies_to=("workflow_creation", "workflow_runtime", "provider_profiles"),
         order=70,
     ),
     SettingRegistryEntry(
@@ -783,7 +783,7 @@ class SettingsRegistry:
             ui: str = mm.get("ui", "input")
             requires_reload: bool = bool(mm.get("requires_reload", False))
             apply_mode: SettingApplyMode = (
-                "worker_reload" if requires_reload else mm.get("apply_mode", "next_task")
+                "worker_reload" if requires_reload else mm.get("apply_mode", "next_workflow")
             )
             title: str = mm.get("title") or _field_name.replace("_", " ").title()
             description: str | None = mm.get("description") or getattr(
@@ -2036,7 +2036,7 @@ class SettingsCatalogService:
     ) -> dict[str, Any]:
         pending_state_by_mode: dict[str, SettingActivationState] = {
             "next_request": "pending_next_boundary",
-            "next_task": "pending_next_boundary",
+            "next_workflow": "pending_next_boundary",
             "next_launch": "pending_next_boundary",
             "worker_reload": "pending_reload",
             "process_restart": "pending_restart",
@@ -2045,7 +2045,7 @@ class SettingsCatalogService:
         guidance_by_mode = {
             "immediate": None,
             "next_request": "New requests will use this value.",
-            "next_task": "New tasks will use this value when they are created.",
+            "next_workflow": "New workflows will use this value when they are created.",
             "next_launch": "New launches will use this value the next time they start.",
             "worker_reload": "Reload affected workers to activate this value.",
             "process_restart": "Restart the affected process to activate this value.",
@@ -2170,8 +2170,8 @@ class SettingsCatalogService:
     def _refresh_targets_for_entry(self, entry: SettingRegistryEntry) -> list[str]:
         targets = {"settings_catalog"}
         applies_to = set(entry.applies_to)
-        if "task_creation" in applies_to:
-            targets.add("task_creation_defaults")
+        if "workflow_creation" in applies_to:
+            targets.add("workflow_creation_defaults")
         if "provider_profiles" in applies_to:
             targets.add("provider_profile_manager")
         if entry.apply_mode == "worker_reload" or entry.requires_reload:
@@ -2736,7 +2736,7 @@ class SettingsCatalogService:
         supported_apply_modes = {
             "immediate",
             "next_request",
-            "next_task",
+            "next_workflow",
             "next_launch",
             "worker_reload",
             "process_restart",

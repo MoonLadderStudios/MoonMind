@@ -1,6 +1,6 @@
 # Temporal Scheduling
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
+**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 **Status:** Active
 **Owner:** MoonMind Platform
@@ -46,7 +46,7 @@ For "run this workflow once at time T," MoonMind uses the `start_delay` paramete
 
 ```python
 await client.start_workflow(
- "MoonMind.Run",
+ "MoonMind.UserWorkflow",
  args=[workflow_input],
  id=workflow_id,
  task_queue="mm.workflow",
@@ -75,7 +75,7 @@ If the product requires the user to **change** the scheduled time after creation
 ```json
 POST /api/executions
 {
- "workflowType": "MoonMind.Run",
+ "workflowType": "MoonMind.UserWorkflow",
  "title": "Deploy staging at 2 AM",
  "initialParameters": { ... },
  "schedule": {
@@ -98,7 +98,7 @@ POST /api/executions
 {
  "workflowId": "mm:01HX...",
  "runId": "temporal-run-uuid",
- "workflowType": "MoonMind.Run",
+ "workflowType": "MoonMind.UserWorkflow",
  "state": "scheduled",
  "scheduledFor": "2026-03-24T09:00:00Z",
  "title": "Deploy staging at 2 AM"
@@ -118,7 +118,7 @@ await client.create_schedule(
  id=f"mm-schedule:{definition_id}",
  schedule=Schedule(
  action=ScheduleActionStartWorkflow(
- "MoonMind.Run",
+ "MoonMind.UserWorkflow",
  args=[workflow_input],
  id=f"mm:{{{{.ScheduleTime}}}}-{definition_id}",
  task_queue="mm.workflow",
@@ -214,7 +214,7 @@ The `misfireGraceSeconds` concept is subsumed by `catchup_window`. The `jitterSe
 
 Temporal Schedules start workflows. The workflow input payload carries the target specification. Target resolution (expanding templates, resolving manifests) happens **inside the workflow**, not at schedule evaluation time:
 
-1. Schedule fires → starts `MoonMind.Run` or `MoonMind.ManifestIngest` with the target payload in the workflow input.
+1. Schedule fires → starts `MoonMind.UserWorkflow` or `MoonMind.ManifestIngest` with the target payload in the workflow input.
 2. The workflow's initialization phase resolves the target:
  - `queue_task` → use payload directly
  - `queue_task_template` → expand the template via an Activity
@@ -261,7 +261,7 @@ When a user creates a deferred workflow execution and then needs to change the s
 Instead of `start_delay` (which is immutable), the workflow starts immediately and waits internally for the target time:
 
 ```python
-@workflow.defn(name="MoonMind.Run")
+@workflow.defn(name="MoonMind.UserWorkflow")
 class MoonMindRun:
  def __init__(self):
  self._target_run_time: datetime | None = None
@@ -413,7 +413,7 @@ flowchart TD
 
 ## 10. Scheduling implementation notes
 
-Phased work (adapter wiring, recurring dispatch reconciliation, search attributes) is tracked in MoonSpec feature artifacts or local planning notes when needed.
+Phased work (adapter wiring, recurring dispatch reconciliation, search attributes) is tracked under `docs/tmp/` or in local-only planning notes when needed.
 
 ## 11. Canonical Scheduling Semantics
 

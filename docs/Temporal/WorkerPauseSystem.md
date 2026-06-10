@@ -1,6 +1,6 @@
 # System Pause & Maintenance Mode
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
+**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 Status: **Implemented**
 Owners: **MoonMind Engineering**
@@ -136,4 +136,4 @@ For external agents (e.g., Jules), the pause mechanism behaves differently. Exte
 
 ## 9. Follow-on enhancements
 
-**Steady-state today:** API-driven pause, worker drain, and Temporal-aligned operator messaging (see sections above). **Optional next steps** — banner wired purely to Temporal visibility (where not already), runbooks standardized on `worker.shutdown()` for drain, and a deeper “quiesce” mode using `workflow.wait_condition()` plus batch signals — are tracked in MoonSpec feature artifacts or local planning notes when needed.
+**Steady-state today:** API-driven pause, worker drain, and Temporal-aligned operator messaging (see sections above). **Optional next steps** — banner wired purely to Temporal visibility (where not already), runbooks standardized on `worker.shutdown()` for drain, and a deeper “quiesce” mode using `workflow.wait_condition()` plus batch signals — are tracked under `docs/tmp/` or in local-only planning notes when needed.

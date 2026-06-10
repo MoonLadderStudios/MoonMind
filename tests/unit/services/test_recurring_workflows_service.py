@@ -104,7 +104,7 @@ async def test_create_definition_creates_temporal_schedule(
             assert call_kwargs["definition_id"] == definition.id
             assert call_kwargs["cron_expression"] == "0 6 * * *"
             assert call_kwargs["timezone"] == "UTC"
-            assert call_kwargs["workflow_type"] == "MoonMind.Run"
+            assert call_kwargs["workflow_type"] == "MoonMind.UserWorkflow"
 
 async def test_create_definition_rejects_invalid_policy(tmp_path: Path, mock_temporal_adapter) -> None:
     async with recurring_db(tmp_path) as session_maker:

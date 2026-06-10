@@ -1,6 +1,6 @@
 # Temporal Architecture
 
-**Implementation tracking:** Rollout, backlog, one-off implementation notes, migration checklists, and work sequencing live in MoonSpec artifacts (`specs/<feature>/`), issues, pull requests, gitignored handoffs, or local-only files. Canonical `docs/` files describe durable architecture and product contracts.
+**Implementation tracking:** Rollout, backlog, one-off implementation notes, migration checklists, and work sequencing live under `docs/tmp/`, issues, pull requests, gitignored handoffs, or local-only files. Canonical `docs/` files describe durable architecture and product contracts.
 
 **Status:** Normative architecture hub (Temporal-native; compatibility projections and hardening work remain repo-visible)
 **Owner:** MoonMind Platform
@@ -255,7 +255,7 @@ Child workflow rules:
 
 - Every child workflow start must intentionally choose and document a Parent Close Policy.
 - The parent must await child-start acceptance before treating the child as durably owned.
-- `MoonMind.Run` cancellation should request cancellation of active `MoonMind.AgentRun` children and allow best-effort provider/runtime cleanup.
+- `MoonMind.UserWorkflow` cancellation should request cancellation of active `MoonMind.AgentRun` children and allow best-effort provider/runtime cleanup.
 - Fire-and-forget operational children may use abandon semantics only when their workflow IDs are durably recorded and a reconciliation owner exists.
 - Terminate-style parent close behavior should be reserved for tightly coupled subgraphs where independent cleanup would be wrong.
 - A parent must not Continue-As-New with active children unless it has explicitly recorded child Workflow IDs and selected a handoff strategy.
@@ -355,7 +355,7 @@ The live repo-aligned workflow catalog is:
 
 | Workflow Type | Role | Product visibility |
 | --- | --- | --- |
-| `MoonMind.Run` | Current live root workflow implementation for user/service Workflow Executions; plans work, owns Step ledger, starts child agent runs, integrates outputs | Primary Workflow Execution surface |
+| `MoonMind.UserWorkflow` | Current live root workflow implementation for user/service Workflow Executions; plans work, owns Step ledger, starts child agent runs, integrates outputs | Primary Workflow Execution surface |
 | `MoonMind.ManifestIngest` | Ingests, validates, compiles, and orchestrates manifest-backed work | User/system execution surface |
 | `MoonMind.AgentRun` | Durable lifecycle wrapper for one true managed or external agent execution | Child/internal, surfaced through parent details |
 | `MoonMind.AgentSession` | Workflow-scoped managed-session workflow; currently Codex-backed in the live session plane | Internal/operator/detail support |
@@ -370,7 +370,7 @@ Rules:
 - Add new Workflow Types only when lifecycle behavior is materially distinct.
 - Do not model provider brands as root workflow types.
 - Do not model worker fleets or task queues as product taxonomies.
-- Product Workflow Execution vocabulary maps primarily to `MoonMind.UserWorkflow`; `MoonMind.Run` remains the current live implementation name where code and workflow registration still use it.
+- Product Workflow Execution vocabulary maps primarily to `MoonMind.UserWorkflow`; `MoonMind.UserWorkflow` remains the current live implementation name where code and workflow registration still use it.
 - If docs and code disagree about the live catalog, code registration and `WorkflowTypeCatalogAndLifecycle.md` must be reconciled immediately.
 
 ---
@@ -576,7 +576,7 @@ Rules:
 - detail views may use Queries and artifacts for richer state
 - app DB projections must preserve Temporal-backed semantics
 - dashboard compatibility statuses must not redefine `mm_state`
-- ordinary workflow list views may scope to `MoonMind.Run` and `mm_entry = run`
+- ordinary workflow list views may scope to `MoonMind.UserWorkflow` and `mm_entry = run`
 - operator/admin views may expose broader workflow scopes
 - Search Attributes and Memo are visible to operators and must not contain secrets or sensitive prose
 
@@ -690,7 +690,7 @@ Degraded-mode reads must be truthful. If a route falls back to projection data b
 
 ## 13. Managed and external agent execution
 
-`MoonMind.Run` remains the workflow-level root workflow. When a plan step requires a true agent runtime, `MoonMind.Run` starts `MoonMind.AgentRun`.
+`MoonMind.UserWorkflow` remains the workflow-level root workflow. When a plan step requires a true agent runtime, `MoonMind.UserWorkflow` starts `MoonMind.AgentRun`.
 
 `MoonMind.AgentRun` owns exactly one true agent execution lifecycle.
 

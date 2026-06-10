@@ -88,7 +88,7 @@ def test_child_execution_detail_exposes_inherited_runtime_metadata() -> None:
         memo={"title": "Child", "summary": "Created"},
         owner_id="user-1",
         entry="run",
-        workflow_type=TemporalWorkflowType.RUN,
+        workflow_type=TemporalWorkflowType.USER_WORKFLOW,
         state=MoonMindWorkflowState.EXECUTING,
         workflow_id="mm:child-runtime",
         namespace="moonmind",
@@ -175,7 +175,7 @@ async def test_idempotent_resubmit_preserves_original_inherited_runtime(
             service = TemporalExecutionService(session, client_adapter=AsyncMock())
             owner_id = str(uuid4())
             first = await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=owner_id,
                 title="Child runtime",
                 input_artifact_ref=None,
@@ -188,7 +188,7 @@ async def test_idempotent_resubmit_preserves_original_inherited_runtime(
                 summary="Created once",
             )
             second = await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=owner_id,
                 title="Child runtime changed",
                 input_artifact_ref=None,

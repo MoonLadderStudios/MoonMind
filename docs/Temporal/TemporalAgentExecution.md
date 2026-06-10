@@ -49,21 +49,21 @@ TemporalExecutionService.create_execution()  ← service.py
   │
   │  1. Creates TemporalExecutionRecord in Postgres
   │  2. Starts Temporal workflow via TemporalClientAdapter
-  │     workflow_type = "MoonMind.Run"
+  │     workflow_type = "MoonMind.UserWorkflow"
   │     task_queue    = "mm.workflow"
   │     input = RunWorkflowInput { workflowType, title,
   │               initialParameters, inputArtifactRef, planArtifactRef }
   │
   ▼
-MoonMind.Run workflow starts on Temporal Server
+MoonMind.UserWorkflow workflow starts on Temporal Server
 ```
 
-### 2.2 `MoonMind.Run` workflow lifecycle
+### 2.2 `MoonMind.UserWorkflow` workflow lifecycle
 
 ```python
 # moonmind/workflows/temporal/workflows/run.py
 
-@workflow.defn(name="MoonMind.Run")
+@workflow.defn(name="MoonMind.UserWorkflow")
 class MoonMindRunWorkflow:
 
     async def run(self, input_payload):
@@ -157,7 +157,7 @@ _run_execution_stage()
   └── any other tool.type:
       │
       ▼
-    fail fast as unsupported by MoonMind.Run
+    fail fast as unsupported by MoonMind.UserWorkflow
 ```
 
 For **generic LLM text instructions** (no specific tool), planning produces
@@ -262,7 +262,7 @@ Serialized payload form (legacy accepted): `{ id, skill: { name, version }, inpu
 |-----------|--------|-------|
 | **Job submission** → Temporal routing | ✅ Implemented | `POST /api/queue/jobs` with `target=temporal` |
 | **`TemporalExecutionService.create_execution`** | ✅ Implemented | Creates DB record + starts workflow |
-| **`MoonMind.Run` workflow definition** | ✅ Implemented | Full lifecycle with signals/updates |
+| **`MoonMind.UserWorkflow` workflow definition** | ✅ Implemented | Full lifecycle with signals/updates |
 | **Planning stage** (`plan.generate`) | ✅ Implemented | Activity + planner callback |
 | **Execution stage** (`_run_execution_stage`) | ✅ Implemented | Reads plan artifact, dispatches `agent_runtime` nodes as `MoonMind.AgentRun` child workflows, non-agent nodes as activities |
 | **`MoonMind.AgentRun` child workflow** | ✅ Implemented | Unified agent execution lifecycle for managed and external agents |
@@ -305,7 +305,7 @@ canonical open backlog is maintained in
                                ▼
 ┌─────────────────── Temporal Server ───────────────────────────────────────┐
 │                                                                           │
-│   MoonMind.Run  (task queue: mm.workflow)                                 │
+│   MoonMind.UserWorkflow  (task queue: mm.workflow)                                 │
 │   ┌──────────────────────────────────────────────────────────────────┐    │
 │   │ initialize ──► plan ──► execute ──► [proposals] ──► finalize    │    │
 │   │                  │          │                                    │    │

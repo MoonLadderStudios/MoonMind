@@ -1,6 +1,6 @@
 # Integrations Monitoring Design
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
+**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 Status: Draft (Temporal-first, migration-aware) 
 Owner: MoonMind Platform 
@@ -48,7 +48,7 @@ MoonMind today has:
 
 ### 3.2 Target state
 
-As MoonMind migrates durable orchestration to Temporal, external integration monitoring should become a **Temporal-native concern** inside `MoonMind.Run` executions by default:
+As MoonMind migrates durable orchestration to Temporal, external integration monitoring should become a **Temporal-native concern** inside `MoonMind.UserWorkflow` executions by default:
 
 * start the provider operation in an Activity
 * transition workflow state to `awaiting_external`
@@ -67,7 +67,7 @@ This document does not:
 
 ## 4) Design principles
 
-1. **`MoonMind.Run` is the default orchestration anchor.** 
+1. **`MoonMind.UserWorkflow` is the default orchestration anchor.**
  External monitoring usually belongs inside the main run lifecycle. Use a child workflow only when isolation, history pressure, or a materially different retry/failure domain justifies it.
 
 2. **Workflow code stays deterministic.** 
@@ -240,11 +240,11 @@ Best-effort provider cancellation.
 
 ## 7) Workflow pattern
 
-### 7.1 Default pattern: `MoonMind.Run` with external wait state
+### 7.1 Default pattern: `MoonMind.UserWorkflow` with external wait state
 
 For most integrations:
 
-1. `MoonMind.Run` executes `integration.<provider>.start`
+1. `MoonMind.UserWorkflow` executes `integration.<provider>.start`
 2. Workflow updates visibility:
  * `mm_state = awaiting_external`
  * optional `mm_integration = <provider>`
@@ -263,7 +263,7 @@ Use when the provider can reliably notify MoonMind.
 
 ```mermaid
 sequenceDiagram
- participant W as MoonMind.Run
+ participant W as MoonMind.UserWorkflow
  participant IA as integration.<provider>.start
  participant X as External provider
  participant API as MoonMind API

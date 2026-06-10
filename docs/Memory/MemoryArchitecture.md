@@ -66,7 +66,7 @@ MoonMind uses three orthogonal memory planes. Each plane has a clear purpose and
 
 **Storage:**
 - Digests and fix patterns are embedded and indexed in Qdrant (never raw logs).
-- Every digest links back to evidence: `workflowId`, `taskRunId` when applicable, commits/PRs, and artifact refs.
+- Every digest links back to evidence: `workflowId`, `agentRunId` when applicable, commits/PRs, and artifact refs.
 
 ### Plane C — Long-Term Memory (Mem0)
 
@@ -112,7 +112,7 @@ Fail-open behavior:
 
 ## 5) Write Path: Turning Runs Into Memory
 
-Writeback is automatic, async-first, and idempotent by execution identity (`workflowId`, and `taskRunId` for managed-run observability when applicable).
+Writeback is automatic, async-first, and idempotent by execution identity (`workflowId`, and `agentRunId` for managed-run observability when applicable).
 
 ### 5.1 On run start
 - If linked to Beads: claim the work item with `run_ref`.
@@ -126,7 +126,7 @@ Writeback is automatic, async-first, and idempotent by execution identity (`work
 1) **Generate a Run Digest (Plane B index)**
 - Structured summary:
   - intent, outcome, key changes, key decisions, gotchas, next steps
-- Link to evidence (`workflowId`, `taskRunId` when present, commit/PR, artifact refs).
+- Link to evidence (`workflowId`, `agentRunId` when present, commit/PR, artifact refs).
 - Embed + upsert into Qdrant.
 
 2) **Update Fix Patterns (Plane B procedural memory)**
@@ -165,7 +165,7 @@ Payload keys (minimum):
 Required metadata on every Mem0 entry:
 - `namespace_id`, `repo`, `scope` (`project | team | user`)
 - `review_state` (`draft | approved | deprecated`)
-- `provenance` pointers (`workflowId`, `taskRunId` when applicable, commits, doc refs)
+- `provenance` pointers (`workflowId`, `agentRunId` when applicable, commits, doc refs)
 
 Memory provenance must stay model-agnostic. It records durable evidence pointers, not the model or provider that happened to produce the memory contribution.
 

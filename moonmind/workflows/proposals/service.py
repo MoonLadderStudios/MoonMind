@@ -420,7 +420,7 @@ class WorkflowProposalService:
         repository = self._clean_str(normalized_payload.get("repository"))
         if not repository:
             raise WorkflowProposalValidationError(
-                "taskCreateRequest.payload.repository is required"
+                "workflowCreateRequest.payload.repository is required"
             )
         return normalized_payload, repository
 
@@ -457,7 +457,7 @@ class WorkflowProposalService:
                     normalized.get(key)
                 )
 
-        task_node = normalized.get("task")
+        task_node = normalized.get("workflow") or normalized.get("task")
         if not isinstance(task_node, Mapping):
             return normalized
 
@@ -470,28 +470,30 @@ class WorkflowProposalService:
                 task["runtime"] = cls._normalize_proposal_runtime_mapping(value)
                 continue
             task[key] = cls._normalize_proposal_runtime_mode(value)
-        normalized["task"] = task
+        normalized["workflow"] = task
         return normalized
 
-    def _prepare_task_create_request(
+    def _prepare_workflow_create_request(
         self,
         request: dict[str, Any],
         *,
         apply_runtime_defaults: bool,
     ) -> tuple[dict[str, Any], str]:
         if not isinstance(request, dict):
-            raise WorkflowProposalValidationError("taskCreateRequest must be an object")
+            raise WorkflowProposalValidationError("workflowCreateRequest must be an object")
 
-        job_type = self._clean_str(request.get("type") or "task").lower()
-        if job_type != "task":
-            raise WorkflowProposalValidationError("taskCreateRequest.type must be 'task'")
+        job_type = self._clean_str(request.get("type") or "workflow").lower()
+        if job_type != "workflow":
+            raise WorkflowProposalValidationError(
+                "workflowCreateRequest.type must be 'workflow'"
+            )
 
         priority_raw = request.get("priority", 0)
         try:
             priority = int(priority_raw)
         except Exception as exc:  # pragma: no cover - validation guard
             raise WorkflowProposalValidationError(
-                "taskCreateRequest.priority must be an integer"
+                "workflowCreateRequest.priority must be an integer"
             ) from exc
 
         max_attempts_raw = request.get("maxAttempts", 3)
@@ -499,7 +501,7 @@ class WorkflowProposalService:
             max_attempts = int(max_attempts_raw)
         except Exception as exc:  # pragma: no cover - validation guard
             raise WorkflowProposalValidationError(
-                "taskCreateRequest.maxAttempts must be an integer"
+                "workflowCreateRequest.maxAttempts must be an integer"
             ) from exc
         if max_attempts < 1:
             raise WorkflowProposalValidationError("maxAttempts must be >= 1")
@@ -510,7 +512,7 @@ class WorkflowProposalService:
         payload = request.get("payload") or {}
         if not isinstance(payload, dict):
             raise WorkflowProposalValidationError(
-                "taskCreateRequest.payload must be an object"
+                "workflowCreateRequest.payload must be an object"
             )
         if apply_runtime_defaults:
             try:
@@ -520,14 +522,16 @@ class WorkflowProposalService:
                 parsed = CanonicalWorkflowExecutionPayload.model_validate(normalized_payload_input)
                 normalized_payload = parsed.model_dump(by_alias=True, exclude_none=True)
             except ValidationError as exc:
-                raise WorkflowProposalValidationError(f"Invalid task payload: {exc}") from exc
+                raise WorkflowProposalValidationError(
+                    f"Invalid workflow payload: {exc}"
+                ) from exc
             normalized_payload = self._enforce_proposal_pr_publish_mode(
                 normalized_payload
             )
             repository = self._clean_str(normalized_payload.get("repository"))
             if not repository:
                 raise WorkflowProposalValidationError(
-                    "taskCreateRequest.payload.repository is required"
+                    "workflowCreateRequest.payload.repository is required"
                 )
         else:
             normalized_payload, repository = self._normalize_proposal_task_payload(
@@ -535,7 +539,7 @@ class WorkflowProposalService:
             )
 
         envelope: dict[str, Any] = {
-            "type": "task",
+            "type": "workflow",
             "priority": priority,
             "maxAttempts": max_attempts,
             "payload": normalized_payload,
@@ -550,7 +554,7 @@ class WorkflowProposalService:
         return category.lower() in _NOTIFICATION_CATEGORIES
 
     def _build_notification_payload(self, proposal: WorkflowProposal) -> dict[str, Any]:
-        preview = proposal.task_create_request or {}
+        preview = proposal.workflow_create_request or {}
         payload = {
             "text": f"[Workflow Proposal] {proposal.category or 'general'} → {proposal.repository}",
             "attachments": [
@@ -762,7 +766,7 @@ class WorkflowProposalService:
         summary: str,
         category: str | None,
         tags: list[str] | None,
-        task_create_request: dict[str, Any],
+        workflow_create_request: dict[str, Any],
         origin_source: object,
         origin_id: UUID | None,
         origin_metadata: dict[str, Any] | None,
@@ -775,7 +779,7 @@ class WorkflowProposalService:
         external_url: str | None = None,
         delivered_at: datetime | None = None,
         last_synced_at: datetime | None = None,
-        task_snapshot_ref: str | None = None,
+        workflow_snapshot_ref: str | None = None,
         provider_metadata: dict[str, Any] | None = None,
         resolved_policy: dict[str, Any] | None = None,
     ) -> WorkflowProposal:
@@ -819,8 +823,8 @@ class WorkflowProposalService:
         scrubbed_resolved_policy = self._scrub_json(dict(resolved_policy or {}))
         cleaned_external_key = self._scrub_text(self._clean_str(external_key)) or None
         cleaned_external_url = self._scrub_text(self._clean_str(external_url)) or None
-        cleaned_task_snapshot_ref = (
-            self._scrub_text(self._clean_str(task_snapshot_ref)) or None
+        cleaned_workflow_snapshot_ref = (
+            self._scrub_text(self._clean_str(workflow_snapshot_ref)) or None
         )
         requested_priority = (
             self._normalize_review_priority(review_priority)
@@ -829,8 +833,8 @@ class WorkflowProposalService:
         )
         priority_override_reason: str | None = None
 
-        envelope, repository = self._prepare_task_create_request(
-            task_create_request,
+        envelope, repository = self._prepare_workflow_create_request(
+            workflow_create_request,
             apply_runtime_defaults=False,
         )
         scrubbed_request = self._scrub_json(envelope)
@@ -899,8 +903,8 @@ class WorkflowProposalService:
                     duplicate.external_url = cleaned_external_url
                 if delivered_at is not None:
                     duplicate.delivered_at = delivered_at
-                if cleaned_task_snapshot_ref is not None:
-                    duplicate.task_snapshot_ref = cleaned_task_snapshot_ref
+                if cleaned_workflow_snapshot_ref is not None:
+                    duplicate.workflow_snapshot_ref = cleaned_workflow_snapshot_ref
                 duplicate.origin_external_id = (
                     getattr(duplicate, "origin_external_id", None)
                     or cleaned_origin_external_id
@@ -920,7 +924,7 @@ class WorkflowProposalService:
             category=normalized_category,
             tags=normalized_tags,
             repository=repository,
-            task_create_request=scrubbed_request,
+            workflow_create_request=scrubbed_request,
             proposed_by_worker_id=proposed_by_worker_id,
             proposed_by_user_id=proposed_by_user_id,
             origin_source=origin,
@@ -936,7 +940,7 @@ class WorkflowProposalService:
             external_url=cleaned_external_url,
             delivered_at=delivered_at,
             last_synced_at=last_synced_at,
-            task_snapshot_ref=cleaned_task_snapshot_ref,
+            workflow_snapshot_ref=cleaned_workflow_snapshot_ref,
             provider_metadata=scrubbed_provider_metadata,
             resolved_policy=scrubbed_resolved_policy,
         )
@@ -1304,7 +1308,7 @@ class WorkflowProposalService:
     ) -> tuple[WorkflowProposal, dict[str, Any]]:
         """Validate and finalize a proposal for execution promotion.
 
-        Returns the updated WorkflowProposal and the finalized taskCreateRequest
+        Returns the updated WorkflowProposal and the finalized workflowCreateRequest
         envelope (suitable for use as ``initial_parameters``) ready to execute.
         Runtime mode may be overridden as a bounded promotion control; reviewed
         task steps, instructions, and provenance are always loaded from the
@@ -1319,7 +1323,7 @@ class WorkflowProposalService:
                 f"proposal status {proposal.status.value} cannot be promoted"
             )
 
-        request = dict(proposal.task_create_request or {})
+        request = dict(proposal.workflow_create_request or {})
         payload = dict(request.get("payload") or {})
         try:
             parsed = CanonicalWorkflowExecutionPayload.model_validate(payload)

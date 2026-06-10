@@ -68,7 +68,7 @@ class TestCreateSchedule:
         result = await adapter.create_schedule(
             definition_id=_TEST_UUID,
             cron_expression="0 0 * * *",
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
         )
 
         assert result == _SCHEDULE_ID
@@ -92,7 +92,7 @@ class TestCreateSchedule:
             definition_id=_TEST_UUID,
             cron_expression="0 0 * * *",
             overlap_mode="allow",
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
         )
 
         schedule_arg = mock_client.create_schedule.call_args[0][1]
@@ -111,7 +111,7 @@ class TestCreateSchedule:
             definition_id=_TEST_UUID,
             cron_expression="0 0 * * *",
             catchup_mode="all",
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
         )
 
         schedule_arg = mock_client.create_schedule.call_args[0][1]
@@ -204,7 +204,7 @@ class TestManagedSessionReconcileSchedule:
             definition_id=_TEST_UUID,
             cron_expression="0 0 * * *",
             jitter_seconds=30,
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
         )
 
         schedule_arg = mock_client.create_schedule.call_args[0][1]
@@ -222,7 +222,7 @@ class TestManagedSessionReconcileSchedule:
             definition_id=_TEST_UUID,
             cron_expression="0 0 * * *",
             enabled=False,
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
         )
 
         schedule_arg = mock_client.create_schedule.call_args[0][1]
@@ -240,7 +240,7 @@ class TestManagedSessionReconcileSchedule:
             await adapter.create_schedule(
                 definition_id=_TEST_UUID,
                 cron_expression="0 0 * * *",
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
             )
 
     @pytest.mark.asyncio
@@ -255,7 +255,7 @@ class TestManagedSessionReconcileSchedule:
             await adapter.create_schedule(
                 definition_id=_TEST_UUID,
                 cron_expression="0 0 * * *",
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
             )
 
 # ---------------------------------------------------------------------------

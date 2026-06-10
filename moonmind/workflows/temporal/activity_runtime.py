@@ -238,7 +238,7 @@ _AUTO_SKILL_SENTINEL = "auto"
 _NON_SECRET_MANAGED_SESSION_ENV_KEYS: tuple[str, ...] = ("MOONMIND_URL",)
 _MANAGED_SESSION_TELEMETRY_KEYS: tuple[str, ...] = (
     "activityType",
-    "taskRunId",
+    "agentRunId",
     "runtimeId",
     "sessionId",
     "sessionEpoch",
@@ -1417,7 +1417,7 @@ def _iter_requested_registry_tools(
     if not isinstance(parameters, Mapping):
         return tuple(selected)
 
-    task_payload = parameters.get("task")
+    task_payload = parameters.get("workflow")
     if not isinstance(task_payload, Mapping):
         return tuple(selected)
 
@@ -1559,7 +1559,7 @@ def _build_execution_notification_payload(payload: Mapping[str, Any]) -> dict[st
         "outputRefs": list(result.get("outputRefs") or []),
     }
     for key in (
-        "taskRunId",
+        "agentRunId",
         "childWorkflowId",
         "childRunId",
         "pullRequestUrl",
@@ -3195,7 +3195,7 @@ class TemporalProposalActivities:
 
     @staticmethod
     def _resolve_task_instructions(parameters: Mapping[str, Any]) -> str:
-        task_node = parameters.get("task")
+        task_node = parameters.get("workflow")
         task = task_node if isinstance(task_node, Mapping) else {}
 
         instructions = str(
@@ -3294,7 +3294,7 @@ class TemporalProposalActivities:
 
     @classmethod
     def _preserve_compact_task_metadata(
-        cls, *, source_task: Mapping[str, Any], target_task: dict[str, Any]
+        cls, *, source_workflow: Mapping[str, Any], target_workflow: dict[str, Any]
     ) -> None:
         """Carry compact selector/provenance metadata into generated candidates.
 
@@ -3304,15 +3304,15 @@ class TemporalProposalActivities:
         """
 
         for key in ("skill", "tool", "skills"):
-            value = cls._compact_mapping(source_task.get(key))
+            value = cls._compact_mapping(source_workflow.get(key))
             if value is not None:
-                target_task[key] = value
+                target_workflow[key] = value
 
-        authored_presets = source_task.get("authoredPresets")
+        authored_presets = source_workflow.get("authoredPresets")
         if isinstance(authored_presets, list) and authored_presets:
-            target_task["authoredPresets"] = deepcopy(authored_presets)
+            target_workflow["authoredPresets"] = deepcopy(authored_presets)
 
-        steps = source_task.get("steps")
+        steps = source_workflow.get("steps")
         if not isinstance(steps, Sequence) or isinstance(steps, (str, bytes)):
             return
 
@@ -3352,11 +3352,11 @@ class TemporalProposalActivities:
             source_steps.append(preserved)
 
         if source_steps:
-            target_task["sourceSteps"] = source_steps
+            target_workflow["sourceSteps"] = source_steps
 
     @staticmethod
     def _reject_unsupported_tool_selectors(payload: Mapping[str, Any]) -> None:
-        task_node = payload.get("task")
+        task_node = payload.get("workflow")
         task = task_node if isinstance(task_node, Mapping) else {}
 
         def check_tool(tool_node: object, path: str) -> None:
@@ -3387,7 +3387,7 @@ class TemporalProposalActivities:
         payload_node = stamped_request.get("payload")
         if not isinstance(payload_node, dict):
             return stamped_request
-        task_node = payload_node.get("task")
+        task_node = payload_node.get("workflow")
         if isinstance(task_node, dict):
             runtime_node = task_node.get("runtime")
             if isinstance(runtime_node, dict):
@@ -3403,7 +3403,7 @@ class TemporalProposalActivities:
     def _task_runtime_mode_from_payload(payload_node: Any) -> str:
         if not isinstance(payload_node, Mapping):
             return ""
-        task_node = payload_node.get("task") or {}
+        task_node = payload_node.get("workflow") or {}
         if not isinstance(task_node, Mapping):
             return ""
         runtime_node = task_node.get("runtime") or {}
@@ -3537,11 +3537,11 @@ class TemporalProposalActivities:
             git = dict(git_node) if isinstance(git_node, Mapping) else {}
             publish_node = task.get("publish")
             publish = dict(publish_node) if isinstance(publish_node, Mapping) else {}
-            task_create_request: dict[str, Any] = {
-                "type": "task",
+            workflow_create_request: dict[str, Any] = {
+                "type": "workflow",
                 "payload": {
                     "repository": repo,
-                    "task": {
+                    "workflow": {
                         "instructions": cls._build_telemetry_signal_instructions(
                             workflow_id=workflow_id,
                             label=label,
@@ -3556,8 +3556,8 @@ class TemporalProposalActivities:
                 },
             }
             cls._preserve_compact_task_metadata(
-                source_task=task,
-                target_task=task_create_request["payload"]["task"],
+                source_workflow=task,
+                target_workflow=workflow_create_request["payload"]["workflow"],
             )
             candidate_signal = {
                 key: deepcopy(value)
@@ -3590,13 +3590,13 @@ class TemporalProposalActivities:
                     "tags": list(tags),
                     "severity": severity,
                     "signal": candidate_signal,
-                    "taskCreateRequest": task_create_request,
+                    "workflowCreateRequest": workflow_create_request,
                 }
             )
         return candidates
 
     @classmethod
-    def _validate_candidate_task_create_request(
+    def _validate_candidate_workflow_create_request(
         cls, request: Mapping[str, Any], *, default_runtime: str | None
     ) -> dict[str, Any]:
         from moonmind.workflows.proposals.service import WorkflowProposalService
@@ -3606,24 +3606,24 @@ class TemporalProposalActivities:
         )
 
         stamped_request = cls._stamp_default_runtime(request, default_runtime)
-        job_type = str(stamped_request.get("type") or "task").strip().lower()
-        if job_type != "task":
-            raise ValueError("taskCreateRequest.type must be 'task'")
+        job_type = str(stamped_request.get("type") or "workflow").strip().lower()
+        if job_type != "workflow":
+            raise ValueError("workflowCreateRequest.type must be 'workflow'")
         max_attempts = stamped_request.get("maxAttempts", 3)
         try:
             if int(max_attempts) < 1:
                 raise ValueError("maxAttempts must be >= 1")
         except (TypeError, ValueError) as exc:
-            raise ValueError("taskCreateRequest.maxAttempts must be an integer >= 1") from exc
+            raise ValueError("workflowCreateRequest.maxAttempts must be an integer >= 1") from exc
 
         payload_node = stamped_request.get("payload")
         if not isinstance(payload_node, Mapping):
-            raise ValueError("taskCreateRequest.payload must be an object")
+            raise ValueError("workflowCreateRequest.payload must be an object")
         normalized_payload = WorkflowProposalService._normalize_proposal_runtime_payload(
             payload_node
         )
         validation_payload = deepcopy(normalized_payload)
-        task_node = validation_payload.get("task")
+        task_node = validation_payload.get("workflow")
         task = dict(task_node) if isinstance(task_node, Mapping) else {}
         if not task:
             task = {
@@ -3674,7 +3674,7 @@ class TemporalProposalActivities:
         ``initialParameters`` (passed via the *request* payload by
         ``_run_proposals_stage``).  Each candidate matches the schema
         consumed by ``proposal_submit``: ``title``, ``summary``,
-        ``category``, ``tags``, and ``taskCreateRequest``.
+        ``category``, ``tags``, and ``workflowCreateRequest``.
 
         Returns an empty list when insufficient context is available to
         produce a meaningful proposal (e.g. missing instructions).
@@ -3684,7 +3684,7 @@ class TemporalProposalActivities:
         repo = str(payload.get("repo") or parameters.get("repository") or "").strip()
         workflow_id = str(payload.get("workflow_id") or "").strip()
 
-        task_node = parameters.get("task")
+        task_node = parameters.get("workflow")
         task = dict(task_node) if isinstance(task_node, Mapping) else {}
         instructions = self._resolve_task_instructions(parameters)
 
@@ -3735,11 +3735,11 @@ class TemporalProposalActivities:
         publish_node = task.get("publish")
         publish = dict(publish_node) if isinstance(publish_node, Mapping) else {}
 
-        task_create_request: dict[str, Any] = {
-            "type": "task",
+        workflow_create_request: dict[str, Any] = {
+            "type": "workflow",
             "payload": {
                 "repository": repo,
-                "task": {
+                "workflow": {
                     "instructions": follow_up_instructions,
                     "runtime": runtime,
                     "git": git,
@@ -3748,8 +3748,8 @@ class TemporalProposalActivities:
             },
         }
         self._preserve_compact_task_metadata(
-            source_task=task,
-            target_task=task_create_request["payload"]["task"],
+            source_workflow=task,
+            target_workflow=workflow_create_request["payload"]["workflow"],
         )
 
         candidate: dict[str, Any] = {
@@ -3757,7 +3757,7 @@ class TemporalProposalActivities:
             "summary": summary,
             "category": "run_quality",
             "tags": ["artifact_gap", "auto-generated", "follow_up"],
-            "taskCreateRequest": task_create_request,
+            "workflowCreateRequest": workflow_create_request,
         }
 
         return [candidate]
@@ -3927,18 +3927,18 @@ class TemporalProposalActivities:
                     continue
                 title = str(candidate.get("title") or "").strip()
                 summary = str(candidate.get("summary") or "").strip()
-                task_create_request = candidate.get("taskCreateRequest")
+                workflow_create_request = candidate.get("workflowCreateRequest")
                 if (
                     not title
                     or not summary
-                    or not isinstance(task_create_request, Mapping)
+                    or not isinstance(workflow_create_request, Mapping)
                 ):
                     errors.append(f"skipped malformed candidate: {title!r}")
                     continue
 
                 try:
-                    stamped_request = self._validate_candidate_task_create_request(
-                        task_create_request,
+                    stamped_request = self._validate_candidate_workflow_create_request(
+                        workflow_create_request,
                         default_runtime=(
                             default_runtime if isinstance(default_runtime, str) else None
                         ),
@@ -3946,7 +3946,7 @@ class TemporalProposalActivities:
                 except Exception as exc:
                     redacted_error = self._redactor.scrub(str(exc))[:200]
                     errors.append(
-                        f"invalid taskCreateRequest for {title!r}: {redacted_error}"
+                        f"invalid workflowCreateRequest for {title!r}: {redacted_error}"
                     )
                     continue
 
@@ -3956,7 +3956,7 @@ class TemporalProposalActivities:
                     target_repo = str(payload_node.get("repository") or "").strip()
 
                 original_runtime_mode = self._task_runtime_mode_from_payload(
-                    task_create_request.get("payload")
+                    workflow_create_request.get("payload")
                 )
                 stamped_runtime_mode = self._task_runtime_mode_from_payload(
                     payload_node
@@ -4064,7 +4064,7 @@ class TemporalProposalActivities:
                             summary=summary,
                             category=candidate.get("category"),
                             tags=candidate.get("tags"),
-                            task_create_request=stamped_request,
+                            workflow_create_request=stamped_request,
                             origin_source=origin_source,
                             origin_id=None,
                             origin_external_id=workflow_id,
@@ -4296,7 +4296,7 @@ class TemporalAgentRuntimeActivities:
         )
         principal = str(
             request_payload.get("principal_id")
-            or request_payload.get("task_run_id")
+            or request_payload.get("agent_run_id")
             or "workflow"
         ).strip()
         try:
@@ -4532,7 +4532,7 @@ class TemporalAgentRuntimeActivities:
         return await _verify_cli_fingerprint(payload)
 
     async def _report_task_run_binding(self, workflow_id: str, run_id: str) -> None:
-        """Persist the managed task-run UUID onto the execution record.
+        """Persist the managed agent-run UUID onto the execution record.
 
         Temporal execution detail uses ``workflow_id`` as the durable task
         handle, while managed-run observability artifacts are keyed by the
@@ -4549,7 +4549,7 @@ class TemporalAgentRuntimeActivities:
             uuid.UUID(run_id)
         except ValueError:
             logger.warning(
-                "run_id %r is not a valid UUID; skipping task run binding for workflow %s",
+                "run_id %r is not a valid UUID; skipping agent run binding for workflow %s",
                 run_id,
                 workflow_id,
             )
@@ -4563,19 +4563,19 @@ class TemporalAgentRuntimeActivities:
                 record = await db.get(TemporalExecutionCanonicalRecord, workflow_id)
                 if record is None:
                     logger.warning(
-                        "workflow_id %s was not found; cannot persist task run binding",
+                        "workflow_id %s was not found; cannot persist agent run binding",
                         workflow_id,
                     )
                     return
                 memo = dict(record.memo or {})
-                if memo.get("taskRunId") == run_id:
+                if memo.get("agentRunId") == run_id:
                     return
-                memo["taskRunId"] = run_id
+                memo["agentRunId"] = run_id
                 record.memo = memo
                 await db.commit()
         except Exception:
             logger.warning(
-                "Failed to persist task run binding for workflow %s run %s",
+                "Failed to persist agent run binding for workflow %s run %s",
                 workflow_id,
                 run_id,
                 exc_info=True,
@@ -5102,7 +5102,7 @@ class TemporalAgentRuntimeActivities:
 
         workload_payload = {
             "profileId": launch_plan.profile_id,
-            "taskRunId": request.task_run_id,
+            "agentRunId": request.agent_run_id,
             "stepId": request.step_id,
             "attempt": request.attempt,
             "toolName": "security.pentest.run",
@@ -5128,7 +5128,7 @@ class TemporalAgentRuntimeActivities:
                 workload_result = WorkloadResult.model_validate(
                     {
                         "requestId": (
-                            f"pentest-{request.task_run_id}-{request.step_id}-"
+                            f"pentest-{request.agent_run_id}-{request.step_id}-"
                             f"{request.attempt}"
                         ),
                         "profileId": launch_plan.profile_id,
@@ -5539,15 +5539,15 @@ class TemporalAgentRuntimeActivities:
             )
             if not json_path:
                 return {}
-            task_run_id = _metadata_text("taskRunId", "task_run_id")
-            if not task_run_id or self._run_store is None:
+            agent_run_id = _metadata_text("agentRunId", "agent_run_id")
+            if not agent_run_id or self._run_store is None:
                 return {}
-            record = self._run_store.load(task_run_id)
+            record = self._run_store.load(agent_run_id)
             if record is None:
                 logger.warning(
                     "Skipping story breakdown artifact publication: run record not "
                     "found for %s",
-                    task_run_id,
+                    agent_run_id,
                 )
                 return {}
             workspace_path = str(getattr(record, "workspace_path", "") or "").strip()
@@ -6086,7 +6086,7 @@ class TemporalAgentRuntimeActivities:
                 controller.launch_session(validated),
                 heartbeat_payload={
                     "activityType": "agent_runtime.launch_session",
-                    "taskRunId": validated.task_run_id,
+                    "agentRunId": validated.agent_run_id,
                     "runtimeFamily": validated.runtime_family,
                     "sessionId": validated.session_id,
                     "threadId": validated.thread_id,
@@ -7152,7 +7152,7 @@ class TemporalAgentRuntimeActivities:
             # push/PR URL info using model_copy to preserve the typed contract.
             meta = dict(result.metadata or {})
             if record is not None:
-                meta.setdefault("taskRunId", record.run_id)
+                meta.setdefault("agentRunId", record.run_id)
                 if record.stdout_artifact_ref:
                     meta.setdefault("stdoutArtifactRef", record.stdout_artifact_ref)
                 if record.stderr_artifact_ref:

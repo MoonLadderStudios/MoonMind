@@ -5,7 +5,7 @@ Owners: MoonMind Engineering
 Last updated: 2026-05-04  
 Canonical for: Mission Control Workflows list route, execution-list controls, table sorting, column filters, filter URL state, and Google Sheets-like list filtering behavior
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs, or other local-only files. This document defines the product and UI contract for the page.
+**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs. This document defines the product and UI contract for the page.
 
 ---
 
@@ -120,7 +120,7 @@ Current workflow type groups:
 
 | Group | Workflow types |
 | --- | --- |
-| User workflows | `MoonMind.Run`, `MoonMind.ManifestIngest` |
+| User workflows | `MoonMind.UserWorkflow`, `MoonMind.ManifestIngest` |
 | System workflows | `MoonMind.ProviderProfileManager` |
 | All workflows | User workflows plus system workflows |
 
@@ -333,7 +333,7 @@ Rules:
 
 1. The normal Workflows List table does not include a `Kind` column.
 2. The normal table does not include `Workflow Type` or `Entry` columns by default.
-3. The default query is the Workflow-run list. In current API terms, this is equivalent to `scope=tasks`, which is `WorkflowType=MoonMind.Run` and `mm_entry=run`.
+3. The default query is the Workflow-run list. In current API terms, this is equivalent to `scope=tasks`, which is `WorkflowType=MoonMind.UserWorkflow` and `mm_entry=run`.
 4. System workflow rows must not appear in the normal Workflow table, even through column filters or old URL parameters.
 5. Manifest ingest rows should stay on the Manifests page unless a separate user-workflow diagnostics view is explicitly designed.
 6. The table may hide optional columns by default to preserve width, but optional columns must not reintroduce ordinary access to system workflow browsing.
@@ -598,7 +598,7 @@ Existing URLs must continue to fail safe:
 | `scope=user` | Prefer the default Workflow-run view on `/workflows`; manifest ingest belongs on the Manifests page or diagnostics. |
 | `scope=system` | Not honored by the normal Workflows List page. Authorized admins may be redirected to diagnostics; ordinary users stay in the default Workflow-run view or see a recoverable message. |
 | `scope=all` | Not honored by the normal Workflows List page. Authorized admins may be redirected to diagnostics; ordinary users stay in the default Workflow-run view or see a recoverable message. |
-| `workflowType=MoonMind.Run` | Default Workflow-run view when paired with `entry=run` or no entry. |
+| `workflowType=MoonMind.UserWorkflow` | Default Workflow-run view when paired with `entry=run` or no entry. |
 | `workflowType=MoonMind.ManifestIngest` | Redirect to the Manifests page or show a recoverable message; do not add a `Workflow Type` column to the Workflow table. |
 | `workflowType=<system value>` | Not honored by the normal Workflows List page; use admin diagnostics when authorized. |
 | `state=<value>` | Status column include filter for one value. |

@@ -1909,10 +1909,10 @@ export interface paths {
             cookie?: never;
         };
         /** List Recurring Tasks */
-        get: operations["list_recurring_tasks_api_recurring_tasks_get"];
+        get: operations["list_recurring_workflows_api_recurring_workflows_get"];
         put?: never;
         /** Create Recurring Task */
-        post: operations["create_recurring_task_api_recurring_tasks_post"];
+        post: operations["create_recurring_workflow_api_recurring_workflows_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1927,14 +1927,14 @@ export interface paths {
             cookie?: never;
         };
         /** Get Recurring Task */
-        get: operations["get_recurring_task_api_recurring_tasks__definition_id__get"];
+        get: operations["get_recurring_workflow_api_recurring_workflows__definition_id__get"];
         put?: never;
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
         /** Update Recurring Task */
-        patch: operations["update_recurring_task_api_recurring_tasks__definition_id__patch"];
+        patch: operations["update_recurring_workflow_api_recurring_workflows__definition_id__patch"];
         trace?: never;
     };
     "/api/recurring-tasks/{definition_id}/run": {
@@ -1947,7 +1947,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** Run Recurring Task Now */
-        post: operations["run_recurring_task_now_api_recurring_tasks__definition_id__run_post"];
+        post: operations["run_recurring_workflow_now_api_recurring_workflows__definition_id__run_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1962,7 +1962,7 @@ export interface paths {
             cookie?: never;
         };
         /** List Recurring Task Runs */
-        get: operations["list_recurring_task_runs_api_recurring_tasks__definition_id__runs_get"];
+        get: operations["list_recurring_workflow_runs_api_recurring_workflows__definition_id__runs_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1980,7 +1980,7 @@ export interface paths {
         };
         /**
          * Get Observability Summary
-         * @description Fetch the observability summary for a task run from the shared agent jobs volume.
+         * @description Fetch the observability summary for a agent run from the shared agent jobs volume.
          */
         get: operations["get_observability_summary_api_agent_runs__id__observability_summary_get"];
         put?: never;
@@ -1991,7 +1991,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/agent-runs/{task_run_id}/artifact-sessions/{session_id}": {
+    "/api/agent-runs/{agent_run_id}/artifact-sessions/{session_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -1999,7 +1999,7 @@ export interface paths {
             cookie?: never;
         };
         /** Get Task Run Artifact Session */
-        get: operations["get_task_run_artifact_session_api_agent_runs__task_run_id__artifact_sessions__session_id__get"];
+        get: operations["get_task_run_artifact_session_api_agent_runs__agent_run_id__artifact_sessions__session_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2008,7 +2008,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/agent-runs/{task_run_id}/artifact-sessions/{session_id}/control": {
+    "/api/agent-runs/{agent_run_id}/artifact-sessions/{session_id}/control": {
         parameters: {
             query?: never;
             header?: never;
@@ -2018,7 +2018,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** Control Task Run Artifact Session */
-        post: operations["control_task_run_artifact_session_api_agent_runs__task_run_id__artifact_sessions__session_id__control_post"];
+        post: operations["control_task_run_artifact_session_api_agent_runs__agent_run_id__artifact_sessions__session_id__control_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2034,7 +2034,7 @@ export interface paths {
         };
         /**
          * Get Task Run Observability Events
-         * @description Return structured observability history for one task run.
+         * @description Return structured observability history for one agent run.
          */
         get: operations["get_task_run_observability_events_api_agent_runs__id__observability_events_get"];
         put?: never;
@@ -2094,7 +2094,7 @@ export interface paths {
         };
         /**
          * Get Task Run Diagnostics
-         * @description Return the diagnostics.json payload for a task run.
+         * @description Return the diagnostics.json payload for a agent run.
          */
         get: operations["get_task_run_diagnostics_api_agent_runs__id__diagnostics_get"];
         put?: never;
@@ -2156,7 +2156,7 @@ export interface paths {
          * Task Proposals Route
          * @description Serve the React-powered proposals page.
          */
-        get: operations["task_proposals_route_proposals_get"];
+        get: operations["workflow_proposals_route_proposals_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2509,7 +2509,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/task-step-templates": {
+    "/api/presets": {
         parameters: {
             query?: never;
             header?: never;
@@ -2517,17 +2517,17 @@ export interface paths {
             cookie?: never;
         };
         /** List Templates */
-        get: operations["list_templates_api_task_step_templates_get"];
+        get: operations["list_templates_api_presets_get"];
         put?: never;
         /** Create Template */
-        post: operations["create_template_api_task_step_templates_post"];
+        post: operations["create_template_api_presets_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/task-step-templates/save-from-task": {
+    "/api/presets/save-from-workflow": {
         parameters: {
             query?: never;
             header?: never;
@@ -2537,14 +2537,14 @@ export interface paths {
         get?: never;
         put?: never;
         /** Save From Task */
-        post: operations["save_from_task_api_task_step_templates_save_from_task_post"];
+        post: operations["save_from_workflow_api_presets_save_from_workflow_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/task-step-templates/{slug}:expand": {
+    "/api/presets/{slug}:expand": {
         parameters: {
             query?: never;
             header?: never;
@@ -2554,14 +2554,14 @@ export interface paths {
         get?: never;
         put?: never;
         /** Expand Template */
-        post: operations["expand_template_api_task_step_templates__slug__expand_post"];
+        post: operations["expand_template_api_presets__slug__expand_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/task-step-templates/{slug}": {
+    "/api/presets/{slug}": {
         parameters: {
             query?: never;
             header?: never;
@@ -2569,17 +2569,17 @@ export interface paths {
             cookie?: never;
         };
         /** Get Template */
-        get: operations["get_template_api_task_step_templates__slug__get"];
+        get: operations["get_template_api_presets__slug__get"];
         put?: never;
         post?: never;
         /** Delete Template */
-        delete: operations["delete_template_api_task_step_templates__slug__delete"];
+        delete: operations["delete_template_api_presets__slug__delete"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/task-step-templates/{slug}/versions/{version}": {
+    "/api/presets/{slug}/versions/{version}": {
         parameters: {
             query?: never;
             header?: never;
@@ -2587,9 +2587,9 @@ export interface paths {
             cookie?: never;
         };
         /** Get Template Version */
-        get: operations["get_template_version_api_task_step_templates__slug__versions__version__get"];
+        get: operations["get_template_version_api_presets__slug__versions__version__get"];
         /** Review Template Version */
-        put: operations["review_template_version_api_task_step_templates__slug__versions__version__put"];
+        put: operations["review_template_version_api_presets__slug__versions__version__put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -2597,7 +2597,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/task-step-templates/{slug}:favorite": {
+    "/api/presets/{slug}:favorite": {
         parameters: {
             query?: never;
             header?: never;
@@ -2607,9 +2607,9 @@ export interface paths {
         get?: never;
         put?: never;
         /** Favorite Template */
-        post: operations["favorite_template_api_task_step_templates__slug__favorite_post"];
+        post: operations["favorite_template_api_presets__slug__favorite_post"];
         /** Unfavorite Template */
-        delete: operations["unfavorite_template_api_task_step_templates__slug__favorite_delete"];
+        delete: operations["unfavorite_template_api_presets__slug__favorite_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -3123,7 +3123,7 @@ export interface components {
          */
         ArtifactSessionProjectionModel: {
             /** Task Run Id */
-            task_run_id: string;
+            agent_run_id: string;
             /** Session Id */
             session_id: string;
             /** Session Epoch */
@@ -3773,10 +3773,10 @@ export interface components {
             rate_limit_policy: components["schemas"]["ManagedAgentRateLimitPolicy"];
         };
         /**
-         * CreateRecurringTaskRequest
+         * CreateRecurringWorkflowRequest
          * @description Request payload for creating recurring schedules.
          */
-        CreateRecurringTaskRequest: {
+        CreateRecurringWorkflowRequest: {
             /** Name */
             name: string;
             /** Description */
@@ -5588,7 +5588,7 @@ export interface components {
             title?: string | null;
             /**
              * Workflowtype
-             * @default MoonMind.Run
+             * @default MoonMind.UserWorkflow
              */
             workflowType: string;
             /** Childworkflowid */
@@ -6305,18 +6305,18 @@ export interface components {
             recoveryCheckpointRef: string;
         };
         /**
-         * RecurringTaskDefinitionListResponse
+         * RecurringWorkflowDefinitionListResponse
          * @description List response for recurring definitions.
          */
-        RecurringTaskDefinitionListResponse: {
+        RecurringWorkflowDefinitionListResponse: {
             /** Items */
-            items?: components["schemas"]["RecurringTaskDefinitionModel"][];
+            items?: components["schemas"]["RecurringWorkflowDefinitionModel"][];
         };
         /**
-         * RecurringTaskDefinitionModel
+         * RecurringWorkflowDefinitionModel
          * @description Serialized recurring schedule definition.
          */
-        RecurringTaskDefinitionModel: {
+        RecurringWorkflowDefinitionModel: {
             /**
              * Id
              * Format: uuid
@@ -6370,18 +6370,18 @@ export interface components {
             updatedAt: string;
         };
         /**
-         * RecurringTaskRunListResponse
+         * RecurringWorkflowRunListResponse
          * @description List response for recurring run history.
          */
-        RecurringTaskRunListResponse: {
+        RecurringWorkflowRunListResponse: {
             /** Items */
-            items?: components["schemas"]["RecurringTaskRunModel"][];
+            items?: components["schemas"]["RecurringWorkflowRunModel"][];
         };
         /**
-         * RecurringTaskRunModel
+         * RecurringWorkflowRunModel
          * @description Serialized recurring run history record.
          */
-        RecurringTaskRunModel: {
+        RecurringWorkflowRunModel: {
             /**
              * Id
              * Format: uuid
@@ -7194,7 +7194,7 @@ export interface components {
         };
         /**
          * StepLedgerRefsModel
-         * @description Stable ref slots for child workflow and task-run linkage.
+         * @description Stable ref slots for child workflow and agent-run linkage.
          */
         StepLedgerRefsModel: {
             /** Childworkflowid */
@@ -7418,7 +7418,7 @@ export interface components {
             tags?: string[] | null;
             origin: components["schemas"]["TaskProposalOriginModel"];
             /** Taskcreaterequest */
-            taskCreateRequest: {
+            workflowCreateRequest: {
                 [key: string]: unknown;
             };
             /** Reviewpriority */
@@ -7491,7 +7491,7 @@ export interface components {
             /** Lastsyncedat */
             lastSyncedAt?: string | null;
             /** Tasksnapshotref */
-            taskSnapshotRef?: string | null;
+            workflowSnapshotRef?: string | null;
             /** Providermetadata */
             providerMetadata?: {
                 [key: string]: unknown;
@@ -7532,7 +7532,7 @@ export interface components {
             updatedAt: string;
             origin: components["schemas"]["TaskProposalOriginModel"];
             /** Taskcreaterequest */
-            taskCreateRequest: {
+            workflowCreateRequest: {
                 [key: string]: unknown;
             };
             taskPreview?: components["schemas"]["TaskProposalTaskPreview"] | null;
@@ -7742,10 +7742,10 @@ export interface components {
             }[];
         };
         /**
-         * TaskTemplateAppliedMetadataSchema
+         * PresetAppliedMetadataSchema
          * @description Audit metadata describing one template application.
          */
-        TaskTemplateAppliedMetadataSchema: {
+        PresetAppliedMetadataSchema: {
             /** Slug */
             slug: string;
             /** Version */
@@ -7760,10 +7760,10 @@ export interface components {
             appliedAt?: string | null;
         };
         /**
-         * TaskTemplateCreateRequestSchema
+         * PresetCreateRequestSchema
          * @description Request model for creating templates.
          */
-        TaskTemplateCreateRequestSchema: {
+        PresetCreateRequestSchema: {
             /** Slug */
             slug?: string | null;
             /** Title */
@@ -7781,9 +7781,9 @@ export interface components {
             /** Tags */
             tags?: string[];
             /** Inputs */
-            inputs?: components["schemas"]["TaskTemplateInputSchema"][];
+            inputs?: components["schemas"]["PresetInputSchema"][];
             /** Steps */
-            steps?: components["schemas"]["TaskTemplateStepBlueprintSchema"][];
+            steps?: components["schemas"]["PresetStepBlueprintSchema"][];
             /** Annotations */
             annotations?: {
                 [key: string]: unknown;
@@ -7792,10 +7792,10 @@ export interface components {
             requiredCapabilities?: string[];
         };
         /**
-         * TaskTemplateExpandOptionsSchema
+         * PresetExpandOptionsSchema
          * @description Optional expansion flags.
          */
-        TaskTemplateExpandOptionsSchema: {
+        PresetExpandOptionsSchema: {
             /**
              * Enforcesteplimit
              * @default true
@@ -7803,10 +7803,10 @@ export interface components {
             enforceStepLimit: boolean;
         };
         /**
-         * TaskTemplateExpandRequestSchema
+         * PresetExpandRequestSchema
          * @description Request model for template expansion.
          */
-        TaskTemplateExpandRequestSchema: {
+        PresetExpandRequestSchema: {
             /** Version */
             version: string;
             /** Inputs */
@@ -7817,13 +7817,13 @@ export interface components {
             context?: {
                 [key: string]: unknown;
             };
-            options?: components["schemas"]["TaskTemplateExpandOptionsSchema"];
+            options?: components["schemas"]["PresetExpandOptionsSchema"];
         };
         /**
-         * TaskTemplateExpandResponseSchema
+         * PresetExpandResponseSchema
          * @description Response model for expanded template step payloads.
          */
-        TaskTemplateExpandResponseSchema: {
+        PresetExpandResponseSchema: {
             /** Steps */
             steps?: {
                 [key: string]: unknown;
@@ -7832,17 +7832,17 @@ export interface components {
             composition?: {
                 [key: string]: unknown;
             };
-            appliedTemplate: components["schemas"]["TaskTemplateAppliedMetadataSchema"];
+            appliedTemplate: components["schemas"]["PresetAppliedMetadataSchema"];
             /** Capabilities */
             capabilities?: string[];
             /** Warnings */
             warnings?: string[];
         };
         /**
-         * TaskTemplateFavoriteRequestSchema
+         * PresetFavoriteRequestSchema
          * @description Favorite toggle payload.
          */
-        TaskTemplateFavoriteRequestSchema: {
+        PresetFavoriteRequestSchema: {
             /**
              * Scope
              * @enum {string}
@@ -7852,10 +7852,10 @@ export interface components {
             scopeRef?: string | null;
         };
         /**
-         * TaskTemplateInputSchema
+         * PresetInputSchema
          * @description Input definition used by task template versions.
          */
-        TaskTemplateInputSchema: {
+        PresetInputSchema: {
             /** Name */
             name: string;
             /** Label */
@@ -7878,18 +7878,18 @@ export interface components {
             placeholder?: string | null;
         };
         /**
-         * TaskTemplateListResponseSchema
+         * PresetListResponseSchema
          * @description Envelope for template list responses.
          */
-        TaskTemplateListResponseSchema: {
+        PresetListResponseSchema: {
             /** Items */
-            items?: components["schemas"]["TaskTemplateSummarySchema"][];
+            items?: components["schemas"]["PresetSummarySchema"][];
         };
         /**
-         * TaskTemplateResponseSchema
+         * PresetResponseSchema
          * @description Detail response model for one template version.
          */
-        TaskTemplateResponseSchema: {
+        PresetResponseSchema: {
             /** Slug */
             slug: string;
             /**
@@ -7924,7 +7924,7 @@ export interface components {
              */
             releaseStatus: string;
             /** Inputs */
-            inputs?: components["schemas"]["TaskTemplateInputSchema"][];
+            inputs?: components["schemas"]["PresetInputSchema"][];
             /** Inputschema */
             inputSchema?: {
                 [key: string]: unknown;
@@ -7938,7 +7938,7 @@ export interface components {
                 [key: string]: unknown;
             };
             /** Steps */
-            steps?: components["schemas"]["TaskTemplateStepBlueprintSchema"][];
+            steps?: components["schemas"]["PresetStepBlueprintSchema"][];
             /** Annotations */
             annotations?: {
                 [key: string]: unknown;
@@ -7949,10 +7949,10 @@ export interface components {
             reviewedAt?: string | null;
         };
         /**
-         * TaskTemplateReviewRequestSchema
+         * PresetReviewRequestSchema
          * @description Review workflow request for release status transitions.
          */
-        TaskTemplateReviewRequestSchema: {
+        PresetReviewRequestSchema: {
             /**
              * Releasestatus
              * @enum {string}
@@ -7960,10 +7960,10 @@ export interface components {
             releaseStatus: "draft" | "active" | "inactive";
         };
         /**
-         * TaskTemplateSaveFromTaskRequestSchema
+         * PresetSaveFromTaskRequestSchema
          * @description Request model for creating templates from draft task steps.
          */
-        TaskTemplateSaveFromTaskRequestSchema: {
+        PresetSaveFromTaskRequestSchema: {
             /**
              * Scope
              * @default personal
@@ -7981,17 +7981,17 @@ export interface components {
             /** Selectedstepids */
             selectedStepIds?: string[];
             /** Steps */
-            steps?: components["schemas"]["TaskTemplateStepBlueprintSchema"][];
+            steps?: components["schemas"]["PresetStepBlueprintSchema"][];
             /** Suggestedinputs */
-            suggestedInputs?: components["schemas"]["TaskTemplateInputSchema"][];
+            suggestedInputs?: components["schemas"]["PresetInputSchema"][];
             /** Tags */
             tags?: string[];
         };
         /**
-         * TaskTemplateStepBlueprintSchema
+         * PresetStepBlueprintSchema
          * @description Template step blueprint definition.
          */
-        TaskTemplateStepBlueprintSchema: {
+        PresetStepBlueprintSchema: {
             /** Kind */
             kind?: ("step" | "include") | null;
             /** Type */
@@ -8012,18 +8012,18 @@ export interface components {
             inputMapping?: {
                 [key: string]: unknown;
             };
-            tool?: components["schemas"]["TaskTemplateStepToolSchema"] | null;
-            skill?: components["schemas"]["TaskTemplateStepSkillSchema"] | null;
+            tool?: components["schemas"]["PresetStepToolSchema"] | null;
+            skill?: components["schemas"]["PresetStepSkillSchema"] | null;
             /** Annotations */
             annotations?: {
                 [key: string]: unknown;
             };
         };
         /**
-         * TaskTemplateStepSkillSchema
+         * PresetStepSkillSchema
          * @description Skill payload attached to a template step.
          */
-        TaskTemplateStepSkillSchema: {
+        PresetStepSkillSchema: {
             /**
              * Id
              * @default auto
@@ -8053,10 +8053,10 @@ export interface components {
             };
         };
         /**
-         * TaskTemplateStepToolSchema
+         * PresetStepToolSchema
          * @description Tool payload attached to a template step.
          */
-        TaskTemplateStepToolSchema: {
+        PresetStepToolSchema: {
             /** Id */
             id?: string | null;
             /** Name */
@@ -8089,10 +8089,10 @@ export interface components {
             };
         };
         /**
-         * TaskTemplateSummarySchema
+         * PresetSummarySchema
          * @description List response model for task templates.
          */
-        TaskTemplateSummarySchema: {
+        PresetSummarySchema: {
             /** Slug */
             slug: string;
             /**
@@ -8251,10 +8251,10 @@ export interface components {
             refresh?: components["schemas"]["ExecutionRefreshEnvelope"] | null;
         };
         /**
-         * UpdateRecurringTaskRequest
+         * UpdateRecurringWorkflowRequest
          * @description Request payload for updating recurring schedules.
          */
-        UpdateRecurringTaskRequest: {
+        UpdateRecurringWorkflowRequest: {
             /** Name */
             name?: string | null;
             /** Description */
@@ -11345,8 +11345,8 @@ export interface operations {
             query?: never;
             header?: {
                 "X-MoonMind-Task-Workflow-Id"?: string | null;
-                "X-MoonMind-Task-Run-Id"?: string | null;
-                "X-MoonMind-Task-Run-Identifier"?: string | null;
+                "X-MoonMind-Agent-Run-Id"?: string | null;
+                "X-MoonMind-Agent-Run-Identifier"?: string | null;
             };
             path: {
                 workflow_id: string;
@@ -11516,8 +11516,8 @@ export interface operations {
             query?: never;
             header?: {
                 "X-MoonMind-Task-Workflow-Id"?: string | null;
-                "X-MoonMind-Task-Run-Id"?: string | null;
-                "X-MoonMind-Task-Run-Identifier"?: string | null;
+                "X-MoonMind-Agent-Run-Id"?: string | null;
+                "X-MoonMind-Agent-Run-Identifier"?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -12601,7 +12601,7 @@ export interface operations {
             };
         };
     };
-    list_recurring_tasks_api_recurring_tasks_get: {
+    list_recurring_workflows_api_recurring_workflows_get: {
         parameters: {
             query?: {
                 scope?: "personal" | "global";
@@ -12619,7 +12619,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RecurringTaskDefinitionListResponse"];
+                    "application/json": components["schemas"]["RecurringWorkflowDefinitionListResponse"];
                 };
             };
             /** @description Validation Error */
@@ -12633,7 +12633,7 @@ export interface operations {
             };
         };
     };
-    create_recurring_task_api_recurring_tasks_post: {
+    create_recurring_workflow_api_recurring_workflows_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -12642,7 +12642,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["CreateRecurringTaskRequest"];
+                "application/json": components["schemas"]["CreateRecurringWorkflowRequest"];
             };
         };
         responses: {
@@ -12652,7 +12652,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RecurringTaskDefinitionModel"];
+                    "application/json": components["schemas"]["RecurringWorkflowDefinitionModel"];
                 };
             };
             /** @description Validation Error */
@@ -12666,7 +12666,7 @@ export interface operations {
             };
         };
     };
-    get_recurring_task_api_recurring_tasks__definition_id__get: {
+    get_recurring_workflow_api_recurring_workflows__definition_id__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -12683,7 +12683,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RecurringTaskDefinitionModel"];
+                    "application/json": components["schemas"]["RecurringWorkflowDefinitionModel"];
                 };
             };
             /** @description Validation Error */
@@ -12697,7 +12697,7 @@ export interface operations {
             };
         };
     };
-    update_recurring_task_api_recurring_tasks__definition_id__patch: {
+    update_recurring_workflow_api_recurring_workflows__definition_id__patch: {
         parameters: {
             query?: never;
             header?: never;
@@ -12708,7 +12708,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["UpdateRecurringTaskRequest"];
+                "application/json": components["schemas"]["UpdateRecurringWorkflowRequest"];
             };
         };
         responses: {
@@ -12718,7 +12718,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RecurringTaskDefinitionModel"];
+                    "application/json": components["schemas"]["RecurringWorkflowDefinitionModel"];
                 };
             };
             /** @description Validation Error */
@@ -12732,7 +12732,7 @@ export interface operations {
             };
         };
     };
-    run_recurring_task_now_api_recurring_tasks__definition_id__run_post: {
+    run_recurring_workflow_now_api_recurring_workflows__definition_id__run_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -12749,7 +12749,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RecurringTaskRunModel"];
+                    "application/json": components["schemas"]["RecurringWorkflowRunModel"];
                 };
             };
             /** @description Validation Error */
@@ -12763,7 +12763,7 @@ export interface operations {
             };
         };
     };
-    list_recurring_task_runs_api_recurring_tasks__definition_id__runs_get: {
+    list_recurring_workflow_runs_api_recurring_workflows__definition_id__runs_get: {
         parameters: {
             query?: {
                 limit?: number;
@@ -12782,7 +12782,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RecurringTaskRunListResponse"];
+                    "application/json": components["schemas"]["RecurringWorkflowRunListResponse"];
                 };
             };
             /** @description Validation Error */
@@ -12818,7 +12818,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description Observability record not found for this task run */
+            /** @description Observability record not found for this agent run */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -12836,12 +12836,12 @@ export interface operations {
             };
         };
     };
-    get_task_run_artifact_session_api_agent_runs__task_run_id__artifact_sessions__session_id__get: {
+    get_task_run_artifact_session_api_agent_runs__agent_run_id__artifact_sessions__session_id__get: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                task_run_id: string;
+                agent_run_id: string;
                 session_id: string;
             };
             cookie?: never;
@@ -12857,14 +12857,14 @@ export interface operations {
                     "application/json": components["schemas"]["ArtifactSessionProjectionModel"];
                 };
             };
-            /** @description You do not have permission to access this task run */
+            /** @description You do not have permission to access this agent run */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Session projection not found for this task run */
+            /** @description Session projection not found for this agent run */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -12882,12 +12882,12 @@ export interface operations {
             };
         };
     };
-    control_task_run_artifact_session_api_agent_runs__task_run_id__artifact_sessions__session_id__control_post: {
+    control_task_run_artifact_session_api_agent_runs__agent_run_id__artifact_sessions__session_id__control_post: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                task_run_id: string;
+                agent_run_id: string;
                 session_id: string;
             };
             cookie?: never;
@@ -12907,14 +12907,14 @@ export interface operations {
                     "application/json": components["schemas"]["ArtifactSessionControlResponse"];
                 };
             };
-            /** @description You do not have permission to access this task run */
+            /** @description You do not have permission to access this agent run */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Session projection not found for this task run */
+            /** @description Session projection not found for this agent run */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -12968,7 +12968,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description Observability record not found for this task run */
+            /** @description Observability record not found for this agent run */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -13016,7 +13016,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Observability record not found for this task run */
+            /** @description Observability record not found for this agent run */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -13165,7 +13165,7 @@ export interface operations {
             };
         };
     };
-    task_proposals_route_proposals_get: {
+    workflow_proposals_route_proposals_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -13663,7 +13663,7 @@ export interface operations {
             };
         };
     };
-    list_templates_api_task_step_templates_get: {
+    list_templates_api_presets_get: {
         parameters: {
             query?: {
                 scope?: string | null;
@@ -13685,7 +13685,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskTemplateListResponseSchema"];
+                    "application/json": components["schemas"]["PresetListResponseSchema"];
                 };
             };
             /** @description Validation Error */
@@ -13699,7 +13699,7 @@ export interface operations {
             };
         };
     };
-    create_template_api_task_step_templates_post: {
+    create_template_api_presets_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -13708,7 +13708,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TaskTemplateCreateRequestSchema"];
+                "application/json": components["schemas"]["PresetCreateRequestSchema"];
             };
         };
         responses: {
@@ -13718,7 +13718,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskTemplateResponseSchema"];
+                    "application/json": components["schemas"]["PresetResponseSchema"];
                 };
             };
             /** @description Validation Error */
@@ -13732,7 +13732,7 @@ export interface operations {
             };
         };
     };
-    save_from_task_api_task_step_templates_save_from_task_post: {
+    save_from_workflow_api_presets_save_from_workflow_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -13741,7 +13741,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TaskTemplateSaveFromTaskRequestSchema"];
+                "application/json": components["schemas"]["PresetSaveFromTaskRequestSchema"];
             };
         };
         responses: {
@@ -13751,7 +13751,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskTemplateResponseSchema"];
+                    "application/json": components["schemas"]["PresetResponseSchema"];
                 };
             };
             /** @description Validation Error */
@@ -13765,7 +13765,7 @@ export interface operations {
             };
         };
     };
-    expand_template_api_task_step_templates__slug__expand_post: {
+    expand_template_api_presets__slug__expand_post: {
         parameters: {
             query: {
                 scope: string;
@@ -13779,7 +13779,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TaskTemplateExpandRequestSchema"];
+                "application/json": components["schemas"]["PresetExpandRequestSchema"];
             };
         };
         responses: {
@@ -13789,7 +13789,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskTemplateExpandResponseSchema"];
+                    "application/json": components["schemas"]["PresetExpandResponseSchema"];
                 };
             };
             /** @description Validation Error */
@@ -13803,7 +13803,7 @@ export interface operations {
             };
         };
     };
-    get_template_api_task_step_templates__slug__get: {
+    get_template_api_presets__slug__get: {
         parameters: {
             query: {
                 scope: string;
@@ -13823,7 +13823,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskTemplateResponseSchema"];
+                    "application/json": components["schemas"]["PresetResponseSchema"];
                 };
             };
             /** @description Validation Error */
@@ -13837,7 +13837,7 @@ export interface operations {
             };
         };
     };
-    delete_template_api_task_step_templates__slug__delete: {
+    delete_template_api_presets__slug__delete: {
         parameters: {
             query: {
                 scope: string;
@@ -13869,7 +13869,7 @@ export interface operations {
             };
         };
     };
-    get_template_version_api_task_step_templates__slug__versions__version__get: {
+    get_template_version_api_presets__slug__versions__version__get: {
         parameters: {
             query: {
                 scope: string;
@@ -13890,7 +13890,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskTemplateResponseSchema"];
+                    "application/json": components["schemas"]["PresetResponseSchema"];
                 };
             };
             /** @description Validation Error */
@@ -13904,7 +13904,7 @@ export interface operations {
             };
         };
     };
-    review_template_version_api_task_step_templates__slug__versions__version__put: {
+    review_template_version_api_presets__slug__versions__version__put: {
         parameters: {
             query: {
                 scope: string;
@@ -13919,7 +13919,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TaskTemplateReviewRequestSchema"];
+                "application/json": components["schemas"]["PresetReviewRequestSchema"];
             };
         };
         responses: {
@@ -13929,7 +13929,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskTemplateResponseSchema"];
+                    "application/json": components["schemas"]["PresetResponseSchema"];
                 };
             };
             /** @description Validation Error */
@@ -13943,7 +13943,7 @@ export interface operations {
             };
         };
     };
-    favorite_template_api_task_step_templates__slug__favorite_post: {
+    favorite_template_api_presets__slug__favorite_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -13954,7 +13954,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TaskTemplateFavoriteRequestSchema"];
+                "application/json": components["schemas"]["PresetFavoriteRequestSchema"];
             };
         };
         responses: {
@@ -13976,7 +13976,7 @@ export interface operations {
             };
         };
     };
-    unfavorite_template_api_task_step_templates__slug__favorite_delete: {
+    unfavorite_template_api_presets__slug__favorite_delete: {
         parameters: {
             query?: never;
             header?: never;
@@ -13987,7 +13987,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TaskTemplateFavoriteRequestSchema"];
+                "application/json": components["schemas"]["PresetFavoriteRequestSchema"];
             };
         };
         responses: {

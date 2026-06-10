@@ -99,7 +99,7 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
             {
                 "workflow_id": "test-wf-steps-1",
                 "parameters": {
-                    "task": {
+                    "workflow": {
                         "steps": [
                             {"id": "s1", "instructions": "Investigate failed proposal hooks"},
                             {"id": "s2", "instructions": "Add regression test coverage"},
@@ -119,7 +119,7 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
                 "workflow_id": "wf-mm-794",
                 "repo": "MoonLadderStudios/MoonMind",
                 "parameters": {
-                    "task": {
+                    "workflow": {
                         "instructions": "Run the proposal telemetry checks",
                         "runtime": {"mode": "codex"},
                     }
@@ -147,7 +147,7 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(candidate["signal"]["type"], "retry")
         self.assertEqual(candidate["signal"]["retries"], 2)
         self.assertEqual(candidate["signal"]["diagnostics_ref"], "artifact://diag-1")
-        task = candidate["taskCreateRequest"]["payload"]["task"]
+        task = candidate["workflowCreateRequest"]["payload"]["workflow"]
         self.assertEqual(task["runtime"], {"mode": "codex"})
         self.assertIn(
             "The run retried the same failed check twice.",
@@ -180,7 +180,7 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(
-            result[0]["taskCreateRequest"]["payload"]["task"]["instructions"],
+            result[0]["workflowCreateRequest"]["payload"]["workflow"]["instructions"],
             "Add regression coverage for feature X\n\n"
             "Context from the completed task:\n"
             "Implement feature X",
@@ -200,7 +200,7 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(
-            result[0]["taskCreateRequest"]["payload"]["task"]["instructions"],
+            result[0]["workflowCreateRequest"]["payload"]["workflow"]["instructions"],
             "Add regression coverage for feature X",
         )
 
@@ -211,7 +211,7 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
             {
                 "workflow_id": "test-wf-same-title",
                 "parameters": {
-                    "task": {
+                    "workflow": {
                         "title": "Fix proposal routing",
                         "instructions": "Fix proposal routing",
                     }
@@ -230,7 +230,7 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
                 "workflow_id": "wf-preserve-provenance",
                 "repo": "org/repo",
                 "parameters": {
-                    "task": {
+                    "workflow": {
                         "instructions": "Investigate flaky tests",
                         "skill": {"id": "auto", "args": {}},
                         "tool": {"type": "skill", "name": "auto", "version": "1.0"},
@@ -286,7 +286,7 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
             }
         )
 
-        task = result[0]["taskCreateRequest"]["payload"]["task"]
+        task = result[0]["workflowCreateRequest"]["payload"]["workflow"]
         self.assertEqual(task["tool"]["type"], "skill")
         self.assertEqual(task["skills"], {"sets": ["runtime-quality"]})
         self.assertEqual(
@@ -317,7 +317,7 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
                 "workflow_id": "wf-no-provenance",
                 "repo": "org/repo",
                 "parameters": {
-                    "task": {
+                    "workflow": {
                         "instructions": "Investigate flaky tests",
                     }
                 },
@@ -325,7 +325,7 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
             }
         )
 
-        task = result[0]["taskCreateRequest"]["payload"]["task"]
+        task = result[0]["workflowCreateRequest"]["payload"]["workflow"]
         self.assertNotIn("authoredPresets", task)
         self.assertNotIn("steps", task)
         self.assertNotIn("sourceSteps", task)
@@ -338,7 +338,7 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
             {
                 "workflow_id": "wf-side-effect-free",
                 "repo": "org/repo",
-                "parameters": {"task": {"instructions": "Fix proposal routing"}},
+                "parameters": {"workflow": {"instructions": "Fix proposal routing"}},
                 "proposalIdea": "Add regression coverage",
             }
         )
@@ -360,12 +360,12 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
             {
                 "title": "Fix bug",
                 "summary": "There is a bug in module X",
-                "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                "workflowCreateRequest": {"payload": {"repository": "org/repo"}},
             },
             {
                 "title": "Add feature",
                 "summary": "Feature Y would be helpful",
-                "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                "workflowCreateRequest": {"payload": {"repository": "org/repo"}},
             },
         ]
         result = await activities.proposal_submit(
@@ -384,7 +384,7 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
                     {
                         "title": "Fix bug",
                         "summary": "There is a bug in module X",
-                        "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                        "workflowCreateRequest": {"payload": {"repository": "org/repo"}},
                     }
                 ],
                 "policy": {},
@@ -418,11 +418,11 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
             {
                 "title": "Fix bug",
                 "summary": "There is a bug in module X",
-                "taskCreateRequest": {
-                    "type": "task",
+                "workflowCreateRequest": {
+                    "type": "workflow",
                     "payload": {
                         "repository": "org/repo",
-                        "task": {
+                        "workflow": {
                             "instructions": "Fix it",
                             "steps": [
                                 {
@@ -460,11 +460,11 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
             {
                 "title": "Fix bug",
                 "summary": "There is a bug in module X",
-                "taskCreateRequest": {
-                    "type": "task",
+                "workflowCreateRequest": {
+                    "type": "workflow",
                     "payload": {
                         "repository": "org/repo",
-                        "task": {
+                        "workflow": {
                             "instructions": "Fix it",
                             "tool": {
                                 "type": "agent_runtime",
@@ -483,18 +483,18 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["generated_count"], 1)
         self.assertEqual(result["submitted_count"], 0)
         self.assertEqual(len(result["errors"]), 1)
-        self.assertIn("invalid taskCreateRequest", result["errors"][0])
+        self.assertIn("invalid workflowCreateRequest", result["errors"][0])
         mock_service.create_proposal.assert_not_called()
 
     async def test_malformed_candidates_skipped(self) -> None:
         activities = TemporalProposalActivities()
         candidates: list[Any] = [
-            {"title": "", "summary": "Missing title", "taskCreateRequest": {}},
+            {"title": "", "summary": "Missing title", "workflowCreateRequest": {}},
             "not a dict",
             {
                 "title": "Valid",
                 "summary": "This one is valid",
-                "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                "workflowCreateRequest": {"payload": {"repository": "org/repo"}},
             },
         ]
         result = await activities.proposal_submit(
@@ -510,7 +510,7 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
             {
                 "title": f"Proposal {i}",
                 "summary": f"Summary {i}",
-                "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                "workflowCreateRequest": {"payload": {"repository": "org/repo"}},
             }
             for i in range(5)
         ]
@@ -538,12 +538,12 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
             {
                 "title": "Project 1",
                 "summary": "One",
-                "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                "workflowCreateRequest": {"payload": {"repository": "org/repo"}},
             },
             {
                 "title": "Project 2",
                 "summary": "Two",
-                "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                "workflowCreateRequest": {"payload": {"repository": "org/repo"}},
             },
             {
                 "title": "MoonMind 1",
@@ -551,7 +551,7 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
                 "category": "run_quality",
                 "tags": ["loop_detected"],
                 "severity": "medium",
-                "taskCreateRequest": {
+                "workflowCreateRequest": {
                     "payload": {"repository": "MoonLadderStudios/MoonMind"}
                 },
             },
@@ -561,7 +561,7 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
                 "category": "run_quality",
                 "tags": ["artifact_gap"],
                 "severity": "medium",
-                "taskCreateRequest": {
+                "workflowCreateRequest": {
                     "payload": {"repository": "MoonLadderStudios/MoonMind"}
                 },
             },
@@ -597,7 +597,7 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
             {
                 "title": f"Proposal {i}",
                 "summary": f"Summary {i}",
-                "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                "workflowCreateRequest": {"payload": {"repository": "org/repo"}},
             }
             for i in range(5)
         ]
@@ -630,7 +630,7 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
                 "summary": "Proposal should remain project-targeted for MoonMind repo runs.",
                 "category": "run_quality",
                 "tags": ["artifact_gap"],
-                "taskCreateRequest": {
+                "workflowCreateRequest": {
                     "payload": {"repository": "MoonLadderStudios/MoonMind"}
                 },
             }
@@ -649,7 +649,7 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
         mock_service.create_proposal.assert_awaited_once()
         call_kwargs = mock_service.create_proposal.await_args.kwargs
         self.assertEqual(
-            call_kwargs["task_create_request"]["payload"]["repository"],
+            call_kwargs["workflow_create_request"]["payload"]["repository"],
             "MoonLadderStudios/MoonMind",
         )
 
@@ -665,7 +665,7 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
             {
                 "title": "Fix bug",
                 "summary": "There is a bug",
-                "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                "workflowCreateRequest": {"payload": {"repository": "org/repo"}},
             },
         ]
         result = await activities.proposal_submit(
@@ -691,7 +691,7 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
             {
                 "title": "Fix bug",
                 "summary": "There is a bug",
-                "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                "workflowCreateRequest": {"payload": {"repository": "org/repo"}},
             },
         ]
         await activities.proposal_submit(
@@ -728,7 +728,7 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
                     {
                         "title": "Fix bug",
                         "summary": "Bug in module X",
-                        "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                        "workflowCreateRequest": {"payload": {"repository": "org/repo"}},
                     }
                 ],
                 "policy": {},
@@ -761,7 +761,7 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
             {
                 "title": "Fix bug",
                 "summary": "There is a bug",
-                "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                "workflowCreateRequest": {"payload": {"repository": "org/repo"}},
             },
         ]
         result = await activities.proposal_submit(
@@ -801,12 +801,12 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
                     {
                         "title": "",
                         "summary": "Missing title",
-                        "taskCreateRequest": {},
+                        "workflowCreateRequest": {},
                     },
                     {
                         "title": "Deliver proposal",
                         "summary": "Exercise failed delivery summaries",
-                        "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                        "workflowCreateRequest": {"payload": {"repository": "org/repo"}},
                     },
                 ],
                 "policy": {},
@@ -848,7 +848,7 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
                     {
                         "title": "Deliver proposal",
                         "summary": "Blank status should not count as delivered",
-                        "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                        "workflowCreateRequest": {"payload": {"repository": "org/repo"}},
                     },
                 ],
                 "policy": {},
@@ -873,7 +873,7 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
                     {
                         "title": "Fix bug",
                         "summary": "Bug in module X",
-                        "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                        "workflowCreateRequest": {"payload": {"repository": "org/repo"}},
                     }
                 ],
                 "policy": {},
@@ -900,10 +900,10 @@ class TestProposalSubmitRuntimeStamping(unittest.IsolatedAsyncioTestCase):
             {
                 "title": "Fix bug",
                 "summary": "Bug in module X",
-                "taskCreateRequest": {
+                "workflowCreateRequest": {
                     "payload": {
                         "repository": "org/repo",
-                        "task": {"instructions": "fix it"},
+                        "workflow": {"instructions": "fix it"},
                     }
                 },
             },
@@ -916,9 +916,9 @@ class TestProposalSubmitRuntimeStamping(unittest.IsolatedAsyncioTestCase):
             }
         )
         call_kwargs = mock_service.create_proposal.call_args.kwargs
-        stamped = call_kwargs["task_create_request"]
+        stamped = call_kwargs["workflow_create_request"]
         self.assertEqual(
-            stamped["payload"]["task"]["runtime"]["mode"], "jules"
+            stamped["payload"]["workflow"]["runtime"]["mode"], "jules"
         )
 
     async def test_default_runtime_preserves_existing(self) -> None:
@@ -934,10 +934,10 @@ class TestProposalSubmitRuntimeStamping(unittest.IsolatedAsyncioTestCase):
             {
                 "title": "Fix bug",
                 "summary": "Bug in module X",
-                "taskCreateRequest": {
+                "workflowCreateRequest": {
                     "payload": {
                         "repository": "org/repo",
-                        "task": {
+                        "workflow": {
                             "instructions": "fix it",
                             "runtime": {"mode": "codex"},
                         },
@@ -953,9 +953,9 @@ class TestProposalSubmitRuntimeStamping(unittest.IsolatedAsyncioTestCase):
             }
         )
         call_kwargs = mock_service.create_proposal.call_args.kwargs
-        stamped = call_kwargs["task_create_request"]
+        stamped = call_kwargs["workflow_create_request"]
         self.assertEqual(
-            stamped["payload"]["task"]["runtime"]["mode"], "codex"
+            stamped["payload"]["workflow"]["runtime"]["mode"], "codex"
         )
 
     async def test_default_runtime_stamps_missing_task_node(self) -> None:
@@ -971,7 +971,7 @@ class TestProposalSubmitRuntimeStamping(unittest.IsolatedAsyncioTestCase):
             {
                 "title": "Fix bug",
                 "summary": "Bug in module X",
-                "taskCreateRequest": {
+                "workflowCreateRequest": {
                     "payload": {"repository": "org/repo"}
                 },
             },
@@ -984,9 +984,9 @@ class TestProposalSubmitRuntimeStamping(unittest.IsolatedAsyncioTestCase):
             }
         )
         call_kwargs = mock_service.create_proposal.call_args.kwargs
-        stamped = call_kwargs["task_create_request"]
+        stamped = call_kwargs["workflow_create_request"]
         self.assertEqual(
-            stamped["payload"]["task"]["runtime"]["mode"], "gemini_cli"
+            stamped["payload"]["workflow"]["runtime"]["mode"], "gemini_cli"
         )
 
     async def test_no_default_runtime_leaves_candidate_untouched(self) -> None:
@@ -1002,7 +1002,7 @@ class TestProposalSubmitRuntimeStamping(unittest.IsolatedAsyncioTestCase):
             {
                 "title": "Fix bug",
                 "summary": "Bug in module X",
-                "taskCreateRequest": {
+                "workflowCreateRequest": {
                     "payload": {"repository": "org/repo"}
                 },
             },
@@ -1015,7 +1015,7 @@ class TestProposalSubmitRuntimeStamping(unittest.IsolatedAsyncioTestCase):
             }
         )
         call_kwargs = mock_service.create_proposal.call_args.kwargs
-        stamped = call_kwargs["task_create_request"]
+        stamped = call_kwargs["workflow_create_request"]
         self.assertNotIn("task", stamped["payload"])
 
     async def test_managed_runtime_ids_are_normalized_before_submission(self) -> None:
@@ -1039,7 +1039,7 @@ class TestProposalSubmitRuntimeStamping(unittest.IsolatedAsyncioTestCase):
             origin_source=WorkflowProposalOriginSource.WORKFLOW,
             origin_id=None,
             origin_metadata={},
-            task_create_request={},
+            workflow_create_request={},
         )
         repo.create_proposal.return_value = record
         service = WorkflowProposalService(repo, redactor=SecretRedactor([], "***"))
@@ -1056,12 +1056,12 @@ class TestProposalSubmitRuntimeStamping(unittest.IsolatedAsyncioTestCase):
             {
                 "title": "Fix bug",
                 "summary": "Bug in module X",
-                "taskCreateRequest": {
-                    "type": "task",
+                "workflowCreateRequest": {
+                    "type": "workflow",
                     "payload": {
                         "repository": "org/repo",
                         "targetRuntime": "codex_cli",
-                        "task": {
+                        "workflow": {
                             "instructions": "fix it",
                             "runtime": "claude_code",
                         },
@@ -1081,9 +1081,9 @@ class TestProposalSubmitRuntimeStamping(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["submitted_count"], 1)
         self.assertEqual(result["errors"], [])
         call_kwargs = repo.create_proposal.await_args.kwargs
-        stamped = call_kwargs["task_create_request"]
+        stamped = call_kwargs["workflow_create_request"]
         self.assertEqual(stamped["payload"]["targetRuntime"], "codex")
-        self.assertEqual(stamped["payload"]["task"]["runtime"]["mode"], "claude")
+        self.assertEqual(stamped["payload"]["workflow"]["runtime"]["mode"], "claude")
 
 class TestProposalSubmitPolicyResolution(unittest.IsolatedAsyncioTestCase):
     async def test_invalid_delivery_provider_rejects_policy_before_service_call(self) -> None:
@@ -1100,7 +1100,7 @@ class TestProposalSubmitPolicyResolution(unittest.IsolatedAsyncioTestCase):
                     {
                         "title": "Fix bug",
                         "summary": "Bug in module X",
-                        "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                        "workflowCreateRequest": {"payload": {"repository": "org/repo"}},
                     }
                 ],
                 "policy": {"delivery": {"provider": "slack"}},
@@ -1130,7 +1130,7 @@ class TestProposalSubmitPolicyResolution(unittest.IsolatedAsyncioTestCase):
                     {
                         "title": "Fix bug",
                         "summary": "Bug in module X",
-                        "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                        "workflowCreateRequest": {"payload": {"repository": "org/repo"}},
                     }
                 ],
                 "policy": {
@@ -1200,7 +1200,7 @@ class TestProposalSubmitPolicyResolution(unittest.IsolatedAsyncioTestCase):
                         {
                             "title": "Fix bug",
                             "summary": "Bug in module X",
-                            "taskCreateRequest": {
+                            "workflowCreateRequest": {
                                 "payload": {"repository": "org/repo"}
                             },
                         }
@@ -1232,7 +1232,7 @@ class TestProposalSubmitPolicyResolution(unittest.IsolatedAsyncioTestCase):
                         "category": "run_quality",
                         "tags": ["loop_detected"],
                         "severity": "high",
-                        "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                        "workflowCreateRequest": {"payload": {"repository": "org/repo"}},
                     }
                 ],
                 "policy": {
@@ -1251,7 +1251,7 @@ class TestProposalSubmitPolicyResolution(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["submitted_count"], 1)
         call_kwargs = mock_service.create_proposal.await_args.kwargs
         self.assertEqual(
-            call_kwargs["task_create_request"]["payload"]["repository"],
+            call_kwargs["workflow_create_request"]["payload"]["repository"],
             "MoonLadderStudios/MoonMind",
         )
         self.assertEqual(call_kwargs["category"], "run_quality")
@@ -1282,7 +1282,7 @@ class TestProposalSubmitPolicyResolution(unittest.IsolatedAsyncioTestCase):
                             "retries": 2,
                             "diagnostics_ref": "artifact://diag-1",
                         },
-                        "taskCreateRequest": {
+                        "workflowCreateRequest": {
                             "payload": {"repository": "MoonLadderStudios/MoonMind"}
                         },
                     }
@@ -1333,7 +1333,7 @@ class TestProposalSubmitPolicyResolution(unittest.IsolatedAsyncioTestCase):
                         "category": "tests",
                         "tags": ["tests"],
                         "severity": "high",
-                        "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                        "workflowCreateRequest": {"payload": {"repository": "org/repo"}},
                     }
                 ],
                 "policy": {
@@ -1347,7 +1347,7 @@ class TestProposalSubmitPolicyResolution(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["submitted_count"], 1)
         call_kwargs = mock_service.create_proposal.await_args.kwargs
         self.assertEqual(
-            call_kwargs["task_create_request"]["payload"]["repository"],
+            call_kwargs["workflow_create_request"]["payload"]["repository"],
             "org/repo",
         )
         self.assertEqual(call_kwargs["resolved_policy"]["target"], "project")
@@ -1372,7 +1372,7 @@ class TestProposalSubmitPolicyResolution(unittest.IsolatedAsyncioTestCase):
                         "category": "run_quality",
                         "tags": ["loop_detected"],
                         "severity": "high",
-                        "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                        "workflowCreateRequest": {"payload": {"repository": "org/repo"}},
                     }
                 ],
                 "policy": {

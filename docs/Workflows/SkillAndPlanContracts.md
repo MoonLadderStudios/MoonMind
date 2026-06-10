@@ -1,12 +1,12 @@
 # Execution Tool and Plan Contracts
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
+**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 MoonMind system design (Temporal-first)
 
 Status: **Implemented** (contracts active, runtime live)
 Last updated: 2026-04-04
-Related: [`docs/Steps/SkillSystem.md`](AgentSkillSystem.md)
+Related: [`docs/Steps/SkillSystem.md`](../Steps/SkillSystem.md)
 
 ---
 
@@ -40,7 +40,7 @@ It establishes:
 * execution semantics
 * progress contracts
 
-**Use [`docs/Steps/SkillSystem.md`](AgentSkillSystem.md) for:**
+**Use [`docs/Steps/SkillSystem.md`](../Steps/SkillSystem.md) for:**
 * `AgentSkillDefinition`
 * `SkillSet`
 * `ResolvedSkillSet`
@@ -60,8 +60,8 @@ Canonical terminology for execution payloads is:
 
 The contract model recognizes two tool subtypes:
 
-* `tool.type = "skill"` — activity-backed executable tool contract using a `ToolDefinition` from the tool registry snapshot. Current `MoonMind.Run` plans do not dispatch this legacy shape.
-* `tool.type = "agent_runtime"` — dispatched by `MoonMind.Run` as a child `MoonMind.AgentRun` workflow. Uses an `AgentExecutionRequest`.
+* `tool.type = "skill"` — activity-backed executable tool contract using a `ToolDefinition` from the tool registry snapshot. Current `MoonMind.UserWorkflow` plans do not dispatch this legacy shape.
+* `tool.type = "agent_runtime"` — dispatched by `MoonMind.UserWorkflow` as a child `MoonMind.AgentRun` workflow. Uses an `AgentExecutionRequest`.
 
 A runtime-native command is not a third `tool.type`.
 
@@ -85,7 +85,7 @@ They are execution-shaping selections for `agent_runtime` steps only.
 > **Important:** Executable tool skills and agent instruction skills are separate systems.
 > The term **"Agent Skill"** (in `.agents/skills/` directories and `SKILL.md` files)
 > refers to reusable instruction bundles that AI agents read for guidance as defined in
-> [`docs/Steps/SkillSystem.md`](AgentSkillSystem.md).
+> [`docs/Steps/SkillSystem.md`](../Steps/SkillSystem.md).
 > This document only governs the executable **tool** side.
 
 Canonical Python class names:
@@ -102,7 +102,7 @@ Compatibility rule:
 
 * Legacy `Skill*` aliases are re-exported for backward compatibility during migration.
 * New code should import canonical `Tool*` names.
-* Legacy `Skill*` Python aliases remain for registry/model compatibility. Current `MoonMind.Run` plan execution accepts `agent_runtime` nodes and rejects legacy `tool.type = "skill"` nodes.
+* Legacy `Skill*` Python aliases remain for registry/model compatibility. Current `MoonMind.UserWorkflow` plan execution accepts `agent_runtime` nodes and rejects legacy `tool.type = "skill"` nodes.
 
 ---
 
@@ -169,7 +169,7 @@ A **Tool** is a named capability defined by:
 * default policies (timeouts, retries)
 * capability requirements (what worker fleet can run it)
 
-A Tool is not a workflow. `MoonMind.Run` interprets current Plans as child workflows for `agent_runtime`; activity-backed executable tool contracts remain registry concepts outside the active Run dispatch path.
+A Tool is not a workflow. `MoonMind.UserWorkflow` interprets current Plans as child workflows for `agent_runtime`; activity-backed executable tool contracts remain registry concepts outside the active Run dispatch path.
 A `ToolDefinition` is **not** an `AgentSkillDefinition`. Executable tool execution and agent-skill materialization are adjacent but separate concerns.
 Note: An agent-runtime step may simultaneously receive a `resolved_skillset_ref` or equivalent execution context from the Agent Skill System, but that is resolved separately.
 
@@ -177,7 +177,7 @@ The plan contract defines these tool subtypes:
 
 | `tool.type` | Dispatch mechanism | Contract |
 |---|---|---|
-| `skill` | Legacy activity-backed executable tool contract; not dispatched by current `MoonMind.Run` plans | `ToolDefinition` from registry snapshot |
+| `skill` | Legacy activity-backed executable tool contract; not dispatched by current `MoonMind.UserWorkflow` plans | `ToolDefinition` from registry snapshot |
 | `agent_runtime` | Child `MoonMind.AgentRun` workflow | `AgentExecutionRequest` |
 
 ---
@@ -956,6 +956,6 @@ Reserve fields without enabling them:
 
 ## 14) Engineering backlog
 
-Minimum components: tool registry format + loader + validator; tool registry snapshot digest artifact; `plan.validate`; Plan Executor in `MoonMind.Run`; `mm.tool.execute` / tool dispatch activity; progress query and optional progress artifact. Status is tracked in MoonSpec feature artifacts (`specs/<feature>/`) and local handoffs under `artifacts/` when needed.
+Minimum components: tool registry format + loader + validator; tool registry snapshot digest artifact; `plan.validate`; Plan Executor in `MoonMind.UserWorkflow`; `mm.tool.execute` / tool dispatch activity; progress query and optional progress artifact. Status is tracked under `docs/tmp/` or in local handoffs under `artifacts/` when needed.
 
-Deployment-backed agent instruction skill work is tracked separately in `docs/Steps/SkillSystem.md` and related feature directories under `specs/`.
+Deployment-backed agent instruction skill work is tracked separately in `docs/Steps/SkillSystem.md` and related tracking files under `docs/tmp/`.

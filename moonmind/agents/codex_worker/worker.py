@@ -419,17 +419,17 @@ def _ensure_task_request_repository(
     repository: str,
     proposals_path: Path,
 ) -> bool:
-    """Ensure taskCreateRequest exists and points to the repository."""
+    """Ensure workflowCreateRequest exists and points to the repository."""
 
-    request_node = payload.get("taskCreateRequest")
+    request_node = payload.get("workflowCreateRequest")
     if not isinstance(request_node, Mapping):
         logger.warning(
-            "Proposal entry in %s missing taskCreateRequest; skipping",
+            "Proposal entry in %s missing workflowCreateRequest; skipping",
             proposals_path,
         )
         return False
     request = copy.deepcopy(request_node)
-    payload["taskCreateRequest"] = request
+    payload["workflowCreateRequest"] = request
     request_payload = request.get("payload")
     payload_node = dict(request_payload) if isinstance(request_payload, Mapping) else {}
     payload_node["repository"] = repository
@@ -531,12 +531,6 @@ class CodexWorkerConfig:
     live_log_events_enabled: bool = True
     live_log_events_batch_bytes: int = 8192
     live_log_events_flush_interval_ms: int = 300
-    live_session_enabled_default: bool = True
-    live_session_provider: str = "none"
-    live_session_ttl_minutes: int = 60
-    live_session_rw_grant_ttl_minutes: int = 15
-    live_session_allow_web: bool = False
-    live_session_max_concurrent_per_worker: int = 4
     enable_proposals: bool = False
     artifact_upload_incremental: bool = True
     step_log_max_bytes: int = _DEFAULT_STEP_LOG_MAX_BYTES
@@ -1003,93 +997,11 @@ class CodexWorkerConfig:
         if live_log_events_flush_interval_ms < 10:
             raise ValueError("MOONMIND_LIVE_LOG_EVENTS_FLUSH_INTERVAL_MS must be >= 10")
 
-        live_session_enabled_raw = (
-            str(
-                source.get(
-                    "MOONMIND_LIVE_SESSION_ENABLED_DEFAULT",
-                    str(settings.workflow.live_session_enabled_default),
-                )
-            )
-            .strip()
-            .lower()
-        )
-        live_session_enabled_default = live_session_enabled_raw not in {
-            "0",
-            "false",
-            "no",
-            "off",
-            "",
-        }
-        live_session_provider = (
-            str(
-                source.get(
-                    "MOONMIND_LIVE_SESSION_PROVIDER",
-                    settings.workflow.live_session_provider,
-                )
-            )
-            .strip()
-            .lower()
-            or "none"
-        )
-        if live_session_provider not in {"none"}:
-            raise ValueError("MOONMIND_LIVE_SESSION_PROVIDER must be one of: none")
-        live_session_ttl_minutes = int(
-            str(
-                source.get(
-                    "MOONMIND_LIVE_SESSION_TTL_MINUTES",
-                    str(settings.workflow.live_session_ttl_minutes),
-                )
-            ).strip()
-        )
-        if live_session_ttl_minutes < 1:
-            raise ValueError("MOONMIND_LIVE_SESSION_TTL_MINUTES must be >= 1")
-        live_session_rw_grant_ttl_minutes = int(
-            str(
-                source.get(
-                    "MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES",
-                    str(settings.workflow.live_session_rw_grant_ttl_minutes),
-                )
-            ).strip()
-        )
-        if live_session_rw_grant_ttl_minutes < 1:
-            raise ValueError("MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES must be >= 1")
-        live_session_allow_web_raw = (
-            str(
-                source.get(
-                    "MOONMIND_LIVE_SESSION_ALLOW_WEB",
-                    str(settings.workflow.live_session_allow_web),
-                )
-            )
-            .strip()
-            .lower()
-        )
-        live_session_allow_web = live_session_allow_web_raw not in {
-            "0",
-            "false",
-            "no",
-            "off",
-            "",
-        }
-        live_session_max_concurrent_per_worker = int(
-            str(
-                source.get(
-                    "MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER",
-                    str(settings.workflow.live_session_max_concurrent_per_worker),
-                )
-            ).strip()
-        )
-        if live_session_max_concurrent_per_worker < 1:
-            raise ValueError(
-                "MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER must be >= 1"
-            )
         enable_proposals_raw = (
             str(
                 source.get(
-                    "MOONMIND_ENABLE_TASK_PROPOSALS",
-                    source.get(
-                        "ENABLE_TASK_PROPOSALS",
-                        str(settings.workflow.enable_proposals),
-                    ),
+                    "MOONMIND_ENABLE_PROPOSALS",
+                    str(settings.workflow.enable_proposals),
                 )
             )
             .strip()
@@ -1187,12 +1099,6 @@ class CodexWorkerConfig:
             live_log_events_enabled=live_log_events_enabled,
             live_log_events_batch_bytes=live_log_events_batch_bytes,
             live_log_events_flush_interval_ms=live_log_events_flush_interval_ms,
-            live_session_enabled_default=live_session_enabled_default,
-            live_session_provider=live_session_provider,
-            live_session_ttl_minutes=live_session_ttl_minutes,
-            live_session_rw_grant_ttl_minutes=live_session_rw_grant_ttl_minutes,
-            live_session_allow_web=live_session_allow_web,
-            live_session_max_concurrent_per_worker=live_session_max_concurrent_per_worker,
             enable_proposals=enable_proposals,
             artifact_upload_incremental=artifact_upload_incremental,
             step_log_max_bytes=step_log_max_bytes,
@@ -1337,17 +1243,6 @@ class JulesSoftwareRunState:
     jules_completed_at: str | None
     jules_error: str | None
     next_poll_monotonic: float
-
-@dataclass(frozen=True, slots=True)
-class LiveSessionHandle:
-    """Worker-owned live session context for active queue job execution."""
-
-    job_id: UUID
-    session_name: str
-    socket_path: Path
-    config_path: Path | None
-    log_path: Path
-    status: str
 
 @dataclass(frozen=True, slots=True)
 class TaskAuthContext:
@@ -1647,67 +1542,6 @@ class QueueApiClient:
             body["payload"] = payload
         await self._post_json(f"/api/queue/jobs/{job_id}/events", json=body)
 
-    async def report_live_session(
-        self,
-        *,
-        job_id: UUID,
-        worker_id: str,
-        status: str,
-        worker_hostname: str | None = None,
-        provider: str | None = None,
-        attach_ro: str | None = None,
-        attach_rw: str | None = None,
-        web_ro: str | None = None,
-        web_rw: str | None = None,
-        live_session_name: str | None = None,
-        live_session_socket_path: str | None = None,
-        expires_at: str | None = None,
-        error_message: str | None = None,
-    ) -> dict[str, Any]:
-        """Report live-session lifecycle updates for a task run."""
-
-        payload: dict[str, Any] = {
-            "workerId": worker_id,
-            "status": status,
-        }
-        if worker_hostname:
-            payload["workerHostname"] = worker_hostname
-        if provider:
-            payload["provider"] = provider
-        if attach_ro:
-            payload["attachRo"] = attach_ro
-        if attach_rw:
-            payload["attachRw"] = attach_rw
-        if web_ro:
-            payload["webRo"] = web_ro
-        if web_rw:
-            payload["webRw"] = web_rw
-        if live_session_name:
-            payload["liveSessionName"] = live_session_name
-        if live_session_socket_path:
-            payload["liveSessionSocketPath"] = live_session_socket_path
-        if expires_at:
-            payload["expiresAt"] = expires_at
-        if error_message:
-            payload["errorMessage"] = error_message
-        return await self._post_json(
-            f"/api/task-runs/{job_id}/live-session/report",
-            json=payload,
-        )
-
-    async def heartbeat_live_session(
-        self,
-        *,
-        job_id: UUID,
-        worker_id: str,
-    ) -> dict[str, Any]:
-        """Send live-session heartbeat updates."""
-
-        return await self._post_json(
-            f"/api/task-runs/{job_id}/live-session/heartbeat",
-            json={"workerId": worker_id},
-        )
-
     @staticmethod
     def _parse_system_metadata(node: Any) -> QueueSystemStatus:
         metadata = node if isinstance(node, Mapping) else {}
@@ -1760,19 +1594,6 @@ class QueueApiClient:
                 f"invalid queue field '{field_name}': expected positive int, got {raw_value!r}"
             )
         return parsed
-
-    async def get_live_session(self, *, job_id: UUID) -> dict[str, Any] | None:
-        """Fetch current live-session payload; return ``None`` when no session exists."""
-
-        try:
-            path = f"/api/task-runs/{job_id}/live-session/worker"
-            response = await self._client.get(path, headers=self._request_headers)
-            if response.status_code == 404:
-                return None
-            response.raise_for_status()
-            return dict(response.json()) if response.content else {}
-        except httpx.HTTPError as exc:
-            raise QueueClientError(f"queue API request failed: {path}: {exc}") from exc
 
     async def upload_artifact(
         self,
@@ -1885,8 +1706,6 @@ class CodexWorker:
         self._dynamic_redaction_values: set[str] = set()
         self._active_cancel_event: asyncio.Event | None = None
         self._active_pause_event: asyncio.Event | None = None
-        self._active_live_session: LiveSessionHandle | None = None
-        self._live_session_start_lock = asyncio.Lock()
         self._jules_inflight_runs: dict[UUID, JulesSoftwareRunState] = {}
         self._vault_secret_resolver: VaultSecretResolver | None = None
         if self._config.vault_address and self._config.vault_token:
@@ -1996,7 +1815,7 @@ class CodexWorker:
             await self._emit_event(
                 job_id=job.id,
                 level="error",
-                message="Task runtime is not recognized by worker",
+                message="Agent runtime is not recognized by worker",
                 payload={
                     "jobType": job.type,
                     "targetRuntime": runtime_mode,
@@ -2005,7 +1824,7 @@ class CodexWorker:
             await self._queue_client.fail_job(
                 job_id=job.id,
                 worker_id=self._config.worker_id,
-                error_message=f"unsupported task runtime: {runtime_mode}",
+                error_message=f"unsupported agent runtime: {runtime_mode}",
                 retryable=False,
             )
             return None
@@ -2019,7 +1838,7 @@ class CodexWorker:
             await self._emit_event(
                 job_id=job.id,
                 level="error",
-                message="Task runtime is not executable by this worker runtime mode",
+                message="Agent runtime is not executable by this worker runtime mode",
                 payload={
                     "jobType": job.type,
                     "targetRuntime": runtime_mode,
@@ -2030,7 +1849,7 @@ class CodexWorker:
                 job_id=job.id,
                 worker_id=self._config.worker_id,
                 error_message=(
-                    "unsupported task runtime for worker "
+                    "unsupported agent runtime for worker "
                     f"({self._config.worker_runtime}): {runtime_mode}"
                 ),
                 retryable=False,
@@ -2131,17 +1950,12 @@ class CodexWorker:
         pause_requested_event = asyncio.Event()
         self._active_cancel_event = cancel_requested_event
         self._active_pause_event = pause_requested_event
-        self._active_live_session = None
-        live_session_cwd = self._config.workdir / str(job.id)
-        live_session_log_path = live_session_cwd / "artifacts" / "logs" / "prepare.log"
         heartbeat_task = asyncio.create_task(
             self._heartbeat_loop(
                 job_id=job.id,
                 stop_event=heartbeat_stop,
                 cancel_event=cancel_requested_event,
                 pause_event=pause_requested_event,
-                live_session_bootstrap_cwd=live_session_cwd,
-                live_session_bootstrap_log_path=live_session_log_path,
             )
         )
 
@@ -2800,7 +2614,6 @@ class CodexWorker:
             heartbeat_task.cancel()
             with suppress(asyncio.CancelledError):
                 _ = await heartbeat_task
-            await self._teardown_live_session(job_id=job.id)
 
         return "claimed"
 
@@ -4376,11 +4189,6 @@ class CodexWorker:
             logs_dir.mkdir(parents=True, exist_ok=True)
             home_dir.mkdir(parents=True, exist_ok=True)
             skills_active_path.mkdir(parents=True, exist_ok=True)
-            await self._ensure_live_session_started(
-                job_id=job_id,
-                log_path=prepare_log_path,
-                cwd=job_root,
-            )
 
             deduped_selected_skills = tuple(
                 dict.fromkeys(
@@ -8500,47 +8308,6 @@ class CodexWorker:
         cache_root.mkdir(parents=True, exist_ok=True)
         return cache_root
 
-    async def _ensure_live_session_started(
-        self,
-        *,
-        job_id: UUID,
-        log_path: Path,
-        cwd: Path,
-    ) -> None:
-        """External live-session transport was removed; ``none`` provider is a no-op."""
-
-        async with self._live_session_start_lock:
-            if self._active_live_session is not None:
-                return
-            if self._config.live_session_provider != "none":
-                return
-            if not await self._should_bootstrap_live_session(job_id=job_id):
-                return
-            return
-
-    async def _teardown_live_session(self, *, job_id: UUID) -> None:
-        """Clear worker live-session state."""
-
-        live = self._active_live_session
-        self._active_live_session = None
-        if live is None:
-            return
-        with suppress(Exception):
-            live.socket_path.unlink(missing_ok=True)
-        if live.config_path is not None:
-            with suppress(Exception):
-                live.config_path.unlink(missing_ok=True)
-        with suppress(Exception):
-            await self._queue_client.report_live_session(
-                job_id=job_id,
-                worker_id=self._config.worker_id,
-                worker_hostname=socket.gethostname(),
-                status="ended",
-                provider="none",
-                live_session_name=live.session_name,
-                live_session_socket_path=str(live.socket_path),
-            )
-
     @staticmethod
     def _extract_pr_url(stdout: str) -> str | None:
         for line in stdout.splitlines():
@@ -8643,7 +8410,7 @@ class CodexWorker:
     def _build_proposal_task_request_template(
         self, canonical_payload: Mapping[str, Any]
     ) -> dict[str, Any]:
-        """Build a safe default taskCreateRequest template for proposal skills."""
+        """Build a safe default workflowCreateRequest template for proposal skills."""
 
         task_node = canonical_payload.get("task")
         task = task_node if isinstance(task_node, Mapping) else {}
@@ -8661,7 +8428,7 @@ class CodexWorker:
             "maxAttempts": 3,
             "payload": {
                 "repository": str(canonical_payload.get("repository") or "").strip(),
-                "task": {
+                "workflow": {
                     "instructions": _PROPOSAL_INSTRUCTIONS_PLACEHOLDER,
                     "skill": {"id": "auto", "args": {}},
                     "runtime": {
@@ -8748,12 +8515,12 @@ class CodexWorker:
             f"- Write a JSON array to {proposal_output_path}.\n"
             "- If the file already exists, read and append; keep it valid JSON.\n"
             "- Keep total proposals concise (max 3).\n"
-            "- Each entry must include: title, summary, taskCreateRequest.\n"
+            "- Each entry must include: title, summary, workflowCreateRequest.\n"
             "- For MoonMind run-quality proposals, include category=run_quality, at least one tag from "
             "{retry, duplicate_output, missing_ref, conflicting_instructions, flaky_test, loop_detected, artifact_gap}, "
             "and signal.severity in {low, medium, high, critical}.\n"
             "- If no strong proposal is warranted, keep existing proposals unchanged.\n\n"
-            "taskCreateRequest template (copy this and edit values):\n"
+            "workflowCreateRequest template (copy this and edit values):\n"
             "```json\n"
             f"{request_template}\n"
             "```\n"
@@ -8948,7 +8715,7 @@ class CodexWorker:
                     "jobMaxAttempts": job.max_attempts,
                     "reasonCode": reason.get("code"),
                 },
-                "taskCreateRequest": request,
+                "workflowCreateRequest": request,
             }
         ]
 
@@ -9310,7 +9077,7 @@ class CodexWorker:
             "invalid",
             "required",
             "must be",
-            "unsupported task runtime",
+            "unsupported agent runtime",
             "payload",
         )
         deterministic_policy_markers = (
@@ -10751,7 +10518,7 @@ class CodexWorker:
             "--label",
             f"moonmind.repository={repository}",
             "--label",
-            "moonmind.runtime=container",
+            "MoonMind.UserWorkflowtime=container",
         ]
 
         if self._config.container_workspace_volume:
@@ -11965,8 +11732,6 @@ class CodexWorker:
         stop_event: asyncio.Event,
         cancel_event: asyncio.Event,
         pause_event: asyncio.Event | None = None,
-        live_session_bootstrap_cwd: Path | None = None,
-        live_session_bootstrap_log_path: Path | None = None,
     ) -> None:
         """Send lease renewals while a job is actively executing."""
 
@@ -12006,46 +11771,9 @@ class CodexWorker:
                     effective_pause_event.set()
                 else:
                     effective_pause_event.clear()
-                if (
-                    self._active_live_session is None
-                    and not self._config.live_session_enabled_default
-                    and live_session_bootstrap_cwd is not None
-                    and live_session_bootstrap_log_path is not None
-                ):
-                    with suppress(Exception):
-                        await self._ensure_live_session_started(
-                            job_id=job_id,
-                            cwd=live_session_bootstrap_cwd,
-                            log_path=live_session_bootstrap_log_path,
-                        )
-                if self._active_live_session is not None:
-                    with suppress(Exception):
-                        await self._queue_client.heartbeat_live_session(
-                            job_id=job_id,
-                            worker_id=self._config.worker_id,
-                        )
             except Exception:
                 # Heartbeat errors are tolerated so terminal transition can still run.
                 continue
-
-    async def _should_bootstrap_live_session(self, *, job_id: UUID) -> bool:
-        """Return whether this run should start a live session for current config/state."""
-
-        if self._config.live_session_enabled_default:
-            return True
-        payload = await self._queue_client.get_live_session(job_id=job_id)
-        if not isinstance(payload, Mapping):
-            return False
-        session_node = payload.get("session")
-        if not isinstance(session_node, Mapping):
-            return False
-        status = str(session_node.get("status") or "").strip().lower()
-        if status not in {"starting", "ready"}:
-            return False
-        worker_id = str(session_node.get("workerId") or "").strip()
-        if worker_id and worker_id != self._config.worker_id:
-            return False
-        return True
 
     async def _run_command_without_logging(
         self,
@@ -12259,12 +11987,12 @@ class CodexWorker:
                 errors.append("proposal missing title")
                 continue
 
-            if not isinstance(payload.get("taskCreateRequest"), Mapping):
+            if not isinstance(payload.get("workflowCreateRequest"), Mapping):
                 logger.warning(
-                    "Proposal entry in %s missing taskCreateRequest; skipping",
+                    "Proposal entry in %s missing workflowCreateRequest; skipping",
                     proposals_path,
                 )
-                errors.append("proposal missing taskCreateRequest")
+                errors.append("proposal missing workflowCreateRequest")
                 continue
 
             if effective_policy.has_project_capacity():

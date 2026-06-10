@@ -53,7 +53,7 @@ def test_root_execution_docs_do_not_define_moonmind_task_product_entity() -> Non
         "task-level orchestration",
         "task-level envelope",
         "standard task execution workflow",
-        "Product `task` vocabulary maps primarily to `MoonMind.Run`",
+        "Product `task` vocabulary maps primarily to `MoonMind.UserWorkflow`",
     ]
 
     for phrase in disallowed:

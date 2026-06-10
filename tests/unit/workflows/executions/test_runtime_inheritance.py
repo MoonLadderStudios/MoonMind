@@ -1,4 +1,4 @@
-"""Unit tests for child-task runtime inheritance resolution."""
+"""Unit tests for child-agent runtime inheritance resolution."""
 
 from __future__ import annotations
 

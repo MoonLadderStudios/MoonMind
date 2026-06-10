@@ -30,7 +30,7 @@ The live MoonMind session-control plane currently admits Codex CLI only. Claude 
 
 Current live boundaries:
 
-- `MoonMind.Run` starts `MoonMind.AgentSession` for `codex_cli` managed workflow steps.
+- `MoonMind.UserWorkflow` starts `MoonMind.AgentSession` for `codex_cli` managed workflow steps.
 - `MoonMind.AgentSession` stores compact Codex session binding, epoch, runtime handles, request tracking, and continuity refs.
 - `MoonMind.AgentRun` uses the Codex session adapter when `request.managed_session` is present and the managed-session runtime canonicalizes to `codex_cli`.
 - `agent_runtime.launch_session`, `send_turn`, `steer_turn`, `interrupt_turn`, `clear_session`, `terminate_session`, `fetch_session_summary`, and `publish_session_artifacts` use the live Codex session activity surface.

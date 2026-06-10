@@ -675,7 +675,7 @@ async def test_failed_prereq_then_completed_signal_unblocks_dependent(
             handle = await env.client.start_workflow(
                 MoonMindRunWorkflow.run,
                 {
-                    "workflow_type": "MoonMind.Run",
+                    "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {"task": {"dependsOn": ["dep-rerun-1"]}},
                     "plan_artifact_ref": "ref-123",
                 },

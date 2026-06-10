@@ -502,7 +502,7 @@ def test_run_groups_child_lineage_and_evidence_into_step_row(
             "outputs": {
                 "childWorkflowId": "wf-child-1",
                 "childRunId": "run-child-1",
-                "taskRunId": "550e8400-e29b-41d4-a716-446655440000",
+                "agentRunId": "550e8400-e29b-41d4-a716-446655440000",
                 "outputSummaryRef": "art_summary_1",
                 "outputAgentResultRef": "art_primary_1",
                 "stdoutArtifactRef": "art_stdout_1",
@@ -526,7 +526,7 @@ def test_run_groups_child_lineage_and_evidence_into_step_row(
     assert step["refs"] == {
         "childWorkflowId": "wf-child-1",
         "childRunId": "run-child-1",
-        "taskRunId": "550e8400-e29b-41d4-a716-446655440000",
+        "agentRunId": "550e8400-e29b-41d4-a716-446655440000",
         "latestStepExecutionManifestRef": None,
         "stepExecutionManifestRefs": [],
     }
@@ -580,7 +580,7 @@ def test_run_waiting_state_captures_child_workflow_lineage(
     assert step["refs"] == {
         "childWorkflowId": "wf-child-1",
         "childRunId": None,
-        "taskRunId": None,
+        "agentRunId": None,
         "latestStepExecutionManifestRef": None,
         "stepExecutionManifestRefs": [],
     }
@@ -833,7 +833,7 @@ async def test_run_records_terminal_step_execution_manifest_with_result_refs(
         execution_result={
             "status": "COMPLETED",
             "outputs": {
-                "taskRunId": "task-run-1",
+                "agentRunId": "agent-run-1",
                 "outputSummaryRef": "artifact://summary/attempt-1",
                 "stdoutArtifactRef": "artifact://stdout/attempt-1",
                 "diagnosticsRef": "artifact://diagnostics/attempt-1",
@@ -861,7 +861,7 @@ async def test_run_records_terminal_step_execution_manifest_with_result_refs(
     assert writes[1]["payload"]["status"] == "succeeded"
     assert writes[1]["payload"]["terminalDisposition"] == "accepted"
     assert writes[1]["payload"]["execution"] == {
-        "taskRunId": "task-run-1",
+        "agentRunId": "agent-run-1",
         "diagnosticsRef": "artifact://diagnostics/attempt-1",
     }
     assert writes[1]["payload"]["outputs"] == {
@@ -987,7 +987,7 @@ def test_run_projects_workload_artifacts_and_metadata_from_tool_result(
                     "test.report": "art_report_1",
                 },
                 "workloadMetadata": {
-                    "taskRunId": "wf-1",
+                    "agentRunId": "wf-1",
                     "stepId": "workload-step",
                     "attempt": 1,
                     "toolName": "container.run_workload",
@@ -1008,7 +1008,7 @@ def test_run_projects_workload_artifacts_and_metadata_from_tool_result(
 
     step = workflow.get_step_ledger()["steps"][0]
 
-    assert step["refs"]["taskRunId"] == "wf-1"
+    assert step["refs"]["agentRunId"] == "wf-1"
     assert step["artifacts"]["runtimeStdout"] == "art_stdout_1"
     assert step["artifacts"]["runtimeStderr"] == "art_stderr_1"
     assert step["artifacts"]["runtimeDiagnostics"] == "art_diag_1"
@@ -1252,7 +1252,7 @@ def test_run_reads_nested_workload_metadata_from_legacy_workload_result(
                     "metadata": {
                         "stdout": "large bounded stdout must not be ledger metadata",
                         "workload": {
-                            "taskRunId": "wf-legacy",
+                            "agentRunId": "wf-legacy",
                             "stepId": "workload-step",
                             "profileId": "local-python",
                         },
@@ -1265,8 +1265,8 @@ def test_run_reads_nested_workload_metadata_from_legacy_workload_result(
 
     step = workflow.get_step_ledger()["steps"][0]
 
-    assert step["refs"]["taskRunId"] == "wf-legacy"
-    assert step["workload"]["taskRunId"] == "wf-legacy"
+    assert step["refs"]["agentRunId"] == "wf-legacy"
+    assert step["workload"]["agentRunId"] == "wf-legacy"
     assert step["workload"]["stepId"] == "workload-step"
     assert step["workload"]["profileId"] == "local-python"
     assert "stdout" not in step["workload"]

@@ -76,6 +76,6 @@ Do not use an unqualified Task label for MoonMind-owned product work.
 
 ## Workflow Type Direction
 
-`MoonMind.UserWorkflow` is the user-submitted, Step-ledger-owning Workflow Execution type. Existing references to `MoonMind.Run` identify the current live workflow implementation or historic naming, not a separate product entity named Task.
+`MoonMind.UserWorkflow` is the user-submitted, Step-ledger-owning Workflow Execution type. Existing references to `MoonMind.UserWorkflow` identify the current live workflow implementation or historic naming, not a separate product entity named Task.
 
 `MoonMind.AgentRun` remains the durable lifecycle wrapper for one true managed or external agent execution. `MoonMind.ManifestIngest`, `MoonMind.AgentSession`, `MoonMind.ManagedSessionReconcile`, `MoonMind.ProviderProfileManager`, `MoonMind.OAuthSession`, and `MoonMind.MergeAutomation` keep their specialized workflow semantics.

@@ -1,6 +1,6 @@
 # Temporal Signals System
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
+**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 Status: **Design Draft**
 Owners: MoonMind Engineering
@@ -28,7 +28,7 @@ The core design rule is:
 
 > Use **Temporal Updates** for request/response mutations that need synchronous acknowledgement, and use **Temporal Signals** for asynchronous events that should be recorded durably and processed inside workflow execution.
 
-In the desired state, Signals are a first-class Temporal contract across `MoonMind.Run`, `MoonMind.AgentRun`, `MoonMind.ProviderProfileManager`, and `MoonMind.OAuthSession`, with clear payload rules, idempotency rules, observability rules, and workflow-state effects.
+In the desired state, Signals are a first-class Temporal contract across `MoonMind.UserWorkflow`, `MoonMind.AgentRun`, `MoonMind.ProviderProfileManager`, and `MoonMind.OAuthSession`, with clear payload rules, idempotency rules, observability rules, and workflow-state effects.
 
 ---
 
@@ -157,7 +157,7 @@ These are Signals initiated from the MoonMind API layer into a running workflow.
 
 Primary desired-state use:
 
-- `ExternalEvent` into `MoonMind.Run`.
+- `ExternalEvent` into `MoonMind.UserWorkflow`.
 
 Rules:
 
@@ -172,7 +172,7 @@ These are Signals sent from one workflow to another through `workflow.get_extern
 Primary desired-state use:
 
 - `MoonMind.AgentRun` <-> `MoonMind.ProviderProfileManager`,
-- `MoonMind.AgentRun` -> parent `MoonMind.Run`,
+- `MoonMind.AgentRun` -> parent `MoonMind.UserWorkflow`,
 - `MoonMind.ProviderProfileManager` -> `MoonMind.AgentRun`.
 
 Rules:
@@ -187,7 +187,7 @@ Signals may modify workflow-local wait conditions without representing a public 
 
 Primary desired-state use:
 
-- `reschedule` on `MoonMind.Run`,
+- `reschedule` on `MoonMind.UserWorkflow`,
 - `finalize` and `cancel` on `MoonMind.OAuthSession`.
 
 ### 5.4 External Provider Callback Ingress
@@ -205,9 +205,9 @@ Desired-state callback path:
 
 ## 6. Canonical Signal Contracts by Workflow
 
-## 6.1 `MoonMind.Run`
+## 6.1 `MoonMind.UserWorkflow`
 
-`MoonMind.Run` is the primary orchestration workflow and exposes a narrow signal surface.
+`MoonMind.UserWorkflow` is the primary orchestration workflow and exposes a narrow signal surface.
 
 ### Signals
 
@@ -309,7 +309,7 @@ Required behavior:
 
 These signals coordinate profile-slot allocation and rate-limit recovery for managed runtimes.
 
-#### To parent `MoonMind.Run`
+#### To parent `MoonMind.UserWorkflow`
 
 - `child_state_changed`
 - `profile_assigned`
@@ -556,7 +556,7 @@ When signal contracts change, MoonMind must protect in-flight executions by eith
 
 To protect in-flight workflow histories during the transition to this desired-state contract without violating the strict "no internal compatibility wrappers" policy:
 
-1. **Explicit Versioned Cutover**: Rather than introducing temporary translation layers, dynamic signal handlers, or `workflow.patched(...)` multi-type wrappers, changes to Temporal-facing contracts (such as `MoonMind.Run` control aliases, `child_state_changed` positional arguments, or raw dict payloads in `ProviderProfileManager`) MUST be deployed via an explicit versioned cutover plan (e.g., bumping the Temporal Task Queue or renaming the workflow).
+1. **Explicit Versioned Cutover**: Rather than introducing temporary translation layers, dynamic signal handlers, or `workflow.patched(...)` multi-type wrappers, changes to Temporal-facing contracts (such as `MoonMind.UserWorkflow` control aliases, `child_state_changed` positional arguments, or raw dict payloads in `ProviderProfileManager`) MUST be deployed via an explicit versioned cutover plan (e.g., bumping the Temporal Task Queue or renaming the workflow).
 2. **Old Executions**: Existing in-flight executions will continue to run to completion on older workers tied to the legacy task queue, ensuring safety without polluting the new codebase with backward-compatibility logic.
 
 ---
@@ -618,7 +618,7 @@ Minimum expectations:
 The Temporal Signals System is in its desired state when all of the following are true:
 
 - every public and internal signal contract has a documented semantic owner,
-- `MoonMind.Run` uses Signals only for asynchronous events and scheduling wait control,
+- `MoonMind.UserWorkflow` uses Signals only for asynchronous events and scheduling wait control,
 - acknowledged execution edits are handled through Updates,
 - callback ingestion, workflow coordination, and singleton manager signaling all use compact, explicit payloads,
 - dedupe and replay safety rules are enforced for signal families that can repeat,

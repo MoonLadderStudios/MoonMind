@@ -28,7 +28,7 @@ from api_service.services.settings_change_publisher import (
 from api_service.services.settings_change_subscribers import (
     OperationalControlsSubscriber,
     ProviderProfileManagerSubscriber,
-    TaskCreationDefaultsSubscriber,
+    WorkflowCreationDefaultsSubscriber,
     WorkerReloadSubscriber,
     register_default_subscribers,
 )
@@ -75,10 +75,10 @@ async def settings_subscriber_env(tmp_path):
     handle = SimpleNamespace(
         session_maker=session_maker,
         publisher=publisher,
-        task_creation=next(
+        workflow_creation=next(
             sub
-            for sub in publisher.subscribers_for("task_creation_defaults")
-            if isinstance(sub, TaskCreationDefaultsSubscriber)
+            for sub in publisher.subscribers_for("workflow_creation_defaults")
+            if isinstance(sub, WorkflowCreationDefaultsSubscriber)
         ),
         worker_reload=next(
             sub
@@ -109,7 +109,7 @@ async def settings_subscriber_env(tmp_path):
 async def test_task_creation_defaults_subscriber_fires_on_next_task_setting(
     settings_subscriber_env,
 ):
-    start_version = settings_subscriber_env.task_creation.version
+    start_version = settings_subscriber_env.workflow_creation.version
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
@@ -124,13 +124,13 @@ async def test_task_creation_defaults_subscriber_fires_on_next_task_setting(
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["change_events"][0]["refresh_targets"].count("task_creation_defaults") == 1
+    assert payload["change_events"][0]["refresh_targets"].count("workflow_creation_defaults") == 1
     assert (
-        settings_subscriber_env.task_creation.version == start_version + 1
-    ), "task_creation_defaults subscriber should fire exactly once for a next_task change"
-    latest = settings_subscriber_env.task_creation.recent_events[-1]
+        settings_subscriber_env.workflow_creation.version == start_version + 1
+    ), "workflow_creation_defaults subscriber should fire exactly once for a next_workflow change"
+    latest = settings_subscriber_env.workflow_creation.recent_events[-1]
     assert latest.key == "workflow.default_runtime"
-    assert latest.apply_mode == "next_task"
+    assert latest.apply_mode == "next_workflow"
 
 
 async def test_worker_reload_subscriber_records_soft_reload_intent_for_worker_reload_mode(
@@ -216,7 +216,7 @@ async def test_operational_controls_subscriber_fires_on_operation_mode_change(
 
 
 async def test_multi_key_patch_fans_out_one_event_per_key(settings_subscriber_env):
-    start_version = settings_subscriber_env.task_creation.version
+    start_version = settings_subscriber_env.workflow_creation.version
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
@@ -238,8 +238,8 @@ async def test_multi_key_patch_fans_out_one_event_per_key(settings_subscriber_en
     assert response.status_code == 200
     payload = response.json()
     assert len(payload["change_events"]) == 2
-    assert settings_subscriber_env.task_creation.version == start_version + 2
-    recorded = list(settings_subscriber_env.task_creation.recent_events)[-2:]
+    assert settings_subscriber_env.workflow_creation.version == start_version + 2
+    recorded = list(settings_subscriber_env.workflow_creation.recent_events)[-2:]
     keys = {event.key for event in recorded}
     assert keys == {"workflow.default_runtime", "workflow.default_publish_mode"}
 
@@ -252,7 +252,7 @@ async def test_subscriber_failure_does_not_change_http_response(
 
     class _FailingSubscriber:
         name = "failing_for_test"
-        refresh_targets = frozenset({"task_creation_defaults"})
+        refresh_targets = frozenset({"workflow_creation_defaults"})
 
         def __init__(self) -> None:
             self.invoked = False
@@ -263,7 +263,7 @@ async def test_subscriber_failure_does_not_change_http_response(
 
     failing = _FailingSubscriber()
     settings_subscriber_env.publisher.register(failing)
-    start_version = settings_subscriber_env.task_creation.version
+    start_version = settings_subscriber_env.workflow_creation.version
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
@@ -279,7 +279,7 @@ async def test_subscriber_failure_does_not_change_http_response(
     assert response.status_code == 200
     assert failing.invoked is True
     assert (
-        settings_subscriber_env.task_creation.version == start_version + 1
+        settings_subscriber_env.workflow_creation.version == start_version + 1
     ), "real subscriber must still fire when a sibling subscriber raised"
 
 

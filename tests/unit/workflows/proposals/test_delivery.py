@@ -39,8 +39,8 @@ def _request(
         priority="high",
         dedup_key="moon/repo:add-regression-coverage",
         dedup_hash="d" * 64,
-        task_snapshot_ref="artifact://task-snapshot.json",
-        task_create_request={
+        workflow_snapshot_ref="artifact://task-snapshot.json",
+        workflow_create_request={
             "payload": {
                 "repository": repository,
                 "task": {"instructions": "RAW EXECUTABLE PAYLOAD SHOULD NOT APPEAR"},

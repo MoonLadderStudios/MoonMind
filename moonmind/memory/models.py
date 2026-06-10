@@ -31,7 +31,7 @@ class MemoryProvenance(BaseModel):
     """Evidence links carried by every memory contribution."""
 
     workflow_id: str | None = None
-    task_run_id: str | None = None
+    agent_run_id: str | None = None
     commits: list[str] = Field(default_factory=list)
     pull_request_url: str | None = None
     artifact_refs: list[str] = Field(default_factory=list)
@@ -43,7 +43,7 @@ class MemoryProvenance(BaseModel):
     def _require_some_evidence(self) -> "MemoryProvenance":
         if (
             self.workflow_id
-            or self.task_run_id
+            or self.agent_run_id
             or self.commits
             or self.pull_request_url
             or self.artifact_refs

@@ -47,7 +47,7 @@ async def test_callback_first_completion_uses_single_terminal_path(
                 client_adapter=AsyncMock(),
             )
             created = await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=uuid4(),
                 title="Callback path",
                 input_artifact_ref=None,
@@ -105,7 +105,7 @@ async def test_polling_fallback_and_continue_as_new_preserve_monitoring_identity
                 client_adapter=AsyncMock(),
             )
             created = await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=uuid4(),
                 title="Poll path",
                 input_artifact_ref=None,
@@ -168,7 +168,7 @@ async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
         async with maker() as session:
             service = TemporalExecutionService(session, client_adapter=AsyncMock())
             created = await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=uuid4(),
                 title="Callback safety",
                 input_artifact_ref=None,
@@ -260,7 +260,7 @@ async def test_failure_and_cancel_paths_keep_jules_normalization_compact(
         async with maker() as session:
             service = TemporalExecutionService(session, client_adapter=AsyncMock())
             created = await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=uuid4(),
                 title="Failure path",
                 input_artifact_ref=None,

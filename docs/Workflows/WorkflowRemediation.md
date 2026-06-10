@@ -33,7 +33,7 @@ The core design goal is:
 
 Workflow Remediation must be a first-class concept, separate from ordinary Workflow Execution dependencies.
 
-Workflow Execution dependencies are intentionally narrow. They block one `MoonMind.Run` on the successful terminal completion of another `MoonMind.Run`. They do not import the upstream run’s plan DAG, internal context, logs, or artifacts into the dependent run. They also fail the dependent run when the upstream prerequisite ends in a non-success terminal state. That is the correct contract for orchestration ordering, but it is the wrong contract for troubleshooting and repair.
+Workflow Execution dependencies are intentionally narrow. They block one `MoonMind.UserWorkflow` on the successful terminal completion of another `MoonMind.UserWorkflow`. They do not import the upstream run’s plan DAG, internal context, logs, or artifacts into the dependent run. They also fail the dependent run when the upstream prerequisite ends in a non-success terminal state. That is the correct contract for orchestration ordering, but it is the wrong contract for troubleshooting and repair.
 
 Remediation needs the opposite behavior:
 
@@ -118,9 +118,9 @@ MoonMind may still support operator handoff or manual terminal workflows elsewhe
 
 ## 5. Architectural stance
 
-### 5.1 Remediation Workflow Executions remain `MoonMind.Run`
+### 5.1 Remediation Workflow Executions remain `MoonMind.UserWorkflow`
 
-A remediation Workflow Execution should still be represented as a normal top-level `MoonMind.Run` execution with additional nested semantics under `task.remediation`.
+A remediation Workflow Execution should still be represented as a normal top-level `MoonMind.UserWorkflow` execution with additional nested semantics under `task.remediation`.
 
 This keeps remediation aligned with the existing Workflow-shaped create path, Mission Control Workflow views, proposal promotion, artifacts, step ledger, cancellation, rerun, and summary flows. A new top-level workflow type is not required in v1.
 
@@ -211,7 +211,7 @@ Representative request:
           "stepSelectors": [
             { "logicalStepId": "run-tests", "attempt": 1 }
           ],
-          "taskRunIds": ["tr_01HV8A3Y6Y3Q0QAB7M7H1R5Q7N"]
+          "agentRunIds": ["tr_01HV8A3Y6Y3Q0QAB7M7H1R5Q7N"]
         },
         "mode": "snapshot_then_follow",
         "authorityMode": "admin_auto",
@@ -257,7 +257,7 @@ The backend normalizes remediation intent into:
 }
 ```
 
-The `task.remediation` object is the durable contract. Compatibility routes may expose different shapes, but they must normalize into this nested object before `MoonMind.Run` starts.
+The `task.remediation` object is the durable contract. Compatibility routes may expose different shapes, but they must normalize into this nested object before `MoonMind.UserWorkflow` starts.
 
 ### 7.3 Field semantics
 
@@ -271,9 +271,9 @@ Pinned target run instance. If omitted, the server resolves the latest/current r
 Optional bounded selectors for steps the remediation Workflow Execution should prioritize. Each selector may include:
 - `logicalStepId`
 - `attempt`
-- `taskRunId`
+- `agentRunId`
 
-#### `target.taskRunIds[]`
+#### `target.agentRunIds[]`
 Optional direct observability bindings when the creator already knows which managed-run records matter.
 
 #### `mode`
@@ -324,7 +324,7 @@ At create time, the platform must:
 3. reject malformed self-reference,
 4. reject unsupported target workflow types,
 5. resolve and persist a concrete `target.runId`,
-6. verify that selected `taskRunIds` belong to the target execution or selected steps,
+6. verify that selected `agentRunIds` belong to the target execution or selected steps,
 7. reject unsupported `authorityMode` values,
 8. validate `actionPolicyRef` existence and compatibility with the caller’s permission,
 9. reject nested remediation beyond policy limits,
@@ -438,7 +438,7 @@ The remediation Workflow Execution may need data from several MoonMind surfaces:
    - title, summary, lifecycle state, current run metadata, progress summary.
 
 2. **Step ledger**
-   - selected step status, attempt, summary, `taskRunId`, child refs, step-scoped artifact refs.
+   - selected step status, attempt, summary, `agentRunId`, child refs, step-scoped artifact refs.
 
 3. **Managed-run observability**
    - observability summary,
@@ -501,15 +501,15 @@ Representative shape:
       "attempt": 1,
       "status": "awaiting_external",
       "summary": "Waiting on managed runtime slot",
-      "taskRunId": "tr_01HV..."
+      "agentRunId": "tr_01HV..."
     }
   ],
   "evidence": {
     "stepLedgerRef": { "artifact_id": "art_step_ledger_snapshot" },
     "runSummaryRef": { "artifact_id": "art_run_summary" },
-    "taskRuns": [
+    "agentRuns": [
       {
-        "taskRunId": "tr_01HV...",
+        "agentRunId": "tr_01HV...",
         "observabilitySummaryRef": { "artifact_id": "art_obs_summary" },
         "stdoutRef": { "artifact_id": "art_stdout" },
         "stderrRef": { "artifact_id": "art_stderr" },
@@ -526,7 +526,7 @@ Representative shape:
   "liveFollow": {
     "mode": "snapshot_then_follow",
     "supported": true,
-    "taskRunId": "tr_01HV...",
+    "agentRunId": "tr_01HV...",
     "resumeCursor": { "sequence": 3842 }
   },
   "policies": {
@@ -552,10 +552,10 @@ The remediation runtime should not scrape Mission Control pages. It should recei
 - `remediation.read_target_artifact(artifactRef, readMode?)`
   Read a referenced artifact through normal artifact policy.
 
-- `remediation.read_target_logs(taskRunId, stream, cursor?, tailLines?)`
+- `remediation.read_target_logs(agentRunId, stream, cursor?, tailLines?)`
   Read or tail target logs through the `/api/agent-runs` observability surfaces.
 
-- `remediation.follow_target_logs(taskRunId, fromSequence?)`
+- `remediation.follow_target_logs(agentRunId, fromSequence?)`
   Live follow when supported.
 
 - `remediation.list_allowed_actions()`
@@ -577,7 +577,7 @@ Rules:
 
 1. the remediation Workflow Execution may follow only when:
    - the target run is active,
-   - the target `taskRunId` supports live follow,
+   - the target `agentRunId` supports live follow,
    - policy allows it;
 
 2. the remediation Workflow Execution must persist a resume cursor such as last seen `sequence`;
@@ -914,7 +914,7 @@ Therefore remediation needs its own lock and action ledger.
 Canonical lock scopes:
 
 - `target_execution`
-- `task_run`
+- `agent_run`
 - `managed_session`
 - `provider_profile_lease`
 - `workload_container`
@@ -992,7 +992,7 @@ If the target has materially changed, the action should either:
 
 ### 13.1 Remediation phases
 
-Remediation uses the existing top-level `mm_state` values of `MoonMind.Run`. It does **not** require a new top-level state machine in v1. Instead it exposes a bounded remediation-specific phase field inside summary/read models.
+Remediation uses the existing top-level `mm_state` values of `MoonMind.UserWorkflow`. It does **not** require a new top-level state machine in v1. Instead it exposes a bounded remediation-specific phase field inside summary/read models.
 
 Recommended `remediationPhase` values:
 

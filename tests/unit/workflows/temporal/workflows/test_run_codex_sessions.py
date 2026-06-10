@@ -78,7 +78,7 @@ async def test_run_defers_workflow_scoped_codex_session_until_slot_when_unbound(
         "deferManagedSessionUntilSlot"
     ] == {
         "runtimeId": "codex_cli",
-        "taskRunId": "wf-run-1",
+        "agentRunId": "wf-run-1",
     }
 
 @pytest.mark.asyncio
@@ -94,7 +94,7 @@ async def test_run_reuses_existing_workflow_scoped_codex_session_binding(
     )
     workflow._codex_session_binding = CodexManagedSessionBinding(
         workflowId="wf-run-1:session:codex_cli",
-        taskRunId="wf-run-1",
+        agentRunId="wf-run-1",
         sessionId="sess:wf-run-1:codex_cli",
         sessionEpoch=1,
         runtimeId="codex_cli",
@@ -195,7 +195,7 @@ async def test_run_clears_existing_workflow_scoped_codex_session_before_next_ste
             return {
                 "binding": {
                     "workflowId": "wf-run-1:session:codex_cli",
-                    "taskRunId": "wf-run-1",
+                    "agentRunId": "wf-run-1",
                     "sessionId": "sess:wf-run-1:codex_cli",
                     "sessionEpoch": 1,
                     "runtimeId": "codex_cli",
@@ -237,7 +237,7 @@ async def test_run_clears_existing_workflow_scoped_codex_session_before_next_ste
     _use_external_handle(monkeypatch, _FakeHandle())
     workflow._codex_session_binding = CodexManagedSessionBinding(
         workflowId="wf-run-1:session:codex_cli",
-        taskRunId="wf-run-1",
+        agentRunId="wf-run-1",
         sessionId="sess:wf-run-1:codex_cli",
         sessionEpoch=1,
         runtimeId="codex_cli",
@@ -311,7 +311,7 @@ async def test_run_does_not_clear_workflow_scoped_session_twice_for_same_step_re
             return {
                 "binding": {
                     "workflowId": "wf-run-1:session:codex_cli",
-                    "taskRunId": "wf-run-1",
+                    "agentRunId": "wf-run-1",
                     "sessionId": "sess:wf-run-1:codex_cli",
                     "sessionEpoch": 1,
                     "runtimeId": "codex_cli",
@@ -353,7 +353,7 @@ async def test_run_does_not_clear_workflow_scoped_session_twice_for_same_step_re
     _use_external_handle(monkeypatch, _FakeHandle())
     workflow._codex_session_binding = CodexManagedSessionBinding(
         workflowId="wf-run-1:session:codex_cli",
-        taskRunId="wf-run-1",
+        agentRunId="wf-run-1",
         sessionId="sess:wf-run-1:codex_cli",
         sessionEpoch=1,
         runtimeId="codex_cli",
@@ -376,13 +376,13 @@ async def test_run_does_not_clear_workflow_scoped_session_twice_for_same_step_re
     assert len(signal_calls) == 1
 
 
-def test_run_pending_agent_step_refs_include_session_task_run_id() -> None:
+def test_run_pending_agent_step_refs_include_session_agent_run_id() -> None:
     workflow = MoonMindRunWorkflow()
     request = _managed_request("codex").model_copy(
         update={
             "managed_session": CodexManagedSessionBinding(
                 workflowId="wf-run-1:session:codex_cli",
-                taskRunId="wf-run-1",
+                agentRunId="wf-run-1",
                 sessionId="sess:wf-run-1:codex_cli",
                 sessionEpoch=1,
                 runtimeId="codex_cli",
@@ -396,7 +396,7 @@ def test_run_pending_agent_step_refs_include_session_task_run_id() -> None:
         request=request,
     ) == {
         "childWorkflowId": "wf-run-1:agent:node-1",
-        "taskRunId": "wf-run-1",
+        "agentRunId": "wf-run-1",
     }
 
 @pytest.mark.asyncio
@@ -427,7 +427,7 @@ async def test_run_termination_v4_executes_activity_then_signal(
             return {
                 "binding": {
                     "workflowId": "wf-run-1:session:codex_cli",
-                    "taskRunId": "wf-run-1",
+                    "agentRunId": "wf-run-1",
                     "sessionId": "sess:wf-run-1:codex_cli",
                     "sessionEpoch": 1,
                     "runtimeId": "codex_cli",
@@ -465,7 +465,7 @@ async def test_run_termination_v4_executes_activity_then_signal(
     workflow._codex_session_handle = object()
     workflow._codex_session_binding = CodexManagedSessionBinding(
         workflowId="wf-run-1:session:codex_cli",
-        taskRunId="wf-run-1",
+        agentRunId="wf-run-1",
         sessionId="sess:wf-run-1:codex_cli",
         sessionEpoch=1,
         runtimeId="codex_cli",
@@ -523,7 +523,7 @@ async def test_run_termination_v3_preserves_update_first_replay_path(
     workflow._codex_session_handle = object()
     workflow._codex_session_binding = CodexManagedSessionBinding(
         workflowId="wf-run-1:session:codex_cli",
-        taskRunId="wf-run-1",
+        agentRunId="wf-run-1",
         sessionId="sess:wf-run-1:codex_cli",
         sessionEpoch=1,
         runtimeId="codex_cli",
@@ -571,7 +571,7 @@ async def test_run_termination_v3_activity_failure_falls_back_to_signal(
             return {
                 "binding": {
                     "workflowId": "wf-run-1:session:codex_cli",
-                    "taskRunId": "wf-run-1",
+                    "agentRunId": "wf-run-1",
                     "sessionId": "sess:wf-run-1:codex_cli",
                     "sessionEpoch": 1,
                     "runtimeId": "codex_cli",
@@ -607,7 +607,7 @@ async def test_run_termination_v3_activity_failure_falls_back_to_signal(
     workflow._codex_session_handle = object()
     workflow._codex_session_binding = CodexManagedSessionBinding(
         workflowId="wf-run-1:session:codex_cli",
-        taskRunId="wf-run-1",
+        agentRunId="wf-run-1",
         sessionId="sess:wf-run-1:codex_cli",
         sessionEpoch=1,
         runtimeId="codex_cli",
@@ -672,7 +672,7 @@ async def test_run_terminates_active_workflow_scoped_codex_session_with_v2_signa
     workflow._codex_session_handle = object()
     workflow._codex_session_binding = CodexManagedSessionBinding(
         workflowId="wf-run-1:session:codex_cli",
-        taskRunId="wf-run-1",
+        agentRunId="wf-run-1",
         sessionId="sess:wf-run-1:codex_cli",
         sessionEpoch=1,
         runtimeId="codex_cli",
@@ -726,7 +726,7 @@ async def test_run_terminates_workflow_scoped_codex_session_with_binding_only(
     workflow._codex_session_handle = None
     workflow._codex_session_binding = CodexManagedSessionBinding(
         workflowId="wf-run-1:session:codex_cli",
-        taskRunId="wf-run-1",
+        agentRunId="wf-run-1",
         sessionId="sess:wf-run-1:codex_cli",
         sessionEpoch=1,
         runtimeId="codex_cli",
@@ -776,7 +776,7 @@ async def test_run_termination_uses_v1_patch_history_for_inflight_runs(
             return {
                 "binding": {
                     "workflowId": "wf-run-1:session:codex_cli",
-                    "taskRunId": "wf-run-1",
+                    "agentRunId": "wf-run-1",
                     "sessionId": "sess:wf-run-1:codex_cli",
                     "sessionEpoch": 1,
                     "runtimeId": "codex_cli",
@@ -818,7 +818,7 @@ async def test_run_termination_uses_v1_patch_history_for_inflight_runs(
     workflow._codex_session_handle = object()
     workflow._codex_session_binding = CodexManagedSessionBinding(
         workflowId="wf-run-1:session:codex_cli",
-        taskRunId="wf-run-1",
+        agentRunId="wf-run-1",
         sessionId="sess:wf-run-1:codex_cli",
         sessionEpoch=1,
         runtimeId="codex_cli",
@@ -877,7 +877,7 @@ async def test_run_termination_uses_v1_signal_fallback_without_runtime_handles(
             return {
                 "binding": {
                     "workflowId": "wf-run-1:session:codex_cli",
-                    "taskRunId": "wf-run-1",
+                    "agentRunId": "wf-run-1",
                     "sessionId": "sess:wf-run-1:codex_cli",
                     "sessionEpoch": 1,
                     "runtimeId": "codex_cli",
@@ -904,7 +904,7 @@ async def test_run_termination_uses_v1_signal_fallback_without_runtime_handles(
     workflow._codex_session_handle = object()
     workflow._codex_session_binding = CodexManagedSessionBinding(
         workflowId="wf-run-1:session:codex_cli",
-        taskRunId="wf-run-1",
+        agentRunId="wf-run-1",
         sessionId="sess:wf-run-1:codex_cli",
         sessionEpoch=1,
         runtimeId="codex_cli",
@@ -953,7 +953,7 @@ async def test_run_termination_keeps_legacy_signal_only_path_when_patch_unset(
     workflow._codex_session_handle = object()
     workflow._codex_session_binding = CodexManagedSessionBinding(
         workflowId="wf-run-1:session:codex_cli",
-        taskRunId="wf-run-1",
+        agentRunId="wf-run-1",
         sessionId="sess:wf-run-1:codex_cli",
         sessionEpoch=1,
         runtimeId="codex_cli",
@@ -1002,7 +1002,7 @@ async def test_run_termination_v2_uses_session_control_signal(
     workflow._codex_session_handle = object()
     workflow._codex_session_binding = CodexManagedSessionBinding(
         workflowId="wf-run-1:session:codex_cli",
-        taskRunId="wf-run-1",
+        agentRunId="wf-run-1",
         sessionId="sess:wf-run-1:codex_cli",
         sessionEpoch=1,
         runtimeId="codex_cli",
@@ -1050,7 +1050,7 @@ async def test_run_termination_signals_session_when_v1_terminate_activity_fails(
             return {
                 "binding": {
                     "workflowId": "wf-run-1:session:codex_cli",
-                    "taskRunId": "wf-run-1",
+                    "agentRunId": "wf-run-1",
                     "sessionId": "sess:wf-run-1:codex_cli",
                     "sessionEpoch": 1,
                     "runtimeId": "codex_cli",
@@ -1081,7 +1081,7 @@ async def test_run_termination_signals_session_when_v1_terminate_activity_fails(
     workflow._codex_session_handle = object()
     workflow._codex_session_binding = CodexManagedSessionBinding(
         workflowId="wf-run-1:session:codex_cli",
-        taskRunId="wf-run-1",
+        agentRunId="wf-run-1",
         sessionId="sess:wf-run-1:codex_cli",
         sessionEpoch=1,
         runtimeId="codex_cli",

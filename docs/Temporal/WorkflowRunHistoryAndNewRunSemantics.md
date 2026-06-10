@@ -198,7 +198,7 @@ Rules:
 
 After Continue-As-New for a requested new run:
 
-- `MoonMind.Run` (renames to `MoonMind.UserWorkflow` in the hard switch) restarts in:
+- `MoonMind.UserWorkflow` (renames to `MoonMind.UserWorkflow` in the hard switch) restarts in:
  - `planning` when no `plan_ref` is present
  - `executing` when a `plan_ref` is already available
 - `MoonMind.ManifestIngest` restarts in `executing`
@@ -311,7 +311,7 @@ Client and documentation rules:
 MoonMind should also Continue-As-New when:
 
 - run history is growing beyond configured lifecycle thresholds
-- a `MoonMind.Run` execution exceeds the configured step-count threshold
+- a `MoonMind.UserWorkflow` execution exceeds the configured step-count threshold
 - a `MoonMind.ManifestIngest` execution exceeds the configured phase / wait-cycle threshold
 - an input update is large enough to count as a major reconfiguration and is safer as a clean restart
 

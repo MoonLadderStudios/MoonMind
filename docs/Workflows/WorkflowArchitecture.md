@@ -30,7 +30,7 @@ MoonMind uses a Temporal-backed execution model in which Mission Control acts as
 
 The control plane already centers on these product objects:
 
-- `MoonMind.Run` as the standard Workflow Execution type
+- `MoonMind.UserWorkflow` as the standard Workflow Execution type
 - first-class artifacts for large or binary inputs and outputs
 - step-authored Workflows rather than opaque queue jobs
 - reusable Workflow presets
@@ -127,7 +127,7 @@ flowchart LR
     end
 
     subgraph Execution Plane
-        API -.-> RUN[MoonMind.Run]
+        API -.-> RUN[MoonMind.UserWorkflow]
         RUN --> PREP[Prepare / Artifact Activities]
         RUN --> VISION[Vision Context Activity]
         RUN --> STEP[Planner or Step Runtime]
@@ -462,7 +462,7 @@ Rules:
 
 ### 8.1 Workflow responsibilities
 
-`MoonMind.Run` owns:
+`MoonMind.UserWorkflow` owns:
 
 - durable state progression
 - waiting, retry, and cancel semantics
@@ -514,7 +514,7 @@ Rules:
 
 ### 8.6 Resume execution responsibilities
 
-When a new execution starts with `task.resume.kind === "recover_from_failed_step"`, `MoonMind.Run` owns:
+When a new execution starts with `task.resume.kind === "recover_from_failed_step"`, `MoonMind.UserWorkflow` owns:
 
 - loading and validating the recovery checkpoint
 - verifying the checkpoint source `workflowId`, `runId`, Workflow snapshot, and plan identity
@@ -630,17 +630,17 @@ The following invariants define the desired-state Workflow Execution system.
 
 ## 12. Workload-specific behavior
 
-### 12.1 `MoonMind.Run`
+### 12.1 `MoonMind.UserWorkflow`
 
 This is the canonical attachment-aware Workflow type.
 
 Rules:
 
-- attachment-aware Workflow authoring is defined against `MoonMind.Run`
-- create, edit, rerun, and detail flows for attachment-aware Workflows are all modeled in Workflow-shaped `MoonMind.Run` terms
-- `MoonMind.Run` is the canonical workflow that produces step ledger state and recovery checkpoints for failed-step recovery
-- `MoonMind.Run` may start from the beginning for full retry or start at a failed step when given a validated recovery checkpoint
-- checkpoint durability remains a parent `MoonMind.Run` responsibility even when an individual step delegates work to `MoonMind.AgentRun`
+- attachment-aware Workflow authoring is defined against `MoonMind.UserWorkflow`
+- create, edit, rerun, and detail flows for attachment-aware Workflows are all modeled in Workflow-shaped `MoonMind.UserWorkflow` terms
+- `MoonMind.UserWorkflow` is the canonical workflow that produces step ledger state and recovery checkpoints for failed-step recovery
+- `MoonMind.UserWorkflow` may start from the beginning for full retry or start at a failed step when given a validated recovery checkpoint
+- checkpoint durability remains a parent `MoonMind.UserWorkflow` responsibility even when an individual step delegates work to `MoonMind.AgentRun`
 
 ### 12.2 `MoonMind.AgentRun`
 

@@ -640,7 +640,7 @@ class MoonMindMergeAutomationWorkflow:
                     child_kwargs["memo"] = self._resolver_child_memo(resolver_request)
                 try:
                     resolver_result = await workflow.execute_child_workflow(
-                        "MoonMind.Run",
+                        "MoonMind.UserWorkflow",
                         resolver_request,
                         **child_kwargs,
                     )

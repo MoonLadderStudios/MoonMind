@@ -335,11 +335,11 @@ class RecurringWorkflowsService:
         return definition
 
     def _expected_workflow_type_for_target_kind(self, kind: str) -> str:
-        if kind in {"queue_task", "queue_task_template"}:
-            return "MoonMind.Run"
+        if kind in {"workflow_execution", "workflow_template", "queue_task", "queue_task_template"}:
+            return "MoonMind.UserWorkflow"
         elif kind == "manifest_run":
             return "MoonMind.ManifestIngest"
-        return "MoonMind.Run"
+        return "MoonMind.UserWorkflow"
 
     async def create_definition(
         self,

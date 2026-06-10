@@ -232,7 +232,7 @@ async def _build_agent_run_artifact_session_projection(
         record = await asyncio.to_thread(store.load, session_id)
     except ValueError:
         return None
-    if record is None or record.task_run_id != agent_run_id:
+    if record is None or record.agent_run_id != agent_run_id:
         return None
 
     cache: dict[str, ArtifactMetadataModel | None] = {}
@@ -298,7 +298,7 @@ async def _build_agent_run_artifact_session_projection(
 
     return ArtifactSessionProjectionModel(
         # legacy_run contract: wire field name
-        task_run_id=record.task_run_id,
+        agent_run_id=record.agent_run_id,
         session_id=record.session_id,
         session_epoch=record.session_epoch,
         grouped_artifacts=groups,
@@ -327,7 +327,7 @@ def _load_agent_run_session_record(agent_run_id: str) -> CodexManagedSessionReco
             record = CodexManagedSessionRecord(**payload)
         except (OSError, json.JSONDecodeError, ValueError, TypeError):
             continue
-        if record.task_run_id != agent_run_id:
+        if record.agent_run_id != agent_run_id:
             continue
         candidate_updated_at = record.updated_at or record.started_at
         if best_record is None or (
@@ -1221,7 +1221,7 @@ async def control_agent_run_artifact_session(
         record = await asyncio.to_thread(store.load, session_id)
     except ValueError:
         record = None
-    if record is None or record.task_run_id != agent_run_id:
+    if record is None or record.agent_run_id != agent_run_id:
         _session_projection_not_found()
     if record.status in {"terminated", "degraded", "failed"}:
         raise HTTPException(

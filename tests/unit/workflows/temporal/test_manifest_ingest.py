@@ -334,7 +334,7 @@ def test_runtime_manifest_nodes_preserve_dependencies_and_requester() -> None:
             "nodeId": "node-a",
             "state": "ready",
             "title": "A",
-            "workflowType": "MoonMind.Run",
+            "workflowType": "MoonMind.UserWorkflow",
             "childWorkflowId": None,
             "childRunId": None,
             "resultArtifactRef": None,
@@ -449,7 +449,7 @@ def test_manifest_workflow_run_uses_owner_principal_and_child_owner_id(
     assert activity_calls[2][1]["principal"] == "user-1"
     assert child_calls == [
         {
-            "workflow_type": "MoonMind.Run",
+            "workflow_type": "MoonMind.UserWorkflow",
             "owner_id": "user-1",
             "title": "A",
             "input_artifact_ref": "art_manifest_1",
@@ -463,7 +463,7 @@ def test_manifest_workflow_run_uses_owner_principal_and_child_owner_id(
                 "requestedBy": {"type": "user", "id": "user-1"},
                 "runtimeHints": {
                     "manifestNodeState": "running",
-                    "workflowType": "MoonMind.Run",
+                    "workflowType": "MoonMind.UserWorkflow",
                 },
                 "parentClosePolicy": "REQUEST_CANCEL",
             },

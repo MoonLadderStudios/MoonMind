@@ -1180,7 +1180,7 @@ Workspace settings describe shared behavior for a workspace.
 
 Examples:
 
-- default task runtime,
+- default agent runtime,
 - default publish mode,
 - workspace provider routing defaults,
 - skill policy mode,

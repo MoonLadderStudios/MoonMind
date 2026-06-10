@@ -78,7 +78,7 @@ async def test_accepted_recovery_carries_canonical_recovery_and_recovery_refs(
         async with maker() as session:
             service = TemporalExecutionService(session, client_adapter=AsyncMock())
             created = await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=uuid4(),
                 title="Recovery source",
                 input_artifact_ref="artifact://input/source",
@@ -86,7 +86,7 @@ async def test_accepted_recovery_carries_canonical_recovery_and_recovery_refs(
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={
-                    "taskRunId": "old-task-run",
+                    "agentRunId": "old-agent-run",
                     "task": {"title": "Recovery source", "instructions": "Original"},
                 },
                 idempotency_key=None,
@@ -128,7 +128,7 @@ async def test_accepted_recovery_carries_canonical_recovery_and_recovery_refs(
         "planRef": "artifact://plan/source",
         "planDigest": "sha256:plan",
     }
-    assert "taskRunId" not in resumed.parameters
+    assert "agentRunId" not in resumed.parameters
 
 
 async def test_generic_rerun_does_not_carry_recovery_reference_fields(
@@ -138,7 +138,7 @@ async def test_generic_rerun_does_not_carry_recovery_reference_fields(
         async with maker() as session:
             service = TemporalExecutionService(session, client_adapter=AsyncMock())
             created = await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=uuid4(),
                 title="Recovery source",
                 input_artifact_ref="artifact://input/source",
@@ -217,7 +217,7 @@ async def test_edited_full_retry_does_not_carry_recovery_reference_fields(
         async with maker() as session:
             service = TemporalExecutionService(session, client_adapter=AsyncMock())
             created = await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=uuid4(),
                 title="Recovery source",
                 input_artifact_ref="artifact://input/source",

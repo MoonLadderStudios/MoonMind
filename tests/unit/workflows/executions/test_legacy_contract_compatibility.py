@@ -3,7 +3,7 @@
 The MoonMind Task -> Workflow Execution hard switch renames Python symbols in
 the core contract layer (``moonmind.workflows.executions``), but serialized
 payload shapes, persisted values, and replay-stable patch identifiers written
-by ``MoonMind.Run`` histories MUST NOT change until the MoonMind.UserWorkflow
+by ``MoonMind.UserWorkflow`` histories MUST NOT change until the MoonMind.UserWorkflow
 v2 cutover (MM-730).  These tests pin the legacy_run contract so the rename
 cannot drift wire shapes for in-flight runs.
 """
@@ -76,7 +76,7 @@ def test_model_source_value_task_override_is_unchanged() -> None:
     assert source == "task_override"
 
 def test_workflow_scoped_session_patch_ids_keep_legacy_values() -> None:
-    """Replay-stable workflow.patched ids must not change for MoonMind.Run."""
+    """Replay-stable workflow.patched ids must not change for MoonMind.UserWorkflow."""
 
     from moonmind.workflows.temporal.workflows import run as run_module
 

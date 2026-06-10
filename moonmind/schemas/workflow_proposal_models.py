@@ -65,8 +65,8 @@ class WorkflowProposalModel(BaseModel):
     external_url: Optional[str] = Field(None, alias="externalUrl")
     delivered_at: Optional[datetime] = Field(None, alias="deliveredAt")
     last_synced_at: Optional[datetime] = Field(None, alias="lastSyncedAt")
-    # legacy_run contract: taskSnapshotRef wire alias and DB-bound attribute (WP7/v2 cutover)
-    task_snapshot_ref: Optional[str] = Field(None, alias="taskSnapshotRef")
+    # legacy_run contract: workflowSnapshotRef wire alias and DB-bound attribute (WP7/v2 cutover)
+    workflow_snapshot_ref: Optional[str] = Field(None, alias="workflowSnapshotRef")
     provider_metadata: dict[str, Any] = Field(default_factory=dict, alias="providerMetadata")
     resolved_policy: dict[str, Any] = Field(default_factory=dict, alias="resolvedPolicy")
     review_delivery: dict[str, Any] = Field(default_factory=dict, alias="reviewDelivery")
@@ -85,9 +85,9 @@ class WorkflowProposalModel(BaseModel):
     created_at: datetime = Field(..., alias="createdAt")
     updated_at: datetime = Field(..., alias="updatedAt")
     origin: WorkflowProposalOriginModel = Field(..., alias="origin")
-    # legacy_run contract: taskCreateRequest wire alias is produced by agent proposal
+    # legacy_run contract: workflowCreateRequest wire alias is produced by agent proposal
     # skills and Temporal activity payloads; renames at the v2 cutover, not before
-    task_create_request: dict[str, Any] = Field(..., alias="taskCreateRequest")
+    workflow_create_request: dict[str, Any] = Field(..., alias="workflowCreateRequest")
     # legacy_run contract: taskPreview wire alias renames at the v2 cutover
     task_preview: Optional[WorkflowProposalPreview] = Field(None, alias="taskPreview")
     promotion_result: dict[str, Any] | None = Field(None, alias="promotionResult")
@@ -116,9 +116,9 @@ class WorkflowProposalCreateRequest(BaseModel):
     category: Optional[str] = Field(None, alias="category")
     tags: Optional[list[str]] = Field(None, alias="tags")
     origin: WorkflowProposalOriginModel = Field(..., alias="origin")
-    # legacy_run contract: taskCreateRequest wire alias is produced by agent proposal
+    # legacy_run contract: workflowCreateRequest wire alias is produced by agent proposal
     # skills and Temporal activity payloads; renames at the v2 cutover, not before
-    task_create_request: dict[str, Any] = Field(..., alias="taskCreateRequest")
+    workflow_create_request: dict[str, Any] = Field(..., alias="workflowCreateRequest")
     review_priority: Optional[str] = Field(None, alias="reviewPriority")
     provider: Optional[str] = Field(None, alias="provider")
     provider_metadata: dict[str, Any] | None = Field(None, alias="providerMetadata")

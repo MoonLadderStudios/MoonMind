@@ -421,7 +421,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         self._save_run_state(
             run_id=run_id,
             agent_id=request.agent_id,
-            managed_run_id=binding.task_run_id,
+            managed_run_id=binding.agent_run_id,
             binding=binding,
             workspace_path=workspace_path,
             locator=locator.model_dump(mode="json", by_alias=True),
@@ -476,7 +476,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 failure_result = self._persist_failed_run_state(
                     run_id=run_id,
                     agent_id=request.agent_id,
-                    managed_run_id=binding.task_run_id,
+                    managed_run_id=binding.agent_run_id,
                     binding=binding,
                     workspace_path=workspace_path,
                     locator=current_locator.model_dump(mode="json", by_alias=True),
@@ -560,7 +560,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                         retry_metadata["priorTurnFailure"] = turn_metadata
                         publication = await self._publish_failure_artifacts(
                             locator=current_locator,
-                            managed_run_id=binding.task_run_id,
+                            managed_run_id=binding.agent_run_id,
                             run_id=run_id,
                         )
                         failure_error = _publish_activity_error_result(
@@ -573,7 +573,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 else:
                     publication = await self._publish_failure_artifacts(
                         locator=current_locator,
-                        managed_run_id=binding.task_run_id,
+                        managed_run_id=binding.agent_run_id,
                         run_id=run_id,
                     )
                     failure_error = _publish_activity_error_result(
@@ -609,13 +609,13 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 )
                 publication = await self._publish_failure_artifacts(
                     locator=current_locator,
-                    managed_run_id=binding.task_run_id,
+                    managed_run_id=binding.agent_run_id,
                     run_id=run_id,
                 )
                 failure_result = self._persist_failed_run_state(
                     run_id=run_id,
                     agent_id=request.agent_id,
-                    managed_run_id=binding.task_run_id,
+                    managed_run_id=binding.agent_run_id,
                     binding=binding,
                     workspace_path=workspace_path,
                     locator=current_locator.model_dump(mode="json", by_alias=True),
@@ -666,7 +666,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                             sessionEpoch=current_locator.session_epoch,
                             containerId=current_locator.container_id,
                             threadId=current_locator.thread_id,
-                            taskRunId=binding.task_run_id,
+                            agentRunId=binding.agent_run_id,
                             metadata={"runId": run_id, "workflowId": self._workflow_id},
                         )
                     )
@@ -731,7 +731,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 failure_result = self._persist_failed_run_state(
                     run_id=run_id,
                     agent_id=request.agent_id,
-                    managed_run_id=binding.task_run_id,
+                    managed_run_id=binding.agent_run_id,
                     binding=binding,
                     workspace_path=workspace_path,
                     locator=current_locator.model_dump(mode="json", by_alias=True),
@@ -761,7 +761,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 self._save_run_state(
                     run_id=run_id,
                     agent_id=request.agent_id,
-                    managed_run_id=binding.task_run_id,
+                    managed_run_id=binding.agent_run_id,
                     binding=binding,
                     workspace_path=workspace_path,
                     locator=current_locator.model_dump(mode="json", by_alias=True),
@@ -778,7 +778,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             self._save_run_state(
                 run_id=run_id,
                 agent_id=request.agent_id,
-                managed_run_id=binding.task_run_id,
+                managed_run_id=binding.agent_run_id,
                 binding=binding,
                 workspace_path=workspace_path,
                 locator=current_locator.model_dump(mode="json", by_alias=True),
@@ -809,7 +809,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 failure_result = self._persist_failed_run_state(
                     run_id=run_id,
                     agent_id=request.agent_id,
-                    managed_run_id=binding.task_run_id,
+                    managed_run_id=binding.agent_run_id,
                     binding=binding,
                     workspace_path=workspace_path,
                     locator=current_locator.model_dump(mode="json", by_alias=True),
@@ -1187,7 +1187,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             runtimeFamily=managed_session_runtime_family_for_runtime_id(
                 active_binding.runtime_id
             ),
-            taskRunId=active_binding.task_run_id,
+            agentRunId=active_binding.agent_run_id,
             workflowId=self._workflow_id,
             sessionId=active_binding.session_id,
             sessionEpoch=active_binding.session_epoch,
@@ -1271,7 +1271,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             str(key): str(value) for key, value in environment.items()
         }
         session_environment.setdefault("MOONMIND_WORKDIR", str(self._workspace_root))
-        session_environment.setdefault("MOONMIND_JOB_ID", binding.task_run_id)
+        session_environment.setdefault("MOONMIND_JOB_ID", binding.agent_run_id)
         # Task identity is authorization-critical: caller-inheritance checks rely on these
         # values matching the active workflow/binding. Overwrite any incoming overrides so
         # a managed profile cannot spoof or stale-pin the identity of the current run.
@@ -1279,7 +1279,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             session_environment["MOONMIND_TASK_WORKFLOW_ID"] = self._task_workflow_id
         else:
             session_environment.pop("MOONMIND_TASK_WORKFLOW_ID", None)
-        session_environment["MOONMIND_TASK_RUN_ID"] = binding.task_run_id
+        session_environment["MOONMIND_AGENT_RUN_ID"] = binding.agent_run_id
         session_environment.setdefault(
             "MOONMIND_CONTAINER_WORKSPACE_VOLUME",
             os.environ.get("MOONMIND_AGENT_WORKSPACES_VOLUME_NAME", "agent_workspaces"),
@@ -1408,7 +1408,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         return str(self._session_root(binding) / "repo")
 
     def _session_root(self, binding: CodexManagedSessionBinding) -> Path:
-        return self._workspace_root / binding.task_run_id
+        return self._workspace_root / binding.agent_run_id
 
     def _default_thread_id(self, binding: CodexManagedSessionBinding) -> str:
         return f"thread:{binding.session_id}:{binding.session_epoch}"
@@ -1708,7 +1708,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                         sessionEpoch=locator.session_epoch,
                         containerId=locator.container_id,
                         threadId=locator.thread_id,
-                        taskRunId=managed_run_id or run_id,
+                        agentRunId=managed_run_id or run_id,
                         metadata={"runId": run_id, "workflowId": self._workflow_id},
                     )
                 )

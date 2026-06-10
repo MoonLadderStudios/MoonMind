@@ -91,8 +91,8 @@ class ProposalDeliveryRequest:
     priority: str
     dedup_key: str
     dedup_hash: str
-    task_snapshot_ref: str | None
-    task_create_request: Mapping[str, Any]
+    workflow_snapshot_ref: str | None
+    workflow_create_request: Mapping[str, Any]
     origin_metadata: Mapping[str, Any]
     provider_metadata: Mapping[str, Any]
     resolved_policy: Mapping[str, Any]
@@ -367,7 +367,7 @@ def _safe_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _marker(request: ProposalDeliveryRequest) -> str:
-    snapshot = request.task_snapshot_ref or "stored-proposal-snapshot"
+    snapshot = request.workflow_snapshot_ref or "stored-proposal-snapshot"
     return (
         "<!-- moonmind-proposal "
         f"record={request.record_id} dedup={request.dedup_hash} "
@@ -387,8 +387,8 @@ def _evidence_lines(request: ProposalDeliveryRequest) -> list[str]:
         value = _clean(metadata.get(key))
         if value:
             lines.append(f"- {label}: `{value}`")
-    if request.task_snapshot_ref:
-        lines.append(f"- Stored proposal snapshot: `{request.task_snapshot_ref}`")
+    if request.workflow_snapshot_ref:
+        lines.append(f"- Stored proposal snapshot: `{request.workflow_snapshot_ref}`")
     lines.append(f"- Dedup key: `{request.dedup_key}`")
     lines.append(f"- Dedup hash: `{request.dedup_hash}`")
     return lines
@@ -621,8 +621,8 @@ def request_from_proposal(proposal: Any) -> ProposalDeliveryRequest:
         or "normal",
         dedup_key=_clean(getattr(proposal, "dedup_key", "")),
         dedup_hash=_clean(getattr(proposal, "dedup_hash", "")),
-        task_snapshot_ref=getattr(proposal, "task_snapshot_ref", None),
-        task_create_request=getattr(proposal, "task_create_request", None) or {},
+        workflow_snapshot_ref=getattr(proposal, "workflow_snapshot_ref", None),
+        workflow_create_request=getattr(proposal, "workflow_create_request", None) or {},
         origin_metadata=getattr(proposal, "origin_metadata", None) or {},
         provider_metadata=getattr(proposal, "provider_metadata", None) or {},
         resolved_policy=getattr(proposal, "resolved_policy", None) or {},

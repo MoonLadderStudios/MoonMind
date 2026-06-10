@@ -217,7 +217,7 @@ Returned by session-aware list endpoints.
 
 ```json
 {
-  "task_run_id": "tr_...",
+  "agent_run_id": "tr_...",
   "session_id": "sess_...",
   "session_epoch": 3,
   "grouped_artifacts": [
@@ -492,7 +492,7 @@ Rules:
 
 ### 7.10 Get artifact projection for a workflow-scoped session
 
-`GET /api/agent-runs/{task_run_id}/artifact-sessions/{session_id}`
+`GET /api/agent-runs/{agent_run_id}/artifact-sessions/{session_id}`
 
 Response:
 
@@ -588,7 +588,7 @@ Common session-continuity modes:
 
 Default session view call:
 
-- `GET /api/agent-runs/{task_run_id}/artifact-sessions/{session_id}`
+- `GET /api/agent-runs/{agent_run_id}/artifact-sessions/{session_id}`
 
 Artifact detail drawer/page should:
 

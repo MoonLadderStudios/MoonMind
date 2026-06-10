@@ -28,7 +28,7 @@ class RunDigestEvidence(BaseModel):
 
     workflow_id: str = Field(..., alias="workflowId", min_length=1)
     run_id: str = Field(..., alias="runId", min_length=1)
-    task_run_id: str | None = Field(None, alias="taskRunId")
+    agent_run_id: str | None = Field(None, alias="agentRunId")
     summary_artifact_ref: str | None = Field(None, alias="summaryArtifactRef")
     input_ref: str | None = Field(None, alias="inputRef")
     plan_ref: str | None = Field(None, alias="planRef")
@@ -39,7 +39,7 @@ class RunDigestEvidence(BaseModel):
 
 
 class RunDigest(BaseModel):
-    """Short structured summary of one terminal task run."""
+    """Short structured summary of one terminal agent run."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -88,8 +88,8 @@ class RunDigest(BaseModel):
             f"workflowId={self.evidence.workflow_id}",
             f"runId={self.evidence.run_id}",
         ]
-        if self.evidence.task_run_id:
-            evidence_bits.append(f"taskRunId={self.evidence.task_run_id}")
+        if self.evidence.agent_run_id:
+            evidence_bits.append(f"agentRunId={self.evidence.agent_run_id}")
         if self.evidence.summary_artifact_ref:
             evidence_bits.append(f"summaryRef={self.evidence.summary_artifact_ref}")
         if self.evidence.artifact_refs:
@@ -194,12 +194,12 @@ class TaskHistoryService:
             params.get("summary_artifact_ref"),
             params.get("summaryArtifactRef"),
         )
-        task_run_id = _first_text(
-            memo.get("taskRunId"),
-            memo.get("task_run_id"),
-            attrs.get("mm_task_run_id"),
-            params.get("taskRunId"),
-            params.get("task_run_id"),
+        agent_run_id = _first_text(
+            memo.get("agentRunId"),
+            memo.get("agent_run_id"),
+            attrs.get("mm_agent_run_id"),
+            params.get("agentRunId"),
+            params.get("agent_run_id"),
         )
         pull_request_url = _first_text(
             publish.get("pullRequestUrl"),
@@ -216,7 +216,7 @@ class TaskHistoryService:
         evidence = RunDigestEvidence(
             workflowId=workflow_id,
             runId=run_id,
-            taskRunId=task_run_id,
+            agentRunId=agent_run_id,
             summaryArtifactRef=summary_ref,
             inputRef=_first_text(getattr(record, "input_ref", None)),
             planRef=_first_text(getattr(record, "plan_ref", None)),
@@ -274,9 +274,9 @@ class TaskHistoryService:
                 "run_id": digest.run_id,
             }
         )
-        if digest.evidence.task_run_id:
-            payload["taskRunId"] = digest.evidence.task_run_id
-            payload["task_run_id"] = digest.evidence.task_run_id
+        if digest.evidence.agent_run_id:
+            payload["agentRunId"] = digest.evidence.agent_run_id
+            payload["agent_run_id"] = digest.evidence.agent_run_id
         return payload
 
     def upsert_run_digest(self, digest: RunDigest) -> MutableMapping[str, Any]:

@@ -63,11 +63,11 @@ class OperationalRefreshIntent:
     recorded_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
-class TaskCreationDefaultsSubscriber:
-    """Tracks task-creation default refreshes triggered by setting changes."""
+class WorkflowCreationDefaultsSubscriber:
+    """Tracks workflow-creation default refreshes triggered by setting changes."""
 
-    name = "task_creation_defaults"
-    refresh_targets = frozenset({"task_creation_defaults"})
+    name = "workflow_creation_defaults"
+    refresh_targets = frozenset({"workflow_creation_defaults"})
 
     def __init__(self) -> None:
         self.version: int = 0
@@ -196,7 +196,7 @@ def register_default_subscribers(
 
     target_publisher = publisher or get_settings_change_publisher()
     factories: tuple[Callable[[], object], ...] = (
-        TaskCreationDefaultsSubscriber,
+        WorkflowCreationDefaultsSubscriber,
         lambda: WorkerReloadSubscriber(on_reload=worker_on_reload),
         lambda: ProviderProfileManagerSubscriber(
             on_refresh=provider_profile_on_refresh
@@ -224,7 +224,7 @@ __all__ = [
     "OperationalRefreshIntent",
     "ProviderProfileManagerSubscriber",
     "ProviderProfileRefreshIntent",
-    "TaskCreationDefaultsSubscriber",
+    "WorkflowCreationDefaultsSubscriber",
     "WorkerReloadIntent",
     "WorkerReloadSubscriber",
     "register_default_subscribers",

@@ -91,9 +91,9 @@ from moonmind.schemas.temporal_models import (
     StepLedgerSnapshotModel,
     UpdateExecutionRequest,
     UpdateExecutionResponse,
-    TASK_RUN_ID_MEMO_KEYS,
-    TASK_RUN_ID_PARAM_KEYS,
-    TASK_RUN_ID_SEARCH_ATTR_KEYS,
+    AGENT_RUN_ID_MEMO_KEYS,
+    AGENT_RUN_ID_PARAM_KEYS,
+    AGENT_RUN_ID_SEARCH_ATTR_KEYS,
     normalize_dependency_ids,
 )
 from moonmind.workflows.temporal import (
@@ -111,6 +111,9 @@ from moonmind.workflows.temporal.artifacts import (
 from moonmind.workflows.temporal.report_artifacts import build_report_projection_summary
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.client import TemporalClientAdapter, query_workflow
+from moonmind.workflows.temporal.hard_switch_cutover import (
+    resolve_user_workflow_start_contract,
+)
 from moonmind.workflows.executions.model_resolver import resolve_effective_model
 from moonmind.workflows.executions.preset_goal_scheduler import (
     GoalPresetSchedule,
@@ -157,9 +160,9 @@ _SUPPORTED_TASK_RUNTIMES = frozenset({
     "claude",
 })
 _TEMPORAL_SCOPE_QUERIES = {
-    "workflows": 'WorkflowType="MoonMind.Run" AND mm_entry="user_workflow"',
-    "user": '(WorkflowType="MoonMind.Run" OR WorkflowType="MoonMind.ManifestIngest")',
-    "system": 'WorkflowType!="MoonMind.Run" AND WorkflowType!="MoonMind.ManifestIngest"',
+    "workflows": 'WorkflowType="MoonMind.UserWorkflow" AND mm_entry="user_workflow"',
+    "user": '(WorkflowType="MoonMind.UserWorkflow" OR WorkflowType="MoonMind.ManifestIngest")',
+    "system": 'WorkflowType!="MoonMind.UserWorkflow" AND WorkflowType!="MoonMind.ManifestIngest"',
     "all": "",
 }
 _DASHBOARD_STATUS_BY_STATE: dict[MoonMindWorkflowState, str] = {
@@ -386,7 +389,7 @@ def _emit_task_editing_metric(
         tags["applied"] = _bounded_metric_tag(applied)
     try:
         get_metrics_emitter().increment(
-            "temporal_task_editing.event",
+            "temporal_workflow_editing.event",
             tags=tags,
         )
     except Exception:
@@ -473,7 +476,7 @@ def _normalize_temporal_list_scope(
 
 
 def _is_user_workflow_list_type(workflow_type: str | None) -> bool:
-    return str(workflow_type or "").strip() == "MoonMind.Run"
+    return str(workflow_type or "").strip() == "MoonMind.UserWorkflow"
 
 
 def _is_user_workflow_list_entry(entry: str | None) -> bool:
@@ -1739,18 +1742,18 @@ def _serialize_execution(
 
     params_raw = getattr(record, "parameters", None)
     params = dict(params_raw) if isinstance(params_raw, dict) else {}
-    task_run_id = None
+    agent_run_id = None
     # The sources are checked in order of preference.
     sources_to_check = (
-        [memo.get(k) for k in TASK_RUN_ID_MEMO_KEYS]
-        + [search_attributes.get(k) for k in TASK_RUN_ID_SEARCH_ATTR_KEYS]
-        + [params.get(k) for k in TASK_RUN_ID_PARAM_KEYS]
+        [memo.get(k) for k in AGENT_RUN_ID_MEMO_KEYS]
+        + [search_attributes.get(k) for k in AGENT_RUN_ID_SEARCH_ATTR_KEYS]
+        + [params.get(k) for k in AGENT_RUN_ID_PARAM_KEYS]
     )
     for value in sources_to_check:
         if value:
             candidate = str(value).strip()
             if candidate:
-                task_run_id = candidate
+                agent_run_id = candidate
                 break
     target_runtime, param_model, param_effort = [
         str(params.get(key) or "").strip() or None
@@ -1773,7 +1776,7 @@ def _serialize_execution(
             or _coerce_temporal_scalar(memo.get("target_runtime"))
         ) or None
 
-    task_params = params.get("task") if isinstance(params.get("task"), dict) else {}
+    task_params = _workflow_payload_from_parameters(params)
     tool_params = (
         task_params.get("tool") if isinstance(task_params.get("tool"), dict) else {}
     )
@@ -1811,9 +1814,7 @@ def _serialize_execution(
             or _coerce_temporal_scalar(memo.get("skill"))
         ) or None
 
-    task_payload = params.get("task")
-    if not isinstance(task_payload, dict):
-        task_payload = {}
+    task_payload = _workflow_payload_from_parameters(params)
 
     task_runtime_payload = task_payload.get("runtime")
     if not isinstance(task_runtime_payload, dict):
@@ -1989,7 +1990,7 @@ def _serialize_execution(
         settings.temporal_dashboard.steps_endpoint.replace(
             "{workflowId}", record.workflow_id
         )
-        if workflow_type_value == "MoonMind.Run"
+        if workflow_type_value == "MoonMind.UserWorkflow"
         else None
     )
     resume_summary = _build_recovery_summary(record, actions=actions)
@@ -2042,8 +2043,7 @@ def _serialize_execution(
 
     return ExecutionModel(
         task_id=None,
-        task_run_id=task_run_id,
-        agent_run_id=task_run_id,
+        agent_run_id=agent_run_id,
         progress=None,
         namespace=record.namespace,
         source=_TEMPORAL_SOURCE,
@@ -2656,7 +2656,7 @@ def _build_recovery_summary(
     *,
     actions: ExecutionActionCapabilityModel,
 ) -> ExecutionResumeSummaryModel | None:
-    if _enum_value(getattr(record, "workflow_type", None)) != "MoonMind.Run":
+    if _enum_value(getattr(record, "workflow_type", None)) != "MoonMind.UserWorkflow":
         return None
     return ExecutionResumeSummaryModel(
         available=actions.can_recover_from_failed_step,
@@ -2701,7 +2701,7 @@ def _build_related_runs(
                 )
             )
 
-    task_payload = params.get("task") if isinstance(params.get("task"), Mapping) else {}
+    task_payload = _workflow_payload_from_parameters(params)
     comparison_source = task_payload.get("comparison")
     if isinstance(comparison_source, Mapping):
         source_workflow_id = str(
@@ -2729,7 +2729,7 @@ def _build_related_runs(
 
 def _execution_related_run_metadata(record: TemporalExecutionRecord) -> dict[str, Any]:
     params = record.parameters if isinstance(record.parameters, Mapping) else {}
-    task_payload = params.get("task") if isinstance(params.get("task"), Mapping) else {}
+    task_payload = _workflow_payload_from_parameters(params)
     runtime_payload = task_payload.get("runtime")
     if not isinstance(runtime_payload, Mapping):
         runtime_payload = {}
@@ -3119,7 +3119,7 @@ def _build_target_diagnostics(
 ) -> dict[str, Any] | None:
     memo = dict(getattr(record, "memo", None) or {})
     search_attributes = dict(getattr(record, "search_attributes", None) or {})
-    task_payload = params.get("task") if isinstance(params.get("task"), Mapping) else {}
+    task_payload = _workflow_payload_from_parameters(params)
     diagnostics_block = _target_diagnostics_block(
         params=params,
         memo=memo,
@@ -3301,7 +3301,7 @@ async def _resolver_child_observability(
     temporal_client: Client,
     workflow_id: str,
 ) -> ExecutionMergeAutomationResolverChildModel:
-    task_run_id: str | None = None
+    agent_run_id: str | None = None
     child_status: str | None = None
     try:
         payload = await _query_workflow_for_detail(
@@ -3327,16 +3327,16 @@ async def _resolver_child_observability(
                 refs = step.get("refs")
                 if not isinstance(refs, Mapping):
                     continue
-                task_run_id = (
-                    _coerce_temporal_scalar(refs.get("taskRunId"))
-                    or _coerce_temporal_scalar(refs.get("task_run_id"))
+                agent_run_id = (
+                    _coerce_temporal_scalar(refs.get("agentRunId"))
+                    or _coerce_temporal_scalar(refs.get("agent_run_id"))
                     or None
                 )
-                if task_run_id:
+                if agent_run_id:
                     break
     return ExecutionMergeAutomationResolverChildModel(
         workflowId=workflow_id,
-        taskRunId=task_run_id,
+        agentRunId=agent_run_id,
         status=child_status,
         detailHref=f"/workflows/{quote(workflow_id, safe='')}?source=temporal",
     )
@@ -3600,14 +3600,14 @@ async def _enrich_step_ledger_agent_run_refs(payload: Any) -> Any:
         refs = step.get("refs")
         if not isinstance(refs, Mapping):
             continue
-        existing_task_run_id = str(
-            refs.get("taskRunId") or refs.get("task_run_id") or ""
+        existing_agent_run_id = str(
+            refs.get("agentRunId") or refs.get("agent_run_id") or ""
         ).strip()
         child_workflow_id = str(
             refs.get("childWorkflowId") or refs.get("child_workflow_id") or ""
         ).strip()
         if (
-            existing_task_run_id
+            existing_agent_run_id
             or not child_workflow_id
             or child_workflow_id in seen_child_workflow_ids
         ):
@@ -3643,22 +3643,22 @@ async def _enrich_step_ledger_agent_run_refs(payload: Any) -> Any:
         if not isinstance(refs, Mapping):
             enriched_steps.append(step)
             continue
-        existing_task_run_id = str(
-            refs.get("taskRunId") or refs.get("task_run_id") or ""
+        existing_agent_run_id = str(
+            refs.get("agentRunId") or refs.get("agent_run_id") or ""
         ).strip()
         child_workflow_id = str(
             refs.get("childWorkflowId") or refs.get("child_workflow_id") or ""
         ).strip()
-        if existing_task_run_id or not child_workflow_id:
+        if existing_agent_run_id or not child_workflow_id:
             enriched_steps.append(step)
             continue
-        task_run_id = resolved_by_child_workflow.get(child_workflow_id)
-        if not task_run_id:
+        agent_run_id = resolved_by_child_workflow.get(child_workflow_id)
+        if not agent_run_id:
             enriched_steps.append(step)
             continue
 
         enriched_refs = dict(refs)
-        enriched_refs["taskRunId"] = task_run_id
+        enriched_refs["agentRunId"] = agent_run_id
         enriched_step = dict(step)
         enriched_step["refs"] = enriched_refs
         enriched_steps.append(enriched_step)
@@ -3751,8 +3751,8 @@ def _fallback_step_ledger_from_record(record: Any) -> StepLedgerSnapshotModel | 
     parameters = getattr(record, "parameters", None)
     if not isinstance(parameters, Mapping):
         return None
-    task = parameters.get("task")
-    if not isinstance(task, Mapping):
+    task = _workflow_payload_from_parameters(parameters)
+    if not task:
         return None
     raw_steps = task.get("steps")
     if not isinstance(raw_steps, list):
@@ -3897,7 +3897,7 @@ async def _load_execution_progress(
 
 
 def _execution_uses_live_workflow_queries(execution: ExecutionModel) -> bool:
-    if execution.workflow_type != "MoonMind.Run":
+    if execution.workflow_type != "MoonMind.UserWorkflow":
         return False
     if execution.close_status:
         return False
@@ -4077,10 +4077,16 @@ def _quality_gate_verdict(checks: list[dict[str, Any]]) -> str | None:
 
 def _runtime_child_refs(execution: Any) -> dict[str, Any]:
     refs = dict(_bounded_ref_projection(execution))
-    for key in ("childWorkflowId", "childRunId", "taskRunId"):
+    for key in ("childWorkflowId", "childRunId"):
         value = _field_value(execution, key)
         if isinstance(value, str) and value.strip():
             refs[key] = value.strip()
+    agent_run_id = (
+        _field_value(execution, "agentRunId")
+        or _field_value(execution, "agent_run_id")
+    )
+    if isinstance(agent_run_id, str) and agent_run_id.strip():
+        refs["agentRunId"] = agent_run_id.strip()
     return refs
 
 
@@ -4222,8 +4228,8 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
             }
         )
 
-    temporal_task_editing_enabled = bool(
-        settings.temporal_dashboard.temporal_task_editing_enabled
+    temporal_workflow_editing_enabled = bool(
+        settings.temporal_dashboard.temporal_workflow_editing_enabled
     )
     state_actions = {
         "scheduled": {"can_set_title", "can_update_inputs", "can_cancel"},
@@ -4268,14 +4274,14 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
     )
     resume_evidence_disabled_reason = _recovery_evidence_disabled_reason(record)
     if (
-        workflow_type_value != "MoonMind.Run"
-        or not temporal_task_editing_enabled
+        workflow_type_value != "MoonMind.UserWorkflow"
+        or not temporal_workflow_editing_enabled
         or not has_workflow_input_snapshot
     ):
         enabled = enabled - {"can_update_inputs", "can_edit_for_rerun", "can_rerun"}
     if (
-        workflow_type_value == "MoonMind.Run"
-        and temporal_task_editing_enabled
+        workflow_type_value == "MoonMind.UserWorkflow"
+        and temporal_workflow_editing_enabled
         and raw_state == "failed"
         and has_workflow_input_snapshot
         and resume_evidence_disabled_reason is None
@@ -4305,11 +4311,11 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
             "can_rerun",
             "can_recover_from_failed_step",
         }:
-            if workflow_type_value != "MoonMind.Run":
+            if workflow_type_value != "MoonMind.UserWorkflow":
                 disabled_reasons[alias] = "unsupported_workflow_type"
                 continue
-            if not temporal_task_editing_enabled:
-                disabled_reasons[alias] = "temporal_task_editing_disabled"
+            if not temporal_workflow_editing_enabled:
+                disabled_reasons[alias] = "temporal_workflow_editing_disabled"
                 continue
             if field_name == "can_recover_from_failed_step":
                 if raw_state != "failed":
@@ -4431,7 +4437,7 @@ def _validation_error_code(message: str) -> str:
         return "dependency_invalid_identifier"
     if message.startswith("Dependency ") and message.endswith("must be a workflowId."):
         return "dependency_invalid_identifier"
-    if message.startswith("Dependency ") and "workflow, not a MoonMind.Run workflow." in message:
+    if message.startswith("Dependency ") and "workflow, not a MoonMind.UserWorkflow workflow." in message:
         return "dependency_unsupported_workflow_type"
     if message.startswith("Workflow cannot depend on itself:"):
         return "dependency_self_reference"
@@ -4463,7 +4469,7 @@ def _coerce_step_count(value: Any) -> int:
     if value is None:
         return 0
     if not isinstance(value, list):
-        raise _invalid_workflow_request("payload.task.steps must be a JSON array.")
+        raise _invalid_workflow_request("payload.workflow.steps must be a JSON array.")
     return len(value)
 
 def _default_task_step_id(index: int) -> str:
@@ -4556,7 +4562,7 @@ async def _validate_and_collect_task_input_attachments(
 ) -> tuple[list[dict[str, Any]], dict[int, list[dict[str, Any]]], list[dict[str, Any]]]:
     objective_refs = _normalize_attachment_ref_list(
         task_payload.get("inputAttachments") or task_payload.get("input_attachments"),
-        field_name="payload.task.inputAttachments",
+        field_name="payload.workflow.inputAttachments",
     )
     step_refs: dict[int, list[dict[str, Any]]] = {}
     raw_steps = task_payload.get("steps")
@@ -4566,7 +4572,7 @@ async def _validate_and_collect_task_input_attachments(
                 continue
             refs = _normalize_attachment_ref_list(
                 step.get("inputAttachments") or step.get("input_attachments"),
-                field_name=f"payload.task.steps[{index}].inputAttachments",
+                field_name=f"payload.workflow.steps[{index}].inputAttachments",
             )
             if refs:
                 step_refs[index] = refs
@@ -4691,7 +4697,7 @@ def _normalize_workflow_proposal_policy(raw: Any) -> dict[str, Any] | None:
     if raw is None:
         return None
     if not isinstance(raw, Mapping):
-        raise _invalid_workflow_request("payload.task.proposalPolicy must be an object.")
+        raise _invalid_workflow_request("payload.workflow.proposalPolicy must be an object.")
     try:
         return WorkflowProposalPolicy.model_validate(dict(raw)).model_dump(
             by_alias=True,
@@ -4725,9 +4731,9 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
     if raw_steps is None:
         return []
     if not isinstance(raw_steps, list):
-        raise _invalid_workflow_request("payload.task.steps must be a JSON array.")
+        raise _invalid_workflow_request("payload.workflow.steps must be a JSON array.")
     if len(raw_steps) > 50:
-        raise _invalid_workflow_request("payload.task.steps can have a maximum of 50 items.")
+        raise _invalid_workflow_request("payload.workflow.steps can have a maximum of 50 items.")
 
     normalized_steps: list[dict[str, Any]] = []
     forbidden = {
@@ -4747,7 +4753,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
     for index, item in enumerate(raw_steps):
         if not isinstance(item, Mapping):
             raise _invalid_workflow_request(
-                f"payload.task.steps[{index}] must be an object."
+                f"payload.workflow.steps[{index}] must be an object."
             )
         step_payload = dict(item)
         blocked = sorted(
@@ -4756,7 +4762,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
         if blocked:
             formatted = ", ".join(blocked)
             raise _invalid_workflow_request(
-                f"payload.task.steps[{index}] may not define workflow-scoped overrides: {formatted}"
+                f"payload.workflow.steps[{index}] may not define workflow-scoped overrides: {formatted}"
             )
 
         normalized_step: dict[str, Any] = {}
@@ -4768,7 +4774,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
 
         normalized_skills = _normalize_task_skill_selectors(
             step_payload.get("skills"),
-            field_name=f"payload.task.steps[{index}].skills",
+            field_name=f"payload.workflow.steps[{index}].skills",
         )
         if normalized_skills is not None:
             normalized_step["skills"] = normalized_skills
@@ -4777,7 +4783,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
         if runtime_payload is not None:
             if not isinstance(runtime_payload, Mapping):
                 raise _invalid_workflow_request(
-                    f"payload.task.steps[{index}].runtime must be an object."
+                    f"payload.workflow.steps[{index}].runtime must be an object."
                 )
             normalized_runtime: dict[str, str] = {}
             for source_key, target_key in (
@@ -4800,7 +4806,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                         normalized_value = normalize_runtime_id(normalized_value)
                         if normalized_value not in _SUPPORTED_TASK_RUNTIMES:
                             raise _invalid_workflow_request(
-                                "Unsupported payload.task.steps"
+                                "Unsupported payload.workflow.steps"
                                 f"[{index}].runtime.mode: {value!r}. "
                                 "Must be one of: codex_cli, gemini_cli, "
                                 "claude_code, codex_cloud, jules."
@@ -4812,7 +4818,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
         normalized_input_attachments = _normalize_task_input_attachments(
             step_payload.get("inputAttachments")
             or step_payload.get("input_attachments"),
-            field_name=f"payload.task.steps[{index}].inputAttachments",
+            field_name=f"payload.workflow.steps[{index}].inputAttachments",
         )
         if normalized_input_attachments:
             normalized_step["inputAttachments"] = normalized_input_attachments
@@ -4821,7 +4827,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
         if raw_type:
             if raw_type not in {"tool", "skill"}:
                 raise _invalid_workflow_request(
-                    f"payload.task.steps[{index}].type / task.steps[].type "
+                    f"payload.workflow.steps[{index}].type / workflow.steps[].type "
                     "must be one of: tool, skill."
                 )
             normalized_step["type"] = raw_type
@@ -4840,17 +4846,17 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
         if step_type == "tool":
             if raw_skill is not None:
                 raise _invalid_workflow_request(
-                    f"payload.task.steps[{index}].skill must be omitted for Tool steps."
+                    f"payload.workflow.steps[{index}].skill must be omitted for Tool steps."
                 )
             if raw_tool is None:
                 raise _invalid_workflow_request(
-                    f"payload.task.steps[{index}].tool is required for Tool steps."
+                    f"payload.workflow.steps[{index}].tool is required for Tool steps."
                 )
             tool_id = str(raw_tool.get("id") or raw_tool.get("name") or "").strip()
             if not tool_id:
                 raise _invalid_workflow_request(
-                    f"payload.task.steps[{index}].tool.id or "
-                    f"payload.task.steps[{index}].tool.name is required."
+                    f"payload.workflow.steps[{index}].tool.id or "
+                    f"payload.workflow.steps[{index}].tool.name is required."
                 )
             normalized_tool: dict[str, Any] = {"id": tool_id}
             raw_inputs = raw_tool.get("inputs")
@@ -4863,7 +4869,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                 normalized_caps = _coerce_string_list(
                     raw_caps,
                     field_name=(
-                        f"payload.task.steps[{index}].tool.requiredCapabilities"
+                        f"payload.workflow.steps[{index}].tool.requiredCapabilities"
                     ),
                 )
                 if normalized_caps:
@@ -4877,12 +4883,12 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                 ).strip().lower()
                 if tool_type not in {"", "skill"}:
                     raise _invalid_workflow_request(
-                        f"payload.task.steps[{index}].tool must be omitted for Skill steps."
+                        f"payload.workflow.steps[{index}].tool must be omitted for Skill steps."
                     )
                 selected_skill = raw_tool
             if raw_type == "skill" and selected_skill is None:
                 raise _invalid_workflow_request(
-                    f"payload.task.steps[{index}].skill is required for Skill steps."
+                    f"payload.workflow.steps[{index}].skill is required for Skill steps."
                 )
             if selected_skill is not None:
                 skill_id = str(
@@ -4900,7 +4906,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                         normalized_caps = _coerce_string_list(
                             raw_caps,
                             field_name=(
-                                f"payload.task.steps[{index}].skill.requiredCapabilities"
+                                f"payload.workflow.steps[{index}].skill.requiredCapabilities"
                             ),
                         )
                         if normalized_caps:
@@ -4955,7 +4961,7 @@ async def _resolve_step_runtime_selections(
             normalized_rt = normalize_runtime_id(raw_step_runtime)
             if normalized_rt not in _SUPPORTED_TASK_RUNTIMES:
                 raise _invalid_workflow_request(
-                    f"Unsupported payload.task.steps[{index}].runtime.mode: "
+                    f"Unsupported payload.workflow.steps[{index}].runtime.mode: "
                     f"{raw_step_runtime!r}. Must be one of: codex_cli, "
                     "gemini_cli, claude_code, codex_cloud, jules."
                 )
@@ -4981,13 +4987,13 @@ async def _resolve_step_runtime_selections(
             )
             if provider_profile is None and raw_step_profile_id:
                 raise _invalid_workflow_request(
-                    f"Provider profile not found for payload.task.steps[{index}]: "
+                    f"Provider profile not found for payload.workflow.steps[{index}]: "
                     f"{raw_step_profile_id!r}."
                 )
             if provider_profile is None and task_profile_id and not raw_step_profile_id:
                 raise _invalid_workflow_request(
                     f"Provider profile not found for inherited task profile on "
-                    f"payload.task.steps[{index}]: {task_profile_id!r}."
+                    f"payload.workflow.steps[{index}]: {task_profile_id!r}."
                 )
 
         resolved_model, model_source = resolve_effective_model(
@@ -5344,7 +5350,7 @@ def _merge_automation_selected_from_parameters(
 ) -> bool:
     raw_publish_payload = _coerce_mapping(parameters.get("publish"))
     publish_payload = _normalize_publish_payload(raw_publish_payload)
-    task_payload = _coerce_mapping(parameters.get("task"))
+    task_payload = _workflow_payload_from_parameters(parameters)
     task_publish = _coerce_mapping(task_payload.get("publish"))
     candidates = (
         publish_payload.get("mergeAutomation")
@@ -5372,7 +5378,7 @@ def _normalize_story_output_payload(raw_story_output: Any) -> dict[str, Any]:
         mode = "jira" if _coerce_mapping(story_output.get("jira")) else "docs_tmp"
     if mode not in {"jira", "docs_tmp", "docs"}:
         raise _invalid_workflow_request(
-            "payload.task.storyOutput.mode must be one of: jira, docs_tmp, docs."
+            "payload.workflow.storyOutput.mode must be one of: jira, docs_tmp, docs."
         )
 
     normalized: dict[str, Any] = {"mode": "docs_tmp" if mode == "docs" else mode}
@@ -5424,7 +5430,7 @@ def _normalize_task_tool(task_payload: dict[str, Any]) -> dict[str, Any] | None:
     ).strip()
     if tool_type and tool_type.lower() != "skill":
         raise _invalid_workflow_request(
-            "payload.task.tool.type must be 'skill' for Temporal-backed submit."
+            "payload.workflow.tool.type must be 'skill' for Temporal-backed submit."
         )
 
     name = str(selected_payload.get("name") or selected_payload.get("id") or "").strip()
@@ -5483,8 +5489,8 @@ def _validate_workflow_runtime_requirements(
         return
 
     raise _invalid_workflow_request(
-        "pr-resolver task requires payload.task.instructions, payload.task.inputs.pr, "
-        "or payload.task.git.startingBranch."
+        "pr-resolver workflow requires payload.workflow.instructions, payload.workflow.inputs.pr, "
+        "or payload.workflow.git.startingBranch."
     )
 
 def _derive_task_title(task_payload: dict[str, Any]) -> str | None:
@@ -5597,8 +5603,11 @@ def _workflow_input_snapshot_descriptor_from_record(
         if str(ref or "").strip()
     ]
     parameters = getattr(record, "parameters", None)
-    task = parameters.get("task") if isinstance(parameters, Mapping) else None
-    task_payload = task if isinstance(task, Mapping) else {}
+    task_payload = (
+        _workflow_payload_from_parameters(parameters)
+        if isinstance(parameters, Mapping)
+        else {}
+    )
     attachment_aware = bool(
         task_payload.get("inputAttachments") or task_payload.get("attachmentRefs")
     )
@@ -5638,12 +5647,12 @@ def _build_original_workflow_input_snapshot_payload(
     source_run_id: str | None = None,
 ) -> dict[str, Any]:
     draft = {
-        "taskShape": _derive_task_snapshot_shape(task_payload),
+        "workflowShape": _derive_task_snapshot_shape(task_payload),
         "repository": payload.get("repository"),
         "targetRuntime": payload.get("targetRuntime"),
         "requiredCapabilities": list(payload.get("requiredCapabilities") or []),
-        "task": dict(task_payload),
-        "authoredTaskInput": build_authoritative_workflow_input_snapshot(
+        "workflow": dict(task_payload),
+        "authoredWorkflowInput": build_authoritative_workflow_input_snapshot(
             task_payload=task_payload,
             repository=payload.get("repository"),
             target_runtime=payload.get("targetRuntime"),
@@ -5691,10 +5700,7 @@ def _derive_task_snapshot_shape(task_payload: Mapping[str, Any]) -> str:
 def _snapshot_source_payload_from_parameters(
     parameters: Mapping[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    task: dict[str, Any] = {}
-    task_value = parameters.get("task")
-    if isinstance(task_value, Mapping):
-        task = dict(task_value)
+    task: dict[str, Any] = _workflow_payload_from_parameters(parameters)
     instructions = str(parameters.get("instructions") or "").strip()
     if instructions and not str(task.get("instructions") or "").strip():
         task["instructions"] = instructions
@@ -5983,9 +5989,9 @@ async def _persist_original_workflow_input_snapshot(
         metadata_json={
             "artifact_class": _TASK_INPUT_SNAPSHOT_LINK_TYPE,
             "snapshot_version": _WORKFLOW_INPUT_SNAPSHOT_VERSION,
-            "workflow_type": "MoonMind.Run",
+            "workflow_type": "MoonMind.UserWorkflow",
             "source_kind": source_kind,
-            "draft_shape": snapshot_payload["draft"]["taskShape"],
+            "draft_shape": snapshot_payload["draft"]["workflowShape"],
             "schema_name": "OriginalTaskInputSnapshot",
             "created_by": principal,
             "attachment_refs": list(attachment_refs or []),
@@ -6033,7 +6039,7 @@ async def _persist_original_workflow_input_snapshot_from_parameters(
     input_artifact_ref: str | None = None,
 ) -> str:
     workflow_type_value = _enum_value(getattr(record, "workflow_type", None))
-    if workflow_type_value != "MoonMind.Run":
+    if workflow_type_value != "MoonMind.UserWorkflow":
         return ""
     snapshot_payload, snapshot_task = (
         await _snapshot_source_payload_from_parameters_and_artifact(
@@ -6178,7 +6184,17 @@ async def _attach_input_attachment_artifacts_to_execution(
         record.artifact_refs = existing_refs
     await session.flush()
 
-async def _create_execution_from_task_request(
+def _workflow_payload_from_parameters(parameters: Mapping[str, Any]) -> dict[str, Any]:
+    workflow_payload = parameters.get("workflow")
+    if isinstance(workflow_payload, Mapping):
+        return dict(workflow_payload)
+    legacy_task_payload = parameters.get("task")
+    if isinstance(legacy_task_payload, Mapping):
+        return dict(legacy_task_payload)
+    return {}
+
+
+async def _create_execution_from_workflow_request(
     *,
     request: CreateJobRequest,
     service: TemporalExecutionService,
@@ -6186,19 +6202,21 @@ async def _create_execution_from_task_request(
     session: Any = None,
     principal_context: dict[str, Any] | None = None,
 ) -> ExecutionModel | ScheduleCreatedResponse:
-    if str(request.type).strip().lower() != "task":
+    if str(request.type).strip().lower() != "workflow":
         raise _invalid_workflow_request(
-            "Only task-shaped submit requests can be mapped to Temporal executions."
+            "Only workflow-shaped submit requests can be mapped to Temporal executions."
         )
 
     payload = request.payload if isinstance(request.payload, dict) else {}
-    task_payload = payload.get("task") if isinstance(payload.get("task"), dict) else {}
+    task_payload = (
+        payload.get("workflow") if isinstance(payload.get("workflow"), dict) else {}
+    )
     if not task_payload:
         raise _invalid_workflow_request(
-            "Task-shaped Temporal submit requests require payload.task."
+            "Workflow-shaped Temporal submit requests require payload.workflow."
         )
 
-    # Resolve child-task runtime inheritance before downstream normalization
+    # Resolve child-agent runtime inheritance before downstream normalization
     # consumes targetRuntime / task.runtime fields.  When inheritance applies,
     # we stamp the parent's effective runtime onto the request payload so the
     # rest of the create path sees it exactly as it would an explicit request.
@@ -6208,7 +6226,7 @@ async def _create_execution_from_task_request(
         request=(principal_context or {}).get("request"),
         workflow_id_header=(principal_context or {}).get("workflow_id_header"),
         run_id_header=(principal_context or {}).get("run_id_header"),
-        task_run_id_header=(principal_context or {}).get("task_run_id_header"),
+        agent_run_id_header=(principal_context or {}).get("agent_run_id_header"),
     )
     try:
         inherited = await resolve_child_runtime_inheritance(
@@ -6256,7 +6274,7 @@ async def _create_execution_from_task_request(
 
     if "dependsOn" in task_payload:
         depends_on_source = task_payload.get("dependsOn")
-        field_name = "payload.task.dependsOn"
+        field_name = "payload.workflow.dependsOn"
     else:
         depends_on_source = payload.get("dependsOn")
         field_name = "payload.dependsOn"
@@ -6346,7 +6364,7 @@ async def _create_execution_from_task_request(
     )
     normalized_task_skills = _normalize_task_skill_selectors(
         task_payload.get("skills"),
-        field_name="payload.task.skills",
+        field_name="payload.workflow.skills",
     )
     normalized_proposal_policy = _normalize_workflow_proposal_policy(
         task_payload.get("proposalPolicy")
@@ -6370,7 +6388,7 @@ async def _create_execution_from_task_request(
     normalized_input_attachments = _normalize_task_input_attachments(
         task_payload.get("inputAttachments")
         or task_payload.get("input_attachments"),
-        field_name="payload.task.inputAttachments",
+        field_name="payload.workflow.inputAttachments",
     )
     if normalized_input_attachments:
         normalized_task_for_planner["inputAttachments"] = normalized_input_attachments
@@ -6416,14 +6434,14 @@ async def _create_execution_from_task_request(
         task_payload["git"].get("targetBranch"), str
     ) and task_payload["git"]["targetBranch"].strip():
         raise _invalid_workflow_request(
-            "payload.task.git.targetBranch is not supported; use "
-            "payload.task.git.branch."
+            "payload.workflow.git.targetBranch is not supported; use "
+            "payload.workflow.git.branch."
         )
     if isinstance(task_payload.get("targetBranch"), str) and task_payload[
         "targetBranch"
     ].strip():
         raise _invalid_workflow_request(
-            "payload.task.targetBranch is not supported; use payload.task.git.branch."
+            "payload.workflow.targetBranch is not supported; use payload.workflow.git.branch."
         )
     if git_payload:
         normalized_git_payload: dict[str, str] = {}
@@ -6550,11 +6568,12 @@ async def _create_execution_from_task_request(
     if instructions:
         initial_parameters["instructions"] = instructions
     if normalized_task_for_planner:
-        initial_parameters["task"] = normalized_task_for_planner
+        initial_parameters["workflow"] = normalized_task_for_planner
 
     try:
+        start_contract = resolve_user_workflow_start_contract(settings.temporal)
         record = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type=start_contract.workflow_type,
             owner_id=user.id,
             title=derived_task_title,
             input_artifact_ref=input_artifact_ref,
@@ -6757,15 +6776,15 @@ def _compute_schedule_delay(
     return delay
 
 def _build_recurring_target(request_payload: dict[str, Any]) -> dict[str, Any]:
-    """Transform a task request payload into a RecurringWorkflowsService target.
+    """Transform a workflow request payload into a RecurringWorkflowsService target.
 
-    Constructs the ``kind=queue_task`` envelope expected by
+    Constructs the ``kind=workflow_execution`` envelope expected by
     ``RecurringWorkflowsService.create_definition()``.
     """
     target_payload = dict(request_payload)
     root_propose_tasks = target_payload.pop("proposeTasks", None)
     root_proposal_policy = target_payload.pop("proposalPolicy", None)
-    task_node = target_payload.get("task")
+    task_node = target_payload.get("workflow")
     if isinstance(task_node, Mapping):
         task_payload = dict(task_node)
         propose_tasks_value = (
@@ -6789,11 +6808,11 @@ def _build_recurring_target(request_payload: dict[str, Any]) -> dict[str, Any]:
             task_payload["proposalPolicy"] = normalized_proposal_policy
         else:
             task_payload.pop("proposalPolicy", None)
-        target_payload["task"] = task_payload
+        target_payload["workflow"] = task_payload
     return {
-        "kind": "queue_task",
+        "kind": "workflow_execution",
         "job": {
-            "type": "task",
+            "type": "workflow",
             "payload": target_payload,
         },
     }
@@ -6937,7 +6956,7 @@ async def create_remediation_execution(
 ) -> ExecutionModel | ScheduleCreatedResponse:
     body = payload if isinstance(payload, dict) else {}
     task_payload = (
-        dict(body.get("task")) if isinstance(body.get("task"), Mapping) else {}
+        dict(body.get("workflow")) if isinstance(body.get("workflow"), Mapping) else {}
     )
 
     instructions = str(
@@ -6953,13 +6972,13 @@ async def create_remediation_execution(
     if "remediation" in body:
         remediation_payload = body.get("remediation")
         if not isinstance(remediation_payload, Mapping):
-            raise _invalid_workflow_request("task.remediation must be an object")
+            raise _invalid_workflow_request("workflow.remediation must be an object")
     else:
         remediation_payload = task_payload.get("remediation")
         if remediation_payload is not None and not isinstance(
             remediation_payload, Mapping
         ):
-            raise _invalid_workflow_request("task.remediation must be an object")
+            raise _invalid_workflow_request("workflow.remediation must be an object")
     remediation = (
         dict(remediation_payload) if isinstance(remediation_payload, Mapping) else {}
     )
@@ -6976,7 +6995,7 @@ async def create_remediation_execution(
         "repository": body.get("repository"),
         "integration": body.get("integration"),
         "requiredCapabilities": body.get("requiredCapabilities"),
-        "task": task_payload,
+        "workflow": task_payload,
     }
     for key in (
         "dependsOn",
@@ -6997,7 +7016,7 @@ async def create_remediation_execution(
         if key in body:
             request_payload[key] = body[key]
 
-    request_data: dict[str, Any] = {"type": "task", "payload": request_payload}
+    request_data: dict[str, Any] = {"type": "workflow", "payload": request_payload}
     if "priority" in body:
         request_data["priority"] = body["priority"]
     if "maxAttempts" in body:
@@ -7007,7 +7026,7 @@ async def create_remediation_execution(
     if "schedule" in body:
         request_data["schedule"] = body["schedule"]
     request = CreateJobRequest.model_validate(request_data)
-    return await _create_execution_from_task_request(
+    return await _create_execution_from_workflow_request(
         request=request,
         service=service,
         user=user,
@@ -7203,7 +7222,7 @@ async def create_execution(
     try:
         if "type" in payload and "payload" in payload:
             request = CreateJobRequest.model_validate(payload)
-            return await _create_execution_from_task_request(
+            return await _create_execution_from_workflow_request(
                 request=request,
                 service=service,
                 user=user,
@@ -8053,13 +8072,13 @@ async def describe_execution_step_executions(
         user=user,
     )
     workflow_type_value = _enum_value(getattr(record, "workflow_type", None)) or ""
-    if workflow_type_value != "MoonMind.Run":
+    if workflow_type_value != "MoonMind.UserWorkflow":
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "code": "invalid_execution_query",
                 "message": (
-                    "Step Execution reads are only supported for MoonMind.Run "
+                    "Step Execution reads are only supported for MoonMind.UserWorkflow "
                     "executions."
                 ),
             },
@@ -8137,13 +8156,13 @@ async def describe_execution_step_execution(
         user=user,
     )
     workflow_type_value = _enum_value(getattr(record, "workflow_type", None)) or ""
-    if workflow_type_value != "MoonMind.Run":
+    if workflow_type_value != "MoonMind.UserWorkflow":
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "code": "invalid_execution_query",
                 "message": (
-                    "Step Execution reads are only supported for MoonMind.Run "
+                    "Step Execution reads are only supported for MoonMind.UserWorkflow "
                     "executions."
                 ),
             },
@@ -8194,9 +8213,6 @@ async def describe_execution_step_execution(
 @router.get(
     "/{workflow_id}/steps",
     response_model=StepLedgerSnapshotModel,
-    response_model_exclude={
-        "steps": {"__all__": {"refs": {"task_run_id"}, "workload": {"task_run_id"}}}
-    },
 )
 async def describe_execution_steps(
     workflow_id: str,
@@ -8212,12 +8228,12 @@ async def describe_execution_steps(
         user=user,
     )
     workflow_type_value = _enum_value(getattr(record, "workflow_type", None)) or ""
-    if workflow_type_value != "MoonMind.Run":
+    if workflow_type_value != "MoonMind.UserWorkflow":
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "code": "invalid_execution_query",
-                "message": "Step-ledger reads are only supported for MoonMind.Run executions.",
+                "message": "Step-ledger reads are only supported for MoonMind.UserWorkflow executions.",
             },
         )
     if alias_used:
@@ -8310,7 +8326,7 @@ async def describe_execution(
         user=user,
     )
     execution = await _hydrate_provider_profile_metadata(execution, session)
-    if execution.workflow_type == "MoonMind.Run":
+    if execution.workflow_type == "MoonMind.UserWorkflow":
         if _execution_uses_live_workflow_queries(execution):
             progress, queried_run_id = await _load_execution_progress(
                 temporal_client=temporal_client,
@@ -8331,15 +8347,13 @@ async def describe_execution(
         user=user,
     )
     if not execution.agent_run_id:
-        task_run_ids = await asyncio.to_thread(
+        agent_run_ids = await asyncio.to_thread(
             _resolve_agent_run_ids_from_managed_store,
             (execution.workflow_id,),
         )
-        task_run_id = task_run_ids.get(execution.workflow_id)
-        if task_run_id:
-            execution = execution.model_copy(
-                update={"task_run_id": task_run_id, "agent_run_id": task_run_id}
-            )
+        agent_run_id = agent_run_ids.get(execution.workflow_id)
+        if agent_run_id:
+            execution = execution.model_copy(update={"agent_run_id": agent_run_id})
     return execution
 
 @router.post(
@@ -8372,7 +8386,7 @@ async def update_execution(
         logger.info(
             "Temporal task editing update attempt",
             extra={
-                "event": "temporal_task_editing.submit_attempt",
+                "event": "temporal_workflow_editing.submit_attempt",
                 "workflow_id": record.workflow_id,
                 "update_name": payload.update_name,
                 "workflow_type": _enum_value(getattr(record, "workflow_type", None)),
@@ -8409,7 +8423,7 @@ async def update_execution(
             logger.info(
                 "Temporal task editing update rejected",
                 extra={
-                    "event": "temporal_task_editing.submit_result",
+                    "event": "temporal_workflow_editing.submit_result",
                     "workflow_id": record.workflow_id,
                     "update_name": payload.update_name,
                     "result": "failure",
@@ -8472,7 +8486,7 @@ async def update_execution(
         logger.info(
             "Temporal task editing update result",
             extra={
-                "event": "temporal_task_editing.submit_result",
+                "event": "temporal_workflow_editing.submit_result",
                 "workflow_id": refreshed_record.workflow_id,
                 "update_name": payload.update_name,
                 "result": result,

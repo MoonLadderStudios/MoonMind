@@ -667,7 +667,7 @@ def build_runtime_config(
                 "actionsEnabled": bool(temporal_dashboard.actions_enabled),
                 "submitEnabled": bool(temporal_dashboard.submit_enabled),
                 "temporalWorkflowEditing": bool(
-                    temporal_dashboard.temporal_task_editing_enabled
+                    temporal_dashboard.temporal_workflow_editing_enabled
                 ),
                 "debugFieldsEnabled": bool(temporal_dashboard.debug_fields_enabled),
             },
@@ -698,7 +698,7 @@ def build_runtime_config(
                 "list": "/api/presets",
                 "detail": "/api/presets/{slug}",
                 "expand": "/api/presets/{slug}:expand",
-                "saveFromTask": "/api/presets/save-from-workflow",
+                "saveFromWorkflow": "/api/presets/save-from-workflow",
             },
             "providerProfiles": {
                 "list": "/api/v1/provider-profiles",

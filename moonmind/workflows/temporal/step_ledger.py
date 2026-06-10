@@ -17,7 +17,7 @@ def default_step_refs() -> dict[str, Any]:
     return {
         "childWorkflowId": None,
         "childRunId": None,
-        "taskRunId": None,
+        "agentRunId": None,
         "latestStepExecutionManifestRef": None,
         "stepExecutionManifestRefs": [],
     }

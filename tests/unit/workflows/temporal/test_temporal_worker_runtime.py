@@ -23,7 +23,7 @@ from api_service.db.models import (
 from moonmind.workflows.temporal.worker_runtime import (
     MoonMindAgentRun,
     MoonMindManifestIngest,
-    MoonMindRun,
+    MoonMindUserWorkflow,
     OpenTelemetryLoggingFilter,
     _OPENTELEMETRY_LOG_FORMAT,
     _build_agent_runtime_deps,
@@ -93,7 +93,7 @@ def test_opentelemetry_logging_filter_injects_bounded_managed_session_fields(
         exc_info=None,
     )
     record.managed_session = {
-        "taskRunId": "wf-run-1",
+        "agentRunId": "wf-run-1",
         "runtimeId": "codex_cli",
         "sessionId": "sess:wf-run-1:codex_cli",
         "sessionEpoch": 1,
@@ -115,7 +115,7 @@ def test_opentelemetry_logging_filter_injects_bounded_managed_session_fields(
     assert record.component == "agent_runtime"
     assert record.worker_fleet == "agent_runtime"
     assert record.worker_id == "worker-otel-1"
-    assert record.managed_session_task_run_id == "wf-run-1"
+    assert record.managed_session_agent_run_id == "wf-run-1"
     assert record.managed_session_runtime_id == "codex_cli"
     assert record.managed_session_id == "sess:wf-run-1:codex_cli"
     assert record.managed_session_epoch == "1"
@@ -127,7 +127,7 @@ def test_opentelemetry_logging_filter_injects_bounded_managed_session_fields(
     assert record.managed_session_thread_id == "thread-1"
     assert record.managed_session_turn_id == "turn-1"
     assert record.managed_session == {
-        "taskRunId": "wf-run-1",
+        "agentRunId": "wf-run-1",
         "runtimeId": "codex_cli",
         "sessionId": "sess:wf-run-1:codex_cli",
         "sessionEpoch": "1",
@@ -1866,7 +1866,7 @@ async def test_child_jira_orchestrate_run_persists_original_task_input_snapshot(
                 workflow_id="mm:child-run",
                 run_id="run-child",
                 namespace="default",
-                workflow_type=TemporalWorkflowType.RUN,
+                workflow_type=TemporalWorkflowType.USER_WORKFLOW,
                 owner_id="owner-1",
                 owner_type=TemporalExecutionOwnerType.USER,
                 state=MoonMindWorkflowState.INITIALIZING,
@@ -1969,17 +1969,17 @@ async def test_child_jira_orchestrate_run_persists_original_task_input_snapshot(
         "workflow_id": "mm:child-run",
         "run_id": "run-child",
         "link_type": "input.original_snapshot",
-        "label": "Original task input snapshot",
+        "label": "Original workflow input snapshot",
     }
     snapshot_payload = json.loads(artifact_service.write_calls[0]["payload"])
-    assert snapshot_payload["draft"]["taskShape"] == "multi_step"
+    assert snapshot_payload["draft"]["workflowShape"] == "multi_step"
     assert snapshot_payload["draft"]["repository"] == "MoonLadderStudios/MoonMind"
     assert snapshot_payload["draft"]["targetRuntime"] == "codex_cli"
     assert (
-        snapshot_payload["draft"]["task"]["title"]
+        snapshot_payload["draft"]["workflow"]["title"]
         == "Run Jira Orchestrate for MM-501"
     )
-    authored = snapshot_payload["draft"]["authoredTaskInput"]
+    authored = snapshot_payload["draft"]["authoredWorkflowInput"]
     assert authored["runtime"] == {"mode": "codex_cli", "model": "gpt-5.4"}
     assert authored["publish"] == {"mode": "pr"}
     assert authored["repository"] == "MoonLadderStudios/MoonMind"
@@ -3195,7 +3195,7 @@ async def test_main_async_workflow_fleet(
         MoonMindManagedSessionReconcileWorkflow,
     )
     assert kwargs["workflows"] == [
-        MoonMindRun,
+        MoonMindUserWorkflow,
         MoonMindManifestIngest,
         MoonMindProviderProfileManagerWorkflow,
         MoonMindAgentSessionWorkflow,

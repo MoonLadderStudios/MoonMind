@@ -99,14 +99,14 @@ def _start_dep_workflow(
     wf_id: str,
     depends_on: list[str] | None = None,
 ):
-    """Helper: start a MoonMind.Run workflow on the given environment."""
+    """Helper: start a MoonMind.UserWorkflow workflow on the given environment."""
     initial_params: dict = {}
     if depends_on:
         initial_params["task"] = {"dependsOn": depends_on}
     return env.client.start_workflow(
         MoonMindRunWorkflow.run,
         {
-            "workflow_type": "MoonMind.Run",
+            "workflow_type": "MoonMind.UserWorkflow",
             "initial_parameters": initial_params,
             "plan_artifact_ref": "ref-123",
         },

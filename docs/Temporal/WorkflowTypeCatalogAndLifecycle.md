@@ -1,6 +1,6 @@
 # Workflow Type Catalog and Lifecycle
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
+**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 MoonMind’s **Temporal-native** lifecycle contract for Temporal-managed Workflow Executions. MoonMind does not define a separate product entity named Task; this document governs workflow types and execution semantics inside Temporal.
 
@@ -61,7 +61,7 @@ Namespace: `MoonMind.*`
 
 Current core workflow types:
 
-- `MoonMind.Run`
+- `MoonMind.UserWorkflow`
 - `MoonMind.UserWorkflow`
 - `MoonMind.ManifestIngest`
 - `MoonMind.ProviderProfileManager`
@@ -112,7 +112,7 @@ Rules:
 | Workflow Type | Primary responsibility | Typical inputs | Typical outputs | Expected duration |
 | --- | --- | --- | --- | --- |
 | `MoonMind.UserWorkflow` | User-submitted, Step-ledger-owning Workflow Execution: plan work, own Step state/progress, orchestrate child agent runs, integrate results, produce artifacts | input refs, optional plan ref, parameters | output artifacts, summary, progress, Step refs | seconds → hours |
-| `MoonMind.Run` | Current live implementation name for the user Workflow Execution path while the product model uses `MoonMind.UserWorkflow` terminology | input refs, optional plan ref, parameters | output artifacts, summary, progress, Step refs | seconds → hours |
+| `MoonMind.UserWorkflow` | Current live implementation name for the user Workflow Execution path while the product model uses `MoonMind.UserWorkflow` terminology | input refs, optional plan ref, parameters | output artifacts, summary, progress, Step refs | seconds → hours |
 | `MoonMind.ManifestIngest` | Ingest a manifest artifact, validate, compile to a plan/graph, orchestrate execution, aggregate results | manifest artifact ref, policy params | aggregated outputs, per-node results | seconds → hours |
 | `MoonMind.ProviderProfileManager` | Coordinate provider-profile slot assignment, release, cooldowns, and reconciliation for managed runtimes | runtime/profile coordination inputs | slot assignment, lease state transitions | minutes → long-lived |
 | `MoonMind.AgentRun` | Own the durable lifecycle of one true managed or external agent execution | `AgentExecutionRequest`, refs, runtime metadata | canonical agent result, artifacts, lifecycle outcome | seconds → hours |
@@ -374,7 +374,7 @@ Behavior:
 
 Important child behavior:
 
-- canceling `MoonMind.Run` should propagate to in-flight `MoonMind.AgentRun` child workflows
+- canceling `MoonMind.UserWorkflow` should propagate to in-flight `MoonMind.AgentRun` child workflows
 - `MoonMind.AgentRun` must still attempt best-effort provider/runtime cleanup inside a non-cancellable cleanup region when appropriate
 - provider-side cancel success must be reported truthfully; MoonMind workflow cancellation and provider cancellation are related but not identical concepts
 
@@ -468,7 +468,7 @@ For true agent-runtime work, contract-shape failures such as unsupported provide
 
 ## 11. Per-workflow lifecycle details
 
-## 11.1 `MoonMind.Run` lifecycle
+## 11.1 `MoonMind.UserWorkflow` lifecycle
 
 ```mermaid
 stateDiagram-v2
@@ -507,7 +507,7 @@ stateDiagram-v2
 Key notes:
 
 * planning is an Activity-driven concern, not a separate orchestration substrate
-* the plan artifact owns planned step structure; `MoonMind.Run` owns the live step ledger and operator-facing progress
+* the plan artifact owns planned step structure; `MoonMind.UserWorkflow` owns the live step ledger and operator-facing progress
 * execution may mix direct activities and child workflows
 * true agent steps dispatch to `MoonMind.AgentRun`, while the parent tracks only bounded step status, refs, and summaries
 * `child_state_changed`-style coordination may bubble child state to the parent domain state
@@ -530,7 +530,7 @@ stateDiagram-v2
 Key notes:
 
 * parse/validate/compile belong in Activities
-* orchestration may be inline or may spawn child `MoonMind.Run` executions
+* orchestration may be inline or may spawn child `MoonMind.UserWorkflow` executions
 * aggregation should produce artifact-backed results
 
 ## 11.3 `MoonMind.AgentRun` lifecycle

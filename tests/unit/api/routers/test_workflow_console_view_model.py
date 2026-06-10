@@ -54,7 +54,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
     monkeypatch.setattr(settings.feature_flags, "jira_create_page_enabled", False)
     monkeypatch.setattr(
-        settings.temporal_dashboard, "temporal_task_editing_enabled", False
+        settings.temporal_dashboard, "temporal_workflow_editing_enabled", False
     )
 
     config = dashboard_view_model.build_runtime_config("/workflows")
@@ -736,7 +736,7 @@ def test_build_runtime_config_uses_temporal_dashboard_settings(monkeypatch) -> N
     monkeypatch.setattr(settings.temporal_dashboard, "detail_enabled", True)
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
     monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", True)
-    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", False)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_workflow_editing_enabled", False)
     monkeypatch.setattr(settings.temporal_dashboard, "debug_fields_enabled", True)
     monkeypatch.setattr(
         settings.temporal_dashboard,
@@ -993,7 +993,7 @@ def _runtime_effective(value: Any) -> EffectiveSettingValue:
         value=value,
         source="workspace_override",
         source_explanation="workspace override",
-        apply_mode="next_task",
+        apply_mode="next_workflow",
         activation_state="pending_next_boundary",
         active=False,
     )

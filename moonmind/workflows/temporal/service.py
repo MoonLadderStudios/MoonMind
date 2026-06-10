@@ -47,9 +47,9 @@ from moonmind.schemas.temporal_models import (
     SUPPORTED_SIGNAL_NAMES,
     SUPPORTED_UPDATE_NAMES,
     DependencyResolvedSignalPayload,
-    TASK_RUN_ID_MEMO_KEYS,
-    TASK_RUN_ID_PARAM_KEYS,
-    TASK_RUN_ID_SEARCH_ATTR_KEYS,
+    AGENT_RUN_ID_MEMO_KEYS,
+    AGENT_RUN_ID_PARAM_KEYS,
+    AGENT_RUN_ID_SEARCH_ATTR_KEYS,
     RecoveryCheckpointModel,
     RecoverySourceModel,
 )
@@ -224,7 +224,7 @@ TERMINAL_STATE_TO_CLOSE_STATUS: dict[
 }
 
 WORKFLOW_ENTRY_BY_TYPE: dict[TemporalWorkflowType, str] = {
-    TemporalWorkflowType.RUN: "user_workflow",
+    TemporalWorkflowType.USER_WORKFLOW: "user_workflow",
     TemporalWorkflowType.MANIFEST_INGEST: "manifest",
     TemporalWorkflowType.PROVIDER_PROFILE_MANAGER: "provider_profile",
 }
@@ -422,14 +422,14 @@ class TemporalExecutionService:
                 raise TemporalExecutionValidationError(
                     f"Dependency unauthorized: {dependency_id}"
                 )
-            if getattr(record, "workflow_type", None) is not TemporalWorkflowType.RUN:
+            if getattr(record, "workflow_type", None) is not TemporalWorkflowType.USER_WORKFLOW:
                 wf_type_value = getattr(
                     getattr(record, "workflow_type", None),
                     "value",
                     getattr(record, "workflow_type", "unknown"),
                 )
                 raise TemporalExecutionValidationError(
-                    f"Dependency {dependency_id} is a {wf_type_value} workflow, not a MoonMind.Run workflow."
+                    f"Dependency {dependency_id} is a {wf_type_value} workflow, not a MoonMind.UserWorkflow workflow."
                 )
         return normalized
 
@@ -512,7 +512,7 @@ class TemporalExecutionService:
             raise TemporalExecutionValidationError(
                 f"Remediation target unauthorized: {target_workflow_id}"
             )
-        if getattr(target_record, "workflow_type", None) is not TemporalWorkflowType.RUN:
+        if getattr(target_record, "workflow_type", None) is not TemporalWorkflowType.USER_WORKFLOW:
             wf_type_value = getattr(
                 getattr(target_record, "workflow_type", None),
                 "value",
@@ -520,7 +520,7 @@ class TemporalExecutionService:
             )
             raise TemporalExecutionValidationError(
                 f"Remediation target {target_workflow_id} is a {wf_type_value} "
-                "workflow, not a MoonMind.Run workflow."
+                "workflow, not a MoonMind.UserWorkflow workflow."
             )
         target_task = (
             target_record.parameters.get("task")
@@ -540,25 +540,25 @@ class TemporalExecutionService:
             raise TemporalExecutionValidationError(
                 "task.remediation.target.runId must match the current target runId."
             )
-        task_run_ids = (
-            target.get("taskRunIds")
-            if "taskRunIds" in target
-            else target.get("task_run_ids")
+        agent_run_ids = (
+            target.get("agentRunIds")
+            if "agentRunIds" in target
+            else target.get("agent_run_ids")
         )
-        if task_run_ids is not None:
-            if not isinstance(task_run_ids, list) or any(
+        if agent_run_ids is not None:
+            if not isinstance(agent_run_ids, list) or any(
                 not isinstance(item, str) or not item.strip()
-                for item in task_run_ids
+                for item in agent_run_ids
             ):
                 raise TemporalExecutionValidationError(
-                    "task.remediation.target.taskRunIds must be a list of strings."
+                    "task.remediation.target.agentRunIds must be a list of strings."
                 )
-            allowed_task_run_ids = self._target_task_run_ids(target_record)
-            if allowed_task_run_ids:
-                requested_task_run_ids = {str(item).strip() for item in task_run_ids}
-                if not requested_task_run_ids.issubset(allowed_task_run_ids):
+            allowed_agent_run_ids = self._target_agent_run_ids(target_record)
+            if allowed_agent_run_ids:
+                requested_agent_run_ids = {str(item).strip() for item in agent_run_ids}
+                if not requested_agent_run_ids.issubset(allowed_agent_run_ids):
                     raise TemporalExecutionValidationError(
-                        "task.remediation.target.taskRunIds must belong to the target execution."
+                        "task.remediation.target.agentRunIds must belong to the target execution."
                     )
 
         trigger = remediation.get("trigger")
@@ -600,7 +600,7 @@ class TemporalExecutionService:
         )
 
     @classmethod
-    def _target_task_run_ids(
+    def _target_agent_run_ids(
         cls, record: TemporalExecutionCanonicalRecord
     ) -> set[str]:
         output: set[str] = set()
@@ -609,22 +609,22 @@ class TemporalExecutionService:
             getattr(record, "memo", None),
             getattr(record, "search_attributes", None),
         ):
-            cls._collect_task_run_ids(payload, output)
+            cls._collect_agent_run_ids(payload, output)
         return output
 
     @classmethod
-    def _collect_task_run_ids(cls, value: Any, output: set[str]) -> None:
+    def _collect_agent_run_ids(cls, value: Any, output: set[str]) -> None:
         if isinstance(value, Mapping):
             for key, item in value.items():
-                if key in {"taskRunId", "task_run_id"}:
-                    task_run_id = str(item or "").strip()
-                    if task_run_id:
-                        output.add(task_run_id)
-                cls._collect_task_run_ids(item, output)
+                if key in {"agentRunId", "agent_run_id"}:
+                    agent_run_id = str(item or "").strip()
+                    if agent_run_id:
+                        output.add(agent_run_id)
+                cls._collect_agent_run_ids(item, output)
             return
         if isinstance(value, list | tuple):
             for item in value:
-                cls._collect_task_run_ids(item, output)
+                cls._collect_agent_run_ids(item, output)
 
     async def _write_dependency_edges(
         self,
@@ -949,7 +949,7 @@ class TemporalExecutionService:
         normalized_depends_on: list[str] = []
         remediation_link: TemporalExecutionRemediationLink | None = None
 
-        if workflow_type_enum is TemporalWorkflowType.RUN:
+        if workflow_type_enum is TemporalWorkflowType.USER_WORKFLOW:
             raw_task = (initial_parameters or {}).get("task")
             task_mapping = raw_task if isinstance(raw_task, Mapping) else {}
             depends_on = task_mapping.get("dependsOn")
@@ -1033,7 +1033,7 @@ class TemporalExecutionService:
             memo["manifest_ref"] = manifest_artifact_ref
 
         user_workflow_start_contract = None
-        if workflow_type_enum is TemporalWorkflowType.RUN:
+        if workflow_type_enum is TemporalWorkflowType.USER_WORKFLOW:
             user_workflow_start_contract = resolve_user_workflow_start_contract(
                 settings.temporal
             )
@@ -1129,7 +1129,7 @@ class TemporalExecutionService:
 
         try:
             input_args: dict[str, Any] = {}
-            if workflow_type_enum is TemporalWorkflowType.RUN:
+            if workflow_type_enum is TemporalWorkflowType.USER_WORKFLOW:
                 input_args = {
                     "workflow_type": user_workflow_start_contract.workflow_type,
                     "title": resolved_title,
@@ -1160,7 +1160,7 @@ class TemporalExecutionService:
                 task_queue=_workflow_start_task_queue(params),
                 start_delay=(
                     start_delay
-                    if workflow_type_enum is not TemporalWorkflowType.RUN
+                    if workflow_type_enum is not TemporalWorkflowType.USER_WORKFLOW
                     else None
                 ),
             )
@@ -1383,14 +1383,14 @@ class TemporalExecutionService:
             )
 
         if (
-            record.workflow_type is TemporalWorkflowType.RUN
+            record.workflow_type is TemporalWorkflowType.USER_WORKFLOW
             and update_name in RUN_INTERVENTION_UPDATE_NAMES
         ):
             endpoint = "/api/executions/{id}/signal"
             if update_name == "Cancel":
                 endpoint = "/api/executions/{id}/cancel"
             raise TemporalExecutionValidationError(
-                f"Update {update_name} is not supported for MoonMind.Run workflows; "
+                f"Update {update_name} is not supported for MoonMind.UserWorkflow workflows; "
                 f"use {endpoint} instead."
             )
 
@@ -2057,7 +2057,7 @@ class TemporalExecutionService:
         reason_text = (reason or default_reason).strip() or default_reason
 
         if (
-            record.workflow_type is TemporalWorkflowType.RUN
+            record.workflow_type is TemporalWorkflowType.USER_WORKFLOW
             and record.state not in TERMINAL_STATES
         ):
             await self._best_effort_terminate_workflow_scoped_managed_sessions(
@@ -2419,7 +2419,7 @@ class TemporalExecutionService:
                 session_record = store.load(default_session_id)
                 if (
                     session_record is not None
-                    and session_record.task_run_id == workflow_id
+                    and session_record.agent_run_id == workflow_id
                     and canonical_managed_session_runtime_id(session_record.runtime_id)
                     == canonical_runtime_id
                     and session_record.status not in TERMINAL_MANAGED_SESSION_STATUSES
@@ -2449,7 +2449,7 @@ class TemporalExecutionService:
                 (
                     record
                     for record in session_records
-                    if record.task_run_id == workflow_id
+                    if record.agent_run_id == workflow_id
                     and canonical_managed_session_runtime_id(record.runtime_id)
                     in canonical_runtime_ids
                 ),
@@ -2762,7 +2762,7 @@ class TemporalExecutionService:
         recovery_provenance: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         params = cls._strip_recovery_reference_parameters(parameters)
-        for key in TASK_RUN_ID_PARAM_KEYS:
+        for key in AGENT_RUN_ID_PARAM_KEYS:
             params.pop(key, None)
 
         if isinstance(params.get("task"), Mapping):
@@ -2851,9 +2851,9 @@ class TemporalExecutionService:
     ) -> dict[str, Any]:
         """Create a linked follow-up execution for failed-step recovery."""
 
-        if record.workflow_type is not TemporalWorkflowType.RUN:
+        if record.workflow_type is not TemporalWorkflowType.USER_WORKFLOW:
             raise TemporalExecutionValidationError(
-                "Failed-step recovery is only available for MoonMind.Run executions."
+                "Failed-step recovery is only available for MoonMind.UserWorkflow executions."
             )
         if record.state is not MoonMindWorkflowState.FAILED:
             raise TemporalExecutionValidationError(
@@ -2935,7 +2935,7 @@ class TemporalExecutionService:
             )
 
         params = dict(record.parameters or {})
-        for key in TASK_RUN_ID_PARAM_KEYS:
+        for key in AGENT_RUN_ID_PARAM_KEYS:
             params.pop(key, None)
         params["recoverySource"] = RecoverySourceModel(
             sourceWorkflowId=record.workflow_id,
@@ -3068,15 +3068,15 @@ class TemporalExecutionService:
                 attention_required=False,
             )
         memo = dict(record.memo or {})
-        for key in TASK_RUN_ID_MEMO_KEYS:
+        for key in AGENT_RUN_ID_MEMO_KEYS:
             memo.pop(key, None)
         record.memo = memo
         attrs = dict(record.search_attributes or {})
-        for key in TASK_RUN_ID_SEARCH_ATTR_KEYS:
+        for key in AGENT_RUN_ID_SEARCH_ATTR_KEYS:
             attrs.pop(key, None)
         record.search_attributes = attrs
         params = dict(record.parameters or {})
-        for key in TASK_RUN_ID_PARAM_KEYS:
+        for key in AGENT_RUN_ID_PARAM_KEYS:
             params.pop(key, None)
         record.parameters = params
         record.closed_at = None
@@ -3085,7 +3085,7 @@ class TemporalExecutionService:
 
         if integration_wait_active:
             next_state = MoonMindWorkflowState.AWAITING_EXTERNAL
-        elif record.workflow_type is TemporalWorkflowType.RUN:
+        elif record.workflow_type is TemporalWorkflowType.USER_WORKFLOW:
             next_state = (
                 MoonMindWorkflowState.EXECUTING
                 if record.plan_ref
@@ -3880,7 +3880,7 @@ class TemporalExecutionService:
             )
 
     def _should_continue_as_new(self, record: TemporalExecutionCanonicalRecord) -> bool:
-        if record.workflow_type is TemporalWorkflowType.RUN:
+        if record.workflow_type is TemporalWorkflowType.USER_WORKFLOW:
             return (
                 int(record.step_count or 0) >= self._run_continue_as_new_step_threshold
                 or int(record.wait_cycle_count or 0)

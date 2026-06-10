@@ -404,7 +404,7 @@ async def _recent_actions_from_executions(
 ) -> tuple[DeploymentRecentAction, ...]:
     try:
         result = await execution_service.list_executions(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             integration=DEPLOYMENT_UPDATE_TOOL_NAME,
             page_size=10,
         )

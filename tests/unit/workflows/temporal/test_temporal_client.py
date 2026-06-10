@@ -74,12 +74,12 @@ async def test_explicit_task_queue_override_wins_over_default_topology():
 
     assert (
         adapter._get_task_queue(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             task_queue="mm.workflow.merge_automation",
         )
         == "mm.workflow.merge_automation"
     )
-    assert adapter._get_task_queue(workflow_type="MoonMind.Run") == "mm.workflow"
+    assert adapter._get_task_queue(workflow_type="MoonMind.UserWorkflow") == "mm.workflow"
 
 # ---- get_drain_metrics ----
 

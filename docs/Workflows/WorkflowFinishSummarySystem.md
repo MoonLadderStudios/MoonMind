@@ -11,7 +11,7 @@ Related: `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/WorkflowPropo
 ## 1. Summary
 
 MoonMind requires a clear "what happened?" summary at the end of every
-`MoonMind.Run` execution so Mission Control operators can quickly distinguish:
+`MoonMind.UserWorkflow` execution so Mission Control operators can quickly distinguish:
 
 * **Published output** (PR/branch updated successfully) vs
 * **No changes** (publish skipped because the repository was already correct) vs
@@ -29,7 +29,7 @@ and syncable result payload for rapid UI indexing.
 
 ### 2.1 Outcome Codes
 
-At the conclusion of a `MoonMind.Run` Temporal Workflow, the system guarantees an outcome code of:
+At the conclusion of a `MoonMind.UserWorkflow` Temporal Workflow, the system guarantees an outcome code of:
 
 * `PUBLISHED_PR`
 * `PUBLISHED_BRANCH`
@@ -181,7 +181,7 @@ even when late preset steps do not run.
 
 ## 3. Worker Implementation (Temporal Workflow)
 
-Inside the Python Temporal workflow logic (`MoonMind.Run`):
+Inside the Python Temporal workflow logic (`MoonMind.UserWorkflow`):
 
 1. The Workflow coordinates stage timings across all child Activities.
 2. Even in failure or `CancelledError` paths, a `finally:` or `except:` block captures the execution state.

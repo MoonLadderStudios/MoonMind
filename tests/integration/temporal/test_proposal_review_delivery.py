@@ -76,10 +76,10 @@ def _record() -> SimpleNamespace:
         external_url=None,
         delivered_at=None,
         last_synced_at=None,
-        task_snapshot_ref="artifact://snapshot",
+        workflow_snapshot_ref="artifact://snapshot",
         provider_metadata={},
         resolved_policy={"provider": "github"},
-        task_create_request={"payload": {"repository": "Moon/Repo"}},
+        workflow_create_request={"payload": {"repository": "Moon/Repo"}},
     )
 
 
@@ -100,11 +100,11 @@ def _delivered_record() -> SimpleNamespace:
         ],
         "allowedActors": ["reviewer"],
     }
-    record.task_create_request = {
+    record.workflow_create_request = {
         "payload": {
             "repository": "Moon/Repo",
             "targetRuntime": "gemini_cli",
-            "task": {
+            "workflow": {
                 "instructions": "Implement from stored snapshot",
                 "runtime": {"mode": "gemini_cli"},
                 "authoredPresets": [{"presetId": "runtime-quality-followup"}],
@@ -141,7 +141,7 @@ async def _promote_provider_event(
         workflow_id = f"wf-{len(executions) + 1}"
         executions.append(
             {
-                "workflowType": "MoonMind.Run",
+                "workflowType": "MoonMind.UserWorkflow",
                 "idempotencyKey": f"proposal-provider-{record.id}-{event.provider_event_id}",
                 "initialParameters": final_request["payload"],
                 "workflowId": workflow_id,
@@ -190,11 +190,11 @@ async def test_proposal_submit_persists_external_delivery_result() -> None:
                     "title": "Add tests",
                     "summary": "Add follow-up",
                     "tags": ["artifact_gap"],
-                    "taskCreateRequest": {
-                        "type": "task",
+                    "workflowCreateRequest": {
+                        "type": "workflow",
                         "payload": {
                             "repository": "Moon/Repo",
-                            "task": {"instructions": "Add tests"},
+                            "workflow": {"instructions": "Add tests"},
                         },
                     },
                 }
@@ -254,17 +254,17 @@ async def test_proposal_submit_reports_partial_success_and_dedup_update() -> Non
                 {
                     "title": "",
                     "summary": "Missing title",
-                    "taskCreateRequest": {},
+                    "workflowCreateRequest": {},
                 },
                 {
                     "title": "Add tests",
                     "summary": "Add follow-up",
                     "tags": ["artifact_gap"],
-                    "taskCreateRequest": {
-                        "type": "task",
+                    "workflowCreateRequest": {
+                        "type": "workflow",
                         "payload": {
                             "repository": "Moon/Repo",
-                            "task": {"instructions": "Add tests"},
+                            "workflow": {"instructions": "Add tests"},
                         },
                     },
                 },

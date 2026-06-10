@@ -79,7 +79,7 @@ class ManagedSessionSupervisor:
     ) -> None:
         try:
             self._log_streamer.emit_observability_event(
-                run_id=record.task_run_id,
+                run_id=record.agent_run_id,
                 workspace_path=record.workspace_path,
                 stream=stream_name,
                 text=text,
@@ -95,8 +95,8 @@ class ManagedSessionSupervisor:
             )
         except Exception:
             logger.warning(
-                "Session output publication failed for task run %s session %s stream %s",
-                record.task_run_id,
+                "Session output publication failed for agent run %s session %s stream %s",
+                record.agent_run_id,
                 record.session_id,
                 stream_name,
                 exc_info=True,
@@ -230,7 +230,7 @@ class ManagedSessionSupervisor:
         """Publish one session-aware observability row into the run-level stream."""
         try:
             self._log_streamer.emit_observability_event(
-                run_id=record.task_run_id,
+                run_id=record.agent_run_id,
                 workspace_path=record.workspace_path,
                 stream="session",
                 text=text,
@@ -245,8 +245,8 @@ class ManagedSessionSupervisor:
             )
         except Exception:
             logger.warning(
-                "Session observability publication failed for task run %s session %s kind %s",
-                record.task_run_id,
+                "Session observability publication failed for agent run %s session %s kind %s",
+                record.agent_run_id,
                 record.session_id,
                 kind,
                 exc_info=True,
@@ -386,7 +386,7 @@ class ManagedSessionSupervisor:
             artifact_name="stderr.log",
             data=stderr_bytes,
         )
-        observability_events = self._log_streamer.consume_observability_events(record.task_run_id)
+        observability_events = self._log_streamer.consume_observability_events(record.agent_run_id)
         summary_ref = self._write_json_artifact(
             job_id=record.session_id,
             artifact_name="session.summary.json",
@@ -423,7 +423,7 @@ class ManagedSessionSupervisor:
             metadata={"checkpointRef": checkpoint_ref, "status": status},
         )
         observability_events.extend(
-            self._log_streamer.consume_observability_events(record.task_run_id)
+            self._log_streamer.consume_observability_events(record.agent_run_id)
         )
         diagnostics_ref = self._log_streamer.collect_diagnostics(
             run_id=record.session_id,
@@ -459,7 +459,7 @@ class ManagedSessionSupervisor:
         )
         observability_events_ref = await asyncio.to_thread(
             self._log_streamer.persist_observability_events,
-            run_id=record.task_run_id,
+            run_id=record.agent_run_id,
             workspace_path=record.workspace_path,
             artifact_job_id=record.session_id,
         )
@@ -513,7 +513,7 @@ class ManagedSessionSupervisor:
                         "linkType": "session.control_event",
                         "action": action,
                         "sessionId": record.session_id,
-                        "taskRunId": record.task_run_id,
+                        "agentRunId": record.agent_run_id,
                         "containerId": record.container_id,
                         "previousSessionEpoch": previous_record.session_epoch,
                         "newSessionEpoch": record.session_epoch,
@@ -538,7 +538,7 @@ class ManagedSessionSupervisor:
                         "linkType": "session.reset_boundary",
                         "boundaryKind": action,
                         "sessionId": record.session_id,
-                        "taskRunId": record.task_run_id,
+                        "agentRunId": record.agent_run_id,
                         "containerId": record.container_id,
                         "sessionEpoch": record.session_epoch,
                         "threadId": record.thread_id,

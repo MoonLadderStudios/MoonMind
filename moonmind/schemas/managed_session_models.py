@@ -1003,7 +1003,7 @@ class ManagedSessionDockerCapabilityRequest(BaseModel):
 class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
     """Launch contract for a workflow-scoped remote Codex session container."""
 
-    task_run_id: NonBlankStr = Field(..., alias="taskRunId")
+    agent_run_id: NonBlankStr = Field(..., alias="agentRunId")
     workflow_id: NonBlankStr | None = Field(None, alias="workflowId")
     session_id: NonBlankStr = Field(..., alias="sessionId")
     session_epoch: int = Field(1, alias="sessionEpoch", ge=1)
@@ -1121,7 +1121,7 @@ class FetchCodexManagedSessionSummaryRequest(CodexManagedSessionLocator):
 class PublishCodexManagedSessionArtifactsRequest(CodexManagedSessionLocator):
     """Publish continuity artifacts for the remote session container."""
 
-    task_run_id: NonBlankStr | None = Field(None, alias="taskRunId")
+    agent_run_id: NonBlankStr | None = Field(None, alias="agentRunId")
     step_run_id: NonBlankStr | None = Field(None, alias="stepRunId")
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
 
@@ -1185,7 +1185,7 @@ class CodexManagedSessionRecord(BaseModel):
 
     session_id: NonBlankStr = Field(..., alias="sessionId")
     session_epoch: int = Field(..., alias="sessionEpoch", ge=1)
-    task_run_id: NonBlankStr = Field(..., alias="taskRunId")
+    agent_run_id: NonBlankStr = Field(..., alias="agentRunId")
     container_id: NonBlankStr = Field(..., alias="containerId")
     thread_id: NonBlankStr = Field(..., alias="threadId")
     runtime_id: NonBlankStr = Field(..., alias="runtimeId")
@@ -1224,7 +1224,7 @@ class CodexManagedSessionRecord(BaseModel):
     @model_validator(mode="after")
     def _normalize(self) -> "CodexManagedSessionRecord":
         self.session_id = require_non_blank(self.session_id, field_name="sessionId")
-        self.task_run_id = require_non_blank(self.task_run_id, field_name="taskRunId")
+        self.agent_run_id = require_non_blank(self.agent_run_id, field_name="agentRunId")
         self.container_id = require_non_blank(self.container_id, field_name="containerId")
         self.thread_id = require_non_blank(self.thread_id, field_name="threadId")
         runtime_id = canonical_managed_session_runtime_id(self.runtime_id)
@@ -1331,7 +1331,7 @@ class CodexManagedSessionBinding(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     workflow_id: NonBlankStr = Field(..., alias="workflowId")
-    task_run_id: NonBlankStr = Field(..., alias="taskRunId")
+    agent_run_id: NonBlankStr = Field(..., alias="agentRunId")
     session_id: NonBlankStr = Field(..., alias="sessionId")
     session_epoch: int = Field(1, alias="sessionEpoch", ge=1)
     runtime_id: NonBlankStr = Field(..., alias="runtimeId")
@@ -1340,7 +1340,7 @@ class CodexManagedSessionBinding(BaseModel):
     @model_validator(mode="after")
     def _normalize(self) -> "CodexManagedSessionBinding":
         self.workflow_id = require_non_blank(self.workflow_id, field_name="workflowId")
-        self.task_run_id = require_non_blank(self.task_run_id, field_name="taskRunId")
+        self.agent_run_id = require_non_blank(self.agent_run_id, field_name="agentRunId")
         self.session_id = require_non_blank(self.session_id, field_name="sessionId")
         runtime_id = canonical_managed_session_runtime_id(self.runtime_id)
         if runtime_id is None:
@@ -1361,10 +1361,10 @@ class CodexManagedSessionBinding(BaseModel):
         session_input: "CodexManagedSessionWorkflowInput",
     ) -> "CodexManagedSessionBinding":
         runtime_id = session_input.runtime_id
-        session_id = session_input.session_id or f"sess:{session_input.task_run_id}:{runtime_id}"
+        session_id = session_input.session_id or f"sess:{session_input.agent_run_id}:{runtime_id}"
         return cls(
             workflowId=workflow_id,
-            taskRunId=session_input.task_run_id,
+            agentRunId=session_input.agent_run_id,
             sessionId=session_id,
             sessionEpoch=session_input.session_epoch,
             runtimeId=runtime_id,
@@ -1376,7 +1376,7 @@ class CodexManagedSessionWorkflowInput(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    task_run_id: NonBlankStr = Field(..., alias="taskRunId")
+    agent_run_id: NonBlankStr = Field(..., alias="agentRunId")
     runtime_id: NonBlankStr = Field(..., alias="runtimeId")
     execution_profile_ref: str | None = Field(None, alias="executionProfileRef")
     session_id: str | None = Field(None, alias="sessionId")
@@ -1401,7 +1401,7 @@ class CodexManagedSessionWorkflowInput(BaseModel):
 
     @model_validator(mode="after")
     def _normalize(self) -> "CodexManagedSessionWorkflowInput":
-        self.task_run_id = require_non_blank(self.task_run_id, field_name="taskRunId")
+        self.agent_run_id = require_non_blank(self.agent_run_id, field_name="agentRunId")
         runtime_id = canonical_managed_session_runtime_id(self.runtime_id)
         if runtime_id is None:
             raise ValueError("runtimeId must identify a managed-session runtime")

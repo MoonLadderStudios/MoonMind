@@ -1,6 +1,6 @@
 # Managed and External Agent Execution Model
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
+**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 Status: **Implemented** (runtime live; contract hardening in progress)
 Last updated: 2026-04-09
@@ -67,7 +67,7 @@ MoonMind explicitly separates long-lived, stateful agent execution from plain on
 
 ## 2. Core design: `MoonMind.AgentRun`
 
-`MoonMind.UserWorkflow` is the product name for the root user Workflow Execution. The current live implementation may still appear as `MoonMind.Run` in code and workflow registration. It represents a Workflow Execution: the top-level unit of work. Each Workflow Execution contains a plan consisting of one or more ordered Steps. When a Step requires a true agent runtime, the root user workflow starts a dedicated child workflow: `MoonMind.AgentRun`.
+`MoonMind.UserWorkflow` is the product name for the root user Workflow Execution. The current live implementation may still appear as `MoonMind.UserWorkflow` in code and workflow registration. It represents a Workflow Execution: the top-level unit of work. Each Workflow Execution contains a plan consisting of one or more ordered Steps. When a Step requires a true agent runtime, the root user workflow starts a dedicated child workflow: `MoonMind.AgentRun`.
 
 Parent/child ownership rule:
 
@@ -131,17 +131,17 @@ The split is intentional:
 * the **artifact system** owns large data
 * the **provider-profile manager** owns slot and cooldown coordination for managed runtimes
 
-### 2.3 Dispatch from `MoonMind.Run`
+### 2.3 Dispatch from `MoonMind.UserWorkflow`
 
 Agent dispatch happens **per step**, not per workflow execution.
 
-The plan execution loop in `MoonMind.Run._run_execution_stage()` iterates ordered plan nodes and chooses one of two paths:
+The plan execution loop in `MoonMind.UserWorkflow._run_execution_stage()` iterates ordered plan nodes and chooses one of two paths:
 
 * **Agent step**
- `MoonMind.Run` starts `MoonMind.AgentRun` as a child workflow, constructing an `AgentExecutionRequest` from the node inputs.
+ `MoonMind.UserWorkflow` starts `MoonMind.AgentRun` as a child workflow, constructing an `AgentExecutionRequest` from the node inputs.
 
 * **Activity step**
- `MoonMind.Run` executes a standard Temporal activity directly.
+ `MoonMind.UserWorkflow` executes a standard Temporal activity directly.
 
 This preserves one consistent workflow model while allowing each step to use the correct execution primitive.
 
@@ -149,7 +149,7 @@ This preserves one consistent workflow model while allowing each step to use the
 
 Cancellation propagates naturally through Temporal child workflows.
 
-When `MoonMind.Run` is canceled, any in-flight `MoonMind.AgentRun` receives a `CancelledError`. `MoonMind.AgentRun` must still make a best-effort attempt to:
+When `MoonMind.UserWorkflow` is canceled, any in-flight `MoonMind.AgentRun` receives a `CancelledError`. `MoonMind.AgentRun` must still make a best-effort attempt to:
 
 * cancel the underlying managed runtime or external run
 * release any held provider-profile slot
@@ -216,7 +216,7 @@ Normalization belongs in:
 Normalization does **not** belong in:
 
 * `MoonMind.AgentRun`
-* `MoonMind.Run`
+* `MoonMind.UserWorkflow`
 * parent-to-child orchestration glue
 * ad hoc workflow coercion helpers
 
@@ -378,7 +378,7 @@ Any start-like side effect must be idempotent with respect to a stable key such 
 
 * explicit `idempotency_key`, or
 * a deterministic execution tuple like `(workflow_id, step_id, attempt)`
-* parent-step refs such as `childWorkflowId`, `childRunId`, and `taskRunId`
+* parent-step refs such as `childWorkflowId`, `childRunId`, and `agentRunId`
 
 This is required so activity retries do not create duplicate external jobs or duplicate managed launches.
 
@@ -862,7 +862,7 @@ When `MoonMind.AgentRun` is canceled, the workflow must still make a best-effort
 
 **Root workflow**
 
-* `MoonMind.Run` dispatches `tool.type == "agent_runtime"` plan nodes to `MoonMind.AgentRun`
+* `MoonMind.UserWorkflow` dispatches `tool.type == "agent_runtime"` plan nodes to `MoonMind.AgentRun`
 
 ### 13.2 Hardening direction
 
@@ -889,7 +889,7 @@ Ongoing or pending work includes:
 
 ### 13.4 Legacy session-based observability
 
-Legacy terminal/session metadata (`TaskRunLiveSession`, `tmate web_ro`, socket paths, `attachRo`, `webRo`) may remain in the database for historical runs created before the MoonMind-native observability model was in place.
+Legacy terminal/session metadata (`AgentRunLiveSession`, `tmate web_ro`, socket paths, `attachRo`, `webRo`) may remain in the database for historical runs created before the MoonMind-native observability model was in place.
 
 Migration rules:
 
@@ -906,7 +906,7 @@ MoonMind treats true agent execution as a first-class orchestration concept dist
 
 The unifying model is:
 
-* `MoonMind.Run` remains the current live root workflow implementation for user Workflow Executions
+* `MoonMind.UserWorkflow` remains the current live root workflow implementation for user Workflow Executions
 * `MoonMind.AgentRun` is the child workflow for one true agent execution
 * `AgentAdapter` defines the shared lifecycle interface
 * `ExternalAgentAdapter` handles delegated external agents

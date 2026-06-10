@@ -67,7 +67,7 @@ def _run(**overrides):
     return SimpleNamespace(**base)
 
 
-def test_recurring_task_validation_error_maps_to_422() -> None:
+def test_recurring_workflow_validation_error_maps_to_422() -> None:
     exc = recurring_router._map_error(
         RecurringWorkflowValidationError("target.kind is required")
     )

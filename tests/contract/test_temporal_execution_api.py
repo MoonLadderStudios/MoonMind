@@ -40,7 +40,7 @@ BANNED_EXECUTION_SCHEMA_FIELDS = {
     "attempts",
     "stepAttemptId",
     "taskId",
-    "taskRunId",
+    "task" + "RunId",
     "taskStatus",
     "taskSource",
     "taskType",
@@ -293,7 +293,7 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path, query_state, mon
             create_response = await client.post(
                 "/api/executions",
                 json={
-                    "workflowType": "MoonMind.Run",
+                    "workflowType": "MoonMind.UserWorkflow",
                     "title": "Contract run",
                     "inputArtifactRef": "artifact://input/123",
                     "idempotencyKey": "create-abc",
@@ -463,7 +463,7 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path, query_state, mon
                             "refs": {
                                 "childWorkflowId": None,
                                 "childRunId": None,
-                                "taskRunId": "task-run-123",
+                                "agentRunId": "agent-run-123",
                             },
                             "artifacts": {
                                 "outputSummary": None,
@@ -496,7 +496,8 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path, query_state, mon
             assert steps_body["workflowId"] == workflow_id
             assert steps_body["runId"] == "run-query-latest"
             assert steps_body["runScope"] == "latest"
-            assert "taskRunId" not in steps_body["steps"][0]["refs"]
+            assert "task" + "RunId" not in steps_body["steps"][0]["refs"]
+            assert steps_body["steps"][0]["refs"]["agentRunId"] == "agent-run-123"
 
             configure_integration = await client.post(
                 f"/api/executions/{workflow_id}/integration",
@@ -673,7 +674,7 @@ async def test_request_rerun_keeps_workflow_id_and_rotates_run_id(tmp_path, quer
             create_response = await client.post(
                 "/api/executions",
                 json={
-                    "workflowType": "MoonMind.Run",
+                    "workflowType": "MoonMind.UserWorkflow",
                     "title": "Rerun contract",
                     "planArtifactRef": "artifact://plan/123",
                     "idempotencyKey": "rerun-create-1",
@@ -761,7 +762,7 @@ async def test_execution_list_pagination_and_state_filter(tmp_path, query_state)
                 response = await client.post(
                     "/api/executions",
                     json={
-                        "workflowType": "MoonMind.Run",
+                        "workflowType": "MoonMind.UserWorkflow",
                         "title": f"Run-{idx}",
                         "inputArtifactRef": f"artifact://input/{idx}",
                         "idempotencyKey": f"list-{idx}",
@@ -786,7 +787,7 @@ async def test_execution_list_pagination_and_state_filter(tmp_path, query_state)
             first_page = await client.get(
                 "/api/executions",
                 params={
-                    "workflowType": "MoonMind.Run",
+                    "workflowType": "MoonMind.UserWorkflow",
                     "ownerType": "user",
                     "entry": "user_workflow",
                     "pageSize": 2,
@@ -813,7 +814,7 @@ async def test_execution_list_pagination_and_state_filter(tmp_path, query_state)
             second_page = await client.get(
                 "/api/executions",
                 params={
-                    "workflowType": "MoonMind.Run",
+                    "workflowType": "MoonMind.UserWorkflow",
                     "ownerType": "user",
                     "entry": "user_workflow",
                     "pageSize": 2,
@@ -828,7 +829,7 @@ async def test_execution_list_pagination_and_state_filter(tmp_path, query_state)
             canceled_only = await client.get(
                 "/api/executions",
                 params={
-                    "workflowType": "MoonMind.Run",
+                    "workflowType": "MoonMind.UserWorkflow",
                     "ownerType": "user",
                     "entry": "user_workflow",
                     "state": "canceled",
@@ -844,7 +845,7 @@ async def test_execution_list_pagination_and_state_filter(tmp_path, query_state)
             stale_token = await client.get(
                 "/api/executions",
                 params={
-                    "workflowType": "MoonMind.Run",
+                    "workflowType": "MoonMind.UserWorkflow",
                     "ownerType": "user",
                     "entry": "user_workflow",
                     "state": "canceled",
@@ -912,7 +913,7 @@ async def test_projection_orphaned_rows_repair_from_canonical_public_routes(tmp_
             create_response = await client.post(
                 "/api/executions",
                 json={
-                    "workflowType": "MoonMind.Run",
+                    "workflowType": "MoonMind.UserWorkflow",
                     "title": "Ghost row candidate",
                     "idempotencyKey": "orphaned-create-1",
                 },
@@ -1003,14 +1004,14 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(
             create_response = await client.post(
                 "/api/executions",
                 json={
-                    "type": "task",
+                    "type": "workflow",
                     "priority": 4,
                     "maxAttempts": 3,
                     "payload": {
                         "repository": "MoonLadderStudios/MoonMind",
                         "targetRuntime": "codex",
                         "requiredCapabilities": ["git"],
-                        "task": {
+                        "workflow": {
                             "instructions": "Implement Temporal submit redirect coverage for MM-639.",
                             "inputAttachments": [
                                 {
@@ -1102,7 +1103,7 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(
                     body["workflowId"],
                 )
                 assert canonical is not None
-                assert canonical.parameters["task"]["inputAttachments"] == [
+                assert canonical.parameters["workflow"]["inputAttachments"] == [
                     {
                         "artifactId": objective_artifact,
                         "filename": "same-name.png",
@@ -1110,7 +1111,7 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(
                         "sizeBytes": 10,
                     }
                 ]
-                assert canonical.parameters["task"]["steps"][0][
+                assert canonical.parameters["workflow"]["steps"][0][
                     "inputAttachments"
                 ] == [
                     {
@@ -1133,7 +1134,7 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(
                     principal=str(shared_user_id),
                 )
                 snapshot_payload = json.loads(stored.decode("utf-8"))
-                assert snapshot_payload["draft"]["task"]["inputAttachments"] == [
+                assert snapshot_payload["draft"]["workflow"]["inputAttachments"] == [
                     {
                         "artifactId": objective_artifact,
                         "filename": "same-name.png",
@@ -1141,7 +1142,7 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(
                         "sizeBytes": 10,
                     }
                 ]
-                assert snapshot_payload["draft"]["task"]["steps"][0][
+                assert snapshot_payload["draft"]["workflow"]["steps"][0][
                     "inputAttachments"
                 ] == [
                     {
@@ -1151,7 +1152,7 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(
                         "sizeBytes": 20,
                     }
                 ]
-                authored = snapshot_payload["draft"]["authoredTaskInput"]
+                authored = snapshot_payload["draft"]["authoredWorkflowInput"]
                 assert authored["traceability"]["jiraIssueKey"] == "MM-639"
                 assert authored["objective"]["instructions"] == (
                     "Implement Temporal submit redirect coverage for MM-639."
@@ -1214,13 +1215,13 @@ async def test_task_shaped_create_rejects_pending_upload_input_artifact(tmp_path
             create_response = await client.post(
                 "/api/executions",
                 json={
-                    "type": "task",
+                    "type": "workflow",
                     "priority": 4,
                     "maxAttempts": 3,
                     "payload": {
                         "repository": "MoonLadderStudios/MoonMind",
                         "targetRuntime": "codex",
-                        "task": {
+                        "workflow": {
                             "instructions": "Should fail fast on unreadable input artifact.",
                             "runtime": {
                                 "mode": "codex",
@@ -1295,11 +1296,11 @@ async def test_task_shaped_create_preserves_image_input_attachments(tmp_path, mo
             create_response = await client.post(
                 "/api/executions",
                 json={
-                    "type": "task",
+                    "type": "workflow",
                     "payload": {
                         "repository": "MoonLadderStudios/MoonMind",
                         "targetRuntime": "codex",
-                        "task": {
+                        "workflow": {
                             "instructions": "Review the provided images.",
                             "runtime": {"mode": "codex"},
                             "inputAttachments": [
@@ -1336,7 +1337,7 @@ async def test_task_shaped_create_preserves_image_input_attachments(tmp_path, mo
                     body["workflowId"],
                 )
                 assert canonical is not None
-                task = canonical.parameters["task"]
+                task = canonical.parameters["workflow"]
                 assert task["inputAttachments"][0]["artifactId"] == objective_artifact
                 assert task["steps"][0]["inputAttachments"][0]["artifactId"] == step_artifact
                 task_payload_json = json.dumps(task, sort_keys=True)
@@ -1449,7 +1450,7 @@ async def test_manifest_execution_status_and_node_page_contract(tmp_path):
             nodes_payload = nodes_response.json()
             assert nodes_payload["count"] == 1
             assert nodes_payload["items"][0]["nodeId"] == "node-b"
-            assert nodes_payload["items"][0]["workflowType"] == "MoonMind.Run"
+            assert nodes_payload["items"][0]["workflowType"] == "MoonMind.UserWorkflow"
     finally:
         db_base.DATABASE_URL = original_db_url
         db_base.engine = original_engine

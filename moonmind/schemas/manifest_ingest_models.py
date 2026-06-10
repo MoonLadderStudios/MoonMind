@@ -102,7 +102,7 @@ class ManifestNodeModel(BaseModel):
     node_id: str = Field(..., alias="nodeId")
     state: ManifestNodeState = Field(..., alias="state")
     title: Optional[str] = Field(None, alias="title")
-    workflow_type: str = Field("MoonMind.Run", alias="workflowType")
+    workflow_type: str = Field("MoonMind.UserWorkflow", alias="workflowType")
     child_workflow_id: Optional[str] = Field(None, alias="childWorkflowId")
     child_run_id: Optional[str] = Field(None, alias="childRunId")
     result_artifact_ref: Optional[str] = Field(None, alias="resultArtifactRef")
@@ -165,7 +165,7 @@ class ManifestRunIndexEntryModel(BaseModel):
     state: ManifestNodeState = Field(..., alias="state")
     child_workflow_id: Optional[str] = Field(None, alias="childWorkflowId")
     child_run_id: Optional[str] = Field(None, alias="childRunId")
-    workflow_type: str = Field("MoonMind.Run", alias="workflowType")
+    workflow_type: str = Field("MoonMind.UserWorkflow", alias="workflowType")
     parent_close_policy: str = Field("REQUEST_CANCEL", alias="parentClosePolicy")
     result_artifact_ref: Optional[str] = Field(None, alias="resultArtifactRef")
 

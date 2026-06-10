@@ -240,10 +240,10 @@ async def mock_proposal_generate(args: Dict[str, Any]) -> list[Dict[str, Any]]:
             "summary": "Test xyz is flaky due to race condition",
             "category": "testing",
             "tags": ["flaky", "testing"],
-            "taskCreateRequest": {
+            "workflowCreateRequest": {
                 "payload": {
                     "repository": "moonladder/moonmind",
-                    "task": {"instructions": "Fix the flaky test"},
+                    "workflow": {"instructions": "Fix the flaky test"},
                 }
             },
         }
@@ -311,7 +311,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 ),
             ):
                 request = {
-                    "workflowType": "MoonMind.Run",
+                    "workflowType": "MoonMind.UserWorkflow",
                     "title": "Test Run",
                     "initialParameters": {
                         "repo": "moonladder/moonmind",
@@ -369,7 +369,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 handle = await env.client.start_workflow(
                     MoonMindRunWorkflow.run,
                     {
-                        "workflowType": "MoonMind.Run",
+                        "workflowType": "MoonMind.UserWorkflow",
                         "title": "Queryable run",
                     },
                     id="test-workflow-ledger-query",
@@ -421,7 +421,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 result = await env.client.execute_workflow(
                     MoonMindRunWorkflow.run,
                     {
-                        "workflowType": "MoonMind.Run",
+                        "workflowType": "MoonMind.UserWorkflow",
                         "ownerId": "malicious-owner",
                         "ownerType": "system",
                     },
@@ -474,7 +474,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(client.WorkflowFailureError) as exc_info:
                     await env.client.execute_workflow(
                         MoonMindRunWorkflow.run,
-                        {"workflowType": "MoonMind.Run"},
+                        {"workflowType": "MoonMind.UserWorkflow"},
                         id="test-workflow-id-missing-owner",
                         task_queue="test-task-queue",
                     )
@@ -517,7 +517,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(client.WorkflowFailureError) as exc_info:
                     await env.client.execute_workflow(
                         MoonMindRunWorkflow.run,
-                        {"workflowType": "MoonMind.Run"},
+                        {"workflowType": "MoonMind.UserWorkflow"},
                         id="test-workflow-id-failed-skill-status",
                         task_queue="test-task-queue",
                         search_attributes=_trusted_search_attributes(),
@@ -569,7 +569,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                     await env.client.execute_workflow(
                         MoonMindRunWorkflow.run,
                         {
-                            "workflowType": "MoonMind.Run",
+                            "workflowType": "MoonMind.UserWorkflow",
                             "initialParameters": {
                                 "repo": "moonladder/moonmind",
                                 "publishMode": "pr",
@@ -638,10 +638,10 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                     result = await env.client.execute_workflow(
                         MoonMindRunWorkflow.run,
                         {
-                            "workflowType": "MoonMind.Run",
+                            "workflowType": "MoonMind.UserWorkflow",
                             "initialParameters": {
                                 "repo": "moonladder/moonmind",
-                                "task": {
+                                "workflow": {
                                     "instructions": "Run with proposals.",
                                     "proposeTasks": True,
                                     "proposalPolicy": {
@@ -725,11 +725,11 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                     result = await env.client.execute_workflow(
                         MoonMindRunWorkflow.run,
                         {
-                            "workflowType": "MoonMind.Run",
+                            "workflowType": "MoonMind.UserWorkflow",
                             "initialParameters": {
                                 "repo": "moonladder/moonmind",
                                 "proposeTasks": True,
-                                "task": {
+                                "workflow": {
                                     "instructions": "Run without canonical proposal opt-in.",
                                 },
                             },
@@ -779,7 +779,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 result = await env.client.execute_workflow(
                     MoonMindRunWorkflow.run,
                     {
-                        "workflowType": "MoonMind.Run",
+                        "workflowType": "MoonMind.UserWorkflow",
                         "initialParameters": {
                             "repo": "moonladder/moonmind",
                         },
@@ -815,7 +815,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 Worker(env.client, task_queue="test-task-queue", workflows=[MoonMindRunWorkflow], workflow_runner=UnsandboxedWorkflowRunner()),
             ):
                 request = {
-                    "workflowType": "MoonMind.Run",
+                    "workflowType": "MoonMind.UserWorkflow",
                     "title": "Test Signal Run",
                     "initialParameters": {
                         "repo": "moonladder/moonmind",
@@ -871,7 +871,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 Worker(env.client, task_queue="test-task-queue", workflows=[MoonMindRunWorkflow], workflow_runner=UnsandboxedWorkflowRunner()),
             ):
                 request = {
-                    "workflowType": "MoonMind.Run",
+                    "workflowType": "MoonMind.UserWorkflow",
                     "title": "Test Branch Publish Merge",
                     "initialParameters": {
                         "repo": "moonladder/moonmind",

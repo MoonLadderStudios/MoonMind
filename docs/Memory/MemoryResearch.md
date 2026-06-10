@@ -1,6 +1,6 @@
 # Memory Strategies for LLM Agents and Recommendations for MoonMind
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
+**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 Prioritized experiments, schema/API follow-ups, and effort estimates are listed in the tracker; this document stays **research and recommendations**, not a delivery backlog in prose.
 

@@ -41,7 +41,7 @@ async def test_failed_execution_direct_rerun_creates_exact_full_rerun_from_origi
         async with maker() as session:
             service = TemporalExecutionService(session, client_adapter=AsyncMock())
             source = await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=uuid4(),
                 title="MM-645 failed source",
                 input_artifact_ref="artifact://input/source",
@@ -50,7 +50,7 @@ async def test_failed_execution_direct_rerun_creates_exact_full_rerun_from_origi
                 failure_policy=None,
                 initial_parameters={
                     "repository": "MoonLadderStudios/MoonMind",
-                    "taskRunId": "old-task-run",
+                    "agentRunId": "old-agent-run",
                     "recoverySource": {"workflowId": "mm:old", "runId": "run-old"},
                     "recoveryCheckpointRef": "artifact://checkpoint/old",
                     "preservedSteps": [{"logicalStepId": "plan"}],
@@ -131,7 +131,7 @@ async def test_failed_execution_direct_rerun_creates_exact_full_rerun_from_origi
             "sourceRunId": source_after_rerun.run_id,
         },
     }
-    assert "taskRunId" not in rerun.parameters
+    assert "agentRunId" not in rerun.parameters
     assert "recoverySource" not in rerun.parameters
     assert "recoveryCheckpointRef" not in rerun.parameters
     assert "preservedSteps" not in rerun.parameters

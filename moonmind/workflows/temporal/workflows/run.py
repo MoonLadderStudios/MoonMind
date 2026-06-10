@@ -189,7 +189,7 @@ _MOONSPEC_GATE_VERDICT_TEXT_PATTERN = re.compile(
 )
 
 class RunWorkflowInput(TypedDict, total=False):
-    """Input payload for the MoonMind.Run workflow."""
+    """Input payload for the MoonMind.UserWorkflow workflow."""
 
     workflow_type: str
     title: Optional[str]
@@ -208,8 +208,8 @@ class RunWorkflowOutput(_RunWorkflowOutputBase, total=False):
     mergeAutomationDisposition: str
     headSha: str
 
-WORKFLOW_NAME = "MoonMind.Run"
 USER_WORKFLOW_NAME = "MoonMind.UserWorkflow"
+WORKFLOW_NAME = USER_WORKFLOW_NAME
 STATE_SCHEDULED = "scheduled"
 STATE_INITIALIZING = "initializing"
 STATE_WAITING_ON_DEPENDENCIES = "waiting_on_dependencies"
@@ -328,7 +328,6 @@ def _legacy_manager_workflow_id(runtime_id: str) -> str:
     # provider-profile-manager IDs once the replay patch is active.
     return f"auth-profile-manager:{runtime_id}"
 
-@workflow.defn(name="MoonMind.Run")
 class MoonMindRunWorkflow:
     def _expected_workflow_name(self) -> str:
         return WORKFLOW_NAME
@@ -1455,7 +1454,7 @@ class MoonMindRunWorkflow:
             for source_key, target_key in (
                 ("childWorkflowId", "childWorkflowId"),
                 ("childRunId", "childRunId"),
-                ("taskRunId", "taskRunId"),
+                ("agentRunId", "agentRunId"),
             ):
                 value = refs.get(source_key)
                 if isinstance(value, str) and value.strip():
@@ -2130,11 +2129,18 @@ class MoonMindRunWorkflow:
         refs = {
             "childWorkflowId": _output_ref("childWorkflowId", "child_workflow_id"),
             "childRunId": _output_ref("childRunId", "child_run_id"),
-            "taskRunId": _output_ref("taskRunId", "task_run_id")
+            "agentRunId": _output_ref("agentRunId", "agent_run_id")
+            or _output_ref("agentRunId", "agent_run_id")
             or (
-                str(workload_metadata.get("taskRunId")).strip()
+                str(
+                    workload_metadata.get("agentRunId")
+                    or workload_metadata.get("agentRunId")
+                ).strip()
                 if isinstance(workload_metadata, Mapping)
-                and workload_metadata.get("taskRunId") is not None
+                and (
+                    workload_metadata.get("agentRunId") is not None
+                    or workload_metadata.get("agentRunId") is not None
+                )
                 else None
             ),
         }
@@ -3549,7 +3555,7 @@ class MoonMindRunWorkflow:
                 non_retryable=True,
             ) from exc
         self._get_logger().info(
-            "Starting MoonMind.Run workflow",
+            "Starting MoonMind.UserWorkflow workflow",
             extra={"workflow_type": workflow_type},
         )
 
@@ -4098,7 +4104,7 @@ class MoonMindRunWorkflow:
         pull_request_url: str | None = None
         # Keep this patch command in its historical position, after the
         # jules-bundling marker and before any lazy registry read. Removing or
-        # reordering it strands in-flight MoonMind.Run histories before
+        # reordering it strands in-flight user workflow histories before
         # cancellation/failure handling.
         workflow.patched(RUN_CONDITIONAL_REGISTRY_READ_PATCH)
         previous_step_outputs: Mapping[str, Any] = {}
@@ -5811,7 +5817,7 @@ class MoonMindRunWorkflow:
         binding: CodexManagedSessionBinding,
     ) -> dict[str, Any]:
         return {
-            "TaskRunId": [binding.task_run_id],
+            "AgentRunId": [binding.agent_run_id],
             "RuntimeId": [binding.runtime_id],
             "SessionId": [binding.session_id],
             "SessionEpoch": [binding.session_epoch],
@@ -5826,7 +5832,7 @@ class MoonMindRunWorkflow:
     ) -> str:
         return (
             "Workflow-scoped managed runtime session | "
-            f"taskRunId={binding.task_run_id} | "
+            f"agentRunId={binding.agent_run_id} | "
             f"runtime={binding.runtime_id} | "
             f"session={binding.session_id} | "
             f"epoch={binding.session_epoch}"
@@ -5840,9 +5846,9 @@ class MoonMindRunWorkflow:
     ) -> dict[str, str]:
         refs = {"childWorkflowId": child_workflow_id}
         if request.managed_session is not None:
-            task_run_id = str(request.managed_session.task_run_id or "").strip()
-            if task_run_id:
-                refs["taskRunId"] = task_run_id
+            agent_run_id = str(request.managed_session.agent_run_id or "").strip()
+            if agent_run_id:
+                refs["agentRunId"] = agent_run_id
         return refs
 
     async def _ensure_workflow_scoped_codex_session(
@@ -5855,7 +5861,7 @@ class MoonMindRunWorkflow:
             return self._codex_session_binding
 
         session_input = CodexManagedSessionWorkflowInput(
-            taskRunId=workflow.info().workflow_id,
+            agentRunId=workflow.info().workflow_id,
             runtimeId=runtime_id,
             executionProfileRef=request.execution_profile_ref,
         )
@@ -5905,7 +5911,7 @@ class MoonMindRunWorkflow:
             )
             moonmind_metadata["deferManagedSessionUntilSlot"] = {
                 "runtimeId": runtime_id,
-                "taskRunId": workflow.info().workflow_id,
+                "agentRunId": workflow.info().workflow_id,
             }
             metadata["moonmind"] = moonmind_metadata
             parameters["metadata"] = metadata
@@ -8977,7 +8983,7 @@ class MoonMindRunWorkflow:
         if (
             self._integration == "jules"
             and len(step_instructions) > 1
-            and workflow.patched("moonmind.run.jules_one_shot_bundle")
+            and workflow.patched("MoonMind.UserWorkflow.jules_one_shot_bundle")
         ):
             workspace_spec = integration_parameters.get("workspaceSpec") or {}
             repo_value = (
@@ -9042,7 +9048,7 @@ class MoonMindRunWorkflow:
         else:
             integration_parameters.setdefault(
                 "description",
-                f"Monitor MoonMind.Run workflow for {self._repo or 'the requested workflow'}.",
+                f"Monitor MoonMind.UserWorkflow workflow for {self._repo or 'the requested workflow'}.",
             )
 
         metadata = integration_parameters.get("metadata")

@@ -59,7 +59,7 @@ def test_step_ledger_refs_track_latest_and_historical_step_execution_manifests()
         {
             "childWorkflowId": "child-1",
             "childRunId": "run-child",
-            "taskRunId": "task-run",
+            "agentRunId": "agent-run",
             "latestStepExecutionManifestRef": "artifact-attempt-2",
             "stepExecutionManifestRefs": ["artifact-attempt-1", "artifact-attempt-2"],
         }
@@ -112,7 +112,7 @@ def test_build_initial_step_rows_skips_blank_node_ids() -> None:
             "refs": {
                 "childWorkflowId": None,
                 "childRunId": None,
-                "taskRunId": None,
+                "agentRunId": None,
                 "latestStepExecutionManifestRef": None,
                 "stepExecutionManifestRefs": [],
             },
@@ -231,7 +231,7 @@ def test_contract_models_accept_representative_rows_and_progress() -> None:
             "updatedAt": updated_at.isoformat(),
             "summary": "Retrying after a bounded failure",
             "checks": [],
-            "refs": {"childWorkflowId": None, "childRunId": None, "taskRunId": None},
+            "refs": {"childWorkflowId": None, "childRunId": None, "agentRunId": None},
             "artifacts": {
                 "outputSummary": None,
                 "outputPrimary": None,
@@ -262,7 +262,7 @@ def test_contract_models_accept_representative_rows_and_progress() -> None:
             "refs": {
                 "childWorkflowId": "wf-child",
                 "childRunId": "run-child",
-                "taskRunId": "task-run-1",
+                "agentRunId": "agent-run-1",
             },
             "artifacts": {
                 "outputSummary": None,
@@ -299,7 +299,7 @@ def test_contract_models_accept_representative_rows_and_progress() -> None:
                     "artifactRef": None,
                 }
             ],
-            "refs": {"childWorkflowId": None, "childRunId": None, "taskRunId": None},
+            "refs": {"childWorkflowId": None, "childRunId": None, "agentRunId": None},
             "artifacts": {
                 "outputSummary": None,
                 "outputPrimary": None,
@@ -327,7 +327,7 @@ def test_contract_models_accept_representative_rows_and_progress() -> None:
 
     assert progress.current_step_title == "Review patch"
     assert retrying_row.execution_ordinal == 2
-    assert child_runtime_row.refs.task_run_id == "task-run-1"
+    assert child_runtime_row.refs.agent_run_id == "agent-run-1"
     assert reviewed_row.checks == [
         StepLedgerCheckModel(
             kind="approval_policy",
@@ -346,7 +346,7 @@ def test_row_defaults_remain_bounded_and_structured() -> None:
     assert refs.model_dump(by_alias=True) == {
         "childWorkflowId": None,
         "childRunId": None,
-        "taskRunId": None,
+        "agentRunId": None,
         "latestStepExecutionManifestRef": None,
         "stepExecutionManifestRefs": [],
     }
@@ -514,7 +514,7 @@ def test_update_step_row_merges_structured_refs_and_artifacts() -> None:
         refs={
             "childWorkflowId": "wf-child-1",
             "childRunId": "run-child-1",
-            "taskRunId": "550e8400-e29b-41d4-a716-446655440000",
+            "agentRunId": "550e8400-e29b-41d4-a716-446655440000",
         },
         artifacts={
             "outputSummary": "art_summary_1",
@@ -527,7 +527,7 @@ def test_update_step_row_merges_structured_refs_and_artifacts() -> None:
     assert row["refs"] == {
         "childWorkflowId": "wf-child-1",
         "childRunId": "run-child-1",
-        "taskRunId": "550e8400-e29b-41d4-a716-446655440000",
+        "agentRunId": "550e8400-e29b-41d4-a716-446655440000",
         "latestStepExecutionManifestRef": None,
         "stepExecutionManifestRefs": [],
     }

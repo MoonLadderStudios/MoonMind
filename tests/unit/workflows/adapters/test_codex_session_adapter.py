@@ -75,7 +75,7 @@ def _raise_activity_error_from_application_error(error: ApplicationError) -> Non
 def _binding() -> CodexManagedSessionBinding:
     return CodexManagedSessionBinding(
         workflowId="wf-task-1:session:codex_cli",
-        taskRunId="wf-task-1",
+        agentRunId="wf-task-1",
         sessionId="sess:wf-task-1:codex_cli",
         sessionEpoch=1,
         runtimeId="codex_cli",
@@ -231,7 +231,7 @@ async def test_start_launches_missing_workflow_scoped_session_and_persists_resul
     tmp_path: Path,
 ) -> None:
     binding = _binding()
-    workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
+    workspace_path = tmp_path / "agent_jobs" / binding.agent_run_id / "repo"
     launch_calls: list[Any] = []
     attach_calls: list[dict[str, Any]] = []
     control_calls: list[dict[str, Any]] = []
@@ -326,7 +326,7 @@ async def test_start_launches_missing_workflow_scoped_session_and_persists_resul
     handle = await adapter.start(request)
     status = await adapter.status(handle.run_id)
     result = await adapter.fetch_result(handle.run_id)
-    persisted_record = run_store.load(binding.task_run_id)
+    persisted_record = run_store.load(binding.agent_run_id)
 
     assert len(launch_calls) == 1
     launch_payload = launch_calls[0]
@@ -336,9 +336,9 @@ async def test_start_launches_missing_workflow_scoped_session_and_persists_resul
     launch_request = launch_payload["request"]
     assert launch_request["sessionId"] == binding.session_id
     assert launch_request["workspacePath"] == str(workspace_path)
-    assert launch_request["sessionWorkspacePath"].endswith(f"{binding.task_run_id}/session")
-    assert launch_request["artifactSpoolPath"].endswith(f"{binding.task_run_id}/artifacts")
-    assert launch_request["codexHomePath"].endswith(f"{binding.task_run_id}/.moonmind/codex-home")
+    assert launch_request["sessionWorkspacePath"].endswith(f"{binding.agent_run_id}/session")
+    assert launch_request["artifactSpoolPath"].endswith(f"{binding.agent_run_id}/artifacts")
+    assert launch_request["codexHomePath"].endswith(f"{binding.agent_run_id}/.moonmind/codex-home")
     assert launch_request["imageRef"] == "ghcr.io/moonladderstudios/moonmind:latest"
     assert (
         launch_request["turnCompletionTimeoutSeconds"]
@@ -354,7 +354,7 @@ async def test_start_launches_missing_workflow_scoped_session_and_persists_resul
     assert handle.metadata["sessionId"] == binding.session_id
     assert handle.metadata["containerId"] == "container-1"
     assert persisted_record is not None
-    assert persisted_record.run_id == binding.task_run_id
+    assert persisted_record.run_id == binding.agent_run_id
     assert persisted_record.workflow_id == "wf-agent-run-1"
     assert persisted_record.runtime_id == "codex_cli"
     assert persisted_record.status == "completed"
@@ -396,7 +396,7 @@ async def test_start_prepares_turn_instructions_after_cold_session_launch(
     tmp_path: Path,
 ) -> None:
     binding = _binding()
-    workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
+    workspace_path = tmp_path / "agent_jobs" / binding.agent_run_id / "repo"
     call_order: list[str] = []
     send_turn_calls: list[Any] = []
 
@@ -484,7 +484,7 @@ async def test_start_can_preserve_pre_launch_instruction_preparation_order(
     tmp_path: Path,
 ) -> None:
     binding = _binding()
-    workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
+    workspace_path = tmp_path / "agent_jobs" / binding.agent_run_id / "repo"
     call_order: list[str] = []
     send_turn_calls: list[Any] = []
 
@@ -573,7 +573,7 @@ async def test_start_passes_managed_session_dood_context(
     monkeypatch.setenv("MOONMIND_AGENT_WORKSPACES_VOLUME_NAME", "agent_workspaces_test")
     binding = _binding()
     workspace_root = tmp_path / "agent_jobs"
-    workspace_path = workspace_root / binding.task_run_id / "repo"
+    workspace_path = workspace_root / binding.agent_run_id / "repo"
     launch_calls: list[Any] = []
 
     async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
@@ -643,9 +643,9 @@ async def test_start_passes_managed_session_dood_context(
 
     launch_environment = launch_calls[0]["request"]["environment"]
     assert launch_environment["MOONMIND_WORKDIR"] == str(workspace_root)
-    assert launch_environment["MOONMIND_JOB_ID"] == binding.task_run_id
+    assert launch_environment["MOONMIND_JOB_ID"] == binding.agent_run_id
     assert launch_environment["MOONMIND_TASK_WORKFLOW_ID"] == "wf-parent-task-1"
-    assert launch_environment["MOONMIND_TASK_RUN_ID"] == binding.task_run_id
+    assert launch_environment["MOONMIND_AGENT_RUN_ID"] == binding.agent_run_id
     assert (
         launch_environment["MOONMIND_CONTAINER_WORKSPACE_VOLUME"]
         == "agent_workspaces_test"
@@ -697,7 +697,7 @@ async def test_managed_session_launch_environment_overrides_incoming_task_identi
 
     spoofed_environment = {
         "MOONMIND_TASK_WORKFLOW_ID": "wf-attacker-task",
-        "MOONMIND_TASK_RUN_ID": "wf-attacker-run",
+        "MOONMIND_AGENT_RUN_ID": "wf-attacker-run",
         "OTHER_VAR": "preserved",
     }
 
@@ -707,7 +707,7 @@ async def test_managed_session_launch_environment_overrides_incoming_task_identi
     )
 
     assert launch_environment["MOONMIND_TASK_WORKFLOW_ID"] == "wf-parent-task-trusted"
-    assert launch_environment["MOONMIND_TASK_RUN_ID"] == binding.task_run_id
+    assert launch_environment["MOONMIND_AGENT_RUN_ID"] == binding.agent_run_id
     assert launch_environment["OTHER_VAR"] == "preserved"
 
 
@@ -722,7 +722,7 @@ async def test_managed_session_launch_environment_drops_task_workflow_when_unset
 
     spoofed_environment = {
         "MOONMIND_TASK_WORKFLOW_ID": "wf-attacker-task",
-        "MOONMIND_TASK_RUN_ID": "wf-attacker-run",
+        "MOONMIND_AGENT_RUN_ID": "wf-attacker-run",
     }
 
     launch_environment = adapter._managed_session_launch_environment(
@@ -731,7 +731,7 @@ async def test_managed_session_launch_environment_drops_task_workflow_when_unset
     )
 
     assert "MOONMIND_TASK_WORKFLOW_ID" not in launch_environment
-    assert launch_environment["MOONMIND_TASK_RUN_ID"] == binding.task_run_id
+    assert launch_environment["MOONMIND_AGENT_RUN_ID"] == binding.agent_run_id
 
 
 async def test_start_omits_large_inline_instruction_from_result_metadata(
@@ -812,7 +812,7 @@ async def test_start_preserves_completed_codex_turn_with_usage_limit_summary(
     tmp_path: Path,
 ) -> None:
     binding = _binding()
-    workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
+    workspace_path = tmp_path / "agent_jobs" / binding.agent_run_id / "repo"
     run_store = ManagedRunStore(tmp_path / "managed_runs")
     quota_summary = (
         "You've hit your usage limit. To get more access now, send a request "
@@ -889,7 +889,7 @@ async def test_start_preserves_completed_codex_turn_with_usage_limit_summary(
     assert result.retry_recommendation is None
     assert "providerFailure" not in result.metadata
 
-    persisted_record = run_store.load(binding.task_run_id)
+    persisted_record = run_store.load(binding.agent_run_id)
     await adapter.fetch_result(handle.run_id)
     assert persisted_record is not None
     assert persisted_record.status == "completed"
@@ -985,7 +985,7 @@ async def test_start_passes_oauth_profile_auth_target_to_launch_session(
         "codex-oauth"
     )
     assert launch_request["codexHomePath"].endswith(
-        f"{binding.task_run_id}/.moonmind/codex-home"
+        f"{binding.agent_run_id}/.moonmind/codex-home"
     )
     assert launch_request["codexHomePath"] != (
         launch_request["environment"]["MANAGED_AUTH_VOLUME_PATH"]
@@ -996,7 +996,7 @@ async def test_start_persists_running_live_capable_record_before_send_turn_compl
     tmp_path: Path,
 ) -> None:
     binding = _binding()
-    workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
+    workspace_path = tmp_path / "agent_jobs" / binding.agent_run_id / "repo"
     run_store = ManagedRunStore(tmp_path / "managed_runs")
     send_turn_started = asyncio.Event()
     release_send_turn = asyncio.Event()
@@ -1070,7 +1070,7 @@ async def test_start_persists_running_live_capable_record_before_send_turn_compl
     )
     await asyncio.wait_for(send_turn_started.wait(), timeout=1)
 
-    persisted_running = run_store.load(binding.task_run_id)
+    persisted_running = run_store.load(binding.agent_run_id)
     assert persisted_running is not None
     assert persisted_running.status == "running"
     assert persisted_running.finished_at is None
@@ -1087,7 +1087,7 @@ async def test_start_persists_running_live_capable_record_before_send_turn_compl
     release_send_turn.set()
     await start_task
 
-    persisted_completed = run_store.load(binding.task_run_id)
+    persisted_completed = run_store.load(binding.agent_run_id)
     assert persisted_completed is not None
     assert persisted_completed.status == "completed"
     assert persisted_completed.live_stream_capable is True
@@ -1096,7 +1096,7 @@ async def test_start_fails_jira_issue_creator_when_no_issues_created(
     tmp_path: Path,
 ) -> None:
     binding = _binding()
-    workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
+    workspace_path = tmp_path / "agent_jobs" / binding.agent_run_id / "repo"
     run_store = ManagedRunStore(tmp_path / "managed_runs")
     assistant_text = (
         "I could not create the Jira stories because Jira access is not configured. "
@@ -1188,7 +1188,7 @@ async def test_start_fails_jira_issue_creator_when_no_issues_created(
     with pytest.raises(CodexSessionRunFailedError) as exc_info:
         await adapter.start(request)
 
-    persisted_record = run_store.load(binding.task_run_id)
+    persisted_record = run_store.load(binding.agent_run_id)
     assert exc_info.value.agent_run_result.failure_class == "execution_error"
     assert "No Jira issues were created" in exc_info.value.agent_run_result.summary
     assert persisted_record is not None
@@ -1199,7 +1199,7 @@ async def test_start_fails_jira_pr_verify_when_issue_body_unavailable(
     tmp_path: Path,
 ) -> None:
     binding = _binding()
-    workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
+    workspace_path = tmp_path / "agent_jobs" / binding.agent_run_id / "repo"
     run_store = ManagedRunStore(tmp_path / "managed_runs")
     assistant_text = (
         "I could not read the Jira issue body from Atlassian in this runtime "
@@ -1287,7 +1287,7 @@ async def test_start_fails_jira_pr_verify_when_issue_body_unavailable(
     with pytest.raises(CodexSessionRunFailedError) as exc_info:
         await adapter.start(request)
 
-    persisted_record = run_store.load(binding.task_run_id)
+    persisted_record = run_store.load(binding.agent_run_id)
     assert exc_info.value.agent_run_result.failure_class == "execution_error"
     assert (
         "could not read the Jira issue body"
@@ -1329,7 +1329,7 @@ async def test_start_allows_jira_issue_creator_mixed_output_with_created_issue_k
     tmp_path: Path,
 ) -> None:
     binding = _binding()
-    workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
+    workspace_path = tmp_path / "agent_jobs" / binding.agent_run_id / "repo"
     run_store = ManagedRunStore(tmp_path / "managed_runs")
     assistant_text = (
         "An earlier attempt reported that no Jira issues were created.\n\n"
@@ -1414,7 +1414,7 @@ async def test_start_allows_jira_issue_creator_mixed_output_with_created_issue_k
     handle = await adapter.start(request)
     result = await adapter.fetch_result(handle.run_id)
 
-    persisted_record = run_store.load(binding.task_run_id)
+    persisted_record = run_store.load(binding.agent_run_id)
     assert handle.status == "completed"
     assert persisted_record is not None
     assert persisted_record.status == "completed"
@@ -1424,7 +1424,7 @@ async def test_start_allows_jira_issue_creator_mixed_output_with_created_issue_k
 
 async def test_start_raises_when_send_turn_returns_failed_status(tmp_path: Path) -> None:
     binding = _binding()
-    workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
+    workspace_path = tmp_path / "agent_jobs" / binding.agent_run_id / "repo"
     summary_calls: list[Any] = []
     publication_calls: list[Any] = []
     run_store = ManagedRunStore(tmp_path / "managed_runs")
@@ -1508,7 +1508,7 @@ async def test_start_raises_when_send_turn_returns_failed_status(tmp_path: Path)
     assert str(excinfo.value) == expected_reason
     assert summary_calls == []
     assert len(publication_calls) == 1
-    persisted_record = run_store.load(binding.task_run_id)
+    persisted_record = run_store.load(binding.agent_run_id)
     assert persisted_record is not None
     assert persisted_record.status == "failed"
     assert persisted_record.workspace_path == str(workspace_path)
@@ -1527,7 +1527,7 @@ async def test_start_resets_session_once_after_empty_assistant_activity_failure(
     tmp_path: Path,
 ) -> None:
     binding = _binding()
-    workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
+    workspace_path = tmp_path / "agent_jobs" / binding.agent_run_id / "repo"
     send_turn_calls: list[Any] = []
     clear_calls: list[Any] = []
     attach_calls: list[dict[str, Any]] = []
@@ -1657,7 +1657,7 @@ async def test_start_resets_session_once_after_empty_assistant_activity_failure(
         "containerId": "container-1",
         "threadId": reset_thread_id,
     } in control_calls
-    persisted_record = run_store.load(binding.task_run_id)
+    persisted_record = run_store.load(binding.agent_run_id)
     result = await adapter.fetch_result(handle.run_id)
     assert persisted_record is not None
     assert persisted_record.status == "completed"
@@ -1678,7 +1678,7 @@ async def test_start_classifies_codex_provider_capacity_failure_and_publishes_ar
     tmp_path: Path,
 ) -> None:
     binding = _binding()
-    workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
+    workspace_path = tmp_path / "agent_jobs" / binding.agent_run_id / "repo"
     run_store = ManagedRunStore(tmp_path / "managed_runs")
     reason = (
         "provider emitted verbose diagnostics "
@@ -1763,7 +1763,7 @@ async def test_start_classifies_codex_provider_capacity_failure_and_publishes_ar
     assert result.metadata["providerFailure"]["providerErrorCode"] == "provider_capacity"
     assert result.metadata["profileId"] == "codex-default"
 
-    persisted_record = run_store.load(binding.task_run_id)
+    persisted_record = run_store.load(binding.agent_run_id)
     assert persisted_record is not None
     assert persisted_record.failure_class == "integration_error"
     assert persisted_record.provider_error_code == "provider_capacity"
@@ -1775,7 +1775,7 @@ async def test_start_classifies_codex_auth_failure_as_user_error(
     tmp_path: Path,
 ) -> None:
     binding = _binding()
-    workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
+    workspace_path = tmp_path / "agent_jobs" / binding.agent_run_id / "repo"
     run_store = ManagedRunStore(tmp_path / "managed_runs")
     reason = "turn failed: http 401"
 
@@ -1846,7 +1846,7 @@ async def test_start_classifies_codex_auth_failure_as_user_error(
     assert result.metadata["providerFailure"]["providerErrorCode"] == "401"
     assert result.metadata["profileId"] == "codex-default"
 
-    persisted_record = run_store.load(binding.task_run_id)
+    persisted_record = run_store.load(binding.agent_run_id)
     assert persisted_record is not None
     assert persisted_record.failure_class == "user_error"
     assert persisted_record.provider_error_code == "401"
@@ -1898,7 +1898,7 @@ async def test_publish_failure_artifacts_logs_best_effort_failure(
             containerId="container-1",
             threadId="thread-1",
         ),
-        managed_run_id=binding.task_run_id,
+        managed_run_id=binding.agent_run_id,
         run_id="run-1",
     )
 
@@ -1952,7 +1952,7 @@ async def test_publish_failure_artifacts_preserves_cancellation(
                 containerId="container-1",
                 threadId="thread-1",
             ),
-            managed_run_id=binding.task_run_id,
+            managed_run_id=binding.agent_run_id,
             run_id="run-1",
         )
 
@@ -1971,7 +1971,7 @@ async def test_start_finalizes_failed_record_for_post_save_exceptions(
     expected_message: str,
 ) -> None:
     binding = _binding()
-    workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
+    workspace_path = tmp_path / "agent_jobs" / binding.agent_run_id / "repo"
     run_store = ManagedRunStore(tmp_path / "managed_runs")
 
     async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
@@ -2054,7 +2054,7 @@ async def test_start_finalizes_failed_record_for_post_save_exceptions(
     with pytest.raises(Exception, match=expected_message):
         await adapter.start(_request(binding, workspace_path=str(workspace_path)))
 
-    persisted_record = run_store.load(binding.task_run_id)
+    persisted_record = run_store.load(binding.agent_run_id)
 
     assert persisted_record is not None
     assert persisted_record.status == "failed"
@@ -2069,7 +2069,7 @@ async def test_start_marks_run_failed_when_post_turn_follow_up_raises(
     tmp_path: Path,
 ) -> None:
     binding = _binding()
-    workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
+    workspace_path = tmp_path / "agent_jobs" / binding.agent_run_id / "repo"
     run_store = ManagedRunStore(tmp_path / "managed_runs")
     signal_calls: list[Any] = []
     summary_error = "summary fetch failed after send_turn"
@@ -2136,7 +2136,7 @@ async def test_start_marks_run_failed_when_post_turn_follow_up_raises(
         "containerId": "container-2",
         "threadId": "thread-2",
     }
-    persisted_record = run_store.load(binding.task_run_id)
+    persisted_record = run_store.load(binding.agent_run_id)
     assert persisted_record is not None
     assert persisted_record.status == "failed"
     assert persisted_record.error_message == summary_error
@@ -2148,7 +2148,7 @@ async def test_start_marks_run_failed_when_post_turn_follow_up_raises(
 
 async def test_start_resolves_workspace_path_once_per_turn(tmp_path: Path) -> None:
     binding = _binding()
-    expected_workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
+    expected_workspace_path = tmp_path / "agent_jobs" / binding.agent_run_id / "repo"
     workspace_path_calls = 0
 
     async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
@@ -2632,7 +2632,7 @@ async def test_start_delegates_turn_instruction_preparation_before_sending_turn(
     tmp_path: Path,
 ) -> None:
     binding = _binding()
-    expected_workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
+    expected_workspace_path = tmp_path / "agent_jobs" / binding.agent_run_id / "repo"
     send_turn_calls: list[Any] = []
     prepared_payloads: list[dict[str, Any]] = []
 
@@ -3131,9 +3131,9 @@ async def test_save_run_state_persists_blank_workspace_path_as_none(
     )
 
     adapter._save_run_state(
-        run_id=binding.task_run_id,
+        run_id=binding.agent_run_id,
         agent_id="codex",
-        managed_run_id=binding.task_run_id,
+        managed_run_id=binding.agent_run_id,
         binding=binding,
         workspace_path="   ",
         locator={
@@ -3152,7 +3152,7 @@ async def test_save_run_state_persists_blank_workspace_path_as_none(
         finished_at=datetime.now(tz=UTC),
     )
 
-    persisted_record = run_store.load(binding.task_run_id)
+    persisted_record = run_store.load(binding.agent_run_id)
 
     assert persisted_record is not None
     assert persisted_record.workspace_path is None
@@ -3161,7 +3161,7 @@ async def test_save_run_state_clears_active_turn_id_when_explicitly_none(
     tmp_path: Path,
 ) -> None:
     binding = _binding()
-    workspace_path = str(tmp_path / "agent_jobs" / binding.task_run_id / "repo")
+    workspace_path = str(tmp_path / "agent_jobs" / binding.agent_run_id / "repo")
     run_store = ManagedRunStore(tmp_path / "managed_runs")
     adapter = CodexSessionAdapter(
         profile_fetcher=_fake_profiles(
@@ -3190,9 +3190,9 @@ async def test_save_run_state_clears_active_turn_id_when_explicitly_none(
     )
 
     adapter._save_run_state(
-        run_id=binding.task_run_id,
+        run_id=binding.agent_run_id,
         agent_id="codex",
-        managed_run_id=binding.task_run_id,
+        managed_run_id=binding.agent_run_id,
         binding=binding,
         workspace_path=workspace_path,
         locator={
@@ -3211,9 +3211,9 @@ async def test_save_run_state_clears_active_turn_id_when_explicitly_none(
     )
 
     adapter._save_run_state(
-        run_id=binding.task_run_id,
+        run_id=binding.agent_run_id,
         agent_id="codex",
-        managed_run_id=binding.task_run_id,
+        managed_run_id=binding.agent_run_id,
         binding=binding,
         workspace_path=workspace_path,
         locator={
@@ -3232,7 +3232,7 @@ async def test_save_run_state_clears_active_turn_id_when_explicitly_none(
         finished_at=datetime.now(tz=UTC),
     )
 
-    persisted_record = run_store.load(binding.task_run_id)
+    persisted_record = run_store.load(binding.agent_run_id)
 
     assert persisted_record is not None
     assert persisted_record.active_turn_id is None

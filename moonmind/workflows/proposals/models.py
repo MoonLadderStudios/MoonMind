@@ -54,27 +54,27 @@ class WorkflowProposal(Base):
     """Control-plane record representing a follow-up workflow proposal."""
 
     # legacy_run contract: table/index names rename in WP7 (database migration)
-    __tablename__ = "task_proposals"
+    __tablename__ = "workflow_proposals"
     __table_args__ = (
-        Index("ix_task_proposals_status_created", "status", "created_at"),
-        Index("ix_task_proposals_origin", "origin_source", "origin_id"),
-        Index("ix_task_proposals_repository", "repository"),
-        Index("ix_task_proposals_dedup_hash_status", "dedup_hash", "status"),
+        Index("ix_workflow_proposals_status_created", "status", "created_at"),
+        Index("ix_workflow_proposals_origin", "origin_source", "origin_id"),
+        Index("ix_workflow_proposals_repository", "repository"),
+        Index("ix_workflow_proposals_dedup_hash_status", "dedup_hash", "status"),
         Index(
-            "ix_task_proposals_provider_destination_dedup",
+            "ix_workflow_proposals_provider_destination_dedup",
             "provider",
             "repository",
             "dedup_hash",
             "status",
         ),
-        Index("ix_task_proposals_priority_created", "review_priority", "created_at"),
+        Index("ix_workflow_proposals_priority_created", "review_priority", "created_at"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     status: Mapped[WorkflowProposalStatus] = mapped_column(
         Enum(
             WorkflowProposalStatus,
-            name="taskproposalstatus",
+            name="workflowproposalstatus",
             native_enum=True,
             validate_strings=True,
             values_callable=_enum_values,
@@ -101,7 +101,7 @@ class WorkflowProposal(Base):
         DateTime(timezone=True), nullable=True
     )
     # legacy_run contract: DB column name; attribute renames with WP7 column migration
-    task_snapshot_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
+    workflow_snapshot_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
     provider_metadata: Mapped[dict[str, object]] = mapped_column(
         mutable_json_dict(), nullable=False, default=dict
     )
@@ -111,7 +111,7 @@ class WorkflowProposal(Base):
     review_priority: Mapped[WorkflowProposalReviewPriority] = mapped_column(
         Enum(
             WorkflowProposalReviewPriority,
-            name="taskproposalpriority",
+            name="workflowproposalpriority",
             native_enum=True,
             validate_strings=True,
             values_callable=_enum_values,
@@ -121,7 +121,7 @@ class WorkflowProposal(Base):
     )
     priority_override_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     # legacy_run contract: DB column name; attribute renames with WP7 column migration
-    task_create_request: Mapped[dict[str, object]] = mapped_column(
+    workflow_create_request: Mapped[dict[str, object]] = mapped_column(
         mutable_json_dict(), nullable=False, default=dict
     )
     proposed_by_worker_id: Mapped[str | None] = mapped_column(
@@ -135,7 +135,7 @@ class WorkflowProposal(Base):
     origin_source: Mapped[WorkflowProposalOriginSource] = mapped_column(
         Enum(
             WorkflowProposalOriginSource,
-            name="taskproposaloriginsource",
+            name="workflowproposaloriginsource",
             native_enum=True,
             validate_strings=True,
             values_callable=_enum_values,
@@ -178,19 +178,19 @@ class WorkflowProposalNotification(Base):
     """Audit log for high-signal proposal notification delivery."""
 
     # legacy_run contract: table/constraint names rename in WP7 (database migration)
-    __tablename__ = "task_proposal_notifications"
+    __tablename__ = "workflow_proposal_notifications"
     __table_args__ = (
         UniqueConstraint(
             "proposal_id",
             "target",
-            name="uq_task_proposal_notifications_proposal_target",
+            name="uq_workflow_proposal_notifications_proposal_target",
         ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     proposal_id: Mapped[UUID] = mapped_column(
         # legacy_run contract: FK target table renames in WP7
-        Uuid, ForeignKey("task_proposals.id", ondelete="CASCADE"), nullable=False
+        Uuid, ForeignKey("workflow_proposals.id", ondelete="CASCADE"), nullable=False
     )
     category: Mapped[str] = mapped_column(String(64), nullable=False)
     target: Mapped[str] = mapped_column(String(255), nullable=False)

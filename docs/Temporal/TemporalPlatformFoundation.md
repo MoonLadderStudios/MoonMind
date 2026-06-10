@@ -1,6 +1,6 @@
 # Temporal Platform Foundation
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
+**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 **Project:** MoonMind
 **Doc type:** System architecture / platform foundation
@@ -71,7 +71,7 @@ The following workflow types constitute the live Temporal application layer at t
 
 | Workflow type | Purpose |
 | --- | --- |
-| `MoonMind.Run` | General root execution workflow for plan-driven orchestration |
+| `MoonMind.UserWorkflow` | General root execution workflow for plan-driven orchestration |
 | `MoonMind.ManifestIngest` | Fan-out/fan-in manifest ingestion |
 | `MoonMind.AgentRun` | Durable lifecycle wrapper for true agent execution (managed and external) |
 | `MoonMind.AgentSession` | Workflow-scoped managed-session workflow, currently Codex-backed |
@@ -79,7 +79,7 @@ The following workflow types constitute the live Temporal application layer at t
 | `MoonMind.ProviderProfileManager` | Long-running provider-profile coordination for managed runtimes |
 | `MoonMind.OAuthSession` | OAuth dance lifecycle |
 
-All true agent execution steps are dispatched as `MoonMind.AgentRun` child workflows from `MoonMind.Run`. They are not plain activity invocations. When a managed run uses a workflow-scoped session, `MoonMind.AgentSession` owns the session container and turn/control lifecycle separately from the step-scoped `MoonMind.AgentRun`.
+All true agent execution steps are dispatched as `MoonMind.AgentRun` child workflows from `MoonMind.UserWorkflow`. They are not plain activity invocations. When a managed run uses a workflow-scoped session, `MoonMind.AgentSession` owns the session container and turn/control lifecycle separately from the step-scoped `MoonMind.AgentRun`.
 
 ---
 
@@ -350,6 +350,6 @@ The Temporal Platform Foundation is "done" when:
 5. Worker fleets are polling their configured workflow and activity task queues directly.
 6. Shard count decision recorded and signed off; if 1 shard is chosen, the migration implications are acknowledged.
 7. SQL visibility schema upgrade path rehearsed in pre-rollout validation.
-8. Core workflow catalog (`MoonMind.Run`, `MoonMind.AgentRun`, `MoonMind.AgentSession`, `MoonMind.ManagedSessionReconcile`, `MoonMind.ManifestIngest`, `MoonMind.ProviderProfileManager`, `MoonMind.OAuthSession`) registered and schedulable.
+8. Core workflow catalog (`MoonMind.UserWorkflow`, `MoonMind.AgentRun`, `MoonMind.AgentSession`, `MoonMind.ManagedSessionReconcile`, `MoonMind.ManifestIngest`, `MoonMind.ProviderProfileManager`, `MoonMind.OAuthSession`) registered and schedulable.
 9. Canonical Search Attributes (`mm_owner_type`, `mm_owner_id`, `mm_state`, `mm_updated_at`, `mm_entry`) registered and verified in Visibility queries.
 10. Provider-profile coordination workflows running for managed runtimes that require them.

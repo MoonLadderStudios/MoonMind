@@ -20,7 +20,6 @@ from moonmind.schemas.temporal_artifact_models import CompactArtifactRefModel
 from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
 
 SUPPORTED_WORKFLOW_TYPES = (
-    "MoonMind.Run",
     "MoonMind.UserWorkflow",
     "MoonMind.ManifestIngest",
     "MoonMind.MergeAutomation",
@@ -54,11 +53,11 @@ SUPPORTED_SIGNAL_NAMES = (
     "BypassDependencies",
 )
 # legacy_run contract — persisted memo/search-attribute/parameter keys written by
-# MoonMind.Run histories; key values rename/are removed at the
+# MoonMind.UserWorkflow histories; key values rename/are removed at the
 # MoonMind.UserWorkflow v2 cutover (MM-730, hard-switch plan §15.2).
-TASK_RUN_ID_MEMO_KEYS = ("taskRunId", "task_run_id")
-TASK_RUN_ID_SEARCH_ATTR_KEYS = ("mm_task_run_id",)
-TASK_RUN_ID_PARAM_KEYS = ("taskRunId", "task_run_id")
+AGENT_RUN_ID_MEMO_KEYS = ("agentRunId", "agent_run_id")
+AGENT_RUN_ID_SEARCH_ATTR_KEYS = ("mm_agent_run_id",)
+AGENT_RUN_ID_PARAM_KEYS = ("agentRunId", "agent_run_id")
 
 STEP_EXECUTION_MANIFEST_CONTENT_TYPE = (
     "application/vnd.moonmind.step-execution+json;version=1"
@@ -447,7 +446,7 @@ class StepExecutionCheckpointModel(BaseModel):
     source: StepExecutionIdentityModel = Field(..., alias="source")
     # legacy_run contract — "taskInputSnapshotRef"/"task*" wire keys below (and
     # their python field names) appear in persisted checkpoint/update/signal
-    # payloads for MoonMind.Run histories; they rename at the
+    # payloads for MoonMind.UserWorkflow histories; they rename at the
     # MoonMind.UserWorkflow v2 cutover (MM-730).
     task_input_snapshot_ref: str = Field(
         ..., alias="taskInputSnapshotRef", min_length=1
@@ -1541,8 +1540,10 @@ class ExecutionMergeAutomationResolverChildModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     workflow_id: str = Field(..., alias="workflowId")
-    task_run_id: SkipJsonSchema[str | None] = Field(
-        None, alias="taskRunId", exclude=True
+    agent_run_id: str | None = Field(
+        None,
+        alias="agentRunId",
+        validation_alias=AliasChoices("agentRunId", "agent_run_id"),
     )
     status: str | None = Field(None, alias="status")
     detail_href: str | None = Field(None, alias="detailHref")
@@ -1626,13 +1627,17 @@ class StepLedgerCheckModel(BaseModel):
     artifact_ref: str | None = Field(None, alias="artifactRef")
 
 class StepLedgerRefsModel(BaseModel):
-    """Stable ref slots for child workflow and task-run linkage."""
+    """Stable ref slots for child workflow and managed agent-run linkage."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     child_workflow_id: str | None = Field(None, alias="childWorkflowId")
     child_run_id: str | None = Field(None, alias="childRunId")
-    task_run_id: SkipJsonSchema[str | None] = Field(None, alias="taskRunId")
+    agent_run_id: str | None = Field(
+        None,
+        alias="agentRunId",
+        validation_alias=AliasChoices("agentRunId", "agent_run_id"),
+    )
     latest_step_execution_manifest_ref: str | None = Field(
         None, alias="latestStepExecutionManifestRef"
     )
@@ -1675,7 +1680,11 @@ class StepLedgerWorkloadModel(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
-    task_run_id: SkipJsonSchema[str | None] = Field(None, alias="taskRunId")
+    agent_run_id: str | None = Field(
+        None,
+        alias="agentRunId",
+        validation_alias=AliasChoices("agentRunId", "agent_run_id"),
+    )
     step_id: str | None = Field(None, alias="stepId")
     execution_ordinal: int | None = Field(
         None,
@@ -1990,9 +1999,6 @@ class ExecutionModel(BaseModel):
 
     source: Literal["temporal"] = Field("temporal", alias="source")
     task_id: SkipJsonSchema[str | None] = Field(None, alias="taskId", exclude=True)
-    task_run_id: SkipJsonSchema[Optional[str]] = Field(
-        None, alias="taskRunId", exclude=True
-    )
     agent_run_id: Optional[str] = Field(None, alias="agentRunId")
     progress: ExecutionProgressModel | None = Field(None, alias="progress")
     namespace: str = Field(..., alias="namespace")

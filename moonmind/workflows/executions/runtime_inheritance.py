@@ -1,4 +1,4 @@
-"""Resolve child-task runtime inheritance for ``POST /api/executions``.
+"""Resolve child-agent runtime inheritance for ``POST /api/executions``.
 
 When a parent task creates follow-up work via the execution API, the child
 should run with the same effective runtime/provider profile as the parent
@@ -36,10 +36,10 @@ class RuntimeInheritanceError(Exception):
 
 @dataclass(frozen=True)
 class ExecutionPrincipal:
-    """Caller identity used to gate child-task runtime inheritance.
+    """Caller identity used to gate child-agent runtime inheritance.
 
     ``user_id`` and ``is_superuser`` describe the OIDC/user principal that
-    FastAPI resolved.  ``workflow_id`` / ``run_id`` / ``task_run_id`` are
+    FastAPI resolved.  ``workflow_id`` / ``run_id`` / ``agent_run_id`` are
     populated when the caller asserts a task identity through trusted
     transport headers, *and* that identity has been verified (the executions
     router verifies ownership via ``TemporalExecutionService.describe_execution``).
@@ -50,7 +50,7 @@ class ExecutionPrincipal:
     is_superuser: bool = False
     workflow_id: Optional[str] = None
     run_id: Optional[str] = None
-    task_run_id: Optional[str] = None
+    agent_run_id: Optional[str] = None
     scopes: frozenset[str] = field(default_factory=frozenset)
 
     @property
