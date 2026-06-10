@@ -293,6 +293,8 @@ Key diagnostics:
 - Existing Temporal artifact store and workflow history; no new persistent storage (001-step-execution-contracts)
 - Python 3.12 target per repo instructions; TypeScript/React for Mission Control UI + FastAPI, Pydantic v2, SQLAlchemy async ORM, Temporal Python SDK, React, TanStack Query, Zod, Vitest, Testing Library, pytest (001-fix-schedule-creation)
 - Existing recurring task definition/run tables and Temporal schedule state; no new persistent storage (001-fix-schedule-creation)
+- Python 3.12 target per repository instructions + Pydantic v2, pydantic-settings, existing `moonmind.utils.logging.redact_sensitive_text` (001-high-security-outbound-scan)
+- N/A; deterministic runtime contracts and settings only (001-high-security-outbound-scan)
 - Python 3.12 with Pydantic v2 and Temporal Python SDK. + Temporal Python SDK activities, existing `TemporalActivityCatalog`, `TemporalAgentRuntimeActivities`, Docker workload launcher/registry substrate, artifact service helpers, existing PentestGPT Pydantic contracts in `moonmind/integrations/pentest/models.py`. (001-pentest-activity-handler)
 - Existing artifact store and workflow history only; no new persistent database tables planned. (001-pentest-activity-handler)
 

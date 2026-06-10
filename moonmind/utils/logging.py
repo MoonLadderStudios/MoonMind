@@ -16,7 +16,8 @@ _GITHUB_TOKEN_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _SECRET_ASSIGNMENT_PATTERN = re.compile(
-    r"(?i)\b(token|password|secret|api[_-]?key|credential)\s*[:=]\s*([^\s,;\"']+)"
+    r"(?i)\b(token|password|secret|api[_-]?key|credential)\s*[:=]\s*"
+    r"(?:\"[^\"]*\"|'[^']*'|[^\s,;\"']+)"
 )
 _AUTHORIZATION_PATTERN = re.compile(
     r"(?i)\b(authorization\s*:\s*)?bearer\s+[A-Za-z0-9._~+/=-]+"
