@@ -2585,23 +2585,41 @@ class MoonMindRunWorkflow:
         *,
         max_review_attempts: int,
         review_retry_count: int,
+        max_consecutive_no_progress_attempts: int,
+        consecutive_no_progress_attempts: int,
         verdict: str | None = None,
         recommended_next_action: str | None = None,
     ) -> dict[str, Any]:
         attempts_allowed = max_review_attempts + 1
         attempts_consumed = review_retry_count + 1
         remaining_executions = max(0, attempts_allowed - attempts_consumed)
+        no_progress_exhausted = (
+            consecutive_no_progress_attempts
+            >= max_consecutive_no_progress_attempts
+        )
         metadata: dict[str, Any] = {
             "gate": "approval_policy",
             "maxAttempts": attempts_allowed,
             "attemptsConsumed": attempts_consumed,
             "remainingExecutions": remaining_executions,
+            "additionalStopDimension": {
+                "type": "consecutive_no_progress_attempts",
+                "limit": max_consecutive_no_progress_attempts,
+                "consumed": consecutive_no_progress_attempts,
+                "remaining": max(
+                    0,
+                    max_consecutive_no_progress_attempts
+                    - consecutive_no_progress_attempts,
+                ),
+                "exhausted": no_progress_exhausted,
+            },
             "stopRules": [
                 "structured_gate_verdict_required",
                 "accepted_output_evidence_required",
+                "consecutive_no_progress_attempts_exhaustion_stops_before_publication",
                 "budget_exhaustion_stops_before_publication",
             ],
-            "exhausted": remaining_executions == 0,
+            "exhausted": remaining_executions == 0 or no_progress_exhausted,
         }
         if verdict:
             metadata["gateVerdict"] = str(verdict).strip().upper()
@@ -2615,9 +2633,16 @@ class MoonMindRunWorkflow:
         verdict: Any,
         review_retry_count: int,
         max_review_attempts: int,
+        consecutive_no_progress_attempts: int,
+        max_consecutive_no_progress_attempts: int,
     ) -> bool:
         normalized = str(getattr(verdict, "verdict", "") or "").strip().upper()
         if review_retry_count >= max_review_attempts:
+            return False
+        if (
+            consecutive_no_progress_attempts
+            >= max_consecutive_no_progress_attempts
+        ):
             return False
         if normalized == "ADDITIONAL_WORK_NEEDED":
             return True
@@ -4238,7 +4263,19 @@ class MoonMindRunWorkflow:
                 if review_gate_active
                 else 0
             )
+            max_consecutive_no_progress_attempts = max(1, max_review_attempts + 1)
+            if review_gate_active:
+                raw_no_progress_attempts = getattr(
+                    approval_policy,
+                    "max_consecutive_no_progress_attempts",
+                    None,
+                )
+                if raw_no_progress_attempts is not None:
+                    max_consecutive_no_progress_attempts = int(
+                        raw_no_progress_attempts
+                    )
             review_retry_count = 0
+            consecutive_no_progress_attempts = 0
             previous_review_feedback: str | None = None
             previous_review_issues: tuple[Mapping[str, Any], ...] = ()
             result_status: str | None = None
@@ -4332,6 +4369,12 @@ class MoonMindRunWorkflow:
                             budget=self._review_gate_budget_metadata(
                                 max_review_attempts=max_review_attempts,
                                 review_retry_count=review_retry_count,
+                                max_consecutive_no_progress_attempts=(
+                                    max_consecutive_no_progress_attempts
+                                ),
+                                consecutive_no_progress_attempts=(
+                                    consecutive_no_progress_attempts
+                                ),
                             )
                             if review_gate_active
                             else None,
@@ -4728,6 +4771,7 @@ class MoonMindRunWorkflow:
                 )
 
                 if review_verdict.verdict != "FULLY_IMPLEMENTED":
+                    consecutive_no_progress_attempts += 1
                     failed_review_summary = self._bounded_review_summary(
                         review_verdict.feedback,
                         fallback="Structured gate did not approve advancement",
@@ -4744,6 +4788,12 @@ class MoonMindRunWorkflow:
                         verdict=review_verdict,
                         review_retry_count=review_retry_count,
                         max_review_attempts=max_review_attempts,
+                        consecutive_no_progress_attempts=(
+                            consecutive_no_progress_attempts
+                        ),
+                        max_consecutive_no_progress_attempts=(
+                            max_consecutive_no_progress_attempts
+                        ),
                     ):
                         review_retry_count += 1
                         previous_review_feedback = (
@@ -4773,6 +4823,12 @@ class MoonMindRunWorkflow:
                         budget=self._review_gate_budget_metadata(
                             max_review_attempts=max_review_attempts,
                             review_retry_count=review_retry_count,
+                            max_consecutive_no_progress_attempts=(
+                                max_consecutive_no_progress_attempts
+                            ),
+                            consecutive_no_progress_attempts=(
+                                consecutive_no_progress_attempts
+                            ),
                             verdict=review_verdict.verdict,
                             recommended_next_action=(
                                 review_verdict.recommended_next_action
@@ -4818,6 +4874,12 @@ class MoonMindRunWorkflow:
                         budget=self._review_gate_budget_metadata(
                             max_review_attempts=max_review_attempts,
                             review_retry_count=review_retry_count,
+                            max_consecutive_no_progress_attempts=(
+                                max_consecutive_no_progress_attempts
+                            ),
+                            consecutive_no_progress_attempts=(
+                                consecutive_no_progress_attempts
+                            ),
                             verdict=review_verdict.verdict,
                             recommended_next_action="needs_human",
                         ),
@@ -4874,6 +4936,12 @@ class MoonMindRunWorkflow:
                 budget=self._review_gate_budget_metadata(
                     max_review_attempts=max_review_attempts,
                     review_retry_count=review_retry_count,
+                    max_consecutive_no_progress_attempts=(
+                        max_consecutive_no_progress_attempts
+                    ),
+                    consecutive_no_progress_attempts=(
+                        consecutive_no_progress_attempts
+                    ),
                     verdict="FULLY_IMPLEMENTED",
                     recommended_next_action="advance",
                 )
