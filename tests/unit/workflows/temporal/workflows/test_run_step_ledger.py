@@ -838,6 +838,10 @@ async def test_external_continuation_manifest_records_side_effects_and_checkpoin
     workflow._step_ledger_rows[0]["stateCheckpointRef"] = (
         "artifact://checkpoints/external-step"
     )
+    workflow._step_ledger_rows[0]["workspaceCheckpointRef"] = (
+        "artifact://checkpoints/workspace"
+    )
+    workflow._step_ledger_rows[0]["stepCheckpointRef"] = "artifact://checkpoints/step"
     # A known, already-occurred external side effect from this attempt.
     workflow._record_step_side_effect(
         "delegate-external",
@@ -874,6 +878,8 @@ async def test_external_continuation_manifest_records_side_effects_and_checkpoin
     # Available checkpoint evidence is recorded under the continuation path.
     assert execution["availableCheckpointEvidence"] == {
         "stateCheckpointRef": "artifact://checkpoints/external-step",
+        "workspaceCheckpointRef": "artifact://checkpoints/workspace",
+        "stepCheckpointRef": "artifact://checkpoints/step",
     }
 
 

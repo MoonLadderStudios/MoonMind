@@ -296,6 +296,9 @@ RUN_DEFER_TASK_SCOPED_SESSION_UNTIL_SLOT_PATCH = (
 RUN_TASK_SCOPED_SESSION_CLEAR_BETWEEN_STEPS_PATCH = (
     "run-task-scoped-session-clear-between-steps-v1"
 )
+RUN_TASK_SCOPED_SESSION_CLEAR_PER_EXECUTION_PATCH = (
+    "run-task-scoped-session-clear-per-execution-v2"
+)
 RUN_TASK_SCOPED_SESSION_CLEAR_ACTIVITY_SIGNAL_PATCH = (
     "run-task-scoped-session-clear-activity-signal-v1"
 )
@@ -6070,8 +6073,11 @@ class MoonMindRunWorkflow:
         # epoch before the attempt (reuse_session_new_epoch / clear_session
         # semantics per docs/Steps/StepExecutionsAndCheckpointing.md §16.1).
         execution_ordinal = self._step_execution_for(logical_step_id) or 1
-        step_execution_key = f"{logical_step_id}:{execution_ordinal}"
-        if step_execution_key in self._codex_session_cleared_before_step_executions:
+        if workflow.patched(RUN_TASK_SCOPED_SESSION_CLEAR_PER_EXECUTION_PATCH):
+            clear_dedupe_key = f"{logical_step_id}:{execution_ordinal}"
+        else:
+            clear_dedupe_key = logical_step_id
+        if clear_dedupe_key in self._codex_session_cleared_before_step_executions:
             return
         binding = self._codex_session_binding
         if binding is None:
@@ -6133,7 +6139,7 @@ class MoonMindRunWorkflow:
                     reason=reason,
                     request_id=request_id,
                 )
-        self._codex_session_cleared_before_step_executions.add(step_execution_key)
+        self._codex_session_cleared_before_step_executions.add(clear_dedupe_key)
 
     async def _terminate_task_scoped_sessions(self, *, reason: str) -> None:
         binding = self._codex_session_binding
