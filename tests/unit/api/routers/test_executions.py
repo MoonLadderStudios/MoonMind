@@ -9662,8 +9662,12 @@ def test_selected_step_recovery_requires_checkpoint_ref_before_hydration(
     mock_service.describe_execution.return_value = canonical
 
     artifact_service = SimpleNamespace(read=AsyncMock())
+
+    def session_override() -> SimpleNamespace:
+        return SimpleNamespace()
+
     app.dependency_overrides[_get_service] = lambda: mock_service
-    app.dependency_overrides[get_async_session] = lambda: SimpleNamespace()
+    app.dependency_overrides[get_async_session] = session_override
     _override_user_dependencies(app, is_superuser=True)
     monkeypatch.setattr(
         "api_service.api.routers.executions.get_temporal_artifact_service",
