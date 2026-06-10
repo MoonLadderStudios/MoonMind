@@ -339,7 +339,14 @@ Representative shape:
   "budget": {
     "executionLimit": 3,
     "executionOrdinalInLoop": 2,
-    "remainingExecutions": 1
+    "remainingExecutions": 1,
+    "additionalStopDimension": {
+      "type": "consecutive_no_progress_attempts",
+      "limit": 2,
+      "consumed": 0,
+      "remaining": 2,
+      "exhausted": false
+    }
   }
 }
 ```
@@ -845,6 +852,10 @@ Budget dimensions may include:
 4. maximum consecutive no-progress attempts;
 5. maximum failed command repeats;
 6. maximum unsafe or policy-denied attempts.
+
+Step Execution manifests for autonomous loops must record the attempt budget and
+at least one additional non-attempt stop dimension with its limit, consumed
+count, remaining count, and exhausted state.
 
 When a budget is exhausted, MoonMind must stop with a deterministic terminal disposition such as `needs_human`, `blocked`, or `failed_with_remaining_work`. It must publish the latest evidence and recommended next action.
 
