@@ -2099,6 +2099,51 @@ def test_activity_result_provider_failure_summary_reads_profile_from_failure() -
         "http 401 (retryRecommendation: reauthenticate)"
     )
 
+
+def test_activity_result_provider_failure_summary_includes_agent_runtime_reason() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    message = workflow._activity_result_provider_failure_summary(
+        {
+            "status": "FAILED",
+            "outputs": {
+                "error": "execution_error",
+                "summary": "codex app-server turn/completed produced no assistant output",
+                "diagnosticsRef": "art_empty_turn",
+                "profileId": "codex_default",
+                "turnStatus": "failed",
+                "turnMetadata": {
+                    "failureCause": "app_server_protocol_empty_turn",
+                    "retryRecommendedAction": "clear_session",
+                },
+            },
+        }
+    )
+
+    assert message == (
+        "Agent runtime failed with execution_error for profile codex_default "
+        "due to app_server_protocol_empty_turn: codex app-server turn/completed "
+        "produced no assistant output (retryRecommendedAction: clear_session; "
+        "diagnosticsRef: art_empty_turn)"
+    )
+
+
+def test_activity_result_provider_failure_summary_ignores_generic_activity_failure() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    message = workflow._activity_result_provider_failure_summary(
+        {
+            "status": "FAILED",
+            "outputs": {
+                "error": "execution_error",
+                "summary": "activity exited with code 1",
+            },
+        }
+    )
+
+    assert message is None
+
+
 @pytest.mark.asyncio
 async def test_skipped_jira_blocker_wait_restores_executing_state(
     monkeypatch: pytest.MonkeyPatch,
@@ -2296,6 +2341,208 @@ async def test_run_execution_stage_fail_fast_raises_provider_failure_summary(
             parameters={"repo": "MoonLadderStudios/MoonMind"},
             plan_ref="art_plan_1",
         )
+
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_fail_fast_raises_agent_runtime_failure_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.schemas.agent_runtime_models import AgentRunResult
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    step_execution_artifact_ids = count(1)
+    child_attempts = 0
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> object:
+        if activity_type == "artifact.create":
+            artifact_create_result = _step_execution_artifact_create_result(
+                payload,
+                step_execution_artifact_ids,
+            )
+            if artifact_create_result is not None:
+                return artifact_create_result
+        assert activity_type == "artifact.read"
+        return json.dumps(
+            {
+                "plan_version": "1.0",
+                "metadata": {
+                    "title": "Test Plan",
+                    "created_at": "2026-03-12T00:00:00Z",
+                    "registry_snapshot": {
+                        "digest": "reg:sha256:" + ("a" * 64),
+                        "artifact_ref": "artifact://registry/1",
+                    },
+                },
+                "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+                "nodes": [
+                    {
+                        "id": "node-1",
+                        "tool": {
+                            "type": "agent_runtime",
+                            "name": "codex_cli",
+                            "version": "1.0",
+                        },
+                        "inputs": {
+                            "instructions": "Resolve PR",
+                            "repository": "MoonLadderStudios/MoonMind",
+                            "runtime": {
+                                "mode": "codex_cli",
+                                "executionProfileRef": "codex_default",
+                            },
+                        },
+                        "options": {},
+                    }
+                ],
+                "edges": [],
+            }
+        ).encode("utf-8")
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **kwargs: Any,
+    ) -> object:
+        if activity_type == "artifact.write_complete":
+            return {"ok": True}
+        if activity_type == "agent_runtime.load_session_snapshot":
+            return {
+                "binding": {
+                    "workflowId": "wf-1:session:codex_cli",
+                    "taskRunId": "wf-1",
+                    "sessionId": "sess:wf-1:codex_cli",
+                    "sessionEpoch": 2,
+                    "runtimeId": "codex_cli",
+                    "executionProfileRef": "codex_default",
+                },
+                "status": "active",
+                "containerId": "container-1",
+                "threadId": "thread-1",
+                "activeTurnId": None,
+                "lastControlAction": "clear_session",
+                "lastControlReason": "retry_after_empty_assistant_output",
+                "terminationRequested": False,
+                "requestTrackingState": [],
+            }
+        if activity_type == "agent_runtime.clear_session":
+            return {
+                "runtimeFamily": "codex",
+                "protocol": "codex_app_server",
+                "containerBackend": "docker",
+                "controlMode": "remote_container",
+                "sessionState": {
+                    "sessionId": "sess:wf-1:codex_cli",
+                    "sessionEpoch": 3,
+                    "containerId": "container-1",
+                    "threadId": "thread-cleared",
+                    "activeTurnId": None,
+                },
+                "status": "ready",
+                "metadata": {},
+            }
+        if activity_type == "agent_runtime.terminate_session":
+            return {
+                "runtimeFamily": "codex",
+                "protocol": "codex_app_server",
+                "containerBackend": "docker",
+                "controlMode": "remote_container",
+                "sessionState": {
+                    "sessionId": "sess:wf-1:codex_cli",
+                    "sessionEpoch": 3,
+                    "containerId": "container-1",
+                    "threadId": "thread-cleared",
+                    "activeTurnId": None,
+                },
+                "status": "terminated",
+                "metadata": {},
+            }
+        return await fake_execute_activity(activity_type, payload, **kwargs)
+
+    async def fake_execute_child_workflow(*_args: object, **_kwargs: object) -> AgentRunResult:
+        nonlocal child_attempts
+        child_attempts += 1
+        return AgentRunResult(
+            summary="codex app-server turn/completed produced no assistant output",
+            failureClass="execution_error",
+            diagnosticsRef="art_empty_turn",
+            metadata={
+                "profileId": "codex_default",
+                "turnStatus": "failed",
+                "turnMetadata": {
+                    "failureCause": "app_server_protocol_empty_turn",
+                    "retryRecommendedAction": "clear_session",
+                },
+            },
+        )
+
+    async def fake_resolve_skillset_ref(_self: object, **_kwargs: object) -> str:
+        return "art_skillset_1"
+
+    async def fake_bind_task_scoped_session(_self: object, request: object) -> object:
+        return request
+
+    async def fake_fetch_profile_snapshots(_self: object) -> None:
+        return None
+
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(
+        run_workflow_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_resolve_agent_node_skillset_ref",
+        fake_resolve_skillset_ref,
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_maybe_bind_task_scoped_session",
+        fake_bind_task_scoped_session,
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_fetch_profile_snapshots",
+        fake_fetch_profile_snapshots,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Agent runtime failed with execution_error for profile codex_default "
+            "due to app_server_protocol_empty_turn: codex app-server "
+            "turn/completed produced no assistant output"
+        ),
+    ):
+        await workflow._run_execution_stage(
+            parameters={"repo": "MoonLadderStudios/MoonMind"},
+            plan_ref="art_plan_1",
+        )
+
+    assert child_attempts == 4
 
 def test_blocked_outcome_message_detects_structured_agent_report() -> None:
     workflow = MoonMindRunWorkflow()
