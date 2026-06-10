@@ -73,6 +73,51 @@ def _stub_skill_resolution(monkeypatch):
         _fake_materialize,
     )
 
+
+async def test_codex_worker_push_scan_blocks_secret_without_printing_raw_value(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    monkeypatch.setattr(settings.security, "high_security_mode", True)
+    worker = CodexWorker.__new__(CodexWorker)
+    call_count = 0
+
+    class _Proc:
+        def __init__(self, stdout: bytes):
+            self.returncode = 0
+            self._stdout = stdout
+
+        async def communicate(self):
+            return self._stdout, b""
+
+    async def _mock_exec(*args, **kwargs):
+        nonlocal call_count
+        del kwargs
+        call_count += 1
+        command = list(args)
+        assert "push" not in command
+        if call_count == 1:
+            return _Proc(b"commit local-sha\nsubject MM-813\n")
+        if call_count == 2:
+            return _Proc(b"app/config.py\n")
+        if call_count == 3:
+            return _Proc(b"+token=do-not-print-this-value\n")
+        raise AssertionError(f"Unexpected scan subprocess: {args!r}")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _mock_exec)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await worker._scan_publish_git_push(
+            repo_dir=tmp_path,
+            branch_name="feature/scan-block",
+            base_ref="origin/main",
+            env={},
+        )
+
+    message = str(exc_info.value)
+    assert "git.push.diff:app/config.py" in message
+    assert "do-not-print-this-value" not in message
+
+
 class FakeQueueClient:
     """In-memory queue client stub for worker tests."""
 

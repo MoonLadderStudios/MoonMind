@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 from uuid import UUID
 
+from moonmind.security.outbound_scan import (
+    OutboundBundleItem,
+    resolve_high_security_mode,
+    scan_outbound_bundle,
+)
 from moonmind.workflows.adapters.github_service import GitHubService
 from moonmind.utils.cli import verify_cli_is_executable
+from moonmind.utils.logging import redact_sensitive_text
 from moonmind.publish.sanitization import (
     sanitize_metadata_footer_value,
     sanitize_publish_subject,
@@ -26,6 +33,10 @@ CommandRunner = Callable[
     ...,
     Awaitable[CommandResult],
 ]
+
+_PUBLISH_PUSH_SCAN_MAX_COMMIT_METADATA_CHARS = 100_000
+_PUBLISH_PUSH_SCAN_MAX_FILE_DIFF_CHARS = 200_000
+_PUBLISH_PUSH_SCAN_MAX_CHANGED_FILES = 200
 
 class PublishService:
     """Service to publish changes to Git branches or Pull Requests."""
@@ -164,6 +175,12 @@ class PublishService:
             cwd=repo_dir,
             redaction_values=(commit_message,),
         )
+        await self._scan_git_push_before_publish(
+            repo_dir=repo_dir,
+            branch_name=branch_name,
+            base_ref=f"origin/{publish_base_branch or 'main'}",
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        )
         token = ""
         push_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
         resolved_github_credential = None
@@ -256,3 +273,114 @@ class PublishService:
             ),
         )
         return f"published PR from {branch_name}"
+
+    async def _scan_git_push_before_publish(
+        self,
+        *,
+        repo_dir: Path,
+        branch_name: str,
+        base_ref: str,
+        env: dict[str, str],
+    ) -> None:
+        if not resolve_high_security_mode():
+            return
+
+        commit_range = f"{base_ref}..{branch_name}"
+        try:
+            commit_metadata = await self._read_git_text_for_scan(
+                repo_dir=repo_dir,
+                env=env,
+                timeout=15,
+                args=[
+                    "log",
+                    "--format=commit %H%nparents %P%nauthor %an <%ae>%n"
+                    "subject %s%nbody%n%B%n---END-COMMIT---",
+                    commit_range,
+                ],
+            )
+            changed_files_text = await self._read_git_text_for_scan(
+                repo_dir=repo_dir,
+                env=env,
+                timeout=15,
+                args=["diff", "--name-only", commit_range],
+            )
+            bundle = [
+                OutboundBundleItem(
+                    location=f"git.push.commits:{commit_range}",
+                    content=commit_metadata[
+                        :_PUBLISH_PUSH_SCAN_MAX_COMMIT_METADATA_CHARS
+                    ],
+                )
+            ]
+            changed_files = [
+                line.strip()
+                for line in changed_files_text.splitlines()
+                if line.strip()
+            ][:_PUBLISH_PUSH_SCAN_MAX_CHANGED_FILES]
+            for changed_file in changed_files:
+                file_diff = await self._read_git_text_for_scan(
+                    repo_dir=repo_dir,
+                    env=env,
+                    timeout=20,
+                    args=[
+                        "diff",
+                        "--no-ext-diff",
+                        commit_range,
+                        "--",
+                        changed_file,
+                    ],
+                )
+                bundle.append(
+                    OutboundBundleItem(
+                        location=f"git.push.diff:{changed_file}",
+                        content=file_diff[:_PUBLISH_PUSH_SCAN_MAX_FILE_DIFF_CHARS],
+                    )
+                )
+        except Exception as exc:
+            safe_detail = redact_sensitive_text(str(exc))
+            raise RuntimeError(
+                "outbound git push blocked: could not build high security "
+                f"scan payload for {commit_range}: {safe_detail}"
+            ) from exc
+
+        scan_result = scan_outbound_bundle(bundle, high_security_mode=True)
+        if scan_result.allowed:
+            return
+        diagnostics = "; ".join(scan_result.sanitized_diagnostics)
+        raise RuntimeError(
+            "outbound git push blocked by high security scan: " + diagnostics
+        )
+
+    async def _read_git_text_for_scan(
+        self,
+        *,
+        repo_dir: Path,
+        env: dict[str, str],
+        timeout: int,
+        args: list[str],
+    ) -> str:
+        proc = await asyncio.create_subprocess_exec(
+            self._git_binary,
+            "-C",
+            str(repo_dir),
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise
+        if proc.returncode != 0:
+            detail = (
+                stderr_bytes.decode("utf-8", errors="replace").strip()
+                or stdout_bytes.decode("utf-8", errors="replace").strip()
+                or f"git exited with {proc.returncode}"
+            )
+            raise RuntimeError(detail)
+        return stdout_bytes.decode("utf-8", errors="replace")

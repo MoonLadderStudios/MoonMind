@@ -3,10 +3,12 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
 
+from moonmind.config.settings import settings
 from moonmind.publish.service import PublishService
 
 pytestmark = pytest.mark.asyncio
@@ -40,6 +42,60 @@ async def test_publish_branch_push_uses_resolved_token_env(monkeypatch, tmp_path
     assert env["GH_TOKEN"] == "publish-token"
     assert env["GIT_TERMINAL_PROMPT"] == "0"
     assert "publish-token" in push_call["redaction_values"]
+
+
+async def test_publish_branch_blocks_high_security_scan_before_push(
+    monkeypatch, tmp_path: Path
+):
+    monkeypatch.setattr(settings.security, "high_security_mode", True)
+    calls: list[dict[str, object]] = []
+    scan_call_count = 0
+
+    async def _run(command, **kwargs):
+        calls.append({"command": command, **kwargs})
+        if command[:3] == ["git", "status", "--porcelain"]:
+            return SimpleNamespace(stdout=" M file.py\n")
+        return SimpleNamespace(stdout="")
+
+    async def _mock_exec(*args, **kwargs):
+        nonlocal scan_call_count
+        del kwargs
+        scan_call_count += 1
+        proc = AsyncMock()
+        if scan_call_count == 1:
+            proc.communicate = AsyncMock(
+                return_value=(b"commit local-sha\nsubject MM-813\n", b"")
+            )
+            proc.returncode = 0
+        elif scan_call_count == 2:
+            proc.communicate = AsyncMock(return_value=(b"app/config.py\n", b""))
+            proc.returncode = 0
+        elif scan_call_count == 3:
+            proc.communicate = AsyncMock(
+                return_value=(b"+api_key=do-not-print-this-value\n", b"")
+            )
+            proc.returncode = 0
+        else:
+            raise AssertionError(f"Unexpected scan subprocess: {args!r}")
+        return proc
+
+    with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+        with pytest.raises(RuntimeError) as exc_info:
+            await PublishService().publish(
+                job_id=uuid4(),
+                instruction="MM-813 make change",
+                publish_mode="branch",
+                publish_base_branch="main",
+                runtime_mode="codex",
+                repo_dir=tmp_path,
+                run_command=_run,
+                repo=None,
+            )
+
+    message = str(exc_info.value)
+    assert "git.push.diff:app/config.py" in message
+    assert "do-not-print-this-value" not in message
+    assert not any(call["command"][:2] == ["git", "push"] for call in calls)
 
 
 async def test_publish_pr_uses_rest_service_without_ambient_gh(monkeypatch, tmp_path: Path):
