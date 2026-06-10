@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. api_service/ui_assets.py (score: 1.000, trust: canonical)\n    line 1: import json\n2. moonmind/memory/models.py (score: 1.000, trust: canonical)\n    line 1: from __future__ import annotations\n3. moonmind/vision/service.py (score: 1.000, trust: canonical)\n    line 3: from __future__ import annotations\n4. moonmind/memory/__init__.py (score: 1.000, trust: canonical)\n    line 3: from moonmind.memory.context_pack import (\n5. moonmind/claude/runtime.py (score: 1.000, trust: canonical)\n    line 3: from __future__ import annotations\n6. moonmind/memory/services.py (score: 1.000, trust: canonical)\n    line 1: from __future__ import annotations\n7. moonmind/claude/__init__.py (score: 1.000, trust: canonical)\n    line 3: from .runtime import (\n8. moonmind/memory/procedural.py (score: 1.000, trust: canonical)\n    line 8: from __future__ import annotations",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "api_service/ui_assets.py",
+      "text": "line 1: import json",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/memory/models.py",
+      "text": "line 1: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/vision/service.py",
+      "text": "line 3: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/memory/__init__.py",
+      "text": "line 3: from moonmind.memory.context_pack import (",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/claude/runtime.py",
+      "text": "line 3: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/memory/services.py",
+      "text": "line 1: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/claude/__init__.py",
+      "text": "line 3: from .runtime import (",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/memory/procedural.py",
+      "text": "line 8: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 8,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-06-10T08:07:19Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
