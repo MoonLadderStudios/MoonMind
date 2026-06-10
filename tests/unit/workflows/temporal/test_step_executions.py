@@ -307,6 +307,67 @@ def test_plan_reattempt_compensation_dedupes_already_compensated_subjects() -> N
     assert plan["reattemptAllowed"] is True
 
 
+def _patch_blocked_compensation(monkeypatch) -> None:
+    """Force planned compensations to be recorded with a blocked disposition."""
+
+    from moonmind.workflows.temporal import step_executions as step_executions_module
+
+    real_side_effect_record = step_executions_module.side_effect_record
+
+    def _blocked_compensation(*args: object, **kwargs: object) -> dict[str, object]:
+        record = real_side_effect_record(*args, **kwargs)  # type: ignore[arg-type]
+        record["disposition"] = "blocked"
+        return record
+
+    monkeypatch.setattr(
+        step_executions_module, "side_effect_record", _blocked_compensation
+    )
+
+
+def test_plan_reattempt_compensation_blocks_when_compensation_not_accepted(
+    monkeypatch,
+) -> None:
+    occurred = _occurred_non_idempotent_effect()
+    _patch_blocked_compensation(monkeypatch)
+
+    plan = plan_reattempt_compensation(
+        workflow_id="wf-1",
+        run_id="run-1",
+        logical_step_id="implement",
+        execution_ordinal=2,
+        prior_side_effect_records=[occurred],
+    )
+
+    assert plan["requiresCompensation"] is True
+    assert plan["compensations"][0]["disposition"] == "blocked"
+    # A blocked compensation leaves the prior effect uncompensated: completion
+    # must be false and the reattempt must not be allowed to advance.
+    assert plan["compensationComplete"] is False
+    assert plan["reattemptAllowed"] is False
+    assert plan["reason"] == "uncompensated_non_idempotent_effects"
+
+
+def test_plan_reattempt_compensation_policy_override_allows_blocked_compensation(
+    monkeypatch,
+) -> None:
+    occurred = _occurred_non_idempotent_effect()
+    _patch_blocked_compensation(monkeypatch)
+
+    plan = plan_reattempt_compensation(
+        workflow_id="wf-1",
+        run_id="run-1",
+        logical_step_id="implement",
+        execution_ordinal=2,
+        prior_side_effect_records=[occurred],
+        policy_permits_non_idempotent_reattempt=True,
+    )
+
+    # Completion still reflects the blocked compensation, but explicit policy
+    # permission lets the reattempt advance.
+    assert plan["compensationComplete"] is False
+    assert plan["reattemptAllowed"] is True
+
+
 def test_plan_reattempt_compensation_noop_without_prior_effects() -> None:
     plan = plan_reattempt_compensation(
         workflow_id="wf-1",

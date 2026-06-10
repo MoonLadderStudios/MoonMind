@@ -1931,10 +1931,16 @@ class MoonMindRunWorkflow:
             self._step_side_effect_records.setdefault(logical_step_id, []).append(
                 dict(compensation)
             )
-        for effect in plan.get("outstandingEffects", ()):
-            subject = str(effect.get("subject") or "").strip()
-            if subject:
-                already_compensated.add(subject)
+            # Only treat a subject as compensated once its compensation was
+            # actually accepted. A blocked compensation never reconciled the
+            # prior effect, so it must remain eligible for a later reattempt
+            # rather than being silently skipped.
+            if compensation.get("disposition") == "accepted":
+                subject = str(
+                    (compensation.get("compensates") or {}).get("subject") or ""
+                ).strip()
+                if subject:
+                    already_compensated.add(subject)
         if plan.get("requiresCompensation"):
             self._step_reattempt_compensations[logical_step_id] = plan
             self._get_logger().info(

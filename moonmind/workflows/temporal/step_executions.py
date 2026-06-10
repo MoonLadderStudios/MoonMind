@@ -430,12 +430,19 @@ def plan_reattempt_compensation(
         accounted.append(effect_summary)
 
     requires_compensation = bool(accounted)
+    # Compensation is only complete when every planned compensation was actually
+    # accepted. A blocked compensation leaves the prior non-idempotent effect
+    # uncompensated, so the count-based check (always true, since compensations
+    # and accounted grow in lockstep) would wrongly report completion.
+    compensation_complete = all(
+        record.get("disposition") == "accepted" for record in compensations
+    )
     # A reattempt is only safe to advance once every already-occurred
     # non-idempotent effect is accounted for: either compensated here, already
     # compensated on an earlier reattempt, or explicitly permitted by policy.
     reattempt_allowed = (
         not requires_compensation
-        or len(compensations) == len(accounted)
+        or compensation_complete
         or policy_permits_non_idempotent_reattempt
     )
     plan: dict[str, Any] = {
@@ -445,7 +452,7 @@ def plan_reattempt_compensation(
         "outstandingEffects": accounted,
         "alreadyCompensated": skipped,
         "compensations": compensations,
-        "compensationComplete": len(compensations) == len(accounted),
+        "compensationComplete": compensation_complete,
         "policyPermitsNonIdempotentReattempt": bool(
             policy_permits_non_idempotent_reattempt
         ),
