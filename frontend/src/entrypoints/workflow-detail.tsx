@@ -966,6 +966,14 @@ const StepLedgerArtifactsSchema = z
     stepExecutionManifestRefs: [],
   });
 
+const StepLedgerRecoveryPreservationSchema = z
+  .object({
+    eligible: z.boolean(),
+    reason: z.string(),
+    message: z.string().nullable().optional(),
+  })
+  .passthrough();
+
 const StepLedgerWorkloadSchema = z
   .object({
     taskRunId: z.string().nullable().optional(),
@@ -1020,6 +1028,7 @@ const StepLedgerRowSchema = z
       .optional(),
     workload: StepLedgerWorkloadSchema.nullable().optional(),
     stateCheckpointRef: z.string().nullable().optional(),
+    recoveryPreservation: StepLedgerRecoveryPreservationSchema.nullable().optional(),
     lastError: z.unknown().nullable().optional(),
   })
   .passthrough();
@@ -4557,6 +4566,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const [remediationMode, setRemediationMode] = useState('snapshot_then_follow');
   const [remediationAuthority, setRemediationAuthority] = useState('approval_gated');
   const [remediationActionPolicy, setRemediationActionPolicy] = useState('admin_healer_default');
+  const [selectedRecoveryStepId, setSelectedRecoveryStepId] = useState('');
 
   const detailQuery = useQuery({
     queryKey: ['workflow-detail', encodedTaskId, sourceTemporal],
@@ -4624,6 +4634,44 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     refetchInterval: liveUpdates && execution?.stepsHref && !isTerminalExecution ? detailPoll : false,
   });
   const latestRunId = stepsQuery.data?.runId || runId;
+  const selectedRecoveryOptions = useMemo(() => {
+    const failedStepId = execution?.resume?.failedStepId || '';
+    const rows = stepsQuery.data?.steps || [];
+    if (!failedStepId || rows.length === 0) {
+      return [];
+    }
+    const failedRow = rows.find((row) => row.logicalStepId === failedStepId);
+    const failedOrder = failedRow?.order ?? Number.POSITIVE_INFINITY;
+    return rows.map((row) => {
+      const preservation = row.recoveryPreservation;
+      const isFailedStep = row.logicalStepId === failedStepId;
+      const eligible = isFailedStep || Boolean(preservation?.eligible);
+      let reason = '';
+      if (!eligible) {
+        if (row.order > failedOrder) {
+          reason = 'after failed step';
+        } else if (preservation?.message) {
+          reason = preservation.message;
+        } else if (preservation?.reason) {
+          reason = formatStatusLabel(preservation.reason);
+        } else {
+          reason = 'checkpoint evidence missing';
+        }
+      }
+      return {
+        logicalStepId: row.logicalStepId,
+        title: row.title,
+        eligible,
+        reason,
+        isFailedStep,
+      };
+    });
+  }, [execution?.resume?.failedStepId, stepsQuery.data?.steps]);
+  const selectedRecoveryStep =
+    selectedRecoveryOptions.find((option) => option.logicalStepId === selectedRecoveryStepId) ||
+    selectedRecoveryOptions.find((option) => option.isFailedStep) ||
+    selectedRecoveryOptions.find((option) => option.eligible) ||
+    null;
 
   const artifactsQuery = useQuery({
     queryKey: ['workflow-detail-artifacts', namespace, workflowId, latestRunId],
@@ -4821,7 +4869,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           body: JSON.stringify({
             idempotencyKey: `resume-${workflowId}-${latestRunId || runId || 'latest'}`,
             ...(execution?.resume?.checkpointRef
-              ? { resumeCheckpointRef: execution.resume.checkpointRef }
+              ? { recoveryCheckpointRef: execution.resume.checkpointRef }
               : {}),
             operatorMetadata: { requestedFrom: 'workflow-detail' },
           }),
@@ -4835,6 +4883,43 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     },
     onSuccess: () => {
       setActionNotice('Resumed from failed step.');
+      invalidate();
+    },
+    onError: (error: Error) => setActionError(error.message),
+  });
+
+  const selectedStepRecoveryMutation = useMutation({
+    mutationFn: async () => {
+      const selectedStepId = selectedRecoveryStep?.logicalStepId || '';
+      const sourceRunId = execution?.resume?.sourceRunId || latestRunId || runId || '';
+      if (!selectedStepId || !sourceRunId) {
+        throw new Error('Selected-step recovery requires a source run and start step.');
+      }
+      const response = await fetch(
+        `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/recover-from-selected-step`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({
+            idempotencyKey: `selected-step-recovery-${workflowId}-${sourceRunId}-${selectedStepId}`,
+            sourceWorkflowId: workflowId,
+            sourceRunId,
+            selectedStartStepId: selectedStepId,
+            ...(execution?.resume?.checkpointRef
+              ? { recoveryCheckpointRef: execution.resume.checkpointRef }
+              : {}),
+            operatorMetadata: { requestedFrom: 'workflow-detail', mode: 'selected-step' },
+          }),
+        },
+      );
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || response.statusText);
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      setActionNotice('Recovery started from selected step.');
       invalidate();
     },
     onError: (error: Error) => setActionError(error.message),
@@ -4932,6 +5017,13 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     failedStepResumeMutation.mutate();
   };
 
+  const onRecoverFromSelectedStep = () => {
+    setActionError(null);
+    const label = selectedRecoveryStep?.title || selectedRecoveryStep?.logicalStepId || 'the selected step';
+    if (!window.confirm(`Recover from ${label} using checkpoint evidence from the source run?`)) return;
+    selectedStepRecoveryMutation.mutate();
+  };
+
   const onApprove = () => {
     setActionError(null);
     signalMutation.mutate({ signalName: 'Approve', payload: {} });
@@ -4973,6 +5065,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     signalMutation.isPending ||
     cancelMutation.isPending ||
     failedStepResumeMutation.isPending ||
+    selectedStepRecoveryMutation.isPending ||
     createRemediationMutation.isPending ||
     remediationApprovalMutation.isPending;
   const editHref = workflowId
@@ -5787,6 +5880,39 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                   </button>
                 ) : null}
               </div>
+              {taskEditingOn && actions.canResumeFromFailedStep && selectedRecoveryOptions.length > 0 ? (
+                <div className="stack">
+                  <label className="field-label" htmlFor="selected-recovery-step">
+                    Recovery start step
+                  </label>
+                  <select
+                    id="selected-recovery-step"
+                    value={selectedRecoveryStep?.logicalStepId || ''}
+                    disabled={busy}
+                    onChange={(event) => setSelectedRecoveryStepId(event.target.value)}
+                  >
+                    {selectedRecoveryOptions.map((option) => (
+                      <option
+                        key={option.logicalStepId}
+                        value={option.logicalStepId}
+                        disabled={!option.eligible}
+                      >
+                        {option.title || option.logicalStepId}
+                        {option.isFailedStep ? ' (failed step)' : ''}
+                        {!option.eligible && option.reason ? ` - ${option.reason}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={busy || !selectedRecoveryStep?.eligible}
+                    onClick={onRecoverFromSelectedStep}
+                  >
+                    Recover from selected step
+                  </button>
+                </div>
+              ) : null}
               {editTaskUnavailableReason ? (
                 <p className="small">
                   Edit workflow unavailable: {formatStatusLabel(editTaskUnavailableReason)}

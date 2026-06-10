@@ -2735,6 +2735,127 @@ async def test_failed_step_recovery_accepts_legacy_checkpoint_memo_key(
 
 
 @pytest.mark.asyncio
+async def test_selected_step_recovery_starts_from_preserved_step(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="recover source",
+            input_artifact_ref="artifact://input/source",
+            plan_artifact_ref="artifact://plan/source",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "taskRunId": "old-task-run",
+                "task": {"title": "recovery source", "instructions": "Original"},
+            },
+            idempotency_key=None,
+        )
+        created.state = MoonMindWorkflowState.FAILED
+        created.close_status = TemporalExecutionCloseStatus.FAILED
+        created.memo = {
+            **created.memo,
+            "task_input_snapshot_ref": "artifact://snapshot/source",
+            "recovery_checkpoint_ref": "artifact://checkpoint/source",
+        }
+        await session.commit()
+
+        checkpoint_payload = _valid_recovery_checkpoint_payload(
+            workflow_id=created.workflow_id,
+            run_id=created.run_id,
+            snapshot_ref="artifact://snapshot/source",
+        )
+        checkpoint_payload["preservedSteps"] = [
+            checkpoint_payload["preservedSteps"][0],
+            {
+                "logicalStepId": "design",
+                "order": 2,
+                "status": "succeeded",
+                "sourceExecutionOrdinal": 1,
+                "artifacts": {"outputSummary": "artifact://summary/design"},
+                "stateCheckpointRef": "artifact://workspace/before-design",
+            },
+        ]
+        checkpoint_payload["failedStep"] = {
+            "logicalStepId": "implement",
+            "order": 3,
+            "executionOrdinal": 1,
+            "title": "Implement",
+        }
+
+        result = await service.create_failed_step_recovery_execution(
+            created,
+            recovery_checkpoint_ref=None,
+            idempotency_key="recover-selected",
+            checkpoint_payload=checkpoint_payload,
+            selected_start_step_id="design",
+        )
+
+        resumed = await service.describe_execution(result["execution"]["workflowId"])
+        assert result["relationship"] == "Recovered from selected step"
+        assert resumed.parameters["recoverySource"]["recoveryMode"] == "selected_step"
+        assert resumed.parameters["recoverySource"]["failedStepId"] == "design"
+        assert resumed.parameters["recoverySource"]["selectedStartStepId"] == "design"
+        assert [
+            step["logicalStepId"]
+            for step in resumed.parameters["recoverySource"]["preservedSteps"]
+        ] == ["plan"]
+        assert resumed.parameters["task"]["resume"]["failedStepId"] == "design"
+        assert resumed.parameters["task"]["resume"]["recoveryMode"] == "selected_step"
+        assert resumed.parameters["task"]["resume"]["selectedStartStepId"] == "design"
+
+
+@pytest.mark.asyncio
+async def test_selected_step_recovery_rejects_step_without_checkpoint_evidence(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="recover source",
+            input_artifact_ref="artifact://input/source",
+            plan_artifact_ref="artifact://plan/source",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        created.state = MoonMindWorkflowState.FAILED
+        created.close_status = TemporalExecutionCloseStatus.FAILED
+        created.memo = {
+            **created.memo,
+            "task_input_snapshot_ref": "artifact://snapshot/source",
+            "recovery_checkpoint_ref": "artifact://checkpoint/source",
+        }
+        await session.commit()
+
+        with pytest.raises(
+            TemporalExecutionRecoveryCheckpointError,
+            match="Selected start step",
+        ):
+            await service.create_failed_step_recovery_execution(
+                created,
+                recovery_checkpoint_ref=None,
+                idempotency_key="recover-selected",
+                checkpoint_payload=_valid_recovery_checkpoint_payload(
+                    workflow_id=created.workflow_id,
+                    run_id=created.run_id,
+                    snapshot_ref="artifact://snapshot/source",
+                ),
+                selected_start_step_id="missing-step",
+            )
+
+
+@pytest.mark.asyncio
 async def test_failed_step_recovery_requires_hydrated_checkpoint_payload(
     tmp_path, mock_client_adapter
 ):

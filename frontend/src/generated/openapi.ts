@@ -1670,6 +1670,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executions/{workflow_id}/recover-from-selected-step": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Recover Execution From Selected Step */
+        post: operations["recover_execution_from_selected_step_api_executions__workflow_id__recover_from_selected_step_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/integrations/callbacks": {
         parameters: {
             query?: never;
@@ -6298,9 +6315,9 @@ export interface components {
             /**
              * Relationship
              * @default Recovered from failed step
-             * @constant
+             * @enum {string}
              */
-            relationship: "Recovered from failed step";
+            relationship: "Recovered from failed step" | "Recovered from selected step";
             /** Recoverycheckpointref */
             recoveryCheckpointRef: string;
         };
@@ -12106,6 +12123,43 @@ export interface operations {
         };
     };
     recover_execution_from_failed_step_api_executions__workflow_id__recover_from_failed_step_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoverFromFailedStepResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recover_execution_from_selected_step_api_executions__workflow_id__recover_from_selected_step_post: {
         parameters: {
             query?: never;
             header?: never;
