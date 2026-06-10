@@ -187,6 +187,69 @@ async def test_execution_notify_completion_posts_sanitized_payload(monkeypatch) 
     assert calls[0]["json"]["summary"] == "token=[REDACTED]"
     assert calls[0]["json"]["taskRunId"] == "task-1"
 
+async def test_execution_notify_completion_blocks_webhook_before_send(
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class _Client:
+        def __init__(self, *, timeout: int) -> None:
+            self.timeout = timeout
+
+        async def __aenter__(self) -> "_Client":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def post(self, *args: Any, **kwargs: Any) -> object:
+            calls.append({"args": args, "kwargs": kwargs})
+            raise AssertionError("webhook send should be blocked")
+
+    monkeypatch.setattr(
+        activity_runtime_module.settings.security,
+        "high_security_mode",
+        True,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "webhook_url",
+        "https://hooks.example.test/notify",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "email_to",
+        None,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "email_from",
+        None,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_host",
+        None,
+    )
+    monkeypatch.setattr(activity_runtime_module.httpx, "AsyncClient", _Client)
+
+    activities = TemporalAgentRuntimeActivities()
+    result = await activities.execution_notify_completion(
+        {
+            "workflowId": "wf-1",
+            "result": {"summary": "Use token=super-secret-value"},
+        }
+    )
+
+    assert result["status"] == "failed"
+    assert "execution.notification.webhook.json" in result["reason"]
+    assert calls == []
+
 
 async def test_execution_notify_completion_sends_email_channel(monkeypatch) -> None:
     calls: list[dict[str, Any]] = []
@@ -314,6 +377,60 @@ async def test_execution_notify_completion_sends_email_channel(monkeypatch) -> N
     assert sent["subject"] == "MoonMind execution failed: wf-email"
     assert "password=[REDACTED]" in sent["body"]
     assert "task-email" in sent["body"]
+
+async def test_execution_notify_completion_blocks_email_before_smtp(
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class _SMTP:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            calls.append({"args": args, "kwargs": kwargs})
+            raise AssertionError("smtp send should be blocked")
+
+    monkeypatch.setattr(
+        activity_runtime_module.settings.security,
+        "high_security_mode",
+        True,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "webhook_url",
+        None,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "email_to",
+        "ops@example.test",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "email_from",
+        "moonmind@example.test",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_host",
+        "smtp.example.test",
+    )
+    monkeypatch.setattr(activity_runtime_module.smtplib, "SMTP", _SMTP)
+
+    activities = TemporalAgentRuntimeActivities()
+    result = await activities.execution_notify_completion(
+        {
+            "workflowId": "wf-email",
+            "result": {"summary": "Use password=super-secret-value"},
+        }
+    )
+
+    assert result["status"] == "failed"
+    assert "execution.notification.email.body" in result["reason"]
+    assert calls == []
 
 
 async def test_execution_notify_completion_continues_to_email_after_webhook_failure(

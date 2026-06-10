@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 
+from moonmind.config import settings
 from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.task_proposals.models import (
     TaskProposalOriginSource,
@@ -508,6 +509,56 @@ async def test_update_review_priority_persists_value() -> None:
     repo.commit.assert_awaited()
     assert updated is proposal
     assert updated.review_priority is TaskProposalReviewPriority.URGENT
+
+@pytest.mark.asyncio
+async def test_emit_notification_blocks_secret_before_webhook(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    class _Client:
+        def __init__(self, *, timeout: int) -> None:
+            self.timeout = timeout
+
+        async def __aenter__(self) -> "_Client":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def post(self, *args: object, **kwargs: object) -> object:
+            calls.append({"args": args, "kwargs": kwargs})
+            raise AssertionError("proposal webhook send should be blocked")
+
+    repo = AsyncMock()
+    repo.has_notification.return_value = False
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
+    service._notifications_enabled = True
+    service._notification_webhook = "https://hooks.example.test/proposals"
+    monkeypatch.setattr(settings.security, "high_security_mode", True)
+    monkeypatch.setattr(
+        "moonmind.workflows.task_proposals.service.httpx.AsyncClient",
+        _Client,
+    )
+    proposal = SimpleNamespace(
+        id=uuid4(),
+        title="Check token",
+        summary="Use token=super-secret-value",
+        repository="Moon/Repo",
+        review_priority=TaskProposalReviewPriority.NORMAL,
+        category="tests",
+        origin_id=None,
+        task_create_request={},
+    )
+
+    await service._emit_notification(proposal)
+
+    assert calls == []
+    repo.log_notification.assert_awaited_once()
+    assert repo.log_notification.await_args.kwargs["status"] == "blocked"
+    assert (
+        "task_proposal.notification.webhook.json"
+        in repo.log_notification.await_args.kwargs["error"]
+    )
+    repo.commit.assert_awaited_once()
 
 @pytest.mark.asyncio
 async def test_promote_proposal_applies_runtime_override() -> None:

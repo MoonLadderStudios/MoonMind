@@ -21,6 +21,7 @@ from moonmind.schemas.agent_runtime_models import (
 from moonmind.schemas.jules_models import (
     JulesSendMessageRequest,
 )
+from moonmind.security import scan_outbound_text
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
 from moonmind.workflows.adapters.jules_client import JulesClient
 
@@ -155,6 +156,18 @@ async def jules_send_message_activity(payload: dict) -> AgentRunStatus:
             f"Invalid payload for jules_send_message_activity: {exc}"
         ) from exc
 
+    scan_result = scan_outbound_text(
+        validated.prompt,
+        location="jules.send_message.prompt",
+    )
+    if not scan_result.allowed:
+        diagnostics = "; ".join(scan_result.sanitized_diagnostics) or (
+            "Blocked outbound content at jules.send_message.prompt"
+        )
+        raise ValueError(
+            f"Outbound message blocked by high security scan: {diagnostics}"
+        )
+
     adapter = _build_adapter()
     return await adapter.send_message(
         run_id=validated.session_id,
@@ -216,6 +229,16 @@ async def jules_answer_question_activity(payload: dict) -> dict:
 
     # Dispatch to an LLM to generate the actual answer.
     answer = await _generate_llm_answer(clarification_prompt)
+
+    scan_result = scan_outbound_text(
+        answer,
+        location="jules.answer_question.prompt",
+    )
+    if not scan_result.allowed:
+        diagnostics = "; ".join(scan_result.sanitized_diagnostics) or (
+            "Blocked outbound content at jules.answer_question.prompt"
+        )
+        return {"answered": False, "answer": "", "error": diagnostics}
 
     # Send the generated answer back to Jules
     client = _build_client()
@@ -371,4 +394,3 @@ __all__ = [
     "jules_start_activity",
     "jules_status_activity",
 ]
-

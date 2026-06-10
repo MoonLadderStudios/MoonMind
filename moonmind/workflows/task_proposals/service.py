@@ -17,6 +17,7 @@ import httpx
 from pydantic import ValidationError
 
 from moonmind.config import settings
+from moonmind.security import scan_outbound_text
 from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.task_proposals.models import (
     TaskProposal,
@@ -600,34 +601,52 @@ class TaskProposalService:
         payload = self._build_notification_payload(proposal)
         status = "sent"
         error_message: str | None = None
-        try:
-            async with httpx.AsyncClient(timeout=self._notification_timeout) as client:
-                response = await client.post(
-                    self._notification_webhook,
-                    json=payload,
-                    headers=self._notification_headers(),
-                )
-                response.raise_for_status()
-        except Exception as exc:  # pragma: no cover - best effort
-            status = "failed"
-            error_message = str(exc)
-            logger.warning(
-                "Proposal notification failed for %s: %s", proposal.id, error_message
+        scan_result = scan_outbound_text(
+            json.dumps(payload, sort_keys=True),
+            location="task_proposal.notification.webhook.json",
+        )
+        if not scan_result.allowed:
+            status = "blocked"
+            error_message = "; ".join(scan_result.sanitized_diagnostics) or (
+                "Blocked outbound content at task_proposal.notification.webhook.json"
             )
-        finally:
+            logger.warning(
+                "Proposal notification blocked by high security scan for %s: %s",
+                proposal.id,
+                error_message,
+            )
+        else:
             try:
-                await self._repository.log_notification(
-                    proposal_id=proposal.id,
-                    category=proposal.category or "",
-                    target=self._notification_webhook,
-                    status=status,
-                    error=error_message,
+                async with httpx.AsyncClient(
+                    timeout=self._notification_timeout
+                ) as client:
+                    response = await client.post(
+                        self._notification_webhook,
+                        json=payload,
+                        headers=self._notification_headers(),
+                    )
+                    response.raise_for_status()
+            except Exception as exc:  # pragma: no cover - best effort
+                status = "failed"
+                error_message = str(exc)
+                logger.warning(
+                    "Proposal notification failed for %s: %s",
+                    proposal.id,
+                    error_message,
                 )
-                await self._repository.commit()
-            except Exception:  # pragma: no cover - logging only
-                logger.debug(
-                    "Notification audit insert failed for proposal %s", proposal.id
-                )
+        try:
+            await self._repository.log_notification(
+                proposal_id=proposal.id,
+                category=proposal.category or "",
+                target=self._notification_webhook,
+                status=status,
+                error=error_message,
+            )
+            await self._repository.commit()
+        except Exception:  # pragma: no cover - logging only
+            logger.debug(
+                "Notification audit insert failed for proposal %s", proposal.id
+            )
 
     async def _deliver_proposal_if_configured(self, proposal: TaskProposal) -> None:
         if self._delivery_service is None:

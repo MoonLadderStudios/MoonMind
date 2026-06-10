@@ -26,6 +26,7 @@ from moonmind.factories.openai_factory import get_openai_model
 from moonmind.models_cache import model_cache
 from moonmind.billing.costs import emit_llm_cost_telemetry, estimate_model_cost
 from moonmind.rag.retriever import QdrantRAG
+from moonmind.security import scan_outbound_text
 from moonmind.schemas.chat_models import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -43,6 +44,23 @@ from moonmind.schemas.chat_models import (
 router = APIRouter()
 responses_router = APIRouter()
 logger = logging.getLogger(__name__)
+
+def _scan_chat_messages_before_send(messages: List, *, surface: str) -> None:
+    for index, msg in enumerate(messages):
+        content = getattr(msg, "content", "")
+        result = scan_outbound_text(
+            str(content or ""),
+            location=f"{surface}.messages[{index}].content",
+        )
+        if result.allowed:
+            continue
+        diagnostics = "; ".join(result.sanitized_diagnostics) or (
+            f"Blocked outbound content at {surface}.messages[{index}].content"
+        )
+        raise HTTPException(
+            status_code=422,
+            detail=f"Outbound message blocked by high security scan: {diagnostics}",
+        )
 
 def format_context_for_prompt(retrieved_nodes: List[NodeWithScore]) -> str:
     """Format retrieved RAG context for injection into prompts."""
@@ -635,6 +653,8 @@ async def handle_openai_request(
     )  # This function might need api_key if it uses it
     logger.info(f"Routing to OpenAI for model: {openai_model_name}")
 
+    _scan_chat_messages_before_send(messages, surface="chat.openai")
+
     # Prepare messages for OpenAI
     openai_messages = [{"role": msg.role, "content": msg.content} for msg in messages]
 
@@ -739,6 +759,8 @@ async def handle_google_request(
 
     if not contents:
         raise HTTPException(status_code=400, detail="No messages provided.")
+
+    _scan_chat_messages_before_send(messages, surface="chat.google")
 
     logger.debug(
         f"Final `contents` for Gemini (with RAG context if any): {str(contents)[:1000]}..."
@@ -864,6 +886,8 @@ async def handle_anthropic_request(
             status_code=400,
             detail="No user or assistant messages provided for Anthropic.",
         )
+
+    _scan_chat_messages_before_send(messages, surface="chat.anthropic")
 
     try:
         # Note: Anthropic's SDK might use `messages` and `system` parameters differently

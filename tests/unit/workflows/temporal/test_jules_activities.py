@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from moonmind.config.settings import settings
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunHandle,
@@ -171,6 +172,24 @@ async def test_jules_send_message_activity_calls_adapter(_patch_build_adapter):
         prompt="Continue with step 2.",
     )
 
+async def test_jules_send_message_activity_blocks_secret_before_adapter(
+    _patch_build_adapter,
+    monkeypatch,
+):
+    from moonmind.workflows.temporal.activities.jules_activities import (
+        jules_send_message_activity,
+    )
+
+    monkeypatch.setattr(settings.security, "high_security_mode", True)
+
+    with pytest.raises(ValueError, match="jules\\.send_message\\.prompt"):
+        await jules_send_message_activity({
+            "session_id": "session-42",
+            "prompt": "Use token=super-secret-value",
+        })
+
+    _patch_build_adapter.send_message.assert_not_awaited()
+
 async def test_repo_merge_pr_activity_updates_base_before_merge():
     from moonmind.workflows.temporal.activities.jules_activities import (
         repo_merge_pr_activity,
@@ -315,6 +334,31 @@ async def test_jules_answer_question_sends_answer(_patch_build_client):
     assert result["error"] is None
     assert result["answer"] == "Use the main branch."
     _patch_build_client.send_message.assert_awaited_once()
+
+async def test_jules_answer_question_blocks_secret_before_send_message(
+    _patch_build_client,
+    monkeypatch,
+):
+    from moonmind.workflows.temporal.activities.jules_activities import (
+        jules_answer_question_activity,
+    )
+
+    monkeypatch.setattr(settings.security, "high_security_mode", True)
+    _patch_build_client.send_message = AsyncMock()
+
+    with patch(
+        "moonmind.workflows.temporal.activities.jules_activities._generate_llm_answer",
+        new_callable=AsyncMock,
+        return_value="Use token=super-secret-value",
+    ):
+        result = await jules_answer_question_activity({
+            "session_id": "ses-1",
+            "question": "Which branch?",
+        })
+
+    assert result["answered"] is False
+    assert "jules.answer_question.prompt" in result["error"]
+    _patch_build_client.send_message.assert_not_awaited()
 
 async def test_jules_answer_question_missing_session_id(_patch_build_client):
     """T020: answer_question returns error for missing session_id."""

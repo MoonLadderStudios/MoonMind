@@ -38,6 +38,7 @@ from api_service.db.models import (
     TemporalWorkflowType,
 )
 from moonmind.config.settings import settings
+from moonmind.security import scan_outbound_text
 from moonmind.schemas.manifest_ingest_models import (
     ManifestNodePageModel,
     ManifestStatusSnapshotModel,
@@ -1618,6 +1619,18 @@ class TemporalExecutionService:
                 if operator_message is None:
                     raise TemporalExecutionValidationError(
                         "message is required when signal_name is SendMessage"
+                    )
+                scan_result = scan_outbound_text(
+                    operator_message,
+                    location="workflow.send_message.message",
+                )
+                if not scan_result.allowed:
+                    diagnostics = "; ".join(scan_result.sanitized_diagnostics) or (
+                        "Blocked outbound content at workflow.send_message.message"
+                    )
+                    raise TemporalExecutionValidationError(
+                        "Outbound message blocked by high security scan: "
+                        f"{diagnostics}"
                     )
                 update_arg = {"message": operator_message}
             elif operator_message is not None:
