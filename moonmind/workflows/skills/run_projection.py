@@ -29,7 +29,7 @@ from moonmind.schemas.agent_skill_models import (
     RuntimeMaterializationMode,
 )
 from moonmind.services.skill_materialization import AgentSkillMaterializer
-from moonmind.services.skills_on_demand import skills_on_demand_disabled_instruction
+from moonmind.services.skills_on_demand import skills_on_demand_runtime_instruction
 from moonmind.workflows.agent_skills.selection import selected_agent_skill
 from moonmind.workflows.temporal.artifacts import TemporalArtifactError
 
@@ -244,11 +244,11 @@ def build_skill_activation_summary(
         f"- Read `{skill_doc}` first and follow that active snapshot.\n"
         "- Do not discover skills from repo-local or local-only source folders during execution.\n"
     )
-    disabled_instruction = skills_on_demand_disabled_instruction(
+    on_demand_instruction = skills_on_demand_runtime_instruction(
         enabled=skills_on_demand_enabled
     )
-    if disabled_instruction:
-        block = block + f"{disabled_instruction}\n"
+    if on_demand_instruction:
+        block = block + f"{on_demand_instruction}\n"
     if not alias_available:
         block = block + (
             "- The repository also contains `.agents/skills`; that directory "

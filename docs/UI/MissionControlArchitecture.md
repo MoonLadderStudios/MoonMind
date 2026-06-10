@@ -482,6 +482,8 @@ Expanded step rows should group:
 Rules:
 
 * the default Steps view is for the latest/current run only
+* the default task detail UX is a single flat, ordered step list with inline dependency metadata
+* Mission Control should not render a separate always-visible DAG/grid for the same step ledger; dependency information belongs in the primary step row/list presentation unless a future explicit product design introduces an optional advanced graph view
 * the plan artifact is the canonical planned-step source; the step-ledger API is the canonical live-state source
 * step rows may carry `childWorkflowId`, `childRunId`, and `taskRunId`
 * when a step has `taskRunId`, the Logs & Diagnostics area should embed or deep-link the existing `/api/task-runs/*` observability surfaces for that step

@@ -1460,6 +1460,53 @@ tbody tr:hover {
   letter-spacing: 0.01em;
 }
 
+.workflow-list-metrics {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  border-bottom: 1px solid rgb(var(--mm-border) / 0.28);
+}
+
+.workflow-list-metrics-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0;
+}
+
+.workflow-list-metric-tile {
+  min-width: 0;
+  border: 1px solid rgb(var(--mm-border) / 0.36);
+  border-radius: 8px;
+  background: rgb(var(--mm-surface) / 0.82);
+  padding: 0.85rem;
+}
+
+.workflow-list-metric-tile dt {
+  color: rgb(var(--mm-muted) / 0.94);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.workflow-list-metric-tile dd {
+  margin: 0.35rem 0 0;
+  color: rgb(var(--mm-foreground) / 0.98);
+  font-size: 1.45rem;
+  font-weight: 800;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.workflow-list-metric-tile p,
+.workflow-list-metrics-refreshed {
+  margin: 0.35rem 0 0;
+  color: rgb(var(--mm-muted) / 0.94);
+}
+
+.workflow-list-metrics-notice {
+  margin: 0;
+}
+
 .workflow-list-empty-message {
   margin: 0;
   padding: 1rem;
@@ -1969,6 +2016,15 @@ tr[data-proposal-id].proposal-consuming td {
     padding: 0 0 0.75rem;
     border-bottom: 0;
     background: transparent;
+  }
+
+  .workflow-list-metrics {
+    padding: 0 0 1rem;
+    border-bottom: 0;
+  }
+
+  .workflow-list-metrics-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .workflow-list-data-slab .workflow-list-results-footer {

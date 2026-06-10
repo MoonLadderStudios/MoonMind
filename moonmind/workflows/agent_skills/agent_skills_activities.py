@@ -226,7 +226,7 @@ class AgentSkillsActivities:
             catalog_entries=catalog_entries,
         )
         result = await service.query(request)
-        return self._with_activity_audit_context(result)
+        return await self._with_persisted_activity_audit_context(result)
 
     @activity.defn(name="agent_skill.request_on_demand")
     async def request_on_demand(
@@ -243,12 +243,12 @@ class AgentSkillsActivities:
             initial_result.status != "denied"
             or initial_result.code != "enabled_mode_not_implemented"
         ):
-            return self._with_activity_audit_context(initial_result)
+            return await self._with_persisted_activity_audit_context(initial_result)
 
         requested = service.normalized_requested_skills(request)
         active_snapshot = request.active_snapshot
         if active_snapshot is None:
-            return self._with_activity_audit_context(initial_result)
+            return await self._with_persisted_activity_audit_context(initial_result)
 
         try:
             info = activity.info()
@@ -301,7 +301,7 @@ class AgentSkillsActivities:
                     materialization.metadata.get("runtimeRefreshMessage")
                     or "Skills On Demand runtime refresh failed."
                 )
-                return self._with_activity_audit_context(
+                return await self._with_persisted_activity_audit_context(
                     service.denied_request_result(
                         request,
                         code="runtime_refresh_failed",
@@ -315,7 +315,7 @@ class AgentSkillsActivities:
                     activity_info=info,
                 )
         except ValueError as exc:
-            return self._with_activity_audit_context(
+            return await self._with_persisted_activity_audit_context(
                 service.denied_request_result(
                     request,
                     code=self._skills_on_demand_resolution_code(str(exc)),
@@ -323,7 +323,7 @@ class AgentSkillsActivities:
                 )
             )
         except RuntimeError as exc:
-            return self._with_activity_audit_context(
+            return await self._with_persisted_activity_audit_context(
                 service.denied_request_result(
                     request,
                     code=self._skills_on_demand_runtime_code(str(exc)),
@@ -336,7 +336,72 @@ class AgentSkillsActivities:
             resolved_skillset=derived_set,
             materialization=materialization,
         )
-        return self._with_activity_audit_context(result)
+        return await self._with_persisted_activity_audit_context(result)
+
+    async def _with_persisted_activity_audit_context(self, result):
+        enriched_result = self._with_activity_audit_context(result)
+        if self._artifact_service is None or not getattr(
+            enriched_result, "audit_events", None
+        ):
+            return enriched_result
+        try:
+            info = activity.info()
+        except Exception:
+            return enriched_result
+
+        from moonmind.workflows.temporal.artifacts import ExecutionRef
+        from moonmind.core.artifacts import (
+            TemporalArtifactRedactionLevel,
+            TemporalArtifactRetentionClass,
+        )
+
+        events = [
+            event.model_dump(mode="json") for event in enriched_result.audit_events
+        ]
+        payload = {
+            "producer": "agent_skill.skills_on_demand",
+            "workflow_id": getattr(info, "workflow_id", None),
+            "run_id": getattr(info, "workflow_run_id", None),
+            "activity_id": getattr(info, "activity_id", None),
+            "status": getattr(enriched_result, "status", None),
+            "code": getattr(enriched_result, "code", None),
+            "events": events,
+        }
+        link = ExecutionRef(
+            namespace=info.namespace,
+            workflow_id=info.workflow_id,
+            run_id=info.workflow_run_id,
+            link_type="audit.skills_on_demand",
+        )
+        artifact, _ = await self._artifact_service.create(
+            principal="agent_workflow",
+            content_type="application/json",
+            metadata_json={
+                "producer": "agent_skill.skills_on_demand",
+                "eventTypes": sorted(
+                    {
+                        str(event.get("event_type"))
+                        for event in events
+                        if event.get("event_type")
+                    }
+                ),
+                "status": getattr(enriched_result, "status", None),
+                "code": getattr(enriched_result, "code", None),
+            },
+            link=link,
+            retention_class=TemporalArtifactRetentionClass.LONG,
+            redaction_level=TemporalArtifactRedactionLevel.NONE,
+        )
+        await self._artifact_service.write_complete(
+            artifact_id=artifact.artifact_id,
+            principal="agent_workflow",
+            payload=json.dumps(payload, sort_keys=True, indent=2).encode("utf-8"),
+            content_type="application/json",
+        )
+        metadata = dict(getattr(enriched_result, "metadata", {}) or {})
+        metadata["audit_ref"] = artifact.artifact_id
+        metadata["audit_event_count"] = len(events)
+        return enriched_result.model_copy(update={"metadata": metadata})
 
     def _with_activity_audit_context(self, result):
         if not getattr(result, "audit_events", None):

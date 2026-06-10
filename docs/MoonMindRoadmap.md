@@ -213,6 +213,7 @@ All items shipped: per-step runtime/model/effort selection (MM-786/787), cost tr
 ### What's shipped
 - High-security outbound scan contract — deterministic scan boundaries with `OutboundScanDecision` / `OutboundFinding` models (MM-811, `moonmind/security/outbound_scan.py`); per-caller adoption is follow-up scope under 12.4
 - Outbound scan adopted at the Jira comment-posting boundary (MM-812, `moonmind/integrations/jira/tool.py`) — GitHub comment boundaries were *not* changed in MM-812
+- Outbound scan adopted at the managed workspace git-push boundary (MM-813, `moonmind/workflows/temporal/activity_runtime.py`) — high-security mode scans commit metadata and changed content before MoonMind invokes `git push`
 - SecretRef-based settings integration — durable contracts carry secret references, resolved only at launch boundaries (spec `001-secretref-settings-integration`, `docs/Security/SecretsSystem.md`)
 - Claude OAuth guardrails and bootstrap-PTY session controls (specs 192, 245)
 - GitHub token permission scoping (spec 294)
@@ -226,7 +227,7 @@ All items shipped: per-step runtime/model/effort selection (MM-786/787), cost tr
   *Done means:* privileged actions recorded with actor/action/target/decision and exportable, with boundary tests.
 - [ ] **12.3** Secret lifecycle audit surface — Who created/rotated/deleted a secret, which profiles reference it, which launches resolved it (`docs/Security/SecretsSystem.md` §13); contract defined, operator surface missing.
   *Done means:* those questions answerable from Mission Control without exposing secret values.
-- [ ] **12.4** Outbound scan coverage at all publish boundaries — Adopt the MM-811 contract at GitHub PR/issue comments, commits/pushes, artifact publication, and external tool calls under high-security mode (only the Jira comment path is adopted today).
+- [ ] **12.4** Outbound scan coverage at all publish boundaries — Adopt the MM-811 contract at GitHub PR/issue comments, remaining commit/push paths, artifact publication, and external tool calls under high-security mode (Jira comments and managed workspace git pushes are adopted).
   *Done means:* every send/post/push/publish boundary invokes the scan in high-security mode, with block-on-match tests per boundary.
 - [ ] **12.5** Risk-gated action review policy — Classify risky actions before execution and route them through deterministic policy, optional second-model review, or human approval. The current step-review path is a non-blocking placeholder (`moonmind/workflows/temporal/activities/step_review.py`).
   *Done means:* risky actions classified pre-execution; the review decision and its rationale recorded as governance telemetry (12.2).
