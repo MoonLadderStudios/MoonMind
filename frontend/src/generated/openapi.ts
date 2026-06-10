@@ -3770,6 +3770,8 @@ export interface components {
             volume_ref?: string | null;
             /** Volume Mount Path */
             volume_mount_path?: string | null;
+            /** Session Transport */
+            session_transport?: string | null;
             /** Provider Id */
             provider_id?: string | null;
             /** Provider Label */

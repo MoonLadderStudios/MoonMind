@@ -244,6 +244,47 @@ async def test_create_oauth_session_returns_terminal_transport_refs(
     assert body["session_transport"] == "moonmind_pty_ws"
 
 @pytest.mark.asyncio
+async def test_create_oauth_session_accepts_explicit_tmate_transport(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = {}
+
+    async def _capture_start(session_model):
+        captured["session_transport"] = session_model.session_transport
+        session_model.terminal_session_id = "https://tmate.io/t/oas_tmate"
+        session_model.terminal_bridge_id = "ssh tmate.io/t/oas_tmate"
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.start_oauth_session_workflow",
+        _capture_start,
+    )
+
+    payload = _oauth_payload("codex-cli-tmate")
+    payload["session_transport"] = "tmate"
+    async with client_app as client:
+        response = await client.post("/api/v1/oauth-sessions", json=payload)
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["session_transport"] == "tmate"
+    assert body["terminal_session_id"] == "https://tmate.io/t/oas_tmate"
+    assert body["terminal_bridge_id"] == "ssh tmate.io/t/oas_tmate"
+    assert captured["session_transport"] == "tmate"
+
+@pytest.mark.asyncio
+async def test_create_oauth_session_rejects_unknown_transport(
+    client_app: AsyncClient, _module_db
+) -> None:
+    payload = _oauth_payload("codex-cli-bad-transport")
+    payload["session_transport"] = "legacy-shell"
+
+    async with client_app as client:
+        response = await client.post("/api/v1/oauth-sessions", json=payload)
+
+    assert response.status_code == 422
+    assert "Unsupported OAuth session transport" in response.text
+
+@pytest.mark.asyncio
 async def test_reconnect_oauth_session_preserves_terminal_transport(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
