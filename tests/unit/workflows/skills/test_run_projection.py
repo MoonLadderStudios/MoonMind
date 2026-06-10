@@ -363,6 +363,21 @@ def test_activation_summary_includes_required_fields() -> None:
     assert "/work/agent_jobs/workspaces/r1/runtime/skills_active/snap-1/pr-resolver/SKILL.md" in summary
 
 
+def test_activation_summary_exposes_on_demand_commands_when_enabled() -> None:
+    summary = build_skill_activation_summary(
+        parameters={"selectedSkill": "pr-resolver"},
+        materialization_metadata={
+            "visiblePath": "/work/skills/snap",
+            "canonicalAliasAvailable": True,
+        },
+        skills_on_demand_enabled=True,
+    )
+
+    assert "Skills On Demand is enabled." in summary
+    assert "moonmind.skills.query" in summary
+    assert "moonmind.skills.request" in summary
+
+
 def test_activation_summary_warns_when_alias_unavailable() -> None:
     summary = build_skill_activation_summary(
         parameters={"selectedSkill": "pr-resolver"},

@@ -742,12 +742,14 @@ async def test_enabled_activity_request_does_not_persist_manifest_on_materializa
     class FakeArtifactService:
         def __init__(self) -> None:
             self.created: list[dict] = []
+            self.writes: list[dict] = []
 
         async def create(self, **kwargs):
             self.created.append(kwargs)
             return SimpleNamespace(artifact_id=f"artifact-{len(self.created)}"), None
 
-        async def write_complete(self, **_kwargs) -> None:
+        async def write_complete(self, **kwargs) -> None:
+            self.writes.append(kwargs)
             return None
 
     artifact_service = FakeArtifactService()
@@ -777,4 +779,11 @@ async def test_enabled_activity_request_does_not_persist_manifest_on_materializa
 
     assert result.status == "denied"
     assert result.code == "materialization_failed"
-    assert artifact_service.created == []
+    assert result.metadata["audit_ref"] == "artifact-1"
+    assert result.metadata["audit_event_count"] == 1
+    assert len(artifact_service.created) == 1
+    assert artifact_service.created[0]["metadata_json"]["producer"] == (
+        "agent_skill.skills_on_demand"
+    )
+    assert artifact_service.writes[0]["artifact_id"] == "artifact-1"
+    assert b"skills_on_demand.request" in artifact_service.writes[0]["payload"]
