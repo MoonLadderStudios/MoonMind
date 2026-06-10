@@ -7290,6 +7290,10 @@ export interface components {
             preservedFrom?: components["schemas"]["PreservedStepProvenanceModel"] | null;
             /** Statecheckpointref */
             stateCheckpointRef?: string | null;
+            /** Workspacecheckpointref */
+            workspaceCheckpointRef?: string | null;
+            /** Stepcheckpointref */
+            stepCheckpointRef?: string | null;
             recoveryPreservation?: components["schemas"]["StepLedgerResumePreservationModel"] | null;
             workload?: components["schemas"]["StepLedgerWorkloadModel"] | null;
             /** Lasterror */
