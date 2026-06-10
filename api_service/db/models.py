@@ -142,18 +142,18 @@ class ManifestRecord(Base):
     state_json = Column(mutable_json_dict(), nullable=True)
     state_updated_at = Column(DateTime(timezone=True), nullable=True)
 
-class RecurringTaskScheduleType(str, enum.Enum):
+class RecurringWorkflowScheduleType(str, enum.Enum):
     """Supported recurring definition schedule kinds."""
 
     CRON = "cron"
 
-class RecurringTaskScopeType(str, enum.Enum):
+class RecurringWorkflowScopeType(str, enum.Enum):
     """Scope ownership for recurring definitions."""
 
     PERSONAL = "personal"
     GLOBAL = "global"
 
-class RecurringTaskRunOutcome(str, enum.Enum):
+class RecurringWorkflowRunOutcome(str, enum.Enum):
     """Dispatch result state for one recurring run decision."""
 
     PENDING_DISPATCH = "pending_dispatch"
@@ -161,15 +161,16 @@ class RecurringTaskRunOutcome(str, enum.Enum):
     SKIPPED = "skipped"
     DISPATCH_ERROR = "dispatch_error"
 
-class RecurringTaskRunTrigger(str, enum.Enum):
+class RecurringWorkflowRunTrigger(str, enum.Enum):
     """How one recurring run row was created."""
 
     SCHEDULE = "schedule"
     MANUAL = "manual"
 
-class RecurringTaskDefinition(Base):
+class RecurringWorkflowDefinition(Base):
     """Persistent recurring schedule definition."""
 
+    # legacy_run contract: table/index/enum-type names rename in WP7
     __tablename__ = "recurring_task_definitions"
     __table_args__ = (
         Index(
@@ -188,16 +189,16 @@ class RecurringTaskDefinition(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    schedule_type: Mapped[RecurringTaskScheduleType] = mapped_column(
+    schedule_type: Mapped[RecurringWorkflowScheduleType] = mapped_column(
         Enum(
-            RecurringTaskScheduleType,
+            RecurringWorkflowScheduleType,
             name="recurringtaskscheduletype",
             native_enum=True,
             validate_strings=True,
             values_callable=_enum_values,
         ),
         nullable=False,
-        default=RecurringTaskScheduleType.CRON,
+        default=RecurringWorkflowScheduleType.CRON,
     )
     cron: Mapped[str] = mapped_column(String(128), nullable=False)
     timezone: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -217,16 +218,16 @@ class RecurringTaskDefinition(Base):
         ForeignKey("user.id", ondelete="SET NULL"),
         nullable=True,
     )
-    scope_type: Mapped[RecurringTaskScopeType] = mapped_column(
+    scope_type: Mapped[RecurringWorkflowScopeType] = mapped_column(
         Enum(
-            RecurringTaskScopeType,
+            RecurringWorkflowScopeType,
             name="recurringtaskscopetype",
             native_enum=True,
             validate_strings=True,
             values_callable=_enum_values,
         ),
         nullable=False,
-        default=RecurringTaskScopeType.PERSONAL,
+        default=RecurringWorkflowScopeType.PERSONAL,
     )
     scope_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     target: Mapped[dict[str, Any]] = mapped_column(
@@ -252,15 +253,16 @@ class RecurringTaskDefinition(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
-    runs: Mapped[list["RecurringTaskRun"]] = relationship(
-        "RecurringTaskRun",
+    runs: Mapped[list["RecurringWorkflowRun"]] = relationship(
+        "RecurringWorkflowRun",
         back_populates="definition",
         cascade="all, delete-orphan",
     )
 
-class RecurringTaskRun(Base):
+class RecurringWorkflowRun(Base):
     """Persistent recurring run dispatch decision row."""
 
+    # legacy_run contract: table/index/enum-type names rename in WP7
     __tablename__ = "recurring_task_runs"
     __table_args__ = (
         UniqueConstraint(
@@ -290,27 +292,27 @@ class RecurringTaskRun(Base):
         DateTime(timezone=True),
         nullable=False,
     )
-    trigger: Mapped[RecurringTaskRunTrigger] = mapped_column(
+    trigger: Mapped[RecurringWorkflowRunTrigger] = mapped_column(
         Enum(
-            RecurringTaskRunTrigger,
+            RecurringWorkflowRunTrigger,
             name="recurringtaskruntrigger",
             native_enum=True,
             validate_strings=True,
             values_callable=_enum_values,
         ),
         nullable=False,
-        default=RecurringTaskRunTrigger.SCHEDULE,
+        default=RecurringWorkflowRunTrigger.SCHEDULE,
     )
-    outcome: Mapped[RecurringTaskRunOutcome] = mapped_column(
+    outcome: Mapped[RecurringWorkflowRunOutcome] = mapped_column(
         Enum(
-            RecurringTaskRunOutcome,
+            RecurringWorkflowRunOutcome,
             name="recurringtaskrunoutcome",
             native_enum=True,
             validate_strings=True,
             values_callable=_enum_values,
         ),
         nullable=False,
-        default=RecurringTaskRunOutcome.PENDING_DISPATCH,
+        default=RecurringWorkflowRunOutcome.PENDING_DISPATCH,
     )
     dispatch_attempts: Mapped[int] = mapped_column(
         Integer,
@@ -336,8 +338,8 @@ class RecurringTaskRun(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
-    definition: Mapped[RecurringTaskDefinition] = relationship(
-        "RecurringTaskDefinition",
+    definition: Mapped[RecurringWorkflowDefinition] = relationship(
+        "RecurringWorkflowDefinition",
         back_populates="runs",
     )
 
@@ -346,12 +348,12 @@ __all__ = [
     "User",
     "UserProfile",
     "ManifestRecord",
-    "RecurringTaskDefinition",
-    "RecurringTaskRun",
-    "RecurringTaskRunOutcome",
-    "RecurringTaskRunTrigger",
-    "RecurringTaskScheduleType",
-    "RecurringTaskScopeType",
+    "RecurringWorkflowDefinition",
+    "RecurringWorkflowRun",
+    "RecurringWorkflowRunOutcome",
+    "RecurringWorkflowRunTrigger",
+    "RecurringWorkflowScheduleType",
+    "RecurringWorkflowScopeType",
     "TemporalWorkflowType",
     "MoonMindWorkflowState",
     "TemporalExecutionCloseStatus",
@@ -373,12 +375,12 @@ __all__ = [
     "CodexCredentialStatus",
     "GitHubCredentialStatus",
     "CodexPreflightStatus",
-    "TaskTemplateScopeType",
-    "TaskTemplateReleaseStatus",
-    "TaskStepTemplate",
-    "TaskStepTemplateVersion",
-    "TaskStepTemplateFavorite",
-    "TaskStepTemplateRecent",
+    "PresetScopeType",
+    "PresetReleaseStatus",
+    "Preset",
+    "PresetVersion",
+    "PresetFavorite",
+    "PresetRecent",
     "SecretStatus",
     "ManagedSecret",
     "AgentSkillSourceKind",
@@ -550,22 +552,23 @@ class ApproverRoleListType(TypeDecorator):
             return []
         return list(value)
 
-class TaskTemplateScopeType(str, enum.Enum):
-    """Scope owner for task step template visibility."""
+class PresetScopeType(str, enum.Enum):
+    """Scope owner for preset visibility."""
 
     GLOBAL = "global"
     PERSONAL = "personal"
 
-class TaskTemplateReleaseStatus(str, enum.Enum):
-    """Release lifecycle for task step template versions."""
+class PresetReleaseStatus(str, enum.Enum):
+    """Release lifecycle for preset versions."""
 
     DRAFT = "draft"
     ACTIVE = "active"
     INACTIVE = "inactive"
 
-class TaskStepTemplate(Base):
-    """Top-level catalog entry for reusable task step templates."""
+class Preset(Base):
+    """Top-level catalog entry for reusable presets."""
 
+    # legacy_run contract: table/index/constraint names rename in WP7
     __tablename__ = "task_step_templates"
     __table_args__ = (
         UniqueConstraint(
@@ -578,9 +581,9 @@ class TaskStepTemplate(Base):
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     slug: Mapped[str] = mapped_column(String(128), nullable=False)
-    scope_type: Mapped[TaskTemplateScopeType] = mapped_column(
+    scope_type: Mapped[PresetScopeType] = mapped_column(
         Enum(
-            TaskTemplateScopeType,
+            PresetScopeType,
             name="tasktemplatescopetype",
             native_enum=True,
             validate_strings=True,
@@ -619,25 +622,26 @@ class TaskStepTemplate(Base):
         onupdate=func.now(),
     )
 
-    latest_version: Mapped[Optional["TaskStepTemplateVersion"]] = relationship(
-        "TaskStepTemplateVersion", foreign_keys=[latest_version_id], post_update=True
+    latest_version: Mapped[Optional["PresetVersion"]] = relationship(
+        "PresetVersion", foreign_keys=[latest_version_id], post_update=True
     )
-    versions: Mapped[list["TaskStepTemplateVersion"]] = relationship(
-        "TaskStepTemplateVersion",
+    versions: Mapped[list["PresetVersion"]] = relationship(
+        "PresetVersion",
         back_populates="template",
-        foreign_keys="TaskStepTemplateVersion.template_id",
+        foreign_keys="PresetVersion.template_id",
         cascade="all, delete-orphan",
-        order_by="TaskStepTemplateVersion.created_at",
+        order_by="PresetVersion.created_at",
     )
-    favorites: Mapped[list["TaskStepTemplateFavorite"]] = relationship(
-        "TaskStepTemplateFavorite",
+    favorites: Mapped[list["PresetFavorite"]] = relationship(
+        "PresetFavorite",
         back_populates="template",
         cascade="all, delete-orphan",
     )
 
-class TaskStepTemplateVersion(Base):
+class PresetVersion(Base):
     """Immutable release of a template blueprint."""
 
+    # legacy_run contract: table/index/constraint names rename in WP7
     __tablename__ = "task_step_template_versions"
     __table_args__ = (
         UniqueConstraint(
@@ -664,16 +668,16 @@ class TaskStepTemplateVersion(Base):
         mutable_json_list(), default=list
     )
     max_step_count: Mapped[int] = mapped_column(Integer, nullable=False, default=25)
-    release_status: Mapped[TaskTemplateReleaseStatus] = mapped_column(
+    release_status: Mapped[PresetReleaseStatus] = mapped_column(
         Enum(
-            TaskTemplateReleaseStatus,
+            PresetReleaseStatus,
             name="tasktemplatereleasestatus",
             native_enum=True,
             validate_strings=True,
             values_callable=_enum_values,
         ),
         nullable=False,
-        default=TaskTemplateReleaseStatus.DRAFT,
+        default=PresetReleaseStatus.DRAFT,
     )
     reviewed_by: Mapped[Optional[UUID]] = mapped_column(
         Uuid, ForeignKey("user.id", ondelete="SET NULL"), nullable=True
@@ -691,20 +695,21 @@ class TaskStepTemplateVersion(Base):
         onupdate=func.now(),
     )
 
-    template: Mapped[TaskStepTemplate] = relationship(
-        "TaskStepTemplate",
+    template: Mapped[Preset] = relationship(
+        "Preset",
         back_populates="versions",
         foreign_keys=[template_id],
     )
-    recents: Mapped[list["TaskStepTemplateRecent"]] = relationship(
-        "TaskStepTemplateRecent",
+    recents: Mapped[list["PresetRecent"]] = relationship(
+        "PresetRecent",
         back_populates="template_version",
         cascade="all, delete-orphan",
     )
 
-class TaskStepTemplateFavorite(Base):
+class PresetFavorite(Base):
     """User favorites for quick preset access."""
 
+    # legacy_run contract: table/index/constraint names rename in WP7
     __tablename__ = "task_step_template_favorites"
     __table_args__ = (
         UniqueConstraint("user_id", "template_id", name="uq_task_template_favorite"),
@@ -722,13 +727,14 @@ class TaskStepTemplateFavorite(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
-    template: Mapped[TaskStepTemplate] = relationship(
-        "TaskStepTemplate", back_populates="favorites"
+    template: Mapped[Preset] = relationship(
+        "Preset", back_populates="favorites"
     )
 
-class TaskStepTemplateRecent(Base):
+class PresetRecent(Base):
     """Tracks most recent template applications per user."""
 
+    # legacy_run contract: table/index/constraint names rename in WP7
     __tablename__ = "task_step_template_recents"
     __table_args__ = (
         Index("ix_task_step_template_recents_user", "user_id"),
@@ -752,8 +758,8 @@ class TaskStepTemplateRecent(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
-    template_version: Mapped[TaskStepTemplateVersion] = relationship(
-        "TaskStepTemplateVersion", back_populates="recents"
+    template_version: Mapped[PresetVersion] = relationship(
+        "PresetVersion", back_populates="recents"
     )
 
 class WorkflowRunStatus(str, enum.Enum):

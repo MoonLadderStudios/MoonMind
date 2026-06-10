@@ -122,7 +122,7 @@ async def test_settings_catalog_endpoint_returns_grouped_descriptors():
     descriptor = next(
         item
         for item in body["categories"]["Workflow"]
-        if item["key"] == "workflow.default_task_runtime"
+        if item["key"] == "workflow.default_runtime"
     )
     assert descriptor["type"] == "enum"
     assert descriptor["ui"] == "select"
@@ -1026,8 +1026,8 @@ async def test_mm657_documented_error_code_envelope_matrix(
             "/api/v1/settings/validate",
             json={
                 "scope": "workspace",
-                "changes": {"workflow.default_task_runtime": "codex"},
-                "expected_versions": {"workflow.default_task_runtime": 99},
+                "changes": {"workflow.default_runtime": "codex"},
+                "expected_versions": {"workflow.default_runtime": 99},
             },
         )
         requires_confirmation = await client.patch(
@@ -1089,7 +1089,7 @@ async def test_mm657_documented_error_code_envelope_matrix(
     _assert_settings_error_envelope(
         version_conflict.json(),
         error="version_conflict",
-        key="workflow.default_task_runtime",
+        key="workflow.default_runtime",
         scope="workspace",
     )
     assert requires_confirmation.status_code == 428

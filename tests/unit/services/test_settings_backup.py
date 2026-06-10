@@ -62,8 +62,8 @@ def settings_session_maker(tmp_path):
 def _backup_registry() -> SettingsRegistry:
     entries = (
         SettingRegistryEntry(
-            key="workflow.default_task_runtime",
-            title="Default Task Runtime",
+            key="workflow.default_runtime",
+            title="Default Runtime",
             category="Workflow",
             section="user-workspace",
             value_type="enum",
@@ -208,7 +208,7 @@ async def test_export_includes_nonsensitive_overrides_with_metadata(
     async with settings_session_maker() as session:
         _seed_override(
             session,
-            key="workflow.default_task_runtime",
+            key="workflow.default_runtime",
             value="codex_cli",
             schema_version=2,
             value_version=4,
@@ -219,7 +219,7 @@ async def test_export_includes_nonsensitive_overrides_with_metadata(
 
     assert isinstance(bundle, SettingsBackupBundle)
     assert [record.key for record in bundle.overrides] == [
-        "workflow.default_task_runtime",
+        "workflow.default_runtime",
     ]
     record = bundle.overrides[0]
     assert record.value_json == "codex_cli"
@@ -278,7 +278,7 @@ async def test_export_excludes_sensitive_non_secret_ref_descriptors(
         # A non-sensitive row is preserved alongside the dropped row.
         _seed_override(
             session,
-            key="workflow.default_task_runtime",
+            key="workflow.default_runtime",
             value="codex_cli",
         )
         await session.commit()
@@ -286,7 +286,7 @@ async def test_export_excludes_sensitive_non_secret_ref_descriptors(
         bundle = await export_settings_backup(session=session, registry=registry)
 
     assert sorted(record.key for record in bundle.overrides) == [
-        "workflow.default_task_runtime",
+        "workflow.default_runtime",
     ]
     assert sorted(bundle.excluded_keys) == ["integrations.smtp.password_inline"]
 
@@ -326,7 +326,7 @@ async def test_export_includes_migration_audit_events_and_redacts_payloads(
     async with settings_session_maker() as session:
         _seed_audit(
             session,
-            key="workflow.default_task_runtime",
+            key="workflow.default_runtime",
             event_type="settings.migration.renamed",
             redacted=False,
             old_value="codex",

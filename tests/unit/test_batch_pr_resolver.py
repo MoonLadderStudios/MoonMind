@@ -412,7 +412,7 @@ def test_resolve_runtime_selection_uses_execution_profile_env(
     module = _load_module()
     resolve_runtime_selection = module["_resolve_runtime_selection"]
 
-    monkeypatch.delenv("MOONMIND_DEFAULT_TASK_RUNTIME", raising=False)
+    monkeypatch.delenv("MOONMIND_DEFAULT_RUNTIME", raising=False)
     monkeypatch.setenv("MOONMIND_EXECUTION_PROFILE_REF", "codex_default")
     monkeypatch.setenv("MOONMIND_EXECUTION_PROFILE_RUNTIME", "codex_cli")
 
@@ -441,7 +441,7 @@ def test_resolve_runtime_selection_prefers_execution_profile_over_default(
     # The caller runs under Claude Code (execution profile) while the system
     # default task runtime is still codex_cli. The child must inherit the
     # caller's Claude Code runtime/profile, not fall back to the codex default.
-    monkeypatch.setenv("MOONMIND_DEFAULT_TASK_RUNTIME", "codex_cli")
+    monkeypatch.setenv("MOONMIND_DEFAULT_RUNTIME", "codex_cli")
     monkeypatch.setenv("MOONMIND_EXECUTION_PROFILE_REF", "claude_anthropic")
     monkeypatch.setenv("MOONMIND_EXECUTION_PROFILE_RUNTIME", "claude_code")
 
@@ -517,7 +517,7 @@ def test_resolve_runtime_selection_defaults_to_none_without_inheritance(monkeypa
     module = _load_module()
     resolve_runtime_selection = module["_resolve_runtime_selection"]
 
-    monkeypatch.delenv("MOONMIND_DEFAULT_TASK_RUNTIME", raising=False)
+    monkeypatch.delenv("MOONMIND_DEFAULT_RUNTIME", raising=False)
     monkeypatch.delenv("MOONMIND_EXECUTION_PROFILE_REF", raising=False)
     monkeypatch.delenv("MOONMIND_EXECUTION_PROFILE_RUNTIME", raising=False)
 
@@ -543,7 +543,7 @@ def test_resolve_runtime_selection_uses_default_runtime_env(monkeypatch: Any):
     module = _load_module()
     resolve_runtime_selection = module["_resolve_runtime_selection"]
 
-    monkeypatch.setenv("MOONMIND_DEFAULT_TASK_RUNTIME", "claude")
+    monkeypatch.setenv("MOONMIND_DEFAULT_RUNTIME", "claude")
     monkeypatch.delenv("MOONMIND_EXECUTION_PROFILE_REF", raising=False)
     monkeypatch.delenv("MOONMIND_EXECUTION_PROFILE_RUNTIME", raising=False)
 

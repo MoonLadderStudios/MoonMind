@@ -8,13 +8,13 @@ from uuid import uuid4
 import pytest
 
 from moonmind.utils.logging import SecretRedactor
-from moonmind.workflows.task_proposals.models import (
-    TaskProposalOriginSource,
-    TaskProposalReviewPriority,
-    TaskProposalStatus,
+from moonmind.workflows.proposals.models import (
+    WorkflowProposalOriginSource,
+    WorkflowProposalReviewPriority,
+    WorkflowProposalStatus,
 )
-from moonmind.workflows.task_proposals.service import TaskProposalService
-from moonmind.workflows.task_proposals.delivery import ProviderDecisionEvent
+from moonmind.workflows.proposals.service import WorkflowProposalService
+from moonmind.workflows.proposals.delivery import ProviderDecisionEvent
 from moonmind.workflows.temporal.activity_runtime import TemporalProposalActivities
 
 
@@ -49,7 +49,7 @@ class _Delivery:
 def _record() -> SimpleNamespace:
     return SimpleNamespace(
         id=uuid4(),
-        status=TaskProposalStatus.OPEN,
+        status=WorkflowProposalStatus.OPEN,
         title="Add tests",
         summary="Add follow-up",
         category="tests",
@@ -57,7 +57,7 @@ def _record() -> SimpleNamespace:
         repository="Moon/Repo",
         dedup_key="moon/repo:add-tests",
         dedup_hash="hash",
-        review_priority=TaskProposalReviewPriority.NORMAL,
+        review_priority=WorkflowProposalReviewPriority.NORMAL,
         priority_override_reason=None,
         proposed_by_worker_id="worker-1",
         proposed_by_user_id=None,
@@ -67,7 +67,7 @@ def _record() -> SimpleNamespace:
         decision_note=None,
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
-        origin_source=TaskProposalOriginSource.WORKFLOW,
+        origin_source=WorkflowProposalOriginSource.WORKFLOW,
         origin_id=None,
         origin_metadata={"workflow_id": "wf-1"},
         origin_external_id="wf-1",
@@ -123,7 +123,7 @@ def _delivered_record() -> SimpleNamespace:
 
 
 async def _promote_provider_event(
-    service: TaskProposalService,
+    service: WorkflowProposalService,
     record: SimpleNamespace,
     event: ProviderDecisionEvent,
     executions: list[dict[str, object]],
@@ -172,7 +172,7 @@ async def test_proposal_submit_persists_external_delivery_result() -> None:
 
     repo.create_proposal.side_effect = create_record
     delivery = _Delivery()
-    service = TaskProposalService(
+    service = WorkflowProposalService(
         repo,
         redactor=SecretRedactor([], "[REDACTED]"),
         delivery_service=delivery,
@@ -238,7 +238,7 @@ async def test_proposal_submit_reports_partial_success_and_dedup_update() -> Non
     }
     repo.find_open_duplicate.return_value = record
     repo.create_proposal.return_value = record
-    service = TaskProposalService(
+    service = WorkflowProposalService(
         repo,
         redactor=SecretRedactor([], "[REDACTED]"),
     )
@@ -311,7 +311,7 @@ async def test_provider_decision_event_records_snapshot_safe_action() -> None:
         "allowedActions": ["promote", "dismiss", "defer", "priority"]
     }
     repo.get_proposal_for_update.return_value = record
-    service = TaskProposalService(repo, redactor=SecretRedactor([], "[REDACTED]"))
+    service = WorkflowProposalService(repo, redactor=SecretRedactor([], "[REDACTED]"))
 
     result = await service.record_provider_decision_event(
         proposal_id=record.id,
@@ -329,7 +329,7 @@ async def test_provider_decision_event_records_snapshot_safe_action() -> None:
 
     assert result.accepted is True
     assert result.decision == "dismiss"
-    assert record.status is TaskProposalStatus.DISMISSED
+    assert record.status is WorkflowProposalStatus.DISMISSED
     persisted = record.provider_metadata["providerDecisions"][0]
     assert persisted["providerEventId"] == "evt-safe"
     assert persisted["decision"] == "dismiss"
@@ -341,7 +341,7 @@ async def test_provider_approval_creates_one_run_from_stored_snapshot() -> None:
     repo = AsyncMock()
     record = _delivered_record()
     repo.get_proposal_for_update.return_value = record
-    service = TaskProposalService(repo, redactor=SecretRedactor([], "[REDACTED]"))
+    service = WorkflowProposalService(repo, redactor=SecretRedactor([], "[REDACTED]"))
     executions: list[dict[str, object]] = []
 
     result = await _promote_provider_event(
@@ -392,7 +392,7 @@ async def test_non_executing_and_rejected_provider_events_create_zero_runs() -> 
     repo = AsyncMock()
     record = _delivered_record()
     repo.get_proposal_for_update.return_value = record
-    service = TaskProposalService(
+    service = WorkflowProposalService(
         repo,
         redactor=SecretRedactor(["github_pat_secret"], "[REDACTED]"),
     )

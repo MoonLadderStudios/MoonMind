@@ -274,7 +274,7 @@ def _default_publish_mode() -> str:
     return normalized if normalized in SUPPORTED_PUBLISH_MODES else "pr"
 
 def _default_propose_tasks() -> bool:
-    """Default queue-task proposal generation to explicit task opt-in."""
+    """Default proposal generation to explicit workflow opt-in."""
 
     return False
 

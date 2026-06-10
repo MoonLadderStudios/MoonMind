@@ -15,11 +15,11 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalProposalActivities,
 )
 from moonmind.workflows.temporal.activity_catalog import build_default_activity_catalog
-from moonmind.workflows.task_proposals.models import (
-    TaskProposalOriginSource,
-    TaskProposalStatus,
+from moonmind.workflows.proposals.models import (
+    WorkflowProposalOriginSource,
+    WorkflowProposalStatus,
 )
-from moonmind.workflows.task_proposals.service import TaskProposalService
+from moonmind.workflows.proposals.service import WorkflowProposalService
 
 class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
     async def test_returns_empty_list_stub(self) -> None:
@@ -742,7 +742,7 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
         )
 
         call_kwargs = mock_service.create_proposal.await_args.kwargs
-        self.assertEqual(call_kwargs["origin_source"], TaskProposalOriginSource.WORKFLOW)
+        self.assertEqual(call_kwargs["origin_source"], WorkflowProposalOriginSource.WORKFLOW)
         self.assertEqual(call_kwargs["origin_external_id"], "wf-1")
         self.assertEqual(call_kwargs["origin_metadata"]["source"], "workflow")
         self.assertEqual(call_kwargs["origin_metadata"]["id"], "wf-1")
@@ -1022,7 +1022,7 @@ class TestProposalSubmitRuntimeStamping(unittest.IsolatedAsyncioTestCase):
         repo = AsyncMock()
         record = SimpleNamespace(
             id=uuid4(),
-            status=TaskProposalStatus.OPEN,
+            status=WorkflowProposalStatus.OPEN,
             title="Fix bug",
             summary="Bug in module X",
             category="tests",
@@ -1036,13 +1036,13 @@ class TestProposalSubmitRuntimeStamping(unittest.IsolatedAsyncioTestCase):
             decision_note=None,
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
-            origin_source=TaskProposalOriginSource.WORKFLOW,
+            origin_source=WorkflowProposalOriginSource.WORKFLOW,
             origin_id=None,
             origin_metadata={},
             task_create_request={},
         )
         repo.create_proposal.return_value = record
-        service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
+        service = WorkflowProposalService(repo, redactor=SecretRedactor([], "***"))
         service._emit_notification = AsyncMock()
 
         @contextlib.asynccontextmanager
@@ -1191,7 +1191,7 @@ class TestProposalSubmitPolicyResolution(unittest.IsolatedAsyncioTestCase):
 
         activities = TemporalProposalActivities(proposal_service_factory=factory)
         with patch(
-            "moonmind.workflows.temporal.activity_runtime.settings.task_proposals.proposal_delivery_provider_default",
+            "moonmind.workflows.temporal.activity_runtime.settings.workflow_proposals.proposal_delivery_provider_default",
             "jira",
         ):
             result = await activities.proposal_submit(

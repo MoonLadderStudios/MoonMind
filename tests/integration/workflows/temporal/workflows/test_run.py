@@ -601,8 +601,8 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
 
     async def test_proposals_stage_enabled(self) -> None:
         """When canonical task.proposeTasks is true, proposal activities are invoked."""
-        original_enabled = settings.workflow.enable_task_proposals
-        settings.workflow.enable_task_proposals = True
+        original_enabled = settings.workflow.enable_proposals
+        settings.workflow.enable_proposals = True
         try:
             async with await WorkflowEnvironment.start_time_skipping() as env:
                 await _register_test_search_attributes(env)
@@ -687,12 +687,12 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result.get("proposals_generated"), 1)
                 self.assertEqual(result.get("proposals_submitted"), 1)
         finally:
-            settings.workflow.enable_task_proposals = original_enabled
+            settings.workflow.enable_proposals = original_enabled
 
     async def test_proposals_stage_ignores_root_flag_when_task_payload_exists(self) -> None:
         """A new task payload without task.proposeTasks must not use root proposal flags."""
-        original_enabled = settings.workflow.enable_task_proposals
-        settings.workflow.enable_task_proposals = True
+        original_enabled = settings.workflow.enable_proposals
+        settings.workflow.enable_proposals = True
         try:
             async with await WorkflowEnvironment.start_time_skipping() as env:
                 await _register_test_search_attributes(env)
@@ -744,7 +744,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(PROPOSAL_SUBMIT_CALLS), 0)
                 self.assertNotIn("proposals_generated", result)
         finally:
-            settings.workflow.enable_task_proposals = original_enabled
+            settings.workflow.enable_proposals = original_enabled
 
     async def test_proposals_stage_disabled(self) -> None:
         """When proposeTasks is absent, proposal activities are not called."""

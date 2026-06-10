@@ -21,7 +21,7 @@ from api_service.services.settings_change_publisher import (
 
 def _make_event(
     *,
-    key: str = "workflow.default_task_runtime",
+    key: str = "workflow.default_runtime",
     scope: str = "workspace",
     source: str | None = None,
     apply_mode: str = "next_task",

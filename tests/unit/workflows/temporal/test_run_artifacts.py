@@ -3549,7 +3549,7 @@ async def test_run_proposals_stage_global_disable_halts_execution(
 ) -> None:
     from moonmind.config.settings import settings
     workflow = MoonMindRunWorkflow()
-    monkeypatch.setattr(settings.workflow, "enable_task_proposals", False)
+    monkeypatch.setattr(settings.workflow, "enable_proposals", False)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda x: True)
     
     # Enable proposing tasks in params, but global switch should stop it
@@ -3562,7 +3562,7 @@ async def test_run_proposals_stage_ignores_legacy_fallback_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from moonmind.config.settings import settings
-    monkeypatch.setattr(settings.workflow, "enable_task_proposals", True)
+    monkeypatch.setattr(settings.workflow, "enable_proposals", True)
 
     workflow = MoonMindRunWorkflow()
     workflow._owner_id = "owner-1"
@@ -3597,11 +3597,11 @@ async def test_run_proposals_stage_ignores_legacy_fallback_policy(
     assert captured_policy == {}
 
 @pytest.mark.asyncio
-async def test_run_proposals_stage_uses_task_proposal_policy(
+async def test_run_proposals_stage_uses_workflow_proposal_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from moonmind.config.settings import settings
-    monkeypatch.setattr(settings.workflow, "enable_task_proposals", True)
+    monkeypatch.setattr(settings.workflow, "enable_proposals", True)
 
     workflow = MoonMindRunWorkflow()
     workflow._owner_id = "owner-1"

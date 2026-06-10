@@ -131,7 +131,7 @@ def _run_main(
         "MOONMIND_WORKFLOW_ID",
         "TEMPORAL_WORKFLOW_ID",
         "MOONMIND_SESSION_ARTIFACT_SPOOL_PATH",
-        "MOONMIND_DEFAULT_TASK_RUNTIME",
+        "MOONMIND_DEFAULT_RUNTIME",
         "MOONMIND_EXECUTION_PROFILE_REF",
     ):
         monkeypatch.delenv(env_key, raising=False)

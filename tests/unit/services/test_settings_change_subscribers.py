@@ -58,7 +58,7 @@ async def test_task_creation_defaults_subscriber_increments_and_records():
     start_version = subscriber.version
 
     event = _event(
-        key="workflow.default_task_runtime",
+        key="workflow.default_runtime",
         apply_mode="next_task",
         affected_systems=("task_creation", "workflow_runtime"),
         refresh_targets=("settings_catalog", "task_creation_defaults"),

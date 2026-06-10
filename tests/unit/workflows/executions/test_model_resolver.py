@@ -185,7 +185,7 @@ class TestResolveEffectiveModelNone:
         assert model is None
         assert source == "none"
 
-    def test_no_runtime_resolves_to_default_task_runtime(self):
+    def test_no_runtime_resolves_to_default_runtime(self):
         model, source = resolve_effective_model(
             runtime_id=None,
             profile=None,

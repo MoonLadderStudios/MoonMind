@@ -1,4 +1,4 @@
-"""Helpers for resolving default task runtime settings.
+"""Helpers for resolving default workflow runtime settings.
 
 Canonical managed runtime IDs are: ``codex_cli``, ``gemini_cli``,
 ``claude_code``.  Short aliases (``codex``, ``claude``) are normalized to
@@ -68,11 +68,8 @@ def resolve_default_workflow_runtime(
 ) -> str:
     """Return the configured default runtime with a stable fallback."""
 
-    # Settings key "workflow.default_task_runtime" (env WORKFLOW_DEFAULT_TASK_RUNTIME)
-    # is an operator-visible config contract; it renames in the settings-catalog
-    # work package, not here.
     configured = _clean_optional_string(
-        getattr(workflow_settings, "default_task_runtime", None)
+        getattr(workflow_settings, "default_runtime", None)
     )
     raw = (configured or fallback).lower()
     return normalize_runtime_id(raw)

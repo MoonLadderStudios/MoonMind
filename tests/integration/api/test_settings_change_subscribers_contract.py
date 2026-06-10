@@ -117,8 +117,8 @@ async def test_task_creation_defaults_subscriber_fires_on_next_task_setting(
         response = await client.patch(
             "/api/v1/settings/workspace",
             json={
-                "changes": {"workflow.default_task_runtime": "claude_code"},
-                "expected_versions": {"workflow.default_task_runtime": 1},
+                "changes": {"workflow.default_runtime": "claude_code"},
+                "expected_versions": {"workflow.default_runtime": 1},
             },
         )
 
@@ -129,7 +129,7 @@ async def test_task_creation_defaults_subscriber_fires_on_next_task_setting(
         settings_subscriber_env.task_creation.version == start_version + 1
     ), "task_creation_defaults subscriber should fire exactly once for a next_task change"
     latest = settings_subscriber_env.task_creation.recent_events[-1]
-    assert latest.key == "workflow.default_task_runtime"
+    assert latest.key == "workflow.default_runtime"
     assert latest.apply_mode == "next_task"
 
 
@@ -225,11 +225,11 @@ async def test_multi_key_patch_fans_out_one_event_per_key(settings_subscriber_en
             "/api/v1/settings/workspace",
             json={
                 "changes": {
-                    "workflow.default_task_runtime": "claude_code",
+                    "workflow.default_runtime": "claude_code",
                     "workflow.default_publish_mode": "branch",
                 },
                 "expected_versions": {
-                    "workflow.default_task_runtime": 1,
+                    "workflow.default_runtime": 1,
                     "workflow.default_publish_mode": 1,
                 },
             },
@@ -241,7 +241,7 @@ async def test_multi_key_patch_fans_out_one_event_per_key(settings_subscriber_en
     assert settings_subscriber_env.task_creation.version == start_version + 2
     recorded = list(settings_subscriber_env.task_creation.recent_events)[-2:]
     keys = {event.key for event in recorded}
-    assert keys == {"workflow.default_task_runtime", "workflow.default_publish_mode"}
+    assert keys == {"workflow.default_runtime", "workflow.default_publish_mode"}
 
 
 async def test_subscriber_failure_does_not_change_http_response(
@@ -271,8 +271,8 @@ async def test_subscriber_failure_does_not_change_http_response(
         response = await client.patch(
             "/api/v1/settings/workspace",
             json={
-                "changes": {"workflow.default_task_runtime": "gemini_cli"},
-                "expected_versions": {"workflow.default_task_runtime": 1},
+                "changes": {"workflow.default_runtime": "gemini_cli"},
+                "expected_versions": {"workflow.default_runtime": 1},
             },
         )
 

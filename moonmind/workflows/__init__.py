@@ -8,8 +8,8 @@ from moonmind.workflows.automation.repositories import (
     AutomationRepository,
     WorkflowRepository,
 )
-from moonmind.workflows.task_proposals.repositories import TaskProposalRepository
-from moonmind.workflows.task_proposals.service import TaskProposalService
+from moonmind.workflows.proposals.repositories import WorkflowProposalRepository
+from moonmind.workflows.proposals.service import WorkflowProposalService
 from moonmind.workflows.temporal import (
     TemporalArtifactRepository,
     TemporalArtifactService,
@@ -26,24 +26,24 @@ def get_automation_repository(session: AsyncSession) -> AutomationRepository:
 
     return AutomationRepository(session)
 
-def get_task_proposal_repository(session: AsyncSession) -> TaskProposalRepository:
-    """Factory helper returning the task proposal repository."""
+def get_workflow_proposal_repository(session: AsyncSession) -> WorkflowProposalRepository:
+    """Factory helper returning the workflow proposal repository."""
 
-    return TaskProposalRepository(session)
+    return WorkflowProposalRepository(session)
 
-def get_task_proposal_service(session: AsyncSession) -> TaskProposalService:
-    """Factory helper returning the task proposal service."""
+def get_workflow_proposal_service(session: AsyncSession) -> WorkflowProposalService:
+    """Factory helper returning the workflow proposal service."""
 
     from moonmind.integrations.jira.tool import JiraToolService
     from moonmind.workflows.adapters.github_service import GitHubService
-    from moonmind.workflows.task_proposals.delivery import (
+    from moonmind.workflows.proposals.delivery import (
         GitHubProposalIssueProvider,
         JiraProposalIssueProvider,
         ProposalDeliveryService,
     )
 
-    return TaskProposalService(
-        get_task_proposal_repository(session),
+    return WorkflowProposalService(
+        get_workflow_proposal_repository(session),
         delivery_service=ProposalDeliveryService(
             github=GitHubProposalIssueProvider(GitHubService()),
             jira=JiraProposalIssueProvider(JiraToolService()),
@@ -71,15 +71,15 @@ __all__ = sorted(
     [
         "AutomationRepository",
         "WorkflowRepository",
-        "TaskProposalRepository",
-        "TaskProposalService",
+        "WorkflowProposalRepository",
+        "WorkflowProposalService",
         "TemporalArtifactRepository",
         "TemporalArtifactService",
         "TemporalExecutionService",
         "get_automation_repository",
         "get_workflow_repository",
-        "get_task_proposal_repository",
-        "get_task_proposal_service",
+        "get_workflow_proposal_repository",
+        "get_workflow_proposal_service",
         "get_temporal_artifact_repository",
         "get_temporal_artifact_service",
         "get_temporal_execution_service",

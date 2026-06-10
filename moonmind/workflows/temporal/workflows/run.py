@@ -6155,8 +6155,8 @@ class MoonMindRunWorkflow:
                 "execution initialized",
                 "planning execution strategy.",
                 "planning execution strategy",
-                "generating task proposals.",
-                "generating task proposals",
+                "generating workflow proposals.",
+                "generating workflow proposals",
                 "finalizing execution.",
                 "finalizing execution",
             }
@@ -9221,11 +9221,11 @@ class MoonMindRunWorkflow:
             return
 
         if workflow.patched("enable_task_proposals_gate"):
-            if not settings.workflow.enable_task_proposals:
-                self._get_logger().info("Task proposal generation is globally disabled")
+            if not settings.workflow.enable_proposals:
+                self._get_logger().info("Workflow proposal generation is globally disabled")
                 return
 
-        self._set_state(STATE_PROPOSALS, summary="Generating task proposals.")
+        self._set_state(STATE_PROPOSALS, summary="Generating workflow proposals.")
 
         try:
             proposal_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(

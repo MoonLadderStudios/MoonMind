@@ -66,7 +66,7 @@ Large per-step outputs stay outside workflow state:
 - large result bodies
 - detailed review payloads
 
-Those belong in artifacts and `/api/task-runs/*`.
+Those belong in artifacts and `/api/agent-runs/*`.
 
 ## 4. Retry and resilience
 
@@ -86,7 +86,7 @@ Instead:
 - Workflow detail shows a first-class **Steps** section
 - each step row shows exact status, summary, attempt count, blockers, and evidence links
 - expanded rows group **Summary**, **Checks**, **Logs & Diagnostics**, **Artifacts**, and **Metadata**
-- agent-runtime step rows deep-link or embed `/api/task-runs/*` when `taskRunId` is present
+- agent-runtime step rows deep-link or embed `/api/agent-runs/*` when `taskRunId` is present
 
 ## 6. What this document supersedes
 

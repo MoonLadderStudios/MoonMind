@@ -11,18 +11,18 @@ Define the REST API surfaces used to create, monitor, and observe MoonMind Workf
 MoonMind now splits this responsibility across:
 
 - **`/api/executions`** for Temporal-backed execution lifecycle operations
-- **`/api/task-runs`** for managed-run observability (logs, diagnostics, live follow)
+- **`/api/agent-runs`** for managed-run observability (logs, diagnostics, live follow)
 
 Mission Control still presents these executions as **Workflows** in the product UI, but the active lifecycle API is execution-oriented.
 
-The public `/api/task-runs` path is intentional: the `task_runs` router itself uses `prefix="/task-runs"` and FastAPI mounts it under the app-level `/api` prefix.
+The public `/api/agent-runs` path comes from the `agent_runs` router's `prefix="/agent-runs"`, which FastAPI mounts under the app-level `/api` prefix.
 
 ## 2. API Surface
 
 Workflow runs are served by two active router families:
 
 - **`/api/executions`** — Execution lifecycle for Temporal-backed work.
-- **`/api/task-runs`** — Artifact-backed managed-run observability.
+- **`/api/agent-runs`** — Artifact-backed managed-run observability.
 
 ### 2.1 Execution Lifecycle (`/api/executions`)
 
@@ -49,18 +49,18 @@ These routes extend the main lifecycle surface for specific execution types:
 | `POST` | `/api/executions/{workflowId}/reschedule` | Change the scheduled time of a scheduled execution |
 | `POST` | `/api/executions/{workflowId}/rerun` | Create a fresh execution with the original parameters and a new `workflowId` |
 
-### 2.3 Managed-Run Observability (`/api/task-runs`)
+### 2.3 Managed-Run Observability (`/api/agent-runs`)
 
 These endpoints expose artifact-backed observability for managed runs. The legacy `/live-session*` family is not part of the active API.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/task-runs/{taskRunId}/observability-summary` | Get observability metadata and artifact refs |
-| `GET` | `/api/task-runs/{taskRunId}/logs/stream` | Stream active live logs over SSE when supported |
-| `GET` | `/api/task-runs/{taskRunId}/logs/stdout` | Read the stdout log artifact |
-| `GET` | `/api/task-runs/{taskRunId}/logs/stderr` | Read the stderr log artifact |
-| `GET` | `/api/task-runs/{taskRunId}/logs/merged` | Read the merged log view or synthesized fallback |
-| `GET` | `/api/task-runs/{taskRunId}/diagnostics` | Read the diagnostics artifact |
+| `GET` | `/api/agent-runs/{agentRunId}/observability-summary` | Get observability metadata and artifact refs |
+| `GET` | `/api/agent-runs/{agentRunId}/logs/stream` | Stream active live logs over SSE when supported |
+| `GET` | `/api/agent-runs/{agentRunId}/logs/stdout` | Read the stdout log artifact |
+| `GET` | `/api/agent-runs/{agentRunId}/logs/stderr` | Read the stderr log artifact |
+| `GET` | `/api/agent-runs/{agentRunId}/logs/merged` | Read the merged log view or synthesized fallback |
+| `GET` | `/api/agent-runs/{agentRunId}/diagnostics` | Read the diagnostics artifact |
 
 ## 3. Identity Model
 
@@ -68,7 +68,7 @@ MoonMind currently uses three related identifiers around Workflow runs:
 
 - **`workflowId`** — the canonical durable execution identifier for `/api/executions`
 - **`taskId`** — the legacy product identifier (renames in the hard switch); for Temporal-backed work, `taskId == workflowId`
-- **`taskRunId`** — the managed-run observability record identifier used by `/api/task-runs`; it may appear on top-level execution detail and on individual step rows
+- **`taskRunId`** — the managed-run observability record identifier used by `/api/agent-runs` (the wire key keeps its legacy name until the MoonMind.UserWorkflow v2 cutover); it may appear on top-level execution detail and on individual step rows
 
 The normal control-plane flow is:
 
@@ -76,7 +76,7 @@ The normal control-plane flow is:
 2. Use `workflowId` for lifecycle actions and detail fetches
 3. Read the step ledger from `/api/executions/{workflowId}/steps`
 4. Resolve the relevant step's `taskRunId` when managed-run observability is available
-5. Use `/api/task-runs/{taskRunId}` for logs, diagnostics, and live follow
+5. Use `/api/agent-runs/{agentRunId}` for logs, diagnostics, and live follow
 
 ## 4. Observability Behavior
 

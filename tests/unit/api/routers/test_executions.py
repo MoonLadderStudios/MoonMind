@@ -22,14 +22,14 @@ from temporalio.service import RPCError, RPCStatusCode
 from api_service.api.routers.executions import (
     _get_service,
     _artifact_id_from_ref,
-    _build_original_task_input_snapshot_payload,
-    _expand_goal_preset_for_task_submission,
+    _build_original_workflow_input_snapshot_payload,
+    _expand_goal_preset_for_workflow_submission,
     _extract_cost_estimate_usd,
     _hydrate_related_run_metadata,
-    _merge_task_preserving_artifact_instructions,
+    _merge_workflow_preserving_artifact_instructions,
     _recovery_not_available_reason,
     _reuse_original_task_input_snapshot_from_source,
-    _task_input_snapshot_descriptor_from_record,
+    _workflow_input_snapshot_descriptor_from_record,
     _normalize_task_steps,
     _resolve_step_runtime_selections,
     get_temporal_client,
@@ -55,7 +55,7 @@ from api_service.db.models import (
     TemporalExecutionRecord,
     TemporalWorkflowType,
 )
-from api_service.services.recurring_tasks_service import RecurringTaskValidationError
+from api_service.services.recurring_workflows_service import RecurringWorkflowValidationError
 from moonmind.config.settings import settings
 from moonmind.workflows.temporal.service import ExecutionDependencySummary
 from moonmind.workflows.temporal import (
@@ -325,7 +325,7 @@ async def test_goal_preset_submission_expands_before_planner(tmp_path) -> None:
                 "title": "MM-747 goal",
                 "goal": "Complete Jira issue MM-747 using preset scheduling.",
             }
-            await _expand_goal_preset_for_task_submission(
+            await _expand_goal_preset_for_workflow_submission(
                 task_payload=task_payload,
                 request_payload={
                     "repository": "MoonLadderStudios/MoonMind",
@@ -436,7 +436,7 @@ def _build_execution_record(
     workflow_type: TemporalWorkflowType = TemporalWorkflowType.RUN,
     state: MoonMindWorkflowState = MoonMindWorkflowState.EXECUTING,
     owner_id: str = "user-123",
-    has_task_input_snapshot: bool = True,
+    has_workflow_input_snapshot: bool = True,
 ) -> SimpleNamespace:
     now = datetime.now(UTC)
     entry = (
@@ -468,7 +468,7 @@ def _build_execution_record(
                     "task_input_snapshot_source_kind": "create",
                 }
                 if workflow_type is TemporalWorkflowType.RUN
-                and has_task_input_snapshot
+                and has_workflow_input_snapshot
                 else {}
             ),
         },
@@ -630,7 +630,7 @@ def test_list_executions_temporal_query_includes_target_runtime_filter() -> None
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "tasks",
+                "scope": "workflows",
                 "targetRuntime": "codex_cli",
             },
         )
@@ -671,7 +671,7 @@ def test_list_executions_temporal_query_includes_canonical_state_filters() -> No
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "tasks",
+                "scope": "workflows",
                 "stateIn": "completed,failed",
             },
         )
@@ -722,7 +722,7 @@ def test_list_executions_temporal_query_anchors_non_terminal_state_to_running_st
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "tasks",
+                "scope": "workflows",
                 "stateIn": "waiting_on_dependencies",
             },
         )
@@ -760,7 +760,7 @@ def test_list_executions_temporal_query_mixes_terminal_and_non_terminal_state_fi
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "tasks",
+                "scope": "workflows",
                 "stateIn": "waiting_on_dependencies,canceled",
             },
         )
@@ -797,7 +797,7 @@ def test_list_executions_temporal_query_supports_repeated_canonical_filters() ->
             "/api/executions",
             params=[
                 ("source", "temporal"),
-                ("scope", "tasks"),
+                ("scope", "workflows"),
                 ("targetRuntimeIn", "codex_cli"),
                 ("targetRuntimeIn", "claude_code"),
                 ("targetRuntimeIn", ""),
@@ -836,7 +836,7 @@ def test_list_executions_temporal_query_ignores_empty_canonical_state_for_legacy
             "/api/executions",
             params=[
                 ("source", "temporal"),
-                ("scope", "tasks"),
+                ("scope", "workflows"),
                 ("state", "completed"),
                 ("stateIn", ""),
             ],
@@ -865,7 +865,7 @@ def test_list_executions_temporal_query_rejects_contradictory_canonical_filters(
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "tasks",
+                "scope": "workflows",
                 "stateIn": "completed",
                 "stateNotIn": "canceled",
             },
@@ -903,7 +903,7 @@ def test_list_executions_temporal_query_includes_canonical_runtime_skill_and_rep
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "tasks",
+                "scope": "workflows",
                 "targetRuntimeIn": "codex_cli,claude_code",
                 "targetSkillIn": "moonspec-implement",
                 "repoIn": "Moon/Mind",
@@ -943,7 +943,7 @@ def test_list_executions_temporal_query_prefers_canonical_filters_over_legacy_ex
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "tasks",
+                "scope": "workflows",
                 "state": "executing",
                 "stateIn": "completed",
                 "repo": "legacy/repo",
@@ -990,7 +990,7 @@ def test_list_executions_temporal_query_includes_canonical_date_bounds() -> None
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "tasks",
+                "scope": "workflows",
                 "scheduledFrom": "2026-05-01",
                 "scheduledTo": "2026-05-05",
                 "createdFrom": "2026-05-02",
@@ -1038,7 +1038,7 @@ def test_list_executions_temporal_query_includes_blank_date_filter_semantics() -
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "tasks",
+                "scope": "workflows",
                 "scheduledFrom": "2026-05-01",
                 "scheduledBlank": "include",
                 "finishedBlank": "include",
@@ -1075,7 +1075,7 @@ def test_list_executions_temporal_query_supports_sort_and_text_filters() -> None
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "tasks",
+                "scope": "workflows",
                 "repoContains": "Moon",
                 "workflowIdContains": "wf-",
                 "titleContains": "release",
@@ -1119,7 +1119,7 @@ def test_list_executions_temporal_query_uses_workflow_id_text_filter() -> None:
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "tasks",
+                "scope": "workflows",
                 "workflowIdContains": "wf-",
                 "sort": "workflowId",
             },
@@ -3564,7 +3564,7 @@ def test_create_task_shaped_execution_defaults_runtime_into_parameters(
 ) -> None:
     test_client, service, _user = client
     service.create_execution.return_value = _build_execution_record()
-    monkeypatch.setattr(settings.workflow, "default_task_runtime", "codex_cli")
+    monkeypatch.setattr(settings.workflow, "default_runtime", "codex_cli")
 
     response = test_client.post(
         "/api/executions",
@@ -5004,7 +5004,7 @@ def test_create_task_shaped_recurring_schedule_normalizes_proposal_intent(
     next_run_at = datetime.now(UTC) + timedelta(hours=1)
 
     with patch(
-        "api_service.services.recurring_tasks_service.RecurringTasksService"
+        "api_service.services.recurring_workflows_service.RecurringWorkflowsService"
     ) as service_cls:
         service = service_cls.return_value
         service.create_definition = AsyncMock(
@@ -5059,7 +5059,7 @@ def test_create_task_shaped_recurring_schedule_uses_root_proposal_fallbacks(
     next_run_at = datetime.now(UTC) + timedelta(hours=1)
 
     with patch(
-        "api_service.services.recurring_tasks_service.RecurringTasksService"
+        "api_service.services.recurring_workflows_service.RecurringWorkflowsService"
     ) as service_cls:
         service = service_cls.return_value
         service.create_definition = AsyncMock(
@@ -5109,7 +5109,7 @@ def test_create_task_shaped_recurring_schedule_passes_metadata_and_response(
     policy = {"overlap": {"mode": "skip"}}
 
     with patch(
-        "api_service.services.recurring_tasks_service.RecurringTasksService"
+        "api_service.services.recurring_workflows_service.RecurringWorkflowsService"
     ) as service_cls:
         service = service_cls.return_value
         service.create_definition = AsyncMock(
@@ -5167,7 +5167,7 @@ def test_create_task_shaped_recurring_schedule_preserves_missing_policy(
     next_run_at = datetime.now(UTC) + timedelta(hours=1)
 
     with patch(
-        "api_service.services.recurring_tasks_service.RecurringTasksService"
+        "api_service.services.recurring_workflows_service.RecurringWorkflowsService"
     ) as service_cls:
         service = service_cls.return_value
         service.create_definition = AsyncMock(
@@ -5207,7 +5207,7 @@ def test_create_task_shaped_recurring_schedule_rejects_global_scope_for_non_oper
     test_client.app.dependency_overrides[get_async_session] = _empty_session_override
 
     with patch(
-        "api_service.services.recurring_tasks_service.RecurringTasksService"
+        "api_service.services.recurring_workflows_service.RecurringWorkflowsService"
     ) as service_cls:
         service = service_cls.return_value
         service.create_definition = AsyncMock()
@@ -5244,11 +5244,11 @@ def test_create_task_shaped_recurring_schedule_validation_maps_to_422(
     test_client.app.dependency_overrides[get_async_session] = _empty_session_override
 
     with patch(
-        "api_service.services.recurring_tasks_service.RecurringTasksService"
+        "api_service.services.recurring_workflows_service.RecurringWorkflowsService"
     ) as service_cls:
         service = service_cls.return_value
         service.create_definition = AsyncMock(
-            side_effect=RecurringTaskValidationError("target.kind is required")
+            side_effect=RecurringWorkflowValidationError("target.kind is required")
         )
 
         response = test_client.post(
@@ -5269,7 +5269,7 @@ def test_create_task_shaped_recurring_schedule_validation_maps_to_422(
 
     assert response.status_code == 422
     assert response.json()["detail"] == {
-        "code": "invalid_recurring_task",
+        "code": "invalid_recurring_workflow",
         "message": "target.kind is required",
     }
 
@@ -5312,7 +5312,7 @@ def test_create_execution_persists_task_input_snapshot_for_direct_run_submission
     app = FastAPI()
     app.include_router(router)
     service = AsyncMock()
-    record = _build_execution_record(has_task_input_snapshot=False)
+    record = _build_execution_record(has_workflow_input_snapshot=False)
     record.parameters = {
         "repository": "Moon/Mind",
         "targetRuntime": "codex_cli",
@@ -5354,7 +5354,7 @@ def test_create_execution_persists_task_input_snapshot_for_direct_run_submission
 
     persist_mock = AsyncMock(side_effect=_persist_snapshot)
     monkeypatch.setattr(
-        "api_service.api.routers.executions._persist_original_task_input_snapshot",
+        "api_service.api.routers.executions._persist_original_workflow_input_snapshot",
         persist_mock,
     )
 
@@ -5391,7 +5391,7 @@ def test_task_submission_snapshot_uses_input_artifact_for_stripped_step_instruct
     app = FastAPI()
     app.include_router(router)
     service = AsyncMock()
-    record = _build_execution_record(has_task_input_snapshot=False)
+    record = _build_execution_record(has_workflow_input_snapshot=False)
     service.create_execution.return_value = record
     app.dependency_overrides[_get_service] = lambda: service
     _override_temporal_client(app)
@@ -5418,7 +5418,7 @@ def test_task_submission_snapshot_uses_input_artifact_for_stripped_step_instruct
 
     persist_mock = AsyncMock(side_effect=_persist_snapshot)
     monkeypatch.setattr(
-        "api_service.api.routers.executions._persist_original_task_input_snapshot_from_parameters",
+        "api_service.api.routers.executions._persist_original_workflow_input_snapshot_from_parameters",
         persist_mock,
     )
 
@@ -6726,7 +6726,7 @@ def test_describe_execution_bounds_slow_live_progress_query(
             side_effect=lambda execution, **_kwargs: execution,
         ),
         patch(
-            "api_service.api.routers.executions._resolve_task_run_ids_from_managed_store",
+            "api_service.api.routers.executions._resolve_agent_run_ids_from_managed_store",
             return_value={},
         ),
         TestClient(app) as test_client,
@@ -8001,8 +8001,8 @@ def test_request_rerun_update_snapshot_hydrates_instructions_from_input_artifact
     app = FastAPI()
     app.include_router(router)
     service = AsyncMock()
-    source_record = _build_execution_record(has_task_input_snapshot=False)
-    rerun_record = _build_execution_record(has_task_input_snapshot=False)
+    source_record = _build_execution_record(has_workflow_input_snapshot=False)
+    rerun_record = _build_execution_record(has_workflow_input_snapshot=False)
     rerun_record.workflow_id = "mm:rerun-created"
     rerun_record.run_id = "run-rerun"
     rerun_record.input_ref = "art-full-input"
@@ -8081,7 +8081,7 @@ def test_request_rerun_update_snapshot_hydrates_instructions_from_input_artifact
 
     persist_mock = AsyncMock(side_effect=_persist_snapshot)
     monkeypatch.setattr(
-        "api_service.api.routers.executions._persist_original_task_input_snapshot",
+        "api_service.api.routers.executions._persist_original_workflow_input_snapshot",
         persist_mock,
     )
 
@@ -8116,7 +8116,7 @@ def test_task_input_snapshot_artifact_id_strips_input_prefix_without_scheme() ->
 
 
 def test_task_input_snapshot_merge_preserves_step_deletions() -> None:
-    merged = _merge_task_preserving_artifact_instructions(
+    merged = _merge_workflow_preserving_artifact_instructions(
         {
             "steps": [
                 {"id": "step-1", "title": "First", "instructions": "Original first"},
@@ -8134,7 +8134,7 @@ def test_task_input_snapshot_merge_preserves_step_deletions() -> None:
 def test_original_task_input_snapshot_payload_preserves_mm639_authored_fields() -> None:
     task_payload = _mm639_authored_task_payload()
 
-    payload = _build_original_task_input_snapshot_payload(
+    payload = _build_original_workflow_input_snapshot_payload(
         source_kind="create",
         payload={
             "repository": "MoonLadderStudios/MoonMind",
@@ -8199,7 +8199,7 @@ def test_original_task_input_snapshot_payload_preserves_mm639_authored_fields() 
 
 def test_missing_attachment_aware_snapshot_descriptor_is_degraded_explicitly() -> None:
     record = _build_execution_record(
-        has_task_input_snapshot=False,
+        has_workflow_input_snapshot=False,
     )
     record.parameters = {
         "task": {
@@ -8214,7 +8214,7 @@ def test_missing_attachment_aware_snapshot_descriptor_is_degraded_explicitly() -
         }
     }
 
-    descriptor = _task_input_snapshot_descriptor_from_record(record)
+    descriptor = _workflow_input_snapshot_descriptor_from_record(record)
 
     assert descriptor.available is False
     assert descriptor.reconstruction_mode == "degraded_read_only"
@@ -8228,7 +8228,7 @@ def test_missing_attachment_aware_snapshot_descriptor_is_degraded_explicitly() -
 
 def test_missing_legacy_attachment_ref_snapshot_descriptor_is_degraded() -> None:
     record = _build_execution_record(
-        has_task_input_snapshot=False,
+        has_workflow_input_snapshot=False,
     )
     record.parameters = {
         "task": {
@@ -8255,7 +8255,7 @@ def test_missing_legacy_attachment_ref_snapshot_descriptor_is_degraded() -> None
         }
     }
 
-    descriptor = _task_input_snapshot_descriptor_from_record(record)
+    descriptor = _workflow_input_snapshot_descriptor_from_record(record)
 
     assert descriptor.available is False
     assert descriptor.reconstruction_mode == "degraded_read_only"
@@ -9649,7 +9649,7 @@ def test_temporal_task_editing_actions_require_original_snapshot(
     monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
     record = _build_execution_record(
         state=MoonMindWorkflowState.COMPLETED,
-        has_task_input_snapshot=False,
+        has_workflow_input_snapshot=False,
     )
 
     actions = _serialize_execution(record).actions
@@ -9682,7 +9682,7 @@ def test_mm644_failed_task_edit_for_rerun_requires_authoritative_snapshot(
 
     missing_snapshot = _build_execution_record(
         state=MoonMindWorkflowState.FAILED,
-        has_task_input_snapshot=False,
+        has_workflow_input_snapshot=False,
     )
     missing_body = _serialize_execution(missing_snapshot).model_dump(by_alias=True)
 
@@ -9695,7 +9695,7 @@ def test_mm644_failed_task_edit_for_rerun_requires_authoritative_snapshot(
 
 
 def test_mm644_rerun_snapshot_payload_records_source_lineage() -> None:
-    payload = _build_original_task_input_snapshot_payload(
+    payload = _build_original_workflow_input_snapshot_payload(
         source_kind="rerun",
         payload={
             "repository": "MoonLadderStudios/MoonMind",
@@ -9818,7 +9818,7 @@ def test_terminal_task_editing_actions_reject_parameter_fallback_without_snapsho
     monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
     record = _build_execution_record(
         state=MoonMindWorkflowState.FAILED,
-        has_task_input_snapshot=False,
+        has_workflow_input_snapshot=False,
     )
     record.parameters = {
         "requestType": "task",
@@ -9862,7 +9862,7 @@ def test_terminal_task_editing_actions_reject_title_only_parameter_fallback(
     monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
     record = _build_execution_record(
         state=MoonMindWorkflowState.FAILED,
-        has_task_input_snapshot=False,
+        has_workflow_input_snapshot=False,
     )
     record.parameters = {
         "requestType": "task",

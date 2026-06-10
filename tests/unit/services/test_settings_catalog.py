@@ -55,7 +55,7 @@ def test_catalog_returns_exposed_descriptor_metadata_and_omits_unexposed_setting
 
     workflow = catalog.categories["Workflow"]
     default_runtime = next(
-        item for item in workflow if item.key == "workflow.default_task_runtime"
+        item for item in workflow if item.key == "workflow.default_runtime"
     )
     assert default_runtime.type == "enum"
     assert default_runtime.section == "user-workspace"
@@ -397,9 +397,9 @@ async def test_mm656_references_policy_boundaries_and_atomicity(settings_session
                 "provider_profile_disabled",
             ),
             (
-                {"workflow.default_task_runtime": "jules"},
-                {"workflow.default_task_runtime": 1},
-                "workflow.default_task_runtime",
+                {"workflow.default_runtime": "jules"},
+                {"workflow.default_runtime": 1},
+                "workflow.default_runtime",
                 "runtime_policy_denied",
             ),
             (
@@ -581,7 +581,7 @@ def test_mm656_boundary_validation_helpers_return_structured_issues():
 
     descriptor_issues = service.validate_descriptor_generation()
     preview_issues = service.validate_effective_preview(
-        "workflow.default_task_runtime",
+        "workflow.default_runtime",
         "jules",
         scope="workspace",
     )
@@ -2246,7 +2246,7 @@ async def test_audit_entries_are_scoped_to_workspace_and_subject(
                 ),
                 SettingsAuditEvent(
                     event_type="settings.override.updated",
-                    key="workflow.default_task_runtime",
+                    key="workflow.default_runtime",
                     scope="user",
                     workspace_id=workspace_id,
                     user_id=user_id,
@@ -2264,7 +2264,7 @@ async def test_audit_entries_are_scoped_to_workspace_and_subject(
                 ),
                 SettingsAuditEvent(
                     event_type="settings.override.updated",
-                    key="workflow.default_task_runtime",
+                    key="workflow.default_runtime",
                     scope="user",
                     workspace_id=workspace_id,
                     user_id=other_user_id,
@@ -2990,7 +2990,7 @@ async def test_mm655_reference_sources_remain_secret_safe(settings_session_maker
 # MM-652: SettingsRegistry, SettingsCatalogBuilder, migration gate
 # ---------------------------------------------------------------------------
 
-def _minimal_entry(key: str = "workflow.default_task_runtime") -> SettingRegistryEntry:
+def _minimal_entry(key: str = "workflow.default_runtime") -> SettingRegistryEntry:
     return SettingRegistryEntry(
         key=key,
         title="Test Setting",
@@ -3044,33 +3044,33 @@ def test_settings_registry_orders_entries_at_initialization():
 
 
 def test_settings_registry_migration_gate_raises_for_removed_key_without_rule():
-    ledger = frozenset({"workflow.default_task_runtime", "workflow.old_key"})
-    entry = _minimal_entry("workflow.default_task_runtime")
+    ledger = frozenset({"workflow.default_runtime", "workflow.old_key"})
+    entry = _minimal_entry("workflow.default_runtime")
     with pytest.raises(ValueError, match="catalog_integrity_error"):
         SettingsRegistry((entry,), stable_key_ledger=ledger)
 
 
 def test_settings_registry_migration_gate_passes_with_migration_rule():
-    ledger = frozenset({"workflow.default_task_runtime", "workflow.old_key"})
-    entry = _minimal_entry("workflow.default_task_runtime")
+    ledger = frozenset({"workflow.default_runtime", "workflow.old_key"})
+    entry = _minimal_entry("workflow.default_runtime")
     rule = SettingMigrationRule(
         old_key="workflow.old_key",
         state="removed",
         message="removed in MM-652",
     )
     registry = SettingsRegistry((entry,), migration_rules=(rule,), stable_key_ledger=ledger)
-    assert registry.get("workflow.default_task_runtime") is entry
+    assert registry.get("workflow.default_runtime") is entry
 
 
 def test_settings_registry_migration_gate_skipped_when_no_ledger():
-    entry = _minimal_entry("workflow.default_task_runtime")
+    entry = _minimal_entry("workflow.default_runtime")
     registry = SettingsRegistry((entry,), stable_key_ledger=None)
     assert len(registry.entries) == 1
 
 
 def test_settings_registry_default_uses_catalog_key_ledger():
-    assert "workflow.default_task_runtime" in _CATALOG_KEY_LEDGER
-    assert len(_CATALOG_KEY_LEDGER) == 8
+    assert "workflow.default_runtime" in _CATALOG_KEY_LEDGER
+    assert len(_CATALOG_KEY_LEDGER) == 9
 
 
 def test_settings_registry_default_registry_passes_ledger_check():
@@ -3288,7 +3288,7 @@ def test_workflow_settings_has_moonmind_expose_metadata():
         if mm.get("expose"):
             exposed_keys.add(mm["key"])
 
-    assert "workflow.default_task_runtime" in exposed_keys
+    assert "workflow.default_runtime" in exposed_keys
     assert "workflow.default_publish_mode" in exposed_keys
     assert "skills.policy_mode" in exposed_keys
     assert "skills.canary_percent" in exposed_keys
@@ -3327,14 +3327,14 @@ async def test_apply_overrides_dispatches_change_events_through_injected_publish
         )
         response = await service.apply_overrides(
             scope="workspace",
-            changes={"workflow.default_task_runtime": "claude_code"},
-            expected_versions={"workflow.default_task_runtime": 1},
+            changes={"workflow.default_runtime": "claude_code"},
+            expected_versions={"workflow.default_runtime": 1},
         )
 
     assert len(published) == 1
     assert len(published[0]) == 1
     dispatched = published[0][0]
-    assert dispatched.key == "workflow.default_task_runtime"
+    assert dispatched.key == "workflow.default_runtime"
     assert dispatched.scope == "workspace"
     assert dispatched.source == "workspace_override"
     assert "task_creation_defaults" in dispatched.refresh_targets
@@ -3405,15 +3405,15 @@ async def test_apply_overrides_fans_out_one_event_per_committed_key(
         await service.apply_overrides(
             scope="workspace",
             changes={
-                "workflow.default_task_runtime": "claude_code",
+                "workflow.default_runtime": "claude_code",
                 "workflow.default_publish_mode": "branch",
             },
             expected_versions={
-                "workflow.default_task_runtime": 1,
+                "workflow.default_runtime": 1,
                 "workflow.default_publish_mode": 1,
             },
         )
 
     assert len(published) == 2
     keys = {event.key for event in published}
-    assert keys == {"workflow.default_task_runtime", "workflow.default_publish_mode"}
+    assert keys == {"workflow.default_runtime", "workflow.default_publish_mode"}

@@ -4,7 +4,7 @@ import logging
 from sqlalchemy import select
 
 from api_service.core.sync import create_async_session_maker
-from api_service.db.models import RecurringTaskDefinition
+from api_service.db.models import RecurringWorkflowDefinition
 from moonmind.config.settings import AppSettings
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.schedule_errors import (
@@ -30,9 +30,9 @@ async def migrate_definitions() -> None:
     adapter = TemporalClientAdapter.from_settings(settings)
 
     async with async_session() as session:
-        stmt = select(RecurringTaskDefinition).where(
-            RecurringTaskDefinition.enabled == True,
-            RecurringTaskDefinition.temporal_schedule_id.is_(None),
+        stmt = select(RecurringWorkflowDefinition).where(
+            RecurringWorkflowDefinition.enabled == True,
+            RecurringWorkflowDefinition.temporal_schedule_id.is_(None),
         )
         result = await session.execute(stmt)
         definitions = result.scalars().all()

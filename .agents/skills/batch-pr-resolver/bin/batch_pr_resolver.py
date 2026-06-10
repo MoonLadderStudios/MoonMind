@@ -396,7 +396,7 @@ def _load_parent_runtime_selection(
 def _resolve_runtime_selection(args: argparse.Namespace) -> RuntimeSelection:
     inherited = _load_parent_runtime_selection(args.task_context_path)
     configured_default_mode = _normalize_runtime_mode(
-        os.getenv("MOONMIND_DEFAULT_TASK_RUNTIME")
+        os.getenv("MOONMIND_DEFAULT_RUNTIME")
     )
     runtime_execution_profile_ref = _runtime_text(
         os.getenv("MOONMIND_EXECUTION_PROFILE_REF")
@@ -408,7 +408,7 @@ def _resolve_runtime_selection(args: argparse.Namespace) -> RuntimeSelection:
     # runtime copied from task_context.json, the caller's own execution
     # profile (the runtime this skill is currently executing under), and
     # finally the generic system default. The execution profile must beat
-    # MOONMIND_DEFAULT_TASK_RUNTIME: when batch-pr-resolver runs under Claude
+    # MOONMIND_DEFAULT_RUNTIME: when batch-pr-resolver runs under Claude
     # Code the default is still codex_cli, so preferring it would queue the
     # children on Codex instead of inheriting the caller's Claude Code runtime.
     execution_profile_mode = (

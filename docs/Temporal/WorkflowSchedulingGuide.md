@@ -115,12 +115,12 @@ Temporal Schedules are the authoritative recurring scheduling system for Tempora
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/api/recurring-tasks` | List schedule definitions |
-| `POST` | `/api/recurring-tasks` | Create a new schedule |
-| `GET` | `/api/recurring-tasks/{id}` | Get schedule detail |
-| `PATCH` | `/api/recurring-tasks/{id}` | Update schedule |
-| `POST` | `/api/recurring-tasks/{id}/run` | Trigger immediate manual run |
-| `GET` | `/api/recurring-tasks/{id}/runs` | List run history |
+| `GET` | `/api/recurring-workflows` | List schedule definitions |
+| `POST` | `/api/recurring-workflows` | Create a new schedule |
+| `GET` | `/api/recurring-workflows/{id}` | Get schedule detail |
+| `PATCH` | `/api/recurring-workflows/{id}` | Update schedule |
+| `POST` | `/api/recurring-workflows/{id}/run` | Trigger immediate manual run |
+| `GET` | `/api/recurring-workflows/{id}/runs` | List run history |
 
 #### Create payload
 
@@ -388,9 +388,9 @@ Each time a Temporal Schedule fires:
 > [!NOTE]
 > This section documents legacy scheduling infrastructure that may still exist in the codebase. It is not the canonical path for new scheduling work.
 
-### 7.1 `RecurringTaskDefinition` / `RecurringTaskRun`
+### 7.1 `RecurringWorkflowDefinition` / `RecurringWorkflowRun`
 
-If `RecurringTaskDefinition` and `RecurringTaskRun` still exist in the codebase, they represent the earlier Postgres-backed scheduling infrastructure. This system was designed before Temporal Schedules became the canonical recurring mechanism.
+If `RecurringWorkflowDefinition` and `RecurringWorkflowRun` still exist in the codebase, they represent the earlier Postgres-backed scheduling infrastructure. This system was designed before Temporal Schedules became the canonical recurring mechanism.
 
 Rules:
 
@@ -476,7 +476,7 @@ curl -X POST http://localhost:8000/api/executions \
 ### Create a recurring schedule
 
 ```bash
-curl -X POST http://localhost:8000/api/recurring-tasks \
+curl -X POST http://localhost:8000/api/recurring-workflows \
  -H "Content-Type: application/json" \
  -H "Authorization: Bearer $TOKEN" \
  -d '{
@@ -496,14 +496,14 @@ curl -X POST http://localhost:8000/api/recurring-tasks \
 ### Trigger manual run
 
 ```bash
-curl -X POST http://localhost:8000/api/recurring-tasks/$SCHEDULE_ID/run \
+curl -X POST http://localhost:8000/api/recurring-workflows/$SCHEDULE_ID/run \
  -H "Authorization: Bearer $TOKEN"
 ```
 
 ### List run history
 
 ```bash
-curl http://localhost:8000/api/recurring-tasks/$SCHEDULE_ID/runs?limit=50 \
+curl http://localhost:8000/api/recurring-workflows/$SCHEDULE_ID/runs?limit=50 \
  -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -517,12 +517,12 @@ The dashboard's schedule UI is powered by the `sources.schedules` block in the r
 {
  "sources": {
  "schedules": {
- "list": "/api/recurring-tasks?scope=personal",
- "create": "/api/recurring-tasks",
- "detail": "/api/recurring-tasks/{id}",
- "update": "/api/recurring-tasks/{id}",
- "runNow": "/api/recurring-tasks/{id}/run",
- "runs": "/api/recurring-tasks/{id}/runs?limit=200"
+ "list": "/api/recurring-workflows?scope=personal",
+ "create": "/api/recurring-workflows",
+ "detail": "/api/recurring-workflows/{id}",
+ "update": "/api/recurring-workflows/{id}",
+ "runNow": "/api/recurring-workflows/{id}/run",
+ "runs": "/api/recurring-workflows/{id}/runs?limit=200"
  }
  }
 }

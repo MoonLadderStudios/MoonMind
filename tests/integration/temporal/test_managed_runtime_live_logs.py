@@ -17,7 +17,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from api_service.api.routers.task_runs import router as task_runs_router
+from api_service.api.routers.agent_runs import router as agent_runs_router
 from api_service.auth_providers import get_current_user
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
@@ -428,7 +428,7 @@ async def test_long_running_launch_is_visible_through_observability_routes(
     )
 
     app = FastAPI()
-    app.include_router(task_runs_router, prefix="/api")
+    app.include_router(agent_runs_router, prefix="/api")
     app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
         id=uuid4(),
         email="admin@example.com",

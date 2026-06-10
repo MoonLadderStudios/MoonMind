@@ -87,7 +87,7 @@ The frontend renders descriptors and submits user intent. It must not decide tha
 
 The User / Workspace section must render ordinary settings from catalog descriptors. A setting key is an identity, not a frontend branching mechanism.
 
-The frontend may switch on descriptor shape such as `type`, `ui`, `constraints`, `options`, `read_only`, and `sensitive`. It should not switch on specific keys such as `workflow.default_task_runtime` except for intentionally documented transitional exceptions.
+The frontend may switch on descriptor shape such as `type`, `ui`, `constraints`, `options`, `read_only`, and `sensitive`. It should not switch on specific keys such as `workflow.default_runtime` except for intentionally documented transitional exceptions.
 
 ### 3.3 Explicit specialist surfaces
 
@@ -300,7 +300,7 @@ GET /api/v1/settings/catalog?section=user-workspace&scope=user
 GET /api/v1/settings/effective?scope=workspace
 GET /api/v1/settings/effective?scope=user
 GET /api/v1/settings/diagnostics?scope=workspace
-GET /api/v1/settings/audit?key=workflow.default_task_runtime
+GET /api/v1/settings/audit?key=workflow.default_runtime
 ```
 
 The catalog response should contain enough information for the UI to render controls, source explanations, read-only state, diagnostics, and reset affordances without hard-coded per-setting knowledge.

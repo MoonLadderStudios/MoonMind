@@ -101,7 +101,7 @@ a fresh resolver is allowed.
 ## Recurring schedule (daily / weekly)
 
 Target this skill from a `queue_task` recurring schedule rather than `pr-resolver` directly.
-Example `POST /api/recurring-tasks` body:
+Example `POST /api/recurring-workflows` body:
 
 ```json
 {

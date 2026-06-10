@@ -160,9 +160,9 @@ await client.create_schedule(
 | Upcoming runs | `ScheduleHandle.describe()` → `info.next_action_times` |
 | Schedule visibility | Listed in Temporal UI and via `client.list_schedules()` |
 
-### 5.3 MoonMind Domain Model: RecurringTaskDefinition
+### 5.3 MoonMind Domain Model: RecurringWorkflowDefinition
 
-MoonMind keeps a `RecurringTaskDefinition` row in Postgres for each recurring schedule. This row owns:
+MoonMind keeps a `RecurringWorkflowDefinition` row in Postgres for each recurring schedule. This row owns:
 
 - **Product semantics:** name, description, scope, owner, authorization
 - **Target specification:** what to run (workflow start, step template, manifest) and its payload
@@ -238,15 +238,15 @@ This ensures idempotency — if the schedule fires twice for the same time slot,
 
 ### 5.9 API Contract
 
-Recurring schedule management uses the existing `/api/recurring-tasks` endpoints. The API surface does not change — only the backend implementation shifts from DB-based dispatch to Temporal Schedule reconciliation.
+Recurring schedule management uses the existing `/api/recurring-workflows` endpoints. The API surface does not change — only the backend implementation shifts from DB-based dispatch to Temporal Schedule reconciliation.
 
 | Method | Path | Temporal Operation |
 |---|---|---|
-| `POST` | `/api/recurring-tasks` | `client.create_schedule()` |
-| `GET` | `/api/recurring-tasks/{id}` | DB lookup + `handle.describe()` for next runs |
-| `PATCH` | `/api/recurring-tasks/{id}` | DB update + `handle.update()` |
-| `POST` | `/api/recurring-tasks/{id}/run` | `handle.trigger()` |
-| `GET` | `/api/recurring-tasks/{id}/runs` | `handle.describe()` → `info.recent_actions` + Temporal Visibility query |
+| `POST` | `/api/recurring-workflows` | `client.create_schedule()` |
+| `GET` | `/api/recurring-workflows/{id}` | DB lookup + `handle.describe()` for next runs |
+| `PATCH` | `/api/recurring-workflows/{id}` | DB update + `handle.update()` |
+| `POST` | `/api/recurring-workflows/{id}/run` | `handle.trigger()` |
+| `GET` | `/api/recurring-workflows/{id}/runs` | `handle.describe()` → `info.recent_actions` + Temporal Visibility query |
 
 ---
 
@@ -354,15 +354,15 @@ With Temporal Schedules as the execution backend, MoonMind removes the following
 | `schedule_due_definitions()` scan | Temporal schedule auto-dispatch |
 | `dispatch_pending_runs()` loop | Temporal schedule auto-dispatch |
 | `run_scheduler_tick()` background daemon | Temporal schedule auto-dispatch |
-| `RecurringTaskRun` dispatch tracking | `ScheduleHandle.describe()` + Temporal Visibility |
+| `RecurringWorkflowRun` dispatch tracking | `ScheduleHandle.describe()` + Temporal Visibility |
 | Custom overlap detection queries | `ScheduleOverlapPolicy` |
 | Custom catchup / backfill logic | `SchedulePolicy.catchup_window` |
 | Custom misfire grace computation | `SchedulePolicy.catchup_window` |
 | Custom jitter randomization | `ScheduleSpec.jitter` |
 
 **What MoonMind keeps:**
-- `RecurringTaskDefinition` model — product metadata, scope, authorization, target specification
-- `/api/recurring-tasks` API routes — API surface unchanged
+- `RecurringWorkflowDefinition` model — product metadata, scope, authorization, target specification
+- `/api/recurring-workflows` API routes — API surface unchanged
 - Cron validation utilities — for user input validation before passing to Temporal
 - Timezone validation utilities — for user input validation
 
@@ -379,12 +379,12 @@ flowchart TD
 
  subgraph "MoonMind API"
  API_EXEC["/api/executions"]
- API_RECUR["/api/recurring-tasks"]
+ API_RECUR["/api/recurring-workflows"]
  end
 
  subgraph "MoonMind Backend"
  SVC_EXEC["TemporalExecutionService"]
- SVC_RECUR["RecurringTasksService<br/>(product layer)"]
+ SVC_RECUR["RecurringWorkflowsService<br/>(product layer)"]
  ADAPTER["TemporalClientAdapter"]
  end
 

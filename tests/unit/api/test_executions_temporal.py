@@ -395,7 +395,7 @@ def test_execution_router_exposes_recover_route_without_recovery_alias() -> None
 
 
 def test_task_detail_instructions_include_task_and_step_text() -> None:
-    assert executions_module._derive_full_task_instructions(
+    assert executions_module._derive_full_workflow_instructions(
         {
             "instructions": "Top-level task instructions.",
             "steps": [

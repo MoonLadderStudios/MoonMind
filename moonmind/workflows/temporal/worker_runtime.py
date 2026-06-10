@@ -4,14 +4,14 @@ import uuid
 
 def _build_proposal_service_factory():
     from api_service.db.base import get_async_session_context
-    from moonmind.workflows.task_proposals.repositories import TaskProposalRepository
-    from moonmind.workflows.task_proposals.service import TaskProposalService
+    from moonmind.workflows.proposals.repositories import WorkflowProposalRepository
+    from moonmind.workflows.proposals.service import WorkflowProposalService
 
     @contextlib.asynccontextmanager
     async def factory():
         async with get_async_session_context() as db_session:
-            yield TaskProposalService(
-                TaskProposalRepository(db_session),
+            yield WorkflowProposalService(
+                WorkflowProposalRepository(db_session),
             )
     return factory
 
@@ -153,7 +153,7 @@ _TASK_INPUT_SNAPSHOT_CONTENT_TYPE = (
     "application/vnd.moonmind.task-input-snapshot+json;version=1"
 )
 _TASK_INPUT_SNAPSHOT_LINK_TYPE = "input.original_snapshot"
-_TASK_INPUT_SNAPSHOT_VERSION = 1
+_WORKFLOW_INPUT_SNAPSHOT_VERSION = 1
 
 _MANAGED_SESSION_LOG_FIELD_MAP: tuple[tuple[str, str], ...] = (
     ("taskRunId", "managed_session_task_run_id"),
@@ -188,10 +188,10 @@ _OPENTELEMETRY_LOG_FORMAT = (
     "turn_id=%(managed_session_turn_id)s] %(message)s"
 )
 
-def _task_template_seed_dir() -> Path:
+def _preset_seed_dir() -> Path:
     import api_service
 
-    return Path(api_service.__file__).resolve().parent / "data" / "task_step_templates"
+    return Path(api_service.__file__).resolve().parent / "data" / "presets"
 
 def _template_slug_from_task(task_payload: Mapping[str, Any]) -> str:
     template_payload = _coerce_mapping(
@@ -204,7 +204,7 @@ def _template_slug_from_task(task_payload: Mapping[str, Any]) -> str:
         or ""
     ).strip()
 
-async def _expand_task_template_for_child_run(
+async def _expand_preset_for_child_run(
     *,
     session: Any,
     initial_parameters: Mapping[str, Any] | None,
@@ -259,10 +259,10 @@ async def _expand_task_template_for_child_run(
             "jiraIssueKey": schedule.issue_key,
         }
 
-    from api_service.services.task_templates.catalog import (
+    from api_service.services.presets.catalog import (
         ExpandOptions,
-        TaskTemplateCatalogService,
-        TaskTemplateNotFoundError,
+        PresetCatalogService,
+        PresetNotFoundError,
     )
 
     template_version = str(template_payload.get("version") or "1.0.0").strip()
@@ -285,7 +285,7 @@ async def _expand_task_template_for_child_run(
     target_runtime = parameters.get("targetRuntime")
     if isinstance(target_runtime, str) and target_runtime.strip():
         template_context["targetRuntime"] = target_runtime.strip()
-    catalog = TaskTemplateCatalogService(session)
+    catalog = PresetCatalogService(session)
     expand_kwargs = {
         "slug": template_slug,
         "scope": template_scope,
@@ -297,14 +297,14 @@ async def _expand_task_template_for_child_run(
     }
     try:
         expanded = await catalog.expand_template(**expand_kwargs)
-    except TaskTemplateNotFoundError:
-        await catalog.sync_seed_templates(seed_dir=_task_template_seed_dir())
+    except PresetNotFoundError:
+        await catalog.sync_seed_templates(seed_dir=_preset_seed_dir())
         expanded = await catalog.expand_template(**expand_kwargs)
 
     expanded_steps = expanded.get("steps") if isinstance(expanded, Mapping) else None
     if not isinstance(expanded_steps, list) or not expanded_steps:
         raise RuntimeError(
-            f"Task template '{template_slug}' expansion produced no executable steps."
+            f"Preset '{template_slug}' expansion produced no executable steps."
         )
 
     applied_template = _coerce_mapping(expanded.get("appliedTemplate"))
@@ -383,7 +383,7 @@ def _build_child_run_task_input_snapshot_payload(
     task_payload: Mapping[str, Any],
 ) -> dict[str, Any]:
     return {
-        "snapshotVersion": _TASK_INPUT_SNAPSHOT_VERSION,
+        "snapshotVersion": _WORKFLOW_INPUT_SNAPSHOT_VERSION,
         "source": {"kind": "create"},
         "draft": {
             "taskShape": _child_task_snapshot_shape(task_payload),
@@ -436,7 +436,7 @@ async def _create_child_run_task_input_snapshot_artifact(
         },
         metadata_json={
             "artifact_class": _TASK_INPUT_SNAPSHOT_LINK_TYPE,
-            "snapshot_version": _TASK_INPUT_SNAPSHOT_VERSION,
+            "snapshot_version": _WORKFLOW_INPUT_SNAPSHOT_VERSION,
             "workflow_type": "MoonMind.Run",
             "source_kind": "create",
             "draft_shape": snapshot_payload["draft"]["taskShape"],
@@ -462,7 +462,7 @@ def _apply_child_snapshot_ref_to_records(
     for target_record in records:
         memo = dict(target_record.memo or {})
         memo["task_input_snapshot_ref"] = artifact_id
-        memo["task_input_snapshot_version"] = _TASK_INPUT_SNAPSHOT_VERSION
+        memo["task_input_snapshot_version"] = _WORKFLOW_INPUT_SNAPSHOT_VERSION
         memo["task_input_snapshot_source_kind"] = "create"
         target_record.memo = memo
         artifact_refs = list(target_record.artifact_refs or [])
@@ -539,7 +539,7 @@ async def _persist_child_run_task_input_snapshot(
 def _build_jira_orchestrate_execution_creator():
     async def _create_execution(**kwargs):
         async with get_async_session_context() as session:
-            kwargs["initial_parameters"] = await _expand_task_template_for_child_run(
+            kwargs["initial_parameters"] = await _expand_preset_for_child_run(
                 session=session,
                 initial_parameters=kwargs.get("initial_parameters"),
             )
@@ -904,7 +904,7 @@ def _derive_pr_resolver_title(
 def _normalize_runtime_mode(raw_mode: Any) -> str:
     normalized = str(raw_mode or "").strip().lower()
     if not normalized:
-        return str(settings.workflow.default_task_runtime or "gemini_cli").strip().lower()
+        return str(settings.workflow.default_runtime or "gemini_cli").strip().lower()
     return normalized
 
 _JIRA_AGENT_SKILLS = JIRA_AGENT_SKILLS

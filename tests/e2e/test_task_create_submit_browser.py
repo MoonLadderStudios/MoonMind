@@ -150,7 +150,7 @@ def _route_handlers(
             return
         route.continue_()
 
-    def _mock_task_step_templates(route):
+    def _mock_presets(route):
         route.fulfill(
             status=200,
             content_type="application/json",
@@ -201,7 +201,7 @@ def _route_handlers(
     )
     page.route(f"{base_url}/api/workflows/skills", _mock_skills)
     page.route(f"{base_url}/api/system/worker-pause", _mock_worker_pause)
-    page.route(f"{base_url}/api/task-step-templates*", _mock_task_step_templates)
+    page.route(f"{base_url}/api/presets*", _mock_presets)
     page.route(f"{base_url}/api/v1/provider-profiles*", _mock_provider_profiles)
     page.route(f"{base_url}/api/executions", _mock_create)
     page.route(f"{base_url}/api/executions/*", _mock_detail)

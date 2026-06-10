@@ -553,7 +553,7 @@ The remediation runtime should not scrape Mission Control pages. It should recei
   Read a referenced artifact through normal artifact policy.
 
 - `remediation.read_target_logs(taskRunId, stream, cursor?, tailLines?)`
-  Read or tail target logs through the `/api/task-runs` observability surfaces.
+  Read or tail target logs through the `/api/agent-runs` observability surfaces.
 
 - `remediation.follow_target_logs(taskRunId, fromSequence?)`
   Live follow when supported.

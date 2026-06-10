@@ -17,7 +17,7 @@ def _run_script(*paths: str, stdin: str | None = None) -> subprocess.CompletedPr
     )
 
 def test_matches_backend_api_descendants_from_args() -> None:
-    result = _run_script("api_service/api/routers/task_runs.py")
+    result = _run_script("api_service/api/routers/agent_runs.py")
 
     assert result.returncode == 0
 

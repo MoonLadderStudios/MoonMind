@@ -3599,7 +3599,7 @@ class TemporalProposalActivities:
     def _validate_candidate_task_create_request(
         cls, request: Mapping[str, Any], *, default_runtime: str | None
     ) -> dict[str, Any]:
-        from moonmind.workflows.task_proposals.service import TaskProposalService
+        from moonmind.workflows.proposals.service import WorkflowProposalService
         from moonmind.workflows.executions.execution_contract import (
             CanonicalWorkflowExecutionPayload,
             WorkflowContractError,
@@ -3619,7 +3619,7 @@ class TemporalProposalActivities:
         payload_node = stamped_request.get("payload")
         if not isinstance(payload_node, Mapping):
             raise ValueError("taskCreateRequest.payload must be an object")
-        normalized_payload = TaskProposalService._normalize_proposal_runtime_payload(
+        normalized_payload = WorkflowProposalService._normalize_proposal_runtime_payload(
             payload_node
         )
         validation_payload = deepcopy(normalized_payload)
@@ -3808,34 +3808,34 @@ class TemporalProposalActivities:
         effective_policy = build_effective_proposal_policy(
             policy=parsed_policy,
             default_targets=getattr(
-                settings.task_proposals,
+                settings.workflow_proposals,
                 "proposal_targets_default",
                 "project",
             ),
             default_max_items_project=getattr(
-                settings.task_proposals,
+                settings.workflow_proposals,
                 "max_items_project_default",
                 3,
             ),
             default_max_items_moonmind=getattr(
-                settings.task_proposals,
+                settings.workflow_proposals,
                 "max_items_moonmind_default",
                 2,
             ),
             default_moonmind_severity_floor=getattr(
-                settings.task_proposals,
+                settings.workflow_proposals,
                 "moonmind_severity_floor_default",
                 "high",
             ),
             severity_vocabulary=getattr(
-                settings.task_proposals,
+                settings.workflow_proposals,
                 "severity_vocabulary",
                 None,
             ),
         )
         default_runtime = parsed_policy.default_runtime if parsed_policy else None
         moonmind_repo = str(
-            getattr(settings.task_proposals, "moonmind_ci_repository", "") or ""
+            getattr(settings.workflow_proposals, "moonmind_ci_repository", "") or ""
         ).strip()
         approved_moonmind_tags = {
             "retry",
@@ -3866,7 +3866,7 @@ class TemporalProposalActivities:
         ):
             delivery_provider = str(
                 getattr(
-                    settings.task_proposals,
+                    settings.workflow_proposals,
                     "proposal_delivery_provider_default",
                     "github",
                 )
@@ -4033,11 +4033,11 @@ class TemporalProposalActivities:
 
                 try:
                     if service is not None:
-                        from moonmind.workflows.task_proposals.models import (
-                            TaskProposalOriginSource,
+                        from moonmind.workflows.proposals.models import (
+                            WorkflowProposalOriginSource,
                         )
 
-                        origin_source = TaskProposalOriginSource.WORKFLOW
+                        origin_source = WorkflowProposalOriginSource.WORKFLOW
                         candidate_signal = candidate.get("signal")
                         signal_metadata = (
                             deepcopy(dict(candidate_signal))

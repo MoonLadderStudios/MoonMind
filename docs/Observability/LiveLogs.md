@@ -669,7 +669,7 @@ SSE is sufficient for one-way live observability.
 
 Canonical endpoint:
 
-`GET /api/task-runs/{id}/logs/stream`
+`GET /api/agent-runs/{id}/logs/stream`
 
 Optional query params may include:
 - `since=`
@@ -738,7 +738,7 @@ The old `web_ro`-style design is no longer the observability architecture.
 
 ## 12.1 Observability summary
 
-`GET /api/task-runs/{id}/observability-summary`
+`GET /api/agent-runs/{id}/observability-summary`
 
 Minimum required response fields:
 - `run_id`
@@ -780,7 +780,7 @@ Behavior when artifacts are missing or partial:
 
 ## 12.2 Structured observability events
 
-`GET /api/task-runs/{id}/observability/events`
+`GET /api/agent-runs/{id}/observability/events`
 
 This endpoint is the preferred initial-load surface for a session-aware Live Logs timeline.
 
@@ -800,9 +800,9 @@ Rules:
 ## 12.3 Tail endpoints
 
 These remain required compatibility and operator convenience endpoints:
-- `GET /api/task-runs/{id}/logs/stdout`
-- `GET /api/task-runs/{id}/logs/stderr`
-- `GET /api/task-runs/{id}/logs/merged`
+- `GET /api/agent-runs/{id}/logs/stdout`
+- `GET /api/agent-runs/{id}/logs/stderr`
+- `GET /api/agent-runs/{id}/logs/merged`
 
 Each endpoint must handle:
 - ended runs: return final artifact tail, no stream connection
@@ -812,9 +812,9 @@ Each endpoint must handle:
 ## 12.4 Full retrieval and download
 
 Required download surfaces:
-- `GET /api/task-runs/{id}/logs/stdout/download`
-- `GET /api/task-runs/{id}/logs/stderr/download`
-- `GET /api/task-runs/{id}/diagnostics`
+- `GET /api/agent-runs/{id}/logs/stdout/download`
+- `GET /api/agent-runs/{id}/logs/stderr/download`
+- `GET /api/agent-runs/{id}/diagnostics`
 
 ## 12.5 Session continuity retrieval
 
@@ -898,7 +898,7 @@ The persisted `TaskRunLiveSession` row and terminal-relay metadata are **legacy 
 
 Deprecation rules:
 - managed-run observability for new runs must not depend on `attachRo`, `webRo`, socket paths, or terminal-relay metadata
-- the deprecated `/api/task-runs/{taskRunId}/live-session*` route family is not part of the supported managed-run observability surface
+- the deprecated `/api/agent-runs/{taskRunId}/live-session*` route family is not part of the supported managed-run observability surface
 - historical runs that only persisted legacy `logArtifactRef` should degrade through read-only merged-log fallback rather than through terminal relays
 - any code path that reads terminal-session fields for managed-run log viewing is a migration target, not a supported architecture path
 

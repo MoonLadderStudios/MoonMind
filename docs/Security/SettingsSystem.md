@@ -356,7 +356,7 @@ A setting key is a stable dotted identifier.
 Examples:
 
 ```text
-workflow.default_task_runtime
+workflow.default_runtime
 workflow.default_publish_mode
 skills.policy_mode
 skills.canary_percent
@@ -509,8 +509,8 @@ SettingDescriptor:
 Example:
 
 ```yaml
-key: workflow.default_task_runtime
-title: Default Task Runtime
+key: workflow.default_runtime
+title: Default Runtime
 description: Runtime used when a task does not explicitly request one.
 category: Workflow
 section: user-workspace
@@ -869,11 +869,11 @@ Example payload:
 ```json
 {
   "changes": {
-    "workflow.default_task_runtime": "codex_cli",
+    "workflow.default_runtime": "codex_cli",
     "skills.canary_percent": 25
   },
   "expected_versions": {
-    "workflow.default_task_runtime": 3,
+    "workflow.default_runtime": 3,
     "skills.canary_percent": 1
   },
   "reason": "Update default workflow behavior for current workspace."
@@ -905,7 +905,7 @@ Preview returns effective-value changes, dependency warnings, and reload require
 ### 12.6 Audit APIs
 
 ```http
-GET /api/v1/settings/audit?key=workflow.default_task_runtime
+GET /api/v1/settings/audit?key=workflow.default_runtime
 GET /api/v1/settings/audit?scope=workspace
 ```
 
@@ -1334,7 +1334,7 @@ Example:
 ```json
 {
   "event_type": "setting_changed",
-  "key": "workflow.default_task_runtime",
+  "key": "workflow.default_runtime",
   "scope": "workspace",
   "source": "workspace_override",
   "apply_mode": "next_task",
@@ -1486,7 +1486,7 @@ Settings overrides are ordinary application configuration data and should be inc
 
 A standard database backup that covers the Settings System tables (`settings_overrides`, `settings_audit_events`) may contain:
 
-- setting keys (for example `workflow.default_task_runtime`),
+- setting keys (for example `workflow.default_runtime`),
 - non-sensitive override values (booleans, enums, lists, strings, integers, structured non-secret JSON),
 - SecretRef values (for example `db://my-token`, `env:MOONMIND_GH_TOKEN`) — these are references, not plaintext,
 - resource references (for example provider-profile IDs in `workflow.default_provider_profile_ref`),
@@ -1698,7 +1698,7 @@ OperationsPanel
 
 1. User opens Settings → User / Workspace → Workspace.
 2. UI fetches catalog.
-3. UI renders `workflow.default_task_runtime` as a select.
+3. UI renders `workflow.default_runtime` as a select.
 4. User selects `codex_cli`.
 5. UI previews change.
 6. Backend validates scope, permission, enum value, and policy.

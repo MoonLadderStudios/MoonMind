@@ -122,26 +122,26 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert temporal_dashboard["detailEnabled"] is True
     assert temporal_dashboard["actionsEnabled"] is True
     assert temporal_dashboard["submitEnabled"] is True
-    assert temporal_dashboard["temporalTaskEditing"] is False
+    assert temporal_dashboard["temporalWorkflowEditing"] is False
     assert temporal_dashboard["debugFieldsEnabled"] is False
     assert config["statusMaps"]["temporal"]["executing"] == "running"
     assert "defaultRepository" in config["system"]
     assert "buildId" in config["system"]
-    assert config["system"]["defaultTaskRuntime"] in ("codex_cli", "gemini_cli", "claude_code")
-    assert "defaultTaskModel" in config["system"]
-    assert "defaultTaskEffort" in config["system"]
-    assert "defaultTaskModelByRuntime" in config["system"]
-    assert "defaultTaskEffortByRuntime" in config["system"]
+    assert config["system"]["defaultRuntime"] in ("codex_cli", "gemini_cli", "claude_code")
+    assert "defaultModel" in config["system"]
+    assert "defaultEffort" in config["system"]
+    assert "defaultModelByRuntime" in config["system"]
+    assert "defaultEffortByRuntime" in config["system"]
     assert config["system"]["workerRuntimeEnv"] == "MOONMIND_WORKER_RUNTIME"
-    assert config["system"]["supportedTaskRuntimes"] == ["codex_cli", "gemini_cli", "claude_code", "codex_cloud"]
+    assert config["system"]["supportedRuntimes"] == ["codex_cli", "gemini_cli", "claude_code", "codex_cloud"]
     assert "runtimeCommandPreview" in config["system"]
     assert "claude_code" in config["system"]["supportedWorkerRuntimes"]
-    assert "taskTemplateCatalog" in config["system"]
-    assert "enabled" in config["system"]["taskTemplateCatalog"]
-    assert "templateSaveEnabled" in config["system"]["taskTemplateCatalog"]
-    assert config["system"]["taskTemplateCatalog"]["list"] == "/api/task-step-templates"
-    assert config["system"]["taskTemplateCatalog"]["detail"] == "/api/task-step-templates/{slug}"
-    assert config["system"]["taskTemplateCatalog"]["expand"] == "/api/task-step-templates/{slug}:expand"
+    assert "presetCatalog" in config["system"]
+    assert "enabled" in config["system"]["presetCatalog"]
+    assert "templateSaveEnabled" in config["system"]["presetCatalog"]
+    assert config["system"]["presetCatalog"]["list"] == "/api/presets"
+    assert config["system"]["presetCatalog"]["detail"] == "/api/presets/{slug}"
+    assert config["system"]["presetCatalog"]["expand"] == "/api/presets/{slug}:expand"
     attachment_policy = config["system"]["attachmentPolicy"]
     assert attachment_policy["enabled"] is True
     assert attachment_policy["maxCount"] >= 1
@@ -355,10 +355,10 @@ def test_build_runtime_config_uses_runtime_env_for_task_default(monkeypatch) -> 
     monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "gemini_cli")
     monkeypatch.setenv("MOONMIND_GEMINI_MODEL", "gemini-2.5-flash")
     config = dashboard_view_model.build_runtime_config("/workflows")
-    assert config["system"]["defaultTaskRuntime"] == "gemini_cli"
-    assert config["system"]["defaultTaskModel"] == "gemini-2.5-flash"
-    assert config["system"]["defaultTaskEffort"] == ""
-    assert config["system"]["defaultTaskModelByRuntime"]["gemini_cli"] == (
+    assert config["system"]["defaultRuntime"] == "gemini_cli"
+    assert config["system"]["defaultModel"] == "gemini-2.5-flash"
+    assert config["system"]["defaultEffort"] == ""
+    assert config["system"]["defaultModelByRuntime"]["gemini_cli"] == (
         "gemini-2.5-flash"
     )
     monkeypatch.delenv("MOONMIND_WORKER_RUNTIME", raising=False)
@@ -366,7 +366,7 @@ def test_build_runtime_config_uses_runtime_env_for_task_default(monkeypatch) -> 
 
 def test_build_runtime_config_uses_claude_from_runtime_env(monkeypatch) -> None:
     # The alias 'claude' is normalized to 'claude_code' internally, but since
-    # 'claude' is not in supportedTaskRuntimes (now 'claude_code' is), it will
+    # 'claude' is not in supportedRuntimes (now 'claude_code' is), it will
     # fall back to the settings-configured default (codex_cli) rather than 'claude'.
     monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "claude_code")
     monkeypatch.setenv("CLAUDE_API_KEY", "enabled")
@@ -376,9 +376,9 @@ def test_build_runtime_config_uses_claude_from_runtime_env(monkeypatch) -> None:
 
     config = dashboard_view_model.build_runtime_config("/workflows")
 
-    assert config["system"]["supportedTaskRuntimes"] == ["codex_cli", "gemini_cli", "claude_code", "codex_cloud"]
-    assert config["system"]["defaultTaskRuntime"] == "claude_code"
-    assert config["system"]["defaultTaskModel"] == "claude-opus-4-8"
+    assert config["system"]["supportedRuntimes"] == ["codex_cli", "gemini_cli", "claude_code", "codex_cloud"]
+    assert config["system"]["defaultRuntime"] == "claude_code"
+    assert config["system"]["defaultModel"] == "claude-opus-4-8"
 
 def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
     monkeypatch.setattr(settings.workflow, "github_repository", "Octo/Repo")
@@ -386,7 +386,7 @@ def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
     monkeypatch.setattr(settings.github, "github_token", None)
     monkeypatch.setattr(settings.workflow, "codex_model", "gpt-test-codex")
     monkeypatch.setattr(settings.workflow, "codex_effort", "medium")
-    monkeypatch.setattr(settings.workflow, "default_task_runtime", "codex_cli")
+    monkeypatch.setattr(settings.workflow, "default_runtime", "codex_cli")
     monkeypatch.setenv("MOONMIND_GEMINI_MODEL", "gemini-2.5-pro")
     monkeypatch.setattr(settings.workflow, "default_publish_mode", "branch")
 
@@ -397,13 +397,13 @@ def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
         "items": [{"value": "Octo/Repo", "label": "Octo/Repo", "source": "default"}],
         "error": None,
     }
-    assert config["system"]["defaultTaskModel"] == "gpt-test-codex"
-    assert config["system"]["defaultTaskEffort"] == "medium"
-    assert config["system"]["defaultTaskModelByRuntime"]["codex_cli"] == "gpt-test-codex"
-    assert config["system"]["defaultTaskModelByRuntime"]["gemini_cli"] == "gemini-2.5-pro"
-    assert config["system"]["defaultTaskEffortByRuntime"]["codex_cli"] == "medium"
+    assert config["system"]["defaultModel"] == "gpt-test-codex"
+    assert config["system"]["defaultEffort"] == "medium"
+    assert config["system"]["defaultModelByRuntime"]["codex_cli"] == "gpt-test-codex"
+    assert config["system"]["defaultModelByRuntime"]["gemini_cli"] == "gemini-2.5-pro"
+    assert config["system"]["defaultEffortByRuntime"]["codex_cli"] == "medium"
     assert config["system"]["defaultPublishMode"] == "branch"
-    assert config["system"]["defaultProposeTasks"] is False
+    assert config["system"]["defaultProposeWorkflows"] is False
 
 def test_build_runtime_config_includes_configured_repository_options(
     monkeypatch,
@@ -713,9 +713,9 @@ def test_build_runtime_config_uses_repo_runtime_model_defaults(monkeypatch) -> N
 
     config = dashboard_view_model.build_runtime_config("/workflows")
 
-    assert config["system"]["defaultTaskModelByRuntime"]["codex_cli"] == "gpt-5.5"
-    assert config["system"]["defaultTaskModelByRuntime"]["gemini_cli"] == "gemini-3.1-pro"
-    assert config["system"]["defaultTaskModelByRuntime"]["claude_code"] == "claude-opus-4-8"
+    assert config["system"]["defaultModelByRuntime"]["codex_cli"] == "gpt-5.5"
+    assert config["system"]["defaultModelByRuntime"]["gemini_cli"] == "gemini-3.1-pro"
+    assert config["system"]["defaultModelByRuntime"]["claude_code"] == "claude-opus-4-8"
 
 def test_normalize_status_maps_temporal_waits_to_awaiting_action() -> None:
     assert dashboard_view_model.normalize_status("temporal", "awaiting_external") == "awaiting_action"
@@ -728,7 +728,7 @@ def test_build_runtime_config_includes_claude_without_api_key(monkeypatch) -> No
 
     config = dashboard_view_model.build_runtime_config("/workflows")
 
-    assert config["system"]["supportedTaskRuntimes"] == ["codex_cli", "gemini_cli", "claude_code", "codex_cloud"]
+    assert config["system"]["supportedRuntimes"] == ["codex_cli", "gemini_cli", "claude_code", "codex_cloud"]
 
 def test_build_runtime_config_uses_temporal_dashboard_settings(monkeypatch) -> None:
     monkeypatch.setattr(settings.temporal_dashboard, "enabled", False)
@@ -762,7 +762,7 @@ def test_build_runtime_config_uses_temporal_dashboard_settings(monkeypatch) -> N
         "detailEnabled": True,
         "actionsEnabled": True,
         "submitEnabled": True,
-        "temporalTaskEditing": False,
+        "temporalWorkflowEditing": False,
         "debugFieldsEnabled": True,
     }
     assert config["sources"]["temporal"]["list"] == "/api/temporal/executions"
@@ -774,7 +774,7 @@ def test_build_runtime_config_uses_temporal_dashboard_settings(monkeypatch) -> N
         config["sources"]["temporal"]["artifactDownload"]
         == "/api/temporal/artifacts/{artifactId}/download"
     )
-    assert "temporal" not in config["system"]["supportedTaskRuntimes"]
+    assert "temporal" not in config["system"]["supportedRuntimes"]
 
 def test_build_runtime_config_includes_jules_when_enabled(monkeypatch) -> None:
     monkeypatch.setattr(settings.anthropic, "anthropic_api_key", None)
@@ -786,7 +786,7 @@ def test_build_runtime_config_includes_jules_when_enabled(monkeypatch) -> None:
 
     config = dashboard_view_model.build_runtime_config("/workflows")
 
-    assert config["system"]["supportedTaskRuntimes"] == [
+    assert config["system"]["supportedRuntimes"] == [
         "codex_cli",
         "gemini_cli",
         "claude_code",
@@ -918,17 +918,17 @@ def test_normalize_status_maps_temporal_waiting_on_dependencies_to_waiting() -> 
 
 
 def test_build_runtime_config_runtime_override_wins_over_settings(monkeypatch) -> None:
-    """An effective workflow.default_task_runtime override should win over settings."""
+    """An effective workflow.default_runtime override should win over settings."""
 
     monkeypatch.delenv("MOONMIND_WORKER_RUNTIME", raising=False)
-    monkeypatch.setattr(settings.workflow, "default_task_runtime", "codex_cli")
+    monkeypatch.setattr(settings.workflow, "default_runtime", "codex_cli")
 
     config = dashboard_view_model.build_runtime_config(
         "/workflows/new",
-        default_task_runtime_override="claude_code",
+        default_runtime_override="claude_code",
     )
 
-    assert config["system"]["defaultTaskRuntime"] == "claude_code"
+    assert config["system"]["defaultRuntime"] == "claude_code"
 
 
 def test_build_runtime_config_runtime_override_ignored_when_unsupported(
@@ -937,14 +937,14 @@ def test_build_runtime_config_runtime_override_ignored_when_unsupported(
     """Unsupported runtime overrides fall back to env/settings resolution."""
 
     monkeypatch.delenv("MOONMIND_WORKER_RUNTIME", raising=False)
-    monkeypatch.setattr(settings.workflow, "default_task_runtime", "codex_cli")
+    monkeypatch.setattr(settings.workflow, "default_runtime", "codex_cli")
 
     config = dashboard_view_model.build_runtime_config(
         "/workflows/new",
-        default_task_runtime_override="not_a_real_runtime",
+        default_runtime_override="not_a_real_runtime",
     )
 
-    assert config["system"]["defaultTaskRuntime"] == "codex_cli"
+    assert config["system"]["defaultRuntime"] == "codex_cli"
 
 
 def test_build_runtime_config_includes_provider_profile_ref_when_set() -> None:
@@ -988,7 +988,7 @@ def _effective(value: Any, *, diagnostics: list[SettingDiagnostic] | None = None
 
 def _runtime_effective(value: Any) -> EffectiveSettingValue:
     return EffectiveSettingValue(
-        key="workflow.default_task_runtime",
+        key="workflow.default_runtime",
         scope="workspace",
         value=value,
         source="workspace_override",
@@ -1010,7 +1010,7 @@ async def test_resolve_dashboard_runtime_config_propagates_overrides() -> None:
     fake_session = object()
 
     async def fake_effective_value_async(self, key, *, scope):
-        if key == "workflow.default_task_runtime":
+        if key == "workflow.default_runtime":
             return _runtime_effective("claude_code")
         if key == "workflow.default_provider_profile_ref":
             return _effective("claude-anthropic")
@@ -1024,7 +1024,7 @@ async def test_resolve_dashboard_runtime_config_propagates_overrides() -> None:
             "/workflows/new", session=fake_session, user=user
         )
 
-    assert config["system"]["defaultTaskRuntime"] == "claude_code"
+    assert config["system"]["defaultRuntime"] == "claude_code"
     assert (
         config["system"]["providerProfiles"]["defaultProfileRef"]
         == "claude-anthropic"
@@ -1039,7 +1039,7 @@ async def test_resolve_dashboard_runtime_config_drops_invalid_profile_ref() -> N
     fake_session = object()
 
     async def fake_effective_value_async(self, key, *, scope):
-        if key == "workflow.default_task_runtime":
+        if key == "workflow.default_runtime":
             return _runtime_effective(None)
         if key == "workflow.default_provider_profile_ref":
             return _effective(

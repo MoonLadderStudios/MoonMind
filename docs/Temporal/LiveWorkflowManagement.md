@@ -3,7 +3,7 @@
 > [!WARNING]
 > **DEPRECATED (Phase 6)**: This document describes the legacy terminal-session observability pattern (e.g., `web_ro`, `tmate` embedding). 
 > **Managed run observability is now strictly artifact-backed.**
-> Route examples below are historical references only; `/api/task-runs/{id}/live-session*` is not a supported managed-run log API surface after the Phase 6 cutoff.
+> Route examples below are historical references only; `/api/agent-runs/{id}/live-session*` is not a supported managed-run log API surface after the Phase 6 cutoff.
 > Please see [`docs/ManagedAgents/LiveLogs.md`](../ManagedAgents/LiveLogs.md) for the active architecture.
 
 **Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
@@ -48,7 +48,7 @@ Implementation detail: the managed launcher runs agents as a plain subprocess wi
 Real-time visibility is delivered without an external terminal relay in the default managed path:
 
 1. **Managed runtime** — `ManagedRuntimeLauncher` spawns a direct subprocess; `ManagedRunSupervisor` streams stdout/stderr into run-scoped artifacts. Contracts and UI integration are described in [LiveLogs.md](../ManagedAgents/LiveLogs.md).
-2. **Workflow-run live sessions** — Historical metadata for operator tooling lived in **`task_run_live_sessions`**. Those `/api/task-runs/{id}/live-session*` routes are migration-era references, not the active managed-run log path. Provider **`none`** applies when no external relay is in use.
+2. **Workflow-run live sessions** — Historical metadata for operator tooling lived in **`task_run_live_sessions`**. Those `/api/agent-runs/{id}/live-session*` routes are migration-era references, not the active managed-run log path. Provider **`none`** applies when no external relay is in use.
 3. **Queue worker** — The standalone worker may report live-session state over HTTP when enabled; it does not provision a relay when the configured provider is `none`.
 
 ### 4.1 Session lifecycle (conceptual)
@@ -189,7 +189,7 @@ Tracks operator-driven actions for audit.
 
 ## 8. Historical API Surface & Temporal Signals
 
-The route names in this section are preserved to explain the retired terminal-session flow. They are not the active `/api/task-runs` contract for managed-run observability.
+The route names in this section are preserved to explain the retired terminal-session flow. They are not the active `/api/agent-runs` contract for managed-run observability.
 
 ### 8.1 Session Lifecycle (REST APIs)
 

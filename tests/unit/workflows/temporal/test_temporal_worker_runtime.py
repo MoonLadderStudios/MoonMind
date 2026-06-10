@@ -29,7 +29,7 @@ from moonmind.workflows.temporal.worker_runtime import (
     _build_agent_runtime_deps,
     _build_deployment_update_executor,
     _enforce_codex_config_for_managed_fleet,
-    _expand_task_template_for_child_run,
+    _expand_preset_for_child_run,
     _persist_child_run_task_input_snapshot,
     _build_runtime_planner,
     _build_runtime_activities,
@@ -49,7 +49,7 @@ from moonmind.workflows.temporal.workers import (
 
 @asynccontextmanager
 async def _template_db(tmp_path):
-    db_url = f"sqlite+aiosqlite:///{tmp_path}/child_task_templates.db"
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/child_presets.db"
     engine = create_async_engine(db_url, future=True)
     async_session_maker = sessionmaker(
         engine, class_=AsyncSession, expire_on_commit=False
@@ -296,7 +296,7 @@ def test_runtime_planner_promotes_profile_id_to_runtime_node():
 async def test_child_run_auto_sequences_jira_goal_through_implement_preset(tmp_path):
     async with _template_db(tmp_path) as session_maker:
         async with session_maker() as session:
-            expanded_parameters = await _expand_task_template_for_child_run(
+            expanded_parameters = await _expand_preset_for_child_run(
                 session=session,
                 initial_parameters={
                     "requestType": "task",
@@ -337,7 +337,7 @@ async def test_child_run_auto_sequences_jira_goal_through_implement_preset(tmp_p
 async def test_child_run_goal_scheduled_breakdown_preserves_target_runtime(tmp_path):
     async with _template_db(tmp_path) as session_maker:
         async with session_maker() as session:
-            expanded_parameters = await _expand_task_template_for_child_run(
+            expanded_parameters = await _expand_preset_for_child_run(
                 session=session,
                 initial_parameters={
                     "requestType": "task",
@@ -1761,7 +1761,7 @@ def test_runtime_planner_rejects_conflicting_duplicate_step_ids():
 async def test_child_jira_orchestrate_run_expands_seeded_template_steps(tmp_path):
     async with _template_db(tmp_path) as session_maker:
         async with session_maker() as session:
-            expanded_parameters = await _expand_task_template_for_child_run(
+            expanded_parameters = await _expand_preset_for_child_run(
                 session=session,
                 initial_parameters={
                     "requestType": "task",

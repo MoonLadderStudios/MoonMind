@@ -84,7 +84,7 @@ The following must stay out of workflow state:
 - long review feedback bodies
 - diagnostics bundles
 
-Those belong in artifacts or `/api/task-runs/*`.
+Those belong in artifacts or `/api/agent-runs/*`.
 
 ## 4. Latest-run semantics
 
@@ -488,7 +488,7 @@ MoonMind's step model is:
 
 - **plan artifact** for planned structure
 - **workflow query/state** for current step truth
-- **artifacts and `/api/task-runs/*`** for durable evidence
+- **artifacts and `/api/agent-runs/*`** for durable evidence
 - **recovery checkpoints** for restoring completed work before a failed step
 - **latest-run workflow detail** as the default operator view
 

@@ -453,7 +453,7 @@ def _load_parent_runtime_selection(
 def _resolve_runtime_selection(args: argparse.Namespace) -> RuntimeSelection:
     inherited = _load_parent_runtime_selection(args.task_context_path)
     configured_default_mode = _normalize_runtime_mode(
-        os.getenv("MOONMIND_DEFAULT_TASK_RUNTIME")
+        os.getenv("MOONMIND_DEFAULT_RUNTIME")
     )
     runtime_execution_profile_ref = _runtime_text(
         os.getenv("MOONMIND_EXECUTION_PROFILE_REF")

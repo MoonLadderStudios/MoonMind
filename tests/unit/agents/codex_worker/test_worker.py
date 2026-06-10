@@ -246,7 +246,7 @@ class FakeQueueClient:
             }
         )
 
-    async def create_task_proposal(self, *, proposal):
+    async def create_workflow_proposal(self, *, proposal):
         self.submitted_proposals.append(dict(proposal))
         return {"id": str(uuid4())}
 
@@ -1146,7 +1146,7 @@ async def test_run_once_optional_artifact_upload_failures_are_non_fatal(
     assert queue.completed[0][1] is not None
     assert "optional artifact upload(s) failed" in queue.completed[0][1]
 
-async def test_worker_submits_task_proposals(tmp_path: Path) -> None:
+async def test_worker_submits_workflow_proposals(tmp_path: Path) -> None:
     """Workers should submit proposals when the feature flag is enabled."""
 
     config = CodexWorkerConfig(
@@ -1156,7 +1156,7 @@ async def test_worker_submits_task_proposals(tmp_path: Path) -> None:
         poll_interval_ms=1500,
         lease_seconds=120,
         workdir=tmp_path,
-        enable_task_proposals=True,
+        enable_proposals=True,
     )
     queue = FakeQueueClient()
     handler = FakeHandler(
@@ -1167,7 +1167,7 @@ async def test_worker_submits_task_proposals(tmp_path: Path) -> None:
     job = ClaimedJob(id=uuid4(), type="task", payload={"repository": "moon/org"})
     context_dir = tmp_path / "context"
     context_dir.mkdir(parents=True, exist_ok=True)
-    proposals_path = context_dir / "task_proposals.json"
+    proposals_path = context_dir / "workflow_proposals.json"
     proposals_path.write_text(
         json.dumps(
             [
@@ -1206,7 +1206,7 @@ async def test_worker_submits_task_proposals(tmp_path: Path) -> None:
         publish_command_env=None,
     )
 
-    await worker._maybe_submit_task_proposals(job=job, prepared=prepared)
+    await worker._maybe_submit_workflow_proposals(job=job, prepared=prepared)
 
     assert queue.submitted_proposals
     first = queue.submitted_proposals[0]
@@ -1220,7 +1220,7 @@ async def test_worker_submission_report_aggregates_delivery_outcomes(
     tmp_path: Path,
 ) -> None:
     class OutcomeQueue(FakeQueueClient):
-        async def create_task_proposal(self, *, proposal):
+        async def create_workflow_proposal(self, *, proposal):
             self.submitted_proposals.append(dict(proposal))
             return {
                 "id": str(uuid4()),
@@ -1241,7 +1241,7 @@ async def test_worker_submission_report_aggregates_delivery_outcomes(
         poll_interval_ms=1500,
         lease_seconds=120,
         workdir=tmp_path,
-        enable_task_proposals=True,
+        enable_proposals=True,
     )
     queue = OutcomeQueue()
     worker = CodexWorker(
@@ -1255,7 +1255,7 @@ async def test_worker_submission_report_aggregates_delivery_outcomes(
     job = ClaimedJob(id=uuid4(), type="task", payload={"repository": "moon/org"})
     context_dir = tmp_path / "context"
     context_dir.mkdir(parents=True, exist_ok=True)
-    (context_dir / "task_proposals.json").write_text(
+    (context_dir / "workflow_proposals.json").write_text(
         json.dumps(
             [
                 {
@@ -1293,7 +1293,7 @@ async def test_worker_submission_report_aggregates_delivery_outcomes(
         publish_command_env=None,
     )
 
-    report = await worker._maybe_submit_task_proposals(job=job, prepared=prepared)
+    report = await worker._maybe_submit_workflow_proposals(job=job, prepared=prepared)
 
     assert report.submitted_count == 1
     assert report.delivered_count == 1
@@ -1323,7 +1323,7 @@ async def test_worker_builds_deterministic_retry_loop_signal_proposal(
         poll_interval_ms=1500,
         lease_seconds=120,
         workdir=tmp_path,
-        enable_task_proposals=True,
+        enable_proposals=True,
     )
     worker = CodexWorker(
         config=config,
@@ -1379,7 +1379,7 @@ async def test_worker_builds_project_safe_run_quality_signal_proposal(
         poll_interval_ms=1500,
         lease_seconds=120,
         workdir=tmp_path,
-        enable_task_proposals=True,
+        enable_proposals=True,
     )
     worker = CodexWorker(
         config=config,
@@ -1425,7 +1425,7 @@ async def test_worker_builds_deterministic_flaky_test_signal_proposal(
         poll_interval_ms=1500,
         lease_seconds=120,
         workdir=tmp_path,
-        enable_task_proposals=True,
+        enable_proposals=True,
     )
     worker = CodexWorker(
         config=config,
@@ -1452,7 +1452,7 @@ async def test_worker_builds_deterministic_flaky_test_signal_proposal(
     assert "flaky test behavior" in proposal["title"]
 
 
-async def test_post_task_proposal_skills_seed_deterministic_signal_artifact(
+async def test_post_workflow_proposal_skills_seed_deterministic_signal_artifact(
     tmp_path: Path,
 ) -> None:
     config = CodexWorkerConfig(
@@ -1462,7 +1462,7 @@ async def test_post_task_proposal_skills_seed_deterministic_signal_artifact(
         poll_interval_ms=1500,
         lease_seconds=120,
         workdir=tmp_path,
-        enable_task_proposals=True,
+        enable_proposals=True,
     )
     handler = FakeHandler(
         WorkerExecutionResult(
@@ -1497,7 +1497,7 @@ async def test_post_task_proposal_skills_seed_deterministic_signal_artifact(
     prepared.repo_dir.mkdir(parents=True)
     prepared.artifacts_dir.mkdir(parents=True)
 
-    artifacts = await worker._run_post_task_proposal_skills(
+    artifacts = await worker._run_post_workflow_proposal_skills(
         job=ClaimedJob(id=uuid4(), type="task", attempt=2, max_attempts=3, payload={}),
         canonical_payload={"repository": "MoonLadderStudios/MoonMind", "task": {}},
         source_payload={},
@@ -1512,15 +1512,15 @@ async def test_post_task_proposal_skills_seed_deterministic_signal_artifact(
     )
 
     assert "codex_skill:fix-proposal:True" in handler.calls
-    assert any(artifact.name == "task_proposals.json" for artifact in artifacts)
+    assert any(artifact.name == "workflow_proposals.json" for artifact in artifacts)
     proposals = json.loads(
-        (prepared.artifacts_dir / "task_proposals.json").read_text(encoding="utf-8")
+        (prepared.artifacts_dir / "workflow_proposals.json").read_text(encoding="utf-8")
     )
     assert proposals[0]["tags"] == ["retry", "loop_detected"]
     assert proposals[0]["signal"]["source"] == "codex_worker"
 
 
-async def test_post_task_proposal_skills_preserve_seed_on_invalid_hook_output(
+async def test_post_workflow_proposal_skills_preserve_seed_on_invalid_hook_output(
     tmp_path: Path,
 ) -> None:
     class CorruptingHandler(FakeHandler):
@@ -1537,7 +1537,7 @@ async def test_post_task_proposal_skills_preserve_seed_on_invalid_hook_output(
         poll_interval_ms=1500,
         lease_seconds=120,
         workdir=tmp_path,
-        enable_task_proposals=True,
+        enable_proposals=True,
     )
     handler = CorruptingHandler(
         WorkerExecutionResult(
@@ -1572,7 +1572,7 @@ async def test_post_task_proposal_skills_preserve_seed_on_invalid_hook_output(
     prepared.repo_dir.mkdir(parents=True)
     prepared.artifacts_dir.mkdir(parents=True)
 
-    artifacts = await worker._run_post_task_proposal_skills(
+    artifacts = await worker._run_post_workflow_proposal_skills(
         job=ClaimedJob(id=uuid4(), type="task", attempt=2, max_attempts=3, payload={}),
         canonical_payload={"repository": "MoonLadderStudios/MoonMind", "task": {}},
         source_payload={},
@@ -1587,14 +1587,14 @@ async def test_post_task_proposal_skills_preserve_seed_on_invalid_hook_output(
     )
 
     assert "codex_skill:fix-proposal:True" in handler.calls
-    assert any(artifact.name == "task_proposals.json" for artifact in artifacts)
+    assert any(artifact.name == "workflow_proposals.json" for artifact in artifacts)
     proposals = json.loads(
-        (prepared.artifacts_dir / "task_proposals.json").read_text(encoding="utf-8")
+        (prepared.artifacts_dir / "workflow_proposals.json").read_text(encoding="utf-8")
     )
     assert proposals[0]["tags"] == ["retry", "loop_detected"]
     assert proposals[0]["signal"]["source"] == "codex_worker"
     skill_output_path = next(
-        (prepared.repo_dir / ".artifacts").glob("moonmind_task_proposals_*.json")
+        (prepared.repo_dir / ".artifacts").glob("moonmind_workflow_proposals_*.json")
     )
     assert skill_output_path.read_text(encoding="utf-8") == "{invalid json"
 
@@ -1627,7 +1627,7 @@ async def test_worker_submission_outcome_preserves_delivery_failure_details() ->
     ]
 
 
-async def test_task_proposal_request_uses_task_flag_with_config_gate(
+async def test_workflow_proposal_request_uses_task_flag_with_config_gate(
     tmp_path: Path,
 ) -> None:
     """Task-level proposeTasks should be interpreted, but still gated by config."""
@@ -1640,7 +1640,7 @@ async def test_task_proposal_request_uses_task_flag_with_config_gate(
             poll_interval_ms=1500,
             lease_seconds=120,
             workdir=tmp_path,
-            enable_task_proposals=False,
+            enable_proposals=False,
         ),
         queue_client=FakeQueueClient(),
         codex_exec_handler=FakeHandler(
@@ -1648,11 +1648,11 @@ async def test_task_proposal_request_uses_task_flag_with_config_gate(
         ),
     )
 
-    assert worker._task_proposals_requested(
+    assert worker._workflow_proposals_requested(
         canonical_payload={"repository": "moon/org", "task": {"proposeTasks": True}}
     )
     assert (
-        worker._task_proposals_requested(
+        worker._workflow_proposals_requested(
             canonical_payload={
                 "repository": "moon/org",
                 "task": {"proposeTasks": False},
@@ -1661,7 +1661,7 @@ async def test_task_proposal_request_uses_task_flag_with_config_gate(
         is False
     )
     assert (
-        worker._task_proposals_requested(
+        worker._workflow_proposals_requested(
             canonical_payload={"repository": "moon/org", "task": {}}
         )
         is False
@@ -1675,7 +1675,7 @@ async def test_task_proposal_request_uses_task_flag_with_config_gate(
             poll_interval_ms=1500,
             lease_seconds=120,
             workdir=tmp_path,
-            enable_task_proposals=True,
+            enable_proposals=True,
         ),
         queue_client=FakeQueueClient(),
         codex_exec_handler=FakeHandler(
@@ -1684,7 +1684,7 @@ async def test_task_proposal_request_uses_task_flag_with_config_gate(
     )
 
     assert (
-        enabled_worker._task_proposals_requested(
+        enabled_worker._workflow_proposals_requested(
             canonical_payload={"repository": "moon/org", "task": {}}
         )
         is False
@@ -3211,7 +3211,7 @@ async def test_run_once_retryable_run_quality_retry_skips_proposal_submission(
         poll_interval_ms=1500,
         lease_seconds=120,
         workdir=tmp_path,
-        enable_task_proposals=True,
+        enable_proposals=True,
     )
     worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
 
@@ -3222,9 +3222,9 @@ async def test_run_once_retryable_run_quality_retry_skips_proposal_submission(
         raise AssertionError("proposal submission should be skipped")
 
     monkeypatch.setattr(
-        worker, "_run_post_task_proposal_skills", _unexpected_post_skill
+        worker, "_run_post_workflow_proposal_skills", _unexpected_post_skill
     )
-    monkeypatch.setattr(worker, "_maybe_submit_task_proposals", _unexpected_submit)
+    monkeypatch.setattr(worker, "_maybe_submit_workflow_proposals", _unexpected_submit)
 
     processed = await worker.run_once()
 
@@ -7041,17 +7041,17 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     assert config.artifact_upload_incremental is True
     assert config.step_log_max_bytes == 1024 * 1024
 
-async def test_config_from_env_enables_task_proposals(monkeypatch) -> None:
+async def test_config_from_env_enables_workflow_proposals(monkeypatch) -> None:
     """Flag should toggle worker proposal submission behavior."""
 
     monkeypatch.setenv("MOONMIND_URL", "http://localhost:8000")
     monkeypatch.setenv("MOONMIND_ENABLE_TASK_PROPOSALS", "true")
     config = CodexWorkerConfig.from_env()
-    assert config.enable_task_proposals is True
+    assert config.enable_proposals is True
 
     monkeypatch.setenv("MOONMIND_ENABLE_TASK_PROPOSALS", "false")
     config = CodexWorkerConfig.from_env()
-    assert config.enable_task_proposals is False
+    assert config.enable_proposals is False
 
 async def test_config_from_env_parses_live_session_settings(monkeypatch) -> None:
     """Live session config should parse from MOONMIND_LIVE_SESSION_* variables."""

@@ -1,7 +1,7 @@
 """Adapter-level exceptions for Temporal Schedule operations.
 
 These exceptions wrap raw Temporal SDK errors at the adapter boundary
-so that callers (e.g. RecurringTasksService) never depend on SDK
+so that callers (e.g. RecurringWorkflowsService) never depend on SDK
 internals.
 """
 

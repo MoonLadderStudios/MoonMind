@@ -143,7 +143,7 @@ def test_settings_catalog_contract_exposes_apply_semantics(tmp_path) -> None:
     default_runtime = next(
         descriptor
         for descriptor in workflow_descriptors
-        if descriptor["key"] == "workflow.default_task_runtime"
+        if descriptor["key"] == "workflow.default_runtime"
     )
     assert default_runtime["apply_mode"] == "next_task"
     assert default_runtime["activation_state"] == "active"

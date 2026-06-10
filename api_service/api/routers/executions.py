@@ -145,7 +145,7 @@ from moonmind.workflows import get_temporal_artifact_service
 router = APIRouter(prefix="/api/executions", tags=["executions"])
 _TEMPORAL_SOURCE = "temporal"
 _ALLOWED_OWNER_TYPES = {"user", "system", "service"}
-_TEMPORAL_LIST_SCOPES = {"tasks", "user", "system", "all"}
+_TEMPORAL_LIST_SCOPES = {"workflows", "user", "system", "all"}
 _SUPPORTED_TASK_RUNTIMES = frozenset({
     "codex_cli",
     "gemini_cli",
@@ -157,7 +157,7 @@ _SUPPORTED_TASK_RUNTIMES = frozenset({
     "claude",
 })
 _TEMPORAL_SCOPE_QUERIES = {
-    "tasks": 'WorkflowType="MoonMind.Run" AND mm_entry="user_workflow"',
+    "workflows": 'WorkflowType="MoonMind.Run" AND mm_entry="user_workflow"',
     "user": '(WorkflowType="MoonMind.Run" OR WorkflowType="MoonMind.ManifestIngest")',
     "system": 'WorkflowType!="MoonMind.Run" AND WorkflowType!="MoonMind.ManifestIngest"',
     "all": "",
@@ -354,7 +354,7 @@ _TASK_INPUT_SNAPSHOT_CONTENT_TYPE = (
     "application/vnd.moonmind.task-input-snapshot+json;version=1"
 )
 _TASK_INPUT_SNAPSHOT_LINK_TYPE = "input.original_snapshot"
-_TASK_INPUT_SNAPSHOT_VERSION = 1
+_WORKFLOW_INPUT_SNAPSHOT_VERSION = 1
 
 def _bounded_metric_tag(value: object | None, *, fallback: str = "unknown") -> str:
     normalized = str(value or "").strip()
@@ -448,12 +448,12 @@ def _normalize_temporal_list_scope(
     *,
     workflow_type: str | None,
     entry: str | None,
-) -> Literal["tasks", "user", "system", "all"]:
+) -> Literal["workflows", "user", "system", "all"]:
     """Return the product-facing Temporal list scope.
 
     The default workflow console view is intentionally not a raw Temporal
     namespace browser. Recognized broad workflow scopes are accepted for old
-    URLs but fail safe to task-run visibility on this ordinary list boundary.
+    URLs but fail safe to user-workflow visibility on this ordinary list boundary.
     """
 
     normalized = str(scope or "").strip().lower()
@@ -469,14 +469,14 @@ def _normalize_temporal_list_scope(
                 ),
             },
         )
-    return "tasks"
+    return "workflows"
 
 
-def _is_task_list_workflow_type(workflow_type: str | None) -> bool:
+def _is_user_workflow_list_type(workflow_type: str | None) -> bool:
     return str(workflow_type or "").strip() == "MoonMind.Run"
 
 
-def _is_task_list_entry(entry: str | None) -> bool:
+def _is_user_workflow_list_entry(entry: str | None) -> bool:
     return str(entry or "").strip().lower() == "user_workflow"
 
 
@@ -824,7 +824,7 @@ def _build_temporal_execution_query(
     scope_query = _TEMPORAL_SCOPE_QUERIES[temporal_scope]
     if scope_query:
         query_parts.append(scope_query)
-    if workflow_type and not _is_task_list_workflow_type(workflow_type):
+    if workflow_type and not _is_user_workflow_list_type(workflow_type):
         logger.info(
             "Ignoring workflowType=%s for ordinary workflow-list temporal query",
             workflow_type,
@@ -840,7 +840,7 @@ def _build_temporal_execution_query(
         include=state_in_values,
         exclude=state_not_in_values,
     )
-    if entry and not _is_task_list_entry(entry):
+    if entry and not _is_user_workflow_list_entry(entry):
         logger.info("Ignoring entry=%s for ordinary workflow-list temporal query", entry)
     elif entry and not scope_query:
         query_parts.append(f'mm_entry="{_escape_temporal_value(entry)}"')
@@ -1123,7 +1123,7 @@ def _skill_selector_names(raw: object | None) -> list[str] | None:
                 names.append(_coerce_temporal_scalar(item))
     return _dedupe_non_blank(names) or None
 
-def _task_template_primary_skill_name(task_payload: Mapping[str, Any]) -> str | None:
+def _preset_primary_skill_name(task_payload: Mapping[str, Any]) -> str | None:
     task_template = task_payload.get("taskTemplate") or task_payload.get(
         "task_template"
     )
@@ -1575,7 +1575,7 @@ def _ensure_submit_enabled() -> None:
             detail={
                 "code": "temporal_submit_disabled",
                 "message": (
-                    "Temporal task submission is disabled "
+                    "Temporal workflow submission is disabled "
                     "(temporal_dashboard.submit_enabled=False). "
                     "The legacy queue execution substrate is no longer supported. "
                     "Enable Temporal submission to proceed."
@@ -1583,7 +1583,7 @@ def _ensure_submit_enabled() -> None:
             },
         )
 
-def _derive_full_task_instructions(task_payload: Mapping[str, Any]) -> str | None:
+def _derive_full_workflow_instructions(task_payload: Mapping[str, Any]) -> str | None:
     sections: list[str] = []
     task_instructions = str(task_payload.get("instructions") or "").strip()
     if task_instructions:
@@ -1791,7 +1791,7 @@ def _serialize_execution(
         or None
     )
     if not target_skill:
-        target_skill = _task_template_primary_skill_name(task_params)
+        target_skill = _preset_primary_skill_name(task_params)
     if not target_skill:
         target_skill = (
             _coerce_temporal_scalar(params.get("targetSkill"))
@@ -1913,7 +1913,7 @@ def _serialize_execution(
 
     task_skills = _skill_selector_names(task_payload.get("skills"))
     if task_skills is None:
-        template_primary_skill = _task_template_primary_skill_name(task_payload)
+        template_primary_skill = _preset_primary_skill_name(task_payload)
         if template_primary_skill:
             task_skills = [template_primary_skill]
     skill_runtime = _skill_runtime_evidence(
@@ -2057,7 +2057,7 @@ def _serialize_execution(
         owner_id=owner_id,
         title=title,
         summary=summary,
-        task_instructions=_derive_full_task_instructions(task_payload),
+        task_instructions=_derive_full_workflow_instructions(task_payload),
         status=dashboard_status,
         dashboard_status=dashboard_status,
         state=state_value,
@@ -2071,7 +2071,7 @@ def _serialize_execution(
         memo=memo,
         input_parameters=params,
         input_artifact_ref=getattr(record, "input_ref", None),
-        task_input_snapshot=_task_input_snapshot_descriptor_from_record(record),
+        task_input_snapshot=_workflow_input_snapshot_descriptor_from_record(record),
         target_runtime=target_runtime,
         target_skill=target_skill,
         model=param_model,
@@ -3549,7 +3549,7 @@ def _managed_run_store_root() -> str:
         "managed_runs",
     )
 
-def _resolve_task_run_ids_from_managed_store(
+def _resolve_agent_run_ids_from_managed_store(
     workflow_ids: tuple[str, ...]
 ) -> dict[str, str]:
     normalized_workflow_ids = tuple(
@@ -3566,7 +3566,7 @@ def _resolve_task_run_ids_from_managed_store(
         records = store.find_latest_by_workflow_ids(normalized_workflow_ids)
     except Exception:
         logger.warning(
-            "Failed to resolve managed task run ids for workflows %s from run store",
+            "Failed to resolve managed agent run ids for workflows %s from run store",
             normalized_workflow_ids,
             exc_info=True,
         )
@@ -3578,7 +3578,7 @@ def _resolve_task_run_ids_from_managed_store(
             resolved[workflow_id] = run_id
     return resolved
 
-async def _enrich_step_ledger_task_run_refs(payload: Any) -> Any:
+async def _enrich_step_ledger_agent_run_refs(payload: Any) -> Any:
     if not isinstance(payload, Mapping):
         return payload
     steps = payload.get("steps")
@@ -3619,7 +3619,7 @@ async def _enrich_step_ledger_task_run_refs(payload: Any) -> Any:
         return payload
 
     resolved_by_child_workflow = await asyncio.to_thread(
-        _resolve_task_run_ids_from_managed_store,
+        _resolve_agent_run_ids_from_managed_store,
         tuple(missing_agent_child_workflow_ids),
     )
     if not resolved_by_child_workflow:
@@ -3929,7 +3929,7 @@ async def _load_execution_step_ledger(
         )
         if fallback is not None:
             logger.info(
-                "Serving fallback step ledger for %s from stored task parameters",
+                "Serving fallback step ledger for %s from stored workflow parameters",
                 workflow_id,
             )
             return fallback
@@ -3941,7 +3941,7 @@ async def _load_execution_step_ledger(
             },
         ) from exc
 
-    enriched_payload = await _enrich_step_ledger_task_run_refs(payload)
+    enriched_payload = await _enrich_step_ledger_agent_run_refs(payload)
 
     try:
         return StepLedgerSnapshotModel.model_validate(enriched_payload)
@@ -4263,21 +4263,21 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         "timed_out": {"can_edit_for_rerun", "can_rerun"},
     }
     enabled = state_actions.get(raw_state, set())
-    has_task_input_snapshot = bool(
-        _task_input_snapshot_ref_from_memo(dict(getattr(record, "memo", None) or {}))
+    has_workflow_input_snapshot = bool(
+        _workflow_input_snapshot_ref_from_memo(dict(getattr(record, "memo", None) or {}))
     )
     resume_evidence_disabled_reason = _recovery_evidence_disabled_reason(record)
     if (
         workflow_type_value != "MoonMind.Run"
         or not temporal_task_editing_enabled
-        or not has_task_input_snapshot
+        or not has_workflow_input_snapshot
     ):
         enabled = enabled - {"can_update_inputs", "can_edit_for_rerun", "can_rerun"}
     if (
         workflow_type_value == "MoonMind.Run"
         and temporal_task_editing_enabled
         and raw_state == "failed"
-        and has_task_input_snapshot
+        and has_workflow_input_snapshot
         and resume_evidence_disabled_reason is None
     ):
         enabled = enabled | {"can_recover_from_failed_step"}
@@ -4315,17 +4315,17 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
                 if raw_state != "failed":
                     disabled_reasons[alias] = "state_not_eligible"
                     continue
-                if not has_task_input_snapshot:
+                if not has_workflow_input_snapshot:
                     disabled_reasons[alias] = "original_task_input_snapshot_missing"
                     continue
                 if resume_evidence_disabled_reason is not None:
                     disabled_reasons[alias] = resume_evidence_disabled_reason
                     continue
-            if field_name == "can_update_inputs" and not has_task_input_snapshot:
+            if field_name == "can_update_inputs" and not has_workflow_input_snapshot:
                 disabled_reasons[alias] = "original_task_input_snapshot_missing"
                 continue
             if field_name in {"can_edit_for_rerun", "can_rerun"}:
-                if not has_task_input_snapshot:
+                if not has_workflow_input_snapshot:
                     disabled_reasons[alias] = "original_task_input_snapshot_missing"
                     continue
         disabled_reasons[alias] = "state_not_eligible"
@@ -4413,7 +4413,7 @@ def _parse_intervention_audit_entries(
         )
     return entries
 
-def _invalid_task_request(message: str) -> HTTPException:
+def _invalid_workflow_request(message: str) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         detail={
@@ -4443,12 +4443,12 @@ def _coerce_string_list(value: Any, *, field_name: str) -> list[str]:
     if value is None:
         return []
     if not isinstance(value, list):
-        raise _invalid_task_request(f"{field_name} must be a JSON array of strings.")
+        raise _invalid_workflow_request(f"{field_name} must be a JSON array of strings.")
 
     normalized: list[str] = []
     for item in value:
         if not isinstance(item, str):
-            raise _invalid_task_request(
+            raise _invalid_workflow_request(
                 f"{field_name} must be a JSON array of strings."
             )
         candidate = item.strip()
@@ -4463,7 +4463,7 @@ def _coerce_step_count(value: Any) -> int:
     if value is None:
         return 0
     if not isinstance(value, list):
-        raise _invalid_task_request("payload.task.steps must be a JSON array.")
+        raise _invalid_workflow_request("payload.task.steps must be a JSON array.")
     return len(value)
 
 def _default_task_step_id(index: int) -> str:
@@ -4495,42 +4495,42 @@ def _allowed_attachment_content_types() -> set[str]:
 
 def _normalize_attachment_ref(raw: Any, *, field_name: str) -> dict[str, Any]:
     if not isinstance(raw, Mapping):
-        raise _invalid_task_request(f"{field_name} must be an object.")
+        raise _invalid_workflow_request(f"{field_name} must be an object.")
     unsupported = sorted(str(key) for key in raw.keys() if key not in _ATTACHMENT_REF_KEYS)
     if unsupported:
-        raise _invalid_task_request(
+        raise _invalid_workflow_request(
             f"{field_name} contains unsupported fields: {', '.join(unsupported)}."
         )
     artifact_id = str(raw.get("artifactId") or "").strip()
     if not artifact_id:
-        raise _invalid_task_request(f"{field_name}.artifactId is required.")
+        raise _invalid_workflow_request(f"{field_name}.artifactId is required.")
     if not artifact_id.startswith("art_"):
-        raise _invalid_task_request(f"{field_name}.artifactId must be a MoonMind artifact id.")
+        raise _invalid_workflow_request(f"{field_name}.artifactId must be a MoonMind artifact id.")
     filename = str(raw.get("filename") or "").strip()
     if not filename:
-        raise _invalid_task_request(f"{field_name}.filename is required.")
+        raise _invalid_workflow_request(f"{field_name}.filename is required.")
     content_type = _normalized_attachment_content_type(raw.get("contentType"))
     if not content_type:
-        raise _invalid_task_request(f"{field_name}.contentType is required.")
+        raise _invalid_workflow_request(f"{field_name}.contentType is required.")
     if content_type in _FORBIDDEN_ATTACHMENT_CONTENT_TYPES:
-        raise _invalid_task_request(f"{content_type} is not supported for input attachments.")
+        raise _invalid_workflow_request(f"{content_type} is not supported for input attachments.")
     allowed = _allowed_attachment_content_types()
     if content_type not in allowed:
         supported = ", ".join(sorted(allowed))
-        raise _invalid_task_request(
+        raise _invalid_workflow_request(
             f"{field_name}.contentType must be one of: {supported}."
         )
     size_value = raw.get("sizeBytes")
     if isinstance(size_value, bool):
-        raise _invalid_task_request(f"{field_name}.sizeBytes must be a non-negative integer.")
+        raise _invalid_workflow_request(f"{field_name}.sizeBytes must be a non-negative integer.")
     try:
         size_bytes = int(size_value)
     except (TypeError, ValueError) as exc:
-        raise _invalid_task_request(
+        raise _invalid_workflow_request(
             f"{field_name}.sizeBytes must be a non-negative integer."
         ) from exc
     if size_bytes < 0:
-        raise _invalid_task_request(f"{field_name}.sizeBytes must be a non-negative integer.")
+        raise _invalid_workflow_request(f"{field_name}.sizeBytes must be a non-negative integer.")
     return {
         "artifactId": artifact_id,
         "filename": filename,
@@ -4542,7 +4542,7 @@ def _normalize_attachment_ref_list(raw: Any, *, field_name: str) -> list[dict[st
     if raw is None:
         return []
     if not isinstance(raw, list):
-        raise _invalid_task_request(f"{field_name} must be a JSON array.")
+        raise _invalid_workflow_request(f"{field_name} must be a JSON array.")
     return [
         _normalize_attachment_ref(item, field_name=f"{field_name}[{index}]")
         for index, item in enumerate(raw)
@@ -4592,20 +4592,20 @@ async def _validate_and_collect_task_input_attachments(
     if not attachment_index:
         return objective_refs, step_refs, []
     if not settings.workflow.agent_job_attachment_enabled:
-        raise _invalid_task_request("input attachment policy is disabled.")
+        raise _invalid_workflow_request("input attachment policy is disabled.")
 
     unique: dict[str, dict[str, Any]] = {}
     for ref in attachment_index:
         artifact_id = ref["artifactId"]
         existing = unique.get(artifact_id)
         if existing is not None:
-            raise _invalid_task_request(
+            raise _invalid_workflow_request(
                 f"input attachment {artifact_id} is declared more than once."
             )
         unique.setdefault(artifact_id, ref)
 
     if len(unique) > settings.workflow.agent_job_attachment_max_count:
-        raise _invalid_task_request(
+        raise _invalid_workflow_request(
             "too many input attachments "
             f"({len(unique)}/{settings.workflow.agent_job_attachment_max_count})."
         )
@@ -4614,13 +4614,13 @@ async def _validate_and_collect_task_input_attachments(
     for ref in unique.values():
         size_bytes = int(ref["sizeBytes"])
         if size_bytes > max_bytes:
-            raise _invalid_task_request(
+            raise _invalid_workflow_request(
                 f"input attachment {ref['artifactId']} exceeds max bytes ({max_bytes})."
             )
         total_bytes += size_bytes
     total_limit = int(settings.workflow.agent_job_attachment_total_bytes)
     if total_bytes > total_limit:
-        raise _invalid_task_request(
+        raise _invalid_workflow_request(
             f"input attachments exceed total bytes ({total_limit})."
         )
 
@@ -4638,11 +4638,11 @@ async def _validate_and_collect_task_input_attachments(
         for ref in unique.values():
             artifact = artifacts_by_id.get(ref["artifactId"])
             if artifact is None:
-                raise _invalid_task_request(
+                raise _invalid_workflow_request(
                     f"input attachment artifact was not found: {ref['artifactId']}."
                 )
             if artifact.status is not TemporalArtifactStatus.COMPLETE:
-                raise _invalid_task_request(
+                raise _invalid_workflow_request(
                     "input attachment artifact must be complete before execution start: "
                     f"{ref['artifactId']} is {artifact.status.value}."
                 )
@@ -4653,20 +4653,20 @@ async def _validate_and_collect_task_input_attachments(
                 and owner != principal
                 and not principal.startswith("service:")
             ):
-                raise _invalid_task_request(
+                raise _invalid_workflow_request(
                     f"input attachment artifact is not authorized for this execution: {ref['artifactId']}."
                 )
             artifact_content_type = _normalized_attachment_content_type(
                 artifact.content_type
             )
             if artifact_content_type and artifact_content_type != ref["contentType"]:
-                raise _invalid_task_request(
+                raise _invalid_workflow_request(
                     f"input attachment {ref['artifactId']} content type mismatch."
                 )
             if artifact.size_bytes is not None and int(artifact.size_bytes) != int(
                 ref["sizeBytes"]
             ):
-                raise _invalid_task_request(
+                raise _invalid_workflow_request(
                     f"input attachment {ref['artifactId']} size mismatch."
                 )
 
@@ -4678,27 +4678,27 @@ def _normalize_task_skill_selectors(
     if raw is None:
         return None
     if not isinstance(raw, Mapping):
-        raise _invalid_task_request(f"{field_name} must be an object.")
+        raise _invalid_workflow_request(f"{field_name} must be an object.")
     try:
         return WorkflowSkillSelectors.model_validate(dict(raw)).model_dump(
             by_alias=True,
             exclude_none=True,
         )
     except (WorkflowContractError, ValidationError, ValueError) as exc:
-        raise _invalid_task_request(str(exc)) from exc
+        raise _invalid_workflow_request(str(exc)) from exc
 
-def _normalize_task_proposal_policy(raw: Any) -> dict[str, Any] | None:
+def _normalize_workflow_proposal_policy(raw: Any) -> dict[str, Any] | None:
     if raw is None:
         return None
     if not isinstance(raw, Mapping):
-        raise _invalid_task_request("payload.task.proposalPolicy must be an object.")
+        raise _invalid_workflow_request("payload.task.proposalPolicy must be an object.")
     try:
         return WorkflowProposalPolicy.model_validate(dict(raw)).model_dump(
             by_alias=True,
             exclude_none=True,
         )
     except (WorkflowContractError, ValidationError, ValueError) as exc:
-        raise _invalid_task_request(str(exc)) from exc
+        raise _invalid_workflow_request(str(exc)) from exc
 
 def _normalize_task_input_attachments(
     raw: Any, *, field_name: str
@@ -4706,7 +4706,7 @@ def _normalize_task_input_attachments(
     if raw is None or raw == "":
         return []
     if not isinstance(raw, list):
-        raise _invalid_task_request(f"{field_name} must be a JSON array.")
+        raise _invalid_workflow_request(f"{field_name} must be a JSON array.")
 
     normalized: list[dict[str, Any]] = []
     for index, item in enumerate(raw):
@@ -4716,7 +4716,7 @@ def _normalize_task_input_attachments(
                 exclude_none=True,
             )
         except (WorkflowContractError, ValidationError, ValueError) as exc:
-            raise _invalid_task_request(f"{field_name}[{index}]: {exc}") from exc
+            raise _invalid_workflow_request(f"{field_name}[{index}]: {exc}") from exc
         normalized.append(attachment)
     return normalized
 
@@ -4725,9 +4725,9 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
     if raw_steps is None:
         return []
     if not isinstance(raw_steps, list):
-        raise _invalid_task_request("payload.task.steps must be a JSON array.")
+        raise _invalid_workflow_request("payload.task.steps must be a JSON array.")
     if len(raw_steps) > 50:
-        raise _invalid_task_request("payload.task.steps can have a maximum of 50 items.")
+        raise _invalid_workflow_request("payload.task.steps can have a maximum of 50 items.")
 
     normalized_steps: list[dict[str, Any]] = []
     forbidden = {
@@ -4746,7 +4746,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
 
     for index, item in enumerate(raw_steps):
         if not isinstance(item, Mapping):
-            raise _invalid_task_request(
+            raise _invalid_workflow_request(
                 f"payload.task.steps[{index}] must be an object."
             )
         step_payload = dict(item)
@@ -4755,7 +4755,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
         )
         if blocked:
             formatted = ", ".join(blocked)
-            raise _invalid_task_request(
+            raise _invalid_workflow_request(
                 f"payload.task.steps[{index}] may not define workflow-scoped overrides: {formatted}"
             )
 
@@ -4776,7 +4776,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
         runtime_payload = step_payload.get("runtime")
         if runtime_payload is not None:
             if not isinstance(runtime_payload, Mapping):
-                raise _invalid_task_request(
+                raise _invalid_workflow_request(
                     f"payload.task.steps[{index}].runtime must be an object."
                 )
             normalized_runtime: dict[str, str] = {}
@@ -4799,7 +4799,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                     if target_key == "mode":
                         normalized_value = normalize_runtime_id(normalized_value)
                         if normalized_value not in _SUPPORTED_TASK_RUNTIMES:
-                            raise _invalid_task_request(
+                            raise _invalid_workflow_request(
                                 "Unsupported payload.task.steps"
                                 f"[{index}].runtime.mode: {value!r}. "
                                 "Must be one of: codex_cli, gemini_cli, "
@@ -4820,7 +4820,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
         raw_type = str(step_payload.get("type") or "").strip().lower()
         if raw_type:
             if raw_type not in {"tool", "skill"}:
-                raise _invalid_task_request(
+                raise _invalid_workflow_request(
                     f"payload.task.steps[{index}].type / task.steps[].type "
                     "must be one of: tool, skill."
                 )
@@ -4839,16 +4839,16 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
         step_type = raw_type or "skill"
         if step_type == "tool":
             if raw_skill is not None:
-                raise _invalid_task_request(
+                raise _invalid_workflow_request(
                     f"payload.task.steps[{index}].skill must be omitted for Tool steps."
                 )
             if raw_tool is None:
-                raise _invalid_task_request(
+                raise _invalid_workflow_request(
                     f"payload.task.steps[{index}].tool is required for Tool steps."
                 )
             tool_id = str(raw_tool.get("id") or raw_tool.get("name") or "").strip()
             if not tool_id:
-                raise _invalid_task_request(
+                raise _invalid_workflow_request(
                     f"payload.task.steps[{index}].tool.id or "
                     f"payload.task.steps[{index}].tool.name is required."
                 )
@@ -4876,12 +4876,12 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                     raw_tool.get("type") or raw_tool.get("kind") or ""
                 ).strip().lower()
                 if tool_type not in {"", "skill"}:
-                    raise _invalid_task_request(
+                    raise _invalid_workflow_request(
                         f"payload.task.steps[{index}].tool must be omitted for Skill steps."
                     )
                 selected_skill = raw_tool
             if raw_type == "skill" and selected_skill is None:
-                raise _invalid_task_request(
+                raise _invalid_workflow_request(
                     f"payload.task.steps[{index}].skill is required for Skill steps."
                 )
             if selected_skill is not None:
@@ -4954,7 +4954,7 @@ async def _resolve_step_runtime_selections(
         if raw_step_runtime:
             normalized_rt = normalize_runtime_id(raw_step_runtime)
             if normalized_rt not in _SUPPORTED_TASK_RUNTIMES:
-                raise _invalid_task_request(
+                raise _invalid_workflow_request(
                     f"Unsupported payload.task.steps[{index}].runtime.mode: "
                     f"{raw_step_runtime!r}. Must be one of: codex_cli, "
                     "gemini_cli, claude_code, codex_cloud, jules."
@@ -4980,12 +4980,12 @@ async def _resolve_step_runtime_selections(
                 ManagedAgentProviderProfile, effective_profile_id
             )
             if provider_profile is None and raw_step_profile_id:
-                raise _invalid_task_request(
+                raise _invalid_workflow_request(
                     f"Provider profile not found for payload.task.steps[{index}]: "
                     f"{raw_step_profile_id!r}."
                 )
             if provider_profile is None and task_profile_id and not raw_step_profile_id:
-                raise _invalid_task_request(
+                raise _invalid_workflow_request(
                     f"Provider profile not found for inherited task profile on "
                     f"payload.task.steps[{index}]: {task_profile_id!r}."
                 )
@@ -5017,10 +5017,10 @@ async def _resolve_step_runtime_selections(
         step["runtime"] = resolved_runtime
 
 
-def _task_template_seed_dir() -> Path:
+def _preset_seed_dir() -> Path:
     import api_service
 
-    return Path(api_service.__file__).resolve().parent / "data" / "task_step_templates"
+    return Path(api_service.__file__).resolve().parent / "data" / "presets"
 
 
 def _apply_goal_schedule_metadata(
@@ -5074,7 +5074,7 @@ def _apply_goal_schedule_metadata(
     }
 
 
-async def _expand_goal_preset_for_task_submission(
+async def _expand_goal_preset_for_workflow_submission(
     *,
     task_payload: dict[str, Any],
     request_payload: Mapping[str, Any],
@@ -5090,13 +5090,13 @@ async def _expand_goal_preset_for_task_submission(
     if schedule is None:
         return
 
-    from api_service.services.task_templates.catalog import (
+    from api_service.services.presets.catalog import (
         ExpandOptions,
-        TaskTemplateCatalogService,
-        TaskTemplateNotFoundError,
+        PresetCatalogService,
+        PresetNotFoundError,
     )
 
-    catalog = TaskTemplateCatalogService(session)
+    catalog = PresetCatalogService(session)
     existing_inputs = (
         dict(task_payload.get("inputs")) if isinstance(task_payload.get("inputs"), Mapping) else {}
     )
@@ -5125,13 +5125,13 @@ async def _expand_goal_preset_for_task_submission(
     }
     try:
         expanded = await catalog.expand_template(**expand_kwargs)
-    except TaskTemplateNotFoundError:
-        await catalog.sync_seed_templates(seed_dir=_task_template_seed_dir())
+    except PresetNotFoundError:
+        await catalog.sync_seed_templates(seed_dir=_preset_seed_dir())
         expanded = await catalog.expand_template(**expand_kwargs)
 
     expanded_steps = expanded.get("steps") if isinstance(expanded, Mapping) else None
     if not isinstance(expanded_steps, list) or not expanded_steps:
-        raise _invalid_task_request(
+        raise _invalid_workflow_request(
             f"Goal preset '{schedule.slug}' expansion produced no executable steps."
         )
 
@@ -5200,7 +5200,7 @@ def _normalize_report_output_payload(
             enabled = _coerce_bool(report_payload.get("enabled"), default=False)
             required = _coerce_bool(report_payload.get("required"), default=True)
         except ValueError as exc:
-            raise _invalid_task_request(
+            raise _invalid_workflow_request(
                 f"reportOutput boolean value is invalid: {exc}"
             ) from exc
         if not enabled:
@@ -5212,10 +5212,10 @@ def _normalize_report_output_payload(
             or "agent_run_report"
         )
         if not isinstance(raw_report_type, str):
-            raise _invalid_task_request("reportOutput.reportType must be a string.")
+            raise _invalid_workflow_request("reportOutput.reportType must be a string.")
         report_type = raw_report_type.strip() or "agent_run_report"
         if len(report_type) > _REPORT_OUTPUT_MAX_STRING_CHARS:
-            raise _invalid_task_request(
+            raise _invalid_workflow_request(
                 f"reportOutput.reportType must be "
                 f"{_REPORT_OUTPUT_MAX_STRING_CHARS} characters or fewer."
             )
@@ -5231,7 +5231,7 @@ def _normalize_report_output_payload(
             if value is None:
                 continue
             if not isinstance(value, str):
-                raise _invalid_task_request(f"reportOutput.{key} must be a string.")
+                raise _invalid_workflow_request(f"reportOutput.{key} must be a string.")
             text = value.strip()
             if not text:
                 continue
@@ -5241,7 +5241,7 @@ def _normalize_report_output_payload(
             if canonical_key == "primaryPath":
                 text = normalize_report_output_primary_path(text)
             if len(text) > _REPORT_OUTPUT_MAX_STRING_CHARS:
-                raise _invalid_task_request(
+                raise _invalid_workflow_request(
                     f"reportOutput.{canonical_key} must be "
                     f"{_REPORT_OUTPUT_MAX_STRING_CHARS} characters or fewer."
                 )
@@ -5271,7 +5271,7 @@ def _report_output_instruction(report_output: Mapping[str, Any]) -> str:
         f"{path_sentence}"
     )
 
-def _task_publish_skill_id(
+def _workflow_publish_skill_id(
     task_payload: Mapping[str, Any],
     normalized_tool: Mapping[str, Any] | None,
 ) -> object:
@@ -5290,7 +5290,7 @@ def _first_present_publish_mode(
             return source[key]
     return None
 
-def _resolve_task_publish_payload(
+def _resolve_workflow_publish_payload(
     *,
     payload: Mapping[str, Any],
     task_payload: Mapping[str, Any],
@@ -5310,7 +5310,7 @@ def _resolve_task_publish_payload(
         (payload, "publishMode"),
         (payload, "publish_mode"),
     )
-    skill_id = _task_publish_skill_id(task_payload, normalized_tool)
+    skill_id = _workflow_publish_skill_id(task_payload, normalized_tool)
     allow_repository_publish = allows_repository_publish_for_skill_context(task_payload)
     if (
         task_requested_mode is None
@@ -5330,7 +5330,7 @@ def _resolve_task_publish_payload(
             allow_repository_publish=allow_repository_publish,
         )
     except WorkflowContractError as exc:
-        raise _invalid_task_request(str(exc)) from exc
+        raise _invalid_workflow_request(str(exc)) from exc
 
     resolved = dict(task_publish or top_publish)
     resolved["mode"] = publish_mode
@@ -5371,7 +5371,7 @@ def _normalize_story_output_payload(raw_story_output: Any) -> dict[str, Any]:
     if not mode:
         mode = "jira" if _coerce_mapping(story_output.get("jira")) else "docs_tmp"
     if mode not in {"jira", "docs_tmp", "docs"}:
-        raise _invalid_task_request(
+        raise _invalid_workflow_request(
             "payload.task.storyOutput.mode must be one of: jira, docs_tmp, docs."
         )
 
@@ -5423,7 +5423,7 @@ def _normalize_task_tool(task_payload: dict[str, Any]) -> dict[str, Any] | None:
         selected_payload.get("type") or selected_payload.get("kind") or "skill"
     ).strip()
     if tool_type and tool_type.lower() != "skill":
-        raise _invalid_task_request(
+        raise _invalid_workflow_request(
             "payload.task.tool.type must be 'skill' for Temporal-backed submit."
         )
 
@@ -5444,7 +5444,7 @@ def _normalize_task_tool(task_payload: dict[str, Any]) -> dict[str, Any] | None:
         normalized["inputs"] = dict(inline_inputs)
     return normalized
 
-def _validate_task_runtime_requirements(
+def _validate_workflow_runtime_requirements(
     *,
     task_payload: dict[str, Any],
     normalized_tool: dict[str, Any] | None,
@@ -5482,7 +5482,7 @@ def _validate_task_runtime_requirements(
     if pr_selector or branch_selector:
         return
 
-    raise _invalid_task_request(
+    raise _invalid_workflow_request(
         "pr-resolver task requires payload.task.instructions, payload.task.inputs.pr, "
         "or payload.task.git.startingBranch."
     )
@@ -5534,7 +5534,7 @@ def _derive_task_title(task_payload: dict[str, Any]) -> str | None:
         return None
     return first_line[:_MAX_TASK_TITLE_LENGTH]
 
-def _derive_task_summary(
+def _derive_workflow_summary(
     task_payload: dict[str, Any], input_artifact_ref: str | None
 ) -> str:
     instructions = str(task_payload.get("instructions") or "").strip()
@@ -5558,18 +5558,18 @@ def _derive_task_summary(
         return f"Task instructions stored in artifact {input_artifact_ref}."
     return "Execution initialized."
 
-def _task_input_snapshot_ref_from_memo(
+def _workflow_input_snapshot_ref_from_memo(
     memo: Mapping[str, Any],
 ) -> str | None:
     value = memo.get("task_input_snapshot_ref") or memo.get("taskInputSnapshotRef")
     candidate = str(value or "").strip()
     return candidate or None
 
-def _task_input_snapshot_descriptor_from_record(
+def _workflow_input_snapshot_descriptor_from_record(
     record,
 ) -> WorkflowInputSnapshotDescriptorModel:
     memo = dict(getattr(record, "memo", None) or {})
-    artifact_ref = _task_input_snapshot_ref_from_memo(memo)
+    artifact_ref = _workflow_input_snapshot_ref_from_memo(memo)
     if artifact_ref:
         return WorkflowInputSnapshotDescriptorModel(
             available=True,
@@ -5577,7 +5577,7 @@ def _task_input_snapshot_descriptor_from_record(
             snapshotVersion=int(
                 memo.get("task_input_snapshot_version")
                 or memo.get("taskInputSnapshotVersion")
-                or _TASK_INPUT_SNAPSHOT_VERSION
+                or _WORKFLOW_INPUT_SNAPSHOT_VERSION
             ),
             sourceKind=str(
                 memo.get("task_input_snapshot_source_kind")
@@ -5628,7 +5628,7 @@ def _task_input_snapshot_descriptor_from_record(
         fallbackEvidenceRefs=fallback_refs,
     )
 
-def _build_original_task_input_snapshot_payload(
+def _build_original_workflow_input_snapshot_payload(
     *,
     source_kind: str,
     payload: Mapping[str, Any],
@@ -5653,7 +5653,7 @@ def _build_original_task_input_snapshot_payload(
         ),
     }
     return {
-        "snapshotVersion": _TASK_INPUT_SNAPSHOT_VERSION,
+        "snapshotVersion": _WORKFLOW_INPUT_SNAPSHOT_VERSION,
         "source": {
             "kind": source_kind,
             **({"sourceWorkflowId": source_workflow_id} if source_workflow_id else {}),
@@ -5666,7 +5666,7 @@ def _build_original_task_input_snapshot_payload(
         "excluded": {
             "schedule": (
                 "Schedule controls are creation-only and are not editable through "
-                "task edit/rerun."
+                "workflow edit/rerun."
             )
         },
     }
@@ -5815,7 +5815,7 @@ def _recovery_not_available_reason(exc: Exception) -> str:
     return "recovery_checkpoint_missing"
 
 
-def _snapshot_task_from_artifact_payload(
+def _snapshot_workflow_from_artifact_payload(
     artifact_payload: Mapping[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     draft = artifact_payload.get("draft")
@@ -5841,7 +5841,7 @@ def _snapshot_task_from_artifact_payload(
     return payload, task
 
 
-def _merge_task_preserving_artifact_instructions(
+def _merge_workflow_preserving_artifact_instructions(
     artifact_task: Mapping[str, Any],
     parameter_task: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -5908,7 +5908,7 @@ async def _snapshot_source_payload_from_parameters_and_artifact(
         decoded = json.loads(body.decode("utf-8"))
     except Exception as exc:
         logger.warning(
-            "Failed to hydrate task input snapshot from artifact %s: %s",
+            "Failed to hydrate workflow input snapshot from artifact %s: %s",
             artifact_id,
             exc,
         )
@@ -5916,7 +5916,7 @@ async def _snapshot_source_payload_from_parameters_and_artifact(
     if not isinstance(decoded, Mapping):
         return parameter_payload, parameter_task
 
-    artifact_payload, artifact_task = _snapshot_task_from_artifact_payload(decoded)
+    artifact_payload, artifact_task = _snapshot_workflow_from_artifact_payload(decoded)
     payload = {
         **artifact_payload,
         **{
@@ -5926,13 +5926,13 @@ async def _snapshot_source_payload_from_parameters_and_artifact(
         },
     }
     if artifact_task and parameter_task:
-        return payload, _merge_task_preserving_artifact_instructions(
+        return payload, _merge_workflow_preserving_artifact_instructions(
             artifact_task,
             parameter_task,
         )
     return payload, parameter_task or artifact_task
 
-async def _persist_original_task_input_snapshot(
+async def _persist_original_workflow_input_snapshot(
     *,
     session: AsyncSession,
     record,
@@ -5955,7 +5955,7 @@ async def _persist_original_task_input_snapshot(
     )
     if canonical_record is None:
         return ""
-    snapshot_payload = _build_original_task_input_snapshot_payload(
+    snapshot_payload = _build_original_workflow_input_snapshot_payload(
         source_kind=source_kind,
         payload=payload,
         task_payload=task_payload,
@@ -5982,7 +5982,7 @@ async def _persist_original_task_input_snapshot(
         },
         metadata_json={
             "artifact_class": _TASK_INPUT_SNAPSHOT_LINK_TYPE,
-            "snapshot_version": _TASK_INPUT_SNAPSHOT_VERSION,
+            "snapshot_version": _WORKFLOW_INPUT_SNAPSHOT_VERSION,
             "workflow_type": "MoonMind.Run",
             "source_kind": source_kind,
             "draft_shape": snapshot_payload["draft"]["taskShape"],
@@ -6004,7 +6004,7 @@ async def _persist_original_task_input_snapshot(
     for target_record in records_to_update:
         memo = dict(target_record.memo or {})
         memo["task_input_snapshot_ref"] = completed.artifact_id
-        memo["task_input_snapshot_version"] = _TASK_INPUT_SNAPSHOT_VERSION
+        memo["task_input_snapshot_version"] = _WORKFLOW_INPUT_SNAPSHOT_VERSION
         memo["task_input_snapshot_source_kind"] = source_kind
         target_record.memo = memo
         refs = list(target_record.artifact_refs or [])
@@ -6020,7 +6020,7 @@ async def _persist_original_task_input_snapshot(
     return completed.artifact_id
 
 
-async def _persist_original_task_input_snapshot_from_parameters(
+async def _persist_original_workflow_input_snapshot_from_parameters(
     *,
     session: AsyncSession,
     record: TemporalExecutionRecord | TemporalExecutionCanonicalRecord,
@@ -6046,7 +6046,7 @@ async def _persist_original_task_input_snapshot_from_parameters(
     )
     if not snapshot_task:
         return ""
-    return await _persist_original_task_input_snapshot(
+    return await _persist_original_workflow_input_snapshot(
         session=session,
         record=record,
         user=user,
@@ -6065,7 +6065,7 @@ async def _reuse_original_task_input_snapshot_from_source(
     target_record: TemporalExecutionRecord | TemporalExecutionCanonicalRecord,
 ) -> str:
     source_memo = dict(getattr(source_record, "memo", None) or {})
-    snapshot_ref = _task_input_snapshot_ref_from_memo(source_memo)
+    snapshot_ref = _workflow_input_snapshot_ref_from_memo(source_memo)
     if not snapshot_ref:
         return ""
     raw_version = source_memo.get("task_input_snapshot_version")
@@ -6075,10 +6075,10 @@ async def _reuse_original_task_input_snapshot_from_source(
         snapshot_version = (
             int(raw_version)
             if raw_version is not None
-            else _TASK_INPUT_SNAPSHOT_VERSION
+            else _WORKFLOW_INPUT_SNAPSHOT_VERSION
         )
     except (TypeError, ValueError):
-        snapshot_version = _TASK_INPUT_SNAPSHOT_VERSION
+        snapshot_version = _WORKFLOW_INPUT_SNAPSHOT_VERSION
     records_to_update: list[
         TemporalExecutionRecord | TemporalExecutionCanonicalRecord
     ] = []
@@ -6187,14 +6187,14 @@ async def _create_execution_from_task_request(
     principal_context: dict[str, Any] | None = None,
 ) -> ExecutionModel | ScheduleCreatedResponse:
     if str(request.type).strip().lower() != "task":
-        raise _invalid_task_request(
+        raise _invalid_workflow_request(
             "Only task-shaped submit requests can be mapped to Temporal executions."
         )
 
     payload = request.payload if isinstance(request.payload, dict) else {}
     task_payload = payload.get("task") if isinstance(payload.get("task"), dict) else {}
     if not task_payload:
-        raise _invalid_task_request(
+        raise _invalid_workflow_request(
             "Task-shaped Temporal submit requests require payload.task."
         )
 
@@ -6269,10 +6269,10 @@ async def _create_execution_from_task_request(
     depends_on = list(dict.fromkeys(d.strip() for d in raw_depends_on if d.strip()))
 
     if len(depends_on) > 10:
-        raise _invalid_task_request(f"{field_name} can have a maximum of 10 items.")
+        raise _invalid_workflow_request(f"{field_name} can have a maximum of 10 items.")
 
     if session is not None:
-        await _expand_goal_preset_for_task_submission(
+        await _expand_goal_preset_for_workflow_submission(
             task_payload=task_payload,
             request_payload=payload,
             session=session,
@@ -6297,7 +6297,7 @@ async def _create_execution_from_task_request(
 
     raw_repository = payload.get("repository")
     if raw_repository is not None and not isinstance(raw_repository, str):
-        raise _invalid_task_request("payload.repository must be a string.")
+        raise _invalid_workflow_request("payload.repository must be a string.")
     repository = raw_repository.strip() if isinstance(raw_repository, str) else None
     if repository == "":
         repository = None
@@ -6339,7 +6339,7 @@ async def _create_execution_from_task_request(
         payload.get("report_output"),
     )
     normalized_tool = _normalize_task_tool(task_payload)
-    publish_payload = _resolve_task_publish_payload(
+    publish_payload = _resolve_workflow_publish_payload(
         payload=payload,
         task_payload=task_payload,
         normalized_tool=normalized_tool,
@@ -6348,7 +6348,7 @@ async def _create_execution_from_task_request(
         task_payload.get("skills"),
         field_name="payload.task.skills",
     )
-    normalized_proposal_policy = _normalize_task_proposal_policy(
+    normalized_proposal_policy = _normalize_workflow_proposal_policy(
         task_payload.get("proposalPolicy")
     )
     propose_tasks = _coerce_bool(task_payload.get("proposeTasks"), default=False)
@@ -6415,14 +6415,14 @@ async def _create_execution_from_task_request(
     if isinstance(task_payload.get("git"), Mapping) and isinstance(
         task_payload["git"].get("targetBranch"), str
     ) and task_payload["git"]["targetBranch"].strip():
-        raise _invalid_task_request(
+        raise _invalid_workflow_request(
             "payload.task.git.targetBranch is not supported; use "
             "payload.task.git.branch."
         )
     if isinstance(task_payload.get("targetBranch"), str) and task_payload[
         "targetBranch"
     ].strip():
-        raise _invalid_task_request(
+        raise _invalid_workflow_request(
             "payload.task.targetBranch is not supported; use payload.task.git.branch."
         )
     if git_payload:
@@ -6450,7 +6450,7 @@ async def _create_execution_from_task_request(
                 dict(item) if isinstance(item, Mapping) else item for item in value
             ]
 
-    _validate_task_runtime_requirements(
+    _validate_workflow_runtime_requirements(
         task_payload=task_payload,
         normalized_tool=normalized_tool,
         normalized_task_for_planner=normalized_task_for_planner,
@@ -6463,7 +6463,7 @@ async def _create_execution_from_task_request(
     raw_target_runtime = (
         payload.get("targetRuntime")
         or runtime_payload.get("mode")
-        or settings.workflow.default_task_runtime
+        or settings.workflow.default_runtime
         or ""
     )
     raw_profile_id = str(
@@ -6486,7 +6486,7 @@ async def _create_execution_from_task_request(
     if raw_target_runtime:
         normalized_rt = normalize_runtime_id(raw_target_runtime)
         if normalized_rt not in _SUPPORTED_TASK_RUNTIMES:
-            raise _invalid_task_request(
+            raise _invalid_workflow_request(
                 f"Unsupported targetRuntime: {raw_target_runtime!r}. "
                 "Must be one of: codex_cli, gemini_cli, claude_code, codex_cloud, jules."
             )
@@ -6505,7 +6505,7 @@ async def _create_execution_from_task_request(
         from api_service.db.models import ManagedAgentProviderProfile
         _provider_profile = await session.get(ManagedAgentProviderProfile, raw_profile_id)
         if _provider_profile is None:
-            raise _invalid_task_request(
+            raise _invalid_workflow_request(
                 f"Provider profile not found: {raw_profile_id!r}."
             )
 
@@ -6566,7 +6566,7 @@ async def _create_execution_from_task_request(
             or payload.get("idempotencyKey"),
             repository=repository,
             integration=integration,
-            summary=_derive_task_summary(task_payload, input_artifact_ref),
+            summary=_derive_workflow_summary(task_payload, input_artifact_ref),
             start_delay=start_delay,
             scheduled_for=scheduled_for_dt,
         )
@@ -6586,7 +6586,7 @@ async def _create_execution_from_task_request(
         attachment_refs=attachment_index,
     )
 
-    snapshot_ref = await _persist_original_task_input_snapshot_from_parameters(
+    snapshot_ref = await _persist_original_workflow_input_snapshot_from_parameters(
         session=session,
         record=record,
         user=user,
@@ -6609,7 +6609,7 @@ async def _create_execution_from_manifest_request(
     user: User,
 ) -> ExecutionModel:
     if str(request.type).strip().lower() != "manifest":
-        raise _invalid_task_request(
+        raise _invalid_workflow_request(
             "Only manifest-shaped submit requests can be mapped to Temporal manifest executions."
         )
 
@@ -6618,7 +6618,7 @@ async def _create_execution_from_manifest_request(
         payload.get("manifest") if isinstance(payload.get("manifest"), dict) else {}
     )
     if not manifest_payload:
-        raise _invalid_task_request(
+        raise _invalid_workflow_request(
             "Manifest-shaped Temporal submit requests require payload.manifest."
         )
 
@@ -6757,10 +6757,10 @@ def _compute_schedule_delay(
     return delay
 
 def _build_recurring_target(request_payload: dict[str, Any]) -> dict[str, Any]:
-    """Transform a task request payload into a RecurringTasksService target.
+    """Transform a task request payload into a RecurringWorkflowsService target.
 
     Constructs the ``kind=queue_task`` envelope expected by
-    ``RecurringTasksService.create_definition()``.
+    ``RecurringWorkflowsService.create_definition()``.
     """
     target_payload = dict(request_payload)
     root_propose_tasks = target_payload.pop("proposeTasks", None)
@@ -6782,7 +6782,7 @@ def _build_recurring_target(request_payload: dict[str, Any]) -> dict[str, Any]:
             propose_tasks_value,
             default=False,
         )
-        normalized_proposal_policy = _normalize_task_proposal_policy(
+        normalized_proposal_policy = _normalize_workflow_proposal_policy(
             proposal_policy_value
         )
         if normalized_proposal_policy is not None:
@@ -6805,13 +6805,13 @@ async def _handle_recurring_schedule(
     user: User,
     session: Any,
 ) -> ScheduleCreatedResponse:
-    """Delegate recurring schedule creation to RecurringTasksService."""
-    from api_service.services.recurring_tasks_service import (
-        RecurringTaskValidationError,
-        RecurringTasksService,
+    """Delegate recurring schedule creation to RecurringWorkflowsService."""
+    from api_service.services.recurring_workflows_service import (
+        RecurringWorkflowValidationError,
+        RecurringWorkflowsService,
     )
 
-    svc = RecurringTasksService(session)
+    svc = RecurringWorkflowsService(session)
     target = _build_recurring_target(request_payload)
     scope_type = schedule.scope_type or "personal"
     if scope_type == "global" and not _is_execution_admin(user):
@@ -6836,11 +6836,11 @@ async def _handle_recurring_schedule(
             target=target,
             policy=schedule.policy,
         )
-    except RecurringTaskValidationError as exc:
+    except RecurringWorkflowValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
-                "code": "invalid_recurring_task",
+                "code": "invalid_recurring_workflow",
                 "message": str(exc),
             },
         ) from exc
@@ -6953,13 +6953,13 @@ async def create_remediation_execution(
     if "remediation" in body:
         remediation_payload = body.get("remediation")
         if not isinstance(remediation_payload, Mapping):
-            raise _invalid_task_request("task.remediation must be an object")
+            raise _invalid_workflow_request("task.remediation must be an object")
     else:
         remediation_payload = task_payload.get("remediation")
         if remediation_payload is not None and not isinstance(
             remediation_payload, Mapping
         ):
-            raise _invalid_task_request("task.remediation must be an object")
+            raise _invalid_workflow_request("task.remediation must be an object")
     remediation = (
         dict(remediation_payload) if isinstance(remediation_payload, Mapping) else {}
     )
@@ -7194,7 +7194,7 @@ async def create_execution(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
                 "code": "temporal_submit_disabled",
-                "message": "Temporal task submission is disabled (temporal_dashboard.submit_enabled=False). "
+                "message": "Temporal workflow submission is disabled (temporal_dashboard.submit_enabled=False). "
                 "The legacy queue execution substrate is no longer supported. "
                 "Enable Temporal submission to proceed.",
             },
@@ -7254,7 +7254,7 @@ async def create_execution(
             },
         ) from exc
 
-    snapshot_ref = await _persist_original_task_input_snapshot_from_parameters(
+    snapshot_ref = await _persist_original_workflow_input_snapshot_from_parameters(
         session=session,
         record=record,
         user=user,
@@ -8332,7 +8332,7 @@ async def describe_execution(
     )
     if not execution.agent_run_id:
         task_run_ids = await asyncio.to_thread(
-            _resolve_task_run_ids_from_managed_store,
+            _resolve_agent_run_ids_from_managed_store,
             (execution.workflow_id,),
         )
         task_run_id = task_run_ids.get(execution.workflow_id)
@@ -8443,7 +8443,7 @@ async def update_execution(
                 target_record=refreshed_record,
             )
         else:
-            snapshot_ref = await _persist_original_task_input_snapshot_from_parameters(
+            snapshot_ref = await _persist_original_workflow_input_snapshot_from_parameters(
                 session=session,
                 record=refreshed_record,
                 user=user,
@@ -8834,7 +8834,7 @@ async def rerun_execution(
             },
         ) from exc
 
-    snapshot_ref = await _persist_original_task_input_snapshot_from_parameters(
+    snapshot_ref = await _persist_original_workflow_input_snapshot_from_parameters(
         session=session,
         record=record,
         user=user,

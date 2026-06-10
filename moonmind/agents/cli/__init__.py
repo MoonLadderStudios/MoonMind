@@ -1,5 +1,5 @@
 """CLI helpers for MoonMind agents."""
 
-from .task_templates import TaskTemplateClient, merge_expanded_steps
+from .presets import PresetClient, merge_expanded_steps
 
-__all__ = ["TaskTemplateClient", "merge_expanded_steps"]
+__all__ = ["PresetClient", "merge_expanded_steps"]

@@ -537,7 +537,7 @@ class CodexWorkerConfig:
     live_session_rw_grant_ttl_minutes: int = 15
     live_session_allow_web: bool = False
     live_session_max_concurrent_per_worker: int = 4
-    enable_task_proposals: bool = False
+    enable_proposals: bool = False
     artifact_upload_incremental: bool = True
     step_log_max_bytes: int = _DEFAULT_STEP_LOG_MAX_BYTES
 
@@ -1082,20 +1082,20 @@ class CodexWorkerConfig:
             raise ValueError(
                 "MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER must be >= 1"
             )
-        enable_task_proposals_raw = (
+        enable_proposals_raw = (
             str(
                 source.get(
                     "MOONMIND_ENABLE_TASK_PROPOSALS",
                     source.get(
                         "ENABLE_TASK_PROPOSALS",
-                        str(settings.workflow.enable_task_proposals),
+                        str(settings.workflow.enable_proposals),
                     ),
                 )
             )
             .strip()
             .lower()
         )
-        enable_task_proposals = enable_task_proposals_raw not in {
+        enable_proposals = enable_proposals_raw not in {
             "0",
             "false",
             "no",
@@ -1193,7 +1193,7 @@ class CodexWorkerConfig:
             live_session_rw_grant_ttl_minutes=live_session_rw_grant_ttl_minutes,
             live_session_allow_web=live_session_allow_web,
             live_session_max_concurrent_per_worker=live_session_max_concurrent_per_worker,
-            enable_task_proposals=enable_task_proposals,
+            enable_proposals=enable_proposals,
             artifact_upload_incremental=artifact_upload_incremental,
             step_log_max_bytes=step_log_max_bytes,
         )
@@ -1834,8 +1834,8 @@ class QueueApiClient:
         except httpx.HTTPError as exc:
             raise QueueClientError(f"queue API request failed: {path}: {exc}") from exc
 
-    async def create_task_proposal(self, *, proposal: dict[str, Any]) -> dict[str, Any]:
-        """Submit a task proposal to the MoonMind API."""
+    async def create_workflow_proposal(self, *, proposal: dict[str, Any]) -> dict[str, Any]:
+        """Submit a workflow proposal to the MoonMind API."""
 
         return await self._post_json("/api/proposals", json=proposal)
 
@@ -2081,9 +2081,9 @@ class CodexWorker:
 
         resolved_steps = self._resolve_task_steps(canonical_payload)
         skill_meta = self._execution_metadata(canonical_payload, resolved_steps)
-        task_proposals_requested = self._task_proposals_requested(canonical_payload)
+        workflow_proposals_requested = self._workflow_proposals_requested(canonical_payload)
         proposal_workflow_enabled = (
-            self._config.enable_task_proposals and task_proposals_requested
+            self._config.enable_proposals and workflow_proposals_requested
         )
         await self._emit_event(
             job_id=job.id,
@@ -2666,7 +2666,7 @@ class CodexWorker:
                     cancel_event=cancel_requested_event,
                 )
                 try:
-                    proposal_artifacts = await self._run_post_task_proposal_skills(
+                    proposal_artifacts = await self._run_post_workflow_proposal_skills(
                         job=job,
                         canonical_payload=canonical_payload,
                         source_payload=job.payload,
@@ -2680,7 +2680,7 @@ class CodexWorker:
                     raise
                 except Exception:
                     logger.exception(
-                        "Post-task proposal skill execution failed for job %s", job.id
+                        "Post-workflow proposal skill execution failed for job %s", job.id
                     )
                     proposal_errors.append("proposal skill execution failed")
                     proposal_artifacts = []
@@ -2691,7 +2691,7 @@ class CodexWorker:
                     cancel_event=cancel_requested_event
                 )
                 try:
-                    submission_report = await self._maybe_submit_task_proposals(
+                    submission_report = await self._maybe_submit_workflow_proposals(
                         job=job,
                         prepared=prepared,
                         requested=True,
@@ -2709,7 +2709,7 @@ class CodexWorker:
                     raise
                 except Exception:
                     logger.exception(
-                        "Failed submitting post-task proposals for job %s", job.id
+                        "Failed submitting post-workflow proposals for job %s", job.id
                     )
                     proposal_errors.append("proposal submission failed")
                     proposal_report = ProposalSubmissionReport(
@@ -4253,7 +4253,7 @@ class CodexWorker:
             return False
         return default
 
-    def _task_proposals_requested(self, canonical_payload: Mapping[str, Any]) -> bool:
+    def _workflow_proposals_requested(self, canonical_payload: Mapping[str, Any]) -> bool:
         """Return whether post-run proposal generation is requested for this task."""
 
         task_node = canonical_payload.get("task")
@@ -8681,7 +8681,7 @@ class CodexWorker:
             },
         }
 
-    def _compose_post_task_proposal_instruction(
+    def _compose_post_workflow_proposal_instruction(
         self,
         *,
         canonical_payload: Mapping[str, Any],
@@ -8759,7 +8759,7 @@ class CodexWorker:
             "```\n"
         )
 
-    def _ensure_post_task_proposal_skills_materialized(
+    def _ensure_post_workflow_proposal_skills_materialized(
         self,
         *,
         job_id: UUID,
@@ -8798,7 +8798,7 @@ class CodexWorker:
             return False
         return True
 
-    def _normalize_post_task_proposal_artifacts(
+    def _normalize_post_workflow_proposal_artifacts(
         self,
         *,
         prepared: PreparedTaskWorkspace,
@@ -8953,7 +8953,7 @@ class CodexWorker:
         ]
 
     @staticmethod
-    def _write_task_proposal_seed(
+    def _write_workflow_proposal_seed(
         *,
         proposals_path: Path,
         candidates: Sequence[Mapping[str, Any]],
@@ -8975,21 +8975,21 @@ class CodexWorker:
 
         if not candidates:
             return []
-        proposal_output_path = prepared.artifacts_dir / "task_proposals.json"
-        self._write_task_proposal_seed(
+        proposal_output_path = prepared.artifacts_dir / "workflow_proposals.json"
+        self._write_workflow_proposal_seed(
             proposals_path=proposal_output_path,
             candidates=candidates,
         )
         return [
             ArtifactUpload(
                 path=proposal_output_path,
-                name="task_proposals.json",
+                name="workflow_proposals.json",
                 content_type="application/json",
                 required=False,
             )
         ]
 
-    async def _run_post_task_proposal_skills(
+    async def _run_post_workflow_proposal_skills(
         self,
         *,
         job: ClaimedJob,
@@ -9033,7 +9033,7 @@ class CodexWorker:
                 prepared=prepared,
                 candidates=deterministic_candidates,
             )
-        if not self._ensure_post_task_proposal_skills_materialized(
+        if not self._ensure_post_workflow_proposal_skills_materialized(
             job_id=job.id,
             prepared=prepared,
             selected_skills=selected_skills,
@@ -9050,15 +9050,15 @@ class CodexWorker:
                 candidates=deterministic_candidates,
             )
 
-        proposal_output_path = prepared.artifacts_dir / "task_proposals.json"
-        self._write_task_proposal_seed(
+        proposal_output_path = prepared.artifacts_dir / "workflow_proposals.json"
+        self._write_workflow_proposal_seed(
             proposals_path=proposal_output_path,
             candidates=deterministic_candidates,
         )
         proposal_output_path_for_skill = (
-            prepared.repo_dir / ".artifacts" / f"moonmind_task_proposals_{job.id}.json"
+            prepared.repo_dir / ".artifacts" / f"moonmind_workflow_proposals_{job.id}.json"
         )
-        self._write_task_proposal_seed(
+        self._write_workflow_proposal_seed(
             proposals_path=proposal_output_path_for_skill,
             candidates=deterministic_candidates,
         )
@@ -9101,7 +9101,7 @@ class CodexWorker:
                     step_id=skill_id,
                     step_index=skill_index,
                 )
-                instruction = self._compose_post_task_proposal_instruction(
+                instruction = self._compose_post_workflow_proposal_instruction(
                     canonical_payload=canonical_payload,
                     task_result=task_result,
                     skill_id=skill_id,
@@ -9191,14 +9191,14 @@ class CodexWorker:
                     payload={"skillId": skill_id},
                 )
                 logger.exception(
-                    "Post-task proposal skill failed for job %s skill=%s",
+                    "Post-workflow proposal skill failed for job %s skill=%s",
                     job.id,
                     skill_id,
                 )
                 continue
 
             collected.extend(
-                self._normalize_post_task_proposal_artifacts(
+                self._normalize_post_workflow_proposal_artifacts(
                     prepared=prepared,
                     skill_id=skill_id,
                 )
@@ -9271,7 +9271,7 @@ class CodexWorker:
             collected.append(
                 ArtifactUpload(
                     path=proposal_output_path,
-                    name="task_proposals.json",
+                    name="workflow_proposals.json",
                     content_type="application/json",
                     required=False,
                 )
@@ -12114,7 +12114,7 @@ class CodexWorker:
                 )
         return optional_failures
 
-    async def _maybe_submit_task_proposals(
+    async def _maybe_submit_workflow_proposals(
         self,
         *,
         job: ClaimedJob,
@@ -12129,11 +12129,11 @@ class CodexWorker:
         errors: list[str] = []
         generated_count = 0
         task_context_path = prepared.task_context_path
-        proposals_paths = [task_context_path / "task_proposals.json"]
+        proposals_paths = [task_context_path / "workflow_proposals.json"]
         if task_context_path.suffix == ".json":
             proposals_paths.insert(
                 0,
-                task_context_path.with_name("task_proposals.json"),
+                task_context_path.with_name("workflow_proposals.json"),
             )
         proposals_path = next(
             (path for path in proposals_paths if path.exists()),
@@ -12141,7 +12141,7 @@ class CodexWorker:
         )
         if proposals_path is None:
             logger.debug(
-                "No task proposal artifact found for job %s; searched %s",
+                "No workflow proposal artifact found for job %s; searched %s",
                 job.id,
                 ", ".join(str(path) for path in proposals_paths),
             )
@@ -12157,10 +12157,10 @@ class CodexWorker:
             parsed = json.loads(raw_text)
         except Exception:
             logger.warning(
-                "Task proposal file %s is missing or invalid JSON; skipping",
+                "Workflow proposal file %s is missing or invalid JSON; skipping",
                 proposals_path,
             )
-            errors.append("task_proposals.json is invalid")
+            errors.append("workflow_proposals.json is invalid")
             return ProposalSubmissionReport(
                 requested=requested,
                 hook_skills=resolved_hook_skills,
@@ -12176,7 +12176,7 @@ class CodexWorker:
         project_repository = str(canonical_payload.get("repository") or "").strip()
         if not project_repository:
             logger.warning(
-                "Skipping task proposal submission for job %s: canonical repository missing",
+                "Skipping workflow proposal submission for job %s: canonical repository missing",
                 job.id,
             )
             errors.append("canonical repository missing")
@@ -12209,7 +12209,7 @@ class CodexWorker:
             default_max_items_project=defaults.proposal_max_items_project,
             default_max_items_moonmind=defaults.proposal_max_items_moonmind,
             default_moonmind_severity_floor=defaults.proposal_moonmind_severity_floor,
-            severity_vocabulary=settings.task_proposals.severity_vocabulary,
+            severity_vocabulary=settings.workflow_proposals.severity_vocabulary,
         )
         approved_ci_tags = _MOONMIND_SIGNAL_TAGS
 
@@ -12275,7 +12275,7 @@ class CodexWorker:
                     proposals_path=proposals_path,
                 ):
                     try:
-                        response = await self._queue_client.create_task_proposal(
+                        response = await self._queue_client.create_workflow_proposal(
                             proposal=project_payload
                         )
                         outcome = self._proposal_submission_outcome(response)
@@ -12338,11 +12338,11 @@ class CodexWorker:
                 )
                 if _ensure_task_request_repository(
                     moonmind_payload,
-                    repository=settings.task_proposals.moonmind_ci_repository,
+                    repository=settings.workflow_proposals.moonmind_ci_repository,
                     proposals_path=proposals_path,
                 ):
                     try:
-                        response = await self._queue_client.create_task_proposal(
+                        response = await self._queue_client.create_workflow_proposal(
                             proposal=moonmind_payload
                         )
                         outcome = self._proposal_submission_outcome(response)
@@ -12373,7 +12373,7 @@ class CodexWorker:
                         )
         if submitted:
             logger.info(
-                "Submitted %s task proposal(s) for job %s from %s",
+                "Submitted %s workflow proposal(s) for job %s from %s",
                 submitted,
                 job.id,
                 proposals_path,
