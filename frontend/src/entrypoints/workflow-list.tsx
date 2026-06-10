@@ -251,14 +251,14 @@ function displayTemporalCount(count: number | null | undefined, countMode: strin
 
 function formatPercent(value: number | null | undefined): string {
   if (typeof value !== 'number' || Number.isNaN(value)) return '—';
-  return new Intl.NumberFormat(undefined, {
+  return new Intl.NumberFormat('en-US', {
     style: 'percent',
     maximumFractionDigits: 1,
   }).format(value);
 }
 
 function formatDuration(seconds: number | null | undefined): string {
-  if (typeof seconds !== 'number' || Number.isNaN(seconds)) return '—';
+  if (typeof seconds !== 'number' || Number.isNaN(seconds) || seconds < 0) return '—';
   if (seconds < 60) return `${Math.round(seconds)}s`;
 
   const roundedSeconds = Math.round(seconds);
@@ -271,7 +271,7 @@ function formatDuration(seconds: number | null | undefined): string {
 
 function formatUsd(value: number | null | undefined): string {
   if (typeof value !== 'number' || Number.isNaN(value)) return '—';
-  return new Intl.NumberFormat(undefined, {
+  return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
     maximumFractionDigits: value >= 10 ? 2 : 4,
@@ -1532,32 +1532,36 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               Operational metrics are unavailable.
             </div>
           ) : null}
-          <dl className="workflow-list-metrics-grid">
-            <div className="workflow-list-metric-tile">
-              <dt>Runs</dt>
-              <dd>{metricsQuery.isLoading ? '—' : String(metrics?.totalRuns ?? 0)}</dd>
-              <p>{metrics?.terminalRuns ?? 0} terminal from {metrics?.sampleSize ?? 0} sampled</p>
-            </div>
-            <div className="workflow-list-metric-tile">
-              <dt>Success Rate</dt>
-              <dd>{metricsQuery.isLoading ? '—' : formatPercent(metrics?.successRate)}</dd>
-              <p>{metrics?.completedRuns ?? 0} completed, {metrics?.failedRuns ?? 0} failed</p>
-            </div>
-            <div className="workflow-list-metric-tile">
-              <dt>Run Duration</dt>
-              <dd>{metricsQuery.isLoading ? '—' : formatDuration(metrics?.duration?.averageSeconds)}</dd>
-              <p>Median {formatDuration(metrics?.duration?.medianSeconds)} across {metrics?.duration?.observedCount ?? 0} runs</p>
-            </div>
-            <div className="workflow-list-metric-tile">
-              <dt>Cost</dt>
-              <dd>{metricsQuery.isLoading ? '—' : formatUsd(metrics?.cost?.totalEstimateUsd)}</dd>
-              <p>Average {formatUsd(metrics?.cost?.averageEstimateUsd)} across {metrics?.cost?.observedCount ?? 0} runs</p>
-            </div>
-          </dl>
-          <p className="small workflow-list-metrics-refreshed">
-            Refreshed {metricsRefreshedAt}
-            {metrics?.countMode && metrics.countMode !== 'exact' ? ' · count estimate' : ''}
-          </p>
+          {!metricsQuery.isLoading && !metricsQuery.isError && metrics ? (
+            <>
+              <dl className="workflow-list-metrics-grid">
+                <div className="workflow-list-metric-tile">
+                  <dt>Runs</dt>
+                  <dd>{String(metrics.totalRuns ?? 0)}</dd>
+                  <p>{metrics.terminalRuns ?? 0} terminal from {metrics.sampleSize ?? 0} sampled</p>
+                </div>
+                <div className="workflow-list-metric-tile">
+                  <dt>Success Rate</dt>
+                  <dd>{formatPercent(metrics.successRate)}</dd>
+                  <p>{metrics.completedRuns ?? 0} completed, {metrics.failedRuns ?? 0} failed</p>
+                </div>
+                <div className="workflow-list-metric-tile">
+                  <dt>Run Duration</dt>
+                  <dd>{formatDuration(metrics.duration?.averageSeconds)}</dd>
+                  <p>Median {formatDuration(metrics.duration?.medianSeconds)} across {metrics.duration?.observedCount ?? 0} runs</p>
+                </div>
+                <div className="workflow-list-metric-tile">
+                  <dt>Cost</dt>
+                  <dd>{formatUsd(metrics.cost?.totalEstimateUsd)}</dd>
+                  <p>Average {formatUsd(metrics.cost?.averageEstimateUsd)} across {metrics.cost?.observedCount ?? 0} runs</p>
+                </div>
+              </dl>
+              <p className="small workflow-list-metrics-refreshed">
+                Refreshed {metricsRefreshedAt}
+                {metrics.countMode && metrics.countMode !== 'exact' ? ' · count estimate' : ''}
+              </p>
+            </>
+          ) : null}
         </section>
         {isLoading ? (
           <p className="loading workflow-list-empty-message">Loading workflows...</p>

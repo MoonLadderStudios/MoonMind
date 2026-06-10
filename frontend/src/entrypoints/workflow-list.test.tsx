@@ -198,6 +198,131 @@ describe('Workflows Entrypoint', () => {
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/metrics?'))).toBe(true);
   });
 
+  it('does not render placeholder operational metric details while metrics are loading', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/executions/metrics?')) {
+        return new Promise(() => {}) as Promise<Response>;
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          items: [
+            {
+              taskId: 'task-123',
+              source: 'temporal',
+              title: 'Example task',
+              status: 'completed',
+              state: 'completed',
+              rawState: 'completed',
+              createdAt: '2026-03-28T00:00:00Z',
+            },
+          ],
+        }),
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    expect(screen.getByLabelText('Operational metrics')).toBeTruthy();
+    expect(screen.queryByText('0 terminal from 0 sampled')).toBeNull();
+    expect(screen.queryByText('0 completed, 0 failed')).toBeNull();
+    expect(screen.queryByText(/^Refreshed /)).toBeNull();
+  });
+
+  it('does not render placeholder operational metric details when metrics fail', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/executions/metrics?')) {
+        return Promise.resolve({
+          ok: false,
+          statusText: 'Service Unavailable',
+          json: async () => ({}),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          items: [
+            {
+              taskId: 'task-123',
+              source: 'temporal',
+              title: 'Example task',
+              status: 'completed',
+              state: 'completed',
+              rawState: 'completed',
+              createdAt: '2026-03-28T00:00:00Z',
+            },
+          ],
+        }),
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    expect(await screen.findByText('Operational metrics are unavailable.')).toBeTruthy();
+    expect(screen.queryByText('0 terminal from 0 sampled')).toBeNull();
+    expect(screen.queryByText('0 completed, 0 failed')).toBeNull();
+    expect(screen.queryByText(/^Refreshed /)).toBeNull();
+  });
+
+  it('renders negative operational metric durations as unavailable', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/executions/metrics?')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            totalRuns: 1,
+            completedRuns: 1,
+            failedRuns: 0,
+            canceledRuns: 0,
+            terminalRuns: 1,
+            successRate: 1,
+            duration: {
+              averageSeconds: -10,
+              medianSeconds: -5,
+              observedCount: 1,
+            },
+            cost: {
+              totalEstimateUsd: 0,
+              averageEstimateUsd: 0,
+              observedCount: 1,
+            },
+            sampleSize: 1,
+            countMode: 'exact',
+            refreshedAt: '2026-03-28T00:00:10Z',
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          items: [
+            {
+              taskId: 'task-123',
+              source: 'temporal',
+              title: 'Example task',
+              status: 'completed',
+              state: 'completed',
+              rawState: 'completed',
+              createdAt: '2026-03-28T00:00:00Z',
+            },
+          ],
+        }),
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    expect(await screen.findByText('Median — across 1 runs')).toBeTruthy();
+    expect(screen.queryByText('-10s')).toBeNull();
+    expect(screen.queryByText('-5s')).toBeNull();
+  });
+
   it('surfaces intervention requests in list rows and status filters', async () => {
     fetchSpy.mockResolvedValue({
       ok: true,

@@ -11,14 +11,14 @@ function formatPercent(value: number | null | undefined): string {
   if (typeof value !== 'number' || Number.isNaN(value)) {
     return '—';
   }
-  return new Intl.NumberFormat(undefined, {
+  return new Intl.NumberFormat('en-US', {
     style: 'percent',
     maximumFractionDigits: 1,
   }).format(value);
 }
 
 function formatDuration(seconds: number | null | undefined): string {
-  if (typeof seconds !== 'number' || Number.isNaN(seconds)) {
+  if (typeof seconds !== 'number' || Number.isNaN(seconds) || seconds < 0) {
     return '—';
   }
   if (seconds < 60) {
@@ -40,7 +40,7 @@ function formatUsd(value: number | null | undefined): string {
   if (typeof value !== 'number' || Number.isNaN(value)) {
     return '—';
   }
-  return new Intl.NumberFormat(undefined, {
+  return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
     maximumFractionDigits: value >= 10 ? 2 : 4,
@@ -119,33 +119,37 @@ export function WorkflowsHomePage({ payload }: { payload: BootPayload }) {
           </p>
         ) : null}
 
-        <dl className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <MetricTile
-            label="Runs"
-            value={String(metrics?.totalRuns ?? '—')}
-            detail={`${metrics?.terminalRuns ?? 0} terminal from ${metrics?.sampleSize ?? 0} sampled`}
-          />
-          <MetricTile
-            label="Success Rate"
-            value={formatPercent(metrics?.successRate)}
-            detail={`${metrics?.completedRuns ?? 0} completed, ${metrics?.failedRuns ?? 0} failed`}
-          />
-          <MetricTile
-            label="Run Duration"
-            value={formatDuration(duration?.averageSeconds)}
-            detail={`Median ${formatDuration(duration?.medianSeconds)} across ${duration?.observedCount ?? 0} runs`}
-          />
-          <MetricTile
-            label="Cost"
-            value={formatUsd(cost?.totalEstimateUsd)}
-            detail={`Average ${formatUsd(cost?.averageEstimateUsd)} across ${cost?.observedCount ?? 0} runs`}
-          />
-        </dl>
+        {!metricsQuery.isLoading && !metricsQuery.isError && metrics ? (
+          <>
+            <dl className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <MetricTile
+                label="Runs"
+                value={String(metrics.totalRuns ?? '—')}
+                detail={`${metrics.terminalRuns ?? 0} terminal from ${metrics.sampleSize ?? 0} sampled`}
+              />
+              <MetricTile
+                label="Success Rate"
+                value={formatPercent(metrics.successRate)}
+                detail={`${metrics.completedRuns ?? 0} completed, ${metrics.failedRuns ?? 0} failed`}
+              />
+              <MetricTile
+                label="Run Duration"
+                value={formatDuration(duration?.averageSeconds)}
+                detail={`Median ${formatDuration(duration?.medianSeconds)} across ${duration?.observedCount ?? 0} runs`}
+              />
+              <MetricTile
+                label="Cost"
+                value={formatUsd(cost?.totalEstimateUsd)}
+                detail={`Average ${formatUsd(cost?.averageEstimateUsd)} across ${cost?.observedCount ?? 0} runs`}
+              />
+            </dl>
 
-        <p className="text-xs text-slate-500 dark:text-slate-400">
-          Refreshed {refreshedAt}
-          {metrics?.countMode === 'estimated_or_unknown' ? ' · count estimate' : ''}
-        </p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Refreshed {refreshedAt}
+              {metrics.countMode === 'estimated_or_unknown' ? ' · count estimate' : ''}
+            </p>
+          </>
+        ) : null}
       </section>
     </main>
   );

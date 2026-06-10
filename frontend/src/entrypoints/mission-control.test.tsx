@@ -219,6 +219,85 @@ describe('Mission Control shared entry', () => {
     expect(screen.getByText('Average $0.3527 across 35 runs')).toBeTruthy();
   });
 
+  it('does not render placeholder operational metric details while home metrics are loading', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/executions/metrics?scope=tasks&sampleSize=500') {
+        return new Promise(() => {}) as Promise<Response>;
+      }
+      if (url === '/api/v1/secrets') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [] }),
+        } as Response);
+      }
+      if (url === '/api/v1/provider-profiles') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [],
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 404,
+        statusText: 'Not Found',
+        text: async () => 'Unhandled fetch',
+      } as Response);
+    });
+
+    renderWithClient(<MissionControlApp payload={{ page: 'workflows-home', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Loading operational metrics...')).toBeTruthy();
+    expect(screen.queryByText('0 terminal from 0 sampled')).toBeNull();
+    expect(screen.queryByText('0 completed, 0 failed')).toBeNull();
+    expect(screen.queryByText(/^Refreshed /)).toBeNull();
+  });
+
+  it('renders negative home metric durations as unavailable', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/executions/metrics?scope=tasks&sampleSize=500') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ...mockExecutionMetricsResponse(),
+            duration: {
+              averageSeconds: -3661,
+              medianSeconds: -91,
+              minSeconds: -91,
+              maxSeconds: -1,
+              observedCount: 35,
+            },
+          }),
+        } as Response);
+      }
+      if (url === '/api/v1/secrets') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [] }),
+        } as Response);
+      }
+      if (url === '/api/v1/provider-profiles') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [],
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 404,
+        statusText: 'Not Found',
+        text: async () => 'Unhandled fetch',
+      } as Response);
+    });
+
+    renderWithClient(<MissionControlApp payload={{ page: 'workflows-home', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Median — across 35 runs')).toBeTruthy();
+    expect(screen.queryByText('-1h 1m')).toBeNull();
+    expect(screen.queryByText('-1m 31s')).toBeNull();
+  });
+
   it('uses the constrained shell by default for non-table pages', async () => {
     renderWithClient(<MissionControlApp payload={{ page: 'workflows-home', apiBase: '/api' }} />);
 
