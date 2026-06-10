@@ -1,4 +1,4 @@
-# 🌙 MoonMind — Mission control for your AI agents
+# 🌙 MoonMind — Safety, resiliency, and observability for Claude Code and Codex CLI
 
 <p align="center">
     <picture>
@@ -7,7 +7,9 @@
     </picture>
 </p>
 
-MoonMind is an open-source platform that orchestrates Claude Code, Codex, and other agents, adding safety, resiliency, and observability.
+MoonMind is an open-source control plane that makes Claude Code and Codex CLI **safer**, more **resilient**, and more **observable** by wrapping agent CLI runs in durable workflows, provider-profile policy, isolated execution, artifact-backed logs, diagnostics, and Mission Control.
+
+MoonMind does not replace your agent. It gives your agent an operational envelope.
 
 ## Quick Start
 
@@ -19,7 +21,7 @@ MoonMind is an open-source platform that orchestrates Claude Code, Codex, and ot
 6. In Settings:
     - Add a GitHub personal access token
     - Add an API key or click OAuth to authenticate a provider profile
-    - Configure any other secrets or setting you want to adjust for your first task
+    - Configure any other secrets or settings you want to adjust for your first task
 7. Click Create and submit a task!
 
 `.env` is optional for normal local startup. Use `.env-template` only when you want to override defaults or preconfigure advanced settings before launch.
@@ -34,25 +36,68 @@ If you already have a subscription with a model provider:
 
 ## Why MoonMind?
 
-### 🛰️ Bring Your Own Agent — or let MoonMind run one for you
-Other platforms make you rebuild agents in their SDK. MoonMind operates at a higher level of abstraction, orchestrating state-of-the-art agents out of the box.
-- **Managed Sessions and Managed Runs:** MoonMind can run owned CLI runtimes on your own infrastructure using your existing subscriptions or API keys. Codex CLI is the live first-class task-scoped managed-session runtime. Claude Code is a first-class managed-runtime target and has Claude-specific session design models, but it does not yet enter the live task-scoped managed-session controller path. Gemini CLI remains a managed-runtime target that can adopt the same session pattern where its adapter supports it.
-- **External Delegated Agents:** Cloud-hosted agents like Jules and Codex Cloud are coordinated through external-agent adapters. MoonMind tracks status, injects context, and closes the feedback loop even when it does not own the provider's runtime envelope.
-- **Sandboxed Execution:** Managed runtime sessions and specialized workload containers run through controlled Docker boundaries with strict capability routing. File allowlists restrict modifications, and credentials are automatically sanitized from logs.
-- **Personal-use friendly defaults:** A fresh local install should boot successfully with `docker compose up -d`, then let you enter a small number of secrets in Mission Control instead of forcing enterprise-only secret infrastructure up front.
+Claude Code and Codex CLI are remarkable agents, but long-running autonomous work needs more than a terminal process:
 
-### 1️⃣ Orchestration Starts At One
-You don't need ten agents to benefit from a task execution system. MoonMind supercharges the planning, resiliency, and context management of even a single agent.
-- **Mission Control:** See what your agent is doing in real time. Track run status, inspect per-step progress, open step-scoped logs and diagnostics, browse generated artifacts, monitor intervention requests, and audit execution histories from a single UI.
-- **Scheduled & Recurring Tasks:** Schedule a heavy job to run overnight when tokens are cheaper, plan a server reboot and get an alert if it fails, or set up a recurring cron schedule for daily issue triaging.
-- **Fire-and-Forget Resiliency:** Submit a refactoring job, close your laptop, and let MoonMind handle the rest. Backed by [Temporal](https://temporal.io/), workflows survive container crashes and restarts. Automatic stuck detection and smart retries keep your agent on track — and off your API bill.
-- **Step-Based Context Management:** Agents perform better on small, focused tasks. Inject the right context into each step and clear it between steps.
+- What credentials did the agent receive, and what provider and model policy was used?
+- What happened before the run failed, stalled, or hit a rate limit?
+- Can I close my laptop and trust the workflow to continue?
+- Can I inspect logs, diagnostics, artifacts, and step evidence after the fact?
+- Can I run build and test containers without handing the agent the host Docker socket?
+- Can I intervene, clear context, retry, or recover without losing the audit trail?
+
+MoonMind exists to answer those questions. Progress against each promise below is tracked milestone-by-milestone in the [MoonMind Roadmap](docs/MoonMindRoadmap.md).
+
+### 🛡️ Safety — boundaries the agent can't cross
+
+An autonomous agent with your credentials and a shell is a liability unless something constrains it. MoonMind builds the constraints into the execution substrate rather than trusting the agent to behave:
+
+- **Provider Profiles as policy.** A profile binds runtime, provider, credential source, materialization, concurrency slots, cooldowns, and routing into one declared contract — so model and credential policy is explicit per run, never ambient environment state.
+- **Sandboxed execution.** Managed runtime sessions and specialized workloads run in isolated Docker boundaries with strict capability routing. Ordinary sessions get a private sidecar Docker daemon — never the host socket. File allowlists restrict what a run may modify.
+- **Secrets stay out of the blast radius.** Durable contracts carry secret *references*, never raw values; credentials are resolved only at controlled launch boundaries and automatically redacted from logs, artifacts, and outbound text. OAuth credentials live in isolated per-runtime volumes, so one runtime cannot read another's auth state.
+- **Outbound scanning.** A high-security mode adds deterministic secret scans at outbound boundaries — before an agent posts a PR comment, pushes a commit, or publishes an artifact.
+- **Fail-fast, not fall-back.** Missing or revoked credentials produce explicit, actionable failures. MoonMind never silently substitutes an alternate credential source or rewrites billing-relevant values like model identifiers.
+
+Where this is headed: typed policy envelopes that declare per-run what an agent may touch, governance telemetry that records every privileged action an agent took and why, and a complete audit trail for the secret lifecycle — creation, rotation, reference, and every launch that resolved one. The goal is that granting an agent autonomy never means granting it trust.
+
+### 🔁 Resiliency — fire and forget, literally
+
+Submit a refactoring job, close your laptop, and let MoonMind handle the rest. Every run is backed by [Temporal](https://temporal.io/), so workflows survive container crashes, worker restarts, and host reboots:
+
+- **Durable step ledger and checkpoints.** Long tasks are decomposed into steps whose state, attempts, and outputs are persisted as immutable artifacts. When a step fails, you resume from the last good checkpoint — completed work is never re-bought.
+- **Stuck detection and escalating intervention.** MoonMind detects looping or silently stalled agents and applies escalating responses — soft reset, hard reset, termination — before they burn through your API budget.
+- **Rate limits as a first-class citizen.** Runtime strategies recognize provider rate-limit signals in live output and respond with slot-based concurrency control and cooldowns instead of blind retry storms.
+- **Idempotent by design.** Externally visible side effects — starting runs, publishing results, posting to GitHub or Jira — are retry-safe, so a crash mid-operation never produces duplicates.
+- **Scheduled and recurring tasks.** Run heavy jobs overnight when tokens are cheaper, or put issue triage on a cron schedule and get alerted on failure.
+
+Where this is headed: self-healing remediation workflows — already taking shape in the codebase — where a dedicated supervisor can target a failed run, read its durable evidence, and execute typed recovery actions (resume, retry, interrupt, clear) with privilege separation and a full audit trail. The aspiration is a system where a failed run at 3 a.m. is diagnosed, repaired, and resumed before you wake up.
+
+### 🔭 Observability — know what your agent actually did
+
+"It finished" is not an answer. MoonMind treats every run as an evidence-producing process:
+
+- **Mission Control.** Track run status in real time, inspect per-step progress, open step-scoped logs and diagnostics, browse generated artifacts, monitor intervention requests, and audit execution histories from a single UI.
+- **Live logs as a session-aware timeline.** Merged stdout/stderr/system/session events stream over SSE into one ordered, run-global sequence — with durable artifact-backed replay after the run ends. Session boundaries, resets, and epochs are explicit, observable events.
+- **Artifact-first outputs.** Prompts, transcripts, diffs, and diagnostics are stored as immutable, content-addressed artifacts rather than buried in process logs, so every run's evidence outlives the container that produced it.
+- **Correlated structured logs.** Every log line carries correlation IDs tying it to its workflow, run, activity, and trace — "what happened?" is answerable without reading raw worker internals.
+
+Where this is headed: end-to-end OpenTelemetry tracing from API request through workflow, activity, and provider call — with token and cost attribution per step, so you can see not just what an agent did but what it cost. The aspiration is that any question about a run — what it changed, what it spent, why it failed — has a durable, queryable answer.
+
+### 🛰️ Bring Your Own Agent — or let MoonMind run one for you
+
+Other platforms make you rebuild agents in their SDK. MoonMind operates at a higher level of abstraction, orchestrating state-of-the-art agents out of the box:
+
+- **Managed sessions and managed runs.** MoonMind runs owned CLI runtimes on your own infrastructure using your existing subscriptions or API keys. Codex CLI is the live first-class task-scoped managed-session runtime; Claude Code is a first-class managed-runtime target with Claude-specific session design models on the path to the same live session controller. Gemini CLI can adopt the same session pattern where its adapter supports it.
+- **External delegated agents.** Cloud-hosted agents like Jules and Codex Cloud are coordinated through external-agent adapters. MoonMind tracks status, injects context, and closes the feedback loop even when it doesn't own the provider's runtime envelope.
+- **Step-based context management.** Agents perform better on small, focused tasks. MoonMind injects the right context into each step and clears it between steps to prevent context-window pollution.
+- **Personal-use friendly defaults.** A fresh local install boots with `docker compose up -d`; enter a few secrets in Mission Control and go — no enterprise secret infrastructure required up front.
 
 ### 🔓 Free Yourself from Vendor Lock-In
-MoonMind supports multiple agent runtimes with multiple model providers behind those runtimes and will be adding support for many more.
-* **Open-Source:** MoonMind is 100% free and open-source software.
-* **Workflow Portability:** Swap between proprietary cloud models and local open-source models with a single configuration change. Only use expensive models for the steps that actually need them.
-* **Own Your Data:** Context, artifacts, and memory are stored on your infrastructure. Switch providers without losing what your agents have learned.
+
+MoonMind supports multiple agent runtimes with multiple model providers behind them, and is adding more.
+
+* **Open-source.** MoonMind is 100% free and open-source software.
+* **Workflow portability.** Swap between proprietary cloud models and local open-source models with a single configuration change. Use expensive models only for the steps that need them.
+* **Own your data.** Context, artifacts, and memory are stored on your infrastructure. Switch providers without losing what your agents have learned.
 
 ## Architecture
 
