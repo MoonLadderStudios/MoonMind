@@ -4245,36 +4245,6 @@ function ArtifactBrowserPanel({
   );
 }
 
-function StepDagOverview({
-  snapshot,
-}: {
-  snapshot: z.infer<typeof StepLedgerSnapshotSchema>;
-}) {
-  return (
-    <section className="step-dag-panel" aria-label="Step DAG visualization">
-      <h4>Step DAG</h4>
-      <div className="step-dag-grid">
-        {snapshot.steps.map((step) => (
-          <article key={step.logicalStepId} className="step-dag-node">
-            <div className="step-dag-node-header">
-              <strong>{step.title}</strong>
-              <span {...executionStatusPillProps(step.status)}>
-                {formatStatusLabel(step.status)}
-              </span>
-            </div>
-            <div className="small">
-              <code>{step.logicalStepId}</code>
-            </div>
-            <div className="small">
-              Depends on: {step.dependsOn.length > 0 ? step.dependsOn.join(', ') : 'start'}
-            </div>
-          </article>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 function InterventionMonitorPanel({
   execution,
 }: {
@@ -5580,26 +5550,23 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
               ) : stepsQuery.isError ? (
                 <div className="notice error">{(stepsQuery.error as Error).message}</div>
               ) : stepsQuery.data ? (
-                <>
-                  <StepDagOverview snapshot={stepsQuery.data} />
-                  <div className="step-tl-list">
-                    {stepsQuery.data.steps.map((row, idx) => (
-                      <StepLedgerRowCard
-                        key={row.logicalStepId}
-                        apiBase={payload.apiBase}
-                        logStreamingEnabled={logStreamingEnabled}
-                        sessionTimelineEnabled={sessionTimelineEnabled}
-                        structuredHistoryEnabled={structuredHistoryEnabled}
-                        row={row}
-                        runId={latestRunId}
-                        expanded={Boolean(expandedSteps[row.logicalStepId])}
-                        onToggle={() => toggleStep(row.logicalStepId)}
-                        isLast={idx === stepsQuery.data.steps.length - 1}
-                        routes={taskRunRoutes}
-                      />
-                    ))}
-                  </div>
-                </>
+                <div className="step-tl-list">
+                  {stepsQuery.data.steps.map((row, idx) => (
+                    <StepLedgerRowCard
+                      key={row.logicalStepId}
+                      apiBase={payload.apiBase}
+                      logStreamingEnabled={logStreamingEnabled}
+                      sessionTimelineEnabled={sessionTimelineEnabled}
+                      structuredHistoryEnabled={structuredHistoryEnabled}
+                      row={row}
+                      runId={latestRunId}
+                      expanded={Boolean(expandedSteps[row.logicalStepId])}
+                      onToggle={() => toggleStep(row.logicalStepId)}
+                      isLast={idx === stepsQuery.data.steps.length - 1}
+                      routes={taskRunRoutes}
+                    />
+                  ))}
+                </div>
               ) : (
                 <p className="small">No step ledger available for this execution.</p>
               )}
