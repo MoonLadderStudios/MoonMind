@@ -9002,16 +9002,9 @@ async def recover_execution_from_selected_step(
             },
         ) from exc
 
-    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
-    canonical = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
-    if canonical is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "execution_not_found",
-                "message": "Source execution was not found or is not visible.",
-            },
-        )
+    canonical = await _get_owned_execution(
+        service=service, workflow_id=workflow_id, user=user
+    )
     if request.source_workflow_id != canonical.workflow_id:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -9033,6 +9026,15 @@ async def recover_execution_from_selected_step(
     checkpoint_ref = request.recovery_checkpoint_ref or _recovery_checkpoint_ref_from_record(
         canonical
     )
+    if not checkpoint_ref:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "resume_not_available",
+                "message": "Selected-step recovery requires a valid checkpoint reference.",
+                "reason": "checkpoint_missing",
+            },
+        )
     if _recovery_evidence_marked_stale(canonical):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -9050,7 +9052,7 @@ async def recover_execution_from_selected_step(
     try:
         result = await service.create_failed_step_recovery_execution(
             canonical,
-            recovery_checkpoint_ref=request.recovery_checkpoint_ref,
+            recovery_checkpoint_ref=checkpoint_ref,
             idempotency_key=request.idempotency_key,
             checkpoint_payload=checkpoint_payload,
             selected_start_step_id=request.selected_start_step_id,

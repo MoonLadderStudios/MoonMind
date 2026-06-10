@@ -2955,6 +2955,10 @@ class TemporalExecutionService:
                     raise TemporalExecutionRecoveryCheckpointError(
                         "Selected start step is not compatible with recovery checkpoint evidence."
                     )
+                if selected_preserved.order >= checkpoint.failed_step.order:
+                    raise TemporalExecutionRecoveryCheckpointError(
+                        "Selected start step must precede the failed step."
+                    )
                 failed_step_id = selected_preserved.logical_step_id
                 failed_step_execution = selected_preserved.source_execution_ordinal
                 preserved_steps = [

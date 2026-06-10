@@ -2856,6 +2856,63 @@ async def test_selected_step_recovery_rejects_step_without_checkpoint_evidence(
 
 
 @pytest.mark.asyncio
+async def test_selected_step_recovery_rejects_step_after_failed_step(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="recover source",
+            input_artifact_ref="artifact://input/source",
+            plan_artifact_ref="artifact://plan/source",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        created.state = MoonMindWorkflowState.FAILED
+        created.close_status = TemporalExecutionCloseStatus.FAILED
+        created.memo = {
+            **created.memo,
+            "task_input_snapshot_ref": "artifact://snapshot/source",
+            "recovery_checkpoint_ref": "artifact://checkpoint/source",
+        }
+        await session.commit()
+
+        checkpoint_payload = _valid_recovery_checkpoint_payload(
+            workflow_id=created.workflow_id,
+            run_id=created.run_id,
+            snapshot_ref="artifact://snapshot/source",
+        )
+        checkpoint_payload["preservedSteps"].append(
+            {
+                "logicalStepId": "notify",
+                "order": 4,
+                "status": "succeeded",
+                "sourceExecutionOrdinal": 1,
+                "artifacts": {"outputSummary": "artifact://summary/notify"},
+                "stateCheckpointRef": "artifact://workspace/before-notify",
+            }
+        )
+
+        with pytest.raises(
+            TemporalExecutionRecoveryCheckpointError,
+            match="must precede the failed step",
+        ):
+            await service.create_failed_step_recovery_execution(
+                created,
+                recovery_checkpoint_ref=None,
+                idempotency_key="recover-selected",
+                checkpoint_payload=checkpoint_payload,
+                selected_start_step_id="notify",
+            )
+
+
+@pytest.mark.asyncio
 async def test_failed_step_recovery_requires_hydrated_checkpoint_payload(
     tmp_path, mock_client_adapter
 ):

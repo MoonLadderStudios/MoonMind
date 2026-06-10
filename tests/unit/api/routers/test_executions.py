@@ -9640,7 +9640,51 @@ def test_selected_step_recovery_pins_source_and_selected_step(
     assert response.status_code == 201
     call_kwargs = mock_service.create_failed_step_recovery_execution.await_args.kwargs
     assert call_kwargs["checkpoint_payload"] == checkpoint_payload
+    assert (
+        call_kwargs["recovery_checkpoint_ref"]
+        == "artifact://resume-checkpoints/source/checkpoint-v1"
+    )
     assert call_kwargs["selected_start_step_id"] == "plan"
+
+
+def test_selected_step_recovery_requires_checkpoint_ref_before_hydration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    canonical = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    canonical.memo = {
+        key: value
+        for key, value in dict(canonical.memo).items()
+        if key not in {"recovery_checkpoint_ref", "recoveryCheckpointRef"}
+    }
+    mock_service.describe_execution.return_value = canonical
+
+    artifact_service = SimpleNamespace(read=AsyncMock())
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = lambda: SimpleNamespace()
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        lambda _session: artifact_service,
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/recover-from-selected-step",
+            json={
+                "idempotencyKey": "recover-selected-1",
+                "sourceWorkflowId": canonical.workflow_id,
+                "sourceRunId": canonical.run_id,
+                "selectedStartStepId": "plan",
+            },
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason"] == "checkpoint_missing"
+    artifact_service.read.assert_not_awaited()
+    mock_service.create_failed_step_recovery_execution.assert_not_awaited()
 
 
 def test_selected_step_recovery_rejects_source_run_mismatch(
