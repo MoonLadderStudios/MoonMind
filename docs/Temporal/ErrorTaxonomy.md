@@ -6,7 +6,7 @@ Related:
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](./ManagedAndExternalAgentExecutionModel.md)
 - [`docs/Temporal/ActivityCatalogAndWorkerTopology.md`](./ActivityCatalogAndWorkerTopology.md)
 - [`docs/Temporal/StepLedgerAndProgressModel.md`](./StepLedgerAndProgressModel.md)
-- [`docs/Tasks/WorkflowFinishSummarySystem.md`](../Tasks/WorkflowFinishSummarySystem.md)
+- [`docs/Workflows/WorkflowFinishSummarySystem.md`](../Tasks/WorkflowFinishSummarySystem.md)
 - [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)
 
 ---
@@ -489,7 +489,7 @@ this taxonomy, the failing `stepId`/`childWorkflowId`, and an optional
 The canonical contract for the diagnostic — including its JSON shape, the
 secret-handling rules, and how it feeds `finishOutcome.reason`, `lastStep`,
 and the terminal-state `errorCategory` — lives in
-[`docs/Tasks/WorkflowFinishSummarySystem.md`](../Tasks/WorkflowFinishSummarySystem.md).
+[`docs/Workflows/WorkflowFinishSummarySystem.md`](../Tasks/WorkflowFinishSummarySystem.md).
 The `category` values used there (`user_error`, `integration_error`,
 `execution_error`, `system_error`) are how this taxonomy's
 `ApplicationError.type` values such as `INVALID_INPUT`, `UnsupportedStatus`,

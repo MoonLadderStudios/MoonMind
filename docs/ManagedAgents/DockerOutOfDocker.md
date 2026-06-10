@@ -10,7 +10,7 @@
 * [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)
 * [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
 * [`docs/Temporal/ActivityCatalogAndWorkerTopology.md`](../Temporal/ActivityCatalogAndWorkerTopology.md)
-* [`docs/Tasks/SkillAndPlanContracts.md`](../Tasks/SkillAndPlanContracts.md)
+* [`docs/Workflows/SkillAndPlanContracts.md`](../Tasks/SkillAndPlanContracts.md)
 * [`docs/Temporal/ArtifactPresentationContract.md`](../Temporal/ArtifactPresentationContract.md)
 * [`docs/ManagedAgents/LiveLogs.md`](./LiveLogs.md)
 

@@ -4,7 +4,7 @@ Status: Desired State
 Owners: MoonMind Engineering
 Last Updated: 2026-04-29
 Canonical for: agent skills, Skill steps, skill-set resolution, runtime skill materialization, `.agents/skills` path policy
-Related: `docs/Steps/StepTypes.md`, `docs/Tasks/SkillAndPlanContracts.md`, `docs/Tasks/WorkflowArchitecture.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/UI/MissionControlArchitecture.md`, `AGENTS.md`
+Related: `docs/Steps/StepTypes.md`, `docs/Workflows/SkillAndPlanContracts.md`, `docs/Workflows/WorkflowArchitecture.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/UI/MissionControlArchitecture.md`, `AGENTS.md`
 
 ---
 
@@ -26,7 +26,7 @@ It is the canonical document for:
 
 This document consolidates the design previously split between:
 
-- `docs/Tasks/AgentSkillSystem.md`
+- `docs/Steps/SkillSystem.md`
 - `docs/Steps/SkillInjection.md`
 
 `docs/Steps/StepTypes.md` remains the canonical document for the product-facing Step Type taxonomy. This document defines what the `skill` Step Type means for agent skills.
@@ -40,7 +40,7 @@ This document does **not** define:
 5. provider-profile or auth semantics,
 6. runtime launch internals except for the skill materialization boundary.
 
-Use `docs/Tasks/SkillAndPlanContracts.md` for executable tools and plan execution. Use `docs/Steps/StepTypes.md` for the Step Type authoring model. Use `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` for `MoonMind.AgentRun`.
+Use `docs/Workflows/SkillAndPlanContracts.md` for executable tools and plan execution. Use `docs/Steps/StepTypes.md` for the Step Type authoring model. Use `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` for `MoonMind.AgentRun`.
 
 ---
 
@@ -1357,10 +1357,10 @@ This document should be the single canonical desired-state document for the Agen
 
 Recommended doc cleanup:
 
-1. Keep this document at `docs/Tasks/AgentSkillSystem.md`.
+1. Keep this document at `docs/Steps/SkillSystem.md`.
 2. Replace `docs/Steps/SkillInjection.md` with a short redirect or remove it after references are updated.
 3. Keep `docs/Steps/StepTypes.md` as the canonical Step Type taxonomy.
-4. Keep `docs/Tasks/SkillAndPlanContracts.md` as the canonical Tool and Plan contract document.
+4. Keep `docs/Workflows/SkillAndPlanContracts.md` as the canonical Tool and Plan contract document.
 5. Update `SkillAndPlanContracts.md` to clearly mark `tool.type = "skill"` as legacy/internal terminology, not the product-facing Skill Step.
 6. Update any docs that say "Skill is a Tool" to instead say "Skill step may use Tools; Skills are agent-facing behavior/data."
 7. Put rollout tasks, migration checklists, and implementation status in specs or tracking artifacts, not in this canonical desired-state doc.
@@ -1373,7 +1373,7 @@ Suggested redirect text for `docs/Steps/SkillInjection.md`:
 Status: Superseded
 
 The desired-state skill injection contract has moved into
-`docs/Tasks/AgentSkillSystem.md`.
+`docs/Steps/SkillSystem.md`.
 
 Use `AgentSkillSystem.md` for:
 - runtime skill materialization,

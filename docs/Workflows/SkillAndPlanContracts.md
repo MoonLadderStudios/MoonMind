@@ -6,7 +6,7 @@ MoonMind system design (Temporal-first)
 
 Status: **Implemented** (contracts active, runtime live)
 Last updated: 2026-04-04
-Related: [`docs/Tasks/AgentSkillSystem.md`](AgentSkillSystem.md)
+Related: [`docs/Steps/SkillSystem.md`](AgentSkillSystem.md)
 
 ---
 
@@ -40,7 +40,7 @@ It establishes:
 * execution semantics
 * progress contracts
 
-**Use [`docs/Tasks/AgentSkillSystem.md`](AgentSkillSystem.md) for:**
+**Use [`docs/Steps/SkillSystem.md`](AgentSkillSystem.md) for:**
 * `AgentSkillDefinition`
 * `SkillSet`
 * `ResolvedSkillSet`
@@ -85,7 +85,7 @@ They are execution-shaping selections for `agent_runtime` steps only.
 > **Important:** Executable tool skills and agent instruction skills are separate systems.
 > The term **"Agent Skill"** (in `.agents/skills/` directories and `SKILL.md` files)
 > refers to reusable instruction bundles that AI agents read for guidance as defined in
-> [`docs/Tasks/AgentSkillSystem.md`](AgentSkillSystem.md).
+> [`docs/Steps/SkillSystem.md`](AgentSkillSystem.md).
 > This document only governs the executable **tool** side.
 
 Canonical Python class names:
@@ -242,7 +242,7 @@ security:
 ### 4.3 ToolInvocation schema
 
 A Plan node (step) references an executable Tool with pinned version and inputs.
-Note: Step-level agent skill selectors are defined in `docs/Tasks/AgentSkillSystem.md`. This document only defines the executable tool invocation shape. A plan node may carry both executable tool intent and agent skill selection intent.
+Note: Step-level agent skill selectors are defined in `docs/Steps/SkillSystem.md`. This document only defines the executable tool invocation shape. A plan node may carry both executable tool intent and agent skill selection intent.
 
 ```json
 {
@@ -958,4 +958,4 @@ Reserve fields without enabling them:
 
 Minimum components: tool registry format + loader + validator; tool registry snapshot digest artifact; `plan.validate`; Plan Executor in `MoonMind.Run`; `mm.tool.execute` / tool dispatch activity; progress query and optional progress artifact. Status is tracked in MoonSpec feature artifacts (`specs/<feature>/`) and local handoffs under `artifacts/` when needed.
 
-Deployment-backed agent instruction skill work is tracked separately in `docs/Tasks/AgentSkillSystem.md` and related feature directories under `specs/`.
+Deployment-backed agent instruction skill work is tracked separately in `docs/Steps/SkillSystem.md` and related feature directories under `specs/`.

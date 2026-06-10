@@ -3,7 +3,7 @@
 Status: Active desired state
 Owners: MoonMind Engineering
 Last Updated: 2026-05-06
-Related: `docs/Tasks/WorkflowArchitecture.md`, `docs/Tasks/WorkflowFinishSummarySystem.md`, `docs/Api/ExecutionsApiContract.md`, `docs/UI/MissionControlArchitecture.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/ExternalAgents/ExternalAgentIntegrationSystem.md`, `docs/Tasks/AgentSkillSystem.md`, `docs/Tasks/SkillAndPlanContracts.md`
+Related: `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/WorkflowFinishSummarySystem.md`, `docs/Api/ExecutionsApiContract.md`, `docs/UI/MissionControlArchitecture.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/ExternalAgents/ExternalAgentIntegrationSystem.md`, `docs/Steps/SkillSystem.md`, `docs/Workflows/SkillAndPlanContracts.md`
 
 ---
 
@@ -36,7 +36,7 @@ The proposal system is Temporal-native:
 5. Webhook or sync activities observe approved/rejected/deferred tracker actions.
 6. Promotion creates a new Temporal execution only after human approval.
 
-Canonical agent-skill storage, precedence, and snapshot semantics live in `docs/Tasks/AgentSkillSystem.md`. This document defines how proposals preserve and promote Workflow-facing skill intent.
+Canonical agent-skill storage, precedence, and snapshot semantics live in `docs/Steps/SkillSystem.md`. This document defines how proposals preserve and promote Workflow-facing skill intent.
 
 ---
 
@@ -444,7 +444,7 @@ That means:
 3. `task.tool` and `step.tool`, when present, use the canonical Temporal submit shape
 4. `task.tool.type` must be `skill` when a tool selector is provided, representing an executable tool rather than an agent instruction bundle
 5. proposal payloads do not use `tool.type = "agent_runtime"`
-6. `task.skills` and `step.skills` may be included and must follow the canonical Agent Skill System contract defined in `docs/Tasks/AgentSkillSystem.md`
+6. `task.skills` and `step.skills` may be included and must follow the canonical Agent Skill System contract defined in `docs/Steps/SkillSystem.md`
 7. delivery metadata is stored alongside the proposal delivery record, not inside the executable Workflow payload unless it is part of the user's explicit Workflow contract
 
 ### 6.2 Candidate example

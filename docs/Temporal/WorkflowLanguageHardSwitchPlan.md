@@ -1043,9 +1043,9 @@ merge_automation
 | `docs/UI/MissionControlArchitecture.md` | Rewrite as `docs/UI/WorkflowConsoleArchitecture.md`. |
 | `docs/Temporal/RunHistoryAndRerunSemantics.md` | Rename to `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`. |
 | `docs/Steps/StepExecutionsAndCheckpointing.md` | Rename to `docs/Steps/StepExecutionsAndCheckpointing.md`. |
-| `docs/Tasks/WorkflowArchitecture.md` | Delete or replace with `docs/Temporal/WorkflowExecutionArchitecture.md`. |
-| `docs/Tasks/WorkflowPresetsSystem.md` | Rename to `docs/Steps/WorkflowPresetsSystem.md` or fold into Step/Preset docs. |
-| `docs/Tasks/WorkflowRemediation.md` | Rename to `docs/Temporal/WorkflowRemediation.md` or `docs/Steps/FailedStepRecovery.md`. |
+| `docs/Workflows/WorkflowArchitecture.md` | Delete or replace with `docs/Temporal/WorkflowExecutionArchitecture.md`. |
+| `docs/Workflows/WorkflowPresetsSystem.md` | Rename to `docs/Steps/WorkflowPresetsSystem.md` or fold into Step/Preset docs. |
+| `docs/Workflows/WorkflowRemediation.md` | Rename to `docs/Temporal/WorkflowRemediation.md` or `docs/Steps/FailedStepRecovery.md`. |
 
 ### 16.2 New Primary Docs
 

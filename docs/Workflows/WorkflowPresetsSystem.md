@@ -603,5 +603,5 @@ The key acceptance test is: a developer can add a new preset manifest with a sup
 - `docs/Steps/StepTypes.md`
 - `docs/Steps/SkillSystem.md`
 - `docs/Steps/JiraIntegration.md`
-- `docs/Tasks/WorkflowArchitecture.md`
-- `docs/Tasks/WorkflowEditingSystem.md`
+- `docs/Workflows/WorkflowArchitecture.md`
+- `docs/Workflows/WorkflowEditingSystem.md`

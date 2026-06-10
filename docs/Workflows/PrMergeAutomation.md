@@ -3,7 +3,7 @@
 **Status:** Proposed  
 **Owner:** MoonMind Platform  
 **Audience:** backend, workflow authors, API, Mission Control  
-**Related:** `docs/Tasks/WorkflowDependencies.md`, `docs/Tasks/WorkflowPublishing.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Temporal/TemporalAgentExecution.md`, `docs/ManagedAgents/SkillGithubPrResolver.md`
+**Related:** `docs/Workflows/WorkflowDependencies.md`, `docs/Workflows/WorkflowPublishing.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Temporal/TemporalAgentExecution.md`, `docs/ManagedAgents/SkillGithubPrResolver.md`
 
 ---
 

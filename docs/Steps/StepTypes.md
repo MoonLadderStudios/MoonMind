@@ -3,7 +3,7 @@
 Status: Desired-state architecture
 Owners: MoonMind Engineering (Task Platform + UI)
 Last Updated: 2026-05-05
-Related: `docs/Tasks/WorkflowPresetsSystem.md`, `docs/UI/CreatePage.md`, `docs/Steps/SkillSystem.md`, `docs/Steps/JiraIntegration.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Tools/DockerComposeUpdateSystem.md`
+Related: `docs/Workflows/WorkflowPresetsSystem.md`, `docs/UI/CreatePage.md`, `docs/Steps/SkillSystem.md`, `docs/Steps/JiraIntegration.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Tools/DockerComposeUpdateSystem.md`
 
 ---
 

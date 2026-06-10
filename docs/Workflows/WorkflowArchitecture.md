@@ -20,7 +20,7 @@ It maps how the control plane translates user intent from Mission Control — in
 
 into durable execution under Temporal.
 
-This document is architectural and declarative. Detailed page behavior belongs in `docs/UI/CreatePage.md`. Detailed image-input behavior belongs in `docs/Tasks/ImageSystem.md`.
+This document is architectural and declarative. Detailed page behavior belongs in `docs/UI/CreatePage.md`. Detailed image-input behavior belongs in `docs/Workflows/ImageSystem.md`.
 
 ---
 
@@ -682,8 +682,8 @@ Use the related docs for detailed behavior:
 
 - `docs/UI/CreatePage.md` for page sections, field behavior, Jira targeting, edit/rerun UX, and validation copy
 - `docs/UI/WorkflowDetailsPage.md` for failed-Workflow Execution action presentation, including **Resume**
-- `docs/Tasks/ImageSystem.md` for image-input upload, artifact storage, materialization, context generation, and preview/download behavior
-- `docs/Tasks/AgentSkillSystem.md` for skill selection and resolution
+- `docs/Workflows/ImageSystem.md` for image-input upload, artifact storage, materialization, context generation, and preview/download behavior
+- `docs/Steps/SkillSystem.md` for skill selection and resolution
 - `docs/Temporal/TemporalArchitecture.md` for workflow lifecycle and worker topology
 - `docs/Temporal/RunHistoryAndRerunSemantics.md` for Workflow ID, Run ID, full rerun, and Resume identity semantics
 - `docs/Temporal/StepLedgerAndProgressModel.md` for step ledger, preserved-step, and recovery checkpoint semantics

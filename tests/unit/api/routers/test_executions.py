@@ -3493,7 +3493,7 @@ def test_create_task_shaped_execution_preserves_story_output_contract(
             "payload": {
                 "task": {
                     "title": "Break down task proposal design",
-                    "instructions": "Extract stories from docs/Tasks/WorkflowProposalSystem.md.",
+                    "instructions": "Extract stories from docs/Workflows/WorkflowProposalSystem.md.",
                     "storyOutput": {
                         "mode": "jira",
                         "jira": {
@@ -3536,7 +3536,7 @@ def test_create_task_shaped_execution_defaults_partial_story_output_mode(
             "payload": {
                 "task": {
                     "title": "Break down task proposal design",
-                    "instructions": "Extract stories from docs/Tasks/WorkflowProposalSystem.md.",
+                    "instructions": "Extract stories from docs/Workflows/WorkflowProposalSystem.md.",
                     "storyOutput": {
                         "jira": {
                             "projectKey": "MM",

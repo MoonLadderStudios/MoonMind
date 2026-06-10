@@ -1,6 +1,6 @@
 # Workflow Dependencies
 
-Related: `docs/Api/ExecutionsApiContract.md`, `docs/Tasks/WorkflowArchitecture.md`, `docs/Tasks/WorkflowCancellation.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/UI/MissionControlArchitecture.md`
+Related: `docs/Api/ExecutionsApiContract.md`, `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/WorkflowCancellation.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/UI/MissionControlArchitecture.md`
 
 ---
 

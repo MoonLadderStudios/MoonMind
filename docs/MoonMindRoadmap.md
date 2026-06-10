@@ -283,7 +283,7 @@ All items shipped: per-step runtime/model/effort selection (MM-786/787), cost tr
 ## Housekeeping — Codebase Cleanup 🔧
 
 - [x] **H.1–H.4** Legacy system removal, spec deduplication, legacy skill dispatch cleanup, legacy docs deletion — complete (MM-797 through MM-800)
-- [x] **H.5** Tasks→Workflows doc rename — `docs/Tasks/*` renamed to `docs/Workflows/*` with content updated (#2395)
+- [x] **H.5** Tasks→Workflows doc rename — legacy `Tasks/*` docs renamed to `docs/Workflows/*` with content updated (#2395)
 - [ ] **H.6** Release/docs metadata hygiene — `pyproject.toml` (version `0.1.0`, MIT, "RAG application…" description) and `package.json` (version `1.0.0`, ISC, legacy "chat, memory, and automation" description) disagree with each other and with the README positioning. Align versions, license declarations, and public descriptions under one release/versioning policy.
 
 ---

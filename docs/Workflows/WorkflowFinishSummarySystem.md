@@ -3,7 +3,7 @@
 Status: Active  
 Owners: MoonMind Engineering  
 Last Updated: 2026-05-17  
-Related: `docs/Tasks/WorkflowArchitecture.md`, `docs/Tasks/WorkflowProposalSystem.md`,
+Related: `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/WorkflowProposalSystem.md`,
 `docs/Temporal/ErrorTaxonomy.md`, `docs/Temporal/StepLedgerAndProgressModel.md`
 
 ---

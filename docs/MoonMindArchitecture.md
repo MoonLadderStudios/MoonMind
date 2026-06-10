@@ -1109,8 +1109,8 @@ This framing keeps the top-level architecture aligned with MoonMind's current du
 - `docs/ManagedAgents/DockerOutOfDocker.md`
 - `docs/Security/ProviderProfiles.md`
 - `docs/Security/SecretsSystem.md`
-- `docs/Tasks/SkillAndPlanContracts.md`
-- `docs/Tasks/AgentSkillSystem.md`
+- `docs/Workflows/SkillAndPlanContracts.md`
+- `docs/Steps/SkillSystem.md`
 - `docs/ExternalAgents/ExternalAgentIntegrationSystem.md`
 - `docs/Memory/MemoryArchitecture.md`
 - `docs/Temporal/TemporalArchitecture.md`

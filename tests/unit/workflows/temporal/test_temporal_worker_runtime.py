@@ -1077,7 +1077,7 @@ def test_runtime_planner_routes_jira_issue_creator_as_agent_skill_step():
         inputs={
             "task": {
                 "title": "Break down proposal workflow",
-                "instructions": "Break down docs/Tasks/WorkflowProposalSystem.md.",
+                "instructions": "Break down docs/Workflows/WorkflowProposalSystem.md.",
                 "runtime": {"mode": "codex_cli"},
                 "publish": {"mode": "pr"},
                 "storyOutput": {

@@ -4,7 +4,7 @@ Status: Desired State
 Owners: MoonMind Engineering
 Last Updated: 2026-05-13
 Canonical for: Create Task runtime slash-command pass-through, command hint metadata, runtime command rendering boundaries
-Related: `docs/UI/CreatePage.md`, `docs/Tasks/WorkflowArchitecture.md`, `docs/Steps/SkillSystem.md`, `docs/ManagedAgents/CodexCliManagedSessions.md`, `docs/ManagedAgents/ClaudeCodeManagedSessions.md`
+Related: `docs/UI/CreatePage.md`, `docs/Workflows/WorkflowArchitecture.md`, `docs/Steps/SkillSystem.md`, `docs/ManagedAgents/CodexCliManagedSessions.md`, `docs/ManagedAgents/ClaudeCodeManagedSessions.md`
 
 ---
 

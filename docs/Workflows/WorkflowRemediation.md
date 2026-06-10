@@ -3,7 +3,7 @@
 **Status:** Desired-state design
 **Owners:** MoonMind Platform + Mission Control
 **Last Updated:** 2026-05-07
-**Related:** `docs/Tasks/WorkflowDependencies.md`, `docs/Api/ExecutionsApiContract.md`, `docs/Tasks/WorkflowRunsApi.md`, `docs/Tasks/WorkflowProposalSystem.md`, `docs/ManagedAgents/LiveLogs.md`, `docs/ManagedAgents/CodexCliManagedSessions.md`, `docs/ManagedAgents/SharedManagedAgentAbstractions.md`, `docs/Security/ProviderProfiles.md`, `docs/Security/SecretsSystem.md`, `docs/ManagedAgents/DockerOutOfDocker.md`, `docs/Temporal/ArtifactPresentationContract.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/RunHistoryAndRerunSemantics.md`, `docs/Temporal/SourceOfTruthAndProjectionModel.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Steps/SkillSystem.md`
+**Related:** `docs/Workflows/WorkflowDependencies.md`, `docs/Api/ExecutionsApiContract.md`, `docs/Workflows/WorkflowRunsApi.md`, `docs/Workflows/WorkflowProposalSystem.md`, `docs/ManagedAgents/LiveLogs.md`, `docs/ManagedAgents/CodexCliManagedSessions.md`, `docs/ManagedAgents/SharedManagedAgentAbstractions.md`, `docs/Security/ProviderProfiles.md`, `docs/Security/SecretsSystem.md`, `docs/ManagedAgents/DockerOutOfDocker.md`, `docs/Temporal/ArtifactPresentationContract.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/RunHistoryAndRerunSemantics.md`, `docs/Temporal/SourceOfTruthAndProjectionModel.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Steps/SkillSystem.md`
 
 ---
 

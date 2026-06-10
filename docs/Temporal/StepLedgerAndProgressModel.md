@@ -20,7 +20,7 @@ It defines:
 
 This document does **not** redefine plan syntax, artifact storage internals, or managed-run log transport. Those remain owned by:
 
-- `docs/Tasks/SkillAndPlanContracts.md`
+- `docs/Workflows/SkillAndPlanContracts.md`
 - `docs/Temporal/WorkflowArtifactSystemDesign.md`
 - `docs/ManagedAgents/LiveLogs.md`
 

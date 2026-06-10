@@ -10,7 +10,7 @@ This document defines the current MoonMind step-execution model at the Workflow 
 
 It is intentionally Workflow-oriented and high level. The detailed owned contracts live elsewhere:
 
-- `docs/Tasks/SkillAndPlanContracts.md` owns executable plan structure
+- `docs/Workflows/SkillAndPlanContracts.md` owns executable plan structure
 - `docs/Temporal/StepLedgerAndProgressModel.md` owns the operator-facing step ledger, status vocabulary, attempts, checks, and refs
 - `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` owns `MoonMind.AgentRun` lifecycle and observability boundaries
 

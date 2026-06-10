@@ -4,7 +4,7 @@ Status: Desired State
 Owners: MoonMind Engineering
 Last Updated: 2026-05-06
 Canonical for: managed-agent requests for additional agent skills during execution
-Related: `docs/Steps/SkillSystem.md`, `docs/Steps/StepTypes.md`, `docs/Tasks/SkillAndPlanContracts.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
+Related: `docs/Steps/SkillSystem.md`, `docs/Steps/StepTypes.md`, `docs/Workflows/SkillAndPlanContracts.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
 
 ---
 

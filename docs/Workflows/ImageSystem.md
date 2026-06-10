@@ -25,7 +25,7 @@ This document is declarative. It defines the target system contract. It is not a
 ## 2. Related docs
 
 - `docs/UI/CreatePage.md`
-- `docs/Tasks/WorkflowArchitecture.md`
+- `docs/Workflows/WorkflowArchitecture.md`
 - `docs/Temporal/TemporalArchitecture.md`
 - `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
 - `docs/Temporal/ArtifactPresentationContract.md`

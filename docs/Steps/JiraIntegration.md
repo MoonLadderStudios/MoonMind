@@ -4,7 +4,7 @@ Status: Desired-state architecture
 Owners: MoonMind Engineering
 Last Updated: 2026-05-05
 Canonical for: Jira issue context, Jira issue picker widget, Jira tool execution, Jira credential handling, schema-driven Jira inputs
-Related: `docs/UI/CreatePage.md`, `docs/Tasks/WorkflowPresetsSystem.md`, `docs/Steps/StepTypes.md`, `docs/Steps/SkillSystem.md`, `docs/Tasks/WorkflowPublishing.md`, `docs/Tasks/PrMergeAutomation.md`
+Related: `docs/UI/CreatePage.md`, `docs/Workflows/WorkflowPresetsSystem.md`, `docs/Steps/StepTypes.md`, `docs/Steps/SkillSystem.md`, `docs/Workflows/WorkflowPublishing.md`, `docs/Workflows/PrMergeAutomation.md`
 
 ---
 

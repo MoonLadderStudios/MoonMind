@@ -76,7 +76,7 @@ This document is the architecture hub. Detailed contracts live in:
 - `docs/ManagedAgents/CodexCliManagedSessions.md`
 - `docs/ManagedAgents/LiveLogs.md`
 - `docs/ManagedAgents/DockerOutOfDocker.md`
-- `docs/Tasks/AgentSkillSystem.md`
+- `docs/Steps/SkillSystem.md`
 - `docs/MoonMindArchitecture.md`
 
 Avoid duplicating exact lifecycle state machines, complete activity catalogs, API schemas, or query syntax here. This hub defines architectural rules and points to the normative contract docs.

@@ -8,7 +8,7 @@ Related:
 - [`docs/Temporal/ArtifactPresentationContract.md`](../Temporal/ArtifactPresentationContract.md)
 - [`docs/ManagedAgents/DockerSidecarRuntime.md`](./DockerSidecarRuntime.md)
 - [`docs/ManagedAgents/DockerOutOfDocker.md`](./DockerOutOfDocker.md)
-- [`docs/Tasks/AgentSkillSystem.md`](../Tasks/AgentSkillSystem.md)
+- [`docs/Steps/SkillSystem.md`](../Tasks/AgentSkillSystem.md)
 
 ## 1. Purpose
 
