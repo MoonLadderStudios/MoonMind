@@ -301,4 +301,4 @@ Key diagnostics:
 - Existing artifact store and workflow history only; no new persistent database tables planned. (001-pentest-activity-handler)
 
 ## Recent Changes
-- 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal work
+- 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
