@@ -946,7 +946,7 @@ async def test_security_pentest_execute_fails_closed_before_runner_without_scope
     activities = TemporalAgentRuntimeActivities()
 
     with pytest.raises(TemporalActivityRuntimeError) as exc_info:
-        await activities.security_pentest_execute(
+        await activities._security_pentest_execute_trusted_internal(
             _pentest_activity_payload(approved_scope=None)
         )
 
@@ -1021,7 +1021,7 @@ async def test_security_pentest_execute_rejects_ordinary_inline_scope_without_ar
 async def test_security_pentest_execute_allows_trusted_internal_inline_scope():
     activities = TemporalAgentRuntimeActivities()
 
-    result = await activities.security_pentest_execute(
+    result = await activities._security_pentest_execute_trusted_internal(
         _pentest_activity_payload(
             scope_artifact_ref=None,
             trusted_internal_execution=True,
@@ -1030,6 +1030,27 @@ async def test_security_pentest_execute_allows_trusted_internal_inline_scope():
 
     assert result["status"] == "launch_plan_ready"
     assert result["launch_plan"]["profile_id"] == "pentestgpt-safe"
+
+
+async def test_security_pentest_execute_ignores_caller_supplied_trust_flag():
+    """A registry-dispatched submission cannot self-authorize an inline scope."""
+
+    activities = TemporalAgentRuntimeActivities()
+
+    with pytest.raises(TemporalActivityRuntimeError) as exc_info:
+        await activities.security_pentest_execute(
+            _pentest_activity_payload(
+                scope_artifact_ref=None,
+                trusted_internal_execution=True,
+            )
+        )
+
+    message = str(exc_info.value)
+    assert "INVALID_SCOPE" in message
+    assert (
+        "inline_scope_requires_trusted_internal_execution" in message
+        or "scope_artifact_ref" in message
+    )
 
 @pytest.mark.parametrize(
     ("scope_overrides", "request_overrides", "error_code", "reason"),
@@ -1106,7 +1127,9 @@ async def test_security_pentest_execute_denies_without_retry_when_workflow_docke
 async def test_security_pentest_execute_reaches_launch_plan_after_scope_validation():
     activities = TemporalAgentRuntimeActivities()
 
-    result = await activities.security_pentest_execute(_pentest_activity_payload())
+    result = await activities._security_pentest_execute_trusted_internal(
+        _pentest_activity_payload()
+    )
 
     assert result["status"] == "launch_plan_ready"
     assert result["launch_plan"]["profile_id"] == "pentestgpt-safe"
@@ -1114,7 +1137,9 @@ async def test_security_pentest_execute_reaches_launch_plan_after_scope_validati
 async def test_security_pentest_execute_returns_safe_launch_plan_after_scope_validation():
     activities = TemporalAgentRuntimeActivities()
 
-    result = await activities.security_pentest_execute(_pentest_activity_payload())
+    result = await activities._security_pentest_execute_trusted_internal(
+        _pentest_activity_payload()
+    )
 
     assert result["status"] == "launch_plan_ready"
     assert result["target"] == "https://lab.example.test"
@@ -1131,7 +1156,7 @@ async def test_security_pentest_execute_returns_safe_launch_plan_after_scope_val
 async def test_security_pentest_execute_includes_secret_safe_provider_preparation():
     activities = TemporalAgentRuntimeActivities()
 
-    result = await activities.security_pentest_execute(
+    result = await activities._security_pentest_execute_trusted_internal(
         _pentest_activity_payload(
             execution_profile_ref="pentestgpt_anthropic_api_team",
         )
@@ -1164,7 +1189,7 @@ async def test_security_pentest_execute_includes_secret_safe_provider_preparatio
 async def test_security_pentest_execute_filters_provider_runtime_state():
     activities = TemporalAgentRuntimeActivities()
 
-    result = await activities.security_pentest_execute(
+    result = await activities._security_pentest_execute_trusted_internal(
         _pentest_activity_payload(
             execution_profile_ref=None,
             provider_selector={"tags_any": ["api-key"]},
@@ -1183,7 +1208,7 @@ async def test_security_pentest_execute_filters_provider_runtime_state():
 async def test_security_pentest_execute_reports_secret_safe_provider_cooldown():
     activities = TemporalAgentRuntimeActivities()
 
-    result = await activities.security_pentest_execute(
+    result = await activities._security_pentest_execute_trusted_internal(
         _pentest_activity_payload(
             execution_profile_ref="pentestgpt_openrouter_default",
             provider_failure={"category": "provider_429"},
@@ -1204,7 +1229,9 @@ async def test_security_pentest_execute_reports_secret_safe_provider_cooldown():
 async def test_security_pentest_execute_includes_instruction_materialization_metadata():
     activities = TemporalAgentRuntimeActivities()
 
-    result = await activities.security_pentest_execute(_pentest_activity_payload())
+    result = await activities._security_pentest_execute_trusted_internal(
+        _pentest_activity_payload()
+    )
 
     bundle = result["instruction_bundle"]
     paths = result["runtime_paths"]
@@ -1244,7 +1271,7 @@ async def test_security_pentest_execute_includes_instruction_materialization_met
 async def test_security_pentest_execute_includes_publication_metadata_without_session_artifacts():
     activities = TemporalAgentRuntimeActivities()
 
-    result = await activities.security_pentest_execute(
+    result = await activities._security_pentest_execute_trusted_internal(
         _pentest_activity_payload(
             summary_text="Pentest finished with password=hunter2",
             findings=[
@@ -1310,7 +1337,7 @@ async def test_security_pentest_execute_includes_publication_metadata_without_se
 async def test_security_pentest_execute_coerces_string_publication_flags():
     activities = TemporalAgentRuntimeActivities()
 
-    result = await activities.security_pentest_execute(
+    result = await activities._security_pentest_execute_trusted_internal(
         _pentest_activity_payload(
             provider_snapshot_available="false",
             wrapper_log_available="0",
@@ -1354,7 +1381,7 @@ async def test_security_pentest_execute_sources_publication_payload_from_nested_
         "provider_snapshot_available": True,
     }
 
-    result = await activities.security_pentest_execute(payload)
+    result = await activities._security_pentest_execute_trusted_internal(payload)
 
     publication = result["artifact_publication"]
     artifact_names = {item["name"] for item in publication["artifacts"]}
@@ -1366,7 +1393,7 @@ async def test_security_pentest_execute_fails_closed_before_vpn_lab_launch_witho
     activities = TemporalAgentRuntimeActivities()
 
     with pytest.raises(TemporalActivityRuntimeError) as exc_info:
-        await activities.security_pentest_execute(
+        await activities._security_pentest_execute_trusted_internal(
             _pentest_activity_payload(
                 runner_profile_id="pentestgpt-vpn-lab",
                 approved_scope={

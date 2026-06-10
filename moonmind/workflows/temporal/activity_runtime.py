@@ -4240,7 +4240,9 @@ class TemporalAgentRuntimeActivities:
 
     @staticmethod
     def _pentest_scope_artifact_id(scope_artifact_ref: object) -> str:
-        if isinstance(scope_artifact_ref, Mapping):
+        if isinstance(scope_artifact_ref, ArtifactRef):
+            artifact_id = str(scope_artifact_ref.artifact_id or "").strip()
+        elif isinstance(scope_artifact_ref, Mapping):
             artifact_id = str(scope_artifact_ref.get("artifact_id") or "").strip()
         else:
             artifact_id = str(scope_artifact_ref or "").strip()
@@ -4774,7 +4776,43 @@ class TemporalAgentRuntimeActivities:
         payload: Mapping[str, Any],
         /,
     ) -> dict[str, Any]:
-        """Validate the curated PentestGPT activity boundary.
+        """Registry-dispatched PentestGPT activity boundary (untrusted input).
+
+        This is the entrypoint bound to the ``security.pentest.execute``
+        activity type, so its payload may originate from a caller-supplied
+        plan. The trusted/internal decision is therefore derived from the
+        entrypoint (here, always untrusted) rather than from request inputs:
+        an inline ``approved_scope`` is rejected and the scope is always loaded
+        from the artifact store. Trusted internal callers must use
+        :meth:`_security_pentest_execute_trusted_internal` instead.
+        """
+
+        return await self._run_security_pentest(payload, trusted_internal=False)
+
+    async def _security_pentest_execute_trusted_internal(
+        self,
+        payload: Mapping[str, Any],
+        /,
+    ) -> dict[str, Any]:
+        """Internal entrypoint that may honor an inline ``approved_scope``.
+
+        This method is intentionally **not** registered in
+        ``_ACTIVITY_HANDLER_ATTRS``, so it cannot be reached through
+        registry/plan dispatch. The trusted decision comes from the fact that
+        only trusted workflow-internal code can call this entrypoint, never
+        from a ``trusted_internal_execution`` flag in the request payload.
+        """
+
+        return await self._run_security_pentest(payload, trusted_internal=True)
+
+    async def _run_security_pentest(
+        self,
+        payload: Mapping[str, Any],
+        /,
+        *,
+        trusted_internal: bool,
+    ) -> dict[str, Any]:
+        """Shared PentestGPT activity body.
 
         The full PentestGPT runner is intentionally implemented separately from
         the registry contract. Keeping this activity registered lets workflow
@@ -4813,17 +4851,18 @@ class TemporalAgentRuntimeActivities:
             if key not in publication_keys
         }
         try:
-            trusted_internal_execution = _coerce_bool(
-                request_payload.get("trusted_internal_execution"),
-                default=False,
-            )
-            if trusted_internal_execution:
+            if trusted_internal:
                 request_payload["trusted_internal_execution"] = True
                 if not request_payload.get("scope_artifact_ref"):
                     request_payload["scope_artifact_ref"] = (
                         "trusted-internal-inline-scope"
                     )
             else:
+                # Untrusted callers can never assert trusted-internal execution
+                # or supply their own inline scope, regardless of what the
+                # request payload claims. Drop any caller-supplied trust flag
+                # and require an artifact-backed approved scope.
+                request_payload.pop("trusted_internal_execution", None)
                 if request_payload.get("approved_scope") is not None:
                     raise PentestScopeValidationError(
                         error_code="INVALID_SCOPE",
