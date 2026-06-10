@@ -7,8 +7,6 @@ from typing import Any
 
 from moonmind.config.settings import AtlassianSettings, settings
 from moonmind.integrations.jira.adf import ensure_adf_document
-from moonmind.integrations.jira.auth import resolve_jira_connection
-from moonmind.integrations.jira.client import JiraClient
 from moonmind.integrations.jira.errors import JiraToolError
 from moonmind.integrations.jira.models import (
     ALL_JIRA_ACTIONS,
@@ -27,6 +25,7 @@ from moonmind.integrations.jira.models import (
     VerifyConnectionRequest,
     normalize_action_name,
 )
+from moonmind.security import scan_outbound_text
 
 _JQL_ORDER_BY_RE = re.compile(r"\border\s+by\b", re.IGNORECASE)
 
@@ -37,8 +36,10 @@ class JiraToolService:
         self,
         *,
         atlassian_settings: AtlassianSettings | None = None,
+        high_security_mode: bool | None = None,
     ) -> None:
         self._settings = atlassian_settings or settings.atlassian
+        self._high_security_mode = high_security_mode
 
     def discoverable_actions(self) -> set[str]:
         configured = self._allowed_actions()
@@ -289,6 +290,7 @@ class JiraToolService:
         self._ensure_enabled()
         self._ensure_action_allowed("add_comment")
         self._ensure_project_allowed(self._project_from_issue_key(request.issue_key))
+        self._scan_comment_body_before_side_effect(request)
         body = ensure_adf_document(request.body)
         return await self._request_json(
             method="POST",
@@ -297,6 +299,46 @@ class JiraToolService:
             json_body={"body": body},
             context={"issueKey": request.issue_key},
         )
+
+    def _scan_comment_body_before_side_effect(
+        self,
+        request: AddCommentRequest,
+    ) -> None:
+        if isinstance(request.body, str):
+            comment_body = request.body
+        else:
+            comment_body = "\n".join(self._extract_adf_text(request.body))
+        result = scan_outbound_text(
+            comment_body,
+            location="jira.add_comment.body",
+            high_security_mode=self._high_security_mode,
+        )
+        if result.allowed:
+            return
+        diagnostics = "; ".join(result.sanitized_diagnostics) or (
+            "Blocked outbound content at jira.add_comment.body"
+        )
+        raise JiraToolError(
+            f"Outbound comment blocked by high security scan: {diagnostics}",
+            code="outbound_scan_blocked",
+            status_code=422,
+            action="add_comment",
+        )
+
+    def _extract_adf_text(self, node: Any) -> list[str]:
+        if isinstance(node, dict):
+            if node.get("type") == "text" and isinstance(node.get("text"), str):
+                return [node["text"]]
+            text: list[str] = []
+            for value in node.values():
+                text.extend(self._extract_adf_text(value))
+            return text
+        if isinstance(node, list):
+            text: list[str] = []
+            for item in node:
+                text.extend(self._extract_adf_text(item))
+            return text
+        return []
 
     async def list_create_issue_types(
         self, request: ListCreateIssueTypesRequest
@@ -383,6 +425,9 @@ class JiraToolService:
         json_body: Any = None,
         context: dict[str, Any] | None = None,
     ) -> Any:
+        from moonmind.integrations.jira.auth import resolve_jira_connection
+        from moonmind.integrations.jira.client import JiraClient
+
         connection = await resolve_jira_connection(self._settings)
         client = JiraClient(connection=connection)
         try:
