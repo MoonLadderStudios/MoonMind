@@ -23,6 +23,10 @@ from moonmind.config.settings import settings
 from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
 from moonmind.schemas.agent_runtime_models import AgentRunResult
 from moonmind.schemas.jules_models import JulesTaskResponse
+from moonmind.schemas.workload_models import (
+    ValidatedWorkloadRequest,
+    WorkloadResult,
+)
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
 from moonmind.workflows.skills.skill_plan_contracts import SkillResult
@@ -884,6 +888,7 @@ def _approved_pentest_scope() -> dict[str, object]:
 
 def _pentest_activity_payload(**overrides: object) -> dict[str, object]:
     request: dict[str, object] = {
+        "pentest_enabled": True,
         "task_run_id": "run-123",
         "step_id": "step-pentest",
         "attempt": 1,
@@ -902,18 +907,84 @@ def _pentest_activity_payload(**overrides: object) -> dict[str, object]:
     request.update(overrides)
     return {"request": request}
 
-async def test_security_pentest_execute_fails_closed_before_runner_without_scope():
-    activities = TemporalAgentRuntimeActivities()
+class _FakePentestLauncher:
+    def __init__(self, *, status: str = "succeeded") -> None:
+        self.status = status
+        self.requests: list[object] = []
 
-    with pytest.raises(TemporalActivityRuntimeError) as exc_info:
-        await activities.security_pentest_execute(
-            _pentest_activity_payload(approved_scope=None)
+    async def run(self, request: object) -> WorkloadResult:
+        self.requests.append(request)
+        return WorkloadResult.model_validate(
+            {
+                "requestId": "workload-run-123",
+                "profileId": "pentestgpt-safe",
+                "status": self.status,
+                "exitCode": 0 if self.status == "succeeded" else 2,
+                "stdoutRef": "file:/tmp/artifacts/pentest/runtime/stdout.log",
+                "stderrRef": "file:/tmp/artifacts/pentest/runtime/stderr.log",
+                "diagnosticsRef": "file:/tmp/artifacts/pentest/runtime/diagnostics.json",
+                "outputRefs": {
+                    "report.primary": "file:/tmp/artifacts/pentest/findings/findings.report.md",
+                    "report.summary": "file:/tmp/artifacts/pentest/findings/findings.summary.md",
+                    "report.structured": "file:/tmp/artifacts/pentest/findings/findings.normalizer-input.json",
+                    "report.evidence": "file:/tmp/artifacts/pentest/evidence/bundle.tar.zst",
+                },
+                "metadata": {"fake": True},
+            }
         )
 
-    message = str(exc_info.value)
-    assert "INVALID_SCOPE" in message
-    assert "missing_approved_scope" in message
-    assert "runner is not implemented" not in message
+class _RecordingPentestRegistry:
+    """Registry stand-in that validates requests into the launcher contract.
+
+    The real ``DockerWorkloadLauncher`` dereferences ``request.profile`` and
+    ``request.request``, so the activity must hand the launcher a
+    ``ValidatedWorkloadRequest`` rather than the plain ``WorkloadRequest``
+    returned by ``parse_workload_request``. This records every validated
+    request so tests can assert the registry was consulted before launch.
+    """
+
+    def __init__(self) -> None:
+        self.requests: list[object] = []
+
+    def validate_request(self, request, *, workflow_docker_mode=None):
+        self.requests.append(request)
+        return ValidatedWorkloadRequest(
+            request=request,
+            profile=None,
+            ownership=request.ownership_metadata(
+                workflow_docker_mode=workflow_docker_mode or "profiles"
+            ),
+            containerName=request.container_name,
+        )
+
+async def test_security_pentest_execute_fails_closed_before_runner_when_disabled_by_default():
+    launcher = _FakePentestLauncher()
+    activities = TemporalAgentRuntimeActivities(workload_launcher=launcher)
+
+    payload = _pentest_activity_payload()["request"]
+    payload.pop("pentest_enabled")
+
+    result = await activities.security_pentest_execute({"request": payload})
+
+    assert result["status"] == "policy_denied"
+    assert result["execution_policy"]["max_attempts"] == 1
+    assert result["failure_classification"]["failure_kind"] == "policy_denied"
+    assert result["failure_classification"]["interaction_state"] == "pre_interaction"
+    assert result["terminal_cleanup"]["terminal_reason"] == "failure"
+    assert launcher.requests == []
+
+async def test_security_pentest_execute_fails_closed_before_runner_without_scope():
+    launcher = _FakePentestLauncher()
+    activities = TemporalAgentRuntimeActivities(workload_launcher=launcher)
+
+    result = await activities.security_pentest_execute(
+        _pentest_activity_payload(approved_scope=None)
+    )
+
+    assert result["status"] == "validation_failed"
+    assert result["failure_classification"]["failure_kind"] == "policy_denied"
+    assert "missing_approved_scope" in str(result["diagnostics"])
+    assert launcher.requests == []
 
 async def test_security_pentest_execute_denies_without_retry_when_workflow_docker_disabled():
     activities = TemporalAgentRuntimeActivities(workflow_docker_mode="disabled")
@@ -928,19 +999,32 @@ async def test_security_pentest_execute_denies_without_retry_when_workflow_docke
     assert exc_info.value.non_retryable is True
 
 async def test_security_pentest_execute_reaches_launch_plan_after_scope_validation():
-    activities = TemporalAgentRuntimeActivities()
+    launcher = _FakePentestLauncher()
+    registry = _RecordingPentestRegistry()
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=launcher,
+        workload_registry=registry,
+    )
 
     result = await activities.security_pentest_execute(_pentest_activity_payload())
 
-    assert result["status"] == "launch_plan_ready"
+    assert result["status"] == "completed"
     assert result["launch_plan"]["profile_id"] == "pentestgpt-safe"
+    assert len(launcher.requests) == 1
+    # The registry must validate the parsed request before the launcher runs it,
+    # and the launcher must receive the validated request (not the raw one).
+    assert len(registry.requests) == 1
+    assert isinstance(launcher.requests[0], ValidatedWorkloadRequest)
 
 async def test_security_pentest_execute_returns_safe_launch_plan_after_scope_validation():
-    activities = TemporalAgentRuntimeActivities()
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=_FakePentestLauncher(),
+        workload_registry=_RecordingPentestRegistry(),
+    )
 
     result = await activities.security_pentest_execute(_pentest_activity_payload())
 
-    assert result["status"] == "launch_plan_ready"
+    assert result["status"] == "completed"
     assert result["target"] == "https://lab.example.test"
     assert result["runner_profile_id"] == "pentestgpt-safe"
     launch_plan = result["launch_plan"]
@@ -953,7 +1037,10 @@ async def test_security_pentest_execute_returns_safe_launch_plan_after_scope_val
     assert launch_plan["labels"]["moonmind.operation_mode"] == "validate_hypothesis"
 
 async def test_security_pentest_execute_includes_secret_safe_provider_preparation():
-    activities = TemporalAgentRuntimeActivities()
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=_FakePentestLauncher(),
+        workload_registry=_RecordingPentestRegistry(),
+    )
 
     result = await activities.security_pentest_execute(
         _pentest_activity_payload(
@@ -986,7 +1073,10 @@ async def test_security_pentest_execute_includes_secret_safe_provider_preparatio
     assert "sk-" not in str(result)
 
 async def test_security_pentest_execute_filters_provider_runtime_state():
-    activities = TemporalAgentRuntimeActivities()
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=_FakePentestLauncher(),
+        workload_registry=_RecordingPentestRegistry(),
+    )
 
     result = await activities.security_pentest_execute(
         _pentest_activity_payload(
@@ -1005,7 +1095,10 @@ async def test_security_pentest_execute_filters_provider_runtime_state():
     assert result["provider_lease"]["profile_id"] == "pentestgpt_openrouter_default"
 
 async def test_security_pentest_execute_reports_secret_safe_provider_cooldown():
-    activities = TemporalAgentRuntimeActivities()
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=_FakePentestLauncher(),
+        workload_registry=_RecordingPentestRegistry(),
+    )
 
     result = await activities.security_pentest_execute(
         _pentest_activity_payload(
@@ -1026,7 +1119,10 @@ async def test_security_pentest_execute_reports_secret_safe_provider_cooldown():
     assert "token" not in str(result).lower()
 
 async def test_security_pentest_execute_includes_instruction_materialization_metadata():
-    activities = TemporalAgentRuntimeActivities()
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=_FakePentestLauncher(),
+        workload_registry=_RecordingPentestRegistry(),
+    )
 
     result = await activities.security_pentest_execute(_pentest_activity_payload())
 
@@ -1066,7 +1162,10 @@ async def test_security_pentest_execute_includes_instruction_materialization_met
     assert "docker attach" not in str(result).lower()
 
 async def test_security_pentest_execute_includes_publication_metadata_without_session_artifacts():
-    activities = TemporalAgentRuntimeActivities()
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=_FakePentestLauncher(),
+        workload_registry=_RecordingPentestRegistry(),
+    )
 
     result = await activities.security_pentest_execute(
         _pentest_activity_payload(
@@ -1098,12 +1197,18 @@ async def test_security_pentest_execute_includes_publication_metadata_without_se
         "runtime.stdout",
         "runtime.stderr",
         "runtime.diagnostics",
-        "output.summary",
-        "output.primary",
+        "report.summary",
+        "report.primary",
+        "report.structured",
         "output.provider_snapshot",
         "output.logs",
-        "evidence.bundle",
+        "report.evidence",
     }.issubset(artifact_names)
+    assert result["report_bundle_v"] == 1
+    assert result["primary_report_ref"]
+    assert result["summary_ref"]
+    assert result["structured_ref"]
+    assert result["evidence_refs"]
     assert "session.summary" not in artifact_names
     assert "session.step_checkpoint" not in artifact_names
     assert "session.control_event" not in artifact_names
@@ -1132,7 +1237,10 @@ async def test_security_pentest_execute_includes_publication_metadata_without_se
     assert "docker attach" not in str(result).lower()
 
 async def test_security_pentest_execute_coerces_string_publication_flags():
-    activities = TemporalAgentRuntimeActivities()
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=_FakePentestLauncher(),
+        workload_registry=_RecordingPentestRegistry(),
+    )
 
     result = await activities.security_pentest_execute(
         _pentest_activity_payload(
@@ -1151,7 +1259,10 @@ async def test_security_pentest_execute_coerces_string_publication_flags():
     ]
 
 async def test_security_pentest_execute_sources_publication_payload_from_nested_request():
-    activities = TemporalAgentRuntimeActivities()
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=_FakePentestLauncher(),
+        workload_registry=_RecordingPentestRegistry(),
+    )
     nested_request = _pentest_activity_payload(
         findings=[
             {
@@ -1187,24 +1298,87 @@ async def test_security_pentest_execute_sources_publication_payload_from_nested_
     assert "output.provider_snapshot" not in artifact_names
 
 async def test_security_pentest_execute_fails_closed_before_vpn_lab_launch_without_network_approval():
-    activities = TemporalAgentRuntimeActivities()
+    launcher = _FakePentestLauncher()
+    activities = TemporalAgentRuntimeActivities(workload_launcher=launcher)
 
-    with pytest.raises(TemporalActivityRuntimeError) as exc_info:
-        await activities.security_pentest_execute(
-            _pentest_activity_payload(
-                runner_profile_id="pentestgpt-vpn-lab",
-                approved_scope={
-                    **_approved_pentest_scope(),
-                    "allowed_runner_profiles": ["pentestgpt-vpn-lab"],
-                    "required_network_attachment_type": "vpn",
-                },
-            )
+    result = await activities.security_pentest_execute(
+        _pentest_activity_payload(
+            runner_profile_id="pentestgpt-vpn-lab",
+            approved_scope={
+                **_approved_pentest_scope(),
+                "allowed_runner_profiles": ["pentestgpt-vpn-lab"],
+                "required_network_attachment_type": "vpn",
+            },
+        )
+    )
+
+    assert result["status"] == "validation_failed"
+    assert "network_attachment_required" in str(result["diagnostics"])
+    assert launcher.requests == []
+
+async def test_security_pentest_execute_returns_structured_runtime_failure_with_cleanup():
+    launcher = _FakePentestLauncher(status="failed")
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=launcher,
+        workload_registry=_RecordingPentestRegistry(),
+    )
+
+    result = await activities.security_pentest_execute(_pentest_activity_payload())
+
+    assert result["status"] == "failed"
+    assert result["failure_classification"]["failure_kind"] == "runtime_action"
+    assert result["failure_classification"]["interaction_state"] == "post_interaction"
+    assert result["terminal_cleanup"]["terminal_reason"] == "failure"
+    assert result["terminal_cleanup"]["container_removed"] is True
+    assert result["execution_policy"]["automatic_retries_enabled"] is False
+
+async def test_security_pentest_execute_requires_registry_to_launch():
+    # A launcher is configured but no registry is wired. The real launcher needs
+    # a ValidatedWorkloadRequest, so the activity must fail closed rather than
+    # hand the raw request to the launcher.
+    launcher = _FakePentestLauncher()
+    activities = TemporalAgentRuntimeActivities(workload_launcher=launcher)
+
+    result = await activities.security_pentest_execute(_pentest_activity_payload())
+
+    assert result["status"] == "failed"
+    assert result["failure_classification"]["failure_kind"] == "runtime_action"
+    assert "workload registry is required" in str(result["diagnostics"])
+    assert launcher.requests == []
+
+class _NoOutputRefsPentestLauncher:
+    """Launcher returning a succeeded result with ``output_refs`` unset (None)."""
+
+    def __init__(self) -> None:
+        self.requests: list[object] = []
+
+    async def run(self, request: object) -> WorkloadResult:
+        self.requests.append(request)
+        return WorkloadResult.model_validate(
+            {
+                "requestId": "workload-run-123",
+                "profileId": "pentestgpt-safe",
+                "status": "succeeded",
+                "exitCode": 0,
+            }
         )
 
-    message = str(exc_info.value)
-    assert "PERMISSION_DENIED" in message
-    assert "network_attachment_required" in message
-    assert "launch_plan_ready" not in message
+async def test_security_pentest_execute_handles_missing_output_refs():
+    # When the workload result omits output_refs, the activity must fall back to
+    # published artifact refs instead of raising AttributeError on None.get().
+    launcher = _NoOutputRefsPentestLauncher()
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=launcher,
+        workload_registry=_RecordingPentestRegistry(),
+    )
+
+    result = await activities.security_pentest_execute(_pentest_activity_payload())
+
+    assert result["status"] == "completed"
+    assert len(launcher.requests) == 1
+    # Report refs fall back to the published pentest artifact refs.
+    assert result["primary_report_ref"]
+    assert result["summary_ref"]
 
 async def test_plan_generate_accepts_auto_placeholder_without_registry_entries(
     tmp_path: Path,
