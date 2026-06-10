@@ -722,7 +722,10 @@ class TestPushWorkspaceBranch:
             elif call_count == 4:  # remote branch sha before scan/push
                 proc.communicate = AsyncMock(return_value=(b"remote-sha\n", b""))
                 proc.returncode = 0
-            elif call_count == 5:  # commit metadata
+            elif call_count == 5:  # fetch remote branch object before scan
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 6:  # commit metadata
                 proc.communicate = AsyncMock(
                     return_value=(
                         b"commit local-sha\nsubject MM-813 scanned push\n",
@@ -730,10 +733,10 @@ class TestPushWorkspaceBranch:
                     )
                 )
                 proc.returncode = 0
-            elif call_count == 6:  # changed file list
+            elif call_count == 7:  # changed file list
                 proc.communicate = AsyncMock(return_value=(b"app/config.py\n", b""))
                 proc.returncode = 0
-            elif call_count == 7:  # per-file changed content
+            elif call_count == 8:  # per-file changed content
                 proc.communicate = AsyncMock(
                     return_value=(b"+password=do-not-print-this-value\n", b"")
                 )
@@ -777,7 +780,10 @@ class TestPushWorkspaceBranch:
             elif call_count == 4:  # remote branch sha before scan/push
                 proc.communicate = AsyncMock(return_value=(b"remote-sha\n", b""))
                 proc.returncode = 0
-            elif call_count == 5:  # commit metadata
+            elif call_count == 5:  # fetch remote branch object before scan
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 6:  # commit metadata
                 proc.communicate = AsyncMock(
                     return_value=(
                         b"commit local-sha\nsubject MM-813 clean scanned push\n",
@@ -785,21 +791,21 @@ class TestPushWorkspaceBranch:
                     )
                 )
                 proc.returncode = 0
-            elif call_count == 6:  # changed file list
+            elif call_count == 7:  # changed file list
                 proc.communicate = AsyncMock(return_value=(b"app/service.py\n", b""))
                 proc.returncode = 0
-            elif call_count == 7:  # per-file changed content
+            elif call_count == 8:  # per-file changed content
                 proc.communicate = AsyncMock(
                     return_value=(b"+return 'ordinary value'\n", b"")
                 )
                 proc.returncode = 0
-            elif call_count == 8:  # push
+            elif call_count == 9:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
-            elif call_count == 9:  # rev-parse HEAD
+            elif call_count == 10:  # rev-parse HEAD
                 proc.communicate = AsyncMock(return_value=(b"pushed-head-sha\n", b""))
                 proc.returncode = 0
-            elif call_count == 10:  # rev-list --count
+            elif call_count == 11:  # rev-list --count
                 proc.communicate = AsyncMock(return_value=(b"1\n", b""))
                 proc.returncode = 0
             else:

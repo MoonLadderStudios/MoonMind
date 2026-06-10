@@ -8347,6 +8347,14 @@ class CodexWorker:
             return
 
         scan_env = dict(env) if env is not None else None
+        if base_ref.startswith("origin/"):
+            with suppress(Exception):
+                await self._read_git_text_for_push_scan(
+                    repo_dir=repo_dir,
+                    env=scan_env,
+                    timeout=30,
+                    args=["fetch", "origin", base_ref.removeprefix("origin/")],
+                )
         commit_range = f"{base_ref}..{branch_name}"
         try:
             commit_metadata = await self._read_git_text_for_push_scan(
@@ -8355,8 +8363,10 @@ class CodexWorker:
                 timeout=15,
                 args=[
                     "log",
-                    "--format=commit %H%nparents %P%nauthor %an <%ae>%n"
-                    "subject %s%nbody%n%B%n---END-COMMIT---",
+                    (
+                        "--format=commit %H%nparents %P%nauthor %an <%ae>%n"
+                        + "subject %s%nbody%n%B%n---END-COMMIT---"
+                    ),
                     commit_range,
                 ],
             )
@@ -8379,25 +8389,30 @@ class CodexWorker:
                 for line in changed_files_text.splitlines()
                 if line.strip()
             ][:_PUBLISH_PUSH_SCAN_MAX_CHANGED_FILES]
-            for changed_file in changed_files:
-                file_diff = await self._read_git_text_for_push_scan(
-                    repo_dir=repo_dir,
-                    env=scan_env,
-                    timeout=20,
-                    args=[
-                        "diff",
-                        "--no-ext-diff",
-                        commit_range,
-                        "--",
-                        changed_file,
-                    ],
-                )
-                bundle.append(
-                    OutboundBundleItem(
-                        location=f"git.push.diff:{changed_file}",
-                        content=file_diff[:_PUBLISH_PUSH_SCAN_MAX_FILE_DIFF_CHARS],
+            diff_semaphore = asyncio.Semaphore(10)
+
+            async def _diff_item(changed_file: str) -> OutboundBundleItem:
+                async with diff_semaphore:
+                    file_diff = await self._read_git_text_for_push_scan(
+                        repo_dir=repo_dir,
+                        env=scan_env,
+                        timeout=20,
+                        args=[
+                            "diff",
+                            "--no-ext-diff",
+                            commit_range,
+                            "--",
+                            changed_file,
+                        ],
                     )
+                return OutboundBundleItem(
+                    location=f"git.push.diff:{changed_file}",
+                    content=file_diff[:_PUBLISH_PUSH_SCAN_MAX_FILE_DIFF_CHARS],
                 )
+
+            bundle.extend(
+                await asyncio.gather(*(_diff_item(path) for path in changed_files))
+            )
         except Exception as exc:
             safe_detail = moonmind_logging.redact_sensitive_text(str(exc))
             raise RuntimeError(
