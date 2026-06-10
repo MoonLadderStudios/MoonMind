@@ -1,0 +1,27 @@
+[
+  {
+    "id": 3384927066,
+    "disposition": "addressed",
+    "rationale": "Added a safe scope.metadata fallback before checking ambiguity markers and covered nullable metadata in tests."
+  },
+  {
+    "id": 3384927076,
+    "disposition": "addressed",
+    "rationale": "Updated scope artifact id extraction to accept ArtifactRef objects directly and added unit coverage."
+  },
+  {
+    "id": 4463806179,
+    "disposition": "not-applicable",
+    "rationale": "Review summary only; its two concrete findings are tracked by comment ids 3384927066 and 3384927076."
+  },
+  {
+    "id": 3384932948,
+    "disposition": "addressed",
+    "rationale": "Changed trusted inline scope handling so trust is derived from the activity envelope, not caller-supplied request fields, and added regression tests."
+  },
+  {
+    "id": 4463814365,
+    "disposition": "not-applicable",
+    "rationale": "Automated review summary/header only; the actionable P1 finding is tracked by comment id 3384932948."
+  }
+]
