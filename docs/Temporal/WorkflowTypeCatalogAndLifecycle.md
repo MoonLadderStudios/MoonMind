@@ -37,7 +37,7 @@ This document defines the **Temporal-side contract**. Product-facing APIs and UI
  All nondeterminism lives in Activities.
 
 4. **True agent execution is a child-workflow concern.** 
- `MoonMind.AgentRun` is the durable lifecycle wrapper for one true agent execution. Task-scoped managed sessions are represented separately by `MoonMind.AgentSession` when a runtime uses the managed-session plane.
+ `MoonMind.AgentRun` is the durable lifecycle wrapper for one true agent execution. Workflow-scoped managed sessions are represented separately by `MoonMind.AgentSession` when a runtime uses the managed-session plane.
 
 5. **Edits are modeled as Updates.** 
  Signals are used for asynchronous events such as approvals, webhooks, and external notifications.
@@ -116,7 +116,7 @@ Rules:
 | `MoonMind.ManifestIngest` | Ingest a manifest artifact, validate, compile to a plan/graph, orchestrate execution, aggregate results | manifest artifact ref, policy params | aggregated outputs, per-node results | seconds → hours |
 | `MoonMind.ProviderProfileManager` | Coordinate provider-profile slot assignment, release, cooldowns, and reconciliation for managed runtimes | runtime/profile coordination inputs | slot assignment, lease state transitions | minutes → long-lived |
 | `MoonMind.AgentRun` | Own the durable lifecycle of one true managed or external agent execution | `AgentExecutionRequest`, refs, runtime metadata | canonical agent result, artifacts, lifecycle outcome | seconds → hours |
-| `MoonMind.AgentSession` | Own one task-scoped managed runtime session container, including launch, turn routing, clear/reset epoch changes, status, summary refs, and teardown | `ManagedSessionWorkflowInput` for the live session-capable runtime (`codex_cli`) | session handle/state, continuity refs, control/reset refs | minutes → hours |
+| `MoonMind.AgentSession` | Own one workflow-scoped managed runtime session container, including launch, turn routing, clear/reset epoch changes, status, summary refs, and teardown | `ManagedSessionWorkflowInput` for the live session-capable runtime (`codex_cli`) | session handle/state, continuity refs, control/reset refs | minutes → hours |
 | `MoonMind.ManagedSessionReconcile` | Periodically reconcile managed-session supervision records and container state outside any one task step | reconciliation policy and runtime scope | reconciliation summary and cleanup actions | seconds → minutes per run |
 | `MoonMind.OAuthSession` | Manage browser-initiated OAuth or terminal-auth session lifecycle for managed runtimes | session config, runtime/provider context | auth/session status, profile registration side effects | minutes |
 | `MoonMind.MergeAutomation` | Wait for external pull request readiness after a published implementation run, then launch one resolver follow-up run when policy allows | parent run ref, compact pull request ref, optional Jira issue key, merge readiness policy | blocker summary, resolver run ref, terminal gate status | minutes → hours |
@@ -584,7 +584,7 @@ stateDiagram-v2
 
 Key notes:
 
-* this workflow owns one task-scoped managed runtime session for `codex_cli`
+* this workflow owns one workflow-scoped managed runtime session for `codex_cli`
 * the workflow carries bounded session identity and refs, not large transcripts or logs
 * turn execution and session controls call `agent_runtime.*` activities on `mm.activity.agent_runtime`
 * clear/reset creates a new `session_epoch` and publishes explicit continuity artifacts

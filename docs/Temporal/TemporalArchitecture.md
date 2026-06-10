@@ -193,7 +193,7 @@ The managed runtime plane:
 
 - supervises MoonMind-managed CLI/container runtimes
 - owns runtime launch, status, result collection, cleanup, and log capture through Activities and support workflows
-- uses `MoonMind.AgentRun` and, for task-scoped managed sessions, `MoonMind.AgentSession`
+- uses `MoonMind.AgentRun` and, for workflow-scoped managed sessions, `MoonMind.AgentSession`
 - keeps managed-run observability artifact-first and session-aware
 
 ### 5.8 External Integration Plane
@@ -243,7 +243,7 @@ Use child workflows when the child has its own durable lifecycle, cancellation s
 Current first-class examples:
 
 - `MoonMind.AgentRun` for one true agent execution
-- `MoonMind.AgentSession` for one task-scoped managed session
+- `MoonMind.AgentSession` for one workflow-scoped managed session
 - `MoonMind.MergeAutomation` for post-run PR readiness and resolver launch
 - `MoonMind.ProviderProfileManager` for long-lived provider-profile slot coordination
 - `MoonMind.OAuthSession` for OAuth / terminal-auth lifecycle support
@@ -358,7 +358,7 @@ The live repo-aligned workflow catalog is:
 | `MoonMind.Run` | Current live root workflow implementation for user/service Workflow Executions; plans work, owns Step ledger, starts child agent runs, integrates outputs | Primary Workflow Execution surface |
 | `MoonMind.ManifestIngest` | Ingests, validates, compiles, and orchestrates manifest-backed work | User/system execution surface |
 | `MoonMind.AgentRun` | Durable lifecycle wrapper for one true managed or external agent execution | Child/internal, surfaced through parent details |
-| `MoonMind.AgentSession` | Task-scoped managed-session workflow; currently Codex-backed in the live session plane | Internal/operator/detail support |
+| `MoonMind.AgentSession` | Workflow-scoped managed-session workflow; currently Codex-backed in the live session plane | Internal/operator/detail support |
 | `MoonMind.ManagedSessionReconcile` | Bounded operational reconciliation for managed sessions | Operational |
 | `MoonMind.ProviderProfileManager` | Long-lived provider-profile slot, lease, cooldown, and reconciliation manager | Internal/operator |
 | `MoonMind.OAuthSession` | OAuth / terminal-auth lifecycle support for managed runtimes | Support workflow |
@@ -710,7 +710,7 @@ Managed runtimes additionally use:
 - managed runtime launcher/supervisor/store components
 - artifact-first log capture
 - bounded status/result Activities
-- optional task-scoped `MoonMind.AgentSession` for interactive session continuity
+- optional workflow-scoped `MoonMind.AgentSession` for interactive session continuity
 
 External providers use provider adapters, but still return canonical runtime contracts before crossing into workflow code.
 
@@ -756,7 +756,7 @@ A true agent run:
 A managed session:
 
 - is owned by `MoonMind.AgentSession`
-- provides task-scoped runtime continuity, session epoch tracking, turn/control handling, and session continuity artifacts
+- provides workflow-scoped runtime continuity, session epoch tracking, turn/control handling, and session continuity artifacts
 - is currently Codex-backed in the live session plane
 - may later generalize to other runtimes through neutral managed-session contracts
 

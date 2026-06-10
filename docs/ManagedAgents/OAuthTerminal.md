@@ -19,13 +19,13 @@ runtimes and then target the resulting credential volume into managed runtime
 containers. This document defines the desired auth-terminal and volume-targeting
 contract.
 
-The current concrete managed-session targets are **Codex CLI** and **Claude Code**. Gemini CLI can still have auth volumes and provider profiles, but it is not yet a first-class task-scoped managed-session target.
+The current concrete managed-session targets are **Codex CLI** and **Claude Code**. Gemini CLI can still have auth volumes and provider profiles, but it is not yet a first-class workflow-scoped managed-session target.
 
 For Codex CLI and Claude Code, the important boundary is:
 
 - OAuth or manual auth writes durable credential material into a provider-profile
   auth volume such as `codex_auth_volume`.
-- A task-scoped managed session container receives that auth volume only
+- A workflow-scoped managed session container receives that auth volume only
   through an explicit auth-volume mount target.
 - The Codex App Server runs from a per-run `CODEX_HOME` under the shared task
   workspace, not directly from the durable auth volume.
@@ -48,7 +48,7 @@ This document does not define:
 - PTY attach for ordinary managed task runs
 - Live Logs transport for managed runs
 - a generic remote shell product
-- Gemini task-scoped managed-session parity
+- Gemini workflow-scoped managed-session parity
 - Docker-backed workload container auth inheritance
 
 OAuth can require an interactive terminal. Managed task execution should not.
@@ -111,7 +111,7 @@ The per-task layout under that root is:
 
 The per-run `codexHomePath` lives under the workspace volume. It is writable by
 the managed-session container user and is the `CODEX_HOME` used by Codex App
-Server for that task-scoped session.
+Server for that workflow-scoped session.
 
 ### 3.3 Explicit auth-volume target
 
@@ -352,7 +352,7 @@ Credential verification should run at two boundaries:
 1. **OAuth/Profile boundary:** verify the durable auth volume before registering
    or updating the Provider Profile.
 2. **Managed-session launch boundary:** verify the selected provider profile can
-   materialize into the task-scoped session container before marking the session
+   materialize into the workflow-scoped session container before marking the session
    ready.
 
 Verification may inspect expected file presence or CLI fingerprint/status
@@ -396,7 +396,7 @@ For Codex OAuth enrollment:
 7. MoonMind enters `registering_profile`, registers or updates the Codex
    Provider Profile, and refreshes any Settings-side profile views that are open.
    Returning to Settings is optional.
-8. Later task-scoped managed sessions target that profile and mount the auth
+8. Later workflow-scoped managed sessions target that profile and mount the auth
    volume at `MANAGED_AUTH_VOLUME_PATH` when needed.
 9. The session runtime seeds the per-run runtime home under `agent_workspaces`
    and starts the runtime session control surface.

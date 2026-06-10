@@ -72,7 +72,7 @@ The related architecture documents carry the same desired-state split: ordinary 
 
 ## 4. Terminology
 
-- **Managed agent session container** (or "agent container"): the task-scoped runtime container that holds the agent runtime — Codex CLI, Claude Code, Gemini CLI, or equivalent — and the workspace bind. In this document this is the container that runs `docker version`, `docker run`, and so on.
+- **Managed agent session container** (or "agent container"): the workflow-scoped runtime container that holds the agent runtime — Codex CLI, Claude Code, Gemini CLI, or equivalent — and the workspace bind. In this document this is the container that runs `docker version`, `docker run`, and so on.
 - **Docker sidecar container**: a sibling container in the same managed session that runs `dockerd` (classic or rootless) and exposes the daemon socket on a shared volume.
 - **Workspace volume**: the shared volume mounted at the same path into both containers so that `-v "$PWD":/workspace` bind mounts work transparently.
 - **Docker socket volume**: the shared volume that carries the Unix socket exposed by `dockerd` and consumed by the Docker CLI in the agent container.

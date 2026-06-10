@@ -126,7 +126,7 @@ If MoonMind later needs reusable non-agent services with their own lifecycle acr
 
 ### 4.1 Session container
 
-The **session container** is the task-scoped Codex container defined by `CodexManagedSessionPlane`.
+The **session container** is the workflow-scoped Codex container defined by `CodexManagedSessionPlane`.
 
 It owns session continuity state such as:
 
@@ -136,7 +136,7 @@ It owns session continuity state such as:
 * `thread_id`
 * `active_turn_id`
 
-It is the continuity and performance cache for the task-scoped managed session.
+It is the continuity and performance cache for the workflow-scoped managed session.
 
 ### 4.2 Workload container
 
@@ -208,7 +208,7 @@ MoonMind / Temporal owns:
 
 `CodexManagedSessionPlane` owns:
 
-* the task-scoped Codex session container
+* the workflow-scoped Codex session container
 * thread and turn lifecycle
 * `clear_session`, `interrupt_turn`, and related session actions
 * session continuity artifacts and bounded session metadata
@@ -329,12 +329,12 @@ Runtime enforcement remains authoritative even when tool registration and planne
 
 ## 7. Supported container roles
 
-### 7.1 Role A: task-scoped managed session container
+### 7.1 Role A: workflow-scoped managed session container
 
 The shared managed session plane remains:
 
 * Docker only
-* one task-scoped session container per task
+* one workflow-scoped session container per workflow
 * continuity reused only within the same task
 
 This role is governed by `CodexCliManagedSessions.md`, not by this document.
@@ -462,7 +462,7 @@ A Codex-managed session may:
 * determine that a specialized toolchain is required
 * request a MoonMind tool such as `unreal.run_tests`, `container.run_workload`, or `container.run_container`
 * consume the returned artifacts and metadata
-* continue the task-scoped managed session afterward
+* continue the workflow-scoped managed session afterward
 
 ### 9.2 What a Codex session may not do
 
@@ -1225,7 +1225,7 @@ Queue and fleet splitting follow operational need, not naming nostalgia.
 
 ### 18.1 Unreal test run in `profiles` mode
 
-1. A task runs in a task-scoped managed session.
+1. A workflow runs in a workflow-scoped managed session.
 2. The session determines that the repository is an Unreal project.
 3. It requests `unreal.run_tests`.
 4. MoonMind resolves the tool to the `unreal-5_3-linux` runner profile.

@@ -17,7 +17,7 @@ MoonMind vector search and embedding services.
 It is compatible with the shared managed session plane:
 
 - Codex is the concrete managed-session runtime.
-- Each task has one task-scoped Codex session container.
+- Each workflow has one workflow-scoped Codex session container.
 - Session continuity is a performance and context cache, not durable truth.
 - Temporal and MoonMind activities remain the orchestration control plane.
 - Artifacts and bounded workflow metadata remain the operator/audit source of
@@ -36,7 +36,7 @@ directories into durable vector truth.
   settings.
 - Temporal workflows coordinate work, retries, cancellation, and policy routing.
 - Managed Codex sessions execute task steps through Codex App Server inside a
-  task-scoped Docker container.
+  workflow-scoped Docker container.
 - Durable operator evidence is published through artifacts and bounded workflow
   metadata.
 
@@ -181,7 +181,7 @@ Rules:
   vector collections.
 - A `cancel_session` or `terminate_session` stops in-flight vector work through
   normal Temporal cancellation or workload-container termination.
-- Reused task-scoped session containers may retain disposable local retrieval
+- Reused workflow-scoped session containers may retain disposable local retrieval
   caches, but those caches must be safe to lose.
 - Recovery after worker restart uses workflow metadata, artifacts, vector service
   state, and the managed-session supervision index, not container-local vector

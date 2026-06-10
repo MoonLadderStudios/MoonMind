@@ -254,15 +254,15 @@ _JSON_OBJECT_CODE_FENCE_PATTERN = re.compile(
 INTEGRATION_POLL_LOOP_PATCH = "refactor-loop-1.2"
 # Replay-stable patch id for parent-initiated defensive slot release on child terminal state.
 RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH = "run-defensive-slot-release-1"
-# Replay-stable patch id for task-scoped Codex terminate activity+signal finalization.
+# Replay-stable patch id for workflow-scoped Codex terminate activity+signal finalization.
 RUN_TASK_SCOPED_SESSION_TERMINATION_PATCH = "run-task-scoped-session-termination-v1"
 RUN_BLOCKED_OUTCOME_SHORT_CIRCUIT_PATCH = "run-blocked-outcome-short-circuit-v1"
 RUN_JIRA_BLOCKER_RECHECK_PATCH = "run-jira-blocker-recheck-v1"
-# Replay-stable patch id for the v2 task-scoped Codex termination path. The
+# Replay-stable patch id for the v2 workflow-scoped Codex termination path. The
 # identifier says "update" for in-flight history continuity, but current
 # Temporal external workflow handles expose the session control surface by signal.
 RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_PATCH = "run-task-scoped-session-termination-v2"
-# Replay-stable patch id for task-scoped Codex termination through the
+# Replay-stable patch id for workflow-scoped Codex termination through the
 # AgentSession update handler. This path executes the remote terminate activity.
 RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_EXECUTE_PATCH = (
     "run-task-scoped-session-termination-v3"
@@ -9976,7 +9976,7 @@ class MoonMindRunWorkflow:
 
     @workflow.signal
     def managed_session_bound(self, payload: dict) -> None:
-        """Record a task-scoped managed session started after slot admission."""
+        """Record a workflow-scoped managed session started after slot admission."""
 
         binding_payload = payload.get("binding") if isinstance(payload, dict) else None
         if not isinstance(binding_payload, Mapping):

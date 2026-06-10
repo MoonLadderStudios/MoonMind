@@ -898,7 +898,7 @@ def test_write_run_artifacts_skips_no_op_when_executions_queued(tmp_path: Path) 
 
 
 def test_build_queue_request_omits_runtime_inheritance_by_default() -> None:
-    """Without a task-scoped credential, no inheritance flag is emitted."""
+    """Without a workflow-scoped credential, no inheritance flag is emitted."""
     module = _load_module()
     req = _build_request(module)
     assert "runtimeInheritance" not in req["payload"]

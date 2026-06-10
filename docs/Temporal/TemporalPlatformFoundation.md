@@ -74,12 +74,12 @@ The following workflow types constitute the live Temporal application layer at t
 | `MoonMind.Run` | General root execution workflow for plan-driven orchestration |
 | `MoonMind.ManifestIngest` | Fan-out/fan-in manifest ingestion |
 | `MoonMind.AgentRun` | Durable lifecycle wrapper for true agent execution (managed and external) |
-| `MoonMind.AgentSession` | Task-scoped managed-session workflow, currently Codex-backed |
+| `MoonMind.AgentSession` | Workflow-scoped managed-session workflow, currently Codex-backed |
 | `MoonMind.ManagedSessionReconcile` | Bounded support workflow for managed-session reconciliation and cleanup |
 | `MoonMind.ProviderProfileManager` | Long-running provider-profile coordination for managed runtimes |
 | `MoonMind.OAuthSession` | OAuth dance lifecycle |
 
-All true agent execution steps are dispatched as `MoonMind.AgentRun` child workflows from `MoonMind.Run`. They are not plain activity invocations. When a managed run uses a task-scoped session, `MoonMind.AgentSession` owns the session container and turn/control lifecycle separately from the step-scoped `MoonMind.AgentRun`.
+All true agent execution steps are dispatched as `MoonMind.AgentRun` child workflows from `MoonMind.Run`. They are not plain activity invocations. When a managed run uses a workflow-scoped session, `MoonMind.AgentSession` owns the session container and turn/control lifecycle separately from the step-scoped `MoonMind.AgentRun`.
 
 ---
 

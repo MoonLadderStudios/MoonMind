@@ -959,7 +959,7 @@ Suggested values:
 | Policy | Meaning |
 | --- | --- |
 | `fresh_agent_run` | Start a new `MoonMind.AgentRun` child workflow for the attempt. |
-| `reuse_session_new_epoch` | Reuse a task-scoped managed session container but clear/reset to a new epoch before the attempt. |
+| `reuse_session_new_epoch` | Reuse a workflow-scoped managed session container but clear/reset to a new epoch before the attempt. |
 | `reuse_session_same_epoch` | Keep session continuity across attempts; should be rare and explicit. |
 | `external_provider_continuation` | Delegate to provider-specific continuation semantics when MoonMind cannot control runtime state directly. |
 

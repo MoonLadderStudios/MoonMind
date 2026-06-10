@@ -28,12 +28,12 @@ The README was reframed (2026-06-09) around three headline value propositions �
 
 ## Milestone 1 — Managed Agent Runtimes 🔧
 
-**README claim:** *"MoonMind runs owned CLI runtimes on your own infrastructure using your existing subscriptions or API keys. Codex CLI is the live first-class task-scoped managed-session runtime; Claude Code is a first-class managed-runtime target … on the path to the same live session controller."*
+**README claim:** *"MoonMind runs owned CLI runtimes on your own infrastructure using your existing subscriptions or API keys. Codex CLI is the live first-class workflow-scoped managed-session runtime; Claude Code is a first-class managed-runtime target … on the path to the same live session controller."*
 
 ### What's shipped
 - Codex, Gemini, and Claude Temporal activity workers (`codex-worker`, `gemini-worker`, `claude-worker`)
 - Runtime adapter pattern (`moonmind/agents/`, `moonmind/workflows/temporal/runtime/`)
-- Codex CLI task-scoped managed sessions with per-session sidecar Docker daemon
+- Codex CLI workflow-scoped managed sessions with per-session sidecar Docker daemon
 - Auth profile management UI in Mission Control; auto-seeding of default auth profiles on startup
 - Worker health checks & readiness probes; per-worker shard health view (MM-775)
 - Graceful worker pause / unpause — API (`system_operations.py`) + Settings Operations surface
@@ -44,7 +44,7 @@ The README was reframed (2026-06-09) around three headline value propositions �
 - [x] **1.1–1.6** Auth parity, profile UI, health checks, API key gate removal, auto-seeding — all shipped
 - [x] **1.7** Graceful worker pause / unpause — API + Settings Operations wiring
 - [x] **1.8** Universal OAuth sessions — Delivered as the native xterm.js OAuth terminal (spec 306); Tmate architecture retired
-- [ ] **1.9** Claude Code task-scoped managed-session parity — Claude-specific session design exists (`docs/ManagedAgents/ClaudeCodeManagedSessions.md`) but Claude does not yet enter the live `ManagedSession*` controller path that Codex uses. This is the top runtime-parity gap against the README headline. Split into acceptance-level sub-items so progress is visible:
+- [ ] **1.9** Claude Code workflow-scoped managed-session parity — Claude-specific session design exists (`docs/ManagedAgents/ClaudeCodeManagedSessions.md`) but Claude does not yet enter the live `ManagedSession*` controller path that Codex uses. This is the top runtime-parity gap against the README headline. Split into acceptance-level sub-items so progress is visible:
   - [ ] **1.9a** Claude session launch/transport adapter — runtime-specific controller entering the shared `ManagedSession*` path
   - [ ] **1.9b** Normalized turn lifecycle and session state — identity fields, epochs, clear/reset boundaries
   - [ ] **1.9c** Policy enforcement at Claude session launch — enforcement hook only; envelope contracts are 12.1
@@ -77,7 +77,7 @@ The README was reframed (2026-06-09) around three headline value propositions �
 - Workflow presets, step templates, and step sequencing (`docs/Workflows/WorkflowPresetsSystem.md`, `WorkflowStepSystem.md`)
 - Manifest-based task submission; task proposal queue with `proposal_generate`
 - Tracker-native proposal delivery and review — GitHub/Jira delivery records and process-tracker decision handling (specs 312, 313, 357)
-- Context clearing between ordered Codex managed-session steps via the task-scoped AgentSession reset boundary (MM-745)
+- Context clearing between ordered Codex managed-session steps via the workflow-scoped AgentSession reset boundary (MM-745)
 - Target-aware prepared inputs per step — prepared-input manifests selected per step at the runtime prompt boundary (specs 325, 349; `moonmind/workflows/tasks/prepared_context.py`)
 - Preset-driven scheduling — goal-only submissions deterministically mapped to seeded presets (MM-747)
 - Schema-driven capability inputs and Create-page authoring validation (specs 308, 340)

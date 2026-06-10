@@ -1,4 +1,4 @@
-"""Workflow-side adapter for managed task-scoped runtime sessions."""
+"""Workflow-side adapter for managed workflow-scoped runtime sessions."""
 
 from __future__ import annotations
 

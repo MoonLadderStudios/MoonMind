@@ -9,8 +9,8 @@ MoonMind is an open-source platform for orchestrating leading AI coding agents a
 
 MoonMind currently has two concrete managed-runtime centers of gravity:
 
-1. **Codex CLI** — a working managed runtime path and first-class task-scoped managed-session runtime.
-2. **Claude Code** — a working managed runtime path backed by runtime strategies, provider-profile materialization, OAuth/API-key credential flows, context injection, GitHub auth handling, and managed-run supervision. Claude-specific session domain models exist, but Claude Code does not yet have a live task-scoped managed-session controller.
+1. **Codex CLI** — a working managed runtime path and first-class workflow-scoped managed-session runtime.
+2. **Claude Code** — a working managed runtime path backed by runtime strategies, provider-profile materialization, OAuth/API-key credential flows, context injection, GitHub auth handling, and managed-run supervision. Claude-specific session domain models exist, but Claude Code does not yet have a live workflow-scoped managed-session controller.
 
 `MoonMind.AgentRun` and the managed-runtime launcher support multiple managed CLI runtimes, including `codex_cli`, `claude_code`, and `gemini_cli`. The `claude` and `codex` aliases are normalized to canonical managed runtime IDs where needed. `MoonMind.AgentSession`, `managedSession` bindings, and the turn-level session-control catalog currently describe the live Codex CLI session path; future session-capable runtimes should add their own controller/adapter bindings before being admitted to that path.
 
@@ -46,7 +46,7 @@ flowchart LR
   subgraph WorkflowPlane["Workflow Executions"]
     RUN["MoonMind.Run<br/>root workflow implementation"]
     AR["MoonMind.AgentRun<br/>true agent step workflow"]
-    AS["MoonMind.AgentSession<br/>task-scoped session entity"]
+    AS["MoonMind.AgentSession<br/>workflow-scoped session entity"]
     PPM["MoonMind.ProviderProfileManager<br/>per-runtime slot/cooldown entity"]
     OAUTH["MoonMind.OAuthSession<br/>auth-session orchestrator"]
     RECON["MoonMind.ManagedSessionReconcile<br/>bounded session reconciler"]
@@ -74,7 +74,7 @@ flowchart LR
   end
 
   subgraph ManagedSessionPlane["Managed Session Components<br/>(controlled by Agent Runtime activities)"]
-    CSESS["Task-scoped session container<br/>codex_cli / claude_code"]
+    CSESS["Workflow-scoped session container<br/>codex_cli / claude_code"]
     DSIDE["Per-session Docker sidecar<br/>private daemon for repo work"]
     CAPP["Session control transport"]
     TURN["Turn control<br/>send / steer / interrupt / clear"]
@@ -192,7 +192,7 @@ Diagram rules:
 
 | Runtime / integration | Current role | Current maturity | Architecture note |
 |---|---|---|---|
-| `codex_cli` | Managed CLI runtime and task-scoped managed-session runtime | Concrete working managed-run path and concrete `MoonMind.AgentSession` binding | Codex uses the shared session-plane contracts with Codex-specific transport details: session container, turn control, `session_epoch`, thread boundaries, clear/reset artifacts, and Codex App Server transport. |
+| `codex_cli` | Managed CLI runtime and workflow-scoped managed-session runtime | Concrete working managed-run path and concrete `MoonMind.AgentSession` binding | Codex uses the shared session-plane contracts with Codex-specific transport details: session container, turn control, `session_epoch`, thread boundaries, clear/reset artifacts, and Codex App Server transport. |
 | `claude_code` | Managed CLI runtime | Concrete working managed-run path; session design/domain models only | Claude Code uses provider-profile materialization, OAuth/API-key paths, MiniMax/Anthropic-compatible profile support, context injection, GitHub auth handling, and runtime-specific launch hardening. It is not yet admitted to the live `MoonMind.AgentSession` controller path. |
 | `gemini_cli` | Managed CLI runtime | Registered managed-runtime strategy and supported architecture target | Gemini participates in the same strategy/launcher/profile model, but this document's current focus is Codex CLI and Claude Code. |
 | Jules | External delegated agent | Concrete external-agent path | Delegated through integration adapters and canonical `AgentRun` contracts. |
@@ -221,7 +221,7 @@ The Temporal Service does not execute MoonMind application code. Workflow and Ac
 The Agent Orchestration Layer spans all true agent execution:
 
 - managed runtime runs launched and supervised by MoonMind
-- Codex CLI task-scoped managed sessions
+- Codex CLI workflow-scoped managed sessions
 - delegated external agents such as Jules and Codex Cloud
 
 The layer owns canonical contracts, provider-profile coordination, runtime dispatch, artifact publication, policy enforcement, failure classification, and operator-facing lifecycle semantics.
@@ -236,7 +236,7 @@ Claude Code and Codex CLI live here today as concrete managed runtimes.
 
 ### Shared Managed Session Plane
 
-The Managed Session Plane is a stateful, task-scoped path for session-capable runtimes. It uses `MoonMind.AgentSession` as a Temporal entity workflow for session orchestration and compact session metadata. The workflow does not hold a container or socket connection directly. It schedules Agent Runtime activities that launch/resume/control the runtime session container and publish session artifacts.
+The Managed Session Plane is a stateful, workflow-scoped path for session-capable runtimes. It uses `MoonMind.AgentSession` as a Temporal entity workflow for session orchestration and compact session metadata. The workflow does not hold a container or socket connection directly. It schedules Agent Runtime activities that launch/resume/control the runtime session container and publish session artifacts.
 
 Ordinary Docker work that originates from the session uses the per-session
 Docker sidecar described in `docs/ManagedAgents/DockerSidecarRuntime.md`. The
@@ -320,7 +320,7 @@ Managed runtime processes, containers, external jobs, OAuth runners, and workloa
 
 A **managed run** is an asynchronously supervised CLI runtime execution. Claude Code and Codex CLI both work on this path today.
 
-A **managed session** is a longer-lived task-scoped runtime container with explicit session identity, turn control, continuity epochs, and clear/reset semantics. Codex CLI is the current concrete implementation of this path; Claude Code is a managed-run runtime with session-specific design models that are not yet wired into the live session controller.
+A **managed session** is a longer-lived workflow-scoped runtime container with explicit session identity, turn control, continuity epochs, and clear/reset semantics. Codex CLI is the current concrete implementation of this path; Claude Code is a managed-run runtime with session-specific design models that are not yet wired into the live session controller.
 
 The top-level architecture must not collapse these together.
 
@@ -379,9 +379,9 @@ Any state required for recovery, audit, presentation, rerun, or operator underst
 
 ### 9. Step boundaries remain first-class
 
-A managed runtime may run across multiple plan steps or through a task-scoped session, but MoonMind must preserve step-level evidence. Each meaningful step should produce bounded status, logs, outputs, diagnostics, and artifact refs.
+A managed runtime may run across multiple plan steps or through a workflow-scoped session, but MoonMind must preserve step-level evidence. Each meaningful step should produce bounded status, logs, outputs, diagnostics, and artifact refs.
 
-Task-scoped sessions must not allow broad repository-level autonomy instructions to blur current step boundaries.
+Workflow-scoped sessions must not allow broad repository-level autonomy instructions to blur current step boundaries.
 
 ### 10. Observation and control are separate
 
@@ -408,7 +408,7 @@ Long-lived entity workflows such as `MoonMind.AgentSession` and `MoonMind.Provid
 |---|---|
 | `MoonMind.Run` | Current live root workflow implementation for a user Workflow Execution. Owns the workflow envelope, planning, Step ordering, workflow cancellation, Step ledger, and final workflow summary. |
 | `MoonMind.AgentRun` | Child workflow for one true agent execution step. Handles managed, session-backed, and external agents through canonical contracts. |
-| `MoonMind.AgentSession` | Task-scoped session entity workflow for the live Codex CLI session path. Owns compact session orchestration state, turn routing, session epochs, clear/reset metadata, reconciliation hooks, and teardown orchestration. It schedules activities for container and transport side effects. |
+| `MoonMind.AgentSession` | Workflow-scoped session entity workflow for the live Codex CLI session path. Owns compact session orchestration state, turn routing, session epochs, clear/reset metadata, reconciliation hooks, and teardown orchestration. It schedules activities for container and transport side effects. |
 | `MoonMind.ManagedSessionReconcile` | Bounded reconciliation workflow for managed-session records and container state. |
 | `MoonMind.ProviderProfileManager` | Per-runtime workflow that owns provider-profile slot acquisition, release, cooldown, assignment, lease safety nets, and queue draining. |
 | `MoonMind.OAuthSession` | Interactive auth-session workflow. Orchestrates volume provisioning, auth-runner lifecycle, finalize/cancel/fail signals, verification, profile registration, and cleanup. It does not hold PTY/WebSocket connections directly. |
@@ -436,17 +436,17 @@ This is the path where Codex CLI is concrete today. Claude Code is concrete on t
 
 ### Managed-session shape
 
-For Codex CLI task-scoped sessions:
+For Codex CLI workflow-scoped sessions:
 
 1. `MoonMind.Run` determines that a step should use the managed-session path.
-2. `MoonMind.Run` ensures the task-scoped `MoonMind.AgentSession` exists.
+2. `MoonMind.Run` ensures the workflow-scoped `MoonMind.AgentSession` exists.
 3. `MoonMind.AgentSession` launches or resumes a runtime session container through Agent Runtime activities.
 4. Runtime handles such as container ID, thread ID, active turn ID, and session epoch are attached to `MoonMind.AgentSession` through compact Signals or returned activity payloads.
 5. A true agent step is still represented through `MoonMind.AgentRun`. For session-backed execution, `AgentRun` delegates the turn to `MoonMind.AgentSession` and records the canonical step-level `AgentRunResult`.
 6. `MoonMind.AgentSession` accepts turn-control requests through Workflow Updates when the caller needs validation and a response. Updates call Agent Runtime activities to send, steer, interrupt, clear, terminate, fetch summaries, and publish session artifacts.
 7. Codex App Server handles runtime-native turn execution, steering, interruption, clear/reset, and session status inside the session container.
 8. Session continuity artifacts, reset boundaries, stdout/stderr, diagnostics, control-event artifacts, and result artifacts are published.
-9. Clear/reset creates a new MoonMind session epoch and thread boundary inside the same task-scoped session policy. The epoch is MoonMind domain state and is independent of Temporal `RunId`.
+9. Clear/reset creates a new MoonMind session epoch and thread boundary inside the same workflow-scoped session policy. The epoch is MoonMind domain state and is independent of Temporal `RunId`.
 
 For Codex session-backed `AgentRun` steps, turn instruction preparation is a
 separate Agent Runtime activity (`agent_runtime.prepare_turn_instructions`) from
@@ -1087,9 +1087,9 @@ In the current architecture:
 - `MoonMind.Run` remains the current live root workflow implementation for user Workflow Executions.
 - `MoonMind.AgentRun` owns one true agent execution step for managed, session-backed, and external agents.
 - `ManagedRuntimeStrategy`, `ManagedRuntimeLauncher`, `ManagedAgentAdapter`, `ManagedRunSupervisor`, and `ManagedRunStore` are the concrete managed-run path for CLI runtimes such as Claude Code and Codex CLI.
-- `MoonMind.AgentSession` owns the current Codex CLI task-scoped managed-session orchestration path while side effects remain in Agent Runtime activities.
+- `MoonMind.AgentSession` owns the current Codex CLI workflow-scoped managed-session orchestration path while side effects remain in Agent Runtime activities.
 - Provider Profiles are the durable routing, credential-source, materialization, slot, and cooldown policy boundary.
-- Claude Code is a current working managed-run path for many workflows and a candidate for a future peer task-scoped managed-session runtime.
+- Claude Code is a current working managed-run path for many workflows and a candidate for a future peer workflow-scoped managed-session runtime.
 - Artifacts and observability APIs remain authoritative for execution evidence.
 - External agents and Docker workload containers remain separate execution classes with clear contracts.
 

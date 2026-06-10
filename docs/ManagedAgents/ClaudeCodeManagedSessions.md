@@ -1,6 +1,6 @@
 # Claude Code Managed Sessions
 
-**Status:** Desired-state contract and domain model notes; not yet a live task-scoped managed-session runtime
+**Status:** Desired-state contract and domain model notes; not yet a live workflow-scoped managed-session runtime
 **Audience:** Managed Agents platform, runtime integration, client surfaces, security, and enterprise administration
 **Related:** `docs/ManagedAgents/CodexCliManagedSessions.md`
 
@@ -39,7 +39,7 @@ Current live boundaries:
 Known implementation gaps versus Codex:
 
 - Claude Code does not yet use the live remote-session activity transport. Claude-native checkpoint, policy-dialog, Remote Control, and subagent/team semantics are represented by domain models and documentation but are not yet exposed as live session workflow updates.
-- Codex App Server-specific implementation class names remain in private adapter/controller modules because the only live task-scoped managed-session transport is Codex-specific. Shared workflow/activity contracts should use `ManagedSession*` names when a second live runtime is added.
+- Codex App Server-specific implementation class names remain in private adapter/controller modules because the only live workflow-scoped managed-session transport is Codex-specific. Shared workflow/activity contracts should use `ManagedSession*` names when a second live runtime is added.
 
 ---
 

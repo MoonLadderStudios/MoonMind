@@ -773,7 +773,7 @@ CodexManagedSessionWorkflowStatus = Literal[
 def canonical_managed_session_runtime_id(
     runtime_id: str,
 ) -> ManagedSessionRuntimeId | None:
-    """Return the canonical runtime ID for task-scoped managed sessions."""
+    """Return the canonical runtime ID for workflow-scoped managed sessions."""
 
     normalized = str(runtime_id or "").strip().lower().replace("-", "_")
     if normalized in {"codex", "codex_cli"}:
@@ -851,7 +851,7 @@ def _compact_managed_session_metadata(
     return normalized
 
 class ManagedSessionPlaneContract(BaseModel):
-    """Shared task-scoped managed session plane contract."""
+    """Shared workflow-scoped managed session plane contract."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -887,7 +887,7 @@ class ManagedSessionPlaneContract(BaseModel):
 CodexManagedSessionPlaneContract = ManagedSessionPlaneContract
 
 class CodexManagedSessionState(BaseModel):
-    """Identity and continuity state for one task-scoped Codex session."""
+    """Identity and continuity state for one workflow-scoped Codex session."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -1001,7 +1001,7 @@ class ManagedSessionDockerCapabilityRequest(BaseModel):
         return self
 
 class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
-    """Launch contract for a task-scoped remote Codex session container."""
+    """Launch contract for a workflow-scoped remote Codex session container."""
 
     task_run_id: NonBlankStr = Field(..., alias="taskRunId")
     workflow_id: NonBlankStr | None = Field(None, alias="workflowId")
@@ -1326,7 +1326,7 @@ class CodexManagedSessionRecord(BaseModel):
         return tuple(refs)
 
 class CodexManagedSessionBinding(BaseModel):
-    """Bounded task-scoped session binding passed across workflow boundaries."""
+    """Bounded workflow-scoped session binding passed across workflow boundaries."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -1372,7 +1372,7 @@ class CodexManagedSessionBinding(BaseModel):
         )
 
 class CodexManagedSessionWorkflowInput(BaseModel):
-    """Workflow input for one task-scoped managed runtime session."""
+    """Workflow input for one workflow-scoped managed runtime session."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -1583,7 +1583,7 @@ class CodexManagedSessionTerminateUpdateRequest(CodexManagedSessionWorkflowContr
     """Typed workflow update request for terminating the managed session."""
 
 class CodexManagedSessionSnapshot(BaseModel):
-    """Workflow-owned snapshot of one task-scoped managed runtime session."""
+    """Workflow-owned snapshot of one workflow-scoped managed runtime session."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 

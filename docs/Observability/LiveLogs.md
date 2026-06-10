@@ -55,7 +55,7 @@ The first Live Logs redesign correctly replaced that with an artifact-first mode
 That is no longer sufficient for the shared managed session plane.
 
 The Codex session-plane contract introduces a richer continuity model:
-- one task-scoped managed session container per task
+- one workflow-scoped managed session container per workflow
 - one active Codex thread per session epoch
 - bounded session identity made of `session_id`, `session_epoch`, `container_id`, `thread_id`, and `active_turn_id`
 - explicit `clear_session` semantics that write artifacts, increment the epoch, create a new thread, and require UI-visible boundary presentation
@@ -818,7 +818,7 @@ Required download surfaces:
 
 ## 12.5 Session continuity retrieval
 
-MoonMind may also expose continuity-specific drill-down endpoints for a task-scoped session.
+MoonMind may also expose continuity-specific drill-down endpoints for a workflow-scoped session.
 
 Those endpoints should remain separate from Live Logs transport and should serve durable continuity artifacts such as:
 - latest session summary

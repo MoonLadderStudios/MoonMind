@@ -32,7 +32,7 @@ The managed-session model is the only long-term direction for this subsystem. Le
 At the system level:
 
 - **Temporal** remains the durable outer orchestrator.
-- **Managed runtimes** run in **separate task-scoped containers** launched from runtime-specific images.
+- **Managed runtimes** run in **separate workflow-scoped containers** launched from runtime-specific images.
 - **Artifacts and bounded workflow metadata** remain durable truth.
 - **Session containers** are continuity and performance caches, not durable truth.
 - **Context** is assembled by MoonMind and delivered into the session through artifact refs, workspace materialization, and runtime-specific input delivery.
@@ -40,7 +40,7 @@ At the system level:
 - **Authentication** is owned by Provider Profiles plus OAuth and secret-resolution subsystems.
 - **Secrets** are provided through references and launch-time materialization, never as raw durable payloads.
 
-Current maturity is **Codex CLI first-class for managed sessions, with Claude Code first-class for managed runs**. Codex CLI is the live task-scoped managed-session runtime behind the shared `MoonMind.AgentSession` control plane. Claude Code has a live managed-run path and Claude-specific session design models, but it does not yet enter the live managed-session controller. Gemini CLI remains a managed-runtime strategy and can adopt the session plane by implementing the same shared contracts rather than inventing a new top-level managed-agent abstraction.
+Current maturity is **Codex CLI first-class for managed sessions, with Claude Code first-class for managed runs**. Codex CLI is the live workflow-scoped managed-session runtime behind the shared `MoonMind.AgentSession` control plane. Claude Code has a live managed-run path and Claude-specific session design models, but it does not yet enter the live managed-session controller. Gemini CLI remains a managed-runtime strategy and can adopt the session plane by implementing the same shared contracts rather than inventing a new top-level managed-agent abstraction.
 
 ---
 
@@ -52,7 +52,7 @@ This document defines the subsystem architecture for:
 
 - managed agents as declarative desired state,
 - runtime-specific managed session planes,
-- task-scoped managed session containers,
+- workflow-scoped managed session containers,
 - session lifecycle and reconciliation boundaries,
 - context assembly and runtime delivery,
 - session-aware observability and Live Logs,
@@ -155,7 +155,7 @@ Temporal remains the durable orchestrator.
 The intended workflow shape is:
 
 - `MoonMind.Run` owns the task envelope and step ordering,
-- `MoonMind.AgentSession` owns one task-scoped managed session container,
+- `MoonMind.AgentSession` owns one workflow-scoped managed session container,
 - `MoonMind.AgentRun` owns one true agent execution step that attaches to or uses that session,
 - `MoonMind.ManagedSessionReconcile` performs bounded reconciliation work,
 - `MoonMind.ProviderProfileManager` coordinates provider-profile capacity and cooldown,
@@ -182,7 +182,7 @@ Managed sessions are therefore allowed to be long-lived and stateful, but they a
 
 Managed runtimes should run in **runtime-specific session containers** launched on demand by MoonMind.
 
-Each managed session container is a task-scoped environment that can hold:
+Each managed session container is a workflow-scoped environment that can hold:
 
 - the runtime's native session loop,
 - runtime-local configuration,
@@ -196,9 +196,9 @@ MoonMind worker images should remain generic and lightweight. They should orches
 
 ### 5.2 Task scope and reuse
 
-The default architectural unit is a **task-scoped managed session**.
+The default architectural unit is a **workflow-scoped managed session**.
 
-A task-scoped session may:
+A workflow-scoped session may:
 
 - serve one step,
 - serve multiple ordered steps in the same task,
@@ -668,7 +668,7 @@ This distinction is especially important as MoonMind evolves richer build/test/c
 
 Codex CLI is the current concrete managed-session implementation.
 
-The live task-scoped session plane is designed for shared workflow/activity contracts, but the current controller and transport are Codex-specific. Runtime-specific details such as Codex App Server protocol, thread/turn mappings, and session reset mechanics remain documented in runtime-specific docs. Claude Code policy/context/checkpoint semantics remain documented as design/domain model work until a Claude session controller is implemented.
+The live workflow-scoped session plane is designed for shared workflow/activity contracts, but the current controller and transport are Codex-specific. Runtime-specific details such as Codex App Server protocol, thread/turn mappings, and session reset mechanics remain documented in runtime-specific docs. Claude Code policy/context/checkpoint semantics remain documented as design/domain model work until a Claude session controller is implemented.
 
 ### 11.2 Additional runtimes should extend the same model
 

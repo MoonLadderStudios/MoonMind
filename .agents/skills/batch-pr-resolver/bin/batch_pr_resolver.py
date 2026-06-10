@@ -450,7 +450,7 @@ def _task_workflow_id_from_env() -> str | None:
     """Return the parent task workflow id when the skill is running inside one.
 
     Presence of ``MOONMIND_TASK_WORKFLOW_ID`` indicates the managed-session
-    runtime exposed a task-scoped credential.  Callers use it to opt into
+    runtime exposed a workflow-scoped credential.  Callers use it to opt into
     the server-side ``runtimeInheritance="caller"`` contract.
     """
 
@@ -531,8 +531,8 @@ def _build_queue_request(
     if idempotency_key:
         payload_dict["idempotencyKey"] = idempotency_key
 
-    # Server-side inheritance contract: when running inside a task with a
-    # task-scoped credential, opt into runtimeInheritance="caller" so the
+    # Server-side inheritance contract: when running inside a workflow with a
+    # workflow-scoped credential, opt into runtimeInheritance="caller" so the
     # API copies the parent's effective runtime/provider profile.  The
     # explicit targetRuntime/task.runtime fallback below is preserved for
     # deployments that do not yet honour the inheritance contract.
