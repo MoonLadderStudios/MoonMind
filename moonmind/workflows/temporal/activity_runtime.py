@@ -30,6 +30,7 @@ from temporalio import exceptions as temporal_exceptions
 from moonmind.config.settings import settings
 from moonmind.services.skills_on_demand import skills_on_demand_disabled_instruction
 from moonmind.integrations.pentest.models import (
+    PentestApprovedScope,
     PentestLaunchPolicyError,
     PentestProviderMaterializationError,
     PentestScopeValidationError,
@@ -149,6 +150,7 @@ from moonmind.workflows.temporal.artifacts import (
     ArtifactRef,
     ArtifactUploadDescriptor,
     ExecutionRef,
+    TemporalArtifactError,
     TemporalArtifactService,
     build_artifact_ref,
 )
@@ -4236,6 +4238,68 @@ class TemporalAgentRuntimeActivities:
         self._client_adapter = client_adapter
         self._supervision_tasks: set[asyncio.Task] = set()
 
+    @staticmethod
+    def _pentest_scope_artifact_id(scope_artifact_ref: object) -> str:
+        if isinstance(scope_artifact_ref, Mapping):
+            artifact_id = str(scope_artifact_ref.get("artifact_id") or "").strip()
+        else:
+            artifact_id = str(scope_artifact_ref or "").strip()
+        if not artifact_id:
+            raise PentestScopeValidationError(
+                error_code="INVALID_SCOPE",
+                reasons=("scope_artifact_ref_required",),
+                diagnostics={"scope_artifact_ref": None},
+            )
+        return artifact_id
+
+    async def _load_pentest_approved_scope(
+        self,
+        request_payload: Mapping[str, Any],
+    ) -> PentestApprovedScope:
+        if self._artifact_service is None:
+            raise PentestScopeValidationError(
+                error_code="INVALID_SCOPE",
+                reasons=("scope_artifact_service_unavailable",),
+                diagnostics={"scope_artifact_ref": request_payload.get("scope_artifact_ref")},
+            )
+        artifact_id = self._pentest_scope_artifact_id(
+            request_payload.get("scope_artifact_ref")
+        )
+        principal = str(
+            request_payload.get("principal_id")
+            or request_payload.get("task_run_id")
+            or "workflow"
+        ).strip()
+        try:
+            _artifact, payload = await self._artifact_service.read(
+                artifact_id=artifact_id,
+                principal=principal,
+            )
+        except TemporalArtifactError as exc:
+            raise PentestScopeValidationError(
+                error_code="INVALID_SCOPE",
+                reasons=("scope_artifact_unreadable",),
+                diagnostics={"scope_artifact_ref": artifact_id},
+            ) from exc
+        try:
+            decoded = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise PentestScopeValidationError(
+                error_code="INVALID_SCOPE",
+                reasons=("scope_artifact_malformed",),
+                diagnostics={"scope_artifact_ref": artifact_id},
+            ) from exc
+        try:
+            return PentestApprovedScope.model_validate(decoded)
+        except ValidationError as exc:
+            raise PentestScopeValidationError(
+                error_code="INVALID_SCOPE",
+                reasons=("scope_artifact_invalid",),
+                diagnostics={
+                    "scope_artifact_ref": artifact_id,
+                    "error_count": exc.error_count(),
+                },
+            ) from exc
     async def execution_notify_completion(
         self,
         request: Any = None,
@@ -4748,8 +4812,36 @@ class TemporalAgentRuntimeActivities:
             for key, value in request_payload.items()
             if key not in publication_keys
         }
-        request = PentestWorkloadRequest.model_validate(request_payload)
         try:
+            trusted_internal_execution = _coerce_bool(
+                request_payload.get("trusted_internal_execution"),
+                default=False,
+            )
+            if trusted_internal_execution:
+                request_payload["trusted_internal_execution"] = True
+                if not request_payload.get("scope_artifact_ref"):
+                    request_payload["scope_artifact_ref"] = (
+                        "trusted-internal-inline-scope"
+                    )
+            else:
+                if request_payload.get("approved_scope") is not None:
+                    raise PentestScopeValidationError(
+                        error_code="INVALID_SCOPE",
+                        reasons=("inline_scope_requires_trusted_internal_execution",),
+                        diagnostics={
+                            "scope_artifact_ref": request_payload.get(
+                                "scope_artifact_ref"
+                            ),
+                        },
+                    )
+                approved_scope = await self._load_pentest_approved_scope(
+                    request_payload
+                )
+                request_payload["approved_scope"] = approved_scope.model_dump(
+                    mode="json"
+                )
+                request_payload["scope_artifact_loaded"] = True
+            request = PentestWorkloadRequest.model_validate(request_payload)
             launch_plan = build_pentest_launch_plan(request)
             provider_profile = resolve_pentest_provider_profile(
                 execution_profile_ref=request.execution_profile_ref,

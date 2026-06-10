@@ -898,9 +898,49 @@ def _pentest_activity_payload(**overrides: object) -> dict[str, object]:
         "artifacts_dir": "/tmp/artifacts",
         "principal_id": "user-security",
         "approved_scope": _approved_pentest_scope(),
+        "trusted_internal_execution": True,
     }
     request.update(overrides)
     return {"request": request}
+
+def _pentest_artifact_activity_payload(**overrides: object) -> dict[str, object]:
+    request: dict[str, object] = {
+        "task_run_id": "run-123",
+        "step_id": "step-pentest",
+        "attempt": 1,
+        "target": "https://lab.example.test",
+        "operation_mode": "validate_hypothesis",
+        "objective": "Validate auth bypass hypothesis.",
+        "scope_artifact_ref": "art_scope_valid",
+        "runner_profile_id": "pentestgpt-safe",
+        "execution_profile_ref": "pentestgpt_anthropic_api_team",
+        "time_budget_minutes": 60,
+        "evidence_level": "standard",
+        "artifacts_dir": "/tmp/artifacts",
+        "principal_id": "user-security",
+    }
+    request.update(overrides)
+    return {"request": request}
+
+class _FakePentestArtifactService:
+    def __init__(self, artifacts: dict[str, bytes]) -> None:
+        self.artifacts = artifacts
+        self.reads: list[tuple[str, str]] = []
+
+    async def read(
+        self,
+        *,
+        artifact_id: str,
+        principal: str,
+        allow_restricted_raw: bool = False,
+    ) -> tuple[object, bytes]:
+        self.reads.append((artifact_id, principal))
+        if artifact_id not in self.artifacts:
+            raise TemporalArtifactNotFoundError(artifact_id)
+        return SimpleNamespace(artifact_id=artifact_id), self.artifacts[artifact_id]
+
+def _scope_artifact_bytes(**overrides: object) -> bytes:
+    return json.dumps(_approved_pentest_scope() | overrides).encode("utf-8")
 
 async def test_security_pentest_execute_fails_closed_before_runner_without_scope():
     activities = TemporalAgentRuntimeActivities()
@@ -914,6 +954,142 @@ async def test_security_pentest_execute_fails_closed_before_runner_without_scope
     assert "INVALID_SCOPE" in message
     assert "missing_approved_scope" in message
     assert "runner is not implemented" not in message
+
+async def test_security_pentest_execute_loads_scope_artifact_before_launch_plan():
+    artifact_service = _FakePentestArtifactService(
+        {"art_scope_valid": _scope_artifact_bytes()}
+    )
+    activities = TemporalAgentRuntimeActivities(artifact_service=artifact_service)
+
+    result = await activities.security_pentest_execute(
+        _pentest_artifact_activity_payload()
+    )
+
+    assert artifact_service.reads == [("art_scope_valid", "user-security")]
+    assert result["status"] == "launch_plan_ready"
+    assert result["launch_plan"]["profile_id"] == "pentestgpt-safe"
+
+@pytest.mark.parametrize(
+    ("artifact_id", "artifact_payload", "message"),
+    [
+        ("art_scope_missing", None, "scope_artifact_unreadable"),
+        ("art_scope_malformed", b"{not-json", "scope_artifact_malformed"),
+        (
+            "art_scope_structurally_invalid",
+            json.dumps({"scope_id": "scope-123"}).encode("utf-8"),
+            "scope_artifact_invalid",
+        ),
+    ],
+)
+async def test_security_pentest_execute_maps_unreadable_scope_artifacts(
+    artifact_id: str,
+    artifact_payload: bytes | None,
+    message: str,
+):
+    artifacts = {} if artifact_payload is None else {artifact_id: artifact_payload}
+    activities = TemporalAgentRuntimeActivities(
+        artifact_service=_FakePentestArtifactService(artifacts)
+    )
+
+    with pytest.raises(TemporalActivityRuntimeError) as exc_info:
+        await activities.security_pentest_execute(
+            _pentest_artifact_activity_payload(scope_artifact_ref=artifact_id)
+        )
+
+    assert "INVALID_SCOPE" in str(exc_info.value)
+    assert message in str(exc_info.value)
+
+async def test_security_pentest_execute_rejects_ordinary_inline_scope_without_artifact():
+    activities = TemporalAgentRuntimeActivities()
+
+    with pytest.raises(TemporalActivityRuntimeError) as exc_info:
+        await activities.security_pentest_execute(
+            _pentest_activity_payload(
+                scope_artifact_ref="",
+                approved_scope=_approved_pentest_scope(),
+                trusted_internal_execution=False,
+            )
+        )
+
+    message = str(exc_info.value)
+    assert "INVALID_SCOPE" in message
+    assert (
+        "scope_artifact_ref" in message
+        or "inline_scope_requires_trusted_internal_execution" in message
+    )
+
+async def test_security_pentest_execute_allows_trusted_internal_inline_scope():
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.security_pentest_execute(
+        _pentest_activity_payload(
+            scope_artifact_ref=None,
+            trusted_internal_execution=True,
+        )
+    )
+
+    assert result["status"] == "launch_plan_ready"
+    assert result["launch_plan"]["profile_id"] == "pentestgpt-safe"
+
+@pytest.mark.parametrize(
+    ("scope_overrides", "request_overrides", "error_code", "reason"),
+    [
+        ({"expires_at": "2020-01-01T00:00:00Z"}, {}, "INVALID_SCOPE", "scope_expired"),
+        ({}, {"principal_id": "user-other"}, "PERMISSION_DENIED", "principal_not_authorized"),
+        (
+            {"targets": [{"kind": "url", "value": "https://other.example.test"}]},
+            {},
+            "UNAPPROVED_TARGET",
+            "target_outside_scope",
+        ),
+        (
+            {"allowed_runner_profiles": ["pentestgpt-vpn-lab"]},
+            {},
+            "UNSUPPORTED_PROFILE",
+            "runner_profile_not_allowed",
+        ),
+        (
+            {"allowed_actions": ["auth_testing"]},
+            {},
+            "UNSUPPORTED_PROFILE",
+            "operation_mode_not_allowed",
+        ),
+        (
+            {"required_network_attachment_type": "vpn"},
+            {},
+            "UNSUPPORTED_PROFILE",
+            "network_attachment_required",
+        ),
+        (
+            {"metadata": {"idempotency_safety": "ambiguous"}},
+            {},
+            "NON_IDEMPOTENT_OPERATION",
+            "idempotency_safety_ambiguous",
+        ),
+    ],
+)
+async def test_security_pentest_execute_returns_validation_failure_before_side_effects(
+    scope_overrides: dict[str, object],
+    request_overrides: dict[str, object],
+    error_code: str,
+    reason: str,
+):
+    activities = TemporalAgentRuntimeActivities(
+        artifact_service=_FakePentestArtifactService(
+            {"art_scope_valid": _scope_artifact_bytes(**scope_overrides)}
+        )
+    )
+
+    with pytest.raises(TemporalActivityRuntimeError) as exc_info:
+        await activities.security_pentest_execute(
+            _pentest_artifact_activity_payload(**request_overrides)
+        )
+
+    message = str(exc_info.value)
+    assert error_code in message
+    assert reason in message
+    assert "provider_profile" not in message
+    assert "launch_plan_ready" not in message
 
 async def test_security_pentest_execute_denies_without_retry_when_workflow_docker_disabled():
     activities = TemporalAgentRuntimeActivities(workflow_docker_mode="disabled")
@@ -1202,7 +1378,7 @@ async def test_security_pentest_execute_fails_closed_before_vpn_lab_launch_witho
         )
 
     message = str(exc_info.value)
-    assert "PERMISSION_DENIED" in message
+    assert "UNSUPPORTED_PROFILE" in message
     assert "network_attachment_required" in message
     assert "launch_plan_ready" not in message
 
