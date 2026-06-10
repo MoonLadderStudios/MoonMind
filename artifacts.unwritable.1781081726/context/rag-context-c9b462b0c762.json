@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. api_service/services/profile_service.py (score: 1.000, trust: canonical)\n    line 81: status_code=status.HTTP_404_NOT_FOUND,\n2. moonmind/codex_cloud/settings.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Shared helpers for gating Codex Cloud runtime support on API configuration.\"\"\"\n3. moonmind/security/__init__.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Shared security contracts for MoonMind runtime code.\"\"\"\n4. moonmind/security/outbound_scan.py (score: 1.000, trust: canonical)\n    line 17: \"\"\"Allow/block decision returned before an external side effect.\"\"\"\n5. docs/Workflows/WorkflowPublishing.md (score: 1.000, trust: canonical)\n    line 29: \"branch\": \"156-jira-ui-runtime-config\"\n6. docs/ManagedAgents/SharedManagedAgentAbstractions.md (score: 1.000, trust: canonical)\n    line 10: - [`docs/ManagedAgents/CodexManagedSessionPlane.md`](./CodexManagedSessionPlane.md)\n7. docs/ManagedAgents/DockerSidecarRuntime.md (score: 1.000, trust: canonical)\n    line 10: - [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)\n8. docs/ManagedAgents/CodexCliManagedSessions.md (score: 1.000, trust: canonical)\n    line 1: # Codex CLI Managed Sessions",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "api_service/services/profile_service.py",
+      "text": "line 81: status_code=status.HTTP_404_NOT_FOUND,",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 81,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/codex_cloud/settings.py",
+      "text": "line 1: \"\"\"Shared helpers for gating Codex Cloud runtime support on API configuration.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/security/__init__.py",
+      "text": "line 1: \"\"\"Shared security contracts for MoonMind runtime code.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/security/outbound_scan.py",
+      "text": "line 17: \"\"\"Allow/block decision returned before an external side effect.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 17,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Workflows/WorkflowPublishing.md",
+      "text": "line 29: \"branch\": \"156-jira-ui-runtime-config\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 29,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ManagedAgents/SharedManagedAgentAbstractions.md",
+      "text": "line 10: - [`docs/ManagedAgents/CodexManagedSessionPlane.md`](./CodexManagedSessionPlane.md)",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 10,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ManagedAgents/DockerSidecarRuntime.md",
+      "text": "line 10: - [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 10,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ManagedAgents/CodexCliManagedSessions.md",
+      "text": "line 1: # Codex CLI Managed Sessions",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-06-10T08:52:19Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
