@@ -22,6 +22,7 @@ class CreateOAuthSessionRequest(BaseModel):
     profile_id: str
     volume_ref: Optional[str] = None
     volume_mount_path: Optional[str] = None
+    session_transport: Optional[str] = None
     provider_id: Optional[str] = None
     provider_label: Optional[str] = None
     account_label: str
