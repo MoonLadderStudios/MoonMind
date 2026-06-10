@@ -35,6 +35,14 @@ SKILLS_ON_DEMAND_DISABLED_INSTRUCTION = (
     "- Skills On Demand is disabled for this run. Use only the active Skills "
     "already available under the active skill path provided by MoonMind."
 )
+SKILLS_ON_DEMAND_ENABLED_INSTRUCTION = (
+    "- Skills On Demand is enabled. You may ask MoonMind for additional Skill "
+    "metadata with `moonmind.skills.query` or request additional Skills with "
+    "`moonmind.skills.request`. MoonMind must approve and resolve any requested "
+    "Skill before it becomes active. Continue reading active Skill bodies from "
+    "the active skill path, and do not copy full Skill bodies into responses "
+    "unless specifically needed."
+)
 
 
 class SkillsOnDemandService:
@@ -550,3 +558,11 @@ def skills_on_demand_disabled_instruction(*, enabled: bool) -> str:
     """Return runtime guidance when on-demand Skill commands cannot be hidden."""
 
     return "" if enabled else SKILLS_ON_DEMAND_DISABLED_INSTRUCTION
+
+
+def skills_on_demand_runtime_instruction(*, enabled: bool) -> str:
+    """Return runtime guidance for the current Skills On Demand feature state."""
+
+    if enabled:
+        return SKILLS_ON_DEMAND_ENABLED_INSTRUCTION
+    return SKILLS_ON_DEMAND_DISABLED_INSTRUCTION

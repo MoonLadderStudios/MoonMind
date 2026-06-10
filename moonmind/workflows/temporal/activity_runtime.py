@@ -28,7 +28,7 @@ from pydantic import BaseModel, ValidationError
 from temporalio import exceptions as temporal_exceptions
 
 from moonmind.config.settings import settings
-from moonmind.services.skills_on_demand import skills_on_demand_disabled_instruction
+from moonmind.services.skills_on_demand import skills_on_demand_runtime_instruction
 from moonmind.integrations.pentest.models import (
     PENTEST_HEARTBEAT_PHASES,
     PentestApprovedScope,
@@ -6436,7 +6436,7 @@ class TemporalAgentRuntimeActivities:
             parameters=parameters,
             skill_materialization_metadata=skill_materialization_metadata,
         )
-        prepared = cls._append_skills_on_demand_disabled_notice(
+        prepared = cls._append_skills_on_demand_notice(
             prepared,
             parameters=parameters,
         )
@@ -6630,7 +6630,7 @@ class TemporalAgentRuntimeActivities:
         return instructions.rstrip() + "\n\n" + "\n".join(lines)
 
     @staticmethod
-    def _append_skills_on_demand_disabled_notice(
+    def _append_skills_on_demand_notice(
         instructions: str,
         *,
         parameters: Mapping[str, Any] | None,
@@ -6638,12 +6638,12 @@ class TemporalAgentRuntimeActivities:
         selected_skill = selected_agent_skill(parameters)
         if not selected_skill or selected_skill == _AUTO_SKILL_SENTINEL:
             return instructions
-        disabled_instruction = skills_on_demand_disabled_instruction(
+        on_demand_instruction = skills_on_demand_runtime_instruction(
             enabled=settings.workflow.skills_on_demand_enabled
         )
-        if not disabled_instruction or disabled_instruction in instructions:
+        if not on_demand_instruction or on_demand_instruction in instructions:
             return instructions
-        return instructions.rstrip() + "\n\n" + disabled_instruction
+        return instructions.rstrip() + "\n\n" + on_demand_instruction
 
     @staticmethod
     def _append_managed_step_boundary(instructions: str) -> str:
@@ -6695,11 +6695,11 @@ class TemporalAgentRuntimeActivities:
             f"- Read `{skill_doc}` first and follow that active snapshot.\n"
             "- Do not discover skills from repo-local or local-only source folders during execution.\n\n"
         )
-        disabled_instruction = skills_on_demand_disabled_instruction(
+        on_demand_instruction = skills_on_demand_runtime_instruction(
             enabled=settings.workflow.skills_on_demand_enabled
         )
-        if disabled_instruction:
-            block = block.rstrip() + f"\n{disabled_instruction}\n\n"
+        if on_demand_instruction:
+            block = block.rstrip() + f"\n{on_demand_instruction}\n\n"
         if not alias_available:
             block = block.rstrip() + (
                 "\n- The repository also contains `.agents/skills`; that directory "
