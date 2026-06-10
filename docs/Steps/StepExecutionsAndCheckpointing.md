@@ -4,7 +4,7 @@ Status: Desired State
 Owners: MoonMind Engineering
 Last Updated: 2026-05-16
 Canonical for: semantic step reattempts, checkpointed side-effect policy, gated iteration, failed-step recovery primitive, autonomous story loops
-Related: `docs/Steps/StepTypes.md`, `docs/Tasks/TaskArchitecture.md`, `docs/Tasks/TaskRemediation.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Temporal/RunHistoryAndRerunSemantics.md`, `docs/Temporal/ActivityCatalogAndWorkerTopology.md`, `docs/Artifacts/ArtifactPresentationContract.md`
+Related: `docs/Steps/StepTypes.md`, `docs/Tasks/WorkflowArchitecture.md`, `docs/Tasks/WorkflowRemediation.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Temporal/RunHistoryAndRerunSemantics.md`, `docs/Temporal/ActivityCatalogAndWorkerTopology.md`, `docs/Artifacts/ArtifactPresentationContract.md`
 
 ---
 
@@ -37,7 +37,7 @@ This document does **not** redefine:
 5. provider-specific runtime launch internals;
 6. full run-history product UI.
 
-Use `docs/Steps/StepTypes.md` for the user-facing step taxonomy. Step Executions are execution-plane records, not authoring steps and not Step Types. Use `docs/Temporal/StepLedgerAndProgressModel.md` for the operator-facing step ledger shape. Use `docs/Tasks/TaskArchitecture.md` and `docs/Temporal/RunHistoryAndRerunSemantics.md` for task create, rerun, and failed-step recovery semantics.
+Use `docs/Steps/StepTypes.md` for the user-facing step taxonomy. Step Executions are execution-plane records, not authoring steps and not Step Types. Use `docs/Temporal/StepLedgerAndProgressModel.md` for the operator-facing step ledger shape. Use `docs/Tasks/WorkflowArchitecture.md` and `docs/Temporal/RunHistoryAndRerunSemantics.md` for task create, rerun, and failed-step recovery semantics.
 
 ---
 

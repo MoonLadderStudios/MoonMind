@@ -1,39 +1,39 @@
-# Task Remediation
+# Workflow Remediation
 
 **Status:** Desired-state design
 **Owners:** MoonMind Platform + Mission Control
 **Last Updated:** 2026-05-07
-**Related:** `docs/Tasks/TaskDependencies.md`, `docs/Api/ExecutionsApiContract.md`, `docs/Tasks/TaskRunsApi.md`, `docs/Tasks/TaskProposalSystem.md`, `docs/ManagedAgents/LiveLogs.md`, `docs/ManagedAgents/CodexCliManagedSessions.md`, `docs/ManagedAgents/SharedManagedAgentAbstractions.md`, `docs/Security/ProviderProfiles.md`, `docs/Security/SecretsSystem.md`, `docs/ManagedAgents/DockerOutOfDocker.md`, `docs/Temporal/ArtifactPresentationContract.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/RunHistoryAndRerunSemantics.md`, `docs/Temporal/SourceOfTruthAndProjectionModel.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Steps/SkillSystem.md`
+**Related:** `docs/Tasks/WorkflowDependencies.md`, `docs/Api/ExecutionsApiContract.md`, `docs/Tasks/WorkflowRunsApi.md`, `docs/Tasks/WorkflowProposalSystem.md`, `docs/ManagedAgents/LiveLogs.md`, `docs/ManagedAgents/CodexCliManagedSessions.md`, `docs/ManagedAgents/SharedManagedAgentAbstractions.md`, `docs/Security/ProviderProfiles.md`, `docs/Security/SecretsSystem.md`, `docs/ManagedAgents/DockerOutOfDocker.md`, `docs/Temporal/ArtifactPresentationContract.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/RunHistoryAndRerunSemantics.md`, `docs/Temporal/SourceOfTruthAndProjectionModel.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Steps/SkillSystem.md`
 
 ---
 
 ## 1. Purpose
 
-This document defines the desired-state contract for **Task Remediation** in MoonMind.
+This document defines the desired-state contract for **Workflow Remediation** in MoonMind.
 
-Task Remediation is the system that allows one MoonMind task to **troubleshoot, observe, and optionally intervene on another MoonMind task or run**. It is the architectural home for the “self-healing” feature: a task may be created specifically to investigate another task, read its durable evidence, follow its live observability stream when appropriate, and take typed, policy-bound administrative actions when allowed.
+Workflow Remediation is the system that allows one MoonMind Workflow Execution to **troubleshoot, observe, and optionally intervene on another MoonMind Workflow Execution or run**. It is the architectural home for the “self-healing” feature: a Workflow Execution may be created specifically to investigate another Workflow Execution, read its durable evidence, follow its live observability stream when appropriate, and take typed, policy-bound administrative actions when allowed.
 
 In this document:
 
-- a **target execution** is the task being investigated or repaired,
-- a **remediation task** is the follow-up task doing the investigation or repair,
+- a **target execution** is the Workflow Execution being investigated or repaired,
+- a **remediation Workflow Execution** is the follow-up Workflow Execution doing the investigation or repair,
 - **troubleshooting** means evidence collection and diagnosis,
 - **remediation** means diagnosis plus allowed intervention actions,
-- **immediate repair** means a bounded attempt to get the target task unstuck or completed now, using fresh target evidence and allowed actions when a plausible safe fix is available,
+- **immediate repair** means a bounded attempt to get the target Workflow Execution unstuck or completed now, using fresh target evidence and allowed actions when a plausible safe fix is available,
 - **long-term prevention** means a separately reviewable change to MoonMind, a reusable Agent Skill, or associated instructions that reduces the chance of the same failure recurring,
-- **self-healing** means automated or operator-triggered creation of remediation tasks under policy.
+- **self-healing** means automated or operator-triggered creation of remediation Workflow Executions under policy.
 
 The core design goal is:
 
-> MoonMind should let a task investigate another task, attempt a safe immediate repair when one is plausible, and produce a durable prevention fix when a systemic MoonMind or Skill improvement is found **without turning logs into the source of truth and without turning the agent into an unaudited root shell**.
+> MoonMind should let a Workflow Execution investigate another Workflow Execution, attempt a safe immediate repair when one is plausible, and produce a durable prevention fix when a systemic MoonMind or Skill improvement is found **without turning logs into the source of truth and without turning the agent into an unaudited root shell**.
 
 ---
 
 ## 2. Why a separate system is required
 
-Task Remediation must be a first-class concept, separate from ordinary task dependencies.
+Workflow Remediation must be a first-class concept, separate from ordinary Workflow Execution dependencies.
 
-Task dependencies are intentionally narrow. They block one `MoonMind.Run` on the successful terminal completion of another `MoonMind.Run`. They do not import the upstream run’s plan DAG, internal context, logs, or artifacts into the dependent run. They also fail the dependent run when the upstream prerequisite ends in a non-success terminal state. That is the correct contract for orchestration ordering, but it is the wrong contract for troubleshooting and repair.
+Workflow Execution dependencies are intentionally narrow. They block one `MoonMind.Run` on the successful terminal completion of another `MoonMind.Run`. They do not import the upstream run’s plan DAG, internal context, logs, or artifacts into the dependent run. They also fail the dependent run when the upstream prerequisite ends in a non-success terminal state. That is the correct contract for orchestration ordering, but it is the wrong contract for troubleshooting and repair.
 
 Remediation needs the opposite behavior:
 
@@ -48,18 +48,18 @@ Therefore MoonMind needs a dedicated **remediation relationship** and a dedicate
 
 ## 3. Design goals
 
-Task Remediation must satisfy all of the following:
+Workflow Remediation must satisfy all of the following:
 
-1. **Cross-task troubleshooting**
-   - A new task can explicitly target another task/execution.
+1. **Cross-Workflow troubleshooting**
+   - A new Workflow Execution can explicitly target another Workflow Execution.
    - The target relationship is durable, inspectable, and visible in both directions.
 
 2. **Pinned evidence identity**
-   - The remediation task can target a logical execution by `workflowId`.
+   - The remediation Workflow Execution can target a logical execution by `workflowId`.
    - It can also pin a specific run instance by `runId` so it does not silently drift when the target reruns or continues as new.
 
 3. **Artifact-first evidence access**
-   - The remediation task can read:
+   - The remediation Workflow Execution can read:
      - execution detail,
      - latest/current step ledger,
      - selected step artifact refs,
@@ -68,15 +68,15 @@ Task Remediation must satisfy all of the following:
      - continuity and control-boundary artifacts for managed sessions.
 
 4. **Optional live follow**
-   - When the target is active and observability supports it, the remediation task may follow live logs or structured observability events.
+   - When the target is active and observability supports it, the remediation Workflow Execution may follow live logs or structured observability events.
    - Live follow is additive, not authoritative.
 
 5. **Typed administrative actions**
-   - The remediation task may execute allowed administrative actions through a MoonMind-owned action registry.
+   - The remediation Workflow Execution may execute allowed administrative actions through a MoonMind-owned action registry.
    - Actions are explicit, validated, idempotent, and audited.
 
 6. **Privilege separation**
-   - A remediation task may run with stronger permissions than ordinary tasks.
+   - A remediation Workflow Execution may run with stronger permissions than ordinary Workflow Executions.
    - Those permissions are expressed through a named policy/profile, not through implicit raw host access.
 
 7. **Auditability**
@@ -87,12 +87,12 @@ Task Remediation must satisfy all of the following:
 
 9. **Graceful degradation**
    - Historical runs with only merged logs or partial artifact coverage must still be troubleshootable.
-   - Missing evidence should degrade the remediation task, not deadlock it.
+   - Missing evidence should degrade the remediation Workflow Execution, not deadlock it.
 
 10. **Immediate repair plus prevention**
-    - After diagnosis, a remediation task should first attempt the smallest safe repair that can unblock the target task now, such as resuming or retrying the failed step with corrected remediation context when policy, step replayability, and checkpoint evidence allow it.
-    - After the immediate repair succeeds, fails, or is ruled unsafe, the remediation task should look for a long-term fix in MoonMind code, configuration, presets, or Agent Skill instructions.
-    - When a long-term fix is identified and repository write authority is available, the remediation task should create a pull request instead of only writing a diagnosis.
+    - After diagnosis, a remediation Workflow Execution should first attempt the smallest safe repair that can unblock the target Workflow Execution now, such as resuming or retrying the failed step with corrected remediation context when policy, step replayability, and checkpoint evidence allow it.
+    - After the immediate repair succeeds, fails, or is ruled unsafe, the remediation Workflow Execution should look for a long-term fix in MoonMind code, configuration, presets, or Agent Skill instructions.
+    - When a long-term fix is identified and repository write authority is available, the remediation Workflow Execution should create a pull request instead of only writing a diagnosis.
 
 ---
 
@@ -103,34 +103,34 @@ This design does **not** attempt to provide:
 - arbitrary raw shell access on the MoonMind host,
 - unrestricted Docker daemon access from the remediation runtime,
 - arbitrary SQL or direct database row editing by the agent,
-- silent import of another task’s entire workflow history into `initialParameters`,
-- cross-task managed-session reuse,
-- a rule that every failed task automatically spawns an admin healer,
-- a guarantee that every failed task can be resumed, retried, or repaired in place,
+- silent import of another Workflow Execution’s entire workflow history into `initialParameters`,
+- cross-Workflow managed-session reuse,
+- a rule that every failed Workflow Execution automatically spawns an admin healer,
+- a guarantee that every failed Workflow Execution can be resumed, retried, or repaired in place,
 - automatic merge or self-application of MoonMind or Agent Skill prevention changes without review,
 - a guarantee that historical runs always have full structured event history,
 - a bypass around the Secrets System or artifact redaction rules,
 - a claim that Live Logs itself is the source of truth.
 
-MoonMind may still support operator handoff or manual terminal workflows elsewhere. This document only defines the **task-based remediation system**.
+MoonMind may still support operator handoff or manual terminal workflows elsewhere. This document only defines the **Workflow-based remediation system**.
 
 ---
 
 ## 5. Architectural stance
 
-### 5.1 Remediation tasks remain `MoonMind.Run`
+### 5.1 Remediation Workflow Executions remain `MoonMind.Run`
 
-A remediation task should still be represented as a normal top-level `MoonMind.Run` execution with additional nested semantics under `task.remediation`.
+A remediation Workflow Execution should still be represented as a normal top-level `MoonMind.Run` execution with additional nested semantics under `task.remediation`.
 
-This keeps remediation aligned with the existing task-shaped create path, Mission Control task views, proposal promotion, artifacts, step ledger, cancellation, rerun, and summary flows. A new top-level workflow type is not required in v1.
+This keeps remediation aligned with the existing Workflow-shaped create path, Mission Control Workflow views, proposal promotion, artifacts, step ledger, cancellation, rerun, and summary flows. A new top-level workflow type is not required in v1.
 
 ### 5.2 Remediation is a relationship, not a dependency
 
-A remediation task has a **directed link** to a target execution. The link is not a dependency gate. The remediation run starts immediately once created (or once its own schedule starts); it does not wait for the target to complete successfully.
+A remediation Workflow Execution has a **directed link** to a target execution. The link is not a dependency gate. The remediation run starts immediately once created (or once its own schedule starts); it does not wait for the target to complete successfully.
 
 ### 5.3 Control remains separate from observation
 
-Live Logs and observability remain passive observation surfaces. Intervention must occur through a separate MoonMind-owned action surface. A remediation task may use both, but it must not treat the log timeline itself as the control channel.
+Live Logs and observability remain passive observation surfaces. Intervention must occur through a separate MoonMind-owned action surface. A remediation Workflow Execution may use both, but it must not treat the log timeline itself as the control channel.
 
 ### 5.4 Source of truth remains unchanged
 
@@ -142,7 +142,7 @@ For the target execution:
 - evidence remains owned by artifact linkage and managed-run observability,
 - projections remain read models, not a second workflow engine.
 
-Task Remediation is layered on top of those contracts; it does not redefine them.
+Workflow Remediation is layered on top of those contracts; it does not redefine them.
 
 ---
 
@@ -150,10 +150,10 @@ Task Remediation is layered on top of those contracts; it does not redefine them
 
 The following invariants are fixed:
 
-1. **A remediation task is explicitly marked.**
+1. **A remediation Workflow Execution is explicitly marked.**
    The canonical marker is `payload.task.remediation`.
 
-2. **A remediation task targets one logical execution and one pinned run snapshot.**
+2. **A remediation Workflow Execution targets one logical execution and one pinned run snapshot.**
    `target.workflowId` is required. `target.runId` is resolved and persisted at create time even if the user omitted it.
 
 3. **Remediation is non-transitive by default.**
@@ -163,7 +163,7 @@ The following invariants are fixed:
    Large logs, diagnostics, provider snapshots, and evidence bodies remain behind artifact refs or observability APIs.
 
 5. **All evidence access is server-mediated.**
-   Artifact refs are identifiers, not access grants. The remediation task never receives presigned URLs, raw storage keys, or raw local filesystem paths as durable context.
+   Artifact refs are identifiers, not access grants. The remediation Workflow Execution never receives presigned URLs, raw storage keys, or raw local filesystem paths as durable context.
 
 6. **Administrative actions are typed and allowlisted.**
    Remediation never implies “run any command the model suggests.”
@@ -175,16 +175,16 @@ The following invariants are fixed:
    Diagnosis may be parallelized later; mutation may not.
 
 9. **Secrets remain redacted.**
-   Stronger task authority does not override redaction, audit, or secret-reference rules.
+   Stronger Workflow Execution authority does not override redaction, audit, or secret-reference rules.
 
 10. **Nested remediation is off by default.**
-    Automatic remediation of remediation tasks is disabled unless explicitly allowed by policy.
+    Automatic remediation of remediation Workflow Executions is disabled unless explicitly allowed by policy.
 
 11. **Force termination stays high-risk.**
     Even for admin remediation, forced termination is treated as an ops-grade action, not a casual fallback.
 
 12. **Failure to resolve evidence never becomes infinite wait.**
-    The remediation task must degrade, escalate, or fail with a bounded reason.
+    The remediation Workflow Execution must degrade, escalate, or fail with a bounded reason.
 
 ---
 
@@ -192,7 +192,7 @@ The following invariants are fixed:
 
 ### 7.1 Canonical create path
 
-The canonical create path remains the task-shaped submit flow that normalizes into `POST /api/executions`.
+The canonical create path remains the Workflow-shaped submit flow that normalizes into `POST /api/executions`.
 
 Representative request:
 
@@ -268,7 +268,7 @@ Required durable identity of the target execution.
 Pinned target run instance. If omitted, the server resolves the latest/current run at create time and persists the resolved value.
 
 #### `target.stepSelectors[]`
-Optional bounded selectors for steps the remediation task should prioritize. Each selector may include:
+Optional bounded selectors for steps the remediation Workflow Execution should prioritize. Each selector may include:
 - `logicalStepId`
 - `attempt`
 - `taskRunId`
@@ -292,7 +292,7 @@ Allowed values:
 - `approval_gated`
 - `admin_auto`
 
-This field controls whether the task may only diagnose, may plan actions but require approval, or may execute actions automatically within policy.
+This field controls whether the Workflow Execution may only diagnose, may plan actions but require approval, or may execute actions automatically within policy.
 
 #### `evidencePolicy`
 Bounded hints controlling which evidence classes are requested and how much initial log context to include.
@@ -307,7 +307,7 @@ Policy for human approval requirements.
 Policy for lock scope and exclusivity.
 
 #### `trigger`
-Metadata describing how the remediation task was created:
+Metadata describing how the remediation Workflow Execution was created:
 - `manual`
 - `on_failed`
 - `on_attention_required`
@@ -342,7 +342,7 @@ That route is only a control-plane convenience. It must expand into the same can
 
 ### 7.6 Future automatic self-healing policy
 
-Automatic creation is intentionally a later layer. When MoonMind adds automatic self-healing, the triggering task may carry a bounded policy such as:
+Automatic creation is intentionally a later layer. When MoonMind adds automatic self-healing, the triggering Workflow Execution may carry a bounded policy such as:
 
 ```yaml
 task:
@@ -365,7 +365,7 @@ The important rule is that **automatic remediation is policy-driven and bounded*
 
 MoonMind detail routes and compatibility views anchor on the logical execution identity (`workflowId`). However, the latest/current run may change when the target reruns or continues as new. Remediation needs both:
 
-- `workflowId` to identify the logical task,
+- `workflowId` to identify the logical Workflow Execution,
 - `runId` to pin the evidence snapshot that the remediator started from.
 
 ### 8.2 Link directions
@@ -373,16 +373,16 @@ MoonMind detail routes and compatibility views anchor on the logical execution i
 The system must support both of these views:
 
 - **Remediator → Target**
-  - “Which execution is this remediation task investigating?”
+  - “Which execution is this remediation Workflow Execution investigating?”
 - **Target → Remediators**
-  - “Which remediation tasks have investigated or acted on this target?”
+  - “Which remediation Workflow Executions have investigated or acted on this target?”
 
 ### 8.3 Durable linkage requirements
 
 The platform must persist enough data to support:
 
-- forward lookup from remediation task to target execution,
-- reverse lookup from target execution to remediation tasks,
+- forward lookup from remediation Workflow Execution to target execution,
+- reverse lookup from target execution to remediation Workflow Executions,
 - pinned target run identity,
 - current remediation status,
 - current lock holder,
@@ -423,8 +423,8 @@ GET /api/executions/{workflowId}/remediations?direction=outbound
 ```
 
 Where:
-- `inbound` means remediation tasks targeting this execution,
-- `outbound` means executions that this task is remediating.
+- `inbound` means remediation Workflow Executions targeting this execution,
+- `outbound` means executions that this Workflow Execution is remediating.
 
 ---
 
@@ -432,7 +432,7 @@ Where:
 
 ### 9.1 Evidence sources
 
-The remediation task may need data from several MoonMind surfaces:
+The remediation Workflow Execution may need data from several MoonMind surfaces:
 
 1. **Execution detail**
    - title, summary, lifecycle state, current run metadata, progress summary.
@@ -462,14 +462,14 @@ The remediation task may need data from several MoonMind surfaces:
 
 ### 9.2 Remediation Context Builder
 
-MoonMind should introduce a **Remediation Context Builder** activity or service that resolves the target evidence and creates a single MoonMind-owned bundle artifact for the remediation task.
+MoonMind should introduce a **Remediation Context Builder** activity or service that resolves the target evidence and creates a single MoonMind-owned bundle artifact for the remediation Workflow Execution.
 
 Canonical output artifact:
 
 - path: `reports/remediation_context.json`
 - artifact type: `remediation.context`
 
-This artifact is the remediation task’s stable entrypoint. It should contain:
+This artifact is the remediation Workflow Execution’s stable entrypoint. It should contain:
 - target identity,
 - selected steps,
 - observability refs,
@@ -542,7 +542,7 @@ Representative shape:
 
 The context artifact must stay **bounded**. It may include small excerpts or summaries, but not unbounded full log bodies. Full logs and rich diagnostics stay behind refs.
 
-### 9.5 Evidence access surface for remediation tasks
+### 9.5 Evidence access surface for remediation Workflow Executions
 
 The remediation runtime should not scrape Mission Control pages. It should receive a MoonMind-owned tool surface such as:
 
@@ -575,14 +575,14 @@ Live follow is optional and best effort.
 
 Rules:
 
-1. the remediation task may follow only when:
+1. the remediation Workflow Execution may follow only when:
    - the target run is active,
    - the target `taskRunId` supports live follow,
    - policy allows it;
 
-2. the remediation task must persist a resume cursor such as last seen `sequence`;
+2. the remediation Workflow Execution must persist a resume cursor such as last seen `sequence`;
 
-3. disconnects, worker restarts, or task retries must resume from durable cursor state when possible;
+3. disconnects, worker restarts, or Workflow Execution retries must resume from durable cursor state when possible;
 
 4. when structured event history is unavailable, MoonMind may fall back to merged-log retrieval or artifact tailing;
 
@@ -590,19 +590,19 @@ Rules:
 
 ### 9.7 Evidence freshness before action
 
-Before executing a side-effecting action, the remediation task must re-read the target’s current bounded health view. The agent is allowed to start from a pinned snapshot, but it must not act on stale assumptions without a fresh precondition check.
+Before executing a side-effecting action, the remediation Workflow Execution must re-read the target’s current bounded health view. The agent is allowed to start from a pinned snapshot, but it must not act on stale assumptions without a fresh precondition check.
 
 ### 9.8 Immediate repair and prevention workflow
 
 Remediation is a two-track workflow:
 
-1. **Repair the current target if safe.** The remediation task must use the evidence bundle, fresh target health, allowed action list, and lock state to decide whether a bounded immediate repair is plausible. Examples include retrying a failed publish step with clarified remediation context, interrupting a stuck managed turn, clearing a stale session, evicting an orphaned slot lease, or requesting a targeted rerun/resume action. The repair attempt must be the smallest action likely to unblock the target and must not silently broaden into a full rerun or destructive action.
-2. **Verify the target outcome.** After an immediate repair action, the remediation task must call the verification surface and publish the result. Verification should distinguish `repaired`, `still_failed`, `not_attempted`, `unsafe`, `approval_required`, and `escalated` outcomes.
-3. **Prevent recurrence.** Regardless of whether the target was repaired, the remediation task should identify whether the failure points to a reusable MoonMind, preset, prompt, or Agent Skill defect. If it does, the task should prepare the smallest reviewable code, configuration, documentation, or Skill change and create a pull request when repository write authority and policy allow it.
+1. **Repair the current target if safe.** The remediation Workflow Execution must use the evidence bundle, fresh target health, allowed action list, and lock state to decide whether a bounded immediate repair is plausible. Examples include retrying a failed publish step with clarified remediation context, interrupting a stuck managed turn, clearing a stale session, evicting an orphaned slot lease, or requesting a targeted rerun/resume action. The repair attempt must be the smallest action likely to unblock the target and must not silently broaden into a full rerun or destructive action.
+2. **Verify the target outcome.** After an immediate repair action, the remediation Workflow Execution must call the verification surface and publish the result. Verification should distinguish `repaired`, `still_failed`, `not_attempted`, `unsafe`, `approval_required`, and `escalated` outcomes.
+3. **Prevent recurrence.** Regardless of whether the target was repaired, the remediation Workflow Execution should identify whether the failure points to a reusable MoonMind, preset, prompt, or Agent Skill defect. If it does, the Workflow Execution should prepare the smallest reviewable code, configuration, documentation, or Skill change and create a pull request when repository write authority and policy allow it.
 
 Immediate repair is not a substitute for long-term prevention. A successful target repair still requires a recurrence analysis, and a failed or unsafe repair can still produce a prevention pull request.
 
-Corrected-instruction retries are remediation interventions, not ordinary failed-step recovery. If the platform has a distinct Resume-from-failed-step action that preserves the original task input snapshot unchanged, remediation must not overload that action with edited instructions. Any corrected instructions must be recorded as remediation repair context or a follow-up retry override with explicit provenance, not as a mutation of the original task input.
+Corrected-instruction retries are remediation interventions, not ordinary failed-step recovery. If the platform has a distinct Resume-from-failed-step action that preserves the original Workflow input snapshot unchanged, remediation must not overload that action with edited instructions. Any corrected instructions must be recorded as remediation repair context or a follow-up retry override with explicit provenance, not as a mutation of the original Workflow input.
 
 The remediation decision log must record:
 
@@ -611,7 +611,7 @@ The remediation decision log must record:
 - the action request/result and verification refs when attempted,
 - the root-cause category selected for long-term prevention,
 - the prevention branch, commit, and pull request URL when created,
-- the reason no prevention PR was created when the task only reports findings.
+- the reason no prevention PR was created when the Workflow Execution only reports findings.
 
 ---
 
@@ -619,10 +619,10 @@ The remediation decision log must record:
 
 ### 10.1 Authority modes
 
-Task Remediation defines three authority modes:
+Workflow Remediation defines three authority modes:
 
 #### `observe_only`
-The remediation task may:
+The remediation Workflow Execution may:
 - read allowed evidence,
 - produce diagnosis artifacts,
 - suggest actions.
@@ -630,14 +630,14 @@ The remediation task may:
 It may **not** execute side-effecting actions.
 
 #### `approval_gated`
-The remediation task may:
+The remediation Workflow Execution may:
 - read evidence,
 - propose concrete actions,
 - optionally perform dry runs,
 - execute actions only after required approval.
 
 #### `admin_auto`
-The remediation task may:
+The remediation Workflow Execution may:
 - read evidence,
 - plan actions,
 - execute allowed actions automatically within policy,
@@ -645,7 +645,7 @@ The remediation task may:
 
 ### 10.2 Execution principal
 
-A remediation task with elevated authority should execute under a **named admin remediation principal or security profile**, not simply as the ordinary user runtime.
+A remediation Workflow Execution with elevated authority should execute under a **named admin remediation principal or security profile**, not simply as the ordinary user runtime.
 
 Desired-state fields:
 
@@ -665,12 +665,12 @@ Audit must record both:
 The control plane should distinguish:
 
 - permission to view a target execution,
-- permission to create a remediation task,
+- permission to create a remediation Workflow Execution,
 - permission to request an admin remediation profile,
 - permission to approve high-risk actions,
 - permission to inspect remediation audit history.
 
-A user who can view a task should not automatically be able to launch an admin remediator against it.
+A user who can view a Workflow Execution should not automatically be able to launch an admin remediator against it.
 
 ### 10.4 Secret handling
 
@@ -688,7 +688,7 @@ Rules:
 
 Artifacts and logs must remain server-mediated.
 
-A remediation task may receive:
+A remediation Workflow Execution may receive:
 - artifact refs,
 - MoonMind-issued read capability handles,
 - redacted or preview views,
@@ -772,12 +772,12 @@ The registry may later grow, but every new action kind must declare:
 Backed by the ordinary execution signal surface. Use these when the target should stop progressing while evidence is reviewed or operator work occurs.
 
 #### `execution.retry_failed_step_with_remediation_context`
-A targeted immediate-repair action for a failed step when fresh evidence indicates the step may succeed with bounded corrective context. Example: a publish step failed because the task instructions were ambiguous, and remediation can provide clarified publish instructions for that retry.
+A targeted immediate-repair action for a failed step when fresh evidence indicates the step may succeed with bounded corrective context. Example: a publish step failed because the Workflow instructions were ambiguous, and remediation can provide clarified publish instructions for that retry.
 
 This action must:
 - pin the source `workflowId`, source `runId`, failed step identity, and attempt,
 - preserve completed prior-step outputs by refs when resuming a linked follow-up execution,
-- record corrective context separately from the original task input snapshot,
+- record corrective context separately from the original Workflow input snapshot,
 - require step replayability, checkpoint availability, authorization, and policy approval before execution,
 - fail explicitly when checkpoint validation or restoration fails,
 - avoid silent fallback to a full rerun,
@@ -943,7 +943,7 @@ Rules:
 - lock acquisition must be idempotent,
 - stale locks must expire or be recoverable,
 - lock loss must be surfaced explicitly,
-- the remediation task must not silently keep mutating after lock loss.
+- the remediation Workflow Execution must not silently keep mutating after lock loss.
 
 ### 12.4 Action idempotency
 
@@ -953,7 +953,7 @@ The remediation system must not rely solely on the generic execution update idem
 
 ### 12.5 Retry budget and cooldowns
 
-Each remediation task should carry:
+Each remediation Workflow Execution should carry:
 - max actions per target,
 - max attempts per action kind,
 - minimum cooldown between repeated identical actions,
@@ -968,14 +968,14 @@ Example defaults:
 ### 12.6 Nested remediation defaults
 
 Defaults:
-- a remediation task may not automatically spawn another remediation task;
-- a remediation task may not target itself;
-- a remediation task may not target another remediation task unless `allowNestedRemediation` is explicitly enabled by policy;
+- a remediation Workflow Execution may not automatically spawn another remediation Workflow Execution;
+- a remediation Workflow Execution may not target itself;
+- a remediation Workflow Execution may not target another remediation Workflow Execution unless `allowNestedRemediation` is explicitly enabled by policy;
 - automatic self-healing depth defaults to 1.
 
 ### 12.7 Target-change guard
 
-Before acting, the remediation task must compare:
+Before acting, the remediation Workflow Execution must compare:
 - pinned target `runId`,
 - current target `runId`,
 - current target state,
@@ -1032,7 +1032,7 @@ stateDiagram-v2
 
 ### 13.3 Recommended step structure
 
-A remediation task commonly follows these plan nodes:
+A remediation Workflow Execution commonly follows these plan nodes:
 
 1. acquire lock,
 2. build evidence bundle,
@@ -1049,10 +1049,10 @@ This does not need to be a hard-coded universal plan, but the system should make
 ### 13.4 Cancellation semantics
 
 Rules:
-- canceling the remediation task cancels only the remediation task,
+- canceling the remediation Workflow Execution cancels only the remediation Workflow Execution,
 - the target execution is not mutated by cancellation unless a specific action already requested that mutation,
-- canceling the target execution does not automatically cancel the remediation task,
-- the remediation task must still attempt best-effort lock release and final audit artifact publication.
+- canceling the target execution does not automatically cancel the remediation Workflow Execution,
+- the remediation Workflow Execution must still attempt best-effort lock release and final audit artifact publication.
 
 ### 13.5 Rerun semantics
 
@@ -1060,7 +1060,7 @@ The target may change runs while remediation is active.
 
 Rules:
 - the pinned `target.runId` is the diagnosis snapshot anchor,
-- the remediation task may still inspect the current/latest target health before acting,
+- the remediation Workflow Execution may still inspect the current/latest target health before acting,
 - action policies may allow:
   - `request_rerun_same_workflow`,
   - `start_fresh_rerun`,
@@ -1069,7 +1069,7 @@ Rules:
 
 ### 13.6 Continue-As-New safety
 
-If the remediation task continues as new, it must preserve:
+If the remediation Workflow Execution continues as new, it must preserve:
 - target `workflowId`,
 - pinned target `runId`,
 - remediation context artifact ref,
@@ -1085,7 +1085,7 @@ If the remediation task continues as new, it must preserve:
 
 ### 14.1 Required remediation artifacts
 
-At minimum, a remediation task should produce:
+At minimum, a remediation Workflow Execution should produce:
 
 - `reports/remediation_context.json`
   `artifact_type = remediation.context`
@@ -1116,7 +1116,7 @@ These artifacts must obey the normal artifact presentation contract:
 
 ### 14.2 Target-side artifacts
 
-When the remediation task mutates a target-managed session or workload, the target side should also receive the normal continuity/control artifacts appropriate to that subsystem.
+When the remediation Workflow Execution mutates a target-managed session or workload, the target side should also receive the normal continuity/control artifacts appropriate to that subsystem.
 
 Examples:
 - `session.control_event`
@@ -1124,11 +1124,11 @@ Examples:
 - target-side audit annotations
 - new diagnostics or summary artifacts
 
-The remediation task does not replace those subsystem-native artifacts; it adds a parallel remediation audit trail.
+The remediation Workflow Execution does not replace those subsystem-native artifacts; it adds a parallel remediation audit trail.
 
 ### 14.3 Remediation summary block
 
-`reports/run_summary.json` for the remediation task should include a stable `remediation` block.
+`reports/run_summary.json` for the remediation Workflow Execution should include a stable `remediation` block.
 
 Representative shape:
 
@@ -1197,11 +1197,11 @@ Artifacts remain the operator-facing deep evidence; audit rows remain the compac
 
 ### 15.1 Create flow
 
-Mission Control should expose **Create remediation task** from:
-- task detail,
-- failed task banners,
+Mission Control should expose **Create remediation Workflow** from:
+- Workflow detail,
+- failed Workflow banners,
 - attention-required surfaces,
-- stuck task surfaces,
+- stuck Workflow surfaces,
 - provider-slot or session problem surfaces where applicable.
 
 The create UI should let the operator:
@@ -1212,19 +1212,19 @@ The create UI should let the operator:
 - choose or review the action policy,
 - preview which evidence will be attached.
 
-### 15.2 Target task detail
+### 15.2 Target Workflow detail
 
-The target task should show a **Remediation Tasks** panel with:
-- remediation task links,
+The target Workflow should show a **Remediation Workflows** panel with:
+- remediation Workflow links,
 - status,
 - authority mode,
 - last action,
 - resolution,
 - active lock badge.
 
-### 15.3 Remediation task detail
+### 15.3 Remediation Workflow detail
 
-The remediation task detail should show a **Remediation Target** panel with:
+The remediation Workflow detail should show a **Remediation Target** panel with:
 - target execution link,
 - pinned target run id,
 - selected steps,
@@ -1254,7 +1254,7 @@ If live follow is active:
 
 ### 15.6 Operator handoff
 
-When a remediation task is `approval_gated` or encounters a high-risk action:
+When a remediation Workflow Execution is `approval_gated` or encounters a high-risk action:
 - show the proposed action,
 - show preconditions,
 - show expected blast radius,
@@ -1268,7 +1268,7 @@ When a remediation task is `approval_gated` or encounters a high-risk action:
 The system must explicitly handle these cases.
 
 ### 16.1 Target execution not found or not visible
-Fail create-time validation or fail early with a structured remediation error. Do not silently create a task with a null target.
+Fail create-time validation or fail early with a structured remediation error. Do not silently create a Workflow Execution with a null target.
 
 ### 16.2 Target reran after remediation started
 Keep the pinned snapshot. Revalidate current health before acting. Do not silently retarget without recording it.
@@ -1301,7 +1301,7 @@ Treat as `no_op` or `verification_failed` depending on desired action semantics.
 ### 16.10 Forced termination attempted on non-runaway target
 Require approval or reject by policy. Forced termination is not the generic fallback for every failure.
 
-### 16.11 Remediation task itself fails
+### 16.11 Remediation Workflow Execution itself fails
 Publish a final remediation summary and release locks. Automatic remediation of the failed remediator is off by default.
 
 ---
@@ -1311,7 +1311,7 @@ Publish a final remediation summary and release locks. Automatic remediation of 
 A practical v1 should ship with the following constraints:
 
 1. **Manual creation first**
-   - Operators create remediation tasks explicitly from Mission Control.
+   - Operators create remediation Workflow Executions explicitly from Mission Control.
 
 2. **Pinned target run**
    - Always persist `workflowId + runId`.
@@ -1376,19 +1376,19 @@ artifact-first evidence, typed actions, explicit locks, strict audit, and no raw
 This document is complete enough to guide implementation when all of the following are true:
 
 1. `task.remediation` is accepted as the canonical create-time contract.
-2. The system distinguishes remediation from ordinary task dependencies.
+2. The system distinguishes remediation from ordinary Workflow Execution dependencies.
 3. The create path resolves and persists a pinned target `runId`.
 4. A remediation context bundle artifact is generated and linked.
-5. A MoonMind-owned evidence access surface exists for remediation tasks.
+5. A MoonMind-owned evidence access surface exists for remediation Workflow Executions.
 6. A typed action registry exists for side-effecting admin actions.
 7. Privileged remediation uses named policy/profile binding, not implicit host access.
 8. Exclusive mutation locking and a remediation action idempotency ledger are implemented.
-9. Remediation tasks emit the required audit artifacts and summary block.
+9. Remediation Workflow Executions emit the required audit artifacts and summary block.
 10. Mission Control can show forward and reverse remediation links.
 11. The system degrades safely when only partial historical evidence is available.
 12. Automatic self-healing, when later added, is policy-driven and bounded.
-13. Remediation tasks attempt the smallest safe immediate repair when one is plausible.
-14. Remediation tasks create a reviewable long-term MoonMind, preset, prompt, or Agent Skill prevention PR when recurrence analysis identifies an actionable systemic fix and repository write policy allows it.
+13. Remediation Workflow Executions attempt the smallest safe immediate repair when one is plausible.
+14. Remediation Workflow Executions create a reviewable long-term MoonMind, preset, prompt, or Agent Skill prevention PR when recurrence analysis identifies an actionable systemic fix and repository write policy allows it.
 
 ---
 
@@ -1484,4 +1484,4 @@ Keep these rules stable even as implementation evolves:
 9. **Loop prevention is required.**
 10. **Mission Control must make the relationship visible in both directions.**
 11. **Immediate repair and long-term prevention are separate outputs; a remediator may do either or both, but it must record its decision.**
-12. **Corrected-instruction retries must be recorded as remediation context, not as silent mutation of the original task input.**
+12. **Corrected-instruction retries must be recorded as remediation context, not as silent mutation of the original Workflow input.**

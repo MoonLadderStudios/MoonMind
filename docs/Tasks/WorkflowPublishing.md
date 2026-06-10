@@ -1,6 +1,6 @@
-# Task Publishing
+# Workflow Publishing
 
-Task publishing controls how agent-produced changes reach the repository after execution. The `publishMode` field on a task determines whether changes are committed only, pushed to a branch, or turned into a pull request.
+Workflow publishing controls how agent-produced changes reach the repository after execution. The `publishMode` field on a Workflow Execution determines whether changes are committed only, pushed to a branch, or turned into a pull request.
 
 ## Publish Modes
 
@@ -12,7 +12,7 @@ Task publishing controls how agent-produced changes reach the repository after e
 
 ### `none`
 
-The agent runs in its workspace but no git operations occur after completion. Useful for read-only tasks (analysis, diagnostics, research) or for tasks with side effects other than a final publish action.
+The agent runs in its workspace but no git operations occur after completion. Useful for read-only Workflow Executions (analysis, diagnostics, research) or for Workflow Executions with side effects other than a final publish action.
 
 ### `branch`
 
@@ -35,13 +35,13 @@ Example:
 
 For PR publication, the authored `branch` is the selected repository branch and PR base. MoonMind creates or obtains a runtime-generated work branch for the PR head, pushes changes there, and creates a pull request back to the authored base branch.
 
-When merge automation is explicitly enabled for a PR-publishing task, successful PR publication starts a parent-owned `MoonMind.MergeAutomation` child workflow. The original `MoonMind.Run` remains in `awaiting_external` while merge automation waits for configured external readiness signals and runs `pr-resolver` with publish mode `none`; downstream dependencies on the original task are satisfied only after merge automation succeeds.
+When merge automation is explicitly enabled for a PR-publishing Workflow Execution, successful PR publication starts a parent-owned `MoonMind.MergeAutomation` child workflow. The original `MoonMind.Run` remains in `awaiting_external` while merge automation waits for configured external readiness signals and runs `pr-resolver` with publish mode `none`; downstream dependencies on the original Workflow Execution are satisfied only after merge automation succeeds.
 
-For Jira-backed PR-publishing tasks, the authored or preset-provided Jira issue key must be preserved as the canonical `jiraIssueKey` in merge automation input. When that key is present, `MoonMind.Run` enables `mergeAutomationConfig.postMergeJira` by default so `MoonMind.MergeAutomation` can complete the same authoritative issue after verified merge success. If operators provide an explicit `postMergeJira.issueKey`, it overrides the canonical key for the post-merge completion step.
+For Jira-backed PR-publishing Workflow Executions, the authored or preset-provided Jira issue key must be preserved as the canonical `jiraIssueKey` in merge automation input. When that key is present, `MoonMind.Run` enables `mergeAutomationConfig.postMergeJira` by default so `MoonMind.MergeAutomation` can complete the same authoritative issue after verified merge success. If operators provide an explicit `postMergeJira.issueKey`, it overrides the canonical key for the post-merge completion step.
 
 The publish path must not infer post-merge completion targets through fuzzy summary search or by transitioning every issue key found in PR metadata. PR metadata is only a strict fallback when stronger configured or captured Jira context is unavailable.
 
-If a Jira-oriented PR-publishing task completes with no repository changes
+If a Jira-oriented PR-publishing Workflow Execution completes with no repository changes
 because the issue is already implemented, `MoonMind.Run` completes that
 authoritative Jira issue through the same trusted Jira transition boundary used
 for post-merge completion. Ambiguous no-change results that do not explicitly
@@ -58,11 +58,11 @@ When `publishMode` is `pr`, the runtime planner auto-generates a work/head branc
 {clean-title-prefix}-{uuid8}
 ```
 
-- **`clean-title-prefix`**: Derived from the task title (or parameter title, or skill name). Lowercased, non-alphanumeric characters replaced with `-`, truncated to 40 characters.
+- **`clean-title-prefix`**: Derived from the Workflow Execution title (or parameter title, or skill name). Lowercased, non-alphanumeric characters replaced with `-`, truncated to 40 characters.
 - **`uuid8`**: First 8 characters of a UUID4 for uniqueness.
 
 **Examples:**
-- Task title "Fix login page" → `fix-login-page-a1b2c3d4`
+- Workflow Execution title "Fix login page" → `fix-login-page-a1b2c3d4`
 - No title available → `e5f6a7b8` (UUID only)
 
 ### Branch Fields
@@ -73,7 +73,7 @@ New authored submissions use one branch field consistently across UI, API, snaps
 | --- | --- | --- |
 | `branch` | Authored branch selection | For `publishMode: pr`, the selected repo branch and PR base. For `publishMode: branch`, the branch to update and push. |
 
-`targetBranch` is not an authored or operator-facing field in new submissions. For PR mode, the head/work branch is runtime-generated or provider-managed and is not part of the create-form contract. `Publish Mode` remains part of the task contract; only its UI placement changed.
+`targetBranch` is not an authored or operator-facing field in new submissions. For PR mode, the head/work branch is runtime-generated or provider-managed and is not part of the create-form contract. `Publish Mode` remains part of the Workflow Execution contract; only its UI placement changed.
 
 ### Legacy Migration
 
@@ -199,7 +199,7 @@ The pull request body should include, when available:
 - Tests run
 - Remaining risks or follow-up work
 
-The publisher must not derive the pull request title or body from arbitrary task-step instructions, workflow control text, Jira transition instructions, or the first step in a multi-step orchestration. In particular, titles such as the following are invalid for implementation pull requests:
+The publisher must not derive the pull request title or body from arbitrary Workflow Execution step instructions, workflow control text, Jira transition instructions, or the first step in a multi-step orchestration. In particular, titles such as the following are invalid for implementation pull requests:
 
 ```text
 Change Jira issue MM-597 to status In Progress before implementation starts.

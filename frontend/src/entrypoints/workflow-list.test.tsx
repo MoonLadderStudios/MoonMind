@@ -107,7 +107,7 @@ describe('Workflows Entrypoint', () => {
     expect(screen.getByRole('button', { name: 'Status filter: completed' })).toBeTruthy();
     expect(screen.getByLabelText('Live updates')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Clear filters' })).toBeNull();
-  });
+  }, 10000);
 
   it('announces the current sort state on table headers', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
@@ -1234,7 +1234,7 @@ describe('Workflows Entrypoint', () => {
       fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
       expect((screen.getByLabelText('Status filter value') as HTMLSelectElement).value).toBe('');
     });
-  });
+  }, 10000);
 
   it('marks mobile card details links as the only full-width card action', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);

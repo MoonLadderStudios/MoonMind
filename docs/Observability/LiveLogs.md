@@ -5,7 +5,7 @@ Owners: MoonMind Platform
 Last updated: 2026-04-08
 
 **Replaces or substantially rewrites:**
-- `docs/Temporal/LiveTaskManagement.md`
+- `docs/Temporal/LiveWorkflowManagement.md`
 - `specs/084-live-log-tailing/spec.md`
 
 **Related:**
