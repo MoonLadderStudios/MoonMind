@@ -692,7 +692,7 @@ class MoonMindRunWorkflow:
         self._last_publish_repair_node_id: str | None = None
         self._codex_session_handle: Any | None = None
         self._codex_session_binding: CodexManagedSessionBinding | None = None
-        self._codex_session_cleared_before_step_ids: set[str] = set()
+        self._codex_session_cleared_before_step_executions: set[str] = set()
         self._trusted_jira_context: dict[str, Any] | None = None
         self._step_ledger_rows: list[dict[str, Any]] = []
         self._step_ledger_by_id: dict[str, dict[str, Any]] = {}
@@ -1453,15 +1453,17 @@ class MoonMindRunWorkflow:
         artifacts = row.get("artifacts")
         execution: dict[str, Any] = {}
         tool = row.get("tool")
+        runtime_context_policy: str | None = None
         if isinstance(tool, Mapping) and str(tool.get("type") or "").strip() == (
             "agent_runtime"
         ):
             agent_id = str(tool.get("name") or "").strip()
-            execution["runtimeContextPolicy"] = (
+            runtime_context_policy = (
                 "fresh_agent_run"
                 if self._agent_kind_for_id(agent_id) == "managed"
                 else "external_provider_continuation"
             )
+            execution["runtimeContextPolicy"] = runtime_context_policy
         if isinstance(refs, Mapping):
             for source_key, target_key in (
                 ("childWorkflowId", "childWorkflowId"),
@@ -1475,7 +1477,78 @@ class MoonMindRunWorkflow:
             diagnostics_ref = artifacts.get("runtimeDiagnostics")
             if isinstance(diagnostics_ref, str) and diagnostics_ref.strip():
                 execution["diagnosticsRef"] = diagnostics_ref.strip()
+        if runtime_context_policy == "external_provider_continuation":
+            # External/coordinated agents have weaker runtime control: MoonMind
+            # cannot reset their state, so it still records attempt identity and
+            # context refs (above) together with the known side effects and any
+            # available checkpoint evidence, so the continuation attempt remains
+            # auditable (docs/Steps/StepExecutionsAndCheckpointing.md §16.1).
+            known_side_effects = self._external_continuation_known_side_effects(
+                logical_step_id
+            )
+            if known_side_effects:
+                execution["knownSideEffects"] = known_side_effects
+            checkpoint_evidence = self._external_continuation_checkpoint_evidence(row)
+            if checkpoint_evidence:
+                execution["availableCheckpointEvidence"] = checkpoint_evidence
         return execution
+
+    def _external_continuation_known_side_effects(
+        self,
+        logical_step_id: str,
+    ) -> list[dict[str, Any]]:
+        """Compact projection of side effects recorded across a step's attempts.
+
+        External or coordinated agents may have weaker runtime control, so
+        MoonMind records the side effects it observed rather than assuming the
+        step can be silently reset. Records accumulate per logical step, so this
+        surfaces evidence from prior attempts when an external continuation
+        reattempt is launched.
+        """
+        records = self._step_side_effect_records.get(logical_step_id, ())
+        projected: list[dict[str, Any]] = []
+        for record in records:
+            if not isinstance(record, Mapping):
+                continue
+            compact: dict[str, Any] = {}
+            for key in (
+                "class",
+                "kind",
+                "operation",
+                "target",
+                "idempotencyKey",
+                "disposition",
+            ):
+                value = record.get(key)
+                if isinstance(value, str) and value.strip():
+                    compact[key] = value.strip()
+            accepted = record.get("workflowStateAccepted")
+            if isinstance(accepted, bool):
+                compact["workflowStateAccepted"] = accepted
+            if compact:
+                projected.append(compact)
+        return projected
+
+    def _external_continuation_checkpoint_evidence(
+        self,
+        row: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Available checkpoint evidence for an external continuation attempt.
+
+        MoonMind records whatever durable checkpoint refs exist ("where
+        available") without assuming direct workspace restoration is possible
+        for an external/coordinated runtime.
+        """
+        evidence: dict[str, Any] = {}
+        for source_key, target_key in (
+            ("stateCheckpointRef", "stateCheckpointRef"),
+            ("workspaceCheckpointRef", "workspaceCheckpointRef"),
+            ("stepCheckpointRef", "stepCheckpointRef"),
+        ):
+            value = row.get(source_key)
+            if isinstance(value, str) and value.strip():
+                evidence[target_key] = value.strip()
+        return evidence
 
     def _step_execution_compact_output_refs(
         self,
@@ -5989,7 +6062,16 @@ class MoonMindRunWorkflow:
     ) -> None:
         if not workflow.patched(RUN_TASK_SCOPED_SESSION_CLEAR_BETWEEN_STEPS_PATCH):
             return
-        if logical_step_id in self._codex_session_cleared_before_step_ids:
+        # Dedup by Step Execution identity (logical step + attempt ordinal), not
+        # by logical step alone. A same-attempt retry of an already-cleared
+        # execution must not re-clear, but a genuine reattempt
+        # (execution_ordinal > 1) is a clean-context reattempt: for managed
+        # sessions it resolves to fresh_agent_run plus a session reset to a new
+        # epoch before the attempt (reuse_session_new_epoch / clear_session
+        # semantics per docs/Steps/StepExecutionsAndCheckpointing.md §16.1).
+        execution_ordinal = self._step_execution_for(logical_step_id) or 1
+        step_execution_key = f"{logical_step_id}:{execution_ordinal}"
+        if step_execution_key in self._codex_session_cleared_before_step_executions:
             return
         binding = self._codex_session_binding
         if binding is None:
@@ -6002,7 +6084,7 @@ class MoonMindRunWorkflow:
             workflow_id=workflow.info().workflow_id,
             run_id=workflow.info().run_id,
             logical_step_id=logical_step_id,
-            execution_ordinal=self._step_execution_for(logical_step_id) or 1,
+            execution_ordinal=execution_ordinal,
             operation="clear_session",
         )
         if workflow.patched(RUN_TASK_SCOPED_SESSION_CLEAR_ACTIVITY_SIGNAL_PATCH):
@@ -6051,7 +6133,7 @@ class MoonMindRunWorkflow:
                     reason=reason,
                     request_id=request_id,
                 )
-        self._codex_session_cleared_before_step_ids.add(logical_step_id)
+        self._codex_session_cleared_before_step_executions.add(step_execution_key)
 
     async def _terminate_task_scoped_sessions(self, *, reason: str) -> None:
         binding = self._codex_session_binding
