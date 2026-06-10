@@ -4,7 +4,7 @@ Status: Desired State
 Owners: MoonMind Engineering
 Last Updated: 2026-04-29
 Canonical for: agent skills, Skill steps, skill-set resolution, runtime skill materialization, `.agents/skills` path policy
-Related: `docs/Steps/StepTypes.md`, `docs/Tasks/SkillAndPlanContracts.md`, `docs/Tasks/TaskArchitecture.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/UI/MissionControlArchitecture.md`, `AGENTS.md`
+Related: `docs/Steps/StepTypes.md`, `docs/Tasks/SkillAndPlanContracts.md`, `docs/Tasks/WorkflowArchitecture.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/UI/MissionControlArchitecture.md`, `AGENTS.md`
 
 ---
 

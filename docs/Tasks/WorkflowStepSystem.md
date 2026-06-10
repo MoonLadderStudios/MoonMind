@@ -1,4 +1,4 @@
-# Task Steps System
+# Workflow Steps System
 
 Status: Active  
 Owners: MoonMind Engineering  
@@ -6,9 +6,9 @@ Last Updated: 2026-04-04
 
 ## 1. Purpose
 
-This document defines the current MoonMind step-execution model at the task level.
+This document defines the current MoonMind step-execution model at the Workflow Execution level.
 
-It is intentionally task-oriented and high level. The detailed owned contracts live elsewhere:
+It is intentionally Workflow-oriented and high level. The detailed owned contracts live elsewhere:
 
 - `docs/Tasks/SkillAndPlanContracts.md` owns executable plan structure
 - `docs/Temporal/StepLedgerAndProgressModel.md` owns the operator-facing step ledger, status vocabulary, attempts, checks, and refs
@@ -20,12 +20,12 @@ MoonMind no longer models steps as a raw `task.steps` loop inside an `AgentTaskW
 
 The current architecture is:
 
-- `MoonMind.Run` is the root task workflow
+- `MoonMind.Run` is the root Workflow Execution
 - the canonical planned step list comes from the resolved **plan artifact**
 - direct executable steps run as activities
 - true agent-runtime steps run as child `MoonMind.AgentRun` workflows
 
-This preserves one task-oriented operator surface while giving agent steps their own durable lifecycle boundary.
+This preserves one Workflow-oriented operator surface while giving agent steps their own durable lifecycle boundary.
 
 ## 3. Step structure and execution
 
@@ -75,7 +75,7 @@ Because steps are distinct activity or child-workflow executions:
 - step progress is durable across worker restarts
 - failed steps can be retried without rerunning earlier successful expensive steps
 - retry history is represented as step executions scoped to `(workflowId, runId, logicalStepId, attempt)`
-- current task detail shows the latest/current run's steps only by default
+- current Workflow detail shows the latest/current run's steps only by default
 
 ## 5. Observability posture
 
@@ -83,7 +83,7 @@ MoonMind does **not** use terminal-widget output blocks as the canonical step UX
 
 Instead:
 
-- task detail shows a first-class **Steps** section
+- Workflow detail shows a first-class **Steps** section
 - each step row shows exact status, summary, attempt count, blockers, and evidence links
 - expanded rows group **Summary**, **Checks**, **Logs & Diagnostics**, **Artifacts**, and **Metadata**
 - agent-runtime step rows deep-link or embed `/api/task-runs/*` when `taskRunId` is present

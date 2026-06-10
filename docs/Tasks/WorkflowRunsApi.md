@@ -1,4 +1,4 @@
-# Task Runs API
+# Workflow Runs API
 
 Status: Active  
 Owners: MoonMind Engineering  
@@ -6,20 +6,20 @@ Last Updated: 2026-04-04
 
 ## 1. Purpose
 
-Define the REST API surfaces used to create, monitor, and observe MoonMind task runs in the Temporal-first architecture.
+Define the REST API surfaces used to create, monitor, and observe MoonMind Workflow runs in the Temporal-first architecture.
 
 MoonMind now splits this responsibility across:
 
 - **`/api/executions`** for Temporal-backed execution lifecycle operations
 - **`/api/task-runs`** for managed-run observability (logs, diagnostics, live follow)
 
-Mission Control still presents these executions as **tasks** in the product UI, but the active lifecycle API is execution-oriented.
+Mission Control still presents these executions as **Workflows** in the product UI, but the active lifecycle API is execution-oriented.
 
 The public `/api/task-runs` path is intentional: the `task_runs` router itself uses `prefix="/task-runs"` and FastAPI mounts it under the app-level `/api` prefix.
 
 ## 2. API Surface
 
-Task runs are served by two active router families:
+Workflow runs are served by two active router families:
 
 - **`/api/executions`** — Execution lifecycle for Temporal-backed work.
 - **`/api/task-runs`** — Artifact-backed managed-run observability.
@@ -64,7 +64,7 @@ These endpoints expose artifact-backed observability for managed runs. The legac
 
 ## 3. Identity Model
 
-MoonMind currently uses three related identifiers around task runs:
+MoonMind currently uses three related identifiers around Workflow runs:
 
 - **`workflowId`** — the canonical durable execution identifier for `/api/executions`
 - **`taskId`** — the task-oriented product identifier; for Temporal-backed work, `taskId == workflowId`
@@ -108,14 +108,14 @@ The `activity_catalog.py` module defines the full routing contract including per
 
 ## 6. Legacy Queue Posture
 
-The legacy `/api/queue/jobs` lifecycle routes and `/api/queue` worker callback routes are historical migration references only. They are not the active task-run lifecycle API, and the execution router explicitly rejects falling back to the old queue substrate when Temporal submission is disabled.
+The legacy `/api/queue/jobs` lifecycle routes and `/api/queue` worker callback routes are historical migration references only. They are not the active Workflow-run lifecycle API, and the execution router explicitly rejects falling back to the old queue substrate when Temporal submission is disabled.
 
 ## 7. Related Documentation
 
 - [../Api/ExecutionsApiContract.md](../Api/ExecutionsApiContract.md) — Direct execution lifecycle contract
-- [TaskArchitecture.md](TaskArchitecture.md) — Overall task system design
-- [../UI/MissionControlArchitecture.md](../UI/MissionControlArchitecture.md) — Task-oriented UI over execution APIs
-- [TaskProposalSystem.md](TaskProposalSystem.md) — Task proposal generation
-- [TaskCancellation.md](TaskCancellation.md) — Cancellation flow
+- [WorkflowArchitecture.md](WorkflowArchitecture.md) — Overall Workflow system design
+- [../UI/MissionControlArchitecture.md](../UI/MissionControlArchitecture.md) — Workflow-oriented UI over execution APIs
+- [WorkflowProposalSystem.md](WorkflowProposalSystem.md) — Workflow proposal generation
+- [WorkflowCancellation.md](WorkflowCancellation.md) — Cancellation flow
 - [../ManagedAgents/LiveLogs.md](../ManagedAgents/LiveLogs.md) — Managed-run log and observability design
 - [../Temporal/TemporalArchitecture.md](../Temporal/TemporalArchitecture.md) — Temporal infrastructure

@@ -1,14 +1,14 @@
-# Task Presets System
+# Workflow Presets System
 
 ## Status
 
 Desired-state architecture.
 
-This document defines MoonMind's task preset system as a declarative, schema-driven composition layer. Presets are reusable step plans that may request typed inputs from the user, expand into one or more executable steps, and preserve provenance so task runs remain understandable after expansion.
+This document defines MoonMind's Workflow preset system as a declarative, schema-driven composition layer. Presets are reusable step plans that may request typed inputs from the user, expand into one or more executable steps, and preserve provenance so Workflow runs remain understandable after expansion.
 
 ## Purpose
 
-Task presets let a user start from a known workflow shape without manually authoring every step. A preset may represent a simple one-step action, a multi-step coding workflow, a Jira-driven orchestration flow, a proposal/remediation flow, or another composed task pattern.
+Workflow presets let a user start from a known workflow shape without manually authoring every step. A preset may represent a simple one-step action, a multi-step coding workflow, a Jira-driven orchestration flow, a proposal/remediation flow, or another composed Workflow pattern.
 
 The preset system must make the Create page easier to use without making the Create page responsible for knowing the details of every preset. Presets describe their own inputs through a machine-readable schema. The Create page renders those inputs automatically from the schema, validates them, and passes the collected values to the shared preset expansion path.
 
@@ -16,7 +16,7 @@ The preset system must make the Create page easier to use without making the Cre
 
 - Presets are first-class step types, not a separate Create page mode.
 - A preset may remain unexpanded while the user configures it.
-- The user may submit a task with unexpanded preset steps; submission expands them automatically after validation.
+- The user may submit a Workflow Execution with unexpanded preset steps; submission expands them automatically after validation.
 - The Create page never hard-codes preset-specific forms such as `if presetId === "jira-orchestrate"`.
 - Each preset declares its expected inputs with an `input_schema` that can drive UI generation, API validation, apply, reapply, and submit-time expansion.
 - Preset input schemas align with the same direction as MoonMind skill input schemas and Agent Skills-style declarative capability metadata.
@@ -25,9 +25,9 @@ The preset system must make the Create page easier to use without making the Cre
 
 ## Non-Goals
 
-- Presets are not a replacement for skills. A skill is a reusable agent capability or instruction bundle. A preset is a reusable task/step composition that may invoke skills, scripts, managed agents, external agents, or other presets.
+- Presets are not a replacement for skills. A skill is a reusable agent capability or instruction bundle. A preset is a reusable Workflow/step composition that may invoke skills, scripts, managed agents, external agents, or other presets.
 - Presets do not require custom React code for each preset. Only reusable field widgets may have custom components.
-- Presets do not require the user to manually expand them before task creation.
+- Presets do not require the user to manually expand them before Workflow Execution creation.
 - Presets do not grant arbitrary execution rights. Expanded steps still pass through the same validation, policy, runtime, and publishing controls as manually authored steps.
 
 ## Core Concepts
@@ -50,7 +50,7 @@ A preset step is a step on the Create page with `type: preset`, a `preset_id`, a
 
 ### Expansion
 
-Expansion transforms a preset step plus validated inputs into concrete child steps. The backend owns expansion so apply, submit, API-driven task creation, and re-run flows share the same behavior.
+Expansion transforms a preset step plus validated inputs into concrete child steps. The backend owns expansion so apply, submit, API-driven Workflow Execution creation, and re-run flows share the same behavior.
 
 ### Provenance
 
@@ -351,10 +351,10 @@ The same path is used by:
 
 - preset apply
 - preset reapply
-- task submission with unexpanded presets
-- API-created tasks
-- task edit and re-run flows that reconstruct preset-originated steps
-- goal-only task submissions that are first mapped to a seeded preset
+- Workflow Execution submission with unexpanded presets
+- API-created Workflow Executions
+- Workflow Execution edit and re-run flows that reconstruct preset-originated steps
+- goal-only Workflow Execution submissions that are first mapped to a seeded preset
 
 Expansion must:
 
@@ -425,31 +425,31 @@ generated story with the current repository state and annotates the story
 breakdown before any Jira mutation occurs:
 
 - fully implemented stories are marked for skip and do not create Jira issues or
-  downstream Jira Orchestrate tasks
+  downstream Jira Orchestrate Workflow Executions
 - partially implemented stories keep their original traceability but add
   `remainingWork`, so Jira tracks only the unmet behavior
 - unverifiable stories are marked for manual review and are not automatically
   converted into implementation work
 
 The deterministic Jira story-output tool consumes only eligible reconciled
-stories, then the downstream Jira Orchestrate task creator consumes only the
+stories, then the downstream Jira Orchestrate Workflow Execution creator consumes only the
 Jira issue mappings that were actually created or reused.
 
 ## Submit-Time Auto-Expansion
 
-The user may click Create Task while one or more preset steps are still unexpanded. The submit path must:
+The user may click Create Workflow while one or more preset steps are still unexpanded. The submit path must:
 
 1. Validate all non-preset step fields.
 2. Validate each preset step's collected inputs.
 3. Expand all unexpanded preset steps through the backend expansion path.
-4. Re-run final task validation on the fully expanded step list.
-5. Submit the task.
+4. Re-run final Workflow Execution validation on the fully expanded step list.
+5. Submit the Workflow Execution.
 
-If a required preset input is missing, Create Task is blocked and the missing field is highlighted. If backend expansion fails, the Create page displays the field-addressable errors and preserves the user's entered values.
+If a required preset input is missing, Create Workflow is blocked and the missing field is highlighted. If backend expansion fails, the Create page displays the field-addressable errors and preserves the user's entered values.
 
 ## Goal-Driven Preset Scheduling
 
-When a task is submitted with a plain `goal` and without already-authored
+When a Workflow Execution is submitted with a plain `goal` and without already-authored
 steps, an explicit plan, a selected tool/skill, or a selected preset, MoonMind
 may map that goal to a seeded preset before normal submit-time expansion. This
 keeps the fast path from requiring manual preset selection while preserving the
@@ -464,7 +464,7 @@ The initial selector is deterministic and conservative:
   preset
 - a general implementation goal maps to MoonSpec Orchestrate
 
-The submitted task records `presetSchedule` metadata with the goal source,
+The submitted Workflow Execution records `presetSchedule` metadata with the goal source,
 selected preset, preset version, and reason. Once the preset is selected, the
 normal backend expansion service owns the executable step list.
 
@@ -564,7 +564,7 @@ Persisted records should support:
 - comparison between original preset inputs and edited generated steps
 - future migrations when preset versions change
 
-Preset versions are immutable once tasks have been created from them. Updating a preset creates a new version or equivalent revision identifier.
+Preset versions are immutable once Workflow Executions have been created from them. Updating a preset creates a new version or equivalent revision identifier.
 
 ## Implementation Requirements
 
@@ -575,7 +575,7 @@ To fully realize this design, MoonMind needs:
 3. A generic schema-form renderer on the Create page.
 4. A reusable widget registry for semantic widgets such as Jira issue picker.
 5. Removal of preset-specific Create page branches.
-6. A shared backend expansion service used by apply, reapply, submit-time auto-expansion, and API-created tasks.
+6. A shared backend expansion service used by apply, reapply, submit-time auto-expansion, and API-created Workflow Executions.
 7. Provenance on expanded steps.
 8. Recursive expansion support with cycle detection.
 9. Field-addressable validation errors.
@@ -603,5 +603,5 @@ The key acceptance test is: a developer can add a new preset manifest with a sup
 - `docs/Steps/StepTypes.md`
 - `docs/Steps/SkillSystem.md`
 - `docs/Steps/JiraIntegration.md`
-- `docs/Tasks/TaskArchitecture.md`
-- `docs/Tasks/TaskEditingSystem.md`
+- `docs/Tasks/WorkflowArchitecture.md`
+- `docs/Tasks/WorkflowEditingSystem.md`

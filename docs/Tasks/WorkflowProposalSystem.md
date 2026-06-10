@@ -1,9 +1,9 @@
-# Task Proposal System
+# Workflow Proposal System
 
 Status: Active desired state
 Owners: MoonMind Engineering
 Last Updated: 2026-05-06
-Related: `docs/Tasks/TaskArchitecture.md`, `docs/Tasks/TaskFinishSummarySystem.md`, `docs/Api/ExecutionsApiContract.md`, `docs/UI/MissionControlArchitecture.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/ExternalAgents/ExternalAgentIntegrationSystem.md`, `docs/Tasks/AgentSkillSystem.md`, `docs/Tasks/SkillAndPlanContracts.md`
+Related: `docs/Tasks/WorkflowArchitecture.md`, `docs/Tasks/WorkflowFinishSummarySystem.md`, `docs/Api/ExecutionsApiContract.md`, `docs/UI/MissionControlArchitecture.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/ExternalAgents/ExternalAgentIntegrationSystem.md`, `docs/Tasks/AgentSkillSystem.md`, `docs/Tasks/SkillAndPlanContracts.md`
 
 ---
 
@@ -16,7 +16,7 @@ The desired proposal architecture is external-tracker-native:
 1. MoonMind generates candidate follow-up work during the `proposals` stage of a `MoonMind.Run`.
 2. MoonMind validates, normalizes, deduplicates, and stores each proposal as a control-plane delivery record.
 3. MoonMind delivers each proposal to the configured human-review tracker as either a GitHub Issue or Jira issue.
-4. Reviewers triage proposals in GitHub or Jira, not on a dedicated MoonMind task proposal page.
+4. Reviewers triage proposals in GitHub or Jira, not on a dedicated MoonMind Workflow proposal page.
 5. Promotion creates a new `MoonMind.Run` only after a verified human approval action in the configured tracker.
 6. MoonMind comments or transitions the external issue with execution, pull request, error, and final status links.
 
@@ -25,18 +25,18 @@ Each proposal has two representations:
 1. **Executable source of truth:** MoonMind's stored, validated `taskCreateRequest` snapshot or artifact reference.
 2. **Human review artifact:** the GitHub Issue or Jira issue rendered from that snapshot.
 
-The external issue is the review surface, not the executable contract. MoonMind never executes arbitrary edited issue Markdown, Jira ADF, labels, or comments as a task payload. Promotion always uses MoonMind's stored proposal snapshot plus bounded, validated reviewer controls.
+The external issue is the review surface, not the executable contract. MoonMind never executes arbitrary edited issue Markdown, Jira ADF, labels, or comments as a Workflow payload. Promotion always uses MoonMind's stored proposal snapshot plus bounded, validated reviewer controls.
 
 The proposal system is Temporal-native:
 
 1. `MoonMind.Run` executes work.
 2. A dedicated `proposals` stage runs after execution and before finalization.
-3. Generator activities create candidate follow-up tasks from run artifacts and normalized agent results.
+3. Generator activities create candidate follow-up Workflow Executions from run artifacts and normalized agent results.
 4. Submission activities validate candidates, resolve routing policy, persist delivery records, and create or update external issues.
 5. Webhook or sync activities observe approved/rejected/deferred tracker actions.
 6. Promotion creates a new Temporal execution only after human approval.
 
-Canonical agent-skill storage, precedence, and snapshot semantics live in `docs/Tasks/AgentSkillSystem.md`. This document defines how proposals preserve and promote task-facing skill intent.
+Canonical agent-skill storage, precedence, and snapshot semantics live in `docs/Tasks/AgentSkillSystem.md`. This document defines how proposals preserve and promote Workflow-facing skill intent.
 
 ---
 
@@ -44,13 +44,13 @@ Canonical agent-skill storage, precedence, and snapshot semantics live in `docs/
 
 These rules are fixed:
 
-1. `taskCreateRequest` is the canonical promote-to-task payload.
+1. `taskCreateRequest` is the canonical promote-to-Workflow payload.
 2. Proposal creation is not execution; promotion is the only action that starts new work.
 3. Promotion creates a new `MoonMind.Run` execution, not a legacy queue job.
 4. `taskCreateRequest.payload.repository` is the canonical repository target for deduplication and future execution.
 5. Human review is required before any proposal becomes durable running work.
 6. Human review occurs in GitHub Issues or Jira, according to resolved proposal delivery policy.
-7. MoonMind does not provide a dedicated task proposal review page as a primary workflow surface.
+7. MoonMind does not provide a dedicated Workflow proposal review page as a primary workflow surface.
 8. The external issue body is a rendered review artifact, not an executable payload.
 9. Proposal generation is best-effort and must never compromise the correctness of the parent run result.
 10. Proposal payloads must conform to the canonical Temporal submit contract used by `/api/executions`.
@@ -58,7 +58,7 @@ These rules are fixed:
 12. When a proposal depends on agent skill context, that context must be preserved explicitly in the stored `taskCreateRequest` or through documented inheritance semantics.
 13. Proposal promotion must not silently drift to unrelated skill defaults when the original proposal logic depended on explicit skill selection.
 14. Preset-derived metadata in proposals is advisory review and reconstruction metadata, not a runtime dependency.
-15. Proposal promotion validates and submits the reviewed flat task payload; it does not depend on live preset catalog lookup or live preset re-expansion for correctness.
+15. Proposal promotion validates and submits the reviewed flat Workflow payload; it does not depend on live preset catalog lookup or live preset re-expansion for correctness.
 16. Deduplication is repository-aware and deterministic.
 17. Delivery to GitHub or Jira is idempotent. A repeated proposal with the same dedup target updates or links to the existing external issue instead of creating reviewer-facing duplicates.
 18. Tracker credentials and webhook secrets remain inside trusted MoonMind integration boundaries and are never injected into managed agent runtimes.
@@ -69,7 +69,7 @@ These rules are fixed:
 
 ### 3.1 Submit-time contract
 
-Task-shaped submit requests may include:
+Workflow-shaped submit requests may include:
 
 1. `task.proposeTasks`
 2. `task.proposalPolicy`
@@ -81,27 +81,27 @@ These values are part of the durable run contract and must be preserved in `init
 The canonical direction is:
 
 1. Preserve the raw `task.proposalPolicy` object in `initialParameters`.
-2. Resolve global defaults plus per-task overrides inside the proposal stage or inside `proposal.submit`.
+2. Resolve global defaults plus per-Workflow overrides inside the proposal stage or inside `proposal.submit`.
 3. Do not rely on a parallel flattened proposal-policy contract for new work.
 4. Persist enough resolved policy metadata on proposal delivery records to explain why a proposal was delivered to GitHub or Jira.
 
 ### 3.1.1 Canonical submission-path normalization
 
-All new task submission paths must normalize proposal intent into the same canonical nested task payload accepted by `/api/executions` before `MoonMind.Run` starts.
+All new Workflow submission paths must normalize proposal intent into the same canonical nested Workflow payload accepted by `/api/executions` before `MoonMind.Run` starts.
 
-Managed sessions do not define a parallel proposal contract. They are the highest-risk producer because session containers may create additional MoonMind tasks through the internal API path, but the rule also applies to ordinary API submission, proposal promotion, schedules, and any future task-creation surface.
+Managed sessions do not define a parallel proposal contract. They are the highest-risk producer because session containers may create additional MoonMind Workflow Executions through the internal API path, but the rule also applies to ordinary API submission, proposal promotion, schedules, and any future Workflow-creation surface.
 
 Required mapping:
 
 1. session-level or adapter-level proposal opt-in becomes `initialParameters.task.proposeTasks`
 2. session-level or adapter-level proposal routing overrides become `initialParameters.task.proposalPolicy`
-3. task/runtime/repository metadata continues to flow through the canonical task payload instead of a Codex-only side channel
+3. Workflow/runtime/repository metadata continues to flow through the canonical Workflow payload instead of a Codex-only side channel
 
 Non-canonical locations such as root-level `initialParameters.proposeTasks`, turn metadata, session binding metadata, container environment, or adapter-local state are not the durable write contract for new work.
 
 Workflow code may read root-level `initialParameters.proposeTasks` or older policy shapes only for replay and in-flight compatibility. New submission paths must write the nested `task.*` fields so future behavior does not depend on compatibility fallbacks.
 
-For session-capable runtimes, this applies both when a user submits a task targeting a managed-session runtime and when a managed session creates additional MoonMind tasks through the internal API path.
+For session-capable runtimes, this applies both when a user submits a Workflow Execution targeting a managed-session runtime and when a managed session creates additional MoonMind Workflow Executions through the internal API path.
 
 ### 3.2 Run states
 
@@ -134,9 +134,9 @@ The proposal system uses this lifecycle vocabulary consistently across:
 The `proposals` stage runs only when both conditions are true:
 
 1. global proposal generation is enabled by workflow settings
-2. the submitted task enables proposals through `task.proposeTasks`
+2. the submitted Workflow Execution enables proposals through `task.proposeTasks`
 
-This gives operators a real global off switch while still allowing task-level opt-in when the feature is enabled system-wide.
+This gives operators a real global off switch while still allowing Workflow-level opt-in when the feature is enabled system-wide.
 
 For managed-session originated runs, the durable gate is the canonical nested value preserved in `initialParameters.task.proposeTasks`; session-local flags alone must not determine whether the workflow enters `proposals`.
 
@@ -157,7 +157,7 @@ Generators must:
 
 1. treat run inputs and logs as untrusted
 2. use artifact-backed references for large context
-3. avoid side effects such as commits, pushes, issue creation, or task creation
+3. avoid side effects such as commits, pushes, issue creation, or Workflow creation
 4. redact or exclude secrets and unsafe command output
 5. preserve skill selectors only when they materially affect correctness or expected behavior of the follow-up work
 6. preserve reliable preset provenance only when the candidate work is genuinely derived from authored preset metadata or reliable step source metadata
@@ -199,7 +199,7 @@ At minimum it records:
 
 ## 4. Proposal Policy
 
-Proposal routing follows global defaults plus optional per-task overrides.
+Proposal routing follows global defaults plus optional per-Workflow overrides.
 
 `proposalPolicy` controls whether proposals are generated, which repositories receive proposed work, and which external tracker receives reviewer-facing issues. It does not independently redefine agent skill precedence. Skill selection is preserved from the candidate payload or inherited from canonical system semantics, not recomputed by the proposal policy itself.
 
@@ -219,7 +219,7 @@ The canonical global controls are:
 
 Operator-facing configuration remains the source of truth for these defaults.
 
-### 4.2 Per-task policy contract
+### 4.2 Per-Workflow policy contract
 
 `task.proposalPolicy` controls:
 
@@ -268,7 +268,7 @@ Project-targeted proposals keep the triggering repository as `taskCreateRequest.
 
 They are used for follow-up feature work, cleanup, tests, or project-local quality work discovered during the run.
 
-Their external issue is delivered to the tracker associated with the project repository unless the task policy explicitly selects another allowed destination.
+Their external issue is delivered to the tracker associated with the project repository unless the Workflow policy explicitly selects another allowed destination.
 
 ### 4.5 MoonMind-targeted proposals
 
@@ -435,17 +435,17 @@ Large payloads, logs, artifacts, and diagnostics are linked by reference rather 
 
 ### 6.1 Canonical direction
 
-Stored proposals must use the same task-shaped contract accepted by Temporal submission through `/api/executions`.
+Stored proposals must use the same Workflow-shaped contract accepted by Temporal submission through `/api/executions`.
 
 That means:
 
-1. `taskCreateRequest` stores a normal task payload
+1. `taskCreateRequest` stores a normal Workflow payload
 2. `task.runtime.mode` selects the runtime
 3. `task.tool` and `step.tool`, when present, use the canonical Temporal submit shape
 4. `task.tool.type` must be `skill` when a tool selector is provided, representing an executable tool rather than an agent instruction bundle
 5. proposal payloads do not use `tool.type = "agent_runtime"`
 6. `task.skills` and `step.skills` may be included and must follow the canonical Agent Skill System contract defined in `docs/Tasks/AgentSkillSystem.md`
-7. delivery metadata is stored alongside the proposal delivery record, not inside the executable task payload unless it is part of the user's explicit task contract
+7. delivery metadata is stored alongside the proposal delivery record, not inside the executable Workflow payload unless it is part of the user's explicit Workflow contract
 
 ### 6.2 Candidate example
 
@@ -512,19 +512,19 @@ That means:
 
 ### 6.3 Payload rules
 
-1. `taskCreateRequest` must already validate against the canonical task contract.
+1. `taskCreateRequest` must already validate against the canonical Workflow contract.
 2. `taskCreateRequest.payload.repository` determines deduplication and future execution target.
-3. `taskCreateRequest.payload.task.runtime.mode` uses current supported task runtimes: `codex`, `gemini_cli`, `claude`, and optionally `jules`.
+3. `taskCreateRequest.payload.task.runtime.mode` uses current supported Workflow runtimes: `codex`, `gemini_cli`, `claude`, and optionally `jules`.
 4. Candidate payloads must not include secrets, raw credentials, or unsafe log dumps.
-5. Promotion-time overrides must also validate against the same canonical task contract before execution starts.
+5. Promotion-time overrides must also validate against the same canonical Workflow contract before execution starts.
 6. If `task.skills` or `step.skills` are present, they must validate against the canonical agent-skill contract.
 7. Proposals must not embed full agent skill bodies inline when refs or selectors are the correct contract.
 8. Proposals preserve execution intent, not raw runtime materialization state.
 9. Proposal payloads must not store mutable `.agents/skills` directory state, runtime-local materialization outputs, or ephemeral prompt bundles produced only for one adapter session.
-10. Proposal-capable work originating from a managed session must already carry `task.proposeTasks` and any `task.proposalPolicy` in the canonical task payload.
+10. Proposal-capable work originating from a managed session must already carry `task.proposeTasks` and any `task.proposalPolicy` in the canonical Workflow payload.
 11. Proposal generation must not reconstruct proposal intent from session-local metadata.
 12. Proposal payloads may include optional `task.authoredPresets` and `steps[].source` provenance when the metadata is reliable.
-13. Preset provenance fields are reconstruction and review metadata only; they do not change the executable meaning of the flat task payload.
+13. Preset provenance fields are reconstruction and review metadata only; they do not change the executable meaning of the flat Workflow payload.
 14. Proposal payloads must not contain unresolved preset include objects as runtime work.
 15. Preset-derived proposals must be execution-ready flat payloads before storage and promotion.
 
@@ -558,9 +558,9 @@ Canonical keys are:
 
 ### 7.3 Identity rules
 
-1. `workflow_id` is the durable source task identity for workflow-originated proposals.
-2. `temporal_run_id` is diagnostic metadata, not the durable task handle.
-3. Task-oriented Temporal surfaces continue to use `taskId == workflowId`.
+1. `workflow_id` is the durable source Workflow Execution identity for workflow-originated proposals.
+2. `temporal_run_id` is diagnostic metadata, not the durable Workflow Execution handle.
+3. Workflow-oriented Temporal surfaces continue to use `taskId == workflowId`.
 4. Continue-as-new does not change the proposal origin identity; the durable workflow remains the source.
 5. External issue keys are delivery identities, not execution identities.
 6. The MoonMind proposal delivery ID binds the stored proposal snapshot to the external issue.
@@ -608,17 +608,17 @@ Promotion must follow this algorithm:
 4. load the stored proposal snapshot
 5. verify the proposal is still open or approved-but-not-promoted
 6. parse bounded promotion controls such as `priority`, `maxAttempts`, `note`, and `runtimeMode`
-7. apply validated bounded controls to the execution request without replacing the stored task payload
-8. validate the stored payload against the canonical task contract, including verification of any agent-skill selectors and executable step types
+7. apply validated bounded controls to the execution request without replacing the stored Workflow payload
+8. validate the stored payload against the canonical Workflow contract, including verification of any agent-skill selectors and executable step types
 9. preserve explicit skill-selection intent from the stored proposal
 10. preserve `task.authoredPresets` and per-step `source` provenance from the stored proposal
-11. submit the reviewed task through the same Temporal-backed create path used by `/api/executions`
+11. submit the reviewed Workflow Execution through the same Temporal-backed create path used by `/api/executions`
 12. create a new `MoonMind.Run` through `TemporalExecutionService.create_execution()`
 13. store the promoted workflow or execution identifier on the proposal delivery record
 14. update the external issue status to promoted
 15. comment on or transition the external issue with execution metadata
 
-Promotion does not accept a full task payload replacement from the external issue body. If a future proposal refresh, issue-edit ingestion, or preset re-expansion flow exists, it must be an explicit validate-and-confirm action that creates a new stored proposal revision before promotion.
+Promotion does not accept a full Workflow payload replacement from the external issue body. If a future proposal refresh, issue-edit ingestion, or preset re-expansion flow exists, it must be an explicit validate-and-confirm action that creates a new stored proposal revision before promotion.
 
 Promotion is a control-plane-to-Temporal bridge, not a proposal-local mutation only.
 
@@ -642,8 +642,8 @@ MoonMind updates the external issue with the final decision when the provider ac
 
 Proposal promotion preserves agent skill intent from the original execution.
 
-1. When the original task relied only on deployment/default inheritance, proposal payloads may omit redundant explicit skill selectors.
-2. When the original task included explicit non-default skill selection that materially affects execution behavior, proposals should preserve that selection explicitly.
+1. When the original Workflow Execution relied only on deployment/default inheritance, proposal payloads may omit redundant explicit skill selectors.
+2. When the original Workflow Execution included explicit non-default skill selection that materially affects execution behavior, proposals should preserve that selection explicitly.
 3. Operators may override runtime at promotion time.
 4. Agent skill selectors are preserved by default.
 5. Changing the runtime does not automatically erase or rewrite agent skill intent.
@@ -672,7 +672,7 @@ Proposal promotion supports operator runtime selection.
 Rules:
 
 1. the backend-served runtime list is the source of truth
-2. supported task-facing runtime values are `codex`, `gemini_cli`, `claude`, and optionally `jules`
+2. supported Workflow-facing runtime values are `codex`, `gemini_cli`, `claude`, and optionally `jules`
 3. runtime overrides apply to the promoted execution request, not to the stored proposal snapshot
 4. disabled runtimes must fail validation before a workflow is created
 
@@ -708,7 +708,7 @@ Its desired response includes delivery information:
 }
 ```
 
-Internal callers do not need to know whether the reviewer will use GitHub or Jira before submission unless they intentionally provide an allowed per-task delivery override.
+Internal callers do not need to know whether the reviewer will use GitHub or Jira before submission unless they intentionally provide an allowed per-Workflow delivery override.
 
 ### 9.2 Webhook endpoints
 
@@ -782,12 +782,12 @@ The system must show:
 3. external issue links from execution detail
 4. provider, external key, delivery status, and last sync timestamp
 5. whether a proposal was created as a new issue or attached to an existing dedup issue
-6. compact task summary: runtime, repository, publish mode, priority, max attempts, skill context, and preset provenance
+6. compact Workflow summary: runtime, repository, publish mode, priority, max attempts, skill context, and preset provenance
 7. promotion result links after approval
 
 ### 10.3 No dedicated proposal page
 
-MoonMind does not maintain a dedicated human-facing task proposal page for normal proposal triage.
+MoonMind does not maintain a dedicated human-facing Workflow proposal page for normal proposal triage.
 
 The following surfaces are valid:
 
@@ -913,8 +913,8 @@ The desired system satisfies these acceptance criteria:
 
 1. A generated proposal creates or updates exactly one GitHub Issue or Jira issue per provider destination and dedup target.
 2. Reviewers can promote, dismiss, defer, and reprioritize proposals without opening a MoonMind proposal review page.
-3. Promotion executes only from MoonMind's stored validated task snapshot plus bounded reviewer controls.
-4. GitHub or Jira issue links appear in task run details and finish summaries.
+3. Promotion executes only from MoonMind's stored validated Workflow snapshot plus bounded reviewer controls.
+4. GitHub or Jira issue links appear in Workflow run details and finish summaries.
 5. Duplicate proposals comment on or link to an existing external issue instead of creating duplicate reviewer-facing issues.
 6. Security, tests, and run-quality proposals preserve category, tags, origin metadata, priority, and notification behavior.
 7. External delivery failures are retried idempotently and visible in run summaries, delivery records, and operator diagnostics.

@@ -1,23 +1,23 @@
-# Task Dependencies
+# Workflow Dependencies
 
-Related: `docs/Api/ExecutionsApiContract.md`, `docs/Tasks/TaskArchitecture.md`, `docs/Tasks/TaskCancellation.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/UI/MissionControlArchitecture.md`
+Related: `docs/Api/ExecutionsApiContract.md`, `docs/Tasks/WorkflowArchitecture.md`, `docs/Tasks/WorkflowCancellation.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/UI/MissionControlArchitecture.md`
 
 ---
 
 ## 1. Purpose
 
-This document defines the desired-state contract for **Task Dependencies** in MoonMind.
+This document defines the desired-state contract for **Workflow Dependencies** in MoonMind.
 
-Task dependencies allow one `MoonMind.Run` execution to wait on one or more other `MoonMind.Run` executions before entering its own active work. This supports multi-stage orchestration across separate runs while keeping each execution independently durable, observable, cancelable, rerunnable, and separately inspectable.
+Workflow dependencies allow one `MoonMind.Run` execution to wait on one or more other `MoonMind.Run` executions before entering its own active work. This supports multi-stage orchestration across separate runs while keeping each execution independently durable, observable, cancelable, rerunnable, and separately inspectable.
 
 ---
 
 ## 2. Contract Summary
 
-- A task-shaped create request may declare prerequisite execution IDs in `payload.task.dependsOn`.
+- A Workflow-Execution create request may declare prerequisite execution IDs in `payload.task.dependsOn`.
 - The executions API normalizes this into `initialParameters.task.dependsOn` for `MoonMind.Run`.
 - Each `dependsOn` value is a `workflowId` for an existing `MoonMind.Run` execution.
-- For Temporal-backed task surfaces, `taskId == workflowId`.
+- For Temporal-backed Workflow Execution surfaces, `taskId == workflowId`.
 - `runId` is diagnostic only and is never a valid dependency target.
 - A prerequisite is satisfied only when it reaches terminal MoonMind state `completed`.
 - Any other prerequisite terminal outcome — `failed`, `canceled`, `terminated`, `timed_out`, or runtime unresolvable — keeps the dependent run blocked in `waiting_on_dependencies` until the same prerequisite `workflowId` later reaches `completed`. The dependent never auto-fails on a prerequisite failure. The only way out without prerequisite success is for an operator to cancel the dependent run or bypass the dependency.
@@ -38,9 +38,9 @@ The current contract is intentionally narrow:
 
 ## 3. API Contract
 
-Task dependencies are part of the Temporal-backed create flow through `/api/executions`.
+Workflow dependencies are part of the Temporal-backed create flow through `/api/executions`.
 
-The user-facing request remains task-shaped:
+The user-facing request remains Workflow-Execution-shaped:
 
 ```json
 {
@@ -110,7 +110,7 @@ If `initialParameters.task.dependsOn` is absent or empty, the workflow skips `wa
 
 ### 4.2 Dependency resolution model
 
-The canonical mechanism for inter-run task dependencies is **explicit dependency-resolution signaling**. Dependent runs do not treat direct waiting on external workflow results as the primary dependency contract.
+The canonical mechanism for inter-run Workflow dependencies is **explicit dependency-resolution signaling**. Dependent runs do not treat direct waiting on external workflow results as the primary dependency contract.
 
 When dependencies are present, the workflow must:
 
@@ -381,7 +381,7 @@ The create UX should provide:
 ### 6.2 List and detail surfaces
 
 * `waiting_on_dependencies` maps to dashboard status `waiting`.
-* Task detail shows a **Dependencies** panel with prerequisite links, titles, statuses, and terminal outcomes.
+* Workflow detail shows a **Dependencies** panel with prerequisite links, titles, statuses, and terminal outcomes.
 * When a per-dependency outcome carries `resolution = "waiting_for_successful_rerun"`, the panel must surface a clear "Prerequisite failed; waiting for successful rerun" indicator alongside the failure count and last-failed timestamp.
 * Prerequisite detail shows a **Dependents** panel or equivalent reverse-lookup view.
 * List and quick-view surfaces may show a compact blocked-by summary when useful.
@@ -390,9 +390,9 @@ The create UX should provide:
 
 ## 7. Boundary With Other Ordering Mechanisms
 
-Task dependencies are **inter-workflow** dependencies between separate top-level `MoonMind.Run` executions.
+Workflow dependencies are **inter-workflow** dependencies between separate top-level `MoonMind.Run` executions.
 
-Use task dependencies when the involved runs must remain:
+Use Workflow dependencies when the involved runs must remain:
 
 * independently visible,
 * independently durable,
@@ -400,14 +400,14 @@ Use task dependencies when the involved runs must remain:
 * independently rerunnable,
 * separately inspectable.
 
-Do **not** use task dependencies for:
+Do **not** use Workflow dependencies for:
 
 * plan-node or skill-node ordering inside a single run,
 * direct parent-owned subordinate work that should be awaited inside one orchestration history.
 
 For parent-owned subordinate work that should be directly awaited, use **child workflows**.
 
-Task dependencies block one workflow on the terminal outcome of another workflow. They do not import, merge, or replace the upstream run’s internal plan DAG.
+Workflow dependencies block one workflow on the terminal outcome of another workflow. They do not import, merge, or replace the upstream run’s internal plan DAG.
 
 ---
 

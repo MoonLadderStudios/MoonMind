@@ -1,9 +1,9 @@
-# Task Finish Summary System
+# Workflow Finish Summary System
 
 Status: Active  
 Owners: MoonMind Engineering  
 Last Updated: 2026-05-17  
-Related: `docs/Tasks/TaskArchitecture.md`, `docs/Tasks/TaskProposalQueue.md`,
+Related: `docs/Tasks/WorkflowArchitecture.md`, `docs/Tasks/WorkflowProposalSystem.md`,
 `docs/Temporal/ErrorTaxonomy.md`, `docs/Temporal/StepLedgerAndProgressModel.md`
 
 ---
@@ -164,7 +164,7 @@ sent to the terminal-state activity.
 
 ### 2.6 Preset Summary Ownership
 
-Task presets do not own generic end-of-run narration. Presets may emit structured
+Workflow presets do not own generic end-of-run narration. Presets may emit structured
 facts that are useful after execution, such as a Jira issue key, pull request
 URL, verification verdict, publish handoff, or outcome data, but those facts are
 inputs to operator surfaces and workflow finalization rather than a replacement

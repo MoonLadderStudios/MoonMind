@@ -541,12 +541,12 @@ For the Jira example:
 
 ## Related Documents
 
-- `docs/Tasks/TaskPresetsSystem.md`
+- `docs/Tasks/WorkflowPresetsSystem.md`
 - `docs/Steps/StepTypes.md`
 - `docs/Steps/SkillSystem.md`
 - `docs/Steps/JiraIntegration.md`
-- `docs/Tasks/TaskArchitecture.md`
-- `docs/Tasks/TaskPublishing.md`
+- `docs/Tasks/WorkflowArchitecture.md`
+- `docs/Tasks/WorkflowPublishing.md`
 - `docs/Tasks/PrMergeAutomation.md`
 - `docs/UI/MissionControlArchitecture.md`
 - `docs/UI/MissionControlDesignSystem.md`
