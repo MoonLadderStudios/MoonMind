@@ -2296,6 +2296,44 @@ class MoonMindRunWorkflow:
                     return True
         return False
 
+    @staticmethod
+    def _node_inputs_mapping(node: Mapping[str, Any]) -> Mapping[str, Any]:
+        inputs = node.get("inputs")
+        return inputs if isinstance(inputs, Mapping) else {}
+
+    def _is_moonspec_remediation_step(self, node: Mapping[str, Any]) -> bool:
+        node_inputs = self._node_inputs_mapping(node)
+        annotations = node_inputs.get("annotations")
+        if isinstance(annotations, Mapping):
+            role = str(annotations.get("jiraOrchestrateRole") or "").strip().lower()
+            if role == "moonspec-remediation":
+                return True
+        selected_skill = str(
+            node_inputs.get("selectedSkill")
+            or node_inputs.get("skillId")
+            or node_inputs.get("targetSkill")
+            or ""
+        ).strip().lower()
+        if selected_skill != "moonspec-implement":
+            return False
+        title = (
+            str(node_inputs.get("title") or node.get("title") or "")
+            .strip()
+            .lower()
+        )
+        return title.startswith("remediate verification gaps")
+
+    def _has_remaining_moonspec_remediation_step(
+        self,
+        *,
+        ordered_nodes: Sequence[Mapping[str, Any]],
+        current_index: int,
+    ) -> bool:
+        for node in ordered_nodes[current_index:]:
+            if self._is_moonspec_remediation_step(node):
+                return True
+        return False
+
     def _extract_moonspec_verify_verdict(
         self,
         outputs: Mapping[str, Any],
@@ -4802,6 +4840,32 @@ class MoonMindRunWorkflow:
                         node_id=node_id,
                         outputs=outputs_for_gate,
                     )
+                    gate_verdict = self._normalize_moonspec_verify_verdict(
+                        self._moonspec_gate_verdict
+                    )
+                    blocking_gate_reason = self._blocking_moonspec_gate_reason()
+                    if blocking_gate_reason and not (
+                        gate_verdict == "ADDITIONAL_WORK_NEEDED"
+                        and self._has_remaining_moonspec_remediation_step(
+                            ordered_nodes=ordered_nodes,
+                            current_index=index,
+                        )
+                    ):
+                        self._plan_blocked_message = blocking_gate_reason
+                        self._publish_status = "not_required"
+                        self._publish_reason = blocking_gate_reason
+                        self._publish_context["publicationBlockedBy"] = (
+                            "moonspec_verify"
+                        )
+                        self._summary = blocking_gate_reason
+                        self._mark_remaining_plan_steps_skipped(
+                            ordered_nodes=ordered_nodes,
+                            completed_index=index - 1,
+                            summary=blocking_gate_reason,
+                        )
+                        self._refresh_step_readiness(updated_at=workflow.now())
+                        self._update_memo()
+                        break
             if self._publish_status == "not_required":
                 require_pull_request_url = False
                 pull_request_url = None

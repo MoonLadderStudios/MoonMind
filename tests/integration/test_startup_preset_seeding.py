@@ -124,9 +124,9 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "moonspec-implement" in jira_orchestrate_steps
         assert "moonspec-verify" in jira_orchestrate_steps
         assert jira_orchestrate_steps[-1] == "jira-issue-updater"
-        assert len(jira_orchestrate_steps) == 15
-        assert jira_orchestrate_steps.count("moonspec-implement") == 2
-        assert jira_orchestrate_steps.count("moonspec-verify") == 2
+        assert len(jira_orchestrate_steps) == 25
+        assert jira_orchestrate_steps.count("moonspec-implement") == 7
+        assert jira_orchestrate_steps.count("moonspec-verify") == 7
         blocker_step = jira_orchestrate_template.latest_version.steps[1]
         assert blocker_step["title"] == "Check Jira blockers before implementation"
         assert blocker_step["type"] == "tool"
@@ -145,7 +145,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         remediation_step = next(
             step
             for step in jira_orchestrate_template.latest_version.steps
-            if step["title"] == "Remediate verification gaps"
+            if step["title"] == "Remediate verification gaps 1 of 6"
         )
         assert remediation_step["skill"]["id"] == "moonspec-implement"
         assert "ADDITIONAL_WORK_NEEDED" in remediation_step["instructions"]
@@ -153,7 +153,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         remediation_verify_step = next(
             step
             for step in jira_orchestrate_template.latest_version.steps
-            if step["title"] == "Verify remediation"
+            if step["title"] == "Verify remediation 6 of 6"
         )
         assert remediation_verify_step["skill"]["id"] == "moonspec-verify"
         assert "controlling verification gate" in remediation_verify_step["instructions"]

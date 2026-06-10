@@ -2050,6 +2050,44 @@ def test_moonspec_verify_gate_blocks_pr_publish_completion(
     )
 
 
+def test_moonspec_verify_gate_detects_remaining_remediation_budget(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    ordered_nodes = [
+        {
+            "id": "verify-1",
+            "inputs": {
+                "title": "Verify remediation 1 of 6",
+                "selectedSkill": "moonspec-verify",
+            },
+        },
+        {
+            "id": "remediate-2",
+            "inputs": {
+                "title": "Remediate verification gaps 2 of 6",
+                "selectedSkill": "moonspec-implement",
+                "annotations": {"jiraOrchestrateRole": "moonspec-remediation"},
+            },
+        },
+        {
+            "id": "create-pr",
+            "inputs": {
+                "title": "Create pull request",
+                "annotations": {"jiraOrchestrateRole": "pull-request-handoff"},
+            },
+        },
+    ]
+
+    assert mock_run_workflow._has_remaining_moonspec_remediation_step(
+        ordered_nodes=ordered_nodes,
+        current_index=1,
+    )
+    assert not mock_run_workflow._has_remaining_moonspec_remediation_step(
+        ordered_nodes=ordered_nodes,
+        current_index=2,
+    )
+
+
 def test_moonspec_verify_text_verdict_uses_first_matching_occurrence(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
