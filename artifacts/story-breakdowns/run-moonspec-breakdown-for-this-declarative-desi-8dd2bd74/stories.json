@@ -1,0 +1,402 @@
+{
+  "source": {
+    "title": "MM-809 / GitHub issue 809: Add high security mode",
+    "path": "https://github.com/MoonLadderStudios/MoonMind/issues/809",
+    "referencePath": "https://github.com/MoonLadderStudios/MoonMind/issues/809",
+    "originalDesign": "Add a high security mode that scans outgoing data before sending it for secrets or credentials:\n* comments before posting\n* git commits before push\n* messages before send message"
+  },
+  "extractedAt": "2026-06-10T01:02:16Z",
+  "outputMode": "jira",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "designSummary": "MM-809 requests an operator-visible high security mode that scans outbound content before it leaves MoonMind-controlled workflows or runtimes. The declared outbound surfaces are comments before posting, git commits before push, and messages before send message. The common intent is pre-send secret or credential detection with a consistent enforcement contract that downstream surface-specific stories can reuse.",
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "High security mode",
+      "type": "requirement",
+      "source_section": "Issue title and body",
+      "explanation": "MoonMind must expose a high security mode rather than permanently forcing the behavior into every run."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "Pre-send outbound scanning",
+      "type": "security",
+      "source_section": "Issue body",
+      "explanation": "Outgoing data must be scanned before it is sent, posted, or pushed."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Secret and credential detection",
+      "type": "security",
+      "source_section": "Issue body",
+      "explanation": "The scan target is secrets or credentials in outbound data."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Comment posting protection",
+      "type": "integration",
+      "source_section": "Issue bullet: comments before posting",
+      "explanation": "Comment publication paths must scan content before posting."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "Git push protection",
+      "type": "integration",
+      "source_section": "Issue bullet: git commits before push",
+      "explanation": "Git commit content must be scanned before push operations are allowed."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Message send protection",
+      "type": "integration",
+      "source_section": "Issue bullet: messages before send message",
+      "explanation": "Message-sending paths must scan message content before sending."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Fail-closed enforcement result",
+      "type": "constraint",
+      "source_section": "Inferred from pre-send security purpose",
+      "explanation": "When high security mode detects a likely secret or credential, the outbound operation needs a deterministic blocked result with actionable diagnostics instead of silently sending the data."
+    }
+  ],
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Orchestrate Phase 1: High security mode outbound scan contract",
+      "shortName": "security-mode-contract",
+      "description": "As an operator, I need a high security mode and shared outbound scan contract so every protected surface can decide before send, post, or push whether data contains secrets or credentials. Full MM-809 plan context: enable a high security mode that scans outgoing data before sending it for secrets or credentials across comments before posting, git commits before push, and messages before send message.",
+      "sourceReference": {
+        "path": "https://github.com/MoonLadderStudios/MoonMind/issues/809",
+        "title": "MM-809 / GitHub issue 809: Add high security mode",
+        "sections": [
+          "Issue title",
+          "Issue body"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-007"
+        ]
+      },
+      "scope": [
+        "Define the high security mode switch and configuration precedence.",
+        "Define the shared outbound scan input, result, and blocked-operation diagnostics contract.",
+        "Provide deterministic secret and credential detection behavior suitable for comments, commits, and messages."
+      ],
+      "outOfScope": [
+        "Surface-specific comment posting, git push, and message send wiring.",
+        "Provider-specific secret revocation or credential rotation."
+      ],
+      "independentTest": "Enable high security mode in a unit or boundary test, pass representative clean and secret-like outbound payloads through the shared scan contract, and verify clean payloads are allowed while detected credentials produce a fail-closed blocked result with redacted diagnostics.",
+      "acceptanceCriteria": [
+        "A high security mode setting is available to runtime code with documented deterministic precedence.",
+        "Outbound scan callers receive a structured allow/block result before performing an external side effect.",
+        "Secret-like or credential-like values produce a blocked result when high security mode is enabled.",
+        "Diagnostics identify the category and location of the finding without echoing the raw secret value.",
+        "When high security mode is disabled, the contract does not silently mutate outbound content."
+      ],
+      "requirements": [
+        "Expose a high security mode flag to outbound side-effect code.",
+        "Create a reusable outbound scan contract for text payloads and commit-like payload bundles.",
+        "Fail closed when findings are detected under high security mode.",
+        "Redact any detected secret material from logs, artifacts, errors, and user-visible diagnostics."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "ownership": "Owns the mode itself and its runtime availability."
+        },
+        {
+          "id": "DESIGN-REQ-002",
+          "ownership": "Owns the shared pre-send decision point used by every later phase."
+        },
+        {
+          "id": "DESIGN-REQ-003",
+          "ownership": "Owns the common secret and credential detection semantics."
+        },
+        {
+          "id": "DESIGN-REQ-007",
+          "ownership": "Owns fail-closed blocked-result behavior and redacted diagnostics."
+        }
+      ],
+      "dependencies": [],
+      "assumptions": [
+        "High security mode is operator-controlled rather than always-on.",
+        "The first implementation may use deterministic pattern-based scanning before later provider-specific detectors are added."
+      ],
+      "needsClarification": [
+        "Which configuration surface should expose high security mode first: environment, profile setting, Mission Control UI, or all of them?"
+      ]
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Orchestrate Phase 2: Scan comments before posting",
+      "shortName": "comment-post-scan",
+      "description": "As an operator, I need MoonMind to scan comments before posting them so high security mode prevents accidental publication of secrets or credentials to GitHub, Jira, or other comment destinations. Full MM-809 plan context: enable a high security mode that scans outgoing data before sending it for secrets or credentials across comments before posting, git commits before push, and messages before send message.",
+      "sourceReference": {
+        "path": "https://github.com/MoonLadderStudios/MoonMind/issues/809",
+        "title": "MM-809 / GitHub issue 809: Add high security mode",
+        "sections": [
+          "Issue bullet: comments before posting"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-007"
+        ]
+      },
+      "scope": [
+        "Route comment publication payloads through the shared outbound scan contract.",
+        "Block comment posting when high security mode detects a secret or credential.",
+        "Return a redacted actionable error to the workflow, adapter, or trusted tool caller."
+      ],
+      "outOfScope": [
+        "Git commit or message send enforcement.",
+        "Changing comment formatting behavior unrelated to security scanning."
+      ],
+      "independentTest": "Exercise a trusted comment-posting path with high security mode enabled and verify a clean comment is posted or reaches the mocked provider, while a comment containing a representative credential is blocked before the provider call.",
+      "acceptanceCriteria": [
+        "All MoonMind-owned comment-posting code paths covered by the story call the outbound scan contract before provider submission.",
+        "Detected secrets or credentials prevent the provider comment API call.",
+        "Blocked comment attempts emit redacted diagnostics that identify the comment surface.",
+        "Clean comments continue through the existing publication path without content mutation."
+      ],
+      "requirements": [
+        "Identify the canonical comment-posting boundaries that perform external side effects.",
+        "Invoke the shared high security scan before each comment side effect.",
+        "Preserve existing success behavior for clean comments.",
+        "Add boundary tests proving no provider call occurs after a blocked scan."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-002",
+          "ownership": "Applies the pre-send scan requirement to comment publishing."
+        },
+        {
+          "id": "DESIGN-REQ-003",
+          "ownership": "Verifies comment content is scanned for secrets or credentials."
+        },
+        {
+          "id": "DESIGN-REQ-004",
+          "ownership": "Owns the explicit comments-before-posting issue bullet."
+        },
+        {
+          "id": "DESIGN-REQ-007",
+          "ownership": "Enforces fail-closed behavior for blocked comment posts."
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Comment posting includes any MoonMind trusted tool, adapter, or publish path that sends user-visible comments to an external service."
+      ],
+      "needsClarification": [
+        "Which comment destinations must be included in the first phase: GitHub, Jira, PR review comments, issue comments, or all MoonMind-owned comment publishers?"
+      ]
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Orchestrate Phase 3: Scan git commits before push",
+      "shortName": "git-push-scan",
+      "description": "As an operator, I need MoonMind to scan git commit content before pushing so high security mode stops credentials from leaving the workspace through git history. Full MM-809 plan context: enable a high security mode that scans outgoing data before sending it for secrets or credentials across comments before posting, git commits before push, and messages before send message.",
+      "sourceReference": {
+        "path": "https://github.com/MoonLadderStudios/MoonMind/issues/809",
+        "title": "MM-809 / GitHub issue 809: Add high security mode",
+        "sections": [
+          "Issue bullet: git commits before push"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-007"
+        ]
+      },
+      "scope": [
+        "Determine the commit range that would be pushed by MoonMind-controlled git operations.",
+        "Scan commit messages and changed file content or diffs before push.",
+        "Block push attempts with redacted diagnostics when findings are detected."
+      ],
+      "outOfScope": [
+        "Rewriting git history or automatically removing secrets.",
+        "Scanning remote repositories outside the commits MoonMind is about to push."
+      ],
+      "independentTest": "Create a temporary repository fixture with one clean commit and one commit containing a representative credential, invoke the MoonMind-controlled push boundary in high security mode with the provider call mocked, and verify the dirty range is blocked before push while the clean range proceeds.",
+      "acceptanceCriteria": [
+        "MoonMind-controlled git push paths scan the outbound commit range before invoking push.",
+        "Commit messages and changed content are included in the scan input or an explicitly justified equivalent.",
+        "Detected secrets or credentials prevent the git push command or provider push call.",
+        "Blocked push diagnostics identify affected commit/file locations without printing raw secret material.",
+        "Clean commit ranges continue through the existing push path."
+      ],
+      "requirements": [
+        "Resolve the outbound commit range for push operations deterministically.",
+        "Build scan payloads from commit metadata and changed content with size controls if needed.",
+        "Invoke the shared high security scan before push.",
+        "Add tests proving blocked scans do not execute git push."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-002",
+          "ownership": "Applies the pre-send scan requirement to git push operations."
+        },
+        {
+          "id": "DESIGN-REQ-003",
+          "ownership": "Verifies outbound commit data is scanned for secrets or credentials."
+        },
+        {
+          "id": "DESIGN-REQ-005",
+          "ownership": "Owns the explicit git-commits-before-push issue bullet."
+        },
+        {
+          "id": "DESIGN-REQ-007",
+          "ownership": "Enforces fail-closed behavior for blocked pushes."
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "The first enforcement target is MoonMind-owned push execution, not arbitrary manual git commands run outside MoonMind control."
+      ],
+      "needsClarification": [
+        "Should the initial scan inspect full file contents, diffs only, commit messages only plus diffs, or a configured combination?"
+      ]
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Orchestrate Phase 4: Scan messages before send",
+      "shortName": "message-send-scan",
+      "description": "As an operator, I need MoonMind to scan outbound messages before send message actions so high security mode prevents credentials from being sent through agent, chat, notification, or provider-message surfaces. Full MM-809 plan context: enable a high security mode that scans outgoing data before sending it for secrets or credentials across comments before posting, git commits before push, and messages before send message.",
+      "sourceReference": {
+        "path": "https://github.com/MoonLadderStudios/MoonMind/issues/809",
+        "title": "MM-809 / GitHub issue 809: Add high security mode",
+        "sections": [
+          "Issue bullet: messages before send message"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-007"
+        ]
+      },
+      "scope": [
+        "Route MoonMind-owned send-message payloads through the shared outbound scan contract.",
+        "Block message sending when high security mode detects a secret or credential.",
+        "Return redacted diagnostics to the calling runtime or workflow boundary."
+      ],
+      "outOfScope": [
+        "Comment posting and git push enforcement.",
+        "Scanning inbound messages or private local draft state that is never sent."
+      ],
+      "independentTest": "Invoke a MoonMind-owned send-message boundary with high security mode enabled and a mocked downstream sender; verify clean messages reach the sender and messages containing representative credentials are blocked before the sender call.",
+      "acceptanceCriteria": [
+        "MoonMind-owned send-message paths scan message content before calling the downstream sender.",
+        "Detected secrets or credentials prevent the send operation.",
+        "Blocked message attempts emit redacted diagnostics that identify the message surface.",
+        "Clean messages continue through the existing send path without content mutation."
+      ],
+      "requirements": [
+        "Identify the canonical send-message boundary or boundaries covered by MM-809.",
+        "Invoke the shared high security scan before each message send side effect.",
+        "Preserve existing success behavior for clean messages.",
+        "Add boundary tests proving no downstream sender call occurs after a blocked scan."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-002",
+          "ownership": "Applies the pre-send scan requirement to send-message operations."
+        },
+        {
+          "id": "DESIGN-REQ-003",
+          "ownership": "Verifies message content is scanned for secrets or credentials."
+        },
+        {
+          "id": "DESIGN-REQ-006",
+          "ownership": "Owns the explicit messages-before-send-message issue bullet."
+        },
+        {
+          "id": "DESIGN-REQ-007",
+          "ownership": "Enforces fail-closed behavior for blocked message sends."
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Message send refers to MoonMind-owned outbound message actions, not internal workflow state transitions."
+      ],
+      "needsClarification": [
+        "Which send-message surfaces are in scope for the first implementation: Mission Control chat, agent runtime messages, notifications, or all MoonMind-owned outbound message senders?"
+      ]
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-001",
+      "STORY-002",
+      "STORY-003",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-001",
+      "STORY-002",
+      "STORY-003",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-001",
+      "STORY-002",
+      "STORY-003",
+      "STORY-004"
+    ]
+  },
+  "dependencies": [
+    {
+      "from": "STORY-002",
+      "dependsOn": "STORY-001",
+      "reason": "Comment enforcement needs the shared mode and scan contract."
+    },
+    {
+      "from": "STORY-003",
+      "dependsOn": "STORY-001",
+      "reason": "Git push enforcement needs the shared mode and scan contract."
+    },
+    {
+      "from": "STORY-004",
+      "dependsOn": "STORY-001",
+      "reason": "Message enforcement needs the shared mode and scan contract."
+    }
+  ],
+  "outOfScope": [
+    {
+      "item": "Automatic credential rotation or revocation",
+      "rationale": "MM-809 asks for pre-send scanning and prevention, not remediation of already exposed credentials."
+    },
+    {
+      "item": "Scanning arbitrary user actions outside MoonMind-controlled boundaries",
+      "rationale": "The issue names outgoing MoonMind surfaces; unmanaged shell or provider activity requires a separate runtime containment design."
+    },
+    {
+      "item": "Creating specs, implementation plans, tasks, code, Jira issues, or PRs during breakdown",
+      "rationale": "The selected skill is breakdown-only."
+    }
+  ]
+}
