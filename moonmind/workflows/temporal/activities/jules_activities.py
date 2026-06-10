@@ -11,7 +11,9 @@ import os
 
 from temporalio import activity
 
+from moonmind.config.settings import settings
 from moonmind.jules.runtime import build_runtime_gate_state, JULES_RUNTIME_DISABLED_MESSAGE
+from moonmind.security.outbound_scan import scan_outbound_text
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunHandle,
@@ -27,6 +29,21 @@ from moonmind.workflows.adapters.jules_client import JulesClient
 logger = logging.getLogger(__name__)
 
 _JULES_FALLBACK_ANSWER = "Proceed with your recommendation."
+
+
+def _blocked_message_error(surface: str, diagnostics: list[str]) -> str:
+    joined = "; ".join(diagnostics) if diagnostics else surface
+    return f"Blocked outbound message send: {joined}"
+
+
+def _scan_message_or_raise(content: str, *, location: str) -> None:
+    scan = scan_outbound_text(
+        content,
+        location=location,
+        settings=settings,
+    )
+    if not scan.allowed:
+        raise ValueError(_blocked_message_error(location, scan.sanitized_diagnostics))
 
 def _build_client() -> JulesClient:
     """Build a ``JulesClient`` from environment config.
@@ -155,6 +172,10 @@ async def jules_send_message_activity(payload: dict) -> AgentRunStatus:
             f"Invalid payload for jules_send_message_activity: {exc}"
         ) from exc
 
+    _scan_message_or_raise(
+        validated.prompt,
+        location="jules.send_message.prompt",
+    )
     adapter = _build_adapter()
     return await adapter.send_message(
         run_id=validated.session_id,
@@ -218,6 +239,21 @@ async def jules_answer_question_activity(payload: dict) -> dict:
     answer = await _generate_llm_answer(clarification_prompt)
 
     # Send the generated answer back to Jules
+    scan = scan_outbound_text(
+        answer,
+        location="jules.answer_question.answer",
+        settings=settings,
+    )
+    if not scan.allowed:
+        return {
+            "answered": False,
+            "answer": "",
+            "error": _blocked_message_error(
+                "jules.answer_question.answer",
+                scan.sanitized_diagnostics,
+            ),
+        }
+
     client = _build_client()
     try:
         await client.send_message(
@@ -371,4 +407,3 @@ __all__ = [
     "jules_start_activity",
     "jules_status_activity",
 ]
-

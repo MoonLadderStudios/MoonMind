@@ -33,6 +33,7 @@ from moonmind.security.outbound_scan import (
     OutboundBundleItem,
     resolve_high_security_mode,
     scan_outbound_bundle,
+    scan_outbound_text,
 )
 from moonmind.integrations.pentest.models import (
     PENTEST_HEARTBEAT_PHASES,
@@ -1599,6 +1600,14 @@ def _build_execution_notification_email(
         + "\n"
     )
     return message
+
+
+def _blocked_execution_notification_result(diagnostics: Sequence[str]) -> dict[str, Any]:
+    reason = "; ".join(diagnostics) if diagnostics else "execution.notify_completion.message"
+    return {
+        "status": "blocked",
+        "reason": f"Blocked outbound message send: {reason}",
+    }
 
 
 def _send_execution_notification_email(
@@ -4364,6 +4373,18 @@ class TemporalAgentRuntimeActivities:
             return {"status": "skipped", "reason": "disabled"}
         if not webhook_url and not email_configured:
             return {"status": "skipped", "reason": "no_channels"}
+
+        scan = scan_outbound_text(
+            json.dumps(payload, default=str, sort_keys=True),
+            location="execution.notify_completion.message",
+            settings=settings,
+        )
+        if not scan.allowed:
+            logger.warning(
+                "Blocked execution completion notification: %s",
+                "; ".join(scan.sanitized_diagnostics),
+            )
+            return _blocked_execution_notification_result(scan.sanitized_diagnostics)
 
         event = _build_execution_notification_payload(payload)
         results: list[dict[str, str]] = []

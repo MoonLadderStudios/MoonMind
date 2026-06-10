@@ -171,6 +171,85 @@ async def test_jules_send_message_activity_calls_adapter(_patch_build_adapter):
         prompt="Continue with step 2.",
     )
 
+async def test_jules_send_message_activity_blocks_secret_before_adapter_call(
+    _patch_build_adapter, monkeypatch
+):
+    from moonmind.workflows.temporal.activities import jules_activities
+
+    monkeypatch.setattr(
+        jules_activities.settings.security,
+        "high_security_mode",
+        True,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        await jules_activities.jules_send_message_activity(
+            {
+                "session_id": "session-42",
+                "prompt": "Continue with token=blocked-secret-value",
+            }
+        )
+
+    assert "jules.send_message.prompt" in str(exc_info.value)
+    assert "blocked-secret-value" not in str(exc_info.value)
+    _patch_build_adapter.send_message.assert_not_awaited()
+
+
+async def test_jules_send_message_activity_allows_clean_prompt_with_high_security(
+    _patch_build_adapter, monkeypatch
+):
+    from moonmind.workflows.temporal.activities import jules_activities
+
+    monkeypatch.setattr(
+        jules_activities.settings.security,
+        "high_security_mode",
+        True,
+    )
+
+    result = await jules_activities.jules_send_message_activity(
+        {
+            "session_id": "session-42",
+            "prompt": "Continue with step 2.",
+        }
+    )
+
+    assert result.run_id == "task-001"
+    _patch_build_adapter.send_message.assert_awaited_once_with(
+        run_id="session-42",
+        prompt="Continue with step 2.",
+    )
+
+
+async def test_jules_answer_question_blocks_secret_answer_before_client_send(
+    _patch_build_client, monkeypatch
+):
+    from moonmind.workflows.temporal.activities import jules_activities
+
+    monkeypatch.setattr(
+        jules_activities.settings.security,
+        "high_security_mode",
+        True,
+    )
+    monkeypatch.setattr(
+        jules_activities,
+        "_generate_llm_answer",
+        AsyncMock(return_value="Use token=blocked-secret-value"),
+    )
+
+    result = await jules_activities.jules_answer_question_activity(
+        {
+            "session_id": "session-42",
+            "question": "What token should I use?",
+            "task_context": "test",
+        }
+    )
+
+    assert result["answered"] is False
+    assert "jules.answer_question.answer" in result["error"]
+    assert "blocked-secret-value" not in result["error"]
+    _patch_build_client.send_message.assert_not_awaited()
+
+
 async def test_repo_merge_pr_activity_updates_base_before_merge():
     from moonmind.workflows.temporal.activities.jules_activities import (
         repo_merge_pr_activity,

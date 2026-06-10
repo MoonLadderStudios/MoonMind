@@ -62,6 +62,8 @@ When high-security mode is enabled, MoonMind-owned outbound callers should scan 
 
 The managed workspace publish path scans git pushes before invoking `git push`. It resolves the outbound range from the recorded remote branch SHA when available, otherwise from the publish base ref, and builds the scan bundle from commit metadata plus per-file diffs with bounded item sizes. A blocked scan returns file/commit locations such as `git.push.diff:<path>` without printing the detected value.
 
+MoonMind-owned message-send boundaries also scan text before delivery when high-security mode is enabled. Covered boundaries include external-agent follow-up messages, generated external-agent answers, chat/provider messages, and execution completion notifications. Clean messages continue through the existing sender unchanged. Blocked attempts return boundary-native failures or blocked results with surface-specific locations such as `jules.send_message.prompt`, `chat.openai.messages[0].content`, or `execution.notify_completion.message`; downstream senders are not called.
+
 When high-security mode is disabled, the scan contract returns an allow result and does not silently mutate caller-supplied outbound content.
 
 ---
