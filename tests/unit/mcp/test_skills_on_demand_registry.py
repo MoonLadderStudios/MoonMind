@@ -27,12 +27,12 @@ def _entry(name: str) -> ResolvedSkillEntry:
     )
 
 
-def _snapshot() -> ResolvedSkillSet:
+def _snapshot(*, skills: list[ResolvedSkillEntry] | None = None) -> ResolvedSkillSet:
     return ResolvedSkillSet(
         snapshot_id="skillset-active",
         manifest_ref="manifest-active",
         resolved_at=datetime.now(UTC),
-        skills=[_entry("jira-issue-updater")],
+        skills=skills or [_entry("jira-issue-updater")],
     )
 
 
@@ -45,7 +45,7 @@ class _StaticArtifactService:
         allow_restricted_raw: bool,
     ) -> tuple[object, bytes]:
         del principal, allow_restricted_raw
-        assert artifact_id == "manifest-active"
+        assert artifact_id in {"manifest-active", "skillset-active"}
         return object(), json.dumps(_snapshot().model_dump(mode="json")).encode("utf-8")
 
 
@@ -120,6 +120,7 @@ async def test_enabled_request_already_active_returns_no_change() -> None:
         context=SkillsOnDemandToolExecutionContext(
             enabled=True,
             workspace_root="/tmp/repo",
+            artifact_service=_StaticArtifactService(),
         ),
     )
 
@@ -148,3 +149,30 @@ async def test_enabled_request_loads_active_snapshot_from_manifest_ref() -> None
     assert result["status"] == "no_change"
     assert result["active_snapshot_id"] == "skillset-active"
     assert result["parent_snapshot_ref"] == "skillset-active"
+
+
+async def test_enabled_request_rejects_caller_supplied_active_snapshot() -> None:
+    registry = SkillsOnDemandToolRegistry(expose_commands=True)
+    caller_snapshot = _snapshot(skills=[_entry("unsafe-client-skill")])
+
+    with patch(
+        "moonmind.mcp.skills_on_demand_registry.AgentSkillResolver.resolve",
+        new=AsyncMock(side_effect=ValueError("requested Skill was not found")),
+    ):
+        result = await registry.call_tool(
+            tool="moonmind.skills.request",
+            arguments={
+                "current_snapshot_ref": "skillset-active",
+                "requested_skills": [{"name": "unsafe-client-skill"}],
+                "active_snapshot": caller_snapshot.model_dump(mode="json"),
+            },
+            context=SkillsOnDemandToolExecutionContext(
+                enabled=True,
+                workspace_root="/tmp/repo",
+                artifact_service=_StaticArtifactService(),
+            ),
+        )
+
+    assert result["status"] == "denied"
+    assert result["code"] == "skill_not_found"
+    assert result["active_snapshot_id"] == "skillset-active"

@@ -20,6 +20,11 @@ pytestmark = [pytest.mark.asyncio]
 
 CURRENT_USER_DEP = get_current_user()
 
+
+def _empty_async_session() -> SimpleNamespace:
+    return SimpleNamespace()
+
+
 class _FakeJiraService:
     def __init__(self) -> None:
         self.calls: list[tuple[str, Any]] = []
@@ -48,9 +53,7 @@ def router_app(
     monkeypatch.setattr(mcp_tools_router, "_jira_service", None)
     monkeypatch.setattr(mcp_tools_router, "_jules_registry", None)
     monkeypatch.setattr(mcp_tools_router, "_jules_client", None)
-    app.dependency_overrides[mcp_tools_router.get_async_session] = (
-        lambda: SimpleNamespace()
-    )
+    app.dependency_overrides[mcp_tools_router.get_async_session] = _empty_async_session
     return app
 
 

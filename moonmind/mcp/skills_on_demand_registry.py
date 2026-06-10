@@ -9,7 +9,6 @@ from typing import Any, Awaitable, Callable, Mapping
 from pydantic import BaseModel, ValidationError
 
 from moonmind.schemas.agent_skill_models import (
-    ResolvedSkillSet,
     RuntimeMaterializationMode,
     SkillSelector,
     SkillSelectorEntry,
@@ -268,17 +267,15 @@ class SkillsOnDemandToolRegistry:
         request: SkillsOnDemandRequest,
         context: SkillsOnDemandToolExecutionContext,
     ) -> SkillsOnDemandRequest:
-        if request.active_snapshot is not None:
-            return request
         if not request.current_snapshot_ref:
-            return request
+            return request.model_copy(update={"active_snapshot": None})
         try:
             active_snapshot = await load_resolved_skillset(
                 context.artifact_service,
                 request.current_snapshot_ref,
             )
         except Exception:
-            return request
+            return request.model_copy(update={"active_snapshot": None})
         return request.model_copy(
             update={
                 "active_snapshot": active_snapshot,
