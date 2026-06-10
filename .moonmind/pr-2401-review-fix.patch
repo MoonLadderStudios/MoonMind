@@ -1,0 +1,428 @@
+From 0ad0674a2c77171c8d309a7f1d330b76cb9d74f2 Mon Sep 17 00:00:00 2001
+From: MoonMind Agent <agent@moonmind.local>
+Date: Wed, 10 Jun 2026 15:34:37 +0000
+Subject: [PATCH] Address operational metrics review feedback
+
+---
+ .../src/entrypoints/mission-control.test.tsx  |  79 +++++++++++
+ .../src/entrypoints/workflow-list.test.tsx    | 125 ++++++++++++++++++
+ frontend/src/entrypoints/workflow-list.tsx    |  62 +++++----
+ frontend/src/entrypoints/workflows-home.tsx   |  64 ++++-----
+ 4 files changed, 271 insertions(+), 59 deletions(-)
+
+diff --git a/frontend/src/entrypoints/mission-control.test.tsx b/frontend/src/entrypoints/mission-control.test.tsx
+index 552ec96a9..160b6ec4b 100644
+--- a/frontend/src/entrypoints/mission-control.test.tsx
++++ b/frontend/src/entrypoints/mission-control.test.tsx
+@@ -219,6 +219,85 @@ describe('Mission Control shared entry', () => {
+     expect(screen.getByText('Average $0.3527 across 35 runs')).toBeTruthy();
+   });
+ 
++  it('does not render placeholder operational metric details while home metrics are loading', async () => {
++    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
++      const url = String(input);
++      if (url === '/api/executions/metrics?scope=tasks&sampleSize=500') {
++        return new Promise(() => {}) as Promise<Response>;
++      }
++      if (url === '/api/v1/secrets') {
++        return Promise.resolve({
++          ok: true,
++          json: async () => ({ items: [] }),
++        } as Response);
++      }
++      if (url === '/api/v1/provider-profiles') {
++        return Promise.resolve({
++          ok: true,
++          json: async () => [],
++        } as Response);
++      }
++      return Promise.resolve({
++        ok: false,
++        status: 404,
++        statusText: 'Not Found',
++        text: async () => 'Unhandled fetch',
++      } as Response);
++    });
++
++    renderWithClient(<MissionControlApp payload={{ page: 'workflows-home', apiBase: '/api' }} />);
++
++    expect(await screen.findByText('Loading operational metrics...')).toBeTruthy();
++    expect(screen.queryByText('0 terminal from 0 sampled')).toBeNull();
++    expect(screen.queryByText('0 completed, 0 failed')).toBeNull();
++    expect(screen.queryByText(/^Refreshed /)).toBeNull();
++  });
++
++  it('renders negative home metric durations as unavailable', async () => {
++    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
++      const url = String(input);
++      if (url === '/api/executions/metrics?scope=tasks&sampleSize=500') {
++        return Promise.resolve({
++          ok: true,
++          json: async () => ({
++            ...mockExecutionMetricsResponse(),
++            duration: {
++              averageSeconds: -3661,
++              medianSeconds: -91,
++              minSeconds: -91,
++              maxSeconds: -1,
++              observedCount: 35,
++            },
++          }),
++        } as Response);
++      }
++      if (url === '/api/v1/secrets') {
++        return Promise.resolve({
++          ok: true,
++          json: async () => ({ items: [] }),
++        } as Response);
++      }
++      if (url === '/api/v1/provider-profiles') {
++        return Promise.resolve({
++          ok: true,
++          json: async () => [],
++        } as Response);
++      }
++      return Promise.resolve({
++        ok: false,
++        status: 404,
++        statusText: 'Not Found',
++        text: async () => 'Unhandled fetch',
++      } as Response);
++    });
++
++    renderWithClient(<MissionControlApp payload={{ page: 'workflows-home', apiBase: '/api' }} />);
++
++    expect(await screen.findByText('Median — across 35 runs')).toBeTruthy();
++    expect(screen.queryByText('-1h 1m')).toBeNull();
++    expect(screen.queryByText('-1m 31s')).toBeNull();
++  });
++
+   it('uses the constrained shell by default for non-table pages', async () => {
+     renderWithClient(<MissionControlApp payload={{ page: 'workflows-home', apiBase: '/api' }} />);
+ 
+diff --git a/frontend/src/entrypoints/workflow-list.test.tsx b/frontend/src/entrypoints/workflow-list.test.tsx
+index b149c1a01..6d204b9af 100644
+--- a/frontend/src/entrypoints/workflow-list.test.tsx
++++ b/frontend/src/entrypoints/workflow-list.test.tsx
+@@ -198,6 +198,131 @@ describe('Workflows Entrypoint', () => {
+     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/metrics?'))).toBe(true);
+   });
+ 
++  it('does not render placeholder operational metric details while metrics are loading', async () => {
++    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
++      const url = String(input);
++      if (url.startsWith('/api/executions/metrics?')) {
++        return new Promise(() => {}) as Promise<Response>;
++      }
++      return Promise.resolve({
++        ok: true,
++        json: async () => ({
++          items: [
++            {
++              taskId: 'task-123',
++              source: 'temporal',
++              title: 'Example task',
++              status: 'completed',
++              state: 'completed',
++              rawState: 'completed',
++              createdAt: '2026-03-28T00:00:00Z',
++            },
++          ],
++        }),
++      } as Response);
++    });
++
++    renderWithClient(<WorkflowListPage payload={mockPayload} />);
++
++    await screen.findAllByText('Example task');
++    expect(screen.getByLabelText('Operational metrics')).toBeTruthy();
++    expect(screen.queryByText('0 terminal from 0 sampled')).toBeNull();
++    expect(screen.queryByText('0 completed, 0 failed')).toBeNull();
++    expect(screen.queryByText(/^Refreshed /)).toBeNull();
++  });
++
++  it('does not render placeholder operational metric details when metrics fail', async () => {
++    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
++      const url = String(input);
++      if (url.startsWith('/api/executions/metrics?')) {
++        return Promise.resolve({
++          ok: false,
++          statusText: 'Service Unavailable',
++          json: async () => ({}),
++        } as Response);
++      }
++      return Promise.resolve({
++        ok: true,
++        json: async () => ({
++          items: [
++            {
++              taskId: 'task-123',
++              source: 'temporal',
++              title: 'Example task',
++              status: 'completed',
++              state: 'completed',
++              rawState: 'completed',
++              createdAt: '2026-03-28T00:00:00Z',
++            },
++          ],
++        }),
++      } as Response);
++    });
++
++    renderWithClient(<WorkflowListPage payload={mockPayload} />);
++
++    await screen.findAllByText('Example task');
++    expect(await screen.findByText('Operational metrics are unavailable.')).toBeTruthy();
++    expect(screen.queryByText('0 terminal from 0 sampled')).toBeNull();
++    expect(screen.queryByText('0 completed, 0 failed')).toBeNull();
++    expect(screen.queryByText(/^Refreshed /)).toBeNull();
++  });
++
++  it('renders negative operational metric durations as unavailable', async () => {
++    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
++      const url = String(input);
++      if (url.startsWith('/api/executions/metrics?')) {
++        return Promise.resolve({
++          ok: true,
++          json: async () => ({
++            totalRuns: 1,
++            completedRuns: 1,
++            failedRuns: 0,
++            canceledRuns: 0,
++            terminalRuns: 1,
++            successRate: 1,
++            duration: {
++              averageSeconds: -10,
++              medianSeconds: -5,
++              observedCount: 1,
++            },
++            cost: {
++              totalEstimateUsd: 0,
++              averageEstimateUsd: 0,
++              observedCount: 1,
++            },
++            sampleSize: 1,
++            countMode: 'exact',
++            refreshedAt: '2026-03-28T00:00:10Z',
++          }),
++        } as Response);
++      }
++      return Promise.resolve({
++        ok: true,
++        json: async () => ({
++          items: [
++            {
++              taskId: 'task-123',
++              source: 'temporal',
++              title: 'Example task',
++              status: 'completed',
++              state: 'completed',
++              rawState: 'completed',
++              createdAt: '2026-03-28T00:00:00Z',
++            },
++          ],
++        }),
++      } as Response);
++    });
++
++    renderWithClient(<WorkflowListPage payload={mockPayload} />);
++
++    await screen.findAllByText('Example task');
++    expect(await screen.findByText('Median — across 1 runs')).toBeTruthy();
++    expect(screen.queryByText('-10s')).toBeNull();
++    expect(screen.queryByText('-5s')).toBeNull();
++  });
++
+   it('surfaces intervention requests in list rows and status filters', async () => {
+     fetchSpy.mockResolvedValue({
+       ok: true,
+diff --git a/frontend/src/entrypoints/workflow-list.tsx b/frontend/src/entrypoints/workflow-list.tsx
+index 075d2cafe..4ef1d52c1 100644
+--- a/frontend/src/entrypoints/workflow-list.tsx
++++ b/frontend/src/entrypoints/workflow-list.tsx
+@@ -251,14 +251,14 @@ function displayTemporalCount(count: number | null | undefined, countMode: strin
+ 
+ function formatPercent(value: number | null | undefined): string {
+   if (typeof value !== 'number' || Number.isNaN(value)) return '—';
+-  return new Intl.NumberFormat(undefined, {
++  return new Intl.NumberFormat('en-US', {
+     style: 'percent',
+     maximumFractionDigits: 1,
+   }).format(value);
+ }
+ 
+ function formatDuration(seconds: number | null | undefined): string {
+-  if (typeof seconds !== 'number' || Number.isNaN(seconds)) return '—';
++  if (typeof seconds !== 'number' || Number.isNaN(seconds) || seconds < 0) return '—';
+   if (seconds < 60) return `${Math.round(seconds)}s`;
+ 
+   const roundedSeconds = Math.round(seconds);
+@@ -271,7 +271,7 @@ function formatDuration(seconds: number | null | undefined): string {
+ 
+ function formatUsd(value: number | null | undefined): string {
+   if (typeof value !== 'number' || Number.isNaN(value)) return '—';
+-  return new Intl.NumberFormat(undefined, {
++  return new Intl.NumberFormat('en-US', {
+     style: 'currency',
+     currency: 'USD',
+     maximumFractionDigits: value >= 10 ? 2 : 4,
+@@ -1532,32 +1532,36 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
+               Operational metrics are unavailable.
+             </div>
+           ) : null}
+-          <dl className="workflow-list-metrics-grid">
+-            <div className="workflow-list-metric-tile">
+-              <dt>Runs</dt>
+-              <dd>{metricsQuery.isLoading ? '—' : String(metrics?.totalRuns ?? 0)}</dd>
+-              <p>{metrics?.terminalRuns ?? 0} terminal from {metrics?.sampleSize ?? 0} sampled</p>
+-            </div>
+-            <div className="workflow-list-metric-tile">
+-              <dt>Success Rate</dt>
+-              <dd>{metricsQuery.isLoading ? '—' : formatPercent(metrics?.successRate)}</dd>
+-              <p>{metrics?.completedRuns ?? 0} completed, {metrics?.failedRuns ?? 0} failed</p>
+-            </div>
+-            <div className="workflow-list-metric-tile">
+-              <dt>Run Duration</dt>
+-              <dd>{metricsQuery.isLoading ? '—' : formatDuration(metrics?.duration?.averageSeconds)}</dd>
+-              <p>Median {formatDuration(metrics?.duration?.medianSeconds)} across {metrics?.duration?.observedCount ?? 0} runs</p>
+-            </div>
+-            <div className="workflow-list-metric-tile">
+-              <dt>Cost</dt>
+-              <dd>{metricsQuery.isLoading ? '—' : formatUsd(metrics?.cost?.totalEstimateUsd)}</dd>
+-              <p>Average {formatUsd(metrics?.cost?.averageEstimateUsd)} across {metrics?.cost?.observedCount ?? 0} runs</p>
+-            </div>
+-          </dl>
+-          <p className="small workflow-list-metrics-refreshed">
+-            Refreshed {metricsRefreshedAt}
+-            {metrics?.countMode && metrics.countMode !== 'exact' ? ' · count estimate' : ''}
+-          </p>
++          {!metricsQuery.isLoading && !metricsQuery.isError && metrics ? (
++            <>
++              <dl className="workflow-list-metrics-grid">
++                <div className="workflow-list-metric-tile">
++                  <dt>Runs</dt>
++                  <dd>{String(metrics.totalRuns ?? 0)}</dd>
++                  <p>{metrics.terminalRuns ?? 0} terminal from {metrics.sampleSize ?? 0} sampled</p>
++                </div>
++                <div className="workflow-list-metric-tile">
++                  <dt>Success Rate</dt>
++                  <dd>{formatPercent(metrics.successRate)}</dd>
++                  <p>{metrics.completedRuns ?? 0} completed, {metrics.failedRuns ?? 0} failed</p>
++                </div>
++                <div className="workflow-list-metric-tile">
++                  <dt>Run Duration</dt>
++                  <dd>{formatDuration(metrics.duration?.averageSeconds)}</dd>
++                  <p>Median {formatDuration(metrics.duration?.medianSeconds)} across {metrics.duration?.observedCount ?? 0} runs</p>
++                </div>
++                <div className="workflow-list-metric-tile">
++                  <dt>Cost</dt>
++                  <dd>{formatUsd(metrics.cost?.totalEstimateUsd)}</dd>
++                  <p>Average {formatUsd(metrics.cost?.averageEstimateUsd)} across {metrics.cost?.observedCount ?? 0} runs</p>
++                </div>
++              </dl>
++              <p className="small workflow-list-metrics-refreshed">
++                Refreshed {metricsRefreshedAt}
++                {metrics.countMode && metrics.countMode !== 'exact' ? ' · count estimate' : ''}
++              </p>
++            </>
++          ) : null}
+         </section>
+         {isLoading ? (
+           <p className="loading workflow-list-empty-message">Loading workflows...</p>
+diff --git a/frontend/src/entrypoints/workflows-home.tsx b/frontend/src/entrypoints/workflows-home.tsx
+index 238079d54..514ed76b0 100644
+--- a/frontend/src/entrypoints/workflows-home.tsx
++++ b/frontend/src/entrypoints/workflows-home.tsx
+@@ -11,14 +11,14 @@ function formatPercent(value: number | null | undefined): string {
+   if (typeof value !== 'number' || Number.isNaN(value)) {
+     return '—';
+   }
+-  return new Intl.NumberFormat(undefined, {
++  return new Intl.NumberFormat('en-US', {
+     style: 'percent',
+     maximumFractionDigits: 1,
+   }).format(value);
+ }
+ 
+ function formatDuration(seconds: number | null | undefined): string {
+-  if (typeof seconds !== 'number' || Number.isNaN(seconds)) {
++  if (typeof seconds !== 'number' || Number.isNaN(seconds) || seconds < 0) {
+     return '—';
+   }
+   if (seconds < 60) {
+@@ -40,7 +40,7 @@ function formatUsd(value: number | null | undefined): string {
+   if (typeof value !== 'number' || Number.isNaN(value)) {
+     return '—';
+   }
+-  return new Intl.NumberFormat(undefined, {
++  return new Intl.NumberFormat('en-US', {
+     style: 'currency',
+     currency: 'USD',
+     maximumFractionDigits: value >= 10 ? 2 : 4,
+@@ -119,33 +119,37 @@ export function WorkflowsHomePage({ payload }: { payload: BootPayload }) {
+           </p>
+         ) : null}
+ 
+-        <dl className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+-          <MetricTile
+-            label="Runs"
+-            value={String(metrics?.totalRuns ?? '—')}
+-            detail={`${metrics?.terminalRuns ?? 0} terminal from ${metrics?.sampleSize ?? 0} sampled`}
+-          />
+-          <MetricTile
+-            label="Success Rate"
+-            value={formatPercent(metrics?.successRate)}
+-            detail={`${metrics?.completedRuns ?? 0} completed, ${metrics?.failedRuns ?? 0} failed`}
+-          />
+-          <MetricTile
+-            label="Run Duration"
+-            value={formatDuration(duration?.averageSeconds)}
+-            detail={`Median ${formatDuration(duration?.medianSeconds)} across ${duration?.observedCount ?? 0} runs`}
+-          />
+-          <MetricTile
+-            label="Cost"
+-            value={formatUsd(cost?.totalEstimateUsd)}
+-            detail={`Average ${formatUsd(cost?.averageEstimateUsd)} across ${cost?.observedCount ?? 0} runs`}
+-          />
+-        </dl>
+-
+-        <p className="text-xs text-slate-500 dark:text-slate-400">
+-          Refreshed {refreshedAt}
+-          {metrics?.countMode === 'estimated_or_unknown' ? ' · count estimate' : ''}
+-        </p>
++        {!metricsQuery.isLoading && !metricsQuery.isError && metrics ? (
++          <>
++            <dl className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
++              <MetricTile
++                label="Runs"
++                value={String(metrics.totalRuns ?? '—')}
++                detail={`${metrics.terminalRuns ?? 0} terminal from ${metrics.sampleSize ?? 0} sampled`}
++              />
++              <MetricTile
++                label="Success Rate"
++                value={formatPercent(metrics.successRate)}
++                detail={`${metrics.completedRuns ?? 0} completed, ${metrics.failedRuns ?? 0} failed`}
++              />
++              <MetricTile
++                label="Run Duration"
++                value={formatDuration(duration?.averageSeconds)}
++                detail={`Median ${formatDuration(duration?.medianSeconds)} across ${duration?.observedCount ?? 0} runs`}
++              />
++              <MetricTile
++                label="Cost"
++                value={formatUsd(cost?.totalEstimateUsd)}
++                detail={`Average ${formatUsd(cost?.averageEstimateUsd)} across ${cost?.observedCount ?? 0} runs`}
++              />
++            </dl>
++
++            <p className="text-xs text-slate-500 dark:text-slate-400">
++              Refreshed {refreshedAt}
++              {metrics.countMode === 'estimated_or_unknown' ? ' · count estimate' : ''}
++            </p>
++          </>
++        ) : null}
+       </section>
+     </main>
+   );
+-- 
+2.39.5
