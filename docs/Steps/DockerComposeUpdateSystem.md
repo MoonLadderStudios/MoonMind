@@ -196,7 +196,7 @@ Supports policy-controlled options:
 - wait for services to become healthy
 - run post-update smoke check
 - prune old images after success
-- pause or drain new task work before update
+- pause or drain new workflow work before update
 - resume work after successful update
 
 ### Reason and confirmation
@@ -759,7 +759,7 @@ The smoke check may include:
 - frontend reachability
 - Temporal worker registration or poller health
 - database connectivity, if applicable
-- basic task submission readiness, if safe
+- basic workflow submission readiness, if safe
 
 ## 12.3 Verification failure rule
 
@@ -780,7 +780,7 @@ The UI should show the exact failed check and link to artifacts.
 
 Only administrators may start deployment updates.
 
-Deployment update permissions should be distinct from ordinary task-submission permissions.
+Deployment update permissions should be distinct from ordinary workflow-submission permissions.
 
 ## 13.2 Allowlisted stacks
 
@@ -824,7 +824,7 @@ The tool must reject:
 
 Any runtime with Docker socket access is trusted infrastructure.
 
-MoonMind must not expose Docker socket access to ordinary task runtimes, agent runtimes, repo workspaces, or user-authored tools.
+MoonMind must not expose Docker socket access to ordinary workflow runtimes, agent runtimes, repo workspaces, or user-authored tools.
 
 ## 13.5 Secret handling
 
@@ -847,7 +847,7 @@ Every deployment update run records:
 
 - run ID
 - workflow ID
-- task ID, if applicable
+- workflow ID, if applicable
 - stack
 - operator identity
 - operator role
@@ -925,7 +925,7 @@ The system must not silently roll back unless a separately documented policy exp
 
 ---
 
-## 16. Interaction with task execution
+## 16. Interaction with workflow execution
 
 Deployment update is executable operational work and should be represented through MoonMind's tool and plan system.
 
@@ -933,7 +933,7 @@ The update tool may be invoked by:
 
 - direct Operations UI action
 - scheduled maintenance workflow
-- admin-authored operational task
+- admin-authored operational workflow
 - future release-management workflow
 
 An agent may assist by explaining the update result or summarizing logs, but the privileged update itself is performed by the typed deployment tool.
@@ -941,10 +941,10 @@ An agent may assist by explaining the update result or summarizing logs, but the
 Representative operational sequence:
 
 ```text
-1. Pause or drain new task work, if requested.
+1. Pause or drain new workflow work, if requested.
 2. Update MoonMind deployment.
 3. Verify Compose and application health.
-4. Resume task work, if it was paused.
+4. Resume workflow work, if it was paused.
 5. Summarize before/after state and artifacts.
 ```
 
@@ -959,7 +959,7 @@ Deployment update belongs in the **Operations** subsection because it is a syste
 The Settings page should continue to use subsection routing such as:
 
 ```text
-/tasks/settings?section=operations
+/settings?section=operations
 ```
 
 ---

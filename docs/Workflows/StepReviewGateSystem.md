@@ -364,7 +364,7 @@ The `initialParameters` payload when starting a `MoonMind.Run` can include a app
 
 ### 7.4 Mission Control UI Toggle
 
-The task creation form gains a toggle:
+The workflow creation form gains a toggle:
 
 - **"Enable Step Approval Policy"** checkbox (off by default)
 - Expanding section with optional overrides (max attempts, reviewer model)
@@ -512,7 +512,7 @@ Each review adds one activity result to the workflow history. With a default of 
 | File | Change |
 |---|---|
 | `api_service/api/routers/executions.py` | Accept `approvalPolicy` in create-run payload, merge into `initialParameters` |
-| `frontend/src/entrypoints/task-create.tsx` | Add approval policy toggle to task creation form |
+| `frontend/src/entrypoints/workflow-start.tsx` | Add approval policy toggle to workflow creation form |
 
 ### Layer 5: Observability
 

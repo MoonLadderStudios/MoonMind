@@ -67,7 +67,7 @@ Rules:
 MoonMind must keep these separate:
 
 - **Temporal Visibility**: list, query, count, filters, recency.
-- **Mission Control**: task/workflow product UX, status, artifacts, approvals, execution summary.
+- **Mission Control**: workflow product UX, status, artifacts, approvals, execution summary.
 - **OpenTelemetry**: traces, metrics, logs for operators and developers.
 - **Artifacts**: large logs, sandbox output, command transcripts, prompt transcripts when explicitly enabled.
 
@@ -122,7 +122,7 @@ MoonMind should emit standard OTLP and allow operators to choose the backend:
    - propagates trace context and execution identifiers when starting workflows or invoking updates/signals
 
 3. **Workflow Worker**
-   - uses Temporal interceptors for workflow/task execution visibility
+   - uses Temporal interceptors for workflow/workflow execution visibility
    - creates minimal workflow-level spans/events through interceptor boundaries only
 
 4. **Activity Workers**

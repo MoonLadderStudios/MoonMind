@@ -145,7 +145,7 @@ Desired-state rules:
 
 - use `start_delay` only for simple one-time deferred execution that does not need mutable pre-start control,
 - use an in-workflow scheduled wait plus the `reschedule` signal when the target time can change after creation,
-- do not depend on early control signals being delivered to a workflow that has not yet started its first task.
+- do not depend on early control signals being delivered to a workflow that has not yet started its first Workflow Task.
 
 ---
 

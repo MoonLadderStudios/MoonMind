@@ -31,7 +31,7 @@ This document defines the **Temporal-side contract**. Product-facing APIs and UI
  Temporal-backed list/detail views should come from Temporal Visibility. Product-facing docs and APIs should center Workflow Execution identity.
 
 2. **Workflow Types are the root orchestration categories.** 
- We do not introduce parallel top-level taxonomies for provider brand, runtime brand, or task-queue brand.
+ We do not introduce parallel top-level taxonomies for provider brand, runtime brand, or Task Queue brand.
 
 3. **Workflows orchestrate; Activities do side effects.** 
  All nondeterminism lives in Activities.
@@ -117,7 +117,7 @@ Rules:
 | `MoonMind.ProviderProfileManager` | Coordinate provider-profile slot assignment, release, cooldowns, and reconciliation for managed runtimes | runtime/profile coordination inputs | slot assignment, lease state transitions | minutes → long-lived |
 | `MoonMind.AgentRun` | Own the durable lifecycle of one true managed or external agent execution | `AgentExecutionRequest`, refs, runtime metadata | canonical agent result, artifacts, lifecycle outcome | seconds → hours |
 | `MoonMind.AgentSession` | Own one workflow-scoped managed runtime session container, including launch, turn routing, clear/reset epoch changes, status, summary refs, and teardown | `ManagedSessionWorkflowInput` for the live session-capable runtime (`codex_cli`) | session handle/state, continuity refs, control/reset refs | minutes → hours |
-| `MoonMind.ManagedSessionReconcile` | Periodically reconcile managed-session supervision records and container state outside any one task step | reconciliation policy and runtime scope | reconciliation summary and cleanup actions | seconds → minutes per run |
+| `MoonMind.ManagedSessionReconcile` | Periodically reconcile managed-session supervision records and container state outside any one workflow step | reconciliation policy and runtime scope | reconciliation summary and cleanup actions | seconds → minutes per run |
 | `MoonMind.OAuthSession` | Manage browser-initiated OAuth or terminal-auth session lifecycle for managed runtimes | session config, runtime/provider context | auth/session status, profile registration side effects | minutes |
 | `MoonMind.MergeAutomation` | Wait for external pull request readiness after a published implementation run, then launch one resolver follow-up run when policy allows | parent run ref, compact pull request ref, optional Jira issue key, merge readiness policy | blocker summary, resolver run ref, terminal gate status | minutes → hours |
 
@@ -601,7 +601,7 @@ Representative lifecycle concerns:
 * trigger bounded cleanup or status repair through activity-owned side effects
 * finish quickly and rely on schedule/API triggering for future reconciliation passes
 
-It is not a task workflow and should not appear as a normal user task.
+It is not a user workflow and should not appear as a normal user workflow execution.
 
 ## 11.6 `MoonMind.ProviderProfileManager` lifecycle
 
@@ -629,7 +629,7 @@ Representative lifecycle:
 * register resulting provider/runtime profile if successful
 * fail/cleanup if not
 
-This is a support workflow, not a general task workflow.
+This is a support workflow, not a general user workflow.
 
 ---
 

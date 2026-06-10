@@ -8,7 +8,7 @@ Related:
 - [`docs/Temporal/ArtifactPresentationContract.md`](../Temporal/ArtifactPresentationContract.md)
 - [`docs/ManagedAgents/DockerSidecarRuntime.md`](./DockerSidecarRuntime.md)
 - [`docs/ManagedAgents/DockerOutOfDocker.md`](./DockerOutOfDocker.md)
-- [`docs/Steps/SkillSystem.md`](../Tasks/AgentSkillSystem.md)
+- [`docs/Steps/SkillSystem.md`](../Steps/SkillSystem.md)
 
 ## 1. Purpose
 
@@ -20,7 +20,7 @@ It freezes the smallest supported session-plane shape before broader implementat
 - Docker only
 - one workflow-scoped session container per workflow
 - optional per-session Docker sidecar for ordinary repo Docker commands
-- no cross-task session reuse
+- no cross-workflow session reuse
 - artifact-first logs and continuity
 - no Kubernetes orchestration
 - no Claude Code or Gemini binding details
@@ -59,10 +59,10 @@ operator-facing source of truth.
 
 The managed session plane is the workflow-scoped Codex runtime environment:
 
-- one Docker container per task
+- one Docker container per workflow execution
 - Codex App Server running inside that container
 - one active Codex thread per session epoch
-- continuity reused across steps within the same task only
+- continuity reused across steps within the same workflow execution only
 
 The session plane is a continuity and performance cache. It is not durable truth.
 
@@ -80,9 +80,9 @@ workloads. Those workload containers remain outside session identity: they do
 not become `session_id`, `session_epoch`, `container_id`, `thread_id`, or
 `active_turn_id`, and they do not replace the workflow-scoped session container.
 
-Codex session containers that need to create additional MoonMind tasks must be
+Codex session containers that need to create additional MoonMind workflow executions must be
 launched on the configured MoonMind Docker network and receive `MOONMIND_URL`
-pointing at the internal API endpoint. This keeps task creation on the
+pointing at the internal API endpoint. This keeps workflow creation on the
 Temporal-aware API path instead of relying on removed queue/DB shortcuts.
 
 ## 3. Protocol
@@ -260,7 +260,7 @@ runtimes.
 This contract does not define:
 
 - Kubernetes launch semantics
-- cross-task session reuse
+- cross-workflow session reuse
 - session UIs beyond continuity-aware artifact presentation
 - generalized multi-runtime certification
 - Claude Code/Gemini binding behavior

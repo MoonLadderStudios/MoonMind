@@ -17,7 +17,7 @@
 - [`docs/ManagedAgents/OAuthTerminal.md`](./OAuthTerminal.md)
 - [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)
 - [`docs/Security/SecretsSystem.md`](../Security/SecretsSystem.md)
-- [`docs/Steps/SkillSystem.md`](../Tasks/AgentSkillSystem.md)
+- [`docs/Steps/SkillSystem.md`](../Steps/SkillSystem.md)
 - [`docs/Memory/MemoryArchitecture.md`](../Memory/MemoryArchitecture.md)
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
 
@@ -154,7 +154,7 @@ Temporal remains the durable orchestrator.
 
 The intended workflow shape is:
 
-- `MoonMind.Run` owns the task envelope and step ordering,
+- `MoonMind.Run` owns the workflow execution envelope and step ordering,
 - `MoonMind.AgentSession` owns one workflow-scoped managed session container,
 - `MoonMind.AgentRun` owns one true agent execution step that attaches to or uses that session,
 - `MoonMind.ManagedSessionReconcile` performs bounded reconciliation work,
@@ -189,22 +189,22 @@ Each managed session container is a workflow-scoped environment that can hold:
 - provider-specific auth state or mounted auth home,
 - workspace bindings,
 - runtime caches,
-- task session scratch/spool state,
+- workflow session scratch/spool state,
 - runtime-local session memory.
 
 MoonMind worker images should remain generic and lightweight. They should orchestrate managed runtimes, not embed every managed runtime binary.
 
-### 5.2 Task scope and reuse
+### 5.2 Workflow scope and reuse
 
 The default architectural unit is a **workflow-scoped managed session**.
 
 A workflow-scoped session may:
 
 - serve one step,
-- serve multiple ordered steps in the same task,
+- serve multiple ordered steps in the same workflow execution,
 - be cleared or reset between steps,
 - be torn down and recreated if policy requires replacement,
-- coexist with other managed sessions in the same task when isolation demands it.
+- coexist with other managed sessions in the same workflow execution when isolation demands it.
 
 The session container may persist across multiple steps, but step boundaries remain first-class and must still produce step-scoped durable evidence.
 
@@ -230,7 +230,7 @@ A clear or reset operation starts a new continuity interval. In the Codex refere
 MoonMind should treat these as different container roles:
 
 1. **Managed session container**
-   - long-lived for the duration of the task/session policy,
+   - long-lived for the duration of the workflow/session policy,
    - owns runtime-native session continuity.
 
 2. **Specialized workload container**
@@ -242,7 +242,7 @@ MoonMind should treat these as different container roles:
    - short-lived,
    - used only for interactive runtime authentication flows,
    - writes credentials into an auth volume or equivalent profile backing store,
-   - not a task execution session.
+   - not a workflow execution session.
 
 These container classes should stay separate in both docs and code.
 
@@ -269,7 +269,7 @@ The security boundary between session continuity and generalized container launc
 
 A session container may cache local state for efficiency and continuity, but the authoritative system surfaces are:
 
-- task and step state in Temporal-backed execution records,
+- workflow and step state in Temporal-backed execution records,
 - artifacts and observability blobs,
 - continuity artifacts and bounded metadata,
 - provider-profile and policy records.
@@ -284,13 +284,13 @@ Any state needed for recovery, audit, rerun, operator understanding, or UI prese
 
 Managed sessions should **consume** context assembled by MoonMind rather than becoming the primary owner of execution context.
 
-For task and step execution, MoonMind may assemble a context pack from sources such as:
+For workflow and step execution, MoonMind may assemble a context pack from sources such as:
 
 - planning state,
-- prior task/run history,
+- prior workflow/run history,
 - long-term memory and conventions,
 - document retrieval and design docs,
-- task attachments and instruction bundles,
+- workflow attachments and instruction bundles,
 - resolved skill snapshots,
 - operator-supplied objective or steering input.
 
@@ -316,7 +316,7 @@ Agent skills are part of execution context, but they are their own subsystem.
 
 The canonical direction is:
 
-1. select skill intent at the task and step level,
+1. select skill intent at the workflow and step level,
 2. resolve an immutable `ResolvedSkillSet` before runtime launch,
 3. keep large skill bodies out of workflow history,
 4. pass compact refs into the agent-run path,
@@ -376,7 +376,7 @@ Context remains a controlled execution input, not a secret-storage channel.
 
 ### 7.1 Live Logs is not a terminal
 
-For ordinary managed task execution, **Live Logs** should be a MoonMind-native, session-aware observability surface rather than an embedded terminal.
+For ordinary managed workflow execution, **Live Logs** should be a MoonMind-native, session-aware observability surface rather than an embedded terminal.
 
 The primary model is:
 
@@ -549,7 +549,7 @@ That rule applies to:
 - provider profiles,
 - runtime launch requests,
 - workflow payloads,
-- task definitions,
+- workflow definitions,
 - logs,
 - artifacts,
 - run metadata.

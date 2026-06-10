@@ -202,7 +202,7 @@ Representative request:
   "payload": {
     "repository": "MoonLadderStudios/MoonMind",
     "task": {
-      "instructions": "Investigate the target task, gather evidence, attempt the smallest safe immediate repair if one seems possible, verify the target outcome, then create a reviewable long-term MoonMind or Agent Skill fix if a recurrence-prevention change is identified.",
+      "instructions": "Investigate the target workflow execution, gather evidence, attempt the smallest safe immediate repair if one seems possible, verify the target outcome, then create a reviewable long-term MoonMind or Agent Skill fix if a recurrence-prevention change is identified.",
       "runtime": { "mode": "codex" },
       "remediation": {
         "target": {
@@ -1322,7 +1322,7 @@ A practical v1 should ship with the following constraints:
 4. **MoonMind-owned evidence tools**
    - Provide read access to:
      - step ledger snapshot,
-     - target task-run observability summary,
+     - target workflow-run observability summary,
      - stdout/stderr/merged logs,
      - diagnostics,
      - selected artifacts.

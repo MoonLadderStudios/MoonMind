@@ -2,7 +2,7 @@
 
 Status: Proposed
 Last Updated: 2026-04-02
-Scope: Chat, RAG, Mission Control (task and execution surfaces), Spec workflow, system
+Scope: Chat, RAG, Mission Control (workflow and execution surfaces), Spec workflow, system
 
 This desired-state document now assumes MoonMind's current Temporal-first bridge architecture. Older queue/Celery terminology should be treated as historical only, not as the current execution substrate.
 
@@ -15,7 +15,7 @@ MoonMind memory exists to make agent runs faster, safer, and more repeatable:
 - Preserve **decisions, conventions, and preferences** as reusable long-term memory with provenance.
 - Keep **planning state reviewable and repo-local**, so humans and agents share the same work graph.
 - Maintain strict **isolation** (namespace/repo scoped): no cross-repo contamination.
-- **Fail-open**: memory accelerates; it is never a hard dependency for chat or task execution.
+- **Fail-open**: memory accelerates; it is never a hard dependency for chat or workflow execution.
 - Keep **auditability first-class**: every memory contribution is traceable back to evidence (run/job IDs, commits, artifacts).
 
 Non-goals:
@@ -47,12 +47,12 @@ MoonMind uses three orthogonal memory planes. Each plane has a clear purpose and
 
 - Beads is the repo-scoped planning substrate (issues + dependencies + claims).
 - Git-native and reviewable.
-- Best-effort: Beads failures never block task execution.
+- Best-effort: Beads failures never block workflow execution.
 
 **Objects:**
 - Work items, dependency edges, readiness state, discovered follow-ups, claim/close metadata.
 
-### Plane B — Task History Memory (Run Ledger → Digests → Fix Patterns)
+### Plane B — Run History Memory (Run Ledger → Digests → Fix Patterns)
 
 **Question:** “What happened last time we tried something like this?”
 
@@ -84,7 +84,7 @@ MoonMind uses three orthogonal memory planes. Each plane has a clear purpose and
 
 ## 4) Read Path: Building the Context Pack
 
-Every chat request and every task run may request a “context pack”. It is assembled in this order:
+Every chat request and every workflow run may request a “context pack”. It is assembled in this order:
 
 1) **Planning (Beads) — optional**
 - If the request references a Beads work item, load:
@@ -188,7 +188,7 @@ MoonMind implements this architecture with four small adapters/services:
 
 - `RetrievalGateway`
   - `retrieve_context_pack(query, run_ref?, planning_ref?, budgets) -> context_pack`
-  - used by chat, `/context`, and task workers.
+  - used by chat, `/context`, and workflow workers.
 
 ## 8) Runtime Controls (Feature Flags)
 
@@ -203,7 +203,7 @@ Minimal flags (fail-open by default):
 
 ## 9) Operational Expectations
 
-- Memory must never make chat/task endpoints unavailable.
+- Memory must never make chat/workflow endpoints unavailable.
 - Indexing jobs are async and backlog-tolerant (alerting, not paging).
 - Qdrant/Mem0 outages degrade retrieval quality, not correctness.
 - Retention:

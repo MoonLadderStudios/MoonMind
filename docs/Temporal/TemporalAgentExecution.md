@@ -8,7 +8,7 @@
 ## 1. Purpose
 
 This document explains how the Temporal-based execution system is designed to
-receive an agent task - whether a registered **tool** invocation (currently a
+receive agent work - whether a registered **tool** invocation (currently a
 `skill` subtype like `pr-resolver`) or a **generic LLM instruction** - and
 execute it end to end.
 
@@ -280,7 +280,7 @@ Serialized payload form (legacy accepted): `{ id, skill: { name, version }, inpu
 
 ## 5. Remaining Work
 
-The execution-stage tasks formerly listed here are now implemented. The
+The execution-stage work items formerly listed here are now implemented. The
 canonical open backlog is maintained in
 [`docs/Temporal/RemainingWork.md`](RemainingWork.md).
 

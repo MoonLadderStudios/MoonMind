@@ -26,15 +26,15 @@ docker compose up -d api
 Then open Mission Control through the normal FastAPI route:
 
 ```text
-http://localhost:8000/tasks/list
+http://localhost:8000/workflows
 ```
 
 For network demos, replace `localhost` with the host name or IP address that the
 reviewer can reach, for example:
 
 ```text
-http://asus-laptop:8000/tasks/list
-http://192.168.0.20:8000/tasks/list
+http://asus-laptop:8000/workflows
+http://192.168.0.20:8000/workflows
 ```
 
 In this mode, FastAPI serves the built `dist/` bundle through the Vite manifest.

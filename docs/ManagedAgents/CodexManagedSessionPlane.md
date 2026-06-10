@@ -19,7 +19,7 @@ contract lives in [`CodexCliManagedSessions.md`](./CodexCliManagedSessions.md).
 
 The Codex managed session plane is the workflow-scoped managed runtime environment
 for Codex continuity. It owns the session container, thread and turn lifecycle,
-session reset boundaries, and continuity artifacts for one MoonMind task.
+session reset boundaries, and continuity artifacts for one MoonMind workflow execution.
 
 Ordinary repository Docker work that originates from the Codex session uses the
 per-session sidecar runtime described in

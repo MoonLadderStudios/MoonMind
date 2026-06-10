@@ -522,7 +522,7 @@ Jules artifacts should link back to the owning workflow execution using the same
 
 Do not put large Jules payloads, raw callback bodies, or verbose status dumps into workflow history.
 
-When retaining raw provider payloads or operationally sensitive details, prefer restricted artifacts over embedding raw data into task detail APIs by default.
+When retaining raw provider payloads or operationally sensitive details, prefer restricted artifacts over embedding raw data into workflow detail APIs by default.
 
 ---
 
@@ -582,11 +582,11 @@ If MoonMind cancels a workflow while a Jules run is in flight:
 
 ## 16. API and UI compatibility notes
 
-During migration and compatibility work, MoonMind may continue exposing task-oriented product surfaces while Temporal owns durable orchestration underneath.
+During migration and compatibility work, MoonMind exposes workflow product surfaces while Temporal owns durable orchestration underneath.
 
 For Jules-backed work:
 
-- UI/API layers may still show task-style labels
+- UI/API layers may still carry legacy task-named fields (they rename in the hard switch)
 - the durable provider handle remains the Jules task/session ID
 - the durable MoonMind orchestration handle remains the workflow identity
 - compatibility layers must preserve the distinction between MoonMind execution identity and Jules provider identity

@@ -12,7 +12,7 @@ Related: `docs/Steps/StepTypes.md`, `docs/Workflows/WorkflowArchitecture.md`, `d
 
 This document defines the desired-state MoonMind model for repeating work safely.
 
-MoonMind tasks often need more than one pass. An implementation step may fail tests, a verifier may report `ADDITIONAL_WORK_NEEDED`, a pull request resolver may need another repair attempt, an autonomous story loop may need a fresh agent context, or an operator may resume a failed task from the last failed step.
+MoonMind workflow executions often need more than one pass. An implementation step may fail tests, a verifier may report `ADDITIONAL_WORK_NEEDED`, a pull request resolver may need another repair attempt, an autonomous story loop may need a fresh agent context, or an operator may resume a failed workflow execution from the last failed step.
 
 All of those cases depend on the same primitive:
 
@@ -194,7 +194,7 @@ checkpointId      = {workflowId}:{runId}:{logicalStepId}:execution:{executionOrd
 artifactLinkScope = step:{logicalStepId}:execution:{executionOrdinal}
 ```
 
-If these identifiers are exposed to external systems, sanitize or hash fields as needed to avoid leaking sensitive task details.
+If these identifiers are exposed to external systems, sanitize or hash fields as needed to avoid leaking sensitive workflow details.
 
 ### 6.2 Cross-run lineage
 
@@ -265,14 +265,14 @@ Representative shape:
 ```json
 {
   "schemaVersion": "v1",
-  "stepExecutionId": "mm:task:run-1:implement-story-S004:execution:3",
-  "workflowId": "mm:task",
+  "stepExecutionId": "mm:wf:run-1:implement-story-S004:execution:3",
+  "workflowId": "mm:wf",
   "runId": "temporal-run-id",
   "logicalStepId": "implement-story-S004",
   "executionOrdinal": 3,
   "executionScope": "run",
   "lineage": {
-    "sourceWorkflowId": "mm:task",
+    "sourceWorkflowId": "mm:wf",
     "sourceRunId": "temporal-run-id",
     "sourceLogicalStepId": "implement-story-S004",
     "sourceExecutionOrdinal": 2,
@@ -308,7 +308,7 @@ Representative shape:
   },
   "execution": {
     "kind": "agent_run",
-    "childWorkflowId": "mm:task:agent:implement-story-S004:execution-3",
+    "childWorkflowId": "mm:wf:agent:implement-story-S004:execution-3",
     "childRunId": "child-run-id",
     "runtimeId": "codex_cli",
     "runtimeContextPolicy": "fresh_agent_run"
@@ -399,7 +399,7 @@ Representative context bundle fields:
 ```json
 {
   "schemaVersion": "v1",
-  "workflowId": "mm:task",
+  "workflowId": "mm:wf",
   "runId": "temporal-run-id",
   "logicalStepId": "implement-story-S004",
   "executionOrdinal": 3,
@@ -480,7 +480,7 @@ Representative memory proposal:
   "textRef": "art_memory_proposal_text",
   "status": "proposed",
   "sourceExecutionOrdinal": {
-    "workflowId": "mm:task",
+    "workflowId": "mm:wf",
     "runId": "temporal-run-id",
     "logicalStepId": "implement-story-S004",
     "executionOrdinal": 2
@@ -501,11 +501,11 @@ Representative checkpoint:
 ```json
 {
   "schemaVersion": "v1",
-  "checkpointId": "mm:task:run-1:implement-story-S004:execution:2:after_gate",
+  "checkpointId": "mm:wf:run-1:implement-story-S004:execution:2:after_gate",
   "checkpointKind": "step_boundary",
   "boundary": "after_gate",
   "source": {
-    "workflowId": "mm:task",
+    "workflowId": "mm:wf",
     "runId": "temporal-run-id",
     "logicalStepId": "implement-story-S004",
     "executionOrdinal": 2
@@ -587,7 +587,7 @@ If the required checkpoint evidence is unavailable, the workflow must reject the
 Before a checkpoint can be used to start a new attempt or Resume execution, MoonMind must validate:
 
 1. source `workflowId` and `runId`;
-2. task input snapshot identity;
+2. workflow input snapshot identity;
 3. plan identity and digest;
 4. logical step identity;
 5. attempt provenance;
@@ -701,7 +701,7 @@ Representative side effect:
 {
   "class": "external_idempotent",
   "operation": "jira.add_comment",
-  "idempotencyKey": "mm:task:run-1:verify:attempt:1:jira-comment",
+  "idempotencyKey": "mm:wf:run-1:verify:attempt:1:jira-comment",
   "target": "MM-123",
   "disposition": "accepted"
 }
@@ -904,7 +904,7 @@ Resume attempt properties:
 
 Resume must not:
 
-1. allow silent task input edits in the failed-step recovery path;
+1. allow silent workflow input edits in the failed-step recovery path;
 2. silently fall back to full rerun;
 3. re-execute preserved prior steps unless a future explicit mode requests it;
 4. ignore missing, corrupted, unauthorized, or inconsistent checkpoint evidence;
@@ -969,7 +969,7 @@ For managed sessions, Ralph-style clean context should usually mean `fresh_agent
 
 ## 17. Operator and API Surfaces
 
-The default task detail view should stay simple:
+The default workflow detail view should stay simple:
 
 1. each logical step shows the latest/current attempt;
 2. attempt count is visible;
@@ -1005,7 +1005,7 @@ Representative attempt list response:
 
 ```json
 {
-  "workflowId": "mm:task",
+  "workflowId": "mm:wf",
   "runId": "temporal-run-id",
   "logicalStepId": "implement-story-S004",
   "latestStepExecution": 3,
@@ -1086,7 +1086,7 @@ Rules:
 Desired behavior:
 
 ```text
-1. implement task breakdown
+1. implement story breakdown
 2. verify completion -> ADDITIONAL_WORK_NEEDED
 3. remediate attempt 1
 4. verify remediation attempt 1 -> ADDITIONAL_WORK_NEEDED
@@ -1166,7 +1166,7 @@ This design does not require:
 5. automatically replaying every possible external side effect;
 6. committing memory proposals from failed attempts directly to the repo;
 7. making failed-step recovery and autonomous loops separate recovery systems;
-8. exposing full immutable attempt history in the default task detail view;
+8. exposing full immutable attempt history in the default workflow detail view;
 9. forcing every Step Type to use autonomous reattempt semantics.
 
 ---

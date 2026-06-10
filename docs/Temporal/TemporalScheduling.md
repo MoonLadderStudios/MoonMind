@@ -165,7 +165,7 @@ await client.create_schedule(
 MoonMind keeps a `RecurringTaskDefinition` row in Postgres for each recurring schedule. This row owns:
 
 - **Product semantics:** name, description, scope, owner, authorization
-- **Target specification:** what to run (queue task, task template, manifest) and its payload
+- **Target specification:** what to run (workflow start, step template, manifest) and its payload
 - **Schedule policy preferences:** the MoonMind-level policy expressed by the user
 - **Temporal Schedule reference:** the Temporal Schedule ID this definition is reconciled with
 
@@ -254,7 +254,7 @@ Recurring schedule management uses the existing `/api/recurring-tasks` endpoints
 
 ### 6.1 Use Case
 
-When a user creates a deferred task and then needs to change the scheduled time before execution starts.
+When a user creates a deferred workflow execution and then needs to change the scheduled time before execution starts.
 
 ### 6.2 Mechanism: Updatable Timer Pattern
 
@@ -424,15 +424,15 @@ MoonMind implements three distinct scheduling mechanisms, each suited for a spec
 | Feature | `start_delay` | In-Workflow Timer | Temporal Schedule |
 |---|---|---|---|
 | **Mechanism** | `client.start_workflow(start_delay=...)` | `await workflow.wait_condition(...)` | `client.create_schedule(...)` |
-| **Use Case** | One-time deferred start. | Reschedulable wait state. | Recurring background tasks. |
+| **Use Case** | One-time deferred start. | Reschedulable wait state. | Recurring background workflows. |
 | **Mutability** | **Immutable.** Cannot be changed after start. | **Mutable.** Can be changed via Signal. | **Mutable.** Can be updated via API. |
-| **Visibility State** | Workflow is `Running` (but task is delayed). | Workflow is `Running` (blocked in execution). | Workflow doesn't exist until scheduled time. |
+| **Visibility State** | Workflow is `Running` (but the first Workflow Task is delayed). | Workflow is `Running` (blocked in execution). | Workflow doesn't exist until scheduled time. |
 | **Search Attribute**| Uses `mm_scheduled_for`. | Uses `mm_scheduled_for`. | Uses `mm_scheduled_for` when spawned. |
 | **Timezone Support**| Evaluated as absolute UTC offset at creation. | Evaluated as absolute UTC wait internally. | Full IANA Timezone & DST support. |
 
 ### 11.2 Mechanism Details & Tradeoffs
 
-1. **`start_delay` (Deferred execution):** The simplest and most efficient mechanism for running a task in the future. Temporal holds the execution server-side without consuming a worker thread. However, because it's evaluated at submission time into an absolute wait, it cannot be modified if requirements change.
+1. **`start_delay` (Deferred execution):** The simplest and most efficient mechanism for running a workflow in the future. Temporal holds the execution server-side without consuming a worker thread. However, because it's evaluated at submission time into an absolute wait, it cannot be modified if requirements change.
 
 2. **In-Workflow Timer (Reschedulable execution):** Best used when the start time is a tentative estimate that might shift. The workflow starts immediately but pauses execution at the first step. A Signal handler can interrupt the `wait_condition` to adjust the target time. This consumes slightly more Temporal history but offers full flexibility.
 

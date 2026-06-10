@@ -27,7 +27,7 @@ For Codex CLI and Claude Code, the important boundary is:
   auth volume such as `codex_auth_volume`.
 - A workflow-scoped managed session container receives that auth volume only
   through an explicit auth-volume mount target.
-- The Codex App Server runs from a per-run `CODEX_HOME` under the shared task
+- The Codex App Server runs from a per-run `CODEX_HOME` under the shared workflow
   workspace, not directly from the durable auth volume.
 - Logs, summaries, diagnostics, and continuity artifacts remain the durable
   operator/audit truth. Runtime home directories and auth volumes are not
@@ -41,17 +41,17 @@ This document covers:
 - persistent runtime auth volumes
 - Provider Profile registration for OAuth-backed profiles
 - Codex CLI and Claude Code managed-session volume targeting
-- the separation between auth volumes, task workspaces, and workload containers
+- the separation between auth volumes, workflow workspaces, and workload containers
 
 This document does not define:
 
-- PTY attach for ordinary managed task runs
+- PTY attach for ordinary managed workflow runs
 - Live Logs transport for managed runs
 - a generic remote shell product
 - Gemini workflow-scoped managed-session parity
 - Docker-backed workload container auth inheritance
 
-OAuth can require an interactive terminal. Managed task execution should not.
+OAuth can require an interactive terminal. Managed workflow execution should not.
 Codex CLI and Claude Code managed sessions consume mounted auth volumes through
 Provider Profiles, with operator observability through artifacts and normalized
 session events.
@@ -69,7 +69,7 @@ The durable Codex OAuth home is a Docker named volume:
 - provider profile materialization mode: `oauth_home`
 
 This volume stores reusable auth material for a Codex provider profile. It is a
-credential backing store, not a task workspace and not an audit artifact.
+credential backing store, not a workflow workspace and not an audit artifact.
 
 The default Codex OAuth provider profile shape is:
 
@@ -85,26 +85,26 @@ volume_mount_path: /home/app/.codex
 Claude Code uses the same Provider Profile and explicit mount-target pattern,
 with the runtime profile selecting the Claude auth volume and mount path. The
 managed-run launcher carries the same `MANAGED_AUTH_VOLUME_PATH` environment
-contract so auth material stays separate from the task workspace. A future
+contract so auth material stays separate from the workflow workspace. A future
 Claude managed-session controller should preserve that separation before
 recording any Claude Code session binding.
 
 That shape describes the credential enrollment and verification home only. It
 does not set `CODEX_HOME` for managed sessions. The managed-session launcher
 maps the durable auth volume through the managed-session volume rules below and
-keeps the live session `CODEX_HOME` under the task workspace.
+keeps the live session `CODEX_HOME` under the workflow workspace.
 
-### 3.2 Shared task workspace volume
+### 3.2 Shared workflow workspace volume
 
-The managed session container receives the shared task workspace volume:
+The managed session container receives the shared workflow workspace volume:
 
 - default volume name: `agent_workspaces`
 - configurable compose name: `MOONMIND_AGENT_WORKSPACES_VOLUME_NAME`
 - container mount root: `/work/agent_jobs`
 
-The per-task layout under that root is:
+The per-workflow layout under that root is:
 
-- `repo/` for the checked-out task repository
+- `repo/` for the checked-out workflow repository
 - `session/` for session-local state
 - `artifacts/` for artifact spooling
 - `.moonmind/codex-home/` for the managed session's per-run Codex home
@@ -130,7 +130,7 @@ type=volume,src=codex_auth_volume,dst=/home/app/.codex-auth
 
 The target path must be an absolute path and must not equal `codexHomePath`.
 This prevents the durable auth volume from becoming the live mutable Codex home
-for a task session.
+for a workflow session.
 
 At session startup, the Codex session runtime copies eligible auth entries from
 `MANAGED_AUTH_VOLUME_PATH` into the per-run `codexHomePath`, then starts Codex
@@ -140,10 +140,10 @@ App Server with `CODEX_HOME` pointing at that per-run home.
 
 1. **Auth volumes are provider-profile credential stores.**
    They are referenced by `volume_ref` and verified by OAuth/provider-profile
-   workflows. They are not task workspaces.
+   workflows. They are not workflow workspaces.
 
-2. **Managed-session containers always receive the shared task workspace.**
-   For Codex, the task workspace volume is the only required managed-session
+2. **Managed-session containers always receive the shared workflow workspace.**
+   For Codex, the workflow workspace volume is the only required managed-session
    mount.
 
 3. **Auth volume mounts are explicit.**
@@ -153,7 +153,7 @@ App Server with `CODEX_HOME` pointing at that per-run home.
 4. **Auth volume target paths are separate from runtime homes.**
    `MANAGED_AUTH_VOLUME_PATH` must not equal `codexHomePath`.
 
-5. **The per-run Codex home is materialized under the task workspace.**
+5. **The per-run Codex home is materialized under the workflow workspace.**
    Codex App Server uses the per-run `codexHomePath` as `CODEX_HOME`.
 
 6. **Credential copying is one-way for session startup.**
@@ -192,7 +192,7 @@ Settings / Mission Control UI
 ```
 
 The OAuth terminal is only for credential enrollment or repair. It does not
-become the runtime surface for managed task execution.
+become the runtime surface for managed workflow execution.
 
 ### 5.1 Auth runner container
 
@@ -221,7 +221,7 @@ The terminal bridge should:
 - close on workflow completion, cancellation, or expiry
 - persist metadata about connections, disconnections, and close reasons
 
-The bridge must not expose generic Docker exec access or ordinary task-run
+The bridge must not expose generic Docker exec access or ordinary workflow-run
 terminal attachment.
 
 ### 5.3 Session transport state
@@ -323,7 +323,7 @@ classes:
 
 | Mount | Required | Target | Purpose |
 | --- | --- | --- | --- |
-| `agent_workspaces` | Yes | `/work/agent_jobs` | task repo, session state, artifact spool, per-run Codex home |
+| `agent_workspaces` | Yes | `/work/agent_jobs` | workflow repo, session state, artifact spool, per-run Codex home |
 | `codex_auth_volume` | Conditional | `MANAGED_AUTH_VOLUME_PATH`, for example `/home/app/.codex-auth` | source credential material for seeding |
 | workload/cache volumes | No | runner-profile-specific | specialized workload containers only |
 
@@ -401,7 +401,7 @@ For Codex OAuth enrollment:
 9. The session runtime seeds the per-run runtime home under `agent_workspaces`
    and starts the runtime session control surface.
 
-For ordinary task execution, operators should inspect Live Logs, artifacts,
+For ordinary workflow execution, operators should inspect Live Logs, artifacts,
 session summaries, diagnostics, and reset/control-boundary artifacts. They should
 not inspect terminal scrollback or auth volumes as the execution record.
 

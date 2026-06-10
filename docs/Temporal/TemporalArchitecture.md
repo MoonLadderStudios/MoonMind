@@ -25,9 +25,9 @@ This document defines the top-level architecture for:
 - managed-runtime and external-agent integration
 - security, idempotency, versioning, observability, and operational guardrails
 
-MoonMind may still expose product vocabulary such as `task`, `taskId`, task detail routes, and Mission Control task-oriented views. Those are product/API terms. Inside the Temporal architecture, the canonical durable entity is a **Workflow Execution**.
+Some MoonMind payloads still carry legacy `task` / `taskId` field names (they rename in the hard switch) alongside workflow detail routes and Mission Control workflow views. Those are product/API terms. Inside the Temporal architecture, the canonical durable entity is a **Workflow Execution**.
 
-Compatibility tables, app DB projections, historical rows, dashboard adapters, and task-oriented APIs may exist, but they are not parallel orchestrators. For Temporal-managed work, workflow-owned state/history and workflow-managed metadata are authoritative. App DB projections are repairable read models.
+Compatibility tables, app DB projections, historical rows, dashboard adapters, and workflow product APIs may exist, but they are not parallel orchestrators. For Temporal-managed work, workflow-owned state/history and workflow-managed metadata are authoritative. App DB projections are repairable read models.
 
 ---
 
@@ -104,7 +104,7 @@ Temporal provides:
 
 MoonMind adds domain contracts above Temporal:
 
-- Task / Run product vocabulary
+- Workflow / Run product vocabulary
 - Plan and Step Ledger
 - Tool / Skill / Preset execution contracts
 - Artifact and report presentation contracts
@@ -129,7 +129,7 @@ The API:
 - authenticates and authorizes callers
 - starts workflows
 - sends Updates, Signals, Cancels, Terminations, and Schedule operations
-- exposes task-oriented and execution-oriented APIs
+- exposes workflow product and execution-oriented APIs
 - maintains projections and compatibility fields where useful
 - enforces ownership, idempotency, and public contract validation before invoking Temporal
 
@@ -405,15 +405,15 @@ Rules:
 - detail views may expose it as debug metadata
 - do not assume it is stable across Continue-As-New, retry chains, reset chains, or schedule-triggered executions
 
-### 8.3 Task ID
+### 8.3 Legacy `taskId` fields
 
-`taskId` is product/API compatibility vocabulary.
+`taskId` is legacy product/API vocabulary that renames in the hard switch.
 
-For Temporal-backed task rows:
+For Temporal-backed workflow rows that still carry it:
 
 - `taskId` must equal `workflowId`
 - APIs may return both
-- compatibility aliases should converge toward Workflow ID
+- remaining legacy aliases must converge to Workflow ID
 - `taskId` must not be minted as a second durable identity for the same Temporal execution
 
 ### 8.4 Workflow ID reuse and conflict policy
@@ -466,7 +466,7 @@ A narrow helper-activity exception is allowed only when all of the following are
 - the helper exists to preserve deterministic workflow behavior
 - it is fast and bounded
 - it does not require broad secrets, Docker access, sandbox privileges, or provider-side mutation
-- it does not block workflow-task throughput under normal operation
+- it does not block Workflow Task throughput under normal operation
 - it is explicitly listed in the activity topology
 
 Current repo-aligned example:
@@ -576,7 +576,7 @@ Rules:
 - detail views may use Queries and artifacts for richer state
 - app DB projections must preserve Temporal-backed semantics
 - dashboard compatibility statuses must not redefine `mm_state`
-- ordinary task list views may scope to `MoonMind.Run` and `mm_entry = run`
+- ordinary workflow list views may scope to `MoonMind.Run` and `mm_entry = run`
 - operator/admin views may expose broader workflow scopes
 - Search Attributes and Memo are visible to operators and must not contain secrets or sensitive prose
 
@@ -690,7 +690,7 @@ Degraded-mode reads must be truthful. If a route falls back to projection data b
 
 ## 13. Managed and external agent execution
 
-`MoonMind.Run` remains the task-level root workflow. When a plan step requires a true agent runtime, `MoonMind.Run` starts `MoonMind.AgentRun`.
+`MoonMind.Run` remains the workflow-level root workflow. When a plan step requires a true agent runtime, `MoonMind.Run` starts `MoonMind.AgentRun`.
 
 `MoonMind.AgentRun` owns exactly one true agent execution lifecycle.
 
@@ -784,7 +784,7 @@ Temporal Schedules are the authoritative mechanism for recurring workflow starts
 
 Current schedule-backed concerns include:
 
-- recurring task definitions
+- recurring workflow definitions
 - recurring manifest runs
 - managed-session reconciliation
 - artifact or projection sweepers where appropriate
@@ -821,7 +821,7 @@ Every schedule type must explicitly choose:
 
 Defaults should be conservative:
 
-- recurring user tasks: skip or buffer one, not unbounded overlap
+- recurring user workflows: skip or buffer one, not unbounded overlap
 - operational sweepers: skip if still active unless the sweeper is explicitly designed for overlap
 - reconciliation workflows: bounded overlap only when idempotent and partitioned
 
@@ -1144,7 +1144,7 @@ This document does not define:
 - provider-specific adapter internals
 - detailed artifact class registries
 - deployment upgrade runbooks
-- implementation task checklists
+- implementation checklists
 - full run-history product UX
 - exact numeric SLOs for every environment
 

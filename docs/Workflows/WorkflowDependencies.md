@@ -368,7 +368,7 @@ While the workflow is active and a prerequisite is currently failed, the per-dep
 
 ### 6.1 Create flow
 
-Mission Control should expose dependency configuration on `/tasks/new`.
+Mission Control should expose dependency configuration on `/workflows/new`.
 
 The create UX should provide:
 

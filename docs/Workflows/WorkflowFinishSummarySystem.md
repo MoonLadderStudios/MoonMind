@@ -97,7 +97,7 @@ Failed runs SHOULD additionally include a structured `failure` object alongside
     "source": "child_workflow",
     "stepId": "apply-patch",
     "stepTitle": "Apply patch",
-    "childWorkflowId": "task-123:agent:apply-patch",
+    "childWorkflowId": "mm:123:agent:apply-patch",
     "message": "Provider authentication failed with HTTP 401 for profile codex-prod.",
     "rootCauseType": "ApplicationError",
     "diagnosticsRef": "artifact://..."

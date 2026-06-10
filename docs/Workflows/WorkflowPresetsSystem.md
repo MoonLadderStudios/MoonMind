@@ -76,7 +76,7 @@ input_schema:
     jira_issue:
       type: object
       title: Jira issue
-      description: Select the Jira issue that should seed the task instructions.
+      description: Select the Jira issue that should seed the workflow instructions.
       required:
         - key
       properties:
@@ -268,7 +268,7 @@ input_schema:
     jira_issue:
       type: object
       title: Jira issue
-      description: Issue that will seed the task instructions and orchestration context.
+      description: Issue that will seed the workflow instructions and orchestration context.
       required:
         - key
       properties:

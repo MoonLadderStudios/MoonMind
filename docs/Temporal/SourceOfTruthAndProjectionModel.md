@@ -54,7 +54,7 @@ This document covers:
 - Temporal-managed execution identity and lifecycle truth
 - Postgres projection rows used by MoonMind APIs/UI
 - consistency and reconciliation rules between Temporal and local projections
-- migration posture for `/api/executions`, `/tasks/*`, and other compatibility surfaces
+- migration posture for `/api/executions` and other compatibility surfaces
 - Continue-As-New behavior as it affects projection shape
 - degraded-mode behavior when one subsystem is unavailable
 
@@ -89,13 +89,13 @@ In the current repository, `TemporalExecutionRecord` is the main projection row 
 
 ### 4.3 Compatibility surface
 
-A compatibility surface is any API or UI path that continues to use MoonMind task-oriented language or legacy route shape while the underlying execution substrate is Temporal.
+A compatibility surface is any API or UI path that continues to use MoonMind workflow execution-oriented language or legacy route shape while the underlying execution substrate is Temporal.
 
 Examples include:
 
-- `/tasks/*`
-- transitional system/task views
-- task-oriented dashboard list/detail models
+- legacy task-named payload fields (they rename in the hard switch)
+- transitional system/workflow views
+- workflow console list/detail models
 
 ### 4.4 Reconciliation
 
@@ -126,7 +126,7 @@ For **Temporal-managed work**, MoonMind should treat systems of record as follow
 | artifact bytes | Artifact system |
 | artifact metadata / linkage | Artifact metadata tables + workflow refs |
 | user auth / ownership policy | MoonMind control plane |
-| task-oriented compatibility payloads | MoonMind adapters over canonical sources |
+| workflow product payloads | MoonMind adapters over canonical sources |
 
 ---
 
@@ -243,7 +243,7 @@ That means:
 The primary projection row exists to support:
 
 - compatibility APIs that are not yet direct Temporal consumers
-- task-oriented dashboards that still need MoonMind-shaped joins
+- workflow console views that still need MoonMind-shaped joins
 - local indexing and exact counts where explicitly allowed
 - repair and observability tooling
 - optional degraded-mode reads when the authoritative source is temporarily impaired
@@ -351,7 +351,7 @@ For Temporal-managed work:
 
 - **list/filter/count** should come from Temporal Visibility
 - **detail/describe** should come from Temporal execution state plus safe MoonMind enrichment
-- **compatibility/task-oriented views** may merge projection data or other local joins, but must preserve canonical Temporal identifiers internally
+- **workflow product views** may merge projection data or other local joins, but must preserve canonical Temporal identifiers internally
 
 ### 11.2 Projection-backed reads are allowed only for explicit reasons
 
@@ -374,7 +374,7 @@ Rules:
 
 ### 11.4 Compatibility surfaces
 
-Compatibility surfaces such as `/tasks/*` may continue to present a unified task view across multiple backends.
+Product surfaces such as `/workflows/*` may present a unified workflow view across multiple backends.
 
 Rules:
 
@@ -560,7 +560,7 @@ The architectural rule to preserve is:
 
 That rule allows MoonMind to:
 
-- keep task-oriented and compatibility surfaces during migration
+- keep unified workflow product surfaces over mixed backends
 - support local joins, counts, and fallback reads where needed
 - avoid long-term dual-write ambiguity
 - adopt Temporal-native lifecycle, visibility, and Continue-As-New semantics without hiding them under a conflicting local state machine

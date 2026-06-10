@@ -100,7 +100,7 @@ This adapter implements the shared `AgentAdapter` contract and should be treated
 
 Current responsibilities include:
 
-- translate `AgentExecutionRequest` into Jules session/task creation payloads
+- translate `AgentExecutionRequest` into Jules session/workflow creation payloads
 - inject MoonMind correlation and idempotency metadata
 - normalize Jules statuses into canonical MoonMind runtime states
 - map Jules responses into `AgentRunHandle`, `AgentRunStatus`, and `AgentRunResult`
@@ -219,7 +219,7 @@ This layer should remain transport-oriented and should not accumulate workflow s
 - artifact publishing semantics
 - bundle orchestration semantics
 - parent/child workflow coordination
-- MoonMind task-state transitions
+- MoonMind workflow execution-state transitions
 
 ---
 

@@ -43,7 +43,7 @@ MoonMind today has:
 * a Temporal foundation in Docker Compose
 * Temporal-backed execution lifecycle and artifact API contracts
 * canonical Temporal control names such as `UpdateInputs`, `SetTitle`, `RequestRerun`, and `ExternalEvent`
-* a task-oriented dashboard and compatibility APIs during migration
+* the workflow console and legacy task-named APIs during migration
 * existing non-Temporal Jules adapter and polling behavior in current worker code
 
 ### 3.2 Target state
@@ -63,7 +63,7 @@ This document does not:
 * claim that all existing Jules or integration paths are already Temporal-backed
 * introduce a new root workflow type per provider
 * expose Temporal task queue concepts as user-facing queue semantics
-* replace current task-oriented APIs in one step
+* replace current legacy task-named APIs in one step
 
 ## 4) Design principles
 
@@ -403,7 +403,7 @@ Raw provider payloads, detailed status dumps, and large outputs belong in artifa
 
 ### 9.4 Migration note
 
-Task-oriented list/detail views may continue to expose `taskId`-style compatibility fields, but the Temporal-side source of truth remains the workflow execution plus its artifacts and visibility metadata.
+Legacy list/detail views may continue to expose `taskId`-style fields (they rename in the hard switch), but the Temporal-side source of truth remains the workflow execution plus its artifacts and visibility metadata.
 
 ## 10) Polling policy, concurrency, and rate limits
 

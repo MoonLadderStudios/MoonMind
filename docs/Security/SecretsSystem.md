@@ -38,7 +38,7 @@ That rule applies to:
 - provider profiles,
 - runtime profiles,
 - workflow payloads,
-- task definitions,
+- workflow definitions,
 - scheduler state,
 - logs, and
 - durable run metadata.
@@ -172,7 +172,7 @@ The system must not silently fall back to another secret source.
 
 A `SecretRef` is the durable identifier MoonMind uses to refer to sensitive material without storing the material itself in the referencing record.
 
-Provider Profiles, task configuration, and runtime materialization templates may point to `SecretRef` values.
+Provider Profiles, workflow configuration, and runtime materialization templates may point to `SecretRef` values.
 
 ### 5.2 SecretRef Shape
 
@@ -193,7 +193,7 @@ Secret references may appear in:
 - generated file templates,
 - runtime launch requests,
 - tool auth bindings,
-- scheduler-owned task configuration.
+- scheduler-owned workflow configuration.
 
 Secret references must not be replaced with resolved plaintext in persistent storage.
 
@@ -318,7 +318,7 @@ The resolved value must not be written back into:
 
 - workflow payloads,
 - provider profile rows,
-- task definitions,
+- workflow definitions,
 - durable run metadata,
 - artifacts by default.
 
@@ -389,7 +389,7 @@ MoonMind must not durably store raw secret values in:
 
 - workflow histories,
 - provider profile rows,
-- task payloads,
+- workflow execution payloads,
 - scheduler rows,
 - run summaries,
 - logs,
@@ -497,7 +497,7 @@ The expected first-run onboarding flow is:
 1. start MoonMind with `docker compose up -d` and no required `.env` editing,
 2. open Mission Control,
 3. add a small number of secrets such as a model-provider API key and GitHub PAT,
-4. bind those secrets to provider profiles or task settings through normal UI flows, and
+4. bind those secrets to provider profiles or workflow settings through normal UI flows, and
 5. launch workloads successfully without external secret-manager setup.
 
 The UI should show:

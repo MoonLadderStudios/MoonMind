@@ -4,13 +4,13 @@
 
 Desired-state architecture.
 
-This document defines the MoonMind Create page as the primary task/workflow composition surface. It describes the desired page structure, step authoring model, schema-driven capability inputs, preset expansion behavior, Jira integration, publishing controls, and task submission flow.
+This document defines the MoonMind Create page as the primary workflow composition surface. It describes the desired page structure, step authoring model, schema-driven capability inputs, preset expansion behavior, Jira integration, publishing controls, and workflow submission flow.
 
 ## Purpose
 
 The Create page lets a user describe work, choose how MoonMind should execute it, configure one or more steps, and submit the resulting workflow without needing to understand every backend orchestration detail.
 
-The page should support simple one-step tasks while also scaling to advanced workflows that use skills, scripts, managed agents, external agents, presets, Jira issue context, dependencies, publishing, and merge automation.
+The page should support simple one-step workflows while also scaling to advanced workflows that use skills, scripts, managed agents, external agents, presets, Jira issue context, dependencies, publishing, and merge automation.
 
 ## Design Principles
 
@@ -28,14 +28,14 @@ The page should support simple one-step tasks while also scaling to advanced wor
 
 ## Primary User Flows
 
-### Fast Path: Simple Task
+### Fast Path: Simple Workflow
 
-1. User enters task instructions.
+1. User enters workflow instructions.
 2. User selects repository and branch context if needed.
 3. User accepts the default single step or chooses a step type.
 4. If the draft provides a plain goal and no explicit steps, tool/skill, plan,
    or preset, the backend may map the goal to a seeded preset and expand it.
-5. User clicks **Create Task**.
+5. User clicks **Start Workflow**.
 6. MoonMind validates inputs and starts the workflow.
 
 ### Preset Path
@@ -47,8 +47,8 @@ The page should support simple one-step tasks while also scaling to advanced wor
 5. The generic schema-form renderer generates required and optional inputs.
 6. User fills required inputs, such as selecting a Jira issue.
 7. User may apply the preset or leave it unexpanded.
-8. User clicks **Create Task**.
-9. The backend validates inputs, expands the preset, validates the final expanded workflow, and submits the task.
+8. User clicks **Start Workflow**.
+9. The backend validates inputs, expands the preset, validates the final expanded workflow, and submits the workflow execution.
 
 ### Jira-Orchestrated Path
 
@@ -65,9 +65,9 @@ No Jira preset may require a custom Create page branch. Jira is represented as a
 
 The desired Create page is organized into these regions:
 
-1. **Task Overview**
+1. **Workflow Overview**
    - title or generated title preview
-   - task instructions
+   - workflow instructions
    - repository/project context
    - branch selector
    - dependency or starting point context
@@ -94,13 +94,13 @@ The desired Create page is organized into these regions:
 5. **Review and Submit**
    - final validation summary
    - generated/expanded step summary where needed
-   - Create Task action
+   - Start Workflow action
 
 The page may visually group these regions differently, but the underlying information architecture should remain stable.
 
 ## Step Authoring Model
 
-A task draft contains an ordered list of steps. Each step has a type and type-specific capability metadata.
+A workflow draft contains an ordered list of steps. Each step has a type and type-specific capability metadata.
 
 Supported desired step types include:
 
@@ -143,7 +143,7 @@ A capability selected by a step may expose:
   "id": "jira-orchestrate",
   "kind": "preset",
   "label": "Jira Orchestrate",
-  "description": "Build and execute a task workflow from a Jira issue.",
+  "description": "Build and execute a workflow from a Jira issue.",
   "inputSchema": {},
   "uiSchema": {},
   "defaults": {}
@@ -285,7 +285,7 @@ When a user selects `Preset` as a step type:
 5. Optional fields are available without cluttering the default path.
 6. Preset-specific apply controls appear only after required inputs are valid enough to attempt expansion.
 
-Preset configuration should be saved in the task draft even if the preset is not expanded.
+Preset configuration should be saved in the workflow draft even if the preset is not expanded.
 
 ## Apply and Reapply
 
@@ -301,7 +301,7 @@ Reapply regenerates steps from the saved preset ID, preset version, and current 
 
 ## Submit-Time Preset Auto-Expansion
 
-The user may click **Create Task** when preset steps are configured but not expanded.
+The user may click **Start Workflow** when preset steps are configured but not expanded.
 
 Submit behavior:
 
@@ -311,7 +311,7 @@ Submit behavior:
 4. Backend expands unexpanded preset steps.
 5. Backend recursively expands nested presets.
 6. Backend validates the final concrete step list.
-7. Backend starts the task/workflow.
+7. Backend starts the workflow execution.
 
 If validation fails, the Create page receives field-addressable errors and displays them next to the generated schema fields.
 
@@ -329,13 +329,13 @@ The user's entered values must be preserved after validation failures.
 
 ## Goal-Driven Preset Scheduling
 
-The Create page may submit a task with a plain `goal` instead of a manually
+The Create page may submit a workflow with a plain `goal` instead of a manually
 selected preset. When no explicit execution shape is present, the backend
 selects a seeded preset from the goal, expands it through the same authoritative
 template service used by apply and submit-time expansion, and stores the
-selected preset in task provenance.
+selected preset in workflow provenance.
 
-This is not a separate Create page mode. The page still submits structured task
+This is not a separate Create page mode. The page still submits structured workflow
 data, and the backend remains responsible for selecting and expanding the
 preset. Authored steps, selected tools/skills, explicit plans, and explicit
 presets always take precedence over goal-driven scheduling.
@@ -348,13 +348,13 @@ Validation should happen in layers:
 - backend schema validation for authoritative correctness
 - integration validation for references such as Jira issues or GitHub branches
 - expansion validation for generated step completeness
-- final task validation after all presets are expanded
+- final workflow validation after all presets are expanded
 
 The UI should show errors as close as possible to the field or step that caused them. A summary at the bottom may list blocking issues, but it should not be the only place errors appear.
 
 ## Publishing Controls
 
-Publishing is configured at the task level unless a step explicitly needs to override it.
+Publishing is configured at the workflow level unless a step explicitly needs to override it.
 
 The desired publish modes are:
 
@@ -378,7 +378,7 @@ The page should use `Branch`, not `Target Branch`, as the primary field label un
 Branch behavior:
 
 - Default to the repository's configured default branch when no dependency or prior branch is selected.
-- If the task depends on another task with a branch or PR, offer that branch as the inferred starting point.
+- If the workflow execution depends on another workflow execution with a branch or PR, offer that branch as the inferred starting point.
 - Use a GitHub-backed branch dropdown when repository context is available.
 - Allow manual branch entry as an advanced fallback.
 - Show generated publish branch names before submission when relevant.
@@ -389,7 +389,7 @@ Jira can appear in multiple places on the Create page:
 
 - as a schema-driven preset input
 - as a standalone context attachment
-- as a source for task instructions
+- as a source for workflow instructions
 - as a trigger/context source for follow-up workflows
 - as metadata for publishing or merge automation
 
@@ -433,7 +433,7 @@ The Create page should preserve draft state across navigation and validation fai
 
 Draft state should include:
 
-- task overview fields
+- workflow overview fields
 - repository and branch context
 - publish mode
 - step list
@@ -519,7 +519,7 @@ Tests should verify:
 - Jira issue picker is selected by widget metadata, not preset ID
 - manually entered Jira issue keys are preserved
 - apply inserts generated steps and preserves provenance
-- Create Task expands unexpanded preset steps at submit time
+- Start Workflow expands unexpanded preset steps at submit time
 - nested presets produce field-addressable errors
 - unsupported widgets fail safely
 - a newly added preset using existing widgets appears and renders without Create page code changes
@@ -536,7 +536,7 @@ For the Jira example:
 - The schema requests the reusable `jira.issue-picker` widget.
 - The Create page renders the Jira issue input automatically.
 - The user can select or enter an issue.
-- The user can click Create Task without manually expanding the preset.
+- The user can click Start Workflow without manually expanding the preset.
 - The backend expands the preset and binds the Jira issue into the generated steps.
 
 ## Related Documents

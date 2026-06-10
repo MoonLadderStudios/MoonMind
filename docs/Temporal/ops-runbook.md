@@ -5,7 +5,7 @@ MoonMind background jobs and agent runs are orchestrated by Temporal.
 - **User ID:** `00000000-0000-0000-0000-000000000000`
 - **Email:** `default@example.com`
 
-Keys for model providers (e.g. Google and OpenAI) are injected from this user's profile when Agent tasks execute. In `disabled` auth mode, the values from `.env` seed this profile on startup.
+Keys for model providers (e.g. Google and OpenAI) are injected from this user's profile when agent workflow executions run. In `disabled` auth mode, the values from `.env` seed this profile on startup.
 
 **Agent auth**: Configure `MOONMIND_WORKER_AUTH_MODE` for worker subprocesses. Ensure the Vault integration (`temporal-worker-sandbox`) correctly configures the GitHub credentials or use standard environment variables for the Fast Path logic.
 

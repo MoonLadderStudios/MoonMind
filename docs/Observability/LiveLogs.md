@@ -110,28 +110,28 @@ The observability system should:
 - show session identity and reset boundaries in a way operators can understand quickly
 - merge `stdout`, `stderr`, `system`, and session-plane events into one coherent timeline
 - survive reconnects, refreshes, and temporary disconnects
-- keep the task detail page simple and operator-friendly
+- keep the workflow detail page simple and operator-friendly
 - avoid dependence on terminal relays, browser attachment, or container-local scrollback
 - preserve backward-compatible live-log transport and UI lifecycle where that still makes sense
 
 ### 4.2 Non-goals
 
 This system does not aim to:
-- provide shell access for ordinary task runs
+- provide shell access for ordinary workflow runs
 - mirror the raw Codex App Server protocol 1:1 into the browser
 - make logs depend on container-local databases or runtime home directories as durable truth
 - replace provider-native intervention channels
 - implement distributed full-text log indexing in the first version
 - implement a terminal-grade durable replay buffer for every transient event
-- introduce cross-task session reuse or a generic runtime marketplace
+- introduce cross-workflow session reuse or a generic runtime marketplace
 
 ---
 
 ## 5. User experience
 
-## 5.1 Task detail page
+## 5.1 Workflow detail page
 
-The task detail page should include an **Observability** section with these panels:
+The workflow detail page should include an **Observability** section with these panels:
 - **Live Logs**
 - **Stdout**
 - **Stderr**
@@ -141,7 +141,7 @@ The task detail page should include an **Observability** section with these pane
 A separate continuity drill-down surface may also exist, but Live Logs must still inline the most important session-plane milestones so operators do not need to jump between unrelated observability views.
 
 The default operator workflow should be:
-1. open task
+1. open workflow
 2. inspect the relevant expanded step row in the Steps section
 3. open Live Logs for that step's managed run when `taskRunId` is present
 4. inspect the current session snapshot shown at the top of the panel
@@ -152,7 +152,7 @@ The default operator workflow should be:
 Integration rules:
 - Logs and Diagnostics should open inside the expanded step when a step row has `taskRunId`
 - the default fetch sequence remains `observability-summary` → structured or merged initial tail → optional SSE live follow
-- task-level observability panels remain valid for top-level managed runs, but step-contextual consumption is still the primary operator flow for plan-driven work
+- workflow-level observability panels remain valid for top-level managed runs, but step-contextual consumption is still the primary operator flow for plan-driven work
 
 ## 5.2 Live Logs panel
 
@@ -1000,7 +1000,7 @@ A separate UI flag may be used if a staged rollout of the richer session-aware t
 
 ## 15. Intervention separation
 
-The previous live-task-management model blended live output and terminal handoff under shared session infrastructure.
+The previous live-workflow-management model blended live output and terminal handoff under shared session infrastructure.
 
 That should remain split.
 
@@ -1041,7 +1041,7 @@ If MoonMind later supports a debug session for managed runs, it must be:
 
 ### Functional requirements
 
-- **FR-001**: The task detail page must include a collapsible Live Logs panel.
+- **FR-001**: The workflow detail page must include a collapsible Live Logs panel.
 - **FR-002**: The Live Logs panel must fetch initial artifact-backed or durable-history content from MoonMind APIs. Initial content must not depend on SSE success.
 - **FR-003**: When the run is active and live streaming is supported, the panel must connect to a MoonMind-owned live stream.
 - **FR-004**: The panel must default to collapsed with no active connection.
@@ -1070,7 +1070,7 @@ If MoonMind later supports a debug session for managed runs, it must be:
 ### Key entities
 
 - **Managed Run Record**
-- **Task Run Observability Session**
+- **Workflow Run Observability Session**
 - **Run Observability Event**
 - **Structured Event Journal**
 - **Live Log Stream**
@@ -1097,7 +1097,7 @@ If MoonMind later supports a debug session for managed runs, it must be:
 - **SC-008**: Mission Control can fully observe a completed run without having ever had a live-stream connection.
 - **SC-009**: Operators can clearly see when a session epoch changed and why.
 - **SC-010**: `clear_session` creates an explicit, operator-visible epoch boundary in both historical and live views.
-- **SC-011**: A refreshed task detail page can reconstruct the latest session-aware observability view from durable artifacts and bounded metadata alone.
+- **SC-011**: A refreshed workflow detail page can reconstruct the latest session-aware observability view from durable artifacts and bounded metadata alone.
 
 ---
 

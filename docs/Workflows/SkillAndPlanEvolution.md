@@ -2,7 +2,7 @@
 
 **Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
-**Executive Summary:** The MoonMind system uses **tools** and **plans** atop Temporal to manage agent tasks. A *Tool* (`ToolDefinition`) is a named capability with input/output schemas, execution bindings, retries, etc. (not a workflow). A *Plan* is a DAG of tool invocations (Steps) with explicit dependencies and policies. This design leverages Temporal's deterministic workflows (orchestration) vs activities (side-effects). The codebase has completed a rename from `Skill*` to `Tool*` for Temporal contract objects; the term "Skill" is now reserved for agent instruction bundles (`.agents/skills/SKILL.md` files).
+**Executive Summary:** The MoonMind system uses **tools** and **plans** atop Temporal to manage agent work. A *Tool* (`ToolDefinition`) is a named capability with input/output schemas, execution bindings, retries, etc. (not a workflow). A *Plan* is a DAG of tool invocations (Steps) with explicit dependencies and policies. This design leverages Temporal's deterministic workflows (orchestration) vs activities (side-effects). The codebase has completed a rename from `Skill*` to `Tool*` for Temporal contract objects; the term "Skill" is now reserved for agent instruction bundles (`.agents/skills/SKILL.md` files).
 
 ## Current MoonMind Tool & Plan Contracts
 

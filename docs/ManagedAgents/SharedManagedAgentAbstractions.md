@@ -14,7 +14,7 @@
 - [`docs/ManagedAgents/DockerOutOfDocker.md`](./DockerOutOfDocker.md)
 - [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)
 - [`docs/Security/SecretsSystem.md`](../Security/SecretsSystem.md)
-- [`docs/Steps/SkillSystem.md`](../Tasks/AgentSkillSystem.md)
+- [`docs/Steps/SkillSystem.md`](../Steps/SkillSystem.md)
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
 
 ## 1. Summary
@@ -155,7 +155,7 @@ Field requirements:
 - `desiredState` is one of `present`, `suspended`, or `absent`.
 - `workspace` defines the repo, worktree, sandbox root, or equivalent scope to bind into the session.
 - `providerProfileRef` references the Provider Profile used for runtime/provider selection and launch shaping. It must not contain raw credentials.
-- `agentProfileRef` references role, behavior, or task-template policy when applicable.
+- `agentProfileRef` references role, behavior, or step-template policy when applicable.
 - `contextRefs` references context packs, attachments, memory snapshots, retrieval results, or instruction artifacts. Large context bodies belong behind refs.
 - `resolvedSkillSetRef` references the immutable resolved skill snapshot selected for the run or step.
 - `sessionPolicy` defines reuse, retention, reset, replacement, isolation, resume, and steering behavior.

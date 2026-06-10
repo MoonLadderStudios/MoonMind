@@ -70,7 +70,7 @@ Accordingly, Workflow RAG is one **context plane** inside the broader managed-se
 
 - planning and prior run history may contribute context,
 - skills may contribute context,
-- task attachments may contribute context,
+- workflow attachments may contribute context,
 - **document/code retrieval contributes context via Workflow RAG**.
 
 This document is specifically about that last plane.
@@ -83,14 +83,14 @@ This document is specifically about that last plane.
 
 The primary managed-session RAG flow is:
 
-1. MoonMind receives the task or step instruction.
+1. MoonMind receives the workflow or step instruction.
 2. MoonMind resolves retrieval settings and retrieval scope.
 3. MoonMind embeds the instruction or derived retrieval query.
 4. MoonMind searches the configured vector collection set.
 5. MoonMind builds a `ContextPack`.
 6. MoonMind persists the pack as an artifact and/or publishes a ref.
 7. MoonMind injects the retrieved context into the managed runtime’s next input surface.
-8. The managed session consumes that context while performing the actual task.
+8. The managed session consumes that context while performing the actual work.
 
 This is the default model because it keeps durable truth, observability, and retrieval policy inside MoonMind rather than forcing the runtime session to be the primary owner of retrieval state.
 
@@ -113,7 +113,7 @@ This is the “agent can ask for more context” path. It is useful, but it is *
 
 Workflow RAG should continue to use embeddings and vector search only for retrieval. A general-purpose chat/completions model is not required merely to fetch context.
 
-The managed runtime’s normal model still consumes the retrieved context afterward to do the actual task. But retrieval itself remains:
+The managed runtime’s normal model still consumes the retrieved context afterward to do the actual work. But retrieval itself remains:
 
 - embedding request,
 - vector search,
@@ -315,7 +315,7 @@ That is an implementation choice, not the primary managed-session contract. The 
 ### 9.1 Initial retrieval flow
 
 ```text
-Task/step instruction
+Workflow/step instruction
   -> resolve retrieval settings and scope
   -> embed query
   -> vector search

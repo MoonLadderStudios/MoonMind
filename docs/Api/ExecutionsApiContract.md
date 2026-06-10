@@ -19,9 +19,9 @@ It exists to make three things explicit:
 
 1. the HTTP surface exposed by the API service,
 2. the execution lifecycle semantics that callers can rely on,
-3. how this execution-oriented surface relates to task-oriented UI and compatibility routes.
+3. how this execution-oriented surface relates to the workflow console UI and product routes.
 
-This is an **adapter-first** contract: it describes lifecycle operations for Temporal-managed work. Product prioritization of `/api/executions` vs `/tasks/*` is a separate concern; open work is tracked in the file linked above.
+This is an **adapter-first** contract: it describes lifecycle operations for Temporal-managed work. Product prioritization of `/api/executions` vs `/workflows/*` is a separate concern; open work is tracked in the file linked above.
 
 ---
 
@@ -36,21 +36,21 @@ This document covers:
 - ownership and authorization rules,
 - filtering, pagination, and count semantics,
 - update/signal/cancel behavior for Temporal-managed executions,
-- how callers should interpret identifiers when task-shaped and execution-shaped surfaces coexist.
+- how callers should interpret identifiers when workflow product and execution-shaped surfaces coexist.
 
 ### 2.2 Out of scope
 
 This document does **not** define:
 
-- the `/tasks/*` product API,
+- the `/workflows/*` product API,
 - legacy compatibility routes,
 - artifact upload/download APIs,
 - direct Temporal server APIs,
 - worker-internal lifecycle helpers used only inside workflow/activity execution.
 
-### 2.3 Relationship to task-oriented surfaces
+### 2.3 Relationship to workflow product surfaces
 
-- MoonMind may present **task-oriented** UI and compatibility APIs alongside this API.
+- MoonMind presents the **workflow console** UI and workflow product APIs alongside this API.
 - `/api/executions` is the **execution-oriented** surface for Temporal-managed work.
 - Callers should treat `workflowId` as the canonical execution handle for this API.
 - This contract should remain stable even if backing reads move closer to Temporal Visibility.
@@ -87,7 +87,7 @@ That implementation detail is important for current behavior, but it is **not** 
 | --- | --- |
 | execution | A Temporal-managed MoonMind workflow execution exposed through `/api/executions` |
 | workflow execution | The Temporal-native term for the same durable execution |
-| task | A compatibility/product term still used in current UI and some public surfaces |
+| task | Reserved for Temporal internals and qualified external systems; no longer a MoonMind product entity |
 | workflow type | The root Temporal workflow category, e.g. `MoonMind.Run` |
 | run | A single Temporal run instance under a durable `workflowId` |
 
@@ -97,7 +97,7 @@ That implementation detail is important for current behavior, but it is **not** 
 | --- | --- | --- |
 | `workflowId` | Canonical durable execution identifier for this API | Primary |
 | `runId` | Current run instance identifier | Detail/debug use |
-| `taskId` | Task-oriented compatibility identifier | Out of scope for this API |
+| `taskId` | Legacy product identifier still present on some payloads (renames in the hard switch) | Out of scope for this API |
 | `namespace` | Temporal namespace associated with the execution | Returned for detail/debugging |
 
 ### 4.3 ID rules
@@ -105,7 +105,7 @@ That implementation detail is important for current behavior, but it is **not** 
 - `workflowId` is the primary path key for `/api/executions`.
 - `runId` may change across Continue-As-New or rerun semantics.
 - Clients must **not** treat `runId` as the durable identity of an execution.
-- In adjacent task-oriented compatibility surfaces, the settled bridge rule is `taskId == workflowId` for Temporal-backed work, but this API does not expose `taskId` directly.
+- In surfaces that still expose the legacy `taskId` field, `taskId == workflowId` for Temporal-backed work, but this API does not expose `taskId` directly.
 
 ---
 
@@ -924,15 +924,15 @@ Malformed request bodies, wrong JSON types, and invalid query/path coercions may
 
 ---
 
-## 16. Compatibility with task-shaped clients
+## 16. Compatibility with `task`-typed payloads
 
-`/api/executions` is execution-oriented. Task-shaped clients and routes may still exist; when they map to Temporal-backed work:
+`/api/executions` is execution-oriented. Clients submitting the legacy `task`-typed payload envelope may still exist; when they map to Temporal-backed work:
 
 - `workflowId` is the canonical Temporal execution identity,
-- compatibility adapters may transform execution responses into task-shaped payloads,
-- for task-shaped create and promotion payloads, `task.tool` / `step.tool` are canonical while `task.skill` / `step.skill` remain compatibility aliases where supported,
-- when a tool selector is present on Temporal-backed task-shaped submit payloads, `task.tool.type` must be `skill`,
-- task-oriented compatibility surfaces preserve `taskId == workflowId` for Temporal-backed work.
+- adapters may transform execution responses into `task`-typed payloads,
+- for `task`-typed create and promotion payloads, `task.tool` / `step.tool` are canonical while `task.skill` / `step.skill` remain compatibility aliases where supported,
+- when a tool selector is present on Temporal-backed `task`-typed submit payloads, `task.tool.type` must be `skill`,
+- surfaces that still expose `taskId` preserve `taskId == workflowId` for Temporal-backed work.
 
 The JSON shapes in this document should remain stable even if the backing implementation shifts among projection, Visibility, or mixed adapters.
 
@@ -1014,4 +1014,4 @@ Its contract is:
 - authenticated and ownership-scoped,
 - grounded in `workflowId` as the durable handle,
 - explicit about update/signal/cancel semantics,
-- usable alongside task-oriented surfaces where those still exist; it is not inherently a replacement for every `/tasks/*` flow.
+- usable alongside the workflow console product surfaces; it is not inherently a replacement for every `/workflows/*` flow.

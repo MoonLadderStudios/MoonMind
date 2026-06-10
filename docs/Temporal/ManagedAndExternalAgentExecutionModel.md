@@ -5,7 +5,7 @@
 Status: **Implemented** (runtime live; contract hardening in progress)
 Last updated: 2026-04-09
 Related:
-- [`docs/Steps/SkillSystem.md`](../Tasks/AgentSkillSystem.md)
+- [`docs/Steps/SkillSystem.md`](../Steps/SkillSystem.md)
 - [`docs/Temporal/ActivityCatalogAndWorkerTopology.md`](./ActivityCatalogAndWorkerTopology.md)
 - [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)
 - [`docs/ManagedAgents/LiveLogs.md`](../ManagedAgents/LiveLogs.md) — canonical design for artifact-first log capture, live observability streaming, and the MoonMind-native log viewer UI
@@ -37,7 +37,7 @@ Use this document for:
 - adapter responsibilities
 - runtime preparation and supervision boundaries
 
-Use [`docs/Steps/SkillSystem.md`](../Tasks/AgentSkillSystem.md) for:
+Use [`docs/Steps/SkillSystem.md`](../Steps/SkillSystem.md) for:
 
 - `AgentSkillDefinition`
 - `SkillSet`
@@ -53,7 +53,7 @@ This document does **not** define:
 - ordinary one-shot LLM activity behavior (`mm.activity.llm`)
 - generic executable tool contracts outside true agent runtime execution
 
-Docker-backed workload tools are ordinary executable tools. They stay on the `tool.type = "skill"` path described by [`docs/Workflows/SkillAndPlanContracts.md`](../Tasks/SkillAndPlanContracts.md) and are not new `MoonMind.AgentRun` instances unless the launched runtime is itself a true managed agent runtime. [`docs/ManagedAgents/DockerOutOfDocker.md`](../ManagedAgents/DockerOutOfDocker.md) defines that workload-container boundary.
+Docker-backed workload tools are ordinary executable tools. They stay on the `tool.type = "skill"` path described by [`docs/Workflows/SkillAndPlanContracts.md`](../Workflows/SkillAndPlanContracts.md) and are not new `MoonMind.AgentRun` instances unless the launched runtime is itself a true managed agent runtime. [`docs/ManagedAgents/DockerOutOfDocker.md`](../ManagedAgents/DockerOutOfDocker.md) defines that workload-container boundary.
 
 MoonMind explicitly separates long-lived, stateful agent execution from plain one-shot model calls. True agent execution is treated as a first-class orchestration concept built around:
 
@@ -133,7 +133,7 @@ The split is intentional:
 
 ### 2.3 Dispatch from `MoonMind.Run`
 
-Agent dispatch happens **per step**, not per task.
+Agent dispatch happens **per step**, not per workflow execution.
 
 The plan execution loop in `MoonMind.Run._run_execution_stage()` iterates ordered plan nodes and chooses one of two paths:
 
@@ -143,7 +143,7 @@ The plan execution loop in `MoonMind.Run._run_execution_stage()` iterates ordere
 * **Activity step**
  `MoonMind.Run` executes a standard Temporal activity directly.
 
-This preserves one consistent task model while allowing each step to use the correct execution primitive.
+This preserves one consistent workflow model while allowing each step to use the correct execution primitive.
 
 ### 2.4 Cancellation propagation
 

@@ -18,7 +18,7 @@ This document describes the current architecture and target direction. It separa
 
 > **Core rule:** Temporal remains MoonMind's durable outer orchestrator. Workflows are deterministic and side-effect-free. Managed runtimes, external agents, OAuth runners, Docker workloads, database writes, artifact writes, network calls, CLI invocation, and process supervision happen in Activities or external integration boundaries, never directly inside workflow code.
 
-> **Artifact rule:** Artifacts remain execution-centric evidence. Task-, step-, run-, and session-oriented UI views are projections over execution-linked artifacts and compact metadata; they do not create a second durable source of truth.
+> **Artifact rule:** Artifacts remain execution-centric evidence. Workflow-, step-, run-, and session-oriented UI views are projections over execution-linked artifacts and compact metadata; they do not create a second durable source of truth.
 
 > **Repository-alignment note:** This revision is aligned with the current MoonMind repository shape: `MoonMind.AgentRun`, `MoonMind.AgentSession`, `MoonMind.ProviderProfileManager`, `MoonMind.OAuthSession`, `MoonMind.ManagedSessionReconcile`, `MoonMind.ManifestIngest`, and `MoonMind.MergeAutomation` are workflow types registered by the workflow fleet; managed runtime launch/supervision/session control run through activity fleets and runtime components under `moonmind/workflows/temporal/runtime/`.
 
@@ -206,13 +206,13 @@ Diagram rules:
 
 ### Control Plane
 
-The API service and Mission Control provide the operator boundary. They create tasks, resolve runtime intent, expose provider-profile and auth configuration, serve artifact and observability views, support intervention flows, and expose context/MCP-style surfaces to compatible runtimes.
+The API service and Mission Control provide the operator boundary. They create workflow executions, resolve runtime intent, expose provider-profile and auth configuration, serve artifact and observability views, support intervention flows, and expose context/MCP-style surfaces to compatible runtimes.
 
 Control-plane calls that change workflow-owned lifecycle state should use Temporal Start, Signal, Update, Query, or idempotent projection activities rather than mutating lifecycle tables as a competing source of truth.
 
 ### Temporal Plane
 
-Temporal is the durable orchestration backbone. Workflows own orchestration state; Activities perform side effects. Temporal remains authoritative for task lifecycle, retries, timers, cancellation, signals, updates, child-workflow relationships, schedules, workflow history, and workflow visibility.
+Temporal is the durable orchestration backbone. Workflows own orchestration state; Activities perform side effects. Temporal remains authoritative for workflow lifecycle, retries, timers, cancellation, signals, updates, child-workflow relationships, schedules, workflow history, and workflow visibility.
 
 The Temporal Service does not execute MoonMind application code. Workflow and Activity Workers poll task queues and execute the registered workflow/activity handlers.
 
@@ -259,7 +259,7 @@ Provider Profiles remain a single execution-target abstraction in this architect
 
 External agents are delegated integrations. MoonMind does not own their runtime envelope but still owns orchestration, status normalization, artifacts, observability evidence, cancellation semantics where supported, and operator presentation.
 
-External agents may complete through polling activities, provider callbacks, or both. Callback handlers should route by stable workflow/task/run identifiers and signal or update the waiting `MoonMind.AgentRun`; polling remains a fallback for providers that do not support callbacks.
+External agents may complete through polling activities, provider callbacks, or both. Callback handlers should route by stable workflow/run identifiers and signal or update the waiting `MoonMind.AgentRun`; polling remains a fallback for providers that do not support callbacks.
 
 ### Docker Workload Plane
 
@@ -305,7 +305,7 @@ Managed runtimes do not replace Temporal orchestration. They run inside a Tempor
 
 Temporal owns:
 
-- task lifecycle
+- workflow lifecycle
 - workflow history
 - step ordering
 - retries and timers
@@ -369,7 +369,7 @@ MoonMind stores artifacts for:
 - session summaries and reset boundaries
 - observability events
 
-Task, step, run, and session views are projections over artifacts and compact metadata.
+Workflow, step, run, and session views are projections over artifacts and compact metadata.
 
 ### 8. Session containers are continuity caches, not durable truth
 
@@ -523,7 +523,7 @@ All activity invocation should go through the canonical activity catalog. The ro
 Broad Workflow Retry Policies should not be the default for `MoonMind.Run`, `MoonMind.AgentRun`, or `MoonMind.AgentSession`, especially when a step may mutate a repository or external system. Retries should be explicit at the Activity or step-execution level and must be workspace-safe and idempotent.
 
 Automatic recovery from activity timeout is different from recovery from
-workflow-task nondeterminism. Activity failures may be retried according to the
+Workflow Task nondeterminism. Activity failures may be retried according to the
 activity catalog when the activity is idempotent or guarded by durable keys.
 Nondeterminism occurs during Temporal replay before workflow code can catch it;
 the recovery mechanism is replay-compatible workflow evolution, such as
@@ -554,7 +554,7 @@ Cancellation must propagate in concrete hops:
 2. `MoonMind.AgentRun` catches cancellation and requests managed runtime cancellation where a run was started.
 3. Agent Runtime activities terminate processes/containers, publish cancellation evidence, and update run/session stores.
 4. Provider-profile leases are released idempotently or expire through manager lease TTL/reconciliation.
-5. OAuth and session workflows stop auth/session runners on cancel, expiry, failure, or task completion.
+5. OAuth and session workflows stop auth/session runners on cancel, expiry, failure, or workflow completion.
 
 Cleanup activities must be safe to retry and should be run in a cancellation-aware cleanup section. Any intentionally abandoned child workflow or external process must have a separate reconciler or TTL cleanup path.
 
@@ -798,7 +798,7 @@ Artifacts should carry content type, retention class, ownership/lineage metadata
 
 ### Execution-centric linkage
 
-Artifacts remain linked to concrete executions and are projected into task, step, run, and session views.
+Artifacts remain linked to concrete executions and are projected into workflow, step, run, and session views.
 
 Workflow-oriented and session-oriented views are read models, not alternate artifact authorities.
 
@@ -834,7 +834,7 @@ The projection exists for operator understanding. The source of truth remains ex
 
 ### Structured telemetry
 
-Workers should emit structured logs and metrics containing stable non-sensitive identifiers such as workflow ID, activity ID, run ID, task run ID, runtime ID, profile ID, session ID, session epoch, turn ID, and artifact refs. Raw prompts, raw credentials, full logs, and generated file contents should not be emitted as ordinary structured log fields.
+Workers should emit structured logs and metrics containing stable non-sensitive identifiers such as workflow ID, activity ID, run ID, runtime ID, profile ID, session ID, session epoch, turn ID, and artifact refs. Raw prompts, raw credentials, full logs, and generated file contents should not be emitted as ordinary structured log fields.
 
 OpenTelemetry tracing and Temporal metrics should be used to correlate workflow, activity, process, artifact, and provider boundaries where deployed.
 
@@ -865,7 +865,7 @@ MoonMind owns system-level context assembly and memory retrieval.
 
 Context can include:
 
-- task description
+- workflow description
 - plan and step state
 - repository metadata
 - retrieved documents
@@ -889,7 +889,7 @@ Claude Code and Codex currently share context-injection infrastructure for manag
 Postgres stores:
 
 - API state
-- task and execution metadata
+- workflow and execution metadata
 - provider profiles
 - managed secret metadata and refs
 - OAuth session records
@@ -903,7 +903,7 @@ Application code must not treat Temporal persistence tables as an application AP
 
 `ManagedRunStore` and `ManagedSessionStore` are runtime ledgers used by Agent Runtime activities to reconnect launch, supervision, status, cancellation, artifact collection, and reconciliation.
 
-They are not a second durable source of truth for task lifecycle. They are operational ledgers/read models for side-effecting runtime resources. In multi-worker deployments, they must be shared or co-located with the resources they describe, and the routing/affinity model must make that explicit.
+They are not a second durable source of truth for workflow lifecycle. They are operational ledgers/read models for side-effecting runtime resources. In multi-worker deployments, they must be shared or co-located with the resources they describe, and the routing/affinity model must make that explicit.
 
 ### MinIO
 
@@ -956,7 +956,7 @@ MoonMind's safety model depends on explicit boundaries.
 - generated secret-bearing files are temporary runtime materialization, not durable artifacts by default
 - environment variables are cleared to avoid provider bleed-through
 - runtime logs and failure messages are redacted
-- auth volumes are credential stores, not task workspaces
+- auth volumes are credential stores, not workflow workspaces
 - Docker access is mediated and policy-controlled
 - provider-profile slot policy is explicit
 - cancellation and cleanup use idempotent release, terminate, and reconcile paths to avoid orphaned processes, containers, and leases

@@ -35,7 +35,7 @@ directories into durable vector truth.
 - Embedding generation is provider-backed and configured through MoonMind runtime
   settings.
 - Temporal workflows coordinate work, retries, cancellation, and policy routing.
-- Managed Codex sessions execute task steps through Codex App Server inside a
+- Managed Codex sessions execute workflow steps through Codex App Server inside a
   workflow-scoped Docker container.
 - Durable operator evidence is published through artifacts and bounded workflow
   metadata.
@@ -52,7 +52,7 @@ MoonMind-owned activities and API services own:
 - embedding provider selection
 - embedding dimension checks
 - Qdrant credentials and endpoint policy
-- tenant, repository, task, and run scoping
+- tenant, repository, workflow, and run scoping
 - write authorization
 - quota and rate enforcement
 - audit summaries and artifact publication
@@ -69,10 +69,10 @@ tools should call the MoonMind control-plane vector surface by default, rather
 than requiring the Codex process to know Qdrant topology or embedding-provider
 secrets.
 
-Session-visible vector tools should expose task-oriented operations such as:
+Session-visible vector tools should expose workflow-focused operations such as:
 
 - search indexed repository context
-- search task memory
+- search workflow memory
 - request indexing for the active workspace
 - report vector operation progress
 
@@ -123,7 +123,7 @@ Workflow and activity payloads may carry:
 
 - vector operation intent
 - collection names or refs
-- repository/task/run scope
+- repository/workflow/run scope
 - chunk counts and timing summaries
 - artifact refs
 - failure classification
@@ -141,7 +141,7 @@ details should remain compact. Full diagnostics belong in artifacts.
 
 ## Artifact Expectations
 
-Every managed vector operation that affects task execution should leave durable
+Every managed vector operation that affects workflow execution should leave durable
 evidence through the artifact system.
 
 Recommended artifact types include:
@@ -165,7 +165,7 @@ Requirements:
 
 - Session containers do not receive broad Qdrant admin credentials.
 - Provider embedding credentials are not exposed to Codex by default.
-- Runtime-visible tools enforce task and repository scope before access.
+- Runtime-visible tools enforce workflow and repository scope before access.
 - Collection names or filters encode tenant/project boundaries where applicable.
 - Unsupported embedding model or dimension values fail fast.
 - Logs, artifacts, and diagnostics redact secret-like values.
@@ -192,7 +192,7 @@ Rules:
 A managed session or workload vector tool needs only bounded configuration:
 
 - MoonMind API endpoint for control-plane vector operations.
-- Run, task, repository, and tenant scope.
+- Run, workflow, repository, and tenant scope.
 - A scoped service token or adapter-issued capability, when required.
 - Optional Qdrant endpoint and credential only for approved direct-access paths.
 - Embedding model identity and expected vector dimension, supplied by MoonMind

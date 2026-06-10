@@ -63,11 +63,11 @@ The simplest path: add one line to your `.env` and `docker compose up`.
 
 ## 4. Manual Profile Setup (via Dashboard or API)
 
-If auto-seeding has already run, create the profile through the Task Dashboard or the REST API.
+If auto-seeding has already run, create the profile through Mission Control or the REST API.
 
 ### Dashboard
 
-1. Open the Task Dashboard and navigate to **Settings → Auth Profiles → Create Profile**.
+1. Open Mission Control and navigate to **Settings → Auth Profiles → Create Profile**.
 2. Fill in:
    - **Profile ID**: `claude_minimax`
    - **Runtime**: `claude_code`
@@ -128,17 +128,17 @@ Claude Code treats `ANTHROPIC_AUTH_TOKEN` as a bearer-style credential for third
 
 ### Auth Profile Manager
 
-The `ProviderProfileManager` Temporal workflow for `claude_code` automatically manages concurrency slots across both the default Claude profile and the MiniMax profile. When a task requests `claude_code`, the manager selects an available profile based on slot availability and cooldown state.
+The `ProviderProfileManager` Temporal workflow for `claude_code` automatically manages concurrency slots across both the default Claude profile and the MiniMax profile. When a workflow execution requests `claude_code`, the manager selects an available profile based on slot availability and cooldown state.
 
 ---
 
-## 6. Running a Task with MiniMax
+## 6. Running a Workflow with MiniMax
 
-When creating a task in the dashboard:
+When creating a workflow in Mission Control:
 
 1. Select **Claude Code** as the runtime.
 2. Set **Execution Profile** to `claude_minimax`.
-3. The task will use MiniMax-M2.7 through the MiniMax API endpoint.
+3. The workflow execution will use MiniMax-M2.7 through the MiniMax API endpoint.
 
 If no profile is explicitly selected, the `ProviderProfileManager` picks the next available `claude_code` profile, which may be any of `claude_anthropic` or `claude_minimax` depending on slot availability.
 

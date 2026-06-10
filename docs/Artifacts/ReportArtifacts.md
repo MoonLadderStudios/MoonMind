@@ -4,7 +4,7 @@ Status: Adopted (implemented)
 Owners: MoonMind Platform + Mission Control
 Last updated: 2026-05-15
 
-The core contract in this document — `report.*` link types, the compact `report_bundle_v = 1` workflow result, the `reportProjection` execution-detail summary, retention defaults, the Mission Control report-first surface, and the report/observability separation — is implemented across the specs called out in section 22. Sections that are still future work (a dedicated `/report` endpoint, stronger evidence grouping semantics, multi-step task-level projections) are marked **Deferred** inline.
+The core contract in this document — `report.*` link types, the compact `report_bundle_v = 1` workflow result, the `reportProjection` execution-detail summary, retention defaults, the Mission Control report-first surface, and the report/observability separation — is implemented across the specs called out in section 22. Sections that are still future work (a dedicated `/report` endpoint, stronger evidence grouping semantics, multi-step workflow-level projections) are marked **Deferred** inline.
 
 ## 1. Purpose
 
@@ -156,7 +156,7 @@ An **Evidence artifact** is a durable supporting artifact linked to a report, su
 
 ## 6.4 Final report
 
-A **Final report** is the canonical report deliverable for the completed execution or task.
+A **Final report** is the canonical report deliverable for the completed execution or workflow.
 
 ## 6.5 Intermediate report
 
@@ -369,7 +369,7 @@ Latest-report selection is a server query behavior, not mutable state.
 Rules:
 
 - For one execution, latest report should be resolved by `(namespace, workflow_id, run_id, link_type)`.
-- For one task or multi-step flow, the UI should prefer an explicit final-report projection when available.
+- For one workflow or multi-step flow, the UI should prefer an explicit final-report projection when available.
 - Clients must not sort arbitrary artifacts in the browser and infer a canonical report.
 
 ---
@@ -730,8 +730,8 @@ The questions that were open in the Draft revision are resolved as follows. Item
 5. **Evidence grouping uses existing bounded metadata; richer grouping (`finding_id`, `section_id`) is Deferred.**
    Today, `report.evidence` artifacts may carry `step_id`, `attempt`, and `scope` to group evidence by execution step. Stronger evidence-to-finding linkage (`finding_id`, `section_id`) is deferred until a concrete producer (typically a pentest workflow) needs it; when added, those keys must remain bounded metadata and must not embed raw finding content.
 
-6. **Multi-step tasks: per-step reports live as step-scoped artifacts; one task-level final report projection is Deferred.**
-   The current `reportProjection` is per-execution. Per-step reports are already addressable through `step_id`/`attempt` metadata and the standard artifact APIs. A separate task-level (multi-execution) report projection is **Deferred** and would be added alongside, not in place of, the per-execution projection.
+6. **Multi-step workflows: per-step reports live as step-scoped artifacts; one workflow-level final report projection is Deferred.**
+   The current `reportProjection` is per-execution. Per-step reports are already addressable through `step_id`/`attempt` metadata and the standard artifact APIs. A separate workflow-level (multi-execution) report projection is **Deferred** and would be added alongside, not in place of, the per-execution projection.
 
 ---
 
@@ -772,7 +772,7 @@ The contract in this document is implemented and verified through the following 
   - `ExecutionReportProjectionModel` — bounded camelCase response model attached to `ExecutionModel.report_projection`
 - `api_service/api/routers/executions.py`
   - `_hydrate_execution_report_projection()` — derives the projection server-side from canonical `report.primary` and `report.summary` artifact links
-- `frontend/src/entrypoints/task-detail.tsx`
+- `frontend/src/entrypoints/workflow-detail.tsx`
   - `latestReportQuery` and report-first rendering for `report.primary`, `report.summary`, `report.structured`, `report.evidence`
 
 ### 22.2 Verification
@@ -782,7 +782,7 @@ The contract in this document is implemented and verified through the following 
 | Report bundle publication, link types, final marker cardinality, step metadata, evidence refs | `tests/unit/workflows/temporal/test_artifacts.py`, `tests/unit/workflows/temporal/test_artifacts_activities.py` |
 | Compact bundle/projection helper invariants | `tests/unit/workflows/temporal/test_report_workflow_rollout.py` |
 | Execution-detail `reportProjection` serialization, omission, and bounded metadata | `tests/unit/api/routers/test_executions.py`, `tests/contract/test_temporal_execution_api.py` |
-| Mission Control report-first rendering | `frontend/src/entrypoints/task-detail.test.tsx` |
+| Mission Control report-first rendering | `frontend/src/entrypoints/workflow-detail.test.tsx` |
 
 ### 22.3 Specs
 
@@ -800,6 +800,6 @@ The MM-461 spec listed `./tools/test_integration.sh` as a follow-up step. That s
 Rationale:
 
 - The report bundle contract is a pure workflow-result/validation contract layered on the existing artifact service. The slice did not change artifact persistence semantics, the storage backend, or any cross-service compose-backed seam covered by `integration_ci`.
-- The contract is fully covered by activity-boundary unit tests (`tests/unit/workflows/temporal/test_artifacts_activities.py`), router/contract tests against the FastAPI execution detail surface (`tests/contract/test_temporal_execution_api.py`), and Mission Control component tests (`frontend/src/entrypoints/task-detail.test.tsx`).
+- The contract is fully covered by activity-boundary unit tests (`tests/unit/workflows/temporal/test_artifacts_activities.py`), router/contract tests against the FastAPI execution detail surface (`tests/contract/test_temporal_execution_api.py`), and Mission Control component tests (`frontend/src/entrypoints/workflow-detail.test.tsx`).
 - This matches the escalation policy used by spec 245 (`T020 was intentionally skipped as not required because MM-493 did not cross the hermetic integration boundary`) and spec 248 (`T021 Escalate to ./tools/test_integration.sh only if MM-496 implementation crosses the hermetic integration boundary`).
 - If a future change to the report path touches artifact persistence, the artifact-link query surface, or compose-backed service topology, the hermetic integration suite should be re-run at that time.

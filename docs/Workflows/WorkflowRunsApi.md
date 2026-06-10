@@ -67,7 +67,7 @@ These endpoints expose artifact-backed observability for managed runs. The legac
 MoonMind currently uses three related identifiers around Workflow runs:
 
 - **`workflowId`** — the canonical durable execution identifier for `/api/executions`
-- **`taskId`** — the task-oriented product identifier; for Temporal-backed work, `taskId == workflowId`
+- **`taskId`** — the legacy product identifier (renames in the hard switch); for Temporal-backed work, `taskId == workflowId`
 - **`taskRunId`** — the managed-run observability record identifier used by `/api/task-runs`; it may appear on top-level execution detail and on individual step rows
 
 The normal control-plane flow is:
@@ -91,7 +91,7 @@ Full log bodies and diagnostics come from managed-run artifact storage and spool
 
 ## 5. Request Model Posture
 
-`POST /api/executions` is the active create surface. It accepts the execution-oriented request model and, during migration, may also normalize task-shaped compatibility payloads into the same Temporal-backed execution contract.
+`POST /api/executions` is the active create surface. It accepts the execution-oriented request model and, during migration, may also normalize legacy `task`-typed payloads into the same Temporal-backed execution contract.
 
 Execution requests ultimately dispatch into `MoonMind.Run` or another allowed workflow type, then fan out across Temporal worker fleets grouped by capability and security boundary:
 

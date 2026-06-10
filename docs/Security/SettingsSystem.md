@@ -319,7 +319,7 @@ It includes:
 
 - user preferences,
 - personal runtime defaults,
-- workspace task defaults,
+- workspace workflow defaults,
 - workspace routing defaults,
 - workspace feature flags,
 - non-secret integration defaults,
@@ -1086,7 +1086,7 @@ The Settings UI should show where a secret is referenced, including:
 - setting overrides,
 - tool bindings,
 - integrations,
-- scheduled task definitions, and
+- scheduled workflow definitions, and
 - runtime materialization templates.
 
 Usage views must show references and object names, not plaintext.
@@ -1170,7 +1170,7 @@ Examples:
 - notification preferences,
 - personal Git author defaults,
 - personal integration SecretRef bindings, and
-- personal task creation defaults.
+- personal workflow creation defaults.
 
 User settings must not override workspace safety policies unless the specific setting explicitly allows it.
 
@@ -1186,7 +1186,7 @@ Examples:
 - skill policy mode,
 - allowed skill list,
 - canary percentages,
-- task proposal defaults,
+- workflow proposal defaults,
 - live session defaults,
 - workspace Git defaults,
 - integration defaults, and
@@ -1350,7 +1350,7 @@ Consumers may subscribe to settings change events where appropriate.
 Examples:
 
 - Mission Control refreshes catalog state.
-- Task creation uses updated defaults.
+- Workflow creation uses updated defaults.
 - Provider profile manager syncs profile-related changes.
 - Workers reload non-disruptive settings.
 - Operational controls update runtime status.
@@ -1706,7 +1706,7 @@ OperationsPanel
 8. Backend writes audit event.
 9. Backend emits change event.
 10. UI refreshes descriptor showing source `workspace_override`.
-11. Future task creation uses the new effective default.
+11. Future workflow creation uses the new effective default.
 
 ### 27.2 Add GitHub Token
 

@@ -54,7 +54,7 @@ This document does **not** define deployment-stored agent instruction bundles, s
 
 Canonical terminology for execution payloads is:
 
-* **task** (top-level user request)
+* **workflow execution** (top-level user request; still carried on the `task` payload node until the hard switch)
 * **step** (plan node)
 * **tool** (executable capability — Temporal contract object)
 
@@ -465,7 +465,7 @@ Workers declare capability sets (e.g., `llm`, `sandbox`, `integration:jules`, `i
 
 Broad Moon Spec breakdown is an agent-runtime operation that writes story candidates as durable handoff files under `artifacts/story-breakdowns/`. It does not create `spec.md` files and does not write under `specs/`.
 
-When a task requests Jira issue creation from ambiguous user intent, the planner should dispatch an `agent_runtime` step with the `jira-issue-creator` agent skill selected. The agent uses the Jira connector/API to resolve projects, issue types, create fields, and issue descriptions.
+When a workflow execution requests Jira issue creation from ambiguous user intent, the planner should dispatch an `agent_runtime` step with the `jira-issue-creator` agent skill selected. The agent uses the Jira connector/API to resolve projects, issue types, create fields, and issue descriptions.
 
 ```json
 {
@@ -490,7 +490,7 @@ When a task requests Jira issue creation from ambiguous user intent, the planner
 
 Pure Jira issue creation does not require branch or PR publishing. A PR is required only when the agent produces repository changes that need to be published.
 
-When a task already has fully structured story JSON and a concrete Jira target,
+When a workflow execution already has fully structured story JSON and a concrete Jira target,
 the planner may use the narrower deterministic batch tool:
 
 ```json
@@ -536,7 +536,7 @@ items and do not create Jira issues. Stories marked
 `implementationStatus = "partially_implemented"` create Jira issues from their
 `remainingWork` payload while preserving original story traceability. The output
 reports `skippedStories`, `blockedStories`, and `partialStoriesAdjusted` so
-downstream orchestration can create tasks only for returned Jira issue mappings.
+downstream orchestration can create follow-up work only for returned Jira issue mappings.
 
 For breakdown-driven Jira output, the canonical traceability shape is
 `sourceReference.path` on every story, with `source.referencePath` or

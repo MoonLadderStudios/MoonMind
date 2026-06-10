@@ -173,7 +173,7 @@ Key diagnostics:
 - Existing OAuth session database row and workflow/activity payloads only; no new persistent storage (192-oauth-runner-bootstrap-pty)
 - Python 3.12; TypeScript/React for existing Create page tests if frontend behavior changes + Pydantic v2, FastAPI, SQLAlchemy async session fixtures, existing Temporal execution router/service, React/Vitest test harness (195-targeted-image-attachment-submission)
 - Existing Temporal execution records and artifact-backed original task input snapshots; no new persistent tables (195-targeted-image-attachment-submission)
-- TypeScript/React for Mission Control UI, Python 3.12 for FastAPI route tests + React, FastAPI, existing boot payload helpers, existing task dashboard router, Vitest, pytest (195-canonical-create-page-shell)
+- TypeScript/React for Mission Control UI, Python 3.12 for FastAPI route tests + React, FastAPI, existing boot payload helpers, existing workflow console router, Vitest, pytest (195-canonical-create-page-shell)
 - Python 3.12; TypeScript/React for existing Create-page behavior + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal artifact service, existing React Create page (195-enforce-image-artifact-policy)
 - Existing Temporal artifact metadata tables and configured artifact store; no new persistent storage (195-enforce-image-artifact-policy)
 - Python 3.12; TypeScript/React for Mission Control Create-page behavior + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal artifact service, React, Vitest, existing task editing helpers (196-preserve-attachment-bindings)

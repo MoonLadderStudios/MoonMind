@@ -224,7 +224,7 @@ Pauses and takeovers use standard **Temporal Signals**:
 
 ### 10.1 Workflow Execution Detail Page
 
-The Workflow Execution detail page (`/tasks/:taskId`) should include two live-session UI elements:
+The Workflow Execution detail page (`/workflows/{workflowId}`) should include two live-session UI elements:
 
 1. **Live Output Panel** (section 5): Collapsible panel with live log tailing. Toggle on/off. Available when log data exists for the run.
 2. **Live Session Card** (section 6): Shows session status, RO attach instructions, optional web view link, pause/resume signal buttons, RW grant UI, and operator message composer. Available for full handoff workflows.

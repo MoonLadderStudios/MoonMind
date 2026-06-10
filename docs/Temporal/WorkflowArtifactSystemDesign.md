@@ -23,7 +23,7 @@ MoonMind is built around **Temporal** as the durable orchestration substrate.
 - **Activities** perform all side effects.
 - Temporal history and payloads must remain **small**, **bounded**, and **safe**.
 
-Public MoonMind surfaces may still describe these executions as `tasks` during migration. This document defines the artifact contract at the Temporal/runtime layer.
+Some public MoonMind surfaces still carry legacy task-named fields (they rename in the hard switch). This document defines the artifact contract at the Temporal/runtime layer.
 
 Therefore, workflows and activities must pass **artifact references** rather than large payloads. This ensures large immutable inputs and outputs such as:
 

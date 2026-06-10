@@ -19,7 +19,7 @@ It is the canonical document for:
 3. how Skill steps are authored and validated,
 4. how reusable agent skill definitions are stored and versioned,
 5. how built-in, deployment, repo, and local skill sources are merged,
-6. how task and step skill intent resolves into immutable snapshots,
+6. how workflow and step skill intent resolves into immutable snapshots,
 7. how runtimes receive those snapshots,
 8. how `.agents/skills` and `.agents/skills/local` are used,
 9. how runtime skill injection works for managed and external agents.
@@ -267,7 +267,7 @@ They are useful for:
 
 - common workflows,
 - baseline project guidance,
-- built-in task patterns,
+- built-in workflow patterns,
 - starter deployment defaults,
 - runtime-specific first-run guidance.
 
@@ -321,9 +321,9 @@ Local-only Skills are useful for:
 
 Local-only Skills are excluded from version control by default and may participate only if deployment policy allows them.
 
-### 6.5 Explicit Task and Step Selectors
+### 6.5 Explicit Workflow and Step Selectors
 
-A task or step may explicitly include, exclude, or pin Skills or SkillSets.
+A workflow execution or step may explicitly include, exclude, or pin Skills or SkillSets.
 
 Explicit selectors express execution intent and participate in resolution before runtime launch.
 
@@ -339,7 +339,7 @@ When multiple sources provide candidate Skills, MoonMind resolves them in this o
 2. deployment-stored Skills,
 3. repo checked-in Skills,
 4. repo local-only Skills,
-5. explicit task or step overrides.
+5. explicit workflow or step overrides.
 
 Later layers may override earlier layers where policy allows.
 
@@ -604,9 +604,9 @@ Rules:
    resolution fails before runtime launch.
 6. Runtime adapters must not rediscover or broaden required Skills after launch.
 
-### 9.3 Task-Level Skill Intent
+### 9.3 Workflow-level Skill Intent
 
-A task may define baseline Skill intent inherited by Skill steps.
+A workflow execution may define baseline Skill intent inherited by Skill steps (carried on the `task` payload node until the hard switch renames it).
 
 Illustrative shape:
 
@@ -627,11 +627,11 @@ Illustrative shape:
 
 ### 9.4 Inheritance Rules
 
-1. `task.skills` defines the task-wide baseline.
-2. `step.skill` may add, override, or exclude task-level skill intent.
+1. `task.skills` defines the workflow-wide baseline.
+2. `step.skill` may add, override, or exclude workflow-level skill intent.
 3. A step may explicitly opt out of inherited optional Skills where policy allows.
-4. Absent step-level selectors means the step inherits the task baseline.
-5. A step-level exact version pin overrides unpinned task-level selection if policy allows it.
+4. Absent step-level selectors means the step inherits the workflow baseline.
+5. A step-level exact version pin overrides unpinned workflow-level selection if policy allows it.
 6. Policy may require mandatory Skills that cannot be excluded.
 
 ### 9.5 Validation Rules
@@ -658,7 +658,7 @@ Skill resolution happens before runtime launch.
 
 Resolution may happen:
 
-1. at task submission,
+1. at workflow submission,
 2. during step preparation,
 3. in a dedicated resolution activity,
 4. during proposal promotion where exact execution intent is being frozen.
@@ -669,7 +669,7 @@ Workflow code must not resolve large Skill bodies inline.
 
 Canonical flow:
 
-1. collect task-level and step-level Skill selectors;
+1. collect workflow-level and step-level Skill selectors;
 2. identify target runtime and execution mode;
 3. load deployment policy;
 4. determine allowed source kinds;
@@ -932,7 +932,7 @@ files:
 5. **Transactional preserve-and-link fallback**: this is a disposable-workspace
    fallback only. It is not the normal managed runtime path. If ever selected,
    it must create a projection lease, restore the original tree in a `finally`
-   path before verification, publish, or task completion, and exclude
+   path before verification, publish, or workflow completion, and exclude
    projection-only changes.
 
 Adapters must not replace a tracked or repo-authored `.agents/skills` directory
@@ -1118,7 +1118,7 @@ The managed-runtime implementation should enforce this plan:
 7. **Verify the actual runtime view**: before submitting the turn, adapter
    boundary tests and runtime preflight checks should confirm the agent-visible
    `.agents/skills/_manifest.json` matches the supplied snapshot.
-8. **Publish only task changes**: publication logic must exclude runtime
+8. **Publish only workflow changes**: publication logic must exclude runtime
    projection artifacts and must not commit changes caused only by Skill
    projection.
 
@@ -1153,7 +1153,7 @@ A Skill step that requires true agent execution compiles into an agent runtime e
 
 The desired flow is:
 
-1. `MoonMind.Run` owns task-level orchestration and step order.
+1. `MoonMind.Run` owns workflow-level orchestration and step order.
 2. Skill resolution happens before runtime launch.
 3. The parent workflow passes compact refs into the agent-run path.
 4. `MoonMind.AgentRun` consumes an `AgentExecutionRequest`.
@@ -1261,7 +1261,7 @@ Operators should be able to see or select:
 
 ### 19.2 Detail-Page Visibility
 
-Task and step detail should show:
+Workflow and step detail should show:
 
 1. selected Skill step identity,
 2. resolved snapshot ID,
@@ -1363,7 +1363,7 @@ Recommended doc cleanup:
 4. Keep `docs/Workflows/SkillAndPlanContracts.md` as the canonical Tool and Plan contract document.
 5. Update `SkillAndPlanContracts.md` to clearly mark `tool.type = "skill"` as legacy/internal terminology, not the product-facing Skill Step.
 6. Update any docs that say "Skill is a Tool" to instead say "Skill step may use Tools; Skills are agent-facing behavior/data."
-7. Put rollout tasks, migration checklists, and implementation status in specs or tracking artifacts, not in this canonical desired-state doc.
+7. Put rollout work items, migration checklists, and implementation status in tracking artifacts under `docs/tmp/`, not in this canonical desired-state doc.
 
 Suggested redirect text for `docs/Steps/SkillInjection.md`:
 
@@ -1422,7 +1422,7 @@ The desired model is:
 1. users author Tool, Skill, or Preset steps;
 2. Skill steps select agent-facing behavior and context;
 3. reusable agent Skills are stored as versioned data;
-4. task and step selectors resolve into immutable snapshots;
+4. workflow and step selectors resolve into immutable snapshots;
 5. managed runtimes receive compact activation instructions plus a full active bundle at `.agents/skills`;
 6. external runtimes receive equivalent snapshot-derived context through provider-compatible delivery;
 7. Tools remain governed operations that Skill steps may use under policy;

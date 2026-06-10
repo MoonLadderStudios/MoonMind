@@ -9,7 +9,7 @@ Scope: Defines MoonMind’s canonical **Activity Types**, **worker fleets**, **T
 ## Related docs
 
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](./ManagedAndExternalAgentExecutionModel.md)
-- [`docs/Steps/SkillSystem.md`](../Tasks/AgentSkillSystem.md)
+- [`docs/Steps/SkillSystem.md`](../Steps/SkillSystem.md)
 - [`docs/Temporal/WorkflowArtifactSystemDesign.md`](./WorkflowArtifactSystemDesign.md)
 - [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)
 - [`docs/Temporal/ErrorTaxonomy.md`](./ErrorTaxonomy.md)
@@ -207,7 +207,7 @@ Activity Type names use dotted namespaces.
 - `provider_profile.*` — provider-profile coordination support
 - `oauth_session.*` — OAuth session lifecycle support
 - `agent_runtime.*` — managed runtime launch/supervision/result/cancel operations
-- `proposal.*` — task proposal generation/submission
+- `proposal.*` — workflow proposal generation/submission
 - `step.review` — review gate execution
 
 ### 6.2 Target-state namespace not yet fully implemented

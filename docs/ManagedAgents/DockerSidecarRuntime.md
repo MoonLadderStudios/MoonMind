@@ -11,7 +11,7 @@
 - [`docs/ManagedAgents/CodexManagedSessionPlane.md`](./CodexManagedSessionPlane.md)
 - [`docs/ManagedAgents/DockerOutOfDocker.md`](./DockerOutOfDocker.md)
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
-- [`docs/Workflows/SkillAndPlanContracts.md`](../Tasks/SkillAndPlanContracts.md)
+- [`docs/Workflows/SkillAndPlanContracts.md`](../Workflows/SkillAndPlanContracts.md)
 
 ---
 
@@ -25,7 +25,7 @@ This is the **default execution path** for containerized work that originates fr
 
 ### 1.1 Relationship to existing architecture
 
-This document supersedes two specific clauses in the prior architecture for the case of normal task workloads originating from a managed agent session:
+This document supersedes two specific clauses in the prior architecture for the case of normal workflow workloads originating from a managed agent session:
 
 - `ManagedAgentArchitecture.md §5.5` ("No direct Docker control from the managed session by default") — replaced for the sidecar deployment shape. A managed session with the sidecar runtime enabled has a private `DOCKER_HOST` pointing at its own daemon. It never gets the host socket and never sees other sessions' containers.
 - `DockerOutOfDocker.md §17.3` ("Important boundary") — replaced for ordinary repository test workloads. Control-plane-launched Docker workloads remain the model for MoonMind admin/update flows, helper or one-shot workloads with no managed session attached, and deliberately deployment-gated exceptional workloads; they are no longer the default model for repo tests.
@@ -44,7 +44,7 @@ The related architecture documents carry the same desired-state split: ordinary 
 4. **The Docker sidecar image is prebuilt and generic.** It does not need the MoonMind codebase, MoonMind deployment credentials, or registry secrets.
 5. **The workspace is mounted at the same absolute path in both containers.** Bind mounts of the form `-v "$PWD":/workspace` resolve identically on the agent CLI and the sidecar daemon.
 6. **The Docker daemon scope is per session.** Containers, images, and graph storage do not bleed across sessions or across users.
-7. **The control-plane DooD path is preserved for operations that must originate from the control plane**, including MoonMind admin/update flows, helper or one-shot workloads with no managed session attached, and deliberately deployment-gated exceptional workloads. It is not the default path for ordinary task workloads.
+7. **The control-plane DooD path is preserved for operations that must originate from the control plane**, including MoonMind admin/update flows, helper or one-shot workloads with no managed session attached, and deliberately deployment-gated exceptional workloads. It is not the default path for ordinary workflow workloads.
 8. **The design has a clean Kubernetes mapping** as a future-state target (sidecar container in the same Pod, shared volumes for workspace and socket).
 
 ---
@@ -232,7 +232,7 @@ Recommended defaults:
 - Future hardened Docker deployments: `docker-sidecar-rootless`.
 - Locked-down Kubernetes clusters: `kubernetes-job` (see §13).
 
-The mode is a deployment / profile decision. Task instructions cannot raise it.
+The mode is a deployment / profile decision. Workflow instructions cannot raise it.
 The durable profile contract includes the future `kubernetes-job` mode so the
 workspace, labels, capability, and resource semantics remain portable, but that
 mode fails closed unless the deployment profile explicitly sets
@@ -242,7 +242,7 @@ Docker deployments may set `MOONMIND_MANAGED_SESSION_DOCKER_MODE` to
 `docker-sidecar` or `no-docker` at the worker launcher boundary. When the
 variable is unset, the managed session launcher uses the workflow-provided
 Docker capability mode for that launch request and does not infer capability
-from unrelated ambient task text. The `docker-sidecar-rootless` mode remains a
+from unrelated ambient workflow text. The `docker-sidecar-rootless` mode remains a
 profile contract target, but Docker launcher materialization fails closed until
 that runtime shape is implemented.
 
@@ -277,7 +277,7 @@ The managed agent image stays lightweight.
 - Docker graph storage
 - a mounted host Docker socket
 - MoonMind deployment credentials
-- registry push credentials beyond what an individual task is authorized to use
+- registry push credentials beyond what an individual workflow execution is authorized to use
 
 Smoke test inside an agent container with sidecar enabled:
 
@@ -729,7 +729,7 @@ Every per-session sidecar deployment must be discoverable and traceable. The two
 - `moonmind.task_run_id=<task_run_id>` (when bound)
 - `moonmind.workload_mode=docker-sidecar | docker-sidecar-rootless`
 
-The session-status surface (§13) reports daemon readiness, version, and probe results. Durable evidence for agent work continues to flow through the existing artifact pipeline; the sidecar itself is not the system of record. Per-container stdout/stderr capture for the daemon belongs in worker logs, not in the task artifact area, unless explicitly attached for debugging.
+The session-status surface (§13) reports daemon readiness, version, and probe results. Durable evidence for agent work continues to flow through the existing artifact pipeline; the sidecar itself is not the system of record. Per-container stdout/stderr capture for the daemon belongs in worker logs, not in the workflow artifact area, unless explicitly attached for debugging.
 
 ---
 

@@ -12,21 +12,21 @@ Define the desired design for the **Skills** area in Mission Control: navigation
 
 ## 2. Goals
 
-- Dedicated Mission Control entry point for skills (route `/tasks/skills`).
+- Dedicated Mission Control entry point for skills (route `/skills`).
 - List skills and preview `SKILL.md` content (Markdown → HTML).
 - Create flow: name + Markdown body persisted under `.agents/skills/local/{name}/SKILL.md`.
-- `POST /api/tasks/skills` creates on-disk skill; `GET /api/tasks/skills` lists skills and, when complete, returns enough data for list and detail views.
+- `POST /api/workflows/skills` creates on-disk skill; `GET /api/workflows/skills` lists skills and, when complete, returns enough data for list and detail views.
 - New skills participate in the same skill selection surfaces as other dashboard flows once written.
 
 ## 3. User Interface Design
 
 ### 3.1 Navigation
 
-- Top-level nav pill **Skills** in `.route-nav` → `/tasks/skills`, consistent with `/tasks/list`, `/tasks/new`, etc.
+- Top-level nav pill **Skills** in `.route-nav` → `/skills`, consistent with `/workflows`, `/workflows/new`, etc.
 
 ### 3.2 Main Layout
 
-- `/tasks/skills` uses list–detail: left list from server, right pane for preview or create form.
+- `/skills` uses list–detail: left list from server, right pane for preview or create form.
 - **View mode:** selected skill renders `SKILL.md` as HTML (shared Markdown component).
 - **Create mode:** “Create New Skill” reveals form (name, Markdown body, save action).
 
@@ -38,8 +38,8 @@ Define the desired design for the **Skills** area in Mission Control: navigation
 
 ### 4.1 Endpoints
 
-- **`POST /api/tasks/skills`** — body `{ "name", "markdown" }`; `201` on success; `400` on validation (name conflict, invalid name).
-- **`GET /api/tasks/skills`** — list skills; extended to return file content for detail view when implementation is complete (see tracker).
+- **`POST /api/workflows/skills`** — body `{ "name", "markdown" }`; `201` on success; `400` on validation (name conflict, invalid name).
+- **`GET /api/workflows/skills`** — list skills; extended to return file content for detail view when implementation is complete (see tracker).
 
 ### 4.2 Storage
 
@@ -47,8 +47,8 @@ Define the desired design for the **Skills** area in Mission Control: navigation
 
 ## 5. Frontend
 
-- Route `/tasks/skills` in dashboard shell (`task_dashboard` template + client routing).
-- Client: fetch list, render preview, submit create form to `POST /api/tasks/skills`, refresh list and select new skill on success.
+- Route `/skills` in dashboard shell (`react_dashboard.html` template + client routing).
+- Client: fetch list, render preview, submit create form to `POST /api/workflows/skills`, refresh list and select new skill on success.
 
 ## 6. Security
 

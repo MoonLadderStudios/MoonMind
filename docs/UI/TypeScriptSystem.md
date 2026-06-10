@@ -3,7 +3,7 @@
 Status: **Active**
 Owners: MoonMind Engineering
 Last Updated: 2026-04-03
-Related: `README.md`, `api_service/static/task_dashboard/`, `docs/Workflows/WorkflowArchitecture.md`
+Related: `README.md`, `api_service/static/workflow_console/`, `docs/Workflows/WorkflowArchitecture.md`
 
 **Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
@@ -40,7 +40,7 @@ This is intentionally **not** a move to a separately deployed SPA. It is a move 
 ### 2.2 Secondary Goals
 
 1. Reduce frontend regressions caused by implicit data shapes and untyped DOM interactions.
-2. Make it easier to split UI work across features such as tasks, proposals, schedules, settings, and provider profiles.
+2. Make it easier to split UI work across features such as workflows, proposals, schedules, settings, and provider profiles.
 3. Prepare the frontend for future growth without requiring a second deployment surface today.
 4. Preserve deep links, bookmarkable routes, and server-controlled access checks.
 
@@ -124,7 +124,7 @@ The TypeScript frontend owns:
 
 That means:
 
-- `/tasks`, `/tasks/list`, `/tasks/manifests`, `/tasks/schedules`, `/tasks/proposals`, `/tasks/settings`, and similar paths continue to be server-routed.
+- `/workflows`, `/workflows/new`, `/manifests`, `/schedules`, `/proposals`, `/settings`, and similar paths continue to be server-routed.
 - Client code may update query-string state and in-page filters.
 - Client code may enhance navigation behavior where useful.
 - Client code does **not** become the canonical source of route resolution in Phase 1.
@@ -202,9 +202,9 @@ frontend/
  mountPage.tsx
  entrypoints/
  mission-control.tsx
- tasks-home.tsx
- tasks-list.tsx
- task-detail.tsx
+ workflows-home.tsx
+ workflow-list.tsx
+ workflow-detail.tsx
  manifests-list.tsx
  schedules-list.tsx
  schedule-create.tsx
@@ -218,7 +218,7 @@ frontend/
  status/
  feedback/
  features/
- tasks/
+ workflows/
  manifests/
  schedules/
  proposals/
@@ -251,7 +251,7 @@ frontend/
 Built assets should be emitted to:
 
 ```text
-api_service/static/task_dashboard/dist/
+api_service/static/workflow_console/dist/
 ```
 
 The output directory is a **build artifact location**, not the source of truth for editable frontend code.
@@ -347,7 +347,7 @@ Recommended scripts:
 
 **Canonical inputs:** TypeScript/React source under `frontend/`, `frontend/vite.config.ts`, and the root npm lockfile are the source of truth for Mission Control UI bundles.
 
-**Generated output:** `api_service/static/task_dashboard/dist/` (including `.vite/manifest.json`) is generated output only. Do not treat it as hand-maintained source.
+**Generated output:** `api_service/static/workflow_console/dist/` (including `.vite/manifest.json`) is generated output only. Do not treat it as hand-maintained source.
 
 ### Authoritative builds (correctness)
 
@@ -358,7 +358,7 @@ Recommended scripts:
 
 ### Runtime `dist/`
 
-`api_service/static/task_dashboard/dist/` is runtime build output only. It should be rebuilt locally with **`npm run ui:build`** or **`npm run ui:build:check`**, produced in CI as an artifact, and produced in Docker images from source. It is not a checked-in source of truth and contributors should not commit it.
+`api_service/static/workflow_console/dist/` is runtime build output only. It should be rebuilt locally with **`npm run ui:build`** or **`npm run ui:build:check`**, produced in CI as an artifact, and produced in Docker images from source. It is not a checked-in source of truth and contributors should not commit it.
 
 ---
 
@@ -376,9 +376,9 @@ Each server-rendered page should provide:
 Example:
 
 ```html
-<div id="mission-control-root" data-page="tasks-list"></div>
+<div id="mission-control-root" data-page="workflow-list"></div>
 <script id="moonmind-ui-boot" type="application/json">
- {"page":"tasks-list","apiBase":"/api","features":{"oauth":true}}
+ {"page":"workflow-list","apiBase":"/api","features":{"oauth":true}}
 </script>
 ```
 
@@ -680,7 +680,7 @@ Prioritize tests for:
 - boot payload parsing
 - API client normalization
 - polling pause/resume logic
-- task/proposal/schedule mutation hooks
+- workflow/proposal/schedule mutation hooks
 - settings and provider profile forms
 - route param parsing
 

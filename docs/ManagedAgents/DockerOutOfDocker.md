@@ -10,7 +10,7 @@
 * [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)
 * [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
 * [`docs/Temporal/ActivityCatalogAndWorkerTopology.md`](../Temporal/ActivityCatalogAndWorkerTopology.md)
-* [`docs/Workflows/SkillAndPlanContracts.md`](../Tasks/SkillAndPlanContracts.md)
+* [`docs/Workflows/SkillAndPlanContracts.md`](../Workflows/SkillAndPlanContracts.md)
 * [`docs/Temporal/ArtifactPresentationContract.md`](../Temporal/ArtifactPresentationContract.md)
 * [`docs/ManagedAgents/LiveLogs.md`](./LiveLogs.md)
 
@@ -112,7 +112,7 @@ This document does **not** define:
 
 * Kubernetes orchestration
 * a generic container marketplace
-* cross-task session reuse
+* cross-workflow session reuse
 * raw Docker access from inside the Codex session container
 * provider-native managed session protocols
 * a general-purpose arbitrary shell execution surface
@@ -140,7 +140,7 @@ It is the continuity and performance cache for the workflow-scoped managed sessi
 
 ### 4.2 Workload container
 
-A **workload container** is a separate Docker container launched to execute a specialized non-agent workload against the task workspace.
+A **workload container** is a separate Docker container launched to execute a specialized non-agent workload against the workflow workspace.
 
 Examples include:
 
@@ -261,8 +261,8 @@ Rules:
 
 * default mode is `profiles`
 * unsupported values are startup errors
-* task instructions cannot change the mode
-* the mode is deployment-owned, not planner-owned and not task-owned
+* workflow instructions cannot change the mode
+* the mode is deployment-owned, not planner-owned and not workflow-owned
 
 If a legacy boolean alias is temporarily supported during migration, it maps only as follows:
 
@@ -275,7 +275,7 @@ No runtime behavior may depend on the legacy boolean after settings normalizatio
 
 `disabled` means:
 
-* no workflow or task may use Docker-backed workload tools
+* no workflow execution may use Docker-backed workload tools
 * `container.run_workload` is denied
 * `container.start_helper` is denied
 * `container.stop_helper` is denied
@@ -309,7 +309,7 @@ It means:
 * `container.run_container` is available for arbitrary runtime containers
 * `container.run_docker` is available for Docker CLI execution through the configured Docker host or proxy
 * unrestricted usage is explicit in audit and result metadata
-* unrestricted capability exists only because the deployment enables it; task instructions alone cannot enable it
+* unrestricted capability exists only because the deployment enables it; workflow instructions alone cannot enable it
 
 Unrestricted mode does **not** change the session-plane security boundary. Normal agent and session containers still do not receive direct raw Docker socket access.
 
@@ -335,7 +335,7 @@ The shared managed session plane remains:
 
 * Docker only
 * one workflow-scoped session container per workflow
-* continuity reused only within the same task
+* continuity reused only within the same workflow execution
 
 This role is governed by `CodexCliManagedSessions.md`, not by this document.
 
@@ -472,7 +472,7 @@ A Codex-managed session must not:
 * receive a `DOCKER_HOST` that points at the host daemon, the MoonMind app daemon, or any daemon shared with another session
 * invoke the DooD control-plane tools (`container.run_workload`, `container.run_container`, `container.run_docker`, `container.start_helper`, `container.stop_helper`) outside the normal MoonMind tool routing path
 * inspect, restart, or otherwise control MoonMind application containers
-* bypass Temporal for launches that affect cross-task workspace state, durable evidence, or task progress
+* bypass Temporal for launches that affect cross-workflow workspace state, durable evidence, or workflow progress
 
 A session **may** create containers directly on its **own private per-session daemon** via the sidecar runtime defined in [`DockerSidecarRuntime.md`](./DockerSidecarRuntime.md). That daemon is sandboxed to the session: it is destroyed at session end, holds no host or app authority, and cannot see containers belonging to other sessions or to MoonMind itself.
 
@@ -486,7 +486,7 @@ Rules:
 * `clear_session` does not redefine workload identity
 * session artifacts remain session-plane artifacts
 * workload artifacts remain workload outputs
-* task cancellation best-effort cancels both the session turn and any in-flight owned workload containers
+* workflow cancellation best-effort cancels both the session turn and any in-flight owned workload containers
 
 ### 9.4 Association metadata
 
@@ -504,7 +504,7 @@ These are association fields only. They do not make the workload container part 
 
 ### 10.1 Shared workspace root
 
-The canonical shared task workspace remains a named volume such as:
+The canonical shared workflow workspace remains a named volume such as:
 
 * `agent_workspaces` mounted at `/work/agent_jobs`
 
@@ -517,7 +517,7 @@ Recommended layout:
 
 ### 10.2 Path ownership
 
-All DooD tools operate on MoonMind-owned task paths.
+All DooD tools operate on MoonMind-owned workspace paths.
 
 Rules:
 
@@ -535,7 +535,7 @@ A workload container receives only the mounts it needs.
 Minimum common case:
 
 * `agent_workspaces` mounted at `/work/agent_jobs`
-* working directory set to the task repository or explicit workload workdir under the workspace
+* working directory set to the workflow repository checkout or explicit workload workdir under the workspace
 
 Additional mounts may include:
 
@@ -555,7 +555,7 @@ Any auth or credential mount must be:
 
 ### 10.5 Output discipline
 
-Workload containers must write only to approved task paths and mounted caches.
+Workload containers must write only to approved workspace paths and mounted caches.
 
 They must not rely on:
 
@@ -836,7 +836,7 @@ The worker plane:
 
 * uses the configured Docker host or proxy
 * captures stdout, stderr, and diagnostics
-* writes runtime evidence under the task artifacts directory
+* writes runtime evidence under the workflow artifacts directory
 * collects declared outputs
 * applies timeout and cancellation policies
 * emits audit metadata
@@ -889,7 +889,7 @@ Rules:
 
 * the command is executed as a Docker CLI invocation, not as a general shell contract
 * stdout, stderr, and diagnostics are captured
-* artifacts are written under the task artifacts directory
+* artifacts are written under the workflow artifacts directory
 * declared outputs and report publication use the same semantics as other DooD tools
 
 ### 13.6 Deterministic ownership labels
@@ -959,7 +959,7 @@ MoonMind does not depend on:
 * container-local history
 * daemon state as the only run record
 * terminal scrollback as the only log source
-* background container state as the only evidence of task progress
+* background container state as the only evidence of workflow progress
 
 ### 14.2 Minimum durable outputs
 
@@ -1034,7 +1034,7 @@ Docker workflow mode is a deployment setting.
 
 Rules:
 
-* tasks cannot enable `unrestricted`
+* workflow executions cannot enable `unrestricted`
 * planners cannot elevate the deployment mode
 * unrestricted capability exists only because the deployment explicitly allows it
 
@@ -1131,7 +1131,7 @@ Temporal-side policies own the wall-clock timeout. The workload launcher enforce
 
 ### 16.2 Cancel behavior
 
-On task cancel, step cancel, or activity timeout, MoonMind best-effort:
+On workflow cancel, step cancel, or activity timeout, MoonMind best-effort:
 
 1. stops the container gracefully
 2. escalates to kill after a grace period when needed
@@ -1171,7 +1171,7 @@ This means:
 
 * transient containers are removed
 * approved named caches may persist
-* artifacts and task workspace outputs remain under MoonMind-owned paths
+* artifacts and workflow workspace outputs remain under MoonMind-owned paths
 
 ---
 
@@ -1199,7 +1199,7 @@ Specifically:
 
 * control-plane-originated workloads in this document remain control-plane-launched; they do not collapse into the session plane
 * the **MoonMind API container** never receives the host Docker socket as part of normal workload support; admin Docker access is isolated to the MoonMind ops runner (§21 of [`DockerSidecarRuntime.md`](./DockerSidecarRuntime.md))
-* unrestricted DooD execution expands the **control-plane** tool surface only; task instructions cannot raise it, and it does not silently expand any session's authority over Docker
+* unrestricted DooD execution expands the **control-plane** tool surface only; workflow instructions cannot raise it, and it does not silently expand any session's authority over Docker
 * session-originated Docker work goes through the per-session sidecar in [`DockerSidecarRuntime.md`](./DockerSidecarRuntime.md), which is itself constrained: private per-session daemon, no host socket, no deployment credentials, no visibility into other sessions or MoonMind app containers
 
 In short: a managed session having a private DinD sidecar does not weaken DooD's boundary. DooD's boundary is about preserving the control plane and the MoonMind app surface, not about denying the session a Docker CLI.
@@ -1230,7 +1230,7 @@ Queue and fleet splitting follow operational need, not naming nostalgia.
 3. It requests `unreal.run_tests`.
 4. MoonMind resolves the tool to the `unreal-5_3-linux` runner profile.
 5. A `docker_workload` worker launches the workload through the configured Docker host or proxy.
-6. The container writes reports and build outputs under the task workspace.
+6. The container writes reports and build outputs under the workflow workspace.
 7. MoonMind captures logs, diagnostics, and artifacts and returns a normal tool result.
 8. The managed session continues with the new evidence.
 
@@ -1244,8 +1244,8 @@ A trusted workflow selects the runtime image at execution time without changing 
  "type": "skill",
  "inputs": {
  "image": "mcr.microsoft.com/dotnet/sdk:8.0",
- "repoDir": "/work/agent_jobs/task-123/repo",
- "artifactsDir": "/work/agent_jobs/task-123/artifacts/test-step",
+ "repoDir": "/work/agent_jobs/wf-123/repo",
+ "artifactsDir": "/work/agent_jobs/wf-123/artifacts/test-step",
  "command": ["bash", "-lc", "dotnet test MySolution.sln --logger trx"],
  "declaredOutputs": {
  "trx": "TestResults/results.trx"
@@ -1256,7 +1256,7 @@ A trusted workflow selects the runtime image at execution time without changing 
 
 ### 18.3 Dynamic load test container in `unrestricted` mode
 
-A trusted workflow selects a runtime load test image at execution time and writes outputs under the task workspace.
+A trusted workflow selects a runtime load test image at execution time and writes outputs under the workflow workspace.
 
 ```json
 {
@@ -1264,9 +1264,9 @@ A trusted workflow selects a runtime load test image at execution time and write
  "type": "skill",
  "inputs": {
  "image": "ghcr.io/example/loadtest-runner:latest",
- "repoDir": "/work/agent_jobs/task-456/repo",
- "artifactsDir": "/work/agent_jobs/task-456/artifacts/loadtest",
- "command": ["bash", "-lc", "./run-loadtest.sh --out /work/agent_jobs/task-456/artifacts/loadtest"],
+ "repoDir": "/work/agent_jobs/wf-456/repo",
+ "artifactsDir": "/work/agent_jobs/wf-456/artifacts/loadtest",
+ "command": ["bash", "-lc", "./run-loadtest.sh --out /work/agent_jobs/wf-456/artifacts/loadtest"],
  "declaredOutputs": {
  "summary": "summary.json",
  "logs": "logs/output.log"
@@ -1285,8 +1285,8 @@ A trusted workflow uses the Docker CLI escape hatch for compose-driven behavior.
  "type": "skill",
  "inputs": {
  "command": ["docker", "compose", "-f", "infra/docker-compose.yml", "up", "--abort-on-container-exit"],
- "repoDir": "/work/agent_jobs/task-789/repo",
- "artifactsDir": "/work/agent_jobs/task-789/artifacts/compose-step",
+ "repoDir": "/work/agent_jobs/wf-789/repo",
+ "artifactsDir": "/work/agent_jobs/wf-789/artifacts/compose-step",
  "declaredOutputs": {
  "composeLog": "compose.log"
  }

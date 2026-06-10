@@ -28,9 +28,9 @@ MoonMind supports three scheduling patterns for workflow execution:
 
 | Pattern | Use Case | Backend Mechanism | UI Surface |
 | --- | --- | --- | --- |
-| **Immediate execution** | Run a workflow right now | `POST /api/executions` (no `schedule`) | `/tasks/new` → Submit |
-| **Deferred one-time execution** | Run a workflow once at a specific future time | `POST /api/executions` with `schedule.mode=once` | `/tasks/new` → Schedule panel → "Run Once At" |
-| **Recurring schedule** | Run a workflow on a repeating cadence | Temporal Schedule object | `/tasks/new` → Schedule panel → "Recurring" |
+| **Immediate execution** | Run a workflow right now | `POST /api/executions` (no `schedule`) | `/workflows/new` → Submit |
+| **Deferred one-time execution** | Run a workflow once at a specific future time | `POST /api/executions` with `schedule.mode=once` | `/workflows/new` → Schedule panel → "Run Once At" |
+| **Recurring schedule** | Run a workflow on a repeating cadence | Temporal Schedule object | `/workflows/new` → Schedule panel → "Recurring" |
 
 ---
 
@@ -58,7 +58,7 @@ When a deferred one-time execution is created:
 3. API calls `TemporalClientAdapter.start_workflow()` **without** the `start_delay` parameter.
 4. The workflow implementation's first step is to wait/sleep until `scheduledFor` before performing any activities or emitting user-visible side effects.
 5. The execution record can expose `mm_state=scheduled` until the start time for UI purposes, even though Temporal sees the execution as started and idle.
-6. In Mission Control, it appears in the task list with `dashboardStatus=queued` / "Scheduled" until `scheduledFor`, then transitions to the appropriate running/completed status.
+6. In Mission Control, it appears in the workflow list with `dashboardStatus=queued` / "Scheduled" until `scheduledFor`, then transitions to the appropriate running/completed status.
 
 #### Response
 
@@ -71,16 +71,16 @@ When a deferred one-time execution is created:
  "scheduledFor": "2026-03-19T02:00:00Z",
  "title": "Fix auth bug in login page",
  "startedAt": null,
- "redirectPath": "/tasks/mm:01HX...?source=temporal"
+ "redirectPath": "/workflows/mm:01HX...?source=temporal"
 }
 ```
 
-#### Task identity rule
+#### Workflow identity rule
 
 For Temporal-backed deferred executions:
 
 - `taskId == workflowId`
-- the task appears in list views immediately with `state=scheduled` and `dashboardStatus=queued`
+- the workflow execution appears in list views immediately with `state=scheduled` and `dashboardStatus=queued`
 - the detail page anchors to `taskId == workflowId`
 
 ### 4.2 Recurring Schedules (Temporal Schedules)
@@ -173,7 +173,7 @@ Temporal Schedules are the authoritative recurring scheduling system for Tempora
  "cron": "0 2 * * *",
  "timezone": "America/Los_Angeles",
  "nextRunAt": "2026-03-19T09:00:00Z",
- "redirectPath": "/tasks/schedules/def-uuid-123"
+ "redirectPath": "/schedules/def-uuid-123"
 }
 ```
 
@@ -190,7 +190,7 @@ Temporal Schedules are the authoritative recurring scheduling system for Tempora
 
 ### 5.1 Concept
 
-A one-time execution starts a single Temporal workflow and runs it through to completion. This is the standard path for ad-hoc tasks — the user submits a request and MoonMind starts a `MoonMind.Run` or `MoonMind.ManifestIngest` workflow.
+A one-time execution starts a single Temporal workflow and runs it through to completion. This is the standard path for ad-hoc workflow executions — the user submits a request and MoonMind starts a `MoonMind.Run` or `MoonMind.ManifestIngest` workflow.
 
 ### 5.2 Backend: Starting a One-Time Workflow
 
@@ -257,17 +257,17 @@ POST /api/executions
 }
 ```
 
-### 5.3 Mission Control UI: Submitting a One-Time Task
+### 5.3 Mission Control UI: Submitting a One-Time Workflow
 
 #### Route
 
 ```
-/tasks/new
+/workflows/new
 ```
 
 #### User Flow
 
-1. User navigates to **New Task** from the dashboard sidebar or header.
+1. User navigates to **New Workflow** from the dashboard sidebar or header.
 2. The submit form offers:
  - **Instructions** text area
  - **Runtime** selector (Codex, Gemini CLI, Claude, Jules when enabled)
@@ -280,9 +280,9 @@ POST /api/executions
 3. User clicks **Submit** (or **Schedule** when scheduling is configured).
 4. The dashboard sends the request to the backend create endpoint. The backend determines the workflow type and handles scheduling if specified.
 5. On success:
- - **Immediate execution:** redirect to `/tasks/{taskId}?source=temporal`
- - **Deferred one-time execution:** redirect to `/tasks/{taskId}?source=temporal` (shows scheduled banner)
- - **Recurring schedule:** redirect to `/tasks/schedules/{definitionId}`
+ - **Immediate execution:** redirect to `/workflows/{workflowId}?source=temporal`
+ - **Deferred one-time execution:** redirect to `/workflows/{workflowId}?source=temporal` (shows scheduled banner)
+ - **Recurring schedule:** redirect to `/schedules/{definitionId}`
 
 #### Key UI Rules
 
@@ -293,11 +293,11 @@ POST /api/executions
 
 ### 5.4 Mission Control UI: Schedule Panel on Submit Form
 
-The submit form at `/tasks/new` adds a **Schedule** panel that lets the user choose between immediate, deferred, and recurring execution.
+The submit form at `/workflows/new` adds a **Schedule** panel that lets the user choose between immediate, deferred, and recurring execution.
 
 #### UI Layout
 
-The schedule panel appears below the main task fields and above the submit button:
+The schedule panel appears below the main workflow fields and above the submit button:
 
 ```
 ┌─────────────────────────────────────────┐
@@ -324,15 +324,15 @@ The schedule panel appears below the main task fields and above the submit butto
 
 | Selection | Submit button label | API payload | Redirect |
 | --- | --- | --- | --- |
-| **Run immediately** | "Submit" | No `schedule` field | `/tasks/{taskId}?source=temporal` |
-| **Schedule for later** | "Schedule" | `schedule: { mode: "once", scheduledFor: "..." }` | `/tasks/{taskId}?source=temporal` (shows scheduled banner) |
-| **Set up recurring schedule** | "Create Schedule" | `schedule: { mode: "recurring", ... }` | `/tasks/schedules/{definitionId}` |
+| **Run immediately** | "Submit" | No `schedule` field | `/workflows/{workflowId}?source=temporal` |
+| **Schedule for later** | "Schedule" | `schedule: { mode: "once", scheduledFor: "..." }` | `/workflows/{workflowId}?source=temporal` (shows scheduled banner) |
+| **Set up recurring schedule** | "Create Schedule" | `schedule: { mode: "recurring", ... }` | `/schedules/{definitionId}` |
 
 #### Recurring Schedule Panel Fields
 
 When the user selects "Set up recurring schedule", the panel expands to show:
 
-1. **Schedule name** — auto-filled from task title, editable
+1. **Schedule name** — auto-filled from workflow title, editable
 2. **Cron expression** — text input with inline validation
 3. **Cron preview** — human-readable label (e.g., "Every day at 2:00 AM Pacific")
 4. **Timezone** — dropdown of common IANA timezones + search
@@ -361,7 +361,7 @@ When the user selects "Schedule for later", the panel shows:
 When a workflow is started with `start_delay`:
 
 - it is immediately visible in Temporal Visibility with `mm_state=scheduled`
-- Mission Control shows it in the task list with `dashboardStatus=queued`
+- Mission Control shows it in the workflow list with `dashboardStatus=queued`
 - the detail page shows `state=scheduled` and a "Scheduled to run at {time}" indicator
 - the execution transitions to `initializing` when the delay elapses
 
@@ -372,14 +372,14 @@ Each time a Temporal Schedule fires:
 - a new workflow execution is created with a fresh `workflowId`
 - `taskId == workflowId` for the newly created execution
 - the execution starts with `mm_state=initializing` (or `scheduled` if per-run `start_delay` is applied)
-- Schedule detail pages show the run history, linking each run to its task detail page
+- Schedule detail pages show the run history, linking each run to its workflow detail page
 
 ### 6.3 Schedule list and detail routes
 
 | Route | Purpose |
 | --- | --- |
-| `/tasks/schedules` | List all recurring schedules (personal scope by default) |
-| `/tasks/schedules/:scheduleId` | Schedule detail and run history |
+| `/schedules` | List all recurring schedules (personal scope by default) |
+| `/schedules/:scheduleId` | Schedule detail and run history |
 
 ---
 
@@ -400,7 +400,7 @@ Rules:
 
 ### 7.2 Queue-oriented target kinds
 
-Legacy target kinds such as `queue_task`, `queue_task_template`, and `manifest_run` were designed for the earlier dispatch model. For Temporal-managed recurring work, the schedule target should reference a Temporal workflow type and start parameters, not queue-task dispatch objects.
+Legacy target kinds such as `queue_task`, `queue_task_template`, and `manifest_run` were designed for the earlier dispatch model. For Temporal-managed recurring work, the schedule target should reference a Temporal workflow type and start parameters, not queue-dispatch objects.
 
 ---
 
@@ -511,7 +511,7 @@ curl http://localhost:8000/api/recurring-tasks/$SCHEDULE_ID/runs?limit=50 \
 
 ## 10. Runtime Config for Dashboard
 
-The dashboard's schedule UI is powered by the `sources.schedules` block in the runtime config (built by `build_runtime_config()` in `task_dashboard_view_model.py`):
+The dashboard's schedule UI is powered by the `sources.schedules` block in the runtime config (built by `build_runtime_config()` in `workflow_console_view_model.py`):
 
 ```json
 {
