@@ -5017,7 +5017,17 @@ class TemporalAgentRuntimeActivities:
                     }
                 )
             else:
-                raw_workload_result = await self._workload_launcher.run(workload_request)
+                if self._workload_registry is None:
+                    raise TemporalActivityRuntimeError(
+                        "workload registry is required to launch pentest workloads"
+                    )
+                validated_workload_request = self._workload_registry.validate_request(
+                    workload_request,
+                    workflow_docker_mode=self._workflow_docker_mode,
+                )
+                raw_workload_result = await self._workload_launcher.run(
+                    validated_workload_request
+                )
                 if isinstance(raw_workload_result, WorkloadResult):
                     workload_result = raw_workload_result
                 else:
@@ -5039,7 +5049,7 @@ class TemporalAgentRuntimeActivities:
 
         workload_dump = workload_result.model_dump(mode="json", by_alias=True)
         output["workload_result"] = workload_dump
-        output_refs = workload_result.output_refs
+        output_refs = workload_result.output_refs or {}
         stdout_ref = workload_result.stdout_ref or _artifact_ref_for_pentest_name(
             publication, "runtime.stdout"
         )
