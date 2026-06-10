@@ -30,8 +30,12 @@ class _StubJiraToolService(JiraToolService):
         *,
         atlassian_settings: AtlassianSettings,
         responses: list[Any] | None = None,
+        high_security_mode: bool | None = None,
     ) -> None:
-        super().__init__(atlassian_settings=atlassian_settings)
+        super().__init__(
+            atlassian_settings=atlassian_settings,
+            high_security_mode=high_security_mode,
+        )
         self.calls: list[dict[str, Any]] = []
         self._responses = list(responses or [])
 
@@ -288,6 +292,81 @@ async def test_add_comment_converts_plain_text_to_adf() -> None:
     body = service.calls[0]["json_body"]["body"]
     assert body["type"] == "doc"
     assert body["content"][0]["content"][1] == {"type": "hardBreak"}
+
+async def test_add_comment_scans_clean_body_before_provider_submission() -> None:
+    service = _StubJiraToolService(
+        atlassian_settings=_build_settings(),
+        responses=[{"id": "20001"}],
+        high_security_mode=True,
+    )
+
+    result = await service.add_comment(
+        AddCommentRequest(
+            issueKey="ENG-123",
+            body="Clean publication body",
+        )
+    )
+
+    assert result == {"id": "20001"}
+    assert len(service.calls) == 1
+    assert service.calls[0]["path"] == "/issue/ENG-123/comment"
+
+async def test_add_comment_blocks_secret_body_before_provider_submission() -> None:
+    raw_secret = "unit-test-comment-secret"
+    service = _StubJiraToolService(
+        atlassian_settings=_build_settings(),
+        responses=[{"id": "must-not-post"}],
+        high_security_mode=True,
+    )
+
+    with pytest.raises(JiraToolError) as exc_info:
+        await service.add_comment(
+            AddCommentRequest(
+                issueKey="ENG-123",
+                body=f"Please post password={raw_secret}",
+            )
+        )
+
+    error = exc_info.value
+    assert error.code == "outbound_scan_blocked"
+    assert error.action == "add_comment"
+    assert "jira.add_comment.body" in str(error)
+    assert raw_secret not in str(error)
+    assert service.calls == []
+
+async def test_add_comment_scans_structured_body_before_provider_submission() -> None:
+    raw_secret = "structured-comment-secret"
+    service = _StubJiraToolService(
+        atlassian_settings=_build_settings(),
+        responses=[{"id": "must-not-post"}],
+        high_security_mode=True,
+    )
+
+    with pytest.raises(JiraToolError) as exc_info:
+        await service.add_comment(
+            AddCommentRequest(
+                issueKey="ENG-123",
+                body={
+                    "type": "doc",
+                    "version": 1,
+                    "content": [
+                        {
+                            "type": "paragraph",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": f"credential={raw_secret}",
+                                }
+                            ],
+                        }
+                    ],
+                },
+            )
+        )
+
+    assert exc_info.value.code == "outbound_scan_blocked"
+    assert raw_secret not in str(exc_info.value)
+    assert service.calls == []
 
 async def test_search_issues_preserves_order_by_after_project_scoping() -> None:
     service = _StubJiraToolService(
