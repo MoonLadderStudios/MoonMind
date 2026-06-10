@@ -688,6 +688,21 @@ async def test_run_records_step_execution_manifest_ref_when_work_begins(
     assert writes[1]["payload"]["reason"] == "runtime_recovered"
     assert writes[1]["payload"]["execution"] == {
         "runtimeContextPolicy": "fresh_agent_run",
+        "runtimeSessionReset": {
+            "requestedPolicy": "reuse_session_new_epoch",
+            "resolvedPolicy": "fresh_agent_run",
+            "semantics": "new_epoch_cleared_context",
+            "clearContext": True,
+            "newEpoch": True,
+            "runtimeId": "codex",
+            "sourceExecutionOrdinal": {
+                "workflowId": "wf-run-1",
+                "runId": "run-1",
+                "logicalStepId": "delegate-agent",
+                "executionOrdinal": 1,
+            },
+            "availableCheckpointEvidence": {"available": False},
+        },
         "childWorkflowId": "wf-child-1",
         "childRunId": "run-child-1",
     }
@@ -776,6 +791,18 @@ async def test_step_execution_manifest_merges_explicit_execution_with_refs(
 
     assert writes[0]["payload"]["execution"] == {
         "runtimeContextPolicy": "external_provider_continuation",
+        "externalProviderContinuation": {
+            "attemptIdentity": {
+                "workflowId": "wf-run-1",
+                "runId": "run-1",
+                "logicalStepId": "delegate-external",
+                "executionOrdinal": 1,
+                "stepExecutionId": "wf-run-1:run-1:delegate-external:execution:1",
+            },
+            "contextRefs": {},
+            "knownSideEffects": {"records": []},
+            "checkpointEvidence": {"available": False},
+        },
         "childWorkflowId": "wf-child-explicit",
         "childRunId": "run-child-from-ledger",
         "diagnosticsRef": "artifact://diagnostics/external",

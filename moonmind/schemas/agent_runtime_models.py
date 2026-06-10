@@ -87,6 +87,12 @@ class AgentRuntimeStepExecutionLaunch(BaseModel):
     runtime_selection: dict[str, Any] = Field(
         default_factory=dict, alias="runtimeSelection"
     )
+    runtime_session_reset: dict[str, Any] | None = Field(
+        None, alias="runtimeSessionReset"
+    )
+    external_provider_continuation: dict[str, Any] | None = Field(
+        None, alias="externalProviderContinuation"
+    )
     skill_source_policy: dict[str, Any] = Field(
         default_factory=dict, alias="skillSourcePolicy"
     )
@@ -113,13 +119,17 @@ class AgentRuntimeStepExecutionLaunch(BaseModel):
 
     @field_validator(
         "runtime_selection",
+        "runtime_session_reset",
+        "external_provider_continuation",
         "skill_source_policy",
         mode="after",
     )
     @classmethod
     def _validate_compact_mappings(
-        cls, value: dict[str, Any], info: ValidationInfo
-    ) -> dict[str, Any]:
+        cls, value: dict[str, Any] | None, info: ValidationInfo
+    ) -> dict[str, Any] | None:
+        if value is None:
+            return None
         field = cls.model_fields[info.field_name]
         field_name = f"stepExecution.{field.alias or info.field_name}"
         compact = validate_compact_temporal_mapping(value, field_name=field_name)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -178,6 +179,7 @@ async def test_run_clears_existing_task_scoped_codex_session_before_next_step(
 ) -> None:
     workflow = MoonMindRunWorkflow()
     _configure_workflow_runtime(monkeypatch)
+    now = datetime(2026, 6, 10, 12, 0, tzinfo=UTC)
     activity_calls: list[tuple[str, Any]] = []
     signal_calls: list[tuple[str, Any]] = []
 
@@ -243,6 +245,17 @@ async def test_run_clears_existing_task_scoped_codex_session_before_next_step(
         runtimeId="codex_cli",
         executionProfileRef="codex-default",
     )
+    workflow._initialize_step_ledger(
+        ordered_nodes=[
+            {
+                "id": "step-2",
+                "tool": {"type": "agent_runtime", "name": "codex_cli"},
+            }
+        ],
+        dependency_map={"step-2": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running("step-2", updated_at=now)
 
     await workflow._maybe_clear_task_scoped_session_before_step(
         request=_managed_request("codex"),
@@ -285,15 +298,16 @@ async def test_run_clears_existing_task_scoped_codex_session_before_next_step(
     ]
     assert workflow._codex_session_binding is not None
     assert workflow._codex_session_binding.session_epoch == 2
-    assert "step-2" in workflow._codex_session_cleared_before_step_ids
+    assert ("step-2", 1) in workflow._codex_session_cleared_before_step_attempts
 
 
 @pytest.mark.asyncio
-async def test_run_does_not_clear_task_scoped_session_twice_for_same_step_retry(
+async def test_run_clears_task_scoped_session_once_per_step_execution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflow = MoonMindRunWorkflow()
     _configure_workflow_runtime(monkeypatch)
+    now = datetime(2026, 6, 10, 12, 0, tzinfo=UTC)
     activity_calls: list[tuple[str, Any]] = []
     signal_calls: list[tuple[str, Any]] = []
 
@@ -308,30 +322,38 @@ async def test_run_does_not_clear_task_scoped_session_twice_for_same_step_retry(
     ) -> dict[str, Any]:
         activity_calls.append((activity_name, payload))
         if activity_name == "agent_runtime.load_session_snapshot":
+            session_epoch = len(
+                [
+                    name
+                    for name, _payload in activity_calls
+                    if name == "agent_runtime.clear_session"
+                ]
+            ) + 1
             return {
                 "binding": {
                     "workflowId": "wf-run-1:session:codex_cli",
                     "taskRunId": "wf-run-1",
                     "sessionId": "sess:wf-run-1:codex_cli",
-                    "sessionEpoch": 1,
+                    "sessionEpoch": session_epoch,
                     "runtimeId": "codex_cli",
                     "executionProfileRef": "codex-default",
                 },
                 "status": "active",
                 "containerId": "container-1",
-                "threadId": "thread-1",
+                "threadId": f"thread-{session_epoch}",
                 "activeTurnId": None,
                 "lastControlAction": None,
                 "lastControlReason": None,
                 "terminationRequested": False,
             }
         if activity_name == "agent_runtime.clear_session":
+            session_epoch = int(payload["sessionEpoch"]) + 1
             return {
                 "sessionState": {
                     "sessionId": "sess:wf-run-1:codex_cli",
-                    "sessionEpoch": 2,
+                    "sessionEpoch": session_epoch,
                     "containerId": "container-1",
-                    "threadId": "thread:sess:wf-run-1:codex_cli:2",
+                    "threadId": f"thread:sess:wf-run-1:codex_cli:{session_epoch}",
                 },
                 "status": "ready",
                 "imageRef": "codex:latest",
@@ -359,11 +381,33 @@ async def test_run_does_not_clear_task_scoped_session_twice_for_same_step_retry(
         runtimeId="codex_cli",
         executionProfileRef="codex-default",
     )
+    workflow._initialize_step_ledger(
+        ordered_nodes=[
+            {
+                "id": "step-2",
+                "tool": {"type": "agent_runtime", "name": "codex_cli"},
+            }
+        ],
+        dependency_map={"step-2": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running("step-2", updated_at=now)
 
     await workflow._maybe_clear_task_scoped_session_before_step(
         request=_managed_request("codex"),
         logical_step_id="step-2",
     )
+    await workflow._maybe_clear_task_scoped_session_before_step(
+        request=_managed_request("codex"),
+        logical_step_id="step-2",
+    )
+    workflow._mark_step_terminal(
+        "step-2",
+        status="failed",
+        updated_at=now,
+        summary="Attempt 1 failed",
+    )
+    workflow._mark_step_running("step-2", updated_at=now)
     await workflow._maybe_clear_task_scoped_session_before_step(
         request=_managed_request("codex"),
         logical_step_id="step-2",
@@ -372,8 +416,21 @@ async def test_run_does_not_clear_task_scoped_session_twice_for_same_step_retry(
     assert [name for name, _ in activity_calls] == [
         "agent_runtime.load_session_snapshot",
         "agent_runtime.clear_session",
+        "agent_runtime.load_session_snapshot",
+        "agent_runtime.clear_session",
     ]
-    assert len(signal_calls) == 1
+    assert [
+        payload["requestId"]
+        for signal_name, payload in signal_calls
+        if signal_name == "control_action"
+    ] == [
+        "wf-run-1:run-1:step-2:execution:1:clear_session",
+        "wf-run-1:run-1:step-2:execution:2:clear_session",
+    ]
+    assert workflow._codex_session_cleared_before_step_attempts == {
+        ("step-2", 1),
+        ("step-2", 2),
+    }
 
 
 def test_run_pending_agent_step_refs_include_session_task_run_id() -> None:

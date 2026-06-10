@@ -86,7 +86,7 @@ The README was reframed (2026-06-09) around three headline value propositions �
 - [x] **3.1** Tracker-native proposal delivery/review — specs 312/313 shipped; `/proposals` remains admin/recovery coverage
 - [ ] **3.2** Automatic RAG context injection per step — Target-aware *prepared file* context is wired (specs 325/349), but retrieval-backed context packs (`rag/context_pack.py`) are still not injected into step execution (tracked with 5.3)
 - [x] **3.3** Context clearing between steps — MM-745
-- [ ] **3.4** Multi-step workflow visualization in Mission Control — Workflow detail subroute tabs shipped (MM-801), but no step-DAG rendering yet
+- [ ] **3.4** Multi-step workflow visualization in Mission Control — Workflow detail subroute tabs shipped (MM-801), and task-level steps should show status, dependencies, and evidence in the step ledger
 - [x] **3.5 / 3.6** Preset-driven scheduling; schedules UI overhaul — shipped
 
 ---
@@ -149,7 +149,7 @@ All six items (run digests, fix patterns/error signatures, Mem0 long-term adapte
 - [x] **7.1** Settings migrated to Mission Control — specs 339/341/358/359
 - [ ] **7.2** Artifact browsing UI — API exists (`temporal_artifacts.py`); dashboard browsing of files/logs/patches still partial
 - [ ] **7.5** Side-by-side comparison view — Comparison runs preserve lineage (MM-773), but no side-by-side UI
-- [ ] **7.6** Multi-step / step DAG visualization — Same gap as 3.4
+- [ ] **7.6** Multi-step / step ledger visualization — Same gap as 3.4; present steps as a dependency-aware list, not a separate graph panel
 - [ ] **7.7** Remediation panels — Tracked as 13.4
 
 ---
@@ -213,6 +213,7 @@ All items shipped: per-step runtime/model/effort selection (MM-786/787), cost tr
 ### What's shipped
 - High-security outbound scan contract — deterministic scan boundaries with `OutboundScanDecision` / `OutboundFinding` models (MM-811, `moonmind/security/outbound_scan.py`); per-caller adoption is follow-up scope under 12.4
 - Outbound scan adopted at the Jira comment-posting boundary (MM-812, `moonmind/integrations/jira/tool.py`) — GitHub comment boundaries were *not* changed in MM-812
+- Outbound scan adopted at the managed workspace git-push boundary (MM-813, `moonmind/workflows/temporal/activity_runtime.py`) — high-security mode scans commit metadata and changed content before MoonMind invokes `git push`
 - SecretRef-based settings integration — durable contracts carry secret references, resolved only at launch boundaries (spec `001-secretref-settings-integration`, `docs/Security/SecretsSystem.md`)
 - Claude OAuth guardrails and bootstrap-PTY session controls (specs 192, 245)
 - GitHub token permission scoping (spec 294)
@@ -226,7 +227,7 @@ All items shipped: per-step runtime/model/effort selection (MM-786/787), cost tr
   *Done means:* privileged actions recorded with actor/action/target/decision and exportable, with boundary tests.
 - [ ] **12.3** Secret lifecycle audit surface — Who created/rotated/deleted a secret, which profiles reference it, which launches resolved it (`docs/Security/SecretsSystem.md` §13); contract defined, operator surface missing.
   *Done means:* those questions answerable from Mission Control without exposing secret values.
-- [ ] **12.4** Outbound scan coverage at all publish boundaries — Adopt the MM-811 contract at GitHub PR/issue comments, commits/pushes, artifact publication, and external tool calls under high-security mode (only the Jira comment path is adopted today).
+- [ ] **12.4** Outbound scan coverage at all publish boundaries — Adopt the MM-811 contract at GitHub PR/issue comments, remaining commit/push paths, artifact publication, and external tool calls under high-security mode (Jira comments and managed workspace git pushes are adopted).
   *Done means:* every send/post/push/publish boundary invokes the scan in high-security mode, with block-on-match tests per boundary.
 - [ ] **12.5** Risk-gated action review policy — Classify risky actions before execution and route them through deterministic policy, optional second-model review, or human approval. The current step-review path is a non-blocking placeholder (`moonmind/workflows/temporal/activities/step_review.py`).
   *Done means:* risky actions classified pre-execution; the review decision and its rationale recorded as governance telemetry (12.2).
