@@ -137,11 +137,34 @@ describe('Workflows Entrypoint', () => {
     });
   });
 
-  it('does not request or render operational metrics on the workflow overview', async () => {
+  it('requests and renders operational metrics on the workflow overview', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.startsWith('/api/executions/metrics?')) {
-        throw new Error('Workflow overview should not request execution metrics.');
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            totalRuns: 12,
+            completedRuns: 9,
+            failedRuns: 2,
+            canceledRuns: 1,
+            terminalRuns: 12,
+            successRate: 0.75,
+            duration: {
+              averageSeconds: 125,
+              medianSeconds: 90,
+              observedCount: 8,
+            },
+            cost: {
+              totalEstimateUsd: 1.2345,
+              averageEstimateUsd: 0.1543,
+              observedCount: 8,
+            },
+            sampleSize: 8,
+            countMode: 'exact',
+            refreshedAt: '2026-03-28T00:00:10Z',
+          }),
+        } as Response);
       }
       return Promise.resolve({
         ok: true,
@@ -165,8 +188,14 @@ describe('Workflows Entrypoint', () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
-    expect(screen.queryByLabelText('Operational metrics')).toBeNull();
-    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/metrics?'))).toBe(false);
+    expect(screen.getByLabelText('Operational metrics')).toBeTruthy();
+    expect(screen.getByText('Success Rate')).toBeTruthy();
+    expect(screen.getByText('75%')).toBeTruthy();
+    expect(screen.getByText('Run Duration')).toBeTruthy();
+    expect(screen.getByText('2m 5s')).toBeTruthy();
+    expect(screen.getByText('Cost')).toBeTruthy();
+    expect(screen.getByText('$1.2345')).toBeTruthy();
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/metrics?'))).toBe(true);
   });
 
   it('surfaces intervention requests in list rows and status filters', async () => {
