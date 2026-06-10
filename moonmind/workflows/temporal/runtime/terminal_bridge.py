@@ -129,6 +129,33 @@ def _docker_command_error(stderr: bytes, returncode: int) -> RuntimeError:
     detail = f": {error_output}" if error_output else ""
     return RuntimeError(f"Failed to start auth container with exit code {returncode}{detail}")
 
+
+async def _create_docker_subprocess(*args: str) -> asyncio.subprocess.Process:
+    try:
+        return await asyncio.create_subprocess_exec(
+            "docker",
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "Docker CLI is not available on this worker. "
+            "Ensure Docker is installed and 'docker' is on the PATH before using OAuth terminal sessions."
+        ) from exc
+
+
+async def _stop_docker_container(container_name: str) -> None:
+    try:
+        proc = await _create_docker_subprocess("stop", container_name)
+        await asyncio.wait_for(proc.communicate(), timeout=15)
+    except Exception:
+        logger.warning(
+            "Failed to stop OAuth auth runner container after startup failure",
+            exc_info=True,
+        )
+
+
 class DockerExecPtyAdapter:
     """Docker exec PTY adapter for the OAuth auth-runner container."""
 
@@ -310,30 +337,20 @@ async def start_terminal_bridge_container(
         f"|| {{ echo 'OAuth runner image does not contain {executable}' >&2; exit 127; }}; "
         f"sleep {int(session_ttl)}"
     )
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "docker", "run", "-d", "--init", "-i", "-t", "--rm",
-            "--name", container_name,
-            "--label", "moonmind.oauth_session=true",
-            "--label", f"moonmind.oauth_session_id={session_id}",
-            "--label", f"moonmind.runtime_id={runtime_id}",
-            "--user", _oauth_runner_user(),
-            *_runner_environment_args(runtime_id, volume_mount_path),
-            "-v", f"{volume_ref}:{volume_mount_path}",
-            runner_image,
-            "/bin/sh",
-            "-lc",
-            idle_command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-    except FileNotFoundError as exc:
-        logger.error("Failed to start auth container: docker CLI not found on PATH")
-        raise RuntimeError(
-            "Docker CLI is not available on this worker. "
-            "Ensure Docker is installed and 'docker' is on the PATH, "
-            "or configure a different terminal bridge backend."
-        ) from exc
+    proc = await _create_docker_subprocess(
+        "run", "-d", "--init", "-i", "-t", "--rm",
+        "--name", container_name,
+        "--label", "moonmind.oauth_session=true",
+        "--label", f"moonmind.oauth_session_id={session_id}",
+        "--label", f"moonmind.runtime_id={runtime_id}",
+        "--user", _oauth_runner_user(),
+        *_runner_environment_args(runtime_id, volume_mount_path),
+        "-v", f"{volume_ref}:{volume_mount_path}",
+        runner_image,
+        "/bin/sh",
+        "-lc",
+        idle_command,
+    )
 
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
@@ -378,29 +395,21 @@ async def start_tmate_auth_runner_container(
         f"|| {{ echo 'OAuth runner image does not contain {executable}' >&2; exit 127; }}; "
         f"sleep {int(session_ttl)}"
     )
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "docker", "run", "-d", "--init", "-i", "-t", "--rm",
-            "--name", container_name,
-            "--label", "moonmind.oauth_session=true",
-            "--label", f"moonmind.oauth_session_id={session_id}",
-            "--label", f"moonmind.runtime_id={runtime_id}",
-            "--label", "moonmind.oauth_session_transport=tmate",
-            "--user", _oauth_runner_user(),
-            *_runner_environment_args(runtime_id, volume_mount_path),
-            "-v", f"{volume_ref}:{volume_mount_path}",
-            runner_image,
-            "/bin/sh",
-            "-lc",
-            idle_command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-    except FileNotFoundError as exc:
-        raise RuntimeError(
-            "Docker CLI is not available on this worker. "
-            "Ensure Docker is installed and 'docker' is on the PATH before using Tmate OAuth sessions."
-        ) from exc
+    proc = await _create_docker_subprocess(
+        "run", "-d", "--init", "-i", "-t", "--rm",
+        "--name", container_name,
+        "--label", "moonmind.oauth_session=true",
+        "--label", f"moonmind.oauth_session_id={session_id}",
+        "--label", f"moonmind.runtime_id={runtime_id}",
+        "--label", "moonmind.oauth_session_transport=tmate",
+        "--user", _oauth_runner_user(),
+        *_runner_environment_args(runtime_id, volume_mount_path),
+        "-v", f"{volume_ref}:{volume_mount_path}",
+        runner_image,
+        "/bin/sh",
+        "-lc",
+        idle_command,
+    )
 
     try:
         _stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
@@ -419,35 +428,29 @@ async def start_tmate_auth_runner_container(
         f"tmate -S {shlex.quote(_TMATE_SOCKET)} display -p '#{{tmate_web}}' && "
         f"tmate -S {shlex.quote(_TMATE_SOCKET)} display -p '#{{tmate_ssh}}'"
     )
-    try:
-        exec_proc = await asyncio.create_subprocess_exec(
-            "docker",
-            "exec",
-            container_name,
-            "/bin/sh",
-            "-lc",
-            tmate_start_command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-    except FileNotFoundError as exc:
-        raise RuntimeError(
-            "Docker CLI is not available on this worker. "
-            "Ensure Docker is installed and 'docker' is on the PATH before using Tmate OAuth sessions."
-        ) from exc
+    exec_proc = await _create_docker_subprocess(
+        "exec",
+        container_name,
+        "/bin/sh",
+        "-lc",
+        tmate_start_command,
+    )
 
     try:
         stdout, stderr = await asyncio.wait_for(exec_proc.communicate(), timeout=45)
     except asyncio.TimeoutError:
+        await _stop_docker_container(container_name)
         raise TimeoutError("Timed out while starting Tmate OAuth session")
 
     if exec_proc.returncode != 0:
+        await _stop_docker_container(container_name)
         raise _docker_command_error(stderr, exec_proc.returncode)
 
     refs = [line.strip() for line in stdout.decode("utf-8", errors="replace").splitlines() if line.strip()]
     web_url = refs[0] if refs else ""
     ssh_command = refs[1] if len(refs) > 1 else ""
     if not web_url:
+        await _stop_docker_container(container_name)
         raise RuntimeError("Tmate did not return a web connection URL")
 
     return {

@@ -273,6 +273,36 @@ async def test_start_tmate_auth_runner_container_returns_connection_refs(
     assert "codex login --device-auth" in calls[1][-1]
 
 @pytest.mark.asyncio
+async def test_start_tmate_auth_runner_container_stops_container_when_tmate_start_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    async def fake_create_subprocess_exec(*args, **_kwargs):
+        calls.append(tuple(str(arg) for arg in args))
+        if args[:2] == ("docker", "exec"):
+            return _FakeProcess(returncode=1, stderr=b"tmate failed")
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        terminal_bridge.asyncio,
+        "create_subprocess_exec",
+        fake_create_subprocess_exec,
+    )
+
+    with pytest.raises(RuntimeError, match="tmate failed"):
+        await start_tmate_auth_runner_container(
+            session_id="oas_terminal_tmate_failed",
+            runtime_id="codex_cli",
+            volume_ref="codex_auth_volume",
+            volume_mount_path="/home/app/.codex",
+            session_ttl=1800,
+            bootstrap_command=("codex", "login", "--device-auth"),
+        )
+
+    assert calls[-1] == ("docker", "stop", "moonmind_auth_oas_terminal_tmate_failed")
+
+@pytest.mark.asyncio
 async def test_start_terminal_bridge_container_uses_claude_home_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

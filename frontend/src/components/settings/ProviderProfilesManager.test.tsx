@@ -15,6 +15,7 @@ import {
 import { renderWithClient } from '../../utils/test-utils';
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -610,6 +611,58 @@ describe('ProviderProfilesManager form controls', () => {
     );
     expect(openSpy).not.toHaveBeenCalled();
   });
+
+  it('updates the Tmate OAuth modal when terminal refs arrive from polling', async () => {
+    const fetchSpy = vi.spyOn(window, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          session_id: 'oas_settings_tmate_poll',
+          runtime_id: 'codex_cli',
+          profile_id: 'codex-oauth',
+          status: 'awaiting_user',
+          terminal_session_id: null,
+          terminal_bridge_id: null,
+          session_transport: 'tmate',
+        }),
+      } as Response)
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          session_id: 'oas_settings_tmate_poll',
+          runtime_id: 'codex_cli',
+          profile_id: 'codex-oauth',
+          status: 'awaiting_user',
+          terminal_session_id: 'https://tmate.io/t/oas_settings_tmate_poll',
+          terminal_bridge_id: 'ssh tmate.io/t/oas_settings_tmate_poll',
+          session_transport: 'tmate',
+        }),
+      } as Response);
+    vi.spyOn(window, 'open').mockReturnValue(null);
+
+    renderProviderProfilesManager([codexOauthProfile]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'OAuth codex-oauth' }));
+
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Tmate OAuth session',
+    });
+    expect(dialog.textContent).not.toContain('https://tmate.io/t/oas_settings_tmate_poll');
+
+    await waitFor(
+      () => {
+        expect(fetchSpy).toHaveBeenCalledWith(
+          '/api/v1/oauth-sessions/oas_settings_tmate_poll',
+          expect.objectContaining({ headers: { Accept: 'application/json' } }),
+        );
+        expect(screen.getByRole('link', { name: 'Open Tmate' }).getAttribute('href')).toBe(
+          'https://tmate.io/t/oas_settings_tmate_poll',
+        );
+      },
+      { timeout: 7000 },
+    );
+    expect(dialog.textContent).toContain('ssh tmate.io/t/oas_settings_tmate_poll');
+  }, 10000);
 
   it('supports OAuth finalize without offering reconnect after success', async () => {
     const fetchSpy = vi.spyOn(window, 'fetch')
