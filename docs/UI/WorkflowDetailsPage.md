@@ -4,7 +4,7 @@
 
 The Workflow Details page is the canonical view for inspecting a single MoonMind Workflow Execution. It presents the Workflow identity, current state, original Workflow configuration, execution history, outputs, errors, and all actions that are available for the Workflow in its current state.
 
-The page is declarative and state-driven. Every visible control is derived from the Workflow Execution status, the Workflow type, and explicit backend capabilities. A failed Workflow presents the user with the complete set of available recovery actions, which may include **Remediate**, **Edit task**, **Rerun**, and **Resume**.
+The page is declarative and state-driven. Every visible control is derived from the Workflow Execution status, the Workflow type, and explicit backend capabilities. A failed Workflow presents the user with the complete set of available recovery actions, which may include **Remediate**, **Edit Workflow**, **Rerun**, and **Resume**.
 
 ## Route
 
@@ -106,7 +106,7 @@ Tasks / Customer Renewal Research
 Customer Renewal Research                     [Failed]
 Research customer renewal risks and summarize next steps.
 
-[Remediate] [Edit task] [Rerun] [Resume] [More]
+[Remediate] [Edit Workflow] [Rerun] [Resume] [More]
 ```
 
 ### Title behavior
@@ -137,14 +137,14 @@ The status badge is not the only indicator of status. The status summary section
 
 The primary action bar appears in the header and remains available near the top of the page. On smaller screens, the same actions may collapse into a sticky bottom action bar or an overflow menu, but the actions remain discoverable.
 
-Actions are additive. Showing one action never hides another valid action. In particular, **Remediate** does not replace **Edit task**, **Rerun**, or **Resume** on failed Workflows.
+Actions are additive. Showing one action never hides another valid action. In particular, **Remediate** does not replace **Edit Workflow**, **Rerun**, or **Resume** on failed Workflows.
 
 ### Failed Workflow actions
 
 For a failed MoonMind Workflow, the primary action bar contains all of the following actions when the corresponding capabilities are true:
 
 ```text
-[Remediate] [Edit task] [Rerun] [Resume]
+[Remediate] [Edit Workflow] [Rerun] [Resume]
 ```
 
 The desired failed-Workflow action state is:
@@ -189,9 +189,9 @@ The button purpose is:
 Investigate and resolve the failure.
 ```
 
-### Edit task button
+### Edit Workflow button
 
-The **Edit task** button is present when either of the following is true:
+The **Edit Workflow** button is present when either of the following is true:
 
 ```ts
 capabilities.canEditForRerun === true
@@ -201,10 +201,10 @@ capabilities.canUpdateInputs === true
 The button label is:
 
 ```text
-Edit task
+Edit Workflow
 ```
 
-For failed Workflows, **Edit task** opens the Create page in edit-for-rerun mode. The page loads the original Workflow setup exactly, including all steps, selected choices, instructions, inputs, attachments, tool selections, model settings, scheduling choices, and advanced configuration.
+For failed Workflows, **Edit Workflow** opens the Create page in edit-for-rerun mode. The page loads the original Workflow setup exactly, including all steps, selected choices, instructions, inputs, attachments, tool selections, model settings, scheduling choices, and advanced configuration.
 
 Failed-Workflow edit destination:
 
@@ -214,7 +214,7 @@ Failed-Workflow edit destination:
 
 Failed-Workflow edit behavior:
 
-- The Create page title is `Edit task`.
+- The Create page title is `Edit Workflow`.
 - The page displays a banner explaining that editing creates a new run.
 - The original failed execution remains unchanged.
 - The user can modify the loaded Workflow configuration.
@@ -227,7 +227,7 @@ Required banner copy:
 You are editing a failed task. Your changes will create a new run. The original failed run will remain unchanged.
 ```
 
-For non-terminal Workflows that support live input updates, **Edit task** opens the Create page in update-inputs mode.
+For non-terminal Workflows that support live input updates, **Edit Workflow** opens the Create page in update-inputs mode.
 
 Running-Workflow edit destination:
 
@@ -237,7 +237,7 @@ Running-Workflow edit destination:
 
 Running-Workflow edit behavior:
 
-- The Create page title is `Edit task`.
+- The Create page title is `Edit Workflow`.
 - The original Workflow Execution may be updated according to product rules.
 - The submit button label is `Save changes`.
 
@@ -375,7 +375,7 @@ Destructive actions are visually separated and require confirmation.
 
 The page follows this desired action matrix.
 
-| Workflow status | Remediate | Edit task | Rerun | Failed step recovery | Cancel | Pause | Lifecycle resume |
+| Workflow status | Remediate | Edit Workflow | Rerun | Failed step recovery | Cancel | Pause | Lifecycle resume |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | Pending | No | Yes, if inputs can be updated | No | No | Yes | No | No |
 | Scheduled | No | Yes, if inputs can be updated | No | No | Yes | No | No |
@@ -492,9 +492,9 @@ Status: Failed
 
 ### Exactness requirement for failed-Workflow edit
 
-The configuration shown on the Workflow Details page and the configuration loaded by **Edit task** for a failed Workflow come from the same source of truth.
+The configuration shown on the Workflow Details page and the configuration loaded by **Edit Workflow** for a failed Workflow come from the same source of truth.
 
-When a user selects **Edit task** on a failed Workflow, the edit form contains exactly the same values shown in the Workflow configuration summary unless the backend reports that an option is no longer available.
+When a user selects **Edit Workflow** on a failed Workflow, the edit form contains exactly the same values shown in the Workflow configuration summary unless the backend reports that an option is no longer available.
 
 If an option is no longer available, the edit form displays the prior value, marks it as unavailable, and prompts the user to choose a replacement before submitting.
 
@@ -550,7 +550,7 @@ It contains:
 - Remediation status, when available
 - Resume availability or the disabled reason, when a failed step exists but checkpointed progress cannot be restored
 
-The failure section must not obscure the primary action bar. Users can always see or quickly access **Remediate**, **Edit task**, and **Rerun** on failed Workflows.
+The failure section must not obscure the primary action bar. Users can always see or quickly access **Remediate**, **Edit Workflow**, and **Rerun** on failed Workflows.
 
 Example:
 
@@ -728,7 +728,7 @@ Relationship labels:
 - Recovered from failed step
 - Remediation run
 
-For a failed Workflow, once the user clicks **Rerun**, clicks **Resume**, or submits an edited Workflow from **Edit task**, the new run appears in this section.
+For a failed Workflow, once the user clicks **Rerun**, clicks **Resume**, or submits an edited Workflow from **Edit Workflow**, the new run appears in this section.
 
 ## Metadata section
 
@@ -793,7 +793,7 @@ Task configuration unavailable
 The original task configuration could not be loaded. You can still view status and logs.
 ```
 
-If the Workflow configuration is unavailable, the **Edit task** and **Rerun** actions are hidden unless the backend confirms that a valid submission draft or reconstructable workflow input is available.
+If the Workflow configuration is unavailable, the **Edit Workflow** and **Rerun** actions are hidden unless the backend confirms that a valid submission draft or reconstructable workflow input is available.
 
 ## Accessibility requirements
 
@@ -814,7 +814,7 @@ Button accessible names:
 
 ```text
 Remediate task
-Edit task
+Edit Workflow
 Rerun task
 Cancel task
 Pause task
@@ -850,7 +850,7 @@ On mobile:
 
 ```text
 Remediate
-Edit task
+Edit Workflow
 Rerun
 Resume
 ```
@@ -958,7 +958,7 @@ This task cannot be resumed because the completed work before the failed step is
 A failed Workflow page contains:
 
 - Header with Workflow title and `Failed` status badge.
-- Primary action bar with **Remediate**, **Edit task**, **Rerun**, and **Resume** when backend capabilities allow them.
+- Primary action bar with **Remediate**, **Edit Workflow**, **Rerun**, and **Resume** when backend capabilities allow them.
 - Status summary with failure timestamp and duration.
 - Failure section with failed step, error summary, and technical details.
 - Workflow configuration summary with original steps and choices.
@@ -992,7 +992,7 @@ Desired failed-Workflow action model:
 A running Workflow page contains:
 
 - Header with Workflow title and `Running` status badge.
-- Primary actions for any valid running-state actions, such as **Edit task**, **Pause**, or **Cancel**.
+- Primary actions for any valid running-state actions, such as **Edit Workflow**, **Pause**, or **Cancel**.
 - Live execution progress.
 - Current step.
 - Partial outputs, if available.
@@ -1006,7 +1006,7 @@ A completed Workflow page contains:
 
 - Header with Workflow title and `Completed` status badge.
 - **Rerun** action when supported.
-- Optional **Edit task** action when edit-for-rerun is supported.
+- Optional **Edit Workflow** action when edit-for-rerun is supported.
 - Final outputs.
 - Artifacts.
 - Execution timeline.
@@ -1018,7 +1018,7 @@ A canceled, timed out, or terminated Workflow page contains:
 
 - Header with the corresponding terminal status badge.
 - **Rerun** action when supported.
-- **Edit task** action when edit-for-rerun is supported.
+- **Edit Workflow** action when edit-for-rerun is supported.
 - Remediation action when the backend explicitly marks remediation as available.
 - Status reason.
 - Timeline and logs.
@@ -1033,9 +1033,9 @@ When the user clicks **Remediate**:
 2. The remediation experience receives the current Workflow Execution ID.
 3. The original Workflow details page remains reachable by back navigation.
 
-### Clicking Edit task on a failed Workflow
+### Clicking Edit Workflow on a failed Workflow
 
-When the user clicks **Edit task** on a failed Workflow:
+When the user clicks **Edit Workflow** on a failed Workflow:
 
 1. The user is routed to the Create page in edit-for-rerun mode.
 2. The Create page loads the source Workflow Execution's submission draft.
@@ -1080,15 +1080,15 @@ The Workflow Details page does not reconstruct edit-form state from display-only
 
 The Workflow Details page does not allow destructive actions without confirmation.
 
-The Workflow Details page does not allow Workflow input editing as part of failed-step **Resume**. Editing instructions, steps, attachments, runtime, publish mode, branch, presets, or dependencies belongs to **Edit task**.
+The Workflow Details page does not allow Workflow input editing as part of failed-step **Resume**. Editing instructions, steps, attachments, runtime, publish mode, branch, presets, or dependencies belongs to **Edit Workflow**.
 
 ## Acceptance criteria
 
 The page is considered correct when all of the following are true:
 
-1. A failed Workflow displays **Remediate**, **Edit task**, **Rerun**, and **Resume** when the backend capabilities allow them.
+1. A failed Workflow displays **Remediate**, **Edit Workflow**, **Rerun**, and **Resume** when the backend capabilities allow them.
 2. **Remediate** opens the remediation flow.
-3. **Edit task** on a failed Workflow opens `/tasks/new?rerunExecutionId=:taskExecutionId&mode=edit`.
+3. **Edit Workflow** on a failed Workflow opens `/tasks/new?rerunExecutionId=:taskExecutionId&mode=edit`.
 4. The edit-for-rerun Create page loads every original step and selected choice exactly.
 5. Submitting an edited failed Workflow creates a new run and does not mutate the failed execution.
 6. **Rerun** creates a new run using the exact original Workflow configuration.
