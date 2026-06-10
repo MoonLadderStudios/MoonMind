@@ -7160,6 +7160,85 @@ def test_get_execution_step_executions_returns_bounded_manifest_history() -> Non
     )
 
 
+def test_get_execution_step_executions_sanitizes_failed_attempt_summary() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(
+        app,
+        ledger={
+            "workflowId": "mm:wf-1",
+            "runId": "run-99",
+            "runScope": "latest",
+            "steps": [
+                {
+                    "logicalStepId": "implement",
+                    "order": 1,
+                    "title": "Implement",
+                    "tool": {"type": "skill", "name": "jira-implement", "version": "1"},
+                    "dependsOn": [],
+                    "status": "failed",
+                    "waitingReason": None,
+                    "attentionRequired": True,
+                    "attempt": 1,
+                    "startedAt": "2026-05-19T10:00:00Z",
+                    "updatedAt": "2026-05-19T10:01:00Z",
+                    "summary": "Failed",
+                    "checks": [],
+                    "refs": {
+                        "childWorkflowId": None,
+                        "childRunId": None,
+                        "taskRunId": None,
+                        "latestStepExecutionManifestRef": "art-attempt-1",
+                        "stepExecutionManifestRefs": ["art-attempt-1"],
+                    },
+                    "artifacts": {},
+                    "lastError": None,
+                }
+            ],
+        },
+    )
+    _override_user_dependencies(app, is_superuser=True)
+    raw_token = "ghp_123456789012345678901234567890123456"
+    payload = _step_execution_manifest_payload(
+        artifact_ref="art-attempt-1",
+        attempt=1,
+        status="failed",
+    )
+    payload["outputs"] = {
+        "summary": f"failed with token={raw_token}",
+        "diagnosticsRef": "art-diagnostics-1",
+    }
+    artifact_service = SimpleNamespace(
+        read=AsyncMock(
+            return_value=(
+                SimpleNamespace(artifact_id="art-attempt-1"),
+                json.dumps(payload).encode(),
+            )
+        )
+    )
+    app.dependency_overrides[get_async_session] = _empty_session_override
+
+    with patch(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        return_value=artifact_service,
+    ):
+        with TestClient(app) as test_client:
+            response = test_client.get(
+                "/api/executions/mm:wf-1/steps/implement/step-executions"
+            )
+
+    assert response.status_code == 200
+    dumped = response.text
+    assert raw_token not in dumped
+    assert "token=[REDACTED]" in dumped
+    assert response.json()["stepExecutions"][0]["outputRefs"] == {
+        "diagnosticsRef": "art-diagnostics-1"
+    }
+
+
 def test_get_execution_step_execution_returns_bounded_detail_refs() -> None:
     app = FastAPI()
     app.include_router(router)

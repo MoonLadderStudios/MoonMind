@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -3607,6 +3608,116 @@ async def test_agent_runtime_selected_skill_projection_rejects_non_mapping_manif
         TemporalAgentRuntimeActivities._validate_selected_skill_projection(
             visible_path=workspace / ".agents" / "skills",
             selected_skill="pr-resolver",
+            resolved_skillset=resolved_skillset,
+        )
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_selected_skill_projection_enforces_repo_source_policy(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    skill_dir = workspace / ".agents" / "skills" / "repo-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("repo skill body\n", encoding="utf-8")
+    (workspace / ".agents" / "skills" / "_manifest.json").write_text(
+        json.dumps(
+            {
+                "snapshot_id": "skillset-repo",
+                "skills": [
+                    {
+                        "name": "repo-skill",
+                        "version": "1.0.0",
+                        "source_kind": "repo",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    resolved_skillset = ResolvedSkillSet(
+        snapshot_id="skillset-repo",
+        resolved_at=datetime.now(UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="repo-skill",
+                version="1.0.0",
+                content_ref="art-repo-skill-body",
+                content_digest="sha256:test",
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.REPO,
+                    source_path=".agents/skills/repo-skill",
+                ),
+            )
+        ],
+        policy_summary={
+            "repo_skills_allowed": False,
+            "local_skills_allowed": True,
+        },
+    )
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="repo skill source for 'repo-skill' is disabled by skill source policy",
+    ):
+        TemporalAgentRuntimeActivities._validate_selected_skill_projection(
+            visible_path=workspace / ".agents" / "skills",
+            selected_skill="repo-skill",
+            resolved_skillset=resolved_skillset,
+        )
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_selected_skill_projection_enforces_local_source_policy(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    skill_dir = workspace / ".agents" / "skills" / "local-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("local skill body\n", encoding="utf-8")
+    (workspace / ".agents" / "skills" / "_manifest.json").write_text(
+        json.dumps(
+            {
+                "snapshot_id": "skillset-local",
+                "skills": [
+                    {
+                        "name": "local-skill",
+                        "version": "1.0.0",
+                        "source_kind": "local",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    resolved_skillset = ResolvedSkillSet(
+        snapshot_id="skillset-local",
+        resolved_at=datetime.now(UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="local-skill",
+                version="1.0.0",
+                content_ref="art-local-skill-body",
+                content_digest="sha256:test",
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.LOCAL,
+                    source_path=".agents/skills/local/local-skill",
+                ),
+            )
+        ],
+        policy_summary={
+            "repo_skills_allowed": True,
+            "local_skills_allowed": False,
+        },
+    )
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="local skill source for 'local-skill' is disabled by skill source policy",
+    ):
+        TemporalAgentRuntimeActivities._validate_selected_skill_projection(
+            visible_path=workspace / ".agents" / "skills",
+            selected_skill="local-skill",
             resolved_skillset=resolved_skillset,
         )
 
