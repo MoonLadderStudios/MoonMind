@@ -20,7 +20,9 @@ from moonmind.integrations.jira.models import (
     TransitionIssueRequest,
     VerifyConnectionRequest,
 )
+from moonmind.integrations.jira import tool as jira_tool_module
 from moonmind.integrations.jira.tool import JiraToolService
+from moonmind.security.outbound_scan import OutboundScanResult
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -293,12 +295,33 @@ async def test_add_comment_converts_plain_text_to_adf() -> None:
     assert body["type"] == "doc"
     assert body["content"][0]["content"][1] == {"type": "hardBreak"}
 
-async def test_add_comment_scans_clean_body_before_provider_submission() -> None:
+async def test_add_comment_scans_clean_body_before_provider_submission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
     service = _StubJiraToolService(
         atlassian_settings=_build_settings(),
         responses=[{"id": "20001"}],
         high_security_mode=True,
     )
+    original_request_json = service._request_json
+
+    async def recording_request_json(**kwargs: Any) -> Any:
+        events.append("request")
+        return await original_request_json(**kwargs)
+
+    def recording_scan_outbound_text(*args: Any, **kwargs: Any) -> OutboundScanResult:
+        events.append("scan")
+        return OutboundScanResult(
+            allowed=True,
+            decision="allow",
+            highSecurityMode=True,
+            findings=[],
+            sanitizedDiagnostics=[],
+        )
+
+    service._request_json = recording_request_json  # type: ignore[method-assign]
+    monkeypatch.setattr(jira_tool_module, "scan_outbound_text", recording_scan_outbound_text)
 
     result = await service.add_comment(
         AddCommentRequest(
@@ -308,6 +331,7 @@ async def test_add_comment_scans_clean_body_before_provider_submission() -> None
     )
 
     assert result == {"id": "20001"}
+    assert events == ["scan", "request"]
     assert len(service.calls) == 1
     assert service.calls[0]["path"] == "/issue/ENG-123/comment"
 
