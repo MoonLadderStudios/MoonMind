@@ -65,6 +65,28 @@ def test_high_security_text_scan_blocks_with_redacted_diagnostics() -> None:
     assert "password=[REDACTED]" in dumped
 
 
+def test_high_security_text_scan_blocks_quoted_secret_assignments() -> None:
+    double_quoted_secret = "quoted-secret-value"
+    single_quoted_secret = "single-quoted-secret"
+
+    result = scan_outbound_text(
+        f'api_key="{double_quoted_secret}"\npassword: \'{single_quoted_secret}\'',
+        location="config.payload",
+        high_security_mode=True,
+    )
+
+    dumped = str(result.model_dump())
+
+    assert result.allowed is False
+    assert result.decision == "block"
+    assert [finding.category for finding in result.findings] == [
+        "credential",
+        "credential",
+    ]
+    assert double_quoted_secret not in dumped
+    assert single_quoted_secret not in dumped
+
+
 def test_high_security_bundle_scan_blocks_with_item_location() -> None:
     raw_secret = "bundle-secret-value"
     result = scan_outbound_bundle(

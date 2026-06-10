@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from moonmind.config.settings import SecuritySettings
+from moonmind.config.settings import settings as app_settings
 from moonmind.utils.logging import redact_sensitive_text
 
 
@@ -65,7 +65,7 @@ class OutboundScanResult(BaseModel):
 
 _SECRET_ASSIGNMENT_PATTERN = re.compile(
     r"(?i)\b(?:token|password|secret|api[_-]?key|credential)\s*[:=]\s*"
-    r"[^\s,;\"']+"
+    r"(?:\"[^\"]*\"|'[^']*'|[^\s,;\"']+)"
 )
 _AUTHORIZATION_PATTERN = re.compile(
     r"(?i)\b(?:authorization\s*:\s*)?bearer\s+[A-Za-z0-9._~+/=-]+"
@@ -95,7 +95,7 @@ def resolve_high_security_mode(
     if settings is not None and hasattr(settings, "high_security_mode"):
         return bool(getattr(settings, "high_security_mode"))
 
-    return bool(SecuritySettings().high_security_mode)
+    return bool(app_settings.security.high_security_mode)
 
 
 def scan_outbound_text(

@@ -32,6 +32,26 @@ def test_caller_facing_text_scan_blocks_before_side_effect() -> None:
     assert raw_secret not in str(dumped)
 
 
+def test_caller_facing_text_scan_blocks_quoted_assignments() -> None:
+    raw_secret = "quoted-integration-secret"
+    side_effects: list[str] = []
+
+    result = scan_outbound_text(
+        f'api_key="{raw_secret}"',
+        location="comment.body",
+        high_security_mode=True,
+    )
+    if result.allowed:
+        side_effects.append("posted")
+
+    dumped = result.model_dump(by_alias=True)
+
+    assert side_effects == []
+    assert dumped["decision"] == "block"
+    assert dumped["findings"][0]["category"] == "credential"
+    assert raw_secret not in str(dumped)
+
+
 def test_commit_like_bundle_contract_blocks_with_item_location() -> None:
     raw_secret = "integration-bundle-secret"
     result = scan_outbound_bundle(
