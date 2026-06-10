@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. moonmind/workflows/codex_session_timeouts.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Shared timeout budgets for managed Codex session turns.\"\"\"\n2. docs/MoonMindArchitecture.md (score: 1.000, trust: canonical)\n    line 6: **Purpose:** Top-level architecture for MoonMind's Temporal-native agent orchestration model, including managed runtime runs, Codex CLI managed sessions, Claude Code managed runs, external agents, artifacts, provider profiles, and workload containers.\n3. moonmind/workflows/__init__.py (score: 1.000, trust: canonical)\n    line 37: from moonmind.integrations.jira.tool import JiraToolService\n4. docs/ReleaseNotes/2026-06-02-jira-implement-workflow-batch.md (score: 1.000, trust: canonical)\n    line 1: # Jira Implement Workflow Batch - 2026-06-02\n5. moonmind/workflows/agent_skills/agent_skills_activities.py (score: 1.000, trust: canonical)\n    line 196: payload=json.dumps(payload, sort_keys=True, indent=2).encode(\"utf-8\"),\n6. moonmind/workflows/tasks/preset_goal_scheduler.py (score: 1.000, trust: canonical)\n    line 9: _JIRA_ISSUE_KEY_PATTERN = re.compile(r\"\\b([A-Z][A-Z0-9]+-\\d+)\\b\", re.IGNORECASE)\n7. docs/ReleaseNotes/MM-730-hard-switch-cutover.md (score: 1.000, trust: canonical)\n    line 5: This is a breaking release. Compatibility redirects and task-shaped aliases are not kept after the cutover boundary. Operators must keep the previous worker build draining on the legacy Task Queue for in-flight `MoonMind.Run` histories, or record an explicit pause/resume or terminate/restart decision before enabling `TEMPORAL_USER_WORKFLOW_CONTRACT_MODE=renamed_contract`.\n8. moonmind/workflows/tasks/prepared_context.py (score: 1.000, trust: canonical)\n    line 37: \"codex\": 3,",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "moonmind/workflows/codex_session_timeouts.py",
+      "text": "line 1: \"\"\"Shared timeout budgets for managed Codex session turns.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/MoonMindArchitecture.md",
+      "text": "line 6: **Purpose:** Top-level architecture for MoonMind's Temporal-native agent orchestration model, including managed runtime runs, Codex CLI managed sessions, Claude Code managed runs, external agents, artifacts, provider profiles, and workload containers.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 6,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/workflows/__init__.py",
+      "text": "line 37: from moonmind.integrations.jira.tool import JiraToolService",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 37,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ReleaseNotes/2026-06-02-jira-implement-workflow-batch.md",
+      "text": "line 1: # Jira Implement Workflow Batch - 2026-06-02",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/workflows/agent_skills/agent_skills_activities.py",
+      "text": "line 196: payload=json.dumps(payload, sort_keys=True, indent=2).encode(\"utf-8\"),",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 196,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/workflows/tasks/preset_goal_scheduler.py",
+      "text": "line 9: _JIRA_ISSUE_KEY_PATTERN = re.compile(r\"\\b([A-Z][A-Z0-9]+-\\d+)\\b\", re.IGNORECASE)",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 9,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ReleaseNotes/MM-730-hard-switch-cutover.md",
+      "text": "line 5: This is a breaking release. Compatibility redirects and task-shaped aliases are not kept after the cutover boundary. Operators must keep the previous worker build draining on the legacy Task Queue for in-flight `MoonMind.Run` histories, or record an explicit pause/resume or terminate/restart decision before enabling `TEMPORAL_USER_WORKFLOW_CONTRACT_MODE=renamed_contract`.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 5,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/workflows/tasks/prepared_context.py",
+      "text": "line 37: \"codex\": 3,",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 37,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-06-10T08:48:30Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
