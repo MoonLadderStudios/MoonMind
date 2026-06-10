@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. api_service/ui_assets.py (score: 1.000, trust: canonical)\n    line 94: except json.JSONDecodeError:\n2. docs/ManagedAgents/ClaudeCodeMiniMax.md (score: 1.000, trust: canonical)\n    line 1: # Claude Code via MiniMax\n3. docs/ManagedAgents/DockerSidecarRuntime.md (score: 1.000, trust: canonical)\n    line 10: - [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)\n4. moonmind/security/outbound_scan.py (score: 1.000, trust: canonical)\n    line 17: \"\"\"Allow/block decision returned before an external side effect.\"\"\"\n5. api_service/docker/README.md (score: 1.000, trust: canonical)\n    line 9: - `CODEX_CLI_VERSION`\n6. api_service/auth_providers.py (score: 1.000, trust: canonical)\n    line 35: raise HTTPException(status_code=500, detail=\"Invalid DEFAULT_USER_ID\") from exc\n7. docs/Rag/WorkflowRag.md (score: 1.000, trust: canonical)\n    line 18: MoonMind’s managed-agent architecture is **managed-session first**. A managed session is the runtime-owned work session, but MoonMind remains the owner of durable context assembly, artifact publication, and orchestration. Workflow RAG is therefore **not** primarily a chat-style “agent remembers to search” feature. Its primary job is to let MoonMind assemble relevant document and code context, publish that context as durable artifacts and refs, and deliver it into managed sessions at the right step boundaries.\n8. docs/Development/PreCommitWorkflow.md (score: 1.000, trust: canonical)\n    line 5: MoonMind uses `pre-commit` as a fast local quality gate for Python formatting and lint cleanup before longer test runs.",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "api_service/ui_assets.py",
+      "text": "line 94: except json.JSONDecodeError:",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 94,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ManagedAgents/ClaudeCodeMiniMax.md",
+      "text": "line 1: # Claude Code via MiniMax",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ManagedAgents/DockerSidecarRuntime.md",
+      "text": "line 10: - [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 10,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/security/outbound_scan.py",
+      "text": "line 17: \"\"\"Allow/block decision returned before an external side effect.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 17,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/docker/README.md",
+      "text": "line 9: - `CODEX_CLI_VERSION`",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 9,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/auth_providers.py",
+      "text": "line 35: raise HTTPException(status_code=500, detail=\"Invalid DEFAULT_USER_ID\") from exc",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 35,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Rag/WorkflowRag.md",
+      "text": "line 18: MoonMind’s managed-agent architecture is **managed-session first**. A managed session is the runtime-owned work session, but MoonMind remains the owner of durable context assembly, artifact publication, and orchestration. Workflow RAG is therefore **not** primarily a chat-style “agent remembers to search” feature. Its primary job is to let MoonMind assemble relevant document and code context, publish that context as durable artifacts and refs, and deliver it into managed sessions at the right step boundaries.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 18,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Development/PreCommitWorkflow.md",
+      "text": "line 5: MoonMind uses `pre-commit` as a fast local quality gate for Python formatting and lint cleanup before longer test runs.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 5,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-06-10T08:34:29Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
