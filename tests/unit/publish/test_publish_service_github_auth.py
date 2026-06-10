@@ -61,16 +61,22 @@ async def test_publish_branch_blocks_high_security_scan_before_push(
         nonlocal scan_call_count
         del kwargs
         scan_call_count += 1
+        command = list(args)
+        assert "push" not in command
         proc = AsyncMock()
         if scan_call_count == 1:
+            assert command[-3:] == ["fetch", "origin", "main"]
+            proc.communicate = AsyncMock(return_value=(b"", b""))
+            proc.returncode = 0
+        elif scan_call_count == 2:
             proc.communicate = AsyncMock(
                 return_value=(b"commit local-sha\nsubject MM-813\n", b"")
             )
             proc.returncode = 0
-        elif scan_call_count == 2:
+        elif scan_call_count == 3:
             proc.communicate = AsyncMock(return_value=(b"app/config.py\n", b""))
             proc.returncode = 0
-        elif scan_call_count == 3:
+        elif scan_call_count == 4:
             proc.communicate = AsyncMock(
                 return_value=(b"+api_key=do-not-print-this-value\n", b"")
             )

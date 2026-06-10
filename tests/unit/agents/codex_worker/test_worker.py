@@ -96,10 +96,13 @@ async def test_codex_worker_push_scan_blocks_secret_without_printing_raw_value(
         command = list(args)
         assert "push" not in command
         if call_count == 1:
-            return _Proc(b"commit local-sha\nsubject MM-813\n")
+            assert command[-3:] == ["fetch", "origin", "main"]
+            return _Proc(b"")
         if call_count == 2:
-            return _Proc(b"app/config.py\n")
+            return _Proc(b"commit local-sha\nsubject MM-813\n")
         if call_count == 3:
+            return _Proc(b"app/config.py\n")
+        if call_count == 4:
             return _Proc(b"+token=do-not-print-this-value\n")
         raise AssertionError(f"Unexpected scan subprocess: {args!r}")
 

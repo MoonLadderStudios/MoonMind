@@ -8949,6 +8949,18 @@ class TemporalAgentRuntimeActivities:
                 "diagnostic_kind": "outbound_scan_blocked",
             }
 
+        fetch_ref = branch_name if remote_sha else None
+        if fetch_ref is None and base_ref.startswith("origin/"):
+            fetch_ref = base_ref.removeprefix("origin/")
+        if fetch_ref:
+            with contextlib.suppress(Exception):
+                await self._read_workspace_git_text(
+                    workspace=workspace,
+                    env=env,
+                    timeout=30,
+                    args=("fetch", "origin", fetch_ref),
+                )
+
         commit_range = f"{range_base}..{branch_name}"
         try:
             commit_metadata = await self._read_workspace_git_text(
@@ -8957,8 +8969,10 @@ class TemporalAgentRuntimeActivities:
                 timeout=15,
                 args=(
                     "log",
-                    "--format=commit %H%nparents %P%nauthor %an <%ae>%n"
-                    "subject %s%nbody%n%B%n---END-COMMIT---",
+                    (
+                        "--format=commit %H%nparents %P%nauthor %an <%ae>%n"
+                        + "subject %s%nbody%n%B%n---END-COMMIT---"
+                    ),
                     commit_range,
                 ),
             )
@@ -8981,19 +8995,30 @@ class TemporalAgentRuntimeActivities:
                     ],
                 )
             ]
-            for changed_file in changed_files:
-                file_diff = await self._read_workspace_git_text(
-                    workspace=workspace,
-                    env=env,
-                    timeout=20,
-                    args=("diff", "--no-ext-diff", commit_range, "--", changed_file),
-                )
-                bundle.append(
-                    OutboundBundleItem(
-                        location=f"git.push.diff:{changed_file}",
-                        content=file_diff[:_GIT_PUSH_SCAN_MAX_FILE_DIFF_CHARS],
+            diff_semaphore = asyncio.Semaphore(10)
+
+            async def _diff_item(changed_file: str) -> OutboundBundleItem:
+                async with diff_semaphore:
+                    file_diff = await self._read_workspace_git_text(
+                        workspace=workspace,
+                        env=env,
+                        timeout=20,
+                        args=(
+                            "diff",
+                            "--no-ext-diff",
+                            commit_range,
+                            "--",
+                            changed_file,
+                        ),
                     )
+                return OutboundBundleItem(
+                    location=f"git.push.diff:{changed_file}",
+                    content=file_diff[:_GIT_PUSH_SCAN_MAX_FILE_DIFF_CHARS],
                 )
+
+            bundle.extend(
+                await asyncio.gather(*(_diff_item(path) for path in changed_files))
+            )
         except Exception as exc:
             safe_detail = redact_sensitive_text(str(exc))
             return {
@@ -9036,7 +9061,7 @@ class TemporalAgentRuntimeActivities:
             *self._workspace_git_command(workspace, *args),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=env,
+            env=dict(env) if env is not None else None,
         )
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
