@@ -50,6 +50,7 @@ from moonmind.schemas.manifest_ingest_models import (
     ManifestStatusSnapshotModel,
 )
 from moonmind.schemas.temporal_artifact_models import ArtifactRefModel
+from moonmind.utils.logging import redact_sensitive_text
 from moonmind.schemas.temporal_models import (
     CancelExecutionRequest,
     ConfigureIntegrationMonitoringRequest,
@@ -4047,6 +4048,12 @@ def _first_text(*values: Any) -> str | None:
     return None
 
 
+def _safe_display_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return redact_sensitive_text(value)
+
+
 def _quality_gate_verdict(checks: list[dict[str, Any]]) -> str | None:
     for check in checks:
         if not isinstance(check, (Mapping, BaseModel)):
@@ -4099,9 +4106,11 @@ def _step_execution_projection_payload(
     source_execution_ordinal = (
         manifest.lineage.source_execution_ordinal if manifest.lineage is not None else None
     )
-    summary = _first_text(
-        _field_value(outputs, "summary"),
-        _field_value(execution, "summary"),
+    summary = _safe_display_text(
+        _first_text(
+            _field_value(outputs, "summary"),
+            _field_value(execution, "summary"),
+        )
     )
     return {
         "manifestArtifactRef": manifest_artifact_ref,

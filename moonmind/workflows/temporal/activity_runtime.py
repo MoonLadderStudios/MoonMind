@@ -92,6 +92,7 @@ from moonmind.codex_cloud.settings import build_codex_cloud_gate, CODEX_CLOUD_DI
 from moonmind.workflows.adapters.jules_client import JulesClient
 from moonmind.workflows.agent_skills.selection import selected_agent_skill
 from moonmind.schemas.agent_skill_models import (
+    AgentSkillSourceKind,
     ResolvedSkillSet,
     RuntimeMaterializationMode,
 )
@@ -6282,6 +6283,7 @@ class TemporalAgentRuntimeActivities:
                     "selected skill materialization failed before runtime launch: "
                     f"selected skill '{selected_skill}' is not present in resolvedSkillsetRef {skillset_ref}"
                 )
+            self._validate_resolved_skillset_source_policy(resolved_skillset)
             skills_backing_root = (
                 run_root
                 / "runtime"
@@ -6384,6 +6386,45 @@ class TemporalAgentRuntimeActivities:
                 "selected skill materialization failed before runtime launch: "
                 f"active skill manifest does not include selected skill '{selected_skill}'"
             )
+
+        selected_entry = next(
+            (
+                entry
+                for entry in resolved_skillset.skills
+                if entry.skill_name == selected_skill
+            ),
+            None,
+        )
+        if selected_entry is None:
+            raise TemporalActivityRuntimeError(
+                "selected skill materialization failed before runtime launch: "
+                f"resolvedSkillsetRef does not include selected skill '{selected_skill}'"
+            )
+        TemporalAgentRuntimeActivities._validate_resolved_skillset_source_policy(
+            resolved_skillset
+        )
+
+    @staticmethod
+    def _validate_resolved_skillset_source_policy(
+        resolved_skillset: ResolvedSkillSet,
+    ) -> None:
+        policy_summary = resolved_skillset.policy_summary or {}
+        for entry in resolved_skillset.skills:
+            source_kind = entry.provenance.source_kind
+            if source_kind == AgentSkillSourceKind.REPO and (
+                policy_summary.get("repo_skills_allowed") is not True
+            ):
+                raise TemporalActivityRuntimeError(
+                    "selected skill materialization failed before runtime launch: "
+                    f"repo skill source for '{entry.skill_name}' is disabled by skill source policy"
+                )
+            if source_kind == AgentSkillSourceKind.LOCAL and (
+                policy_summary.get("local_skills_allowed") is not True
+            ):
+                raise TemporalActivityRuntimeError(
+                    "selected skill materialization failed before runtime launch: "
+                    f"local skill source for '{entry.skill_name}' is disabled by skill source policy"
+                )
 
     async def _load_resolved_skillset(self, skillset_ref: str) -> ResolvedSkillSet:
         if self._artifact_service is None:

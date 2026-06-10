@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -3650,6 +3651,251 @@ async def test_agent_runtime_selected_skill_projection_rejects_non_mapping_manif
             visible_path=workspace / ".agents" / "skills",
             selected_skill="pr-resolver",
             resolved_skillset=resolved_skillset,
+        )
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_selected_skill_projection_enforces_repo_source_policy(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    skill_dir = workspace / ".agents" / "skills" / "repo-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("repo skill body\n", encoding="utf-8")
+    (workspace / ".agents" / "skills" / "_manifest.json").write_text(
+        json.dumps(
+            {
+                "snapshot_id": "skillset-repo",
+                "skills": [
+                    {
+                        "name": "repo-skill",
+                        "version": "1.0.0",
+                        "source_kind": "repo",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    resolved_skillset = ResolvedSkillSet(
+        snapshot_id="skillset-repo",
+        resolved_at=datetime.now(UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="repo-skill",
+                version="1.0.0",
+                content_ref="art-repo-skill-body",
+                content_digest="sha256:test",
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.REPO,
+                    source_path=".agents/skills/repo-skill",
+                ),
+            )
+        ],
+        policy_summary={
+            "repo_skills_allowed": False,
+            "local_skills_allowed": True,
+        },
+    )
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="repo skill source for 'repo-skill' is disabled by skill source policy",
+    ):
+        TemporalAgentRuntimeActivities._validate_selected_skill_projection(
+            visible_path=workspace / ".agents" / "skills",
+            selected_skill="repo-skill",
+            resolved_skillset=resolved_skillset,
+        )
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_selected_skill_projection_enforces_local_source_policy(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    skill_dir = workspace / ".agents" / "skills" / "local-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("local skill body\n", encoding="utf-8")
+    (workspace / ".agents" / "skills" / "_manifest.json").write_text(
+        json.dumps(
+            {
+                "snapshot_id": "skillset-local",
+                "skills": [
+                    {
+                        "name": "local-skill",
+                        "version": "1.0.0",
+                        "source_kind": "local",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    resolved_skillset = ResolvedSkillSet(
+        snapshot_id="skillset-local",
+        resolved_at=datetime.now(UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="local-skill",
+                version="1.0.0",
+                content_ref="art-local-skill-body",
+                content_digest="sha256:test",
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.LOCAL,
+                    source_path=".agents/skills/local/local-skill",
+                ),
+            )
+        ],
+        policy_summary={
+            "repo_skills_allowed": True,
+            "local_skills_allowed": False,
+        },
+    )
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="local skill source for 'local-skill' is disabled by skill source policy",
+    ):
+        TemporalAgentRuntimeActivities._validate_selected_skill_projection(
+            visible_path=workspace / ".agents" / "skills",
+            selected_skill="local-skill",
+            resolved_skillset=resolved_skillset,
+        )
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_selected_skill_projection_rejects_repo_skill_with_missing_policy_summary(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    skill_dir = workspace / ".agents" / "skills" / "repo-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("repo skill body\n", encoding="utf-8")
+    (workspace / ".agents" / "skills" / "_manifest.json").write_text(
+        json.dumps(
+            {
+                "snapshot_id": "skillset-repo",
+                "skills": [
+                    {
+                        "name": "repo-skill",
+                        "version": "1.0.0",
+                        "source_kind": "repo",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    resolved_skillset = ResolvedSkillSet(
+        snapshot_id="skillset-repo",
+        resolved_at=datetime.now(UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="repo-skill",
+                version="1.0.0",
+                content_ref="art-repo-skill-body",
+                content_digest="sha256:test",
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.REPO,
+                    source_path=".agents/skills/repo-skill",
+                ),
+            )
+        ],
+    )
+    resolved_skillset.policy_summary = None  # type: ignore[assignment]
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="repo skill source for 'repo-skill' is disabled by skill source policy",
+    ):
+        TemporalAgentRuntimeActivities._validate_selected_skill_projection(
+            visible_path=workspace / ".agents" / "skills",
+            selected_skill="repo-skill",
+            resolved_skillset=resolved_skillset,
+        )
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_enforces_dependency_source_policy_before_materialization(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    managed_root = tmp_path / "agent_jobs"
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(managed_root))
+    workspace = managed_root / "job-1" / "repo"
+    workspace.mkdir(parents=True)
+    resolved_skillset = ResolvedSkillSet(
+        snapshot_id="skillset-with-repo-dependency",
+        resolved_at=datetime.now(UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="pr-resolver",
+                version="1.0.0",
+                content_ref="art-pr-resolver-body",
+                content_digest="sha256:test",
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.BUILT_IN
+                ),
+            ),
+            ResolvedSkillEntry(
+                skill_name="repo-helper",
+                version="1.0.0",
+                content_ref="art-repo-helper-body",
+                content_digest="sha256:test",
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.REPO,
+                    source_path=".agents/skills/repo-helper",
+                ),
+            ),
+        ],
+        policy_summary={
+            "repo_skills_allowed": False,
+            "local_skills_allowed": True,
+        },
+    )
+    artifact_service = _StaticArtifactService(
+        {
+            "art-pr-resolver-snapshot": resolved_skillset.model_dump_json().encode(
+                "utf-8"
+            ),
+        }
+    )
+
+    class _UnexpectedMaterializer:
+        def __init__(self, **_kwargs: Any) -> None:
+            raise AssertionError("skill materializer should not be constructed")
+
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "AgentSkillMaterializer",
+        _UnexpectedMaterializer,
+    )
+    activities = TemporalAgentRuntimeActivities(artifact_service=artifact_service)
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="repo skill source for 'repo-helper' is disabled by skill source policy",
+    ):
+        await activities.agent_runtime_prepare_turn_instructions(
+            {
+                "request": {
+                    "agentKind": "managed",
+                    "agentId": "codex",
+                    "correlationId": "corr-1",
+                    "idempotencyKey": "idem-1",
+                    "resolvedSkillsetRef": "art-pr-resolver-snapshot",
+                    "parameters": {
+                        "instructions": "Resolve the PR.",
+                        "metadata": {
+                            "moonmind": {
+                                "selectedSkill": "pr-resolver",
+                            },
+                        },
+                    },
+                },
+                "workspacePath": str(workspace),
+            }
         )
 
 
