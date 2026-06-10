@@ -196,7 +196,7 @@ class ArtifactListResponse(BaseModel):
     artifacts: list[ArtifactMetadataModel] = Field(default_factory=list)
 
 class ArtifactSessionGroupModel(BaseModel):
-    """Server-defined grouping of task-scoped session artifacts."""
+    """Server-defined grouping of workflow-scoped session artifacts."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -205,10 +205,12 @@ class ArtifactSessionGroupModel(BaseModel):
     artifacts: list[ArtifactMetadataModel] = Field(default_factory=list)
 
 class ArtifactSessionProjectionModel(BaseModel):
-    """Minimal task-scoped session continuity projection."""
+    """Minimal workflow-scoped session continuity projection."""
 
     model_config = ConfigDict(populate_by_name=True)
 
+    # legacy_run contract — serialized projection field name; renames to
+    # agent-run naming at the MoonMind.UserWorkflow v2 cutover (MM-730).
     task_run_id: str
     session_id: str
     session_epoch: int
@@ -219,7 +221,7 @@ class ArtifactSessionProjectionModel(BaseModel):
     latest_reset_boundary_ref: Optional[ArtifactRefModel] = None
 
 class ArtifactSessionControlRequest(BaseModel):
-    """Operator control request for one task-scoped artifact session."""
+    """Operator control request for one workflow-scoped artifact session."""
 
     model_config = ConfigDict(populate_by_name=True)
 

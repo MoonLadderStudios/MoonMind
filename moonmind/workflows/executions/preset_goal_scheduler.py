@@ -68,7 +68,7 @@ def goal_from_payloads(
     )
 
 
-def task_is_already_authored(task_payload: Mapping[str, Any]) -> bool:
+def workflow_is_already_authored(task_payload: Mapping[str, Any]) -> bool:
     """Return whether the task already carries an explicit execution shape."""
 
     if isinstance(task_payload.get("steps"), list) and task_payload.get("steps"):
@@ -166,5 +166,5 @@ __all__ = [
     "GoalPresetSchedule",
     "goal_from_payloads",
     "schedule_preset_from_goal",
-    "task_is_already_authored",
+    "workflow_is_already_authored",
 ]

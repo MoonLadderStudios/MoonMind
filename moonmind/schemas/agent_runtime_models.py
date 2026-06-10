@@ -1218,17 +1218,17 @@ class ManagedAgentRuntimeProfile(BaseModel):
             if self.agent.docker_client.enabled:
                 raise ValueError(
                     "agent.dockerClient.enabled must be false for no-docker profiles; "
-                    "task instructions cannot raise Docker capability"
+                    "workflow instructions cannot raise Docker capability"
                 )
             if sidecar is not None and sidecar.enabled:
                 raise ValueError(
                     "dockerSidecar.enabled must be false for no-docker profiles; "
-                    "task instructions cannot raise Docker capability"
+                    "workflow instructions cannot raise Docker capability"
                 )
             if "DOCKER_HOST" in self.agent.env:
                 raise ValueError(
                     "agent.env.DOCKER_HOST must not be set for no-docker profiles; "
-                    "task instructions cannot raise Docker capability"
+                    "workflow instructions cannot raise Docker capability"
                 )
             return self
 
@@ -1400,14 +1400,14 @@ class ManagedAgentRuntimeProfile(BaseModel):
 def resolve_managed_runtime_workload_mode(
     profile: ManagedAgentRuntimeProfile,
     *,
-    task_requested_workload_mode: str | None = None,
+    workflow_requested_workload_mode: str | None = None,
 ) -> ManagedRuntimeWorkloadMode:
-    """Return profile workload mode and reject task-level capability elevation."""
+    """Return profile workload mode and reject workflow-level capability elevation."""
 
-    requested = str(task_requested_workload_mode or "").strip()
+    requested = str(workflow_requested_workload_mode or "").strip()
     if requested and requested != profile.workload_mode:
         raise ValueError(
-            "task instructions cannot raise Docker capability; workloadMode is "
+            "workflow instructions cannot raise Docker capability; workloadMode is "
             "read from deployment/profile configuration"
         )
     return profile.workload_mode
@@ -1683,7 +1683,7 @@ class RunObservabilityEvent(BaseModel):
     run_id: str | None = Field(
         None,
         alias="runId",
-        description="Task-run identifier for filtering shared observability history",
+        description="Agent-run identifier for filtering shared observability history",
     )
     sequence: int = Field(..., description="Monotonically increasing sequence number")
     stream: Literal["stdout", "stderr", "system", "session"] = Field(

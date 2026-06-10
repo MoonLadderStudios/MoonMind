@@ -3,9 +3,9 @@ from __future__ import annotations
 import pytest
 
 from moonmind.config.settings import settings
-from moonmind.workflows.tasks.routing import (
+from moonmind.workflows.executions.routing import (
     TemporalSubmitDisabledError,
-    get_routing_target_for_task,
+    get_routing_target_for_workflow,
 )
 
 # --- T004: Always returns "temporal" when submit_enabled=True ---
@@ -33,7 +33,7 @@ def test_routing_always_returns_temporal(
         raising=False,
     )
     assert (
-        get_routing_target_for_task(is_manifest=is_manifest, is_run=is_run)
+        get_routing_target_for_workflow(is_manifest=is_manifest, is_run=is_run)
         == "temporal"
     )
 
@@ -43,21 +43,21 @@ def test_routing_ignores_task_payload(monkeypatch: pytest.MonkeyPatch) -> None:
         settings.temporal_dashboard, "submit_enabled", True, raising=False
     )
     assert (
-        get_routing_target_for_task(
+        get_routing_target_for_workflow(
             is_run=True,
             task_payload={"task": {"proposeTasks": True}},
         )
         == "temporal"
     )
     assert (
-        get_routing_target_for_task(
+        get_routing_target_for_workflow(
             is_run=True,
             task_payload={"task": {"proposeTasks": False}},
         )
         == "temporal"
     )
     assert (
-        get_routing_target_for_task(
+        get_routing_target_for_workflow(
             is_run=True,
             task_payload=None,
         )
@@ -77,7 +77,7 @@ def test_routing_raises_when_submit_disabled(
         raising=False,
     )
     with pytest.raises(TemporalSubmitDisabledError, match="legacy queue.*no longer supported"):
-        get_routing_target_for_task(is_manifest=True)
+        get_routing_target_for_workflow(is_manifest=True)
 
 def test_routing_raises_for_run_when_submit_disabled(
     monkeypatch: pytest.MonkeyPatch,
@@ -90,7 +90,7 @@ def test_routing_raises_for_run_when_submit_disabled(
         raising=False,
     )
     with pytest.raises(TemporalSubmitDisabledError, match="legacy queue.*no longer supported"):
-        get_routing_target_for_task(is_run=True)
+        get_routing_target_for_workflow(is_run=True)
 
 def test_routing_raises_for_default_when_submit_disabled(
     monkeypatch: pytest.MonkeyPatch,
@@ -103,5 +103,5 @@ def test_routing_raises_for_default_when_submit_disabled(
         raising=False,
     )
     with pytest.raises(TemporalSubmitDisabledError, match="legacy queue.*no longer supported"):
-        get_routing_target_for_task()
+        get_routing_target_for_workflow()
 

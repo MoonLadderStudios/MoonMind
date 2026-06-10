@@ -733,7 +733,7 @@ async def test_run_execution_stage_honors_pause_between_managed_session_steps(
         workflow._paused = False
         assert predicate() is True
 
-    async def fake_bind_task_scoped_session(request: Any) -> Any:
+    async def fake_bind_workflow_scoped_session(request: Any) -> Any:
         return request
 
     workflow_info = type(
@@ -793,8 +793,8 @@ async def test_run_execution_stage_honors_pause_between_managed_session_steps(
     )
     monkeypatch.setattr(
         workflow,
-        "_maybe_bind_task_scoped_session",
-        fake_bind_task_scoped_session,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
     )
 
     await workflow._run_execution_stage(
@@ -1122,7 +1122,7 @@ def test_jira_implement_no_commit_pr_handoff_is_not_required(
     assert mock_run_workflow._publish_status == "not_required"
     assert status == "success"
     assert "No pull request was required" in message
-    assert "Jira-oriented task completed without repository changes" in message
+    assert "Jira-oriented workflow completed without repository changes" in message
     assert "MM-675 was already implemented" in message
     assert "no publishable diff was produced" not in message
     assert publish_failure is False
@@ -1163,7 +1163,7 @@ def test_jira_implement_no_commit_pr_handoff_without_agent_report_is_explicit(
     assert mock_run_workflow._publish_status == "not_required"
     assert status == "success"
     assert "No pull request was required" in message
-    assert "Jira-oriented task completed without repository changes" in message
+    assert "Jira-oriented workflow completed without repository changes" in message
     assert (
         "no structured agent report confirmed whether the Jira issue was "
         "already implemented"
@@ -1209,7 +1209,7 @@ async def test_already_implemented_no_commit_pr_handoff_completes_jira_done(
     )
     mock_run_workflow._publish_status = "not_required"
     mock_run_workflow._publish_reason = (
-        "No pull request was required because this Jira-oriented task completed "
+        "No pull request was required because this Jira-oriented workflow completed "
         "without repository changes. final agent report: MM-675 was already implemented."
     )
     mock_run_workflow._publish_context["noChangePublish"] = {"status": "no_commits"}
@@ -1339,7 +1339,7 @@ async def test_ambiguous_no_commit_pr_handoff_does_not_complete_jira_done(
     )
     mock_run_workflow._publish_status = "not_required"
     mock_run_workflow._publish_reason = (
-        "No pull request was required because this Jira-oriented task completed "
+        "No pull request was required because this Jira-oriented workflow completed "
         "without repository changes. no structured agent report confirmed whether "
         "the Jira issue was already implemented."
     )
@@ -1388,7 +1388,7 @@ async def test_uncertain_already_implemented_wording_does_not_complete_jira_done
     )
     mock_run_workflow._publish_status = "not_required"
     mock_run_workflow._publish_reason = (
-        "No pull request was required because this Jira-oriented task completed "
+        "No pull request was required because this Jira-oriented workflow completed "
         "without repository changes. The agent could not confirm if MM-675 was "
         "already implemented."
     )

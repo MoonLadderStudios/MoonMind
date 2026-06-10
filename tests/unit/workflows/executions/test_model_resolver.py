@@ -15,8 +15,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from moonmind.workflows.tasks.model_resolver import resolve_effective_model
-from moonmind.workflows.tasks.runtime_defaults import normalize_runtime_id
+from moonmind.workflows.executions.model_resolver import resolve_effective_model
+from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
 
 # ---------------------------------------------------------------------------
 # normalize_runtime_id
@@ -48,7 +48,7 @@ class TestNormalizeRuntimeId:
         assert normalize_runtime_id("some_future_runtime") == "some_future_runtime"
 
     def test_none_falls_back_to_default(self):
-        # None / empty falls back to DEFAULT_TASK_RUNTIME
+        # None / empty falls back to DEFAULT_WORKFLOW_RUNTIME
         result = normalize_runtime_id(None)
         assert result  # should return *some* string, not explode
 

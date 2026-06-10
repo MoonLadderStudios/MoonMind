@@ -3764,7 +3764,7 @@ async def test_cancel_execution_rejects_orphaned_projection_only_workflow(
         mock_client_adapter.cancel_workflow.assert_not_called()
 
 @pytest.mark.asyncio
-async def test_cancel_execution_best_effort_terminates_task_scoped_codex_session(
+async def test_cancel_execution_best_effort_terminates_workflow_scoped_codex_session(
     tmp_path, mock_client_adapter, monkeypatch
 ):
     async with temporal_db(tmp_path) as session:

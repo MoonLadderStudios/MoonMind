@@ -25,7 +25,7 @@ from api_service.services.deployment_operations import (
 )
 from moonmind.config.settings import settings
 from moonmind.utils.build_info import resolve_moonmind_build_id
-from moonmind.workflows.tasks.routing import TemporalSubmitDisabledError
+from moonmind.workflows.executions.routing import TemporalSubmitDisabledError
 from moonmind.workflows.temporal import (
     TemporalExecutionService,
     TemporalExecutionValidationError,

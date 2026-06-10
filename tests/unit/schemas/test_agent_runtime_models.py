@@ -1138,10 +1138,10 @@ def test_no_docker_profile_cannot_be_raised_by_task_requested_mode() -> None:
         }
     )
 
-    with pytest.raises(ValueError, match="task instructions cannot raise Docker capability"):
+    with pytest.raises(ValueError, match="workflow instructions cannot raise Docker capability"):
         resolve_managed_runtime_workload_mode(
             profile,
-            task_requested_workload_mode="docker-sidecar",
+            workflow_requested_workload_mode="docker-sidecar",
         )
 
 

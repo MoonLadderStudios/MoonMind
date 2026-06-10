@@ -1097,7 +1097,7 @@ class MoonMindAgentRun:
         return canonical_managed_session_runtime_id(request.agent_id)
 
     @staticmethod
-    def _task_scoped_session_workflow_id(
+    def _workflow_scoped_session_workflow_id(
         *,
         task_workflow_id: str,
         runtime_id: str,
@@ -1105,7 +1105,7 @@ class MoonMindAgentRun:
         return f"{task_workflow_id}:session:{runtime_id}"
 
     @staticmethod
-    def _task_scoped_session_visibility(
+    def _workflow_scoped_session_visibility(
         *,
         binding: CodexManagedSessionBinding,
     ) -> dict[str, Any]:
@@ -1119,19 +1119,19 @@ class MoonMindAgentRun:
         }
 
     @staticmethod
-    def _task_scoped_session_static_details(
+    def _workflow_scoped_session_static_details(
         *,
         binding: CodexManagedSessionBinding,
     ) -> str:
         return (
-            "Task-scoped managed runtime session | "
+            "Workflow-scoped managed runtime session | "
             f"taskRunId={binding.task_run_id} | "
             f"runtime={binding.runtime_id} | "
             f"session={binding.session_id} | "
             f"epoch={binding.session_epoch}"
         )
 
-    async def _bind_deferred_task_scoped_session_after_slot(
+    async def _bind_deferred_workflow_scoped_session_after_slot(
         self,
         *,
         request: AgentExecutionRequest,
@@ -1166,7 +1166,7 @@ class MoonMindAgentRun:
             runtimeId=session_runtime_id,
             executionProfileRef=request.execution_profile_ref,
         )
-        session_workflow_id = self._task_scoped_session_workflow_id(
+        session_workflow_id = self._workflow_scoped_session_workflow_id(
             task_workflow_id=task_workflow_id,
             runtime_id=session_runtime_id,
         )
@@ -1180,9 +1180,9 @@ class MoonMindAgentRun:
             id=session_workflow_id,
             task_queue=WORKFLOW_TASK_QUEUE,
             parent_close_policy=workflow.ParentClosePolicy.ABANDON,
-            search_attributes=self._task_scoped_session_visibility(binding=binding),
-            static_summary="Task-scoped managed runtime session",
-            static_details=self._task_scoped_session_static_details(binding=binding),
+            search_attributes=self._workflow_scoped_session_visibility(binding=binding),
+            static_summary="Workflow-scoped managed runtime session",
+            static_details=self._workflow_scoped_session_static_details(binding=binding),
         )
 
         if parent_info is not None:
@@ -2416,7 +2416,7 @@ class MoonMindAgentRun:
                                 },
                             )
 
-                    request = await self._bind_deferred_task_scoped_session_after_slot(
+                    request = await self._bind_deferred_workflow_scoped_session_after_slot(
                         request=request,
                         runtime_id=runtime_id,
                         parent_info=parent_info,

@@ -18,13 +18,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from moonmind.config.settings import WorkflowSettings, settings
 from moonmind.utils.build_info import resolve_moonmind_build_id
-from moonmind.workflows.tasks.runtime_defaults import (
+from moonmind.workflows.executions.runtime_defaults import (
     DEFAULT_REPOSITORY,
     normalize_runtime_id,
-    resolve_default_task_runtime,
+    resolve_default_workflow_runtime,
     resolve_runtime_defaults,
 )
-from moonmind.workflows.tasks.task_contract import build_runtime_command_preview_config
+from moonmind.workflows.executions.execution_contract import build_runtime_command_preview_config
 
 logger = logging.getLogger(__name__)
 
@@ -562,7 +562,7 @@ def build_runtime_config(
     elif configured_runtime in supported_task_runtimes:
         default_task_runtime = configured_runtime
     else:
-        configured_default = resolve_default_task_runtime(settings.workflow)
+        configured_default = resolve_default_workflow_runtime(settings.workflow)
         if configured_default in supported_task_runtimes:
             default_task_runtime = configured_default
         else:

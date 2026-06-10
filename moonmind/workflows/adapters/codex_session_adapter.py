@@ -59,7 +59,7 @@ from moonmind.workflows.codex_session_timeouts import (
     MAX_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS,
 )
 from moonmind.workflows.provider_failures import classify_provider_failure
-from moonmind.workflows.tasks.runtime_defaults import resolve_runtime_defaults
+from moonmind.workflows.executions.runtime_defaults import resolve_runtime_defaults
 from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
     append_managed_codex_runtime_note,
 )
@@ -1357,7 +1357,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
     ) -> CodexManagedSessionLocator:
         snapshot = await self._load_snapshot(binding.workflow_id)
         if not snapshot.container_id or not snapshot.thread_id:
-            raise ValueError("Task-scoped managed session has no runtime handles yet")
+            raise ValueError("Workflow-scoped managed session has no runtime handles yet")
         return CodexManagedSessionLocator(
             sessionId=binding.session_id,
             sessionEpoch=snapshot.binding.session_epoch,

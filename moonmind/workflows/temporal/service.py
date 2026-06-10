@@ -2060,7 +2060,7 @@ class TemporalExecutionService:
             record.workflow_type is TemporalWorkflowType.RUN
             and record.state not in TERMINAL_STATES
         ):
-            await self._best_effort_terminate_task_scoped_managed_sessions(
+            await self._best_effort_terminate_workflow_scoped_managed_sessions(
                 workflow_id=record.workflow_id,
                 reason=reason_text,
             )
@@ -2404,7 +2404,7 @@ class TemporalExecutionService:
         await self._session.refresh(record)
         return record
 
-    async def _best_effort_terminate_task_scoped_managed_sessions(
+    async def _best_effort_terminate_workflow_scoped_managed_sessions(
         self,
         *,
         workflow_id: str,

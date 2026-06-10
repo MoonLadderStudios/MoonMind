@@ -53,6 +53,9 @@ SUPPORTED_SIGNAL_NAMES = (
     "DependencyResolved",
     "BypassDependencies",
 )
+# legacy_run contract — persisted memo/search-attribute/parameter keys written by
+# MoonMind.Run histories; key values rename/are removed at the
+# MoonMind.UserWorkflow v2 cutover (MM-730, hard-switch plan §15.2).
 TASK_RUN_ID_MEMO_KEYS = ("taskRunId", "task_run_id")
 TASK_RUN_ID_SEARCH_ATTR_KEYS = ("mm_task_run_id",)
 TASK_RUN_ID_PARAM_KEYS = ("taskRunId", "task_run_id")
@@ -442,6 +445,10 @@ class StepExecutionCheckpointModel(BaseModel):
     )
     boundary: StepExecutionCheckpointBoundary = Field(..., alias="boundary")
     source: StepExecutionIdentityModel = Field(..., alias="source")
+    # legacy_run contract — "taskInputSnapshotRef"/"task*" wire keys below (and
+    # their python field names) appear in persisted checkpoint/update/signal
+    # payloads for MoonMind.Run histories; they rename at the
+    # MoonMind.UserWorkflow v2 cutover (MM-730).
     task_input_snapshot_ref: str = Field(
         ..., alias="taskInputSnapshotRef", min_length=1
     )
@@ -1578,7 +1585,7 @@ class ExecutionMergeAutomationModel(BaseModel):
             self.child_workflow_id = self.workflow_id
         return self
 
-class TaskInputSnapshotDescriptorModel(BaseModel):
+class WorkflowInputSnapshotDescriptorModel(BaseModel):
     """Compact pointer to the authoritative original task input snapshot."""
 
     model_config = ConfigDict(populate_by_name=True)
@@ -1602,7 +1609,7 @@ class TaskInputSnapshotDescriptorModel(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _authoritative_requires_ref(self) -> "TaskInputSnapshotDescriptorModel":
+    def _authoritative_requires_ref(self) -> "WorkflowInputSnapshotDescriptorModel":
         if self.reconstruction_mode == "authoritative" and not self.artifact_ref:
             raise ValueError("authoritative reconstruction requires artifactRef")
         return self
@@ -2037,8 +2044,8 @@ class ExecutionModel(BaseModel):
         default_factory=dict, alias="inputParameters"
     )
     input_artifact_ref: Optional[str] = Field(None, alias="inputArtifactRef")
-    task_input_snapshot: TaskInputSnapshotDescriptorModel = Field(
-        default_factory=TaskInputSnapshotDescriptorModel,
+    task_input_snapshot: WorkflowInputSnapshotDescriptorModel = Field(
+        default_factory=WorkflowInputSnapshotDescriptorModel,
         alias="taskInputSnapshot",
     )
     target_runtime: Optional[str] = Field(None, alias="targetRuntime")

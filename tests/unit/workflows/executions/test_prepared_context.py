@@ -8,7 +8,7 @@ from moonmind.memory.procedural import (
     FixPattern,
     extract_error_signature,
 )
-from moonmind.workflows.tasks.prepared_context import (
+from moonmind.workflows.executions.prepared_context import (
     PreparedContextFailure,
     PreparedInputEntry,
     PreparedInputManifest,
@@ -487,12 +487,12 @@ def test_execution_context_uses_configured_default_memory_context_budget(
         return Pack()
 
     monkeypatch.setattr(
-        "moonmind.workflows.tasks.prepared_context.settings.workflow."
+        "moonmind.workflows.executions.prepared_context.settings.workflow."
         "memory_context_budget_tokens",
         1234,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.tasks.prepared_context.build_memory_context_pack",
+        "moonmind.workflows.executions.prepared_context.build_memory_context_pack",
         fake_build_memory_context_pack,
     )
 

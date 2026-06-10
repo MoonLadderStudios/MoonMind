@@ -82,13 +82,13 @@ from moonmind.workflows.temporal.workers import (
     describe_configured_worker,
     list_registered_workflow_types,
 )
-from moonmind.workflows.tasks.task_contract import (
-    build_authoritative_task_input_snapshot,
+from moonmind.workflows.executions.execution_contract import (
+    build_authoritative_workflow_input_snapshot,
 )
-from moonmind.workflows.tasks.preset_goal_scheduler import (
+from moonmind.workflows.executions.preset_goal_scheduler import (
     goal_from_payloads,
     schedule_preset_from_goal,
-    task_is_already_authored,
+    workflow_is_already_authored,
 )
 from moonmind.workflows.temporal.workflows.provider_profile_manager import MoonMindProviderProfileManagerWorkflow as MoonMindProviderProfileManager
 from moonmind.workflows.temporal.workflows.manifest_ingest import (
@@ -235,7 +235,7 @@ async def _expand_task_template_for_child_run(
         )
         schedule = (
             None
-            if task_is_already_authored(task_payload)
+            if workflow_is_already_authored(task_payload)
             else schedule_preset_from_goal(goal)
         )
         if schedule is None:
@@ -391,7 +391,7 @@ def _build_child_run_task_input_snapshot_payload(
             "targetRuntime": parameters.get("targetRuntime"),
             "requiredCapabilities": list(parameters.get("requiredCapabilities") or []),
             "task": dict(task_payload),
-            "authoredTaskInput": build_authoritative_task_input_snapshot(
+            "authoredTaskInput": build_authoritative_workflow_input_snapshot(
                 task_payload=task_payload,
                 repository=parameters.get("repository"),
                 target_runtime=parameters.get("targetRuntime"),

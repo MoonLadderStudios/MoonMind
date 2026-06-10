@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from moonmind.workflows.tasks.runtime_inheritance import (
+from moonmind.workflows.executions.runtime_inheritance import (
     SCOPE_CREATE_CHILD,
     SCOPE_INHERIT_RUNTIME,
     ExecutionPrincipal,
@@ -207,7 +207,7 @@ async def test_caller_inheritance_rejected_for_non_task_principal() -> None:
             principal=principal,
             service=service,
         )
-    assert excinfo.value.code == "runtime_inheritance_requires_task_principal"
+    assert excinfo.value.code == "runtime_inheritance_requires_workflow_principal"
 
 
 @pytest.mark.asyncio

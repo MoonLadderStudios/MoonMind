@@ -1,7 +1,7 @@
-from moonmind.workflows.tasks.preset_goal_scheduler import (
+from moonmind.workflows.executions.preset_goal_scheduler import (
     goal_from_payloads,
     schedule_preset_from_goal,
-    task_is_already_authored,
+    workflow_is_already_authored,
 )
 
 
@@ -61,9 +61,9 @@ def test_schedule_preset_from_goal_defaults_to_moonspec_orchestrate() -> None:
 
 
 def test_goal_scheduler_skips_authored_tasks() -> None:
-    assert task_is_already_authored({"steps": [{"title": "Already selected"}]})
-    assert task_is_already_authored({"taskTemplate": {"slug": "jira-implement"}})
-    assert task_is_already_authored({"tool": {"id": "jira-issue-updater"}})
+    assert workflow_is_already_authored({"steps": [{"title": "Already selected"}]})
+    assert workflow_is_already_authored({"taskTemplate": {"slug": "jira-implement"}})
+    assert workflow_is_already_authored({"tool": {"id": "jira-issue-updater"}})
 
 
 def test_goal_from_payloads_prefers_task_goal() -> None:

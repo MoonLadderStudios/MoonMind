@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 from typing import Any, Mapping
 
-DEFAULT_TASK_RUNTIME = "codex_cli"
+DEFAULT_WORKFLOW_RUNTIME = "codex_cli"
 DEFAULT_REPOSITORY = "MoonLadderStudios/MoonMind"
 
 # Canonical runtime ids as primary keys.
@@ -58,16 +58,19 @@ def normalize_runtime_id(runtime: object) -> str:
     ``claude_code``) and lowercases the result.  Unknown values are
     returned as-is (lowercased) so callers can handle them gracefully.
     """
-    key = (_clean_optional_string(runtime) or DEFAULT_TASK_RUNTIME).lower()
+    key = (_clean_optional_string(runtime) or DEFAULT_WORKFLOW_RUNTIME).lower()
     return _RUNTIME_ALIASES.get(key, key)
 
-def resolve_default_task_runtime(
+def resolve_default_workflow_runtime(
     workflow_settings: Any,
     *,
-    fallback: str = DEFAULT_TASK_RUNTIME,
+    fallback: str = DEFAULT_WORKFLOW_RUNTIME,
 ) -> str:
     """Return the configured default runtime with a stable fallback."""
 
+    # Settings key "workflow.default_task_runtime" (env WORKFLOW_DEFAULT_TASK_RUNTIME)
+    # is an operator-visible config contract; it renames in the settings-catalog
+    # work package, not here.
     configured = _clean_optional_string(
         getattr(workflow_settings, "default_task_runtime", None)
     )
@@ -118,8 +121,8 @@ def resolve_runtime_defaults(
 
 __all__ = [
     "DEFAULT_REPOSITORY",
-    "DEFAULT_TASK_RUNTIME",
+    "DEFAULT_WORKFLOW_RUNTIME",
     "normalize_runtime_id",
-    "resolve_default_task_runtime",
+    "resolve_default_workflow_runtime",
     "resolve_runtime_defaults",
 ]

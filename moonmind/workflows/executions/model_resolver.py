@@ -11,7 +11,7 @@ managed agent run.  The precedence chain is:
 
 Usage::
 
-    from moonmind.workflows.tasks.model_resolver import resolve_effective_model
+    from moonmind.workflows.executions.model_resolver import resolve_effective_model
 
     resolved_model, model_source = resolve_effective_model(
         runtime_id="codex_cli",
@@ -24,13 +24,16 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from moonmind.workflows.tasks.runtime_defaults import (
+from moonmind.workflows.executions.runtime_defaults import (
     normalize_runtime_id,
     resolve_runtime_defaults,
 )
 
 __all__ = ["resolve_effective_model"]
 
+# legacy_run contract — the model_source value "task_override" is persisted in
+# execution parameters/diagnostics; the value renames at the
+# MoonMind.UserWorkflow v2 cutover (MM-730).
 _MODEL_SOURCE_TASK_OVERRIDE = "task_override"
 _MODEL_SOURCE_PROFILE_DEFAULT = "provider_profile_default"
 _MODEL_SOURCE_RUNTIME_DEFAULT = "runtime_default"
@@ -86,7 +89,7 @@ def resolve_effective_model(
             return profile_model, _MODEL_SOURCE_PROFILE_DEFAULT
 
     # 3. Runtime default.  Always normalize (normalize_runtime_id falls back to
-    # DEFAULT_TASK_RUNTIME for None/empty), so the runtime-default tier applies
+    # DEFAULT_WORKFLOW_RUNTIME for None/empty), so the runtime-default tier applies
     # even when the caller omits targetRuntime.
     canonical_runtime = normalize_runtime_id(runtime_id)
     runtime_model, _ = resolve_runtime_defaults(

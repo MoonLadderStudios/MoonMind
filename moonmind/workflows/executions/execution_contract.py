@@ -1,4 +1,4 @@
-"""Canonical task payload models and normalization helpers for queue jobs."""
+"""Canonical workflow execution payload models and normalization helpers."""
 
 from __future__ import annotations
 
@@ -20,9 +20,9 @@ from pydantic import (
 
 from moonmind.config.settings import settings
 
-from .job_types import CANONICAL_TASK_JOB_TYPE, LEGACY_TASK_JOB_TYPES
+from .job_types import CANONICAL_WORKFLOW_JOB_TYPE, LEGACY_WORKFLOW_JOB_TYPES
 
-DEFAULT_TASK_RUNTIME = "codex"
+DEFAULT_WORKFLOW_RUNTIME = "codex"
 SUPPORTED_RUNTIME_MODES = {
     "codex",
     "codex_cli",
@@ -109,7 +109,7 @@ _EMBEDDED_ATTACHMENT_DATA_FIELDS = frozenset(
     }
 )
 
-class TaskContractError(ValueError):
+class WorkflowContractError(ValueError):
     """Raised when queue payloads violate task contract requirements."""
 
     def __init__(
@@ -137,7 +137,7 @@ def _normalize_preset_version_alias(value: object) -> object:
     legacy_version = _clean_optional_str(normalized.pop("version"))
     current_version = _clean_optional_str(normalized.get("presetVersion"))
     if legacy_version and current_version and legacy_version != current_version:
-        raise TaskContractError("presetVersion conflicts with legacy version")
+        raise WorkflowContractError("presetVersion conflicts with legacy version")
     if legacy_version and not current_version:
         normalized["presetVersion"] = legacy_version
     return normalized
@@ -203,7 +203,7 @@ def _raise_attachment_validation_error(
     target_kind: str,
     step_ref: str | None = None,
 ) -> None:
-    raise TaskContractError(
+    raise WorkflowContractError(
         message,
         diagnostic=_attachment_validation_failed_diagnostic(
             attachment=attachment,
@@ -285,7 +285,7 @@ def _normalize_runtime_value(value: object, *, field_name: str) -> str | None:
     lowered = candidate.lower()
     if lowered not in SUPPORTED_RUNTIME_MODES:
         supported = ", ".join(sorted(SUPPORTED_RUNTIME_MODES))
-        raise TaskContractError(f"{field_name} must be one of: {supported}")
+        raise WorkflowContractError(f"{field_name} must be one of: {supported}")
     return lowered
 
 
@@ -302,7 +302,7 @@ def _first_line_and_body(raw_instructions: str) -> tuple[str, str]:
     return lines[0].rstrip(), "\n".join(lines[1:])
 
 
-def _runtime_mode_from_task(
+def _runtime_mode_from_spec(
     task: Mapping[str, Any], *, target_runtime: object = None
 ) -> str | None:
     runtime = _safe_mapping(task.get("runtime"))
@@ -317,7 +317,7 @@ def _runtime_mode_from_task(
 
 
 def _runtime_supports_slash_passthrough(runtime_mode: str | None) -> bool:
-    return (runtime_mode or DEFAULT_TASK_RUNTIME) in _SLASH_COMMAND_PASSTHROUGH_RUNTIMES
+    return (runtime_mode or DEFAULT_WORKFLOW_RUNTIME) in _SLASH_COMMAND_PASSTHROUGH_RUNTIMES
 
 
 def build_runtime_command_preview_config() -> dict[str, Any]:
@@ -489,9 +489,9 @@ def _validate_supplied_runtime_command(
     if supplied is None:
         return
     if not isinstance(supplied, Mapping):
-        raise TaskContractError(f"{field_name} must be an object")
+        raise WorkflowContractError(f"{field_name} must be an object")
     if expected is None:
-        raise TaskContractError(
+        raise WorkflowContractError(
             f"{field_name} conflicts with backend runtime command normalization"
         )
     for key in (
@@ -506,7 +506,7 @@ def _validate_supplied_runtime_command(
         if key not in supplied:
             continue
         if supplied.get(key) != expected.get(key):
-            raise TaskContractError(
+            raise WorkflowContractError(
                 f"{field_name} conflicts with backend runtime command normalization"
             )
 
@@ -514,7 +514,7 @@ def _normalize_publish_mode(value: object) -> str:
     candidate = (_clean_optional_str(value) or _default_publish_mode()).lower()
     if candidate not in SUPPORTED_PUBLISH_MODES:
         supported = ", ".join(sorted(SUPPORTED_PUBLISH_MODES))
-        raise TaskContractError(f"publish.mode must be one of: {supported}")
+        raise WorkflowContractError(f"publish.mode must be one of: {supported}")
     return candidate
 
 def _normalize_skill_id(value: object) -> str:
@@ -571,7 +571,7 @@ def resolve_publish_mode_for_skill(
             return "none"
         publish_mode = _normalize_publish_mode(requested_mode)
         if publish_mode != "none":
-            raise TaskContractError(
+            raise WorkflowContractError(
                 f"task.publish.mode must be 'none' when using skill '{normalized_skill_id}'"
             )
         return "none"
@@ -585,7 +585,7 @@ def resolve_publish_mode_for_skill(
         ):
             return publish_mode
         if publish_mode != "none":
-            raise TaskContractError(
+            raise WorkflowContractError(
                 f"task.publish.mode must be 'none' when using non-repository skill '{normalized_skill_id}'"
             )
         return "none"
@@ -642,30 +642,30 @@ def _normalize_secret_ref(value: object, *, field_name: str) -> str | None:
     if candidate is None:
         return None
     if len(candidate) > 512:
-        raise TaskContractError(f"{field_name} exceeds max length")
+        raise WorkflowContractError(f"{field_name} exceeds max length")
 
     parsed = urlsplit(candidate)
     if parsed.scheme.lower() != "vault":
-        raise TaskContractError(f"{field_name} must use vault:// secret references")
+        raise WorkflowContractError(f"{field_name} must use vault:// secret references")
 
     mount = parsed.netloc.strip()
     path = parsed.path.lstrip("/").strip()
     field = parsed.fragment.strip()
     if not mount or not path or not field:
-        raise TaskContractError(
+        raise WorkflowContractError(
             f"{field_name} must include mount/path and #field (vault://<mount>/<path>#<field>)"
         )
     if not _SECRET_REF_MOUNT_PATTERN.fullmatch(mount):
-        raise TaskContractError(f"{field_name} mount contains invalid characters")
+        raise WorkflowContractError(f"{field_name} mount contains invalid characters")
     if not _SECRET_REF_PATH_PATTERN.fullmatch(path):
-        raise TaskContractError(f"{field_name} path contains invalid characters")
+        raise WorkflowContractError(f"{field_name} path contains invalid characters")
     if any(segment in {"..", "."} for segment in path.split("/")):
-        raise TaskContractError(f"{field_name} path traversal is not allowed")
+        raise WorkflowContractError(f"{field_name} path traversal is not allowed")
     if not _SECRET_REF_FIELD_PATTERN.fullmatch(field):
-        raise TaskContractError(f"{field_name} field contains invalid characters")
+        raise WorkflowContractError(f"{field_name} field contains invalid characters")
     return f"vault://{mount}/{path}#{field}"
 
-class TaskSkillSelectorExact(BaseModel):
+class WorkflowSkillSelectorExact(BaseModel):
     """Explicitly included skill by name and optional version."""
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
@@ -678,13 +678,13 @@ class TaskSkillSelectorExact(BaseModel):
     def _normalize_optional_strings(cls, value: object) -> str | None:
         return _clean_optional_str(value)
 
-class TaskSkillSelectors(BaseModel):
+class WorkflowSkillSelectors(BaseModel):
     """Resolved definition for active skills during execution."""
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     sets: list[str] | None = Field(None, alias="sets")
-    include: list[TaskSkillSelectorExact] | None = Field(None, alias="include")
+    include: list[WorkflowSkillSelectorExact] | None = Field(None, alias="include")
     exclude: list[str] | None = Field(None, alias="exclude")
     materialization_mode: str | None = Field(None, alias="materializationMode")
 
@@ -694,7 +694,7 @@ class TaskSkillSelectors(BaseModel):
         if value is None:
             return None
         if not isinstance(value, list):
-            raise TaskContractError("task.skills.sets must be a list")
+            raise WorkflowContractError("task.skills.sets must be a list")
         normalized: list[str] = []
         seen: set[str] = set()
         for raw in value:
@@ -710,7 +710,7 @@ class TaskSkillSelectors(BaseModel):
         if value is None:
             return None
         if not isinstance(value, list):
-            raise TaskContractError("task.skills.exclude must be a list")
+            raise WorkflowContractError("task.skills.exclude must be a list")
         normalized: list[str] = []
         seen: set[str] = set()
         for raw in value:
@@ -726,7 +726,7 @@ class TaskSkillSelectors(BaseModel):
         if value is None:
             return None
         if not isinstance(value, list):
-            raise TaskContractError("task.skills.include must be a list")
+            raise WorkflowContractError("task.skills.include must be a list")
         return value
 
     @field_validator("materialization_mode", mode="before")
@@ -737,28 +737,28 @@ class TaskSkillSelectors(BaseModel):
             return None
         lowered = candidate.lower()
         if lowered not in {"hybrid", "remote", "local", "none"}:
-            raise TaskContractError(
+            raise WorkflowContractError(
                 "task.skills.materializationMode must be hybrid, remote, local, or none"
             )
         return lowered
 
-def _coerce_task_skill_selectors(
-    value: TaskSkillSelectors | Mapping[str, Any] | None,
+def _coerce_workflow_skill_selectors(
+    value: WorkflowSkillSelectors | Mapping[str, Any] | None,
     *,
     field_name: str,
-) -> TaskSkillSelectors | None:
+) -> WorkflowSkillSelectors | None:
     if value is None:
         return None
-    if isinstance(value, TaskSkillSelectors):
+    if isinstance(value, WorkflowSkillSelectors):
         return value
     if isinstance(value, Mapping):
-        return TaskSkillSelectors.model_validate(dict(value))
-    raise TaskContractError(f"{field_name} must be an object")
+        return WorkflowSkillSelectors.model_validate(dict(value))
+    raise WorkflowContractError(f"{field_name} must be an object")
 
-def build_effective_task_skill_selectors(
-    task_skills: TaskSkillSelectors | Mapping[str, Any] | None,
-    step_skills: TaskSkillSelectors | Mapping[str, Any] | None,
-) -> TaskSkillSelectors | None:
+def build_effective_workflow_skill_selectors(
+    task_skills: WorkflowSkillSelectors | Mapping[str, Any] | None,
+    step_skills: WorkflowSkillSelectors | Mapping[str, Any] | None,
+) -> WorkflowSkillSelectors | None:
     """Merge task-level and step-level agent skill selectors for one step.
 
     Step selectors refine inherited task intent. Exclusions are retained in the
@@ -766,10 +766,10 @@ def build_effective_task_skill_selectors(
     resolution receives deterministic input without mutating the task selector.
     """
 
-    task = _coerce_task_skill_selectors(
+    task = _coerce_workflow_skill_selectors(
         task_skills, field_name="task.skills"
     )
-    step = _coerce_task_skill_selectors(
+    step = _coerce_workflow_skill_selectors(
         step_skills, field_name="task.steps[].skills"
     )
     if task is None and step is None:
@@ -791,12 +791,12 @@ def build_effective_task_skill_selectors(
                 excludes.append(item)
                 seen_excludes.add(item)
 
-    include_by_name: dict[str, TaskSkillSelectorExact] = {}
+    include_by_name: dict[str, WorkflowSkillSelectorExact] = {}
     for source in (task, step):
         for item in (source.include if source is not None else None) or []:
             if _normalize_skill_id(item.name) == "auto":
                 continue
-            include_by_name[item.name] = TaskSkillSelectorExact(
+            include_by_name[item.name] = WorkflowSkillSelectorExact(
                 name=item.name,
                 version=item.version,
             )
@@ -824,9 +824,9 @@ def build_effective_task_skill_selectors(
 
     if not payload:
         return None
-    return TaskSkillSelectors.model_validate(payload)
+    return WorkflowSkillSelectors.model_validate(payload)
 
-class TaskSkillSelection(BaseModel):
+class WorkflowSkillSelection(BaseModel):
     """Selected skill and optional skill argument object."""
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
@@ -850,11 +850,11 @@ class TaskSkillSelection(BaseModel):
         if value is None:
             return None
         if not isinstance(value, list):
-            raise TaskContractError("task.skill.requiredCapabilities must be a list")
+            raise WorkflowContractError("task.skill.requiredCapabilities must be a list")
         normalized = _normalize_capabilities(value)
         return normalized or None
 
-class TaskRuntimeSelection(BaseModel):
+class WorkflowRuntimeSelection(BaseModel):
     """Runtime mode and optional model/effort overrides."""
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
@@ -882,7 +882,7 @@ class TaskRuntimeSelection(BaseModel):
     def _normalize_optional_strings(cls, value: object) -> str | None:
         return _clean_optional_str(value)
 
-class TaskGitSelection(BaseModel):
+class WorkflowGitSelection(BaseModel):
     """Branch-selection values for task execution."""
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
@@ -904,7 +904,7 @@ class TaskGitSelection(BaseModel):
     def _normalize_branches(cls, value: object) -> str | None:
         return _clean_optional_str(value)
 
-class TaskPublishSelection(BaseModel):
+class WorkflowPublishSelection(BaseModel):
     """Publish controls for branch/pull-request behavior."""
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
@@ -935,7 +935,7 @@ class TaskPublishSelection(BaseModel):
     def _normalize_optional_strings(cls, value: object) -> str | None:
         return _clean_optional_str(value)
 
-class TaskAuthSelection(BaseModel):
+class WorkflowAuthSelection(BaseModel):
     """Optional secret references for repo and publish authentication."""
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
@@ -953,7 +953,7 @@ class TaskAuthSelection(BaseModel):
     def _normalize_publish_auth_ref(cls, value: object) -> str | None:
         return _normalize_secret_ref(value, field_name="auth.publishAuthRef")
 
-class TaskContainerCacheVolume(BaseModel):
+class WorkflowContainerCacheVolume(BaseModel):
     """Named volume mount requested by container-enabled task execution."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
@@ -966,13 +966,13 @@ class TaskContainerCacheVolume(BaseModel):
     def _normalize_name(cls, value: object) -> str:
         cleaned = _clean_optional_str(value)
         if not cleaned:
-            raise TaskContractError("task.container.cacheVolumes[].name is required")
+            raise WorkflowContractError("task.container.cacheVolumes[].name is required")
         if "," in cleaned or "=" in cleaned:
-            raise TaskContractError(
+            raise WorkflowContractError(
                 "task.container.cacheVolumes[].name contains invalid characters"
             )
         if not _CONTAINER_VOLUME_NAME_PATTERN.fullmatch(cleaned):
-            raise TaskContractError(
+            raise WorkflowContractError(
                 "task.container.cacheVolumes[].name has invalid format"
             )
         return cleaned
@@ -982,18 +982,18 @@ class TaskContainerCacheVolume(BaseModel):
     def _normalize_target(cls, value: object) -> str:
         cleaned = _clean_optional_str(value)
         if not cleaned:
-            raise TaskContractError("task.container.cacheVolumes[].target is required")
+            raise WorkflowContractError("task.container.cacheVolumes[].target is required")
         if "," in cleaned:
-            raise TaskContractError(
+            raise WorkflowContractError(
                 "task.container.cacheVolumes[].target may not contain ','"
             )
         if not cleaned.startswith("/"):
-            raise TaskContractError(
+            raise WorkflowContractError(
                 "task.container.cacheVolumes[].target must be an absolute path"
             )
         return cleaned
 
-class TaskContainerSelection(BaseModel):
+class WorkflowContainerSelection(BaseModel):
     """Optional container execution controls for canonical tasks."""
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
@@ -1007,7 +1007,7 @@ class TaskContainerSelection(BaseModel):
     timeout_seconds: int | None = Field(None, alias="timeoutSeconds")
     pull: str | None = Field(None, alias="pull")
     resources: dict[str, Any] | None = Field(None, alias="resources")
-    cache_volumes: list[TaskContainerCacheVolume] | None = Field(
+    cache_volumes: list[WorkflowContainerCacheVolume] | None = Field(
         None, alias="cacheVolumes"
     )
 
@@ -1024,7 +1024,7 @@ class TaskContainerSelection(BaseModel):
             return True
         if lowered in {"0", "false", "no", "off"}:
             return False
-        raise TaskContractError("task.container.enabled must be a boolean")
+        raise WorkflowContractError("task.container.enabled must be a boolean")
 
     @field_validator("image", "workdir", "artifacts_subdir", "pull", mode="before")
     @classmethod
@@ -1037,7 +1037,7 @@ class TaskContainerSelection(BaseModel):
         if value is None:
             return None
         if not isinstance(value, list):
-            raise TaskContractError("task.container.command must be a list")
+            raise WorkflowContractError("task.container.command must be a list")
         normalized: list[str] = []
         for raw in value:
             item = _clean_optional_str(raw)
@@ -1052,16 +1052,16 @@ class TaskContainerSelection(BaseModel):
         if value is None:
             return None
         if not isinstance(value, Mapping):
-            raise TaskContractError("task.container.env must be an object")
+            raise WorkflowContractError("task.container.env must be an object")
         normalized: dict[str, str] = {}
         for raw_key, raw_value in value.items():
             key = _clean_optional_str(raw_key)
             if key is None:
                 continue
             if "=" in key:
-                raise TaskContractError("task.container.env keys may not contain '='")
+                raise WorkflowContractError("task.container.env keys may not contain '='")
             if key.upper() in _CONTAINER_RESERVED_ENV_KEYS:
-                raise TaskContractError(
+                raise WorkflowContractError(
                     f"task.container.env may not override reserved key '{key}'"
                 )
             normalized[key] = _clean_str(raw_value)
@@ -1075,11 +1075,11 @@ class TaskContainerSelection(BaseModel):
         try:
             timeout = int(value)
         except (TypeError, ValueError) as exc:
-            raise TaskContractError(
+            raise WorkflowContractError(
                 "task.container.timeoutSeconds must be an integer"
             ) from exc
         if timeout < 1:
-            raise TaskContractError(
+            raise WorkflowContractError(
                 "task.container.timeoutSeconds must be greater than zero"
             )
         return timeout
@@ -1091,24 +1091,24 @@ class TaskContainerSelection(BaseModel):
             return None
         lowered = value.lower()
         if lowered not in {"if-missing", "always"}:
-            raise TaskContractError("task.container.pull must be if-missing or always")
+            raise WorkflowContractError("task.container.pull must be if-missing or always")
         return lowered
 
     @model_validator(mode="after")
-    def _validate_enabled_requirements(self) -> "TaskContainerSelection":
+    def _validate_enabled_requirements(self) -> "WorkflowContainerSelection":
         if not self.enabled:
             return self
         if not self.image:
-            raise TaskContractError(
+            raise WorkflowContractError(
                 "task.container.image is required when task.container.enabled=true"
             )
         if not self.command:
-            raise TaskContractError(
+            raise WorkflowContractError(
                 "task.container.command is required when task.container.enabled=true"
             )
         return self
 
-class TaskProposalProviderPolicy(BaseModel):
+class WorkflowProposalProviderPolicy(BaseModel):
     """Provider-specific proposal delivery metadata."""
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
@@ -1130,7 +1130,7 @@ class TaskProposalProviderPolicy(BaseModel):
         if value is None or value == "":
             return None
         if not isinstance(value, list):
-            raise TaskContractError(
+            raise WorkflowContractError(
                 "task.proposalPolicy.delivery labels/components must be lists"
             )
         normalized: list[str] = []
@@ -1143,14 +1143,14 @@ class TaskProposalProviderPolicy(BaseModel):
             seen.add(item)
         return normalized or None
 
-class TaskProposalDeliveryPolicy(BaseModel):
+class WorkflowProposalDeliveryPolicy(BaseModel):
     """Optional provider routing policy for proposal delivery."""
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     provider: str | None = Field(None, alias="provider")
-    github: TaskProposalProviderPolicy | None = Field(None, alias="github")
-    jira: TaskProposalProviderPolicy | None = Field(None, alias="jira")
+    github: WorkflowProposalProviderPolicy | None = Field(None, alias="github")
+    jira: WorkflowProposalProviderPolicy | None = Field(None, alias="jira")
 
     @field_validator("provider", mode="before")
     @classmethod
@@ -1160,12 +1160,12 @@ class TaskProposalDeliveryPolicy(BaseModel):
             return None
         lowered = cleaned.lower()
         if lowered not in {"auto", "github", "jira"}:
-            raise TaskContractError(
+            raise WorkflowContractError(
                 "task.proposalPolicy.delivery.provider must be github, jira, or auto"
             )
         return lowered
 
-class TaskProposalPolicy(BaseModel):
+class WorkflowProposalPolicy(BaseModel):
     """Optional policy block controlling worker proposal emission."""
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
@@ -1174,7 +1174,7 @@ class TaskProposalPolicy(BaseModel):
     max_items: dict[str, int] | None = Field(None, alias="maxItems")
     min_severity_for_moonmind: str | None = Field(None, alias="minSeverityForMoonMind")
     default_runtime: str | None = Field(None, alias="defaultRuntime")
-    delivery: TaskProposalDeliveryPolicy | None = Field(None, alias="delivery")
+    delivery: WorkflowProposalDeliveryPolicy | None = Field(None, alias="delivery")
 
     @field_validator("default_runtime", mode="before")
     @classmethod
@@ -1187,7 +1187,7 @@ class TaskProposalPolicy(BaseModel):
         if value is None or value == "":
             return None
         if not isinstance(value, list):
-            raise TaskContractError("task.proposalPolicy.targets must be a list")
+            raise WorkflowContractError("task.proposalPolicy.targets must be a list")
         normalized: list[str] = []
         seen: set[str] = set()
         for raw in value:
@@ -1196,7 +1196,7 @@ class TaskProposalPolicy(BaseModel):
                 continue
             lowered = target.lower()
             if lowered not in _PROPOSAL_POLICY_TARGETS:
-                raise TaskContractError(
+                raise WorkflowContractError(
                     "task.proposalPolicy.targets entries must be 'project' or 'moonmind'"
                 )
             if lowered in seen:
@@ -1211,7 +1211,7 @@ class TaskProposalPolicy(BaseModel):
         if value is None or value == "":
             return None
         if not isinstance(value, Mapping):
-            raise TaskContractError("task.proposalPolicy.maxItems must be an object")
+            raise WorkflowContractError("task.proposalPolicy.maxItems must be an object")
         normalized: dict[str, int] = {}
         for key in _PROPOSAL_POLICY_TARGETS:
             raw = value.get(key)
@@ -1235,12 +1235,12 @@ class TaskProposalPolicy(BaseModel):
         lowered = cleaned.lower()
         if lowered not in _PROPOSAL_SEVERITIES:
             allowed = ", ".join(_PROPOSAL_SEVERITIES)
-            raise TaskContractError(
+            raise WorkflowContractError(
                 f"task.proposalPolicy.minSeverityForMoonMind must be one of: {allowed}"
             )
         return lowered
 
-class TaskInputAttachmentRef(BaseModel):
+class WorkflowInputAttachmentRef(BaseModel):
     """Compact task input attachment reference for task-shaped submissions."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
@@ -1291,7 +1291,7 @@ class TaskInputAttachmentRef(BaseModel):
             )
         return cleaned
 
-class TaskStepSource(BaseModel):
+class WorkflowStepSource(BaseModel):
     """Optional provenance for a step in a compiled task payload."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
@@ -1328,7 +1328,7 @@ class TaskStepSource(BaseModel):
         if value is None or value == "":
             return None
         if not isinstance(value, list):
-            raise TaskContractError("task.steps[].source.includePath must be a list")
+            raise WorkflowContractError("task.steps[].source.includePath must be a list")
         normalized = [
             cleaned
             for item in value
@@ -1372,7 +1372,7 @@ class AuthoredPresetBinding(BaseModel):
         if value is None or value == "":
             return None
         if not isinstance(value, list):
-            raise TaskContractError("task.authoredPresets[].includePath must be a list")
+            raise WorkflowContractError("task.authoredPresets[].includePath must be a list")
         normalized = [
             cleaned
             for item in value
@@ -1386,12 +1386,12 @@ class AuthoredPresetBinding(BaseModel):
         if value is None or value == "":
             return None
         if not isinstance(value, dict):
-            raise TaskContractError(
+            raise WorkflowContractError(
                 "task.authoredPresets[].inputMapping must be an object"
             )
         return dict(value)
 
-class TaskStepSpec(BaseModel):
+class WorkflowStepSpec(BaseModel):
     """Optional execution step contained within a canonical task payload."""
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
@@ -1399,12 +1399,12 @@ class TaskStepSpec(BaseModel):
     id: str | None = Field(None, alias="id")
     title: str | None = Field(None, alias="title")
     instructions: str | None = Field(None, alias="instructions")
-    runtime: TaskRuntimeSelection | None = Field(None, alias="runtime")
-    skill: TaskSkillSelection | None = Field(None, alias="skill")
-    skills: TaskSkillSelectors | None = Field(None, alias="skills")
-    runtime: TaskRuntimeSelection | None = Field(None, alias="runtime")
-    source: TaskStepSource | None = Field(None, alias="source")
-    input_attachments: list[TaskInputAttachmentRef] = Field(
+    runtime: WorkflowRuntimeSelection | None = Field(None, alias="runtime")
+    skill: WorkflowSkillSelection | None = Field(None, alias="skill")
+    skills: WorkflowSkillSelectors | None = Field(None, alias="skills")
+    runtime: WorkflowRuntimeSelection | None = Field(None, alias="runtime")
+    source: WorkflowStepSource | None = Field(None, alias="source")
+    input_attachments: list[WorkflowInputAttachmentRef] = Field(
         default_factory=list, alias="inputAttachments"
     )
 
@@ -1430,29 +1430,29 @@ class TaskStepSpec(BaseModel):
         payload = dict(value)
         raw_kind = _clean_optional_str(payload.get("kind"))
         if raw_kind is not None and raw_kind.lower() == "include":
-            raise TaskContractError(
+            raise WorkflowContractError(
                 "task.steps entries must not contain unresolved preset include work"
             )
         raw_type = _clean_optional_str(payload.get("type"))
         if raw_type is not None:
             step_type = raw_type.lower()
             if step_type not in {"tool", "skill"}:
-                raise TaskContractError("task.steps[].type must be one of: tool, skill")
+                raise WorkflowContractError("task.steps[].type must be one of: tool, skill")
             tool_payload = payload.get("tool")
             skill_payload = payload.get("skill")
             if step_type == "tool":
                 if not isinstance(tool_payload, Mapping):
-                    raise TaskContractError("Tool steps require a tool payload")
+                    raise WorkflowContractError("Tool steps require a tool payload")
                 tool_id = _clean_optional_str(
                     tool_payload.get("id") or tool_payload.get("name")
                 )
                 if not tool_id:
-                    raise TaskContractError(
+                    raise WorkflowContractError(
                         "task.steps[].tool.id or task.steps[].tool.name is required; "
                         "Tool steps require tool.id or tool.name"
                     )
                 if skill_payload is not None:
-                    raise TaskContractError(
+                    raise WorkflowContractError(
                         "Tool steps must not include a skill payload"
                     )
             if step_type == "skill":
@@ -1463,7 +1463,7 @@ class TaskStepSpec(BaseModel):
                     ).strip().lower()
                     legacy_skill_tool = tool_type in {"", "skill"}
                     if not legacy_skill_tool:
-                        raise TaskContractError(
+                        raise WorkflowContractError(
                             "Skill steps must not include a non-skill tool payload"
                         )
         if "inputAttachments" in payload:
@@ -1494,23 +1494,23 @@ class TaskStepSpec(BaseModel):
         blocked = sorted(key for key in payload.keys() if str(key).strip() in forbidden)
         if blocked:
             formatted = ", ".join(blocked)
-            raise TaskContractError(
-                f"task.steps entries may not define task-scoped overrides: {formatted}"
+            raise WorkflowContractError(
+                f"task.steps entries may not define workflow-scoped overrides: {formatted}"
             )
         return payload
 
 
 # --- MM-638: Recovery / Resume contract types ---
 
-TaskRecoveryKind = Literal["exact_full_rerun", "edited_full_retry", "recover_from_failed_step"]
+WorkflowRecoveryKind = Literal["exact_full_rerun", "edited_full_retry", "recover_from_failed_step"]
 
 
-class TaskRecoveryProvenance(BaseModel):
+class WorkflowRecoveryProvenance(BaseModel):
     """Recovery provenance attached to a task submission."""
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
-    kind: TaskRecoveryKind = Field(..., alias="kind")
+    kind: WorkflowRecoveryKind = Field(..., alias="kind")
     source_workflow_id: str = Field(..., alias="sourceWorkflowId")
     source_run_id: str = Field(..., alias="sourceRunId")
     requested_by: str | None = Field(None, alias="requestedBy")
@@ -1521,7 +1521,7 @@ class TaskRecoveryProvenance(BaseModel):
     def _require_non_empty(cls, value: object) -> str:
         cleaned = _clean_str(value)
         if not cleaned:
-            raise TaskContractError(
+            raise WorkflowContractError(
                 "sourceWorkflowId and sourceRunId must be non-empty strings"
             )
         return cleaned
@@ -1561,7 +1561,7 @@ class ResumeFromFailedStepRef(BaseModel):
     def _require_non_empty(cls, value: object) -> str:
         cleaned = _clean_str(value)
         if not cleaned:
-            raise TaskContractError(
+            raise WorkflowContractError(
                 "ResumeFromFailedStepRef required fields must be non-empty strings"
             )
         return cleaned
@@ -1572,7 +1572,7 @@ class ResumeFromFailedStepRef(BaseModel):
         return _clean_optional_str(value)
 
 
-class TaskExecutionSpec(BaseModel):
+class WorkflowExecutionSpec(BaseModel):
     """Main task execution body."""
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
@@ -1582,28 +1582,28 @@ class TaskExecutionSpec(BaseModel):
         alias="instructions",
         validation_alias=AliasChoices("instructions", "instruction"),
     )
-    skill: TaskSkillSelection = Field(default_factory=TaskSkillSelection, alias="skill")
-    skills: TaskSkillSelectors | None = Field(None, alias="skills")
-    runtime: TaskRuntimeSelection = Field(
-        default_factory=TaskRuntimeSelection, alias="runtime"
+    skill: WorkflowSkillSelection = Field(default_factory=WorkflowSkillSelection, alias="skill")
+    skills: WorkflowSkillSelectors | None = Field(None, alias="skills")
+    runtime: WorkflowRuntimeSelection = Field(
+        default_factory=WorkflowRuntimeSelection, alias="runtime"
     )
-    git: TaskGitSelection = Field(default_factory=TaskGitSelection, alias="git")
-    publish: TaskPublishSelection = Field(
-        default_factory=TaskPublishSelection, alias="publish"
+    git: WorkflowGitSelection = Field(default_factory=WorkflowGitSelection, alias="git")
+    publish: WorkflowPublishSelection = Field(
+        default_factory=WorkflowPublishSelection, alias="publish"
     )
     propose_tasks: bool = Field(
         default_factory=_default_propose_tasks, alias="proposeTasks"
     )
-    steps: list[TaskStepSpec] = Field(default_factory=list, alias="steps")
-    input_attachments: list[TaskInputAttachmentRef] = Field(
+    steps: list[WorkflowStepSpec] = Field(default_factory=list, alias="steps")
+    input_attachments: list[WorkflowInputAttachmentRef] = Field(
         default_factory=list, alias="inputAttachments"
     )
-    container: TaskContainerSelection | None = Field(None, alias="container")
-    proposal_policy: TaskProposalPolicy | None = Field(None, alias="proposalPolicy")
+    container: WorkflowContainerSelection | None = Field(None, alias="container")
+    proposal_policy: WorkflowProposalPolicy | None = Field(None, alias="proposalPolicy")
     authored_presets: list[AuthoredPresetBinding] | None = Field(
         None, alias="authoredPresets"
     )
-    recovery: TaskRecoveryProvenance | None = Field(None, alias="recovery")
+    recovery: WorkflowRecoveryProvenance | None = Field(None, alias="recovery")
     resume: ResumeFromFailedStepRef | None = Field(None, alias="resume")
     depends_on: list[str] | None = Field(None, alias="dependsOn")
 
@@ -1627,7 +1627,7 @@ class TaskExecutionSpec(BaseModel):
         if value is None or value == "":
             return None
         if not isinstance(value, list):
-            raise TaskContractError("task.authoredPresets must be a list")
+            raise WorkflowContractError("task.authoredPresets must be a list")
         return value
 
     @field_validator("propose_tasks", mode="before")
@@ -1642,11 +1642,11 @@ class TaskExecutionSpec(BaseModel):
             return True
         if lowered in {"0", "false", "no", "off"}:
             return False
-        raise TaskContractError("task.proposeTasks must be a boolean")
+        raise WorkflowContractError("task.proposeTasks must be a boolean")
 
     @model_validator(mode="before")
     @classmethod
-    def _lift_legacy_task_shape(cls, value: object) -> object:
+    def _lift_legacy_spec_shape(cls, value: object) -> object:
         if not isinstance(value, Mapping):
             return value
         payload = dict(value)
@@ -1669,7 +1669,7 @@ class TaskExecutionSpec(BaseModel):
         if value is None or value == "":
             return []
         if not isinstance(value, list):
-            raise TaskContractError("task.steps must be a list")
+            raise WorkflowContractError("task.steps must be a list")
         return list(value)
 
     @field_validator("depends_on", mode="before")
@@ -1682,51 +1682,51 @@ class TaskExecutionSpec(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def _validate_recovery_recovery_consistency(self) -> "TaskExecutionSpec":
+    def _validate_recovery_recovery_consistency(self) -> "WorkflowExecutionSpec":
         recovery = self.recovery
         resume = self.resume
 
         if recovery is not None and recovery.kind == "recover_from_failed_step":
             if resume is None:
-                raise TaskContractError(
+                raise WorkflowContractError(
                     "task.resume is required when task.recovery.kind is 'recover_from_failed_step'"
                 )
 
         if resume is not None:
             if recovery is None:
-                raise TaskContractError(
+                raise WorkflowContractError(
                     "task.recovery must be present with kind 'recover_from_failed_step' "
                     "when task.resume is provided"
                 )
             if recovery.kind != "recover_from_failed_step":
-                raise TaskContractError(
+                raise WorkflowContractError(
                     "task.resume is only valid when task.recovery.kind is "
                     f"'recover_from_failed_step'; got {recovery.kind!r}"
                 )
             if recovery.source_workflow_id != resume.source_workflow_id:
-                raise TaskContractError(
+                raise WorkflowContractError(
                     "task.recovery.sourceWorkflowId and task.resume.sourceWorkflowId "
                     "must match"
                 )
             if recovery.source_run_id != resume.source_run_id:
-                raise TaskContractError(
+                raise WorkflowContractError(
                     "task.recovery.sourceRunId and task.resume.sourceRunId must match"
                 )
 
         return self
 
     @model_validator(mode="after")
-    def _validate_container_steps_compatibility(self) -> "TaskExecutionSpec":
+    def _validate_container_steps_compatibility(self) -> "WorkflowExecutionSpec":
         if self.container is None:
             return self
         if self.container.enabled and self.steps:
-            raise TaskContractError(
+            raise WorkflowContractError(
                 "task.steps is not supported when task.container.enabled=true"
             )
         return self
 
     @model_validator(mode="after")
-    def _validate_primary_objective_or_skill(self) -> "TaskExecutionSpec":
+    def _validate_primary_objective_or_skill(self) -> "WorkflowExecutionSpec":
         if self.instructions:
             return self
         if _has_explicit_skill_selection(self.skill):
@@ -1734,13 +1734,13 @@ class TaskExecutionSpec(BaseModel):
         primary_step = self.steps[0] if self.steps else None
         if primary_step and _has_explicit_skill_selection(primary_step.skill):
             return self
-        raise TaskContractError(
+        raise WorkflowContractError(
             "task.instructions is required unless task.skill or the primary step "
             "selects an explicit skill"
         )
 
     @model_validator(mode="after")
-    def _validate_skill_publish_compatibility(self) -> "TaskExecutionSpec":
+    def _validate_skill_publish_compatibility(self) -> "WorkflowExecutionSpec":
         allow_repository_publish = allows_repository_publish_for_skill_context(self)
         skill_ids: set[str] = {_normalize_skill_id(self.skill.id)}
         for step in self.steps:
@@ -1760,7 +1760,7 @@ class TaskExecutionSpec(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _validate_resolve_pr_constraints(self) -> "TaskExecutionSpec":
+    def _validate_resolve_pr_constraints(self) -> "WorkflowExecutionSpec":
         """Reject conflicting constraints for resolve-PR task objectives."""
 
         if not _is_resolve_pr_objective(self.instructions):
@@ -1775,7 +1775,7 @@ class TaskExecutionSpec(BaseModel):
                 instruction_chunks.append(step.instructions)
 
         if self.publish.mode == "none" and "pr-resolver" not in skill_ids:
-            raise TaskContractError(
+            raise WorkflowContractError(
                 "resolve-PR objectives with task.publish.mode='none' require "
                 "skill 'pr-resolver' so commit/push/merge can be handled directly"
             )
@@ -1783,7 +1783,7 @@ class TaskExecutionSpec(BaseModel):
         if any(
             _contains_no_commit_push_constraint(chunk) for chunk in instruction_chunks
         ):
-            raise TaskContractError(
+            raise WorkflowContractError(
                 "resolve-PR objectives cannot include 'Do NOT commit or push' constraints"
             )
 
@@ -1842,7 +1842,7 @@ class EffectiveProposalPolicy:
         floor_rank = self.severity_rank.get(self.min_severity_for_moonmind, 0)
         return candidate_rank >= floor_rank
 
-class CanonicalTaskPayload(BaseModel):
+class CanonicalWorkflowExecutionPayload(BaseModel):
     """Top-level canonical queue payload for `type=task` jobs."""
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
@@ -1861,18 +1861,20 @@ class CanonicalTaskPayload(BaseModel):
         alias="targetRuntime",
         validation_alias=AliasChoices("targetRuntime", "target_runtime"),
     )
-    auth: TaskAuthSelection | None = Field(
+    auth: WorkflowAuthSelection | None = Field(
         None,
         alias="auth",
     )
-    task: TaskExecutionSpec = Field(..., alias="task")
+    # legacy_run contract — the serialized "task" envelope key renames at the
+    # MoonMind.UserWorkflow v2 cutover (MM-730).
+    task: WorkflowExecutionSpec = Field(..., alias="task")
 
     @field_validator("repository", mode="before")
     @classmethod
     def _normalize_repository(cls, value: object) -> str:
         cleaned = _clean_optional_str(value)
         if not cleaned:
-            raise TaskContractError("repository is required")
+            raise WorkflowContractError("repository is required")
         return cleaned
 
     @field_validator("target_runtime", mode="before")
@@ -1886,7 +1888,7 @@ class CanonicalTaskPayload(BaseModel):
         if value is None:
             return None
         if not isinstance(value, list):
-            raise TaskContractError("requiredCapabilities must be a list")
+            raise WorkflowContractError("requiredCapabilities must be a list")
         normalized = _normalize_capabilities(value)
         return normalized or None
 
@@ -1934,7 +1936,7 @@ def _assign_sequential_step_ids(steps: list[Any]) -> None:
             steps[index] = target
         target["id"] = f"step-{index + 1}"
 
-def _build_task_from_codex_exec_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+def _build_spec_from_codex_exec_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     publish_raw = payload.get("publish")
     publish = publish_raw if isinstance(publish_raw, Mapping) else {}
     codex_raw = payload.get("codex")
@@ -1978,12 +1980,12 @@ def _build_auth_from_payload(payload: Mapping[str, Any]) -> dict[str, Any] | Non
     if not isinstance(raw_auth, Mapping):
         return None
     try:
-        auth = TaskAuthSelection.model_validate(dict(raw_auth))
-    except (ValidationError, TaskContractError) as exc:
-        raise TaskContractError(str(exc)) from exc
+        auth = WorkflowAuthSelection.model_validate(dict(raw_auth))
+    except (ValidationError, WorkflowContractError) as exc:
+        raise WorkflowContractError(str(exc)) from exc
     return auth.model_dump(by_alias=True, exclude_none=False)
 
-def _build_task_from_codex_skill_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+def _build_spec_from_codex_skill_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     raw_inputs = payload.get("inputs")
     inputs = dict(raw_inputs) if isinstance(raw_inputs, Mapping) else {}
     codex_raw = payload.get("codex")
@@ -2067,11 +2069,11 @@ def _build_task_from_codex_skill_payload(payload: Mapping[str, Any]) -> dict[str
         task["skill"]["args"].setdefault("repo", repository)
     return task
 
-def build_canonical_task_view(
+def build_canonical_workflow_view(
     *,
     job_type: str,
     payload: Mapping[str, Any] | None,
-    default_runtime: str = DEFAULT_TASK_RUNTIME,
+    default_runtime: str = DEFAULT_WORKFLOW_RUNTIME,
 ) -> dict[str, Any]:
     """Return a canonical task-view payload for queue processing."""
 
@@ -2081,23 +2083,23 @@ def build_canonical_task_view(
         default_runtime, field_name="default runtime"
     )
     if resolved_default_runtime in {None, "universal"}:
-        resolved_default_runtime = DEFAULT_TASK_RUNTIME
+        resolved_default_runtime = DEFAULT_WORKFLOW_RUNTIME
 
-    if normalized_type == CANONICAL_TASK_JOB_TYPE:
+    if normalized_type == CANONICAL_WORKFLOW_JOB_TYPE:
         try:
-            model = CanonicalTaskPayload.model_validate(source)
-        except (ValidationError, TaskContractError) as exc:
-            raise TaskContractError(str(exc)) from exc
+            model = CanonicalWorkflowExecutionPayload.model_validate(source)
+        except (ValidationError, WorkflowContractError) as exc:
+            raise WorkflowContractError(str(exc)) from exc
         canonical = model.model_dump(by_alias=True, exclude_none=False)
     elif normalized_type == "codex_exec":
         repository = _clean_optional_str(source.get("repository")) or ""
         if not repository:
-            raise TaskContractError("repository is required")
+            raise WorkflowContractError("repository is required")
         canonical = {
             "repository": repository,
             "targetRuntime": "codex",
             "auth": _build_auth_from_payload(source),
-            "task": _build_task_from_codex_exec_payload(source),
+            "task": _build_spec_from_codex_exec_payload(source),
         }
     elif normalized_type == "codex_skill":
         repository = (
@@ -2115,12 +2117,12 @@ def build_canonical_task_view(
             or ""
         )
         if not repository:
-            raise TaskContractError("repository is required")
+            raise WorkflowContractError("repository is required")
         canonical = {
             "repository": repository,
             "targetRuntime": "codex",
             "auth": _build_auth_from_payload(source),
-            "task": _build_task_from_codex_skill_payload(source),
+            "task": _build_spec_from_codex_skill_payload(source),
         }
     else:
         canonical = {
@@ -2179,7 +2181,7 @@ def build_canonical_task_view(
     required.append("git")
 
     source_publish_mode = None
-    if normalized_type == CANONICAL_TASK_JOB_TYPE:
+    if normalized_type == CANONICAL_WORKFLOW_JOB_TYPE:
         source_task = source.get("task")
         if isinstance(source_task, Mapping):
             source_publish = source_task.get("publish")
@@ -2188,7 +2190,7 @@ def build_canonical_task_view(
 
     publish_mode_candidate = (
         source_publish_mode
-        if normalized_type == CANONICAL_TASK_JOB_TYPE
+        if normalized_type == CANONICAL_WORKFLOW_JOB_TYPE
         else ((canonical.get("task") or {}).get("publish") or {}).get("mode")
     )
     task_node = canonical.get("task")
@@ -2236,7 +2238,7 @@ def build_canonical_task_view(
 
 def build_effective_proposal_policy(
     *,
-    policy: TaskProposalPolicy | None,
+    policy: WorkflowProposalPolicy | None,
     default_targets: str,
     default_max_items_project: int,
     default_max_items_moonmind: int,
@@ -2321,22 +2323,22 @@ def normalize_queue_job_payload(
     *,
     job_type: str,
     payload: Mapping[str, Any] | None,
-    default_runtime: str = DEFAULT_TASK_RUNTIME,
+    default_runtime: str = DEFAULT_WORKFLOW_RUNTIME,
 ) -> dict[str, Any]:
     """Normalize queue payloads while preserving legacy compatibility fields."""
 
     source = dict(payload or {})
     normalized_type = _clean_str(job_type)
-    canonical = build_canonical_task_view(
+    canonical = build_canonical_workflow_view(
         job_type=normalized_type,
         payload=source,
         default_runtime=default_runtime,
     )
 
-    if normalized_type == CANONICAL_TASK_JOB_TYPE:
+    if normalized_type == CANONICAL_WORKFLOW_JOB_TYPE:
         return canonical
 
-    if normalized_type in LEGACY_TASK_JOB_TYPES:
+    if normalized_type in LEGACY_WORKFLOW_JOB_TYPES:
         source["repository"] = canonical.get("repository")
         source["targetRuntime"] = canonical.get("targetRuntime")
         source["auth"] = canonical.get("auth")
@@ -2387,7 +2389,7 @@ def _snapshot_list(value: object) -> list[Any]:
     return safe if isinstance(safe, list) else []
 
 
-def _task_steps(task_payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _spec_steps(task_payload: Mapping[str, Any]) -> list[dict[str, Any]]:
     return [
         _snapshot_mapping(step)
         for step in _snapshot_list(task_payload.get("steps"))
@@ -2490,7 +2492,7 @@ def _include_tree_summary(
     return summary
 
 
-def build_authoritative_task_input_snapshot(
+def build_authoritative_workflow_input_snapshot(
     *,
     task_payload: Mapping[str, Any],
     repository: object = None,
@@ -2506,7 +2508,7 @@ def build_authoritative_task_input_snapshot(
     steps = [
         step for step in _safe_list(task.get("steps")) if isinstance(step, Mapping)
     ]
-    runtime_mode = _runtime_mode_from_task(task, target_runtime=target_runtime)
+    runtime_mode = _runtime_mode_from_spec(task, target_runtime=target_runtime)
     repository_value = (
         _clean_optional_str(git.get("repository"))
         or _clean_optional_str(repository)
@@ -2525,7 +2527,7 @@ def build_authoritative_task_input_snapshot(
     for ordinal, step in enumerate(steps):
         step_id = _step_identifier(step, ordinal)
         step_runtime = _safe_mapping(step.get("runtime"))
-        step_runtime_mode = _runtime_mode_from_task(
+        step_runtime_mode = _runtime_mode_from_spec(
             {"runtime": step_runtime},
             target_runtime=runtime_mode,
         )
@@ -2627,7 +2629,7 @@ def build_authoritative_task_input_snapshot(
     }
 
 
-def build_task_stage_plan(canonical_payload: Mapping[str, Any]) -> list[str]:
+def build_workflow_stage_plan(canonical_payload: Mapping[str, Any]) -> list[str]:
     """Return ordered stage identifiers for canonical task execution."""
 
     task_node = canonical_payload.get("task")
@@ -2636,28 +2638,30 @@ def build_task_stage_plan(canonical_payload: Mapping[str, Any]) -> list[str]:
     publish = publish_node if isinstance(publish_node, Mapping) else {}
     publish_mode = _normalize_publish_mode(publish.get("mode"))
 
+    # legacy_run contract — stage identifier values are persisted in workflow
+    # state/history and rename at the MoonMind.UserWorkflow v2 cutover (MM-730).
     stages = ["moonmind.task.prepare", "moonmind.task.execute"]
     if publish_mode != "none":
         stages.append("moonmind.task.publish")
     return stages
 
 __all__ = [
-    "CANONICAL_TASK_JOB_TYPE",
-    "DEFAULT_TASK_RUNTIME",
-    "LEGACY_TASK_JOB_TYPES",
+    "CANONICAL_WORKFLOW_JOB_TYPE",
+    "DEFAULT_WORKFLOW_RUNTIME",
+    "LEGACY_WORKFLOW_JOB_TYPES",
     "SUPPORTED_EXECUTION_RUNTIMES",
-    "CanonicalTaskPayload",
+    "CanonicalWorkflowExecutionPayload",
     "AuthoredPresetBinding",
-    "TaskContractError",
-    "TaskInputAttachmentRef",
-    "TaskRecoveryKind",
-    "TaskRecoveryProvenance",
+    "WorkflowContractError",
+    "WorkflowInputAttachmentRef",
+    "WorkflowRecoveryKind",
+    "WorkflowRecoveryProvenance",
     "ResumeFromFailedStepRef",
-    "TaskStepSource",
-    "build_authoritative_task_input_snapshot",
+    "WorkflowStepSource",
+    "build_authoritative_workflow_input_snapshot",
     "build_runtime_command_preview_config",
-    "build_task_stage_plan",
-    "build_canonical_task_view",
+    "build_workflow_stage_plan",
+    "build_canonical_workflow_view",
     "allows_repository_publish_for_skill_context",
     "has_attachment_mutation_fields",
     "is_non_repository_side_effect_skill",

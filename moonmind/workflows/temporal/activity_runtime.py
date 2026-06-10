@@ -60,8 +60,8 @@ from moonmind.schemas.temporal_activity_models import (
     PlanGenerateInput,
 )
 from moonmind.workflows.report_output import report_output_display_name
-from moonmind.workflows.tasks.routing import _coerce_bool
-from moonmind.workflows.tasks.prepared_context import (
+from moonmind.workflows.executions.routing import _coerce_bool
+from moonmind.workflows.executions.prepared_context import (
     PreparedContextFailure,
     build_prepared_input_manifest,
     select_step_prepared_context,
@@ -3600,9 +3600,9 @@ class TemporalProposalActivities:
         cls, request: Mapping[str, Any], *, default_runtime: str | None
     ) -> dict[str, Any]:
         from moonmind.workflows.task_proposals.service import TaskProposalService
-        from moonmind.workflows.tasks.task_contract import (
-            CanonicalTaskPayload,
-            TaskContractError,
+        from moonmind.workflows.executions.execution_contract import (
+            CanonicalWorkflowExecutionPayload,
+            WorkflowContractError,
         )
 
         stamped_request = cls._stamp_default_runtime(request, default_runtime)
@@ -3658,8 +3658,8 @@ class TemporalProposalActivities:
         validation_payload["task"] = task
         cls._reject_unsupported_tool_selectors(validation_payload)
         try:
-            CanonicalTaskPayload.model_validate(validation_payload)
-        except (ValidationError, TaskContractError) as exc:
+            CanonicalWorkflowExecutionPayload.model_validate(validation_payload)
+        except (ValidationError, WorkflowContractError) as exc:
             raise ValueError(str(exc)) from exc
         return stamped_request
 
@@ -3782,8 +3782,8 @@ class TemporalProposalActivities:
         trigger_repo: str = str(origin.get("trigger_repo") or "")
         trigger_job_id: str = str(origin.get("trigger_job_id") or run_id or "")
 
-        from moonmind.workflows.tasks.task_contract import (
-            TaskProposalPolicy,
+        from moonmind.workflows.executions.execution_contract import (
+            WorkflowProposalPolicy,
             build_effective_proposal_policy,
         )
 
@@ -3791,10 +3791,10 @@ class TemporalProposalActivities:
         delivery_decisions: list[dict[str, Any]] = []
         errors: list[str] = []
 
-        parsed_policy: TaskProposalPolicy | None = None
+        parsed_policy: WorkflowProposalPolicy | None = None
         if isinstance(policy, Mapping) and policy:
             try:
-                parsed_policy = TaskProposalPolicy.model_validate(policy)
+                parsed_policy = WorkflowProposalPolicy.model_validate(policy)
             except Exception as exc:
                 redacted = self._redactor.scrub(str(exc))[:200]
                 logger.warning("proposal.submit: invalid proposal policy: %s", redacted)

@@ -78,7 +78,7 @@ The README was reframed (2026-06-09) around three headline value propositions �
 - Manifest-based workflow submission; workflow proposal queue with `proposal_generate`
 - Tracker-native proposal delivery and review — GitHub/Jira delivery records and process-tracker decision handling (specs 312, 313, 357)
 - Context clearing between ordered Codex managed-session steps via the workflow-scoped AgentSession reset boundary (MM-745)
-- Target-aware prepared inputs per step — prepared-input manifests selected per step at the runtime prompt boundary (specs 325, 349; `moonmind/workflows/tasks/prepared_context.py`)
+- Target-aware prepared inputs per step — prepared-input manifests selected per step at the runtime prompt boundary (specs 325, 349; `moonmind/workflows/executions/prepared_context.py`)
 - Preset-driven scheduling — goal-only submissions deterministically mapped to seeded presets (MM-747)
 - Schema-driven capability inputs and Create-page authoring validation (specs 308, 340)
 

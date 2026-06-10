@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from moonmind.workflows.tasks.payload import compile_task_payload_templates
+from moonmind.workflows.executions.payload import compile_workflow_payload_templates
 
-def test_compile_task_payload_templates_merges_capabilities_and_metadata() -> None:
+def test_compile_workflow_payload_templates_merges_capabilities_and_metadata() -> None:
     payload = {
         "repository": "Moon/Repo",
         "requiredCapabilities": ["codex", "git"],
@@ -22,7 +22,7 @@ def test_compile_task_payload_templates_merges_capabilities_and_metadata() -> No
         },
     }
 
-    compiled = compile_task_payload_templates(payload)
+    compiled = compile_workflow_payload_templates(payload)
 
     assert sorted(compiled["requiredCapabilities"]) == ["codex", "docker", "gh", "git"]
     assert compiled["task"]["appliedStepTemplates"][0]["slug"] == "pr-code-change"

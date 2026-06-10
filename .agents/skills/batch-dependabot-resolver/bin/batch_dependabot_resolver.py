@@ -26,8 +26,8 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from moonmind.workflows.tasks.runtime_defaults import normalize_runtime_id
-from moonmind.workflows.tasks.task_contract import resolve_publish_mode_for_skill
+from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
+from moonmind.workflows.executions.execution_contract import resolve_publish_mode_for_skill
 
 logger = logging.getLogger(__name__)
 

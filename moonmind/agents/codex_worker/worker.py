@@ -36,14 +36,14 @@ from moonmind.agents.codex_worker.handlers import (
     OutputChunkCallback,
     WorkerExecutionResult,
 )
-from moonmind.workflows.tasks.job_types import CANONICAL_TASK_JOB_TYPE, LEGACY_TASK_JOB_TYPES
-from moonmind.workflows.tasks.task_contract import (
+from moonmind.workflows.executions.job_types import CANONICAL_WORKFLOW_JOB_TYPE, LEGACY_WORKFLOW_JOB_TYPES
+from moonmind.workflows.executions.execution_contract import (
     SUPPORTED_EXECUTION_RUNTIMES,
-    TaskContractError,
-    TaskProposalPolicy,
-    build_canonical_task_view,
+    WorkflowContractError,
+    WorkflowProposalPolicy,
+    build_canonical_workflow_view,
     build_effective_proposal_policy,
-    build_task_stage_plan,
+    build_workflow_stage_plan,
     is_self_managed_publish_skill,
 )
 from moonmind.agents.codex_worker.metrics import WorkerMetrics
@@ -1936,7 +1936,7 @@ class CodexWorker:
     ) -> tuple[Mapping[str, Any], str] | None:
         """Validate and normalize one claimed task-like queue job."""
 
-        supported_types = {CANONICAL_TASK_JOB_TYPE, *LEGACY_TASK_JOB_TYPES}
+        supported_types = {CANONICAL_WORKFLOW_JOB_TYPE, *LEGACY_WORKFLOW_JOB_TYPES}
         if job.type not in supported_types:
             await self._emit_event(
                 job_id=job.id,
@@ -1953,7 +1953,7 @@ class CodexWorker:
             return None
         if (
             not self._config.legacy_job_types_enabled
-            and job.type in LEGACY_TASK_JOB_TYPES
+            and job.type in LEGACY_WORKFLOW_JOB_TYPES
         ):
             await self._emit_event(
                 job_id=job.id,
@@ -1970,11 +1970,11 @@ class CodexWorker:
             return None
 
         try:
-            canonical_payload = build_canonical_task_view(
+            canonical_payload = build_canonical_workflow_view(
                 job_type=job.type,
                 payload=job.payload,
             )
-        except TaskContractError as exc:
+        except WorkflowContractError as exc:
             await self._emit_event(
                 job_id=job.id,
                 level="error",
@@ -2416,7 +2416,7 @@ class CodexWorker:
             )
 
         try:
-            stage_plan = build_task_stage_plan(canonical_payload)
+            stage_plan = build_workflow_stage_plan(canonical_payload)
             await self._emit_event(
                 job_id=job.id,
                 level="info",
@@ -3171,7 +3171,7 @@ class CodexWorker:
             message="Worker claimed job",
             payload={"jobType": job.type, "targetRuntime": runtime_mode, **skill_meta},
         )
-        stage_plan = build_task_stage_plan(canonical_payload)
+        stage_plan = build_workflow_stage_plan(canonical_payload)
         await self._emit_event(
             job_id=job.id,
             level="info",
@@ -12192,10 +12192,10 @@ class CodexWorker:
         policy_node = (
             task_node.get("proposalPolicy") if isinstance(task_node, Mapping) else None
         )
-        task_policy: TaskProposalPolicy | None = None
+        task_policy: WorkflowProposalPolicy | None = None
         if isinstance(policy_node, Mapping):
             try:
-                task_policy = TaskProposalPolicy.model_validate(dict(policy_node))
+                task_policy = WorkflowProposalPolicy.model_validate(dict(policy_node))
             except ValidationError:
                 logger.warning(
                     "Invalid proposalPolicy override for job %s; using defaults",

@@ -1,4 +1,4 @@
-"""Task payload compiler helpers for template metadata and capabilities."""
+"""Workflow execution payload compiler helpers for template metadata and capabilities."""
 
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ def _sanitize_template_application(entry: dict[str, Any]) -> dict[str, Any] | No
         ]
     return payload
 
-def compile_task_payload_templates(payload: dict[str, Any]) -> dict[str, Any]:
+def compile_workflow_payload_templates(payload: dict[str, Any]) -> dict[str, Any]:
     """Normalize applied template metadata and merge derived capabilities."""
 
     compiled = dict(payload)
@@ -83,4 +83,4 @@ def compile_task_payload_templates(payload: dict[str, Any]) -> dict[str, Any]:
     compiled["task"] = task_payload
     return compiled
 
-__all__ = ["compile_task_payload_templates"]
+__all__ = ["compile_workflow_payload_templates"]

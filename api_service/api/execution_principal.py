@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 from fastapi import Header, Request
 
-from moonmind.workflows.tasks.runtime_inheritance import (
+from moonmind.workflows.executions.runtime_inheritance import (
     SCOPE_CREATE_CHILD,
     SCOPE_INHERIT_RUNTIME,
     ExecutionPrincipal,

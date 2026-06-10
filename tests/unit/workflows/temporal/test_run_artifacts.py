@@ -675,7 +675,7 @@ async def test_run_execution_stage_stops_plan_after_structured_blocked_outcome(
             "output_refs": [],
         }
 
-    async def fake_bind_task_scoped_session(
+    async def fake_bind_workflow_scoped_session(
         self: MoonMindRunWorkflow,
         request: object,
     ) -> object:
@@ -739,8 +739,8 @@ async def test_run_execution_stage_stops_plan_after_structured_blocked_outcome(
     )
     monkeypatch.setattr(
         MoonMindRunWorkflow,
-        "_maybe_bind_task_scoped_session",
-        fake_bind_task_scoped_session,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
     )
 
     await workflow._run_execution_stage(
@@ -1910,7 +1910,7 @@ async def test_run_execution_stage_publish_mode_pr_prefers_pushed_branch_for_nat
     workflow._repo = "MoonLadderStudios/MoonMind"
     captured_create_payload: dict[str, Any] = {}
 
-    async def fake_bind_task_scoped_session(
+    async def fake_bind_workflow_scoped_session(
         self: MoonMindRunWorkflow,
         request: object,
     ) -> object:
@@ -2010,8 +2010,8 @@ async def test_run_execution_stage_publish_mode_pr_prefers_pushed_branch_for_nat
     monkeypatch.setattr(run_workflow_module.workflow, "execute_child_workflow", fake_execute_child_workflow)
     monkeypatch.setattr(
         MoonMindRunWorkflow,
-        "_maybe_bind_task_scoped_session",
-        fake_bind_task_scoped_session,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
     )
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
     monkeypatch.setattr(
@@ -2238,7 +2238,7 @@ async def test_run_execution_stage_fail_fast_raises_provider_failure_summary(
     async def fake_resolve_skillset_ref(_self: object, **_kwargs: object) -> str:
         return "art_skillset_1"
 
-    async def fake_bind_task_scoped_session(_self: object, request: object) -> object:
+    async def fake_bind_workflow_scoped_session(_self: object, request: object) -> object:
         return request
 
     async def fake_fetch_profile_snapshots(_self: object) -> None:
@@ -2276,8 +2276,8 @@ async def test_run_execution_stage_fail_fast_raises_provider_failure_summary(
     )
     monkeypatch.setattr(
         MoonMindRunWorkflow,
-        "_maybe_bind_task_scoped_session",
-        fake_bind_task_scoped_session,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
     )
     monkeypatch.setattr(
         MoonMindRunWorkflow,
@@ -2840,7 +2840,7 @@ async def test_run_execution_stage_moonspec_verify_blocks_native_pr_creation(
             "output_refs": [],
         }
 
-    async def fake_bind_task_scoped_session(
+    async def fake_bind_workflow_scoped_session(
         self: MoonMindRunWorkflow,
         request: object,
     ) -> object:
@@ -2861,8 +2861,8 @@ async def test_run_execution_stage_moonspec_verify_blocks_native_pr_creation(
     )
     monkeypatch.setattr(
         MoonMindRunWorkflow,
-        "_maybe_bind_task_scoped_session",
-        fake_bind_task_scoped_session,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
     )
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
     monkeypatch.setattr(

@@ -1,6 +1,6 @@
-"""Task payload compilation helpers."""
+"""Workflow execution payload compilation helpers."""
 
-from .payload import compile_task_payload_templates
+from .payload import compile_workflow_payload_templates
 from .prepared_context import (
     ExecutionContextBundle,
     PreparedContextFailure,
@@ -16,7 +16,7 @@ from .prepared_context import (
     merge_prepared_input_refs,
     merge_prepared_raw_input_refs,
     select_step_prepared_context,
-    task_payload_has_input_attachments,
+    workflow_payload_has_input_attachments,
 )
 
 __all__ = [
@@ -31,9 +31,9 @@ __all__ = [
     "build_prepared_input_manifest",
     "build_retrieval_manifest",
     "build_recovery_prepared_artifact_refs",
-    "compile_task_payload_templates",
+    "compile_workflow_payload_templates",
     "merge_prepared_input_refs",
     "merge_prepared_raw_input_refs",
     "select_step_prepared_context",
-    "task_payload_has_input_attachments",
+    "workflow_payload_has_input_attachments",
 ]

@@ -302,6 +302,8 @@ class PreparedContextFailure(BaseModel):
 def build_prepared_input_manifest(
     payload: Mapping[str, Any],
     *,
+    # legacy_run contract — manifest ref value persisted in artifacts/history;
+    # renames at the MoonMind.UserWorkflow v2 cutover (MM-730).
     manifest_ref: str = "prepared-context-manifest://task-inputs",
 ) -> PreparedInputManifest:
     """Build a compact manifest from objective and step input attachments."""
@@ -587,7 +589,7 @@ def build_recovery_prepared_artifact_refs(
     return _dedupe_refs(refs)
 
 
-def task_payload_has_input_attachments(payload: Mapping[str, Any] | None) -> bool:
+def workflow_payload_has_input_attachments(payload: Mapping[str, Any] | None) -> bool:
     if not isinstance(payload, Mapping):
         return False
     task_payload = _task_payload(payload)

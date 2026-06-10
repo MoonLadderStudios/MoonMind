@@ -4202,8 +4202,8 @@ def test_create_task_shaped_execution_rejects_caller_inheritance_for_user(
 
     assert response.status_code == 422
     assert response.json()["detail"] == {
-        "code": "runtime_inheritance_requires_task_principal",
-        "message": 'runtimeInheritance="caller" requires a task-scoped principal.',
+        "code": "runtime_inheritance_requires_workflow_principal",
+        "message": 'runtimeInheritance="caller" requires a workflow-scoped principal.',
     }
     service.create_execution.assert_not_awaited()
 

@@ -44,7 +44,7 @@ from api_service.db.models import (
 from moonmind.config.settings import settings
 from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.workflows.report_output import normalize_report_output_primary_path
-from moonmind.workflows.tasks.routing import _coerce_bool
+from moonmind.workflows.executions.routing import _coerce_bool
 from moonmind.schemas.manifest_ingest_models import (
     ManifestNodePageModel,
     ManifestStatusSnapshotModel,
@@ -78,7 +78,7 @@ from moonmind.schemas.temporal_models import (
     ExecutionSkillVersionSummaryModel,
     RecoverFromFailedStepRequest,
     RecoverFromFailedStepResponse,
-    TaskInputSnapshotDescriptorModel,
+    WorkflowInputSnapshotDescriptorModel,
     PollIntegrationRequest,
     RescheduleExecutionRequest,
     ScheduleCreatedResponse,
@@ -111,15 +111,15 @@ from moonmind.workflows.temporal.artifacts import (
 from moonmind.workflows.temporal.report_artifacts import build_report_projection_summary
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.client import TemporalClientAdapter, query_workflow
-from moonmind.workflows.tasks.model_resolver import resolve_effective_model
-from moonmind.workflows.tasks.preset_goal_scheduler import (
+from moonmind.workflows.executions.model_resolver import resolve_effective_model
+from moonmind.workflows.executions.preset_goal_scheduler import (
     GoalPresetSchedule,
     goal_from_payloads,
     schedule_preset_from_goal,
-    task_is_already_authored,
+    workflow_is_already_authored,
 )
-from moonmind.workflows.tasks.runtime_defaults import normalize_runtime_id
-from moonmind.workflows.tasks.runtime_inheritance import (
+from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
+from moonmind.workflows.executions.runtime_inheritance import (
     RuntimeInheritanceError,
     apply_inherited_runtime_to_payload,
     resolve_child_runtime_inheritance,
@@ -128,13 +128,13 @@ from api_service.api.execution_principal import (
     execution_principal_dependency,
     resolve_execution_principal,
 )
-from moonmind.workflows.tasks.task_contract import (
-    TaskContractError,
-    TaskInputAttachmentRef,
-    TaskProposalPolicy,
-    TaskSkillSelectors,
+from moonmind.workflows.executions.execution_contract import (
+    WorkflowContractError,
+    WorkflowInputAttachmentRef,
+    WorkflowProposalPolicy,
+    WorkflowSkillSelectors,
     allows_repository_publish_for_skill_context,
-    build_authoritative_task_input_snapshot,
+    build_authoritative_workflow_input_snapshot,
     is_non_repository_side_effect_skill,
     is_self_managed_publish_skill,
     resolve_publish_mode_for_skill,
@@ -4680,11 +4680,11 @@ def _normalize_task_skill_selectors(
     if not isinstance(raw, Mapping):
         raise _invalid_task_request(f"{field_name} must be an object.")
     try:
-        return TaskSkillSelectors.model_validate(dict(raw)).model_dump(
+        return WorkflowSkillSelectors.model_validate(dict(raw)).model_dump(
             by_alias=True,
             exclude_none=True,
         )
-    except (TaskContractError, ValidationError, ValueError) as exc:
+    except (WorkflowContractError, ValidationError, ValueError) as exc:
         raise _invalid_task_request(str(exc)) from exc
 
 def _normalize_task_proposal_policy(raw: Any) -> dict[str, Any] | None:
@@ -4693,11 +4693,11 @@ def _normalize_task_proposal_policy(raw: Any) -> dict[str, Any] | None:
     if not isinstance(raw, Mapping):
         raise _invalid_task_request("payload.task.proposalPolicy must be an object.")
     try:
-        return TaskProposalPolicy.model_validate(dict(raw)).model_dump(
+        return WorkflowProposalPolicy.model_validate(dict(raw)).model_dump(
             by_alias=True,
             exclude_none=True,
         )
-    except (TaskContractError, ValidationError, ValueError) as exc:
+    except (WorkflowContractError, ValidationError, ValueError) as exc:
         raise _invalid_task_request(str(exc)) from exc
 
 def _normalize_task_input_attachments(
@@ -4711,11 +4711,11 @@ def _normalize_task_input_attachments(
     normalized: list[dict[str, Any]] = []
     for index, item in enumerate(raw):
         try:
-            attachment = TaskInputAttachmentRef.model_validate(item).model_dump(
+            attachment = WorkflowInputAttachmentRef.model_validate(item).model_dump(
                 by_alias=True,
                 exclude_none=True,
             )
-        except (TaskContractError, ValidationError, ValueError) as exc:
+        except (WorkflowContractError, ValidationError, ValueError) as exc:
             raise _invalid_task_request(f"{field_name}[{index}]: {exc}") from exc
         normalized.append(attachment)
     return normalized
@@ -4756,7 +4756,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
         if blocked:
             formatted = ", ".join(blocked)
             raise _invalid_task_request(
-                f"payload.task.steps[{index}] may not define task-scoped overrides: {formatted}"
+                f"payload.task.steps[{index}] may not define workflow-scoped overrides: {formatted}"
             )
 
         normalized_step: dict[str, Any] = {}
@@ -5081,7 +5081,7 @@ async def _expand_goal_preset_for_task_submission(
     session: Any,
     user_id: Any,
 ) -> None:
-    if task_is_already_authored(task_payload):
+    if workflow_is_already_authored(task_payload):
         return
 
     schedule = schedule_preset_from_goal(
@@ -5329,7 +5329,7 @@ def _resolve_task_publish_payload(
             requested_mode,
             allow_repository_publish=allow_repository_publish,
         )
-    except TaskContractError as exc:
+    except WorkflowContractError as exc:
         raise _invalid_task_request(str(exc)) from exc
 
     resolved = dict(task_publish or top_publish)
@@ -5567,11 +5567,11 @@ def _task_input_snapshot_ref_from_memo(
 
 def _task_input_snapshot_descriptor_from_record(
     record,
-) -> TaskInputSnapshotDescriptorModel:
+) -> WorkflowInputSnapshotDescriptorModel:
     memo = dict(getattr(record, "memo", None) or {})
     artifact_ref = _task_input_snapshot_ref_from_memo(memo)
     if artifact_ref:
-        return TaskInputSnapshotDescriptorModel(
+        return WorkflowInputSnapshotDescriptorModel(
             available=True,
             artifactRef=artifact_ref,
             snapshotVersion=int(
@@ -5614,7 +5614,7 @@ def _task_input_snapshot_descriptor_from_record(
     }
     if attachment_aware:
         disabled_reasons["attachments"] = "original_task_input_snapshot_missing"
-    return TaskInputSnapshotDescriptorModel(
+    return WorkflowInputSnapshotDescriptorModel(
         available=False,
         artifactRef=None,
         snapshotVersion=None,
@@ -5643,7 +5643,7 @@ def _build_original_task_input_snapshot_payload(
         "targetRuntime": payload.get("targetRuntime"),
         "requiredCapabilities": list(payload.get("requiredCapabilities") or []),
         "task": dict(task_payload),
-        "authoredTaskInput": build_authoritative_task_input_snapshot(
+        "authoredTaskInput": build_authoritative_workflow_input_snapshot(
             task_payload=task_payload,
             repository=payload.get("repository"),
             target_runtime=payload.get("targetRuntime"),

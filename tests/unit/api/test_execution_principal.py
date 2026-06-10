@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from api_service.api.execution_principal import resolve_execution_principal
-from moonmind.workflows.tasks.runtime_inheritance import (
+from moonmind.workflows.executions.runtime_inheritance import (
     SCOPE_CREATE_CHILD,
     SCOPE_INHERIT_RUNTIME,
 )

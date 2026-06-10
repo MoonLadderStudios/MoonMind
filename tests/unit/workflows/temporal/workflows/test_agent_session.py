@@ -108,7 +108,7 @@ def _assert_forbidden_metadata_absent(value: object) -> None:
     ):
         assert forbidden not in rendered
 
-def test_agent_session_initializes_task_scoped_codex_binding(
+def test_agent_session_initializes_workflow_scoped_codex_binding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
@@ -126,7 +126,7 @@ def test_agent_session_initializes_task_scoped_codex_binding(
     assert status["binding"]["executionProfileRef"] == "codex-default"
     assert status["binding"]["sessionId"] == "sess:wf-run-1:codex_cli"
 
-def test_agent_session_rejects_task_scoped_claude_code_binding(
+def test_agent_session_rejects_workflow_scoped_claude_code_binding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
@@ -296,7 +296,7 @@ def test_agent_session_send_follow_up_validator_allows_pre_handle_request(
     workflow = MoonMindAgentSessionWorkflow(_workflow_input())
 
     workflow.validate_send_follow_up(
-        _send_follow_up({"message": "Continue the task-scoped session."})
+        _send_follow_up({"message": "Continue the workflow-scoped session."})
     )
 
 def test_agent_session_workflow_input_carries_request_tracking_state(
@@ -461,7 +461,7 @@ async def test_agent_session_request_tracking_prefers_temporal_update_id(
     await workflow.send_follow_up(
         _send_follow_up(
             {
-                "message": "Continue the task-scoped session.",
+                "message": "Continue the workflow-scoped session.",
                 "requestId": "caller-request-1",
             }
         )
@@ -868,7 +868,7 @@ async def test_agent_session_send_follow_up_update_executes_session_activity_sur
     result = await workflow.send_follow_up(
         _send_follow_up(
             {
-                "message": "Continue the task-scoped session.",
+                "message": "Continue the workflow-scoped session.",
                 "reason": "Operator follow-up",
                 "requestId": "request-send-1",
             }
@@ -883,7 +883,7 @@ async def test_agent_session_send_follow_up_update_executes_session_activity_sur
         "agent_runtime.fetch_session_summary",
         "agent_runtime.publish_session_artifacts",
     ]
-    assert captured[0][1]["instructions"] == "Continue the task-scoped session."
+    assert captured[0][1]["instructions"] == "Continue the workflow-scoped session."
     assert captured[0][1]["reason"] == "Operator follow-up"
     status = workflow.get_status()
     assert status["lastControlAction"] == "send_turn"

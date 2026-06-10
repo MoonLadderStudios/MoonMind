@@ -60,7 +60,7 @@ Canonical target kinds:
 Canonical reference shape:
 
 ```ts
-interface TaskInputAttachmentRef {
+interface WorkflowInputAttachmentRef {
   artifactId: string;
   filename: string;
   contentType: string;

@@ -406,7 +406,7 @@ class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
             "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
             new=AsyncMock(),
         ) as execute_activity, patch(
-            "moonmind.workflows.temporal.workflows.run.build_effective_task_skill_selectors",
+            "moonmind.workflows.temporal.workflows.run.build_effective_workflow_skill_selectors",
             return_value=EffectiveSelector(),
         ):
             with self.assertRaisesRegex(

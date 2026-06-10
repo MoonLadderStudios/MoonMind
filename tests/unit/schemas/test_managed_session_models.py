@@ -25,7 +25,7 @@ from moonmind.schemas.managed_session_models import (
     canonical_managed_session_runtime_id,
 )
 
-def test_managed_session_plane_contract_freezes_task_scoped_scope() -> None:
+def test_managed_session_plane_contract_freezes_workflow_scoped_scope() -> None:
     contract = ManagedSessionPlaneContract()
 
     assert contract.runtime_family == "codex"

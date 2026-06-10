@@ -19,7 +19,7 @@ from api_service.db.models import (
     RecurringTaskRunTrigger,
     RecurringTaskScopeType,
 )
-from moonmind.workflows.tasks.job_types import CANONICAL_TASK_JOB_TYPE
+from moonmind.workflows.executions.job_types import CANONICAL_WORKFLOW_JOB_TYPE
 from moonmind.workflows.recurring_tasks.cron import (
     compute_next_occurrence,
     parse_cron_expression,
@@ -197,8 +197,8 @@ def _normalize_target(target_payload: Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(job_payload, Mapping):
             raise RecurringTaskValidationError("target.job is required for queue_task")
         job = dict(job_payload)
-        workflow_type = str(job.get("type") or "").strip().lower() or CANONICAL_TASK_JOB_TYPE
-        if workflow_type != CANONICAL_TASK_JOB_TYPE:
+        workflow_type = str(job.get("type") or "").strip().lower() or CANONICAL_WORKFLOW_JOB_TYPE
+        if workflow_type != CANONICAL_WORKFLOW_JOB_TYPE:
             raise RecurringTaskValidationError(
                 "target.job.type must be 'task' for queue_task"
             )
@@ -207,7 +207,7 @@ def _normalize_target(target_payload: Mapping[str, Any]) -> dict[str, Any]:
             raise RecurringTaskValidationError(
                 "target.job.payload must be an object for queue_task"
             )
-        job["type"] = CANONICAL_TASK_JOB_TYPE
+        job["type"] = CANONICAL_WORKFLOW_JOB_TYPE
         target["job"] = job
 
     if kind == "queue_task_template":

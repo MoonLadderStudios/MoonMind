@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional
 
-from moonmind.workflows.tasks.runtime_defaults import normalize_runtime_id
+from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
 
 # Inheritance directive values accepted on the wire.
 INHERIT_CALLER = "caller"
@@ -54,7 +54,7 @@ class ExecutionPrincipal:
     scopes: frozenset[str] = field(default_factory=frozenset)
 
     @property
-    def is_task_principal(self) -> bool:
+    def is_workflow_principal(self) -> bool:
         return bool(self.workflow_id)
 
     def has_scope(self, scope: str) -> bool:
@@ -339,10 +339,10 @@ async def resolve_child_runtime_inheritance(
         return None
 
     if directive == INHERIT_CALLER:
-        if not principal.is_task_principal:
+        if not principal.is_workflow_principal:
             raise RuntimeInheritanceError(
-                'runtimeInheritance="caller" requires a task-scoped principal.',
-                code="runtime_inheritance_requires_task_principal",
+                'runtimeInheritance="caller" requires a workflow-scoped principal.',
+                code="runtime_inheritance_requires_workflow_principal",
             )
         if not principal.has_scope(SCOPE_CREATE_CHILD):
             raise RuntimeInheritanceError(
@@ -355,7 +355,7 @@ async def resolve_child_runtime_inheritance(
                 code="runtime_inheritance_forbidden",
             )
         parent_workflow_id = principal.workflow_id
-        assert parent_workflow_id is not None  # narrowed by is_task_principal
+        assert parent_workflow_id is not None  # narrowed by is_workflow_principal
         parent_record = await _load_authorised_parent(
             service=service,
             parent_workflow_id=parent_workflow_id,

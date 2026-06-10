@@ -227,7 +227,7 @@ def _publication(
         latestResetBoundaryRef=None,
     )
 
-async def test_start_launches_missing_task_scoped_session_and_persists_result(
+async def test_start_launches_missing_workflow_scoped_session_and_persists_result(
     tmp_path: Path,
 ) -> None:
     binding = _binding()
@@ -2848,7 +2848,7 @@ async def test_start_rejects_non_text_input_refs_for_session_turns(
     ):
         await adapter.start(request)
 
-async def test_start_reuses_existing_task_scoped_session_without_launching(
+async def test_start_reuses_existing_workflow_scoped_session_without_launching(
     tmp_path: Path,
 ) -> None:
     binding = _binding()

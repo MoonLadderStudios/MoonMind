@@ -2,7 +2,7 @@ from typing import Literal
 
 from moonmind.config.settings import settings
 
-TaskTarget = Literal["temporal"]
+WorkflowTarget = Literal["temporal"]
 
 class TemporalSubmitDisabledError(RuntimeError):
     """Raised when Temporal task submission is disabled via configuration.
@@ -37,12 +37,12 @@ def _coerce_bool(value: object, *, default: bool) -> bool:
         f"expected true/false, yes/no, on/off, 1/0, or omit for default"
     )
 
-def get_routing_target_for_task(
+def get_routing_target_for_workflow(
     *,
     is_manifest: bool = False,
     is_run: bool = False,
     task_payload: object | None = None,
-) -> TaskTarget:
+) -> WorkflowTarget:
     """Determine the deterministic backend execution target for a task.
 
     All tasks now route to Temporal. The legacy task system

@@ -35,10 +35,10 @@ from moonmind.workflows.task_proposals.repositories import (
     TaskProposalNotFoundError,
     TaskProposalRepository,
 )
-from moonmind.workflows.tasks.task_contract import (
-    CanonicalTaskPayload,
+from moonmind.workflows.executions.execution_contract import (
+    CanonicalWorkflowExecutionPayload,
     SUPPORTED_EXECUTION_RUNTIMES,
-    TaskContractError,
+    WorkflowContractError,
 )
 
 logger = logging.getLogger(__name__)
@@ -411,8 +411,8 @@ class TaskProposalService:
         payload_for_validation["task"] = task
 
         try:
-            model = CanonicalTaskPayload.model_validate(payload_for_validation)
-        except (ValidationError, TaskContractError) as exc:
+            model = CanonicalWorkflowExecutionPayload.model_validate(payload_for_validation)
+        except (ValidationError, WorkflowContractError) as exc:
             raise TaskProposalValidationError(str(exc)) from exc
         normalized_payload = model.model_dump(by_alias=True, exclude_none=False)
         normalized_payload = self._enforce_proposal_pr_publish_mode(normalized_payload)
@@ -517,7 +517,7 @@ class TaskProposalService:
                 normalized_payload_input = self._normalize_proposal_runtime_payload(
                     payload
                 )
-                parsed = CanonicalTaskPayload.model_validate(normalized_payload_input)
+                parsed = CanonicalWorkflowExecutionPayload.model_validate(normalized_payload_input)
                 normalized_payload = parsed.model_dump(by_alias=True, exclude_none=True)
             except ValidationError as exc:
                 raise TaskProposalValidationError(f"Invalid task payload: {exc}") from exc
@@ -1322,7 +1322,7 @@ class TaskProposalService:
         request = dict(proposal.task_create_request or {})
         payload = dict(request.get("payload") or {})
         try:
-            parsed = CanonicalTaskPayload.model_validate(payload)
+            parsed = CanonicalWorkflowExecutionPayload.model_validate(payload)
             payload = parsed.model_dump(by_alias=True, exclude_none=True)
         except ValidationError as exc:
             raise TaskProposalValidationError(
@@ -1350,7 +1350,7 @@ class TaskProposalService:
             payload["task"] = task
             payload["targetRuntime"] = normalized_runtime_mode
             try:
-                parsed = CanonicalTaskPayload.model_validate(payload)
+                parsed = CanonicalWorkflowExecutionPayload.model_validate(payload)
                 payload = parsed.model_dump(by_alias=True, exclude_none=True)
             except ValidationError as exc:
                 raise TaskProposalValidationError(

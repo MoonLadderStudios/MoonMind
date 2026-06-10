@@ -16,7 +16,7 @@ BOUNDARY_PATHS = (
     Path("moonmind/workflows/temporal/step_checkpoints.py"),
     Path("moonmind/workflows/temporal/step_ledger.py"),
     Path("moonmind/workflows/temporal/workflows/run.py"),
-    Path("moonmind/workflows/tasks/task_contract.py"),
+    Path("moonmind/workflows/executions/execution_contract.py"),
     Path("docs/Steps/StepExecutionsAndCheckpointing.md"),
 )
 

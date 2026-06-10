@@ -230,14 +230,14 @@ Rules:
 Representative contract:
 
 ```ts
-interface TaskInputAttachmentRef {
+interface WorkflowInputAttachmentRef {
   artifactId: string;
   filename: string;
   contentType: string;
   sizeBytes: number;
 }
 
-interface TaskStepSource {
+interface WorkflowStepSource {
   kind?: "manual" | "preset-derived" | "preset-include" | "detached";
   presetId?: string;
   presetSlug?: string;
@@ -256,12 +256,12 @@ interface AuthoredPresetBinding {
   scope?: string;
 }
 
-interface TaskStepPayload {
+interface WorkflowStepPayload {
   id?: string;
   title?: string;
   instructions?: string;
-  inputAttachments?: TaskInputAttachmentRef[];
-  source?: TaskStepSource;
+  inputAttachments?: WorkflowInputAttachmentRef[];
+  source?: WorkflowStepSource;
   skill?: {
     id?: string;
     args?: Record<string, unknown>;
@@ -272,10 +272,10 @@ interface TaskStepPayload {
   };
 }
 
-interface TaskPayload {
+interface WorkflowExecutionPayload {
   instructions?: string;
-  inputAttachments?: TaskInputAttachmentRef[];
-  steps?: TaskStepPayload[];
+  inputAttachments?: WorkflowInputAttachmentRef[];
+  steps?: WorkflowStepPayload[];
   authoredPresets?: AuthoredPresetBinding[];
   runtime?: {
     mode?: string;
@@ -293,10 +293,10 @@ interface TaskPayload {
   dependsOn?: string[];
 }
 
-type TaskRecoveryKind = "exact_full_rerun" | "edited_full_retry" | "recover_from_failed_step";
+type WorkflowRecoveryKind = "exact_full_rerun" | "edited_full_retry" | "recover_from_failed_step";
 
-interface TaskRecoveryProvenance {
-  kind: TaskRecoveryKind;
+interface WorkflowRecoveryProvenance {
+  kind: WorkflowRecoveryKind;
   sourceWorkflowId: string;
   sourceRunId: string;
   requestedBy?: string;
@@ -315,8 +315,8 @@ interface ResumeFromFailedStepRef {
   planDigest?: string;
 }
 
-interface TaskPayloadWithRecovery extends TaskPayload {
-  recovery?: TaskRecoveryProvenance;
+interface WorkflowExecutionPayloadWithRecovery extends WorkflowExecutionPayload {
+  recovery?: WorkflowRecoveryProvenance;
   resume?: ResumeFromFailedStepRef;
 }
 ```

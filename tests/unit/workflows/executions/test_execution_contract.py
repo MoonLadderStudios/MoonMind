@@ -3,18 +3,18 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from moonmind.workflows.tasks.task_contract import (
-    build_canonical_task_view,
-    build_authoritative_task_input_snapshot,
-    build_effective_task_skill_selectors,
+from moonmind.workflows.executions.execution_contract import (
+    build_canonical_workflow_view,
+    build_authoritative_workflow_input_snapshot,
+    build_effective_workflow_skill_selectors,
     build_runtime_command_preview_config,
-    CanonicalTaskPayload,
+    CanonicalWorkflowExecutionPayload,
     ResumeFromFailedStepRef,
     resolve_publish_mode_for_skill,
-    TaskContractError,
-    TaskExecutionSpec,
-    TaskRecoveryProvenance,
-    TaskStepSpec,
+    WorkflowContractError,
+    WorkflowExecutionSpec,
+    WorkflowRecoveryProvenance,
+    WorkflowStepSpec,
 )
 from tests.helpers.step_type_payloads import (
     mixed_tool_skill_step,
@@ -40,7 +40,7 @@ def test_task_skills_accepts_valid_properties() -> None:
         },
     }
     
-    spec = TaskExecutionSpec.model_validate(raw_payload)
+    spec = WorkflowExecutionSpec.model_validate(raw_payload)
     
     assert spec.skills is not None
     assert spec.skills.sets == ["default", "python"]
@@ -54,7 +54,7 @@ def test_task_skills_accepts_valid_properties() -> None:
 
 
 def test_authoritative_snapshot_preserves_explicit_empty_dependencies() -> None:
-    snapshot = build_authoritative_task_input_snapshot(
+    snapshot = build_authoritative_workflow_input_snapshot(
         task_payload={
             "instructions": "Run MM-639 without dependencies.",
             "dependencies": [],
@@ -77,7 +77,7 @@ def test_authoritative_snapshot_detects_jira_key_without_serializing_metadata() 
     class Unserializable:
         pass
 
-    snapshot = build_authoritative_task_input_snapshot(
+    snapshot = build_authoritative_workflow_input_snapshot(
         task_payload={
             "instructions": "Implement MM-639.",
             "metadata": {"opaque": Unserializable()},
@@ -94,7 +94,7 @@ def test_authoritative_snapshot_detects_jira_key_without_serializing_metadata() 
 
 
 def test_authoritative_snapshot_records_task_runtime_command_metadata() -> None:
-    snapshot = build_authoritative_task_input_snapshot(
+    snapshot = build_authoritative_workflow_input_snapshot(
         task_payload={
             "instructions": "/review\nCheck this branch for regressions.",
             "runtime": {"mode": "codex"},
@@ -124,7 +124,7 @@ def test_authoritative_snapshot_records_task_runtime_command_metadata() -> None:
 
 
 def test_authoritative_snapshot_records_step_runtime_command_metadata() -> None:
-    snapshot = build_authoritative_task_input_snapshot(
+    snapshot = build_authoritative_workflow_input_snapshot(
         task_payload={
             "instructions": "Run task.",
             "runtime": {"mode": "claude"},
@@ -150,7 +150,7 @@ def test_authoritative_snapshot_records_step_runtime_command_metadata() -> None:
 
 
 def test_authoritative_snapshot_preserves_task_and_step_runtime_command_versions() -> None:
-    snapshot = build_authoritative_task_input_snapshot(
+    snapshot = build_authoritative_workflow_input_snapshot(
         task_payload={
             "instructions": "/review\nCheck this branch for regressions.",
             "runtime": {"mode": "codex"},
@@ -191,14 +191,14 @@ def test_mm786_task_steps_accept_runtime_selection_and_snapshot_it() -> None:
         ],
     }
 
-    spec = TaskExecutionSpec.model_validate(payload)
+    spec = WorkflowExecutionSpec.model_validate(payload)
 
     assert spec.steps[0].runtime is not None
     assert spec.steps[0].runtime.mode == "gemini_cli"
     assert spec.steps[0].runtime.model == "gemini-2.5-flash"
     assert spec.steps[0].runtime.effort == "low"
 
-    snapshot = build_authoritative_task_input_snapshot(task_payload=payload)
+    snapshot = build_authoritative_workflow_input_snapshot(task_payload=payload)
 
     assert snapshot["steps"][0]["runtime"] == {
         "mode": "gemini_cli",
@@ -208,7 +208,7 @@ def test_mm786_task_steps_accept_runtime_selection_and_snapshot_it() -> None:
 
 
 def test_runtime_command_unknown_valid_commands_are_opaque_not_rejected() -> None:
-    snapshot = build_authoritative_task_input_snapshot(
+    snapshot = build_authoritative_workflow_input_snapshot(
         task_payload={
             "instructions": "/future-command now\nUse the provider command.",
             "runtime": {"mode": "codex"},
@@ -225,7 +225,7 @@ def test_runtime_command_unknown_valid_commands_are_opaque_not_rejected() -> Non
 
 
 def test_runtime_command_does_not_create_workflow_action_steps() -> None:
-    snapshot = build_authoritative_task_input_snapshot(
+    snapshot = build_authoritative_workflow_input_snapshot(
         task_payload={
             "instructions": "/future-command --dangerous-looking\nUse provider behavior.",
             "runtime": {"mode": "codex"},
@@ -245,7 +245,7 @@ def test_runtime_command_does_not_create_workflow_action_steps() -> None:
 
 
 def test_runtime_command_preserves_opaque_provider_command_lines() -> None:
-    snapshot = build_authoritative_task_input_snapshot(
+    snapshot = build_authoritative_workflow_input_snapshot(
         task_payload={
             "instructions": "/provider.command now\nOpaque provider body.",
             "runtime": {"mode": "codex"},
@@ -264,7 +264,7 @@ def test_runtime_command_preserves_opaque_provider_command_lines() -> None:
     "instructions", ["/ review\nKeep literal.", "/review!\nKeep literal."]
 )
 def test_runtime_command_malformed_token_input_is_literal(instructions: str) -> None:
-    snapshot = build_authoritative_task_input_snapshot(
+    snapshot = build_authoritative_workflow_input_snapshot(
         task_payload={
             "instructions": instructions,
             "runtime": {"mode": "codex"},
@@ -280,7 +280,7 @@ def test_runtime_command_malformed_token_input_is_literal(instructions: str) -> 
 
 
 def test_runtime_command_escaped_slash_records_literal_metadata() -> None:
-    snapshot = build_authoritative_task_input_snapshot(
+    snapshot = build_authoritative_workflow_input_snapshot(
         task_payload={
             "instructions": "\\/review\nTreat this as ordinary text.",
             "runtime": {"mode": "codex"},
@@ -299,7 +299,7 @@ def test_runtime_command_escaped_slash_records_literal_metadata() -> None:
 
 
 def test_runtime_command_path_like_input_is_malformed_literal() -> None:
-    snapshot = build_authoritative_task_input_snapshot(
+    snapshot = build_authoritative_workflow_input_snapshot(
         task_payload={
             "instructions": "/src/app.ts is broken",
             "runtime": {"mode": "codex"},
@@ -324,7 +324,7 @@ def test_runtime_command_path_like_input_is_malformed_literal() -> None:
 def test_runtime_command_slash_only_input_is_malformed_literal(
     instructions: str, raw_command: str, instruction_body: str
 ) -> None:
-    snapshot = build_authoritative_task_input_snapshot(
+    snapshot = build_authoritative_workflow_input_snapshot(
         task_payload={
             "instructions": instructions,
             "runtime": {"mode": "codex"},
@@ -342,7 +342,7 @@ def test_runtime_command_slash_only_input_is_malformed_literal(
 
 
 def test_runtime_command_unsupported_runtime_does_not_require_recognition() -> None:
-    snapshot = build_authoritative_task_input_snapshot(
+    snapshot = build_authoritative_workflow_input_snapshot(
         task_payload={
             "instructions": "/review\nCheck external runtime behavior.",
             "runtime": {"mode": "jules"},
@@ -369,7 +369,7 @@ def test_runtime_command_preview_config_includes_all_passthrough_runtime_ids() -
 
 
 def test_runtime_command_leading_whitespace_is_not_detected() -> None:
-    snapshot = build_authoritative_task_input_snapshot(
+    snapshot = build_authoritative_workflow_input_snapshot(
         task_payload={
             "instructions": " /review\nLeading whitespace keeps this literal.",
             "runtime": {"mode": "codex"},
@@ -383,7 +383,7 @@ def test_runtime_command_leading_whitespace_is_not_detected() -> None:
 
 
 def test_runtime_command_step_leading_whitespace_preserves_literal_text() -> None:
-    snapshot = build_authoritative_task_input_snapshot(
+    snapshot = build_authoritative_workflow_input_snapshot(
         task_payload={
             "instructions": "Run task.",
             "runtime": {"mode": "codex"},
@@ -403,8 +403,8 @@ def test_runtime_command_step_leading_whitespace_preserves_literal_text() -> Non
 
 
 def test_runtime_command_rejects_conflicting_objective_metadata() -> None:
-    with pytest.raises(TaskContractError, match="task.runtimeCommand conflicts"):
-        build_authoritative_task_input_snapshot(
+    with pytest.raises(WorkflowContractError, match="task.runtimeCommand conflicts"):
+        build_authoritative_workflow_input_snapshot(
             task_payload={
                 "instructions": "/review\nCheck this branch.",
                 "runtime": {"mode": "codex"},
@@ -419,8 +419,8 @@ def test_runtime_command_rejects_conflicting_objective_metadata() -> None:
 
 
 def test_runtime_command_rejects_conflicting_step_metadata() -> None:
-    with pytest.raises(TaskContractError, match="task.steps\\[0\\].runtimeCommand conflicts"):
-        build_authoritative_task_input_snapshot(
+    with pytest.raises(WorkflowContractError, match="task.steps\\[0\\].runtimeCommand conflicts"):
+        build_authoritative_workflow_input_snapshot(
             task_payload={
                 "instructions": "Run task.",
                 "runtime": {"mode": "codex"},
@@ -444,35 +444,35 @@ def test_task_skills_rejects_invalid_values() -> None:
     """T001: Assert structure validation handles edge cases for skills."""
     from pydantic import ValidationError
     with pytest.raises(ValidationError, match="task.skills.sets must be a list"):
-        TaskExecutionSpec.model_validate({
+        WorkflowExecutionSpec.model_validate({
             "repository": "test/repo",
             "instructions": "foo",
             "skills": {"sets": "not-a-list"},
         })
 
     with pytest.raises(ValidationError, match="task.skills.include must be a list"):
-        TaskExecutionSpec.model_validate({
+        WorkflowExecutionSpec.model_validate({
             "repository": "test/repo",
             "instructions": "foo",
             "skills": {"include": "not-a-list"},
         })
 
     with pytest.raises(ValidationError, match="task.skills.exclude must be a list"):
-        TaskExecutionSpec.model_validate({
+        WorkflowExecutionSpec.model_validate({
             "repository": "test/repo",
             "instructions": "foo",
             "skills": {"exclude": "not-a-list"},
         })
 
     with pytest.raises(ValidationError, match="task\\.skills\\.materializationMode must be hybrid"):
-        TaskExecutionSpec.model_validate({
+        WorkflowExecutionSpec.model_validate({
             "repository": "test/repo",
             "instructions": "foo",
             "skills": {"materializationMode": "invalid"},
         })
 
 def test_task_step_spec_with_step_skills() -> None:
-    """T002: Ensure step.skills parses correctly on TaskStepSpec."""
+    """T002: Ensure step.skills parses correctly on WorkflowStepSpec."""
     raw_payload = {
         "id": "step1",
         "skills": {
@@ -481,13 +481,13 @@ def test_task_step_spec_with_step_skills() -> None:
         }
     }
     
-    spec = TaskStepSpec.model_validate(raw_payload)
+    spec = WorkflowStepSpec.model_validate(raw_payload)
     assert spec.skills is not None
     assert spec.skills.exclude == ["bad-skill"]
     assert spec.skills.materialization_mode == "none"
 
 def test_canonical_task_payload_accepts_legacy_preset_version_keys() -> None:
-    payload = CanonicalTaskPayload.model_validate(
+    payload = CanonicalWorkflowExecutionPayload.model_validate(
         {
             "repository": "Moon/Repo",
             "task": {
@@ -528,7 +528,7 @@ def test_canonical_task_payload_accepts_legacy_preset_version_keys() -> None:
     }
 
 def test_task_steps_accept_explicit_tool_and_skill_discriminators() -> None:
-    spec = TaskExecutionSpec.model_validate(
+    spec = WorkflowExecutionSpec.model_validate(
         {
             "instructions": "Run explicit steps.",
             "steps": [
@@ -608,7 +608,7 @@ def test_task_steps_validate_without_resolving_source_provenance(
     if source is not None:
         step["source"] = source
 
-    spec = TaskExecutionSpec.model_validate(
+    spec = WorkflowExecutionSpec.model_validate(
         {"instructions": "Run explicit steps.", "steps": [step]}
     )
 
@@ -622,7 +622,7 @@ def test_task_steps_validate_without_resolving_source_provenance(
 
 
 def test_task_steps_preserve_detached_template_source_provenance() -> None:
-    spec = TaskExecutionSpec.model_validate(
+    spec = WorkflowExecutionSpec.model_validate(
         {
             "instructions": "Run detached preset step.",
             "steps": [
@@ -654,7 +654,7 @@ def test_task_steps_preserve_detached_template_source_provenance() -> None:
 
 
 def test_canonical_task_payload_preserves_recursive_preset_source_original_step_id() -> None:
-    payload = CanonicalTaskPayload.model_validate(
+    payload = CanonicalWorkflowExecutionPayload.model_validate(
         {
             "repository": "Moon/Repo",
             "task": {
@@ -708,7 +708,7 @@ def test_canonical_task_payload_preserves_recursive_preset_source_original_step_
 
 
 def test_canonical_task_payload_preserves_detached_template_source_provenance() -> None:
-    payload = CanonicalTaskPayload.model_validate(
+    payload = CanonicalWorkflowExecutionPayload.model_validate(
         {
             "repository": "Moon/Repo",
             "task": {
@@ -745,7 +745,7 @@ def test_canonical_task_payload_preserves_detached_template_source_provenance() 
     }
 
 def test_task_authored_presets_accept_recursive_bindings() -> None:
-    payload = CanonicalTaskPayload.model_validate(
+    payload = CanonicalWorkflowExecutionPayload.model_validate(
         {
             "repository": "Moon/Repo",
             "task": {
@@ -804,7 +804,7 @@ def test_task_authored_presets_accept_recursive_bindings() -> None:
 
 def test_task_steps_reject_unresolved_preset_include_work() -> None:
     with pytest.raises(ValidationError, match="unresolved preset include"):
-        TaskExecutionSpec.model_validate(
+        WorkflowExecutionSpec.model_validate(
             {
                 "instructions": "Invalid worker payload.",
                 "steps": [
@@ -821,7 +821,7 @@ def test_task_steps_reject_unresolved_preset_include_work() -> None:
 @pytest.mark.parametrize("step_type", ["preset", "activity", "Activity"])
 def test_task_steps_reject_non_executable_step_types(step_type: str) -> None:
     with pytest.raises(ValidationError, match="task\\.steps\\[\\]\\.type"):
-        TaskExecutionSpec.model_validate(
+        WorkflowExecutionSpec.model_validate(
             {
                 "instructions": "Run explicit steps.",
                 "steps": [
@@ -842,7 +842,7 @@ def test_task_steps_reject_conflicting_executable_payloads() -> None:
         ValidationError,
         match="Tool steps must not include a skill payload",
     ):
-        TaskExecutionSpec.model_validate(
+        WorkflowExecutionSpec.model_validate(
             {
                 "instructions": "Run explicit steps.",
                 "steps": [
@@ -864,7 +864,7 @@ def test_task_steps_reject_skill_step_with_non_skill_tool_payload() -> None:
         ValidationError,
         match="Skill steps must not include a non-skill tool payload",
     ):
-        TaskExecutionSpec.model_validate(
+        WorkflowExecutionSpec.model_validate(
             {
                 "instructions": "Run explicit steps.",
                 "steps": [
@@ -886,9 +886,9 @@ def test_task_steps_reject_skill_step_with_non_skill_tool_payload() -> None:
 def test_task_steps_reject_shell_like_executable_fields(field: str) -> None:
     with pytest.raises(
         ValidationError,
-        match="task\\.steps entries may not define task-scoped overrides",
+        match="task\\.steps entries may not define workflow-scoped overrides",
     ):
-        TaskExecutionSpec.model_validate(
+        WorkflowExecutionSpec.model_validate(
             {
                 "instructions": "Run explicit steps.",
                 "steps": [
@@ -906,7 +906,7 @@ def test_task_steps_reject_shell_like_executable_fields(field: str) -> None:
         )
 
 def test_task_step_accepts_per_step_runtime_selection() -> None:
-    spec = TaskStepSpec.model_validate(
+    spec = WorkflowStepSpec.model_validate(
         {
             "id": "review",
             "instructions": "Review with a cheaper model.",
@@ -926,7 +926,7 @@ def test_task_step_accepts_per_step_runtime_selection() -> None:
     assert spec.runtime.provider_profile == "gemini-default"
 
 def test_mm569_accepts_executable_tool_and_skill_payload_fixtures() -> None:
-    result = build_canonical_task_view(
+    result = build_canonical_workflow_view(
         job_type="task",
         payload=task_payload(tool_step(), skill_step()),
     )
@@ -939,14 +939,14 @@ def test_mm569_accepts_executable_tool_and_skill_payload_fixtures() -> None:
 
 
 def test_mm569_rejects_mixed_and_unresolved_preset_runtime_steps() -> None:
-    with pytest.raises(TaskContractError, match="Tool steps must not include a skill payload"):
-        build_canonical_task_view(
+    with pytest.raises(WorkflowContractError, match="Tool steps must not include a skill payload"):
+        build_canonical_workflow_view(
             job_type="task",
             payload=task_payload(mixed_tool_skill_step()),
         )
 
-    with pytest.raises(TaskContractError, match="task\\.steps\\[\\]\\.type"):
-        build_canonical_task_view(
+    with pytest.raises(WorkflowContractError, match="task\\.steps\\[\\]\\.type"):
+        build_canonical_workflow_view(
             job_type="task",
             payload=task_payload(preset_step()),
         )
@@ -956,7 +956,7 @@ def test_mm569_tool_step_required_capabilities_aggregate_into_canonical_required
     """MM-569: capability requirements declared on a tool step must propagate into the
     canonical top-level requiredCapabilities so the worker selector can route the job
     to a worker that advertises them (matches existing skill-step behavior)."""
-    result = build_canonical_task_view(
+    result = build_canonical_workflow_view(
         job_type="task",
         payload=task_payload(tool_step()),  # default fixture sets requiredCapabilities=["jira"]
     )
@@ -968,8 +968,8 @@ def test_mm569_tool_validation_error_identifies_required_field_path() -> None:
     invalid = tool_step()
     invalid["tool"].pop("id")
 
-    with pytest.raises(TaskContractError) as excinfo:
-        build_canonical_task_view(job_type="task", payload=task_payload(invalid))
+    with pytest.raises(WorkflowContractError) as excinfo:
+        build_canonical_workflow_view(job_type="task", payload=task_payload(invalid))
 
     assert "task.steps[].tool.id" in str(excinfo.value)
     assert "tool.name" in str(excinfo.value)
@@ -982,7 +982,7 @@ def test_mm569_tool_validation_error_identifies_required_field_path() -> None:
 def test_jira_side_effect_skills_reject_repository_publish_modes(
     skill_id: str,
 ) -> None:
-    with pytest.raises(TaskContractError, match="non-repository skill"):
+    with pytest.raises(WorkflowContractError, match="non-repository skill"):
         resolve_publish_mode_for_skill(skill_id, "pr")
 
     assert resolve_publish_mode_for_skill(skill_id, None) == "none"
@@ -996,7 +996,7 @@ def test_jira_side_effect_skills_reject_repository_publish_modes(
 def test_self_managed_publish_skills_force_none(skill_id: str) -> None:
     assert resolve_publish_mode_for_skill(skill_id, None) == "none"
     assert resolve_publish_mode_for_skill(skill_id, "none") == "none"
-    with pytest.raises(TaskContractError):
+    with pytest.raises(WorkflowContractError):
         resolve_publish_mode_for_skill(skill_id, "pr")
 
 
@@ -1007,7 +1007,7 @@ def test_jira_issue_updater_allows_explicit_repository_publish_modes() -> None:
 
 
 def test_jira_orchestrate_preset_context_allows_first_step_skill_pr_publish() -> None:
-    result = build_canonical_task_view(
+    result = build_canonical_workflow_view(
         job_type="task",
         payload={
             "repository": "MoonLadderStudios/MoonMind",
@@ -1039,7 +1039,7 @@ def test_jira_orchestrate_preset_context_allows_first_step_skill_pr_publish() ->
 
 
 def test_effective_task_step_skills_apply_exclusions_without_mutating_task() -> None:
-    task_skills = TaskExecutionSpec.model_validate(
+    task_skills = WorkflowExecutionSpec.model_validate(
         {
             "repository": "test/repo",
             "instructions": "execute",
@@ -1054,7 +1054,7 @@ def test_effective_task_step_skills_apply_exclusions_without_mutating_task() -> 
             },
         }
     ).skills
-    step_skills = TaskStepSpec.model_validate(
+    step_skills = WorkflowStepSpec.model_validate(
         {
             "id": "step1",
             "skills": {
@@ -1066,7 +1066,7 @@ def test_effective_task_step_skills_apply_exclusions_without_mutating_task() -> 
         }
     ).skills
 
-    effective = build_effective_task_skill_selectors(task_skills, step_skills)
+    effective = build_effective_workflow_skill_selectors(task_skills, step_skills)
 
     assert effective is not None
     assert effective.sets == ["default", "python"]
@@ -1082,10 +1082,10 @@ def test_effective_task_step_skills_apply_exclusions_without_mutating_task() -> 
     ]
 
 def test_effective_task_step_skills_returns_none_for_empty_intent() -> None:
-    assert build_effective_task_skill_selectors(None, None) is None
+    assert build_effective_workflow_skill_selectors(None, None) is None
 
 def test_effective_task_step_skills_ignores_auto_sentinel_include() -> None:
-    task_skills = TaskExecutionSpec.model_validate(
+    task_skills = WorkflowExecutionSpec.model_validate(
         {
             "repository": "test/repo",
             "instructions": "execute",
@@ -1093,10 +1093,10 @@ def test_effective_task_step_skills_ignores_auto_sentinel_include() -> None:
         }
     ).skills
 
-    assert build_effective_task_skill_selectors(task_skills, None) is None
+    assert build_effective_workflow_skill_selectors(task_skills, None) is None
 
 def test_effective_task_step_skills_drops_auto_without_losing_real_includes() -> None:
-    task_skills = TaskExecutionSpec.model_validate(
+    task_skills = WorkflowExecutionSpec.model_validate(
         {
             "repository": "test/repo",
             "instructions": "execute",
@@ -1109,7 +1109,7 @@ def test_effective_task_step_skills_drops_auto_without_losing_real_includes() ->
         }
     ).skills
 
-    effective = build_effective_task_skill_selectors(task_skills, None)
+    effective = build_effective_workflow_skill_selectors(task_skills, None)
 
     assert effective is not None
     assert [(item.name, item.version) for item in effective.include or []] == [
@@ -1119,7 +1119,7 @@ def test_effective_task_step_skills_drops_auto_without_losing_real_includes() ->
 def test_task_input_attachments_preserve_objective_and_step_targets() -> None:
     """MM-367: objective and step refs remain distinct canonical fields."""
 
-    canonical = build_canonical_task_view(
+    canonical = build_canonical_workflow_view(
         job_type="task",
         payload={
             "repository": "Moon/Mind",
@@ -1171,7 +1171,7 @@ def test_task_input_attachments_preserve_objective_and_step_targets() -> None:
 def test_task_input_attachments_accept_field_name_keys() -> None:
     """MM-375: pre-validation preserves populate_by_name attachment payloads."""
 
-    canonical = build_canonical_task_view(
+    canonical = build_canonical_workflow_view(
         job_type="task",
         payload={
             "repository": "Moon/Mind",
@@ -1246,7 +1246,7 @@ def test_task_input_attachments_reject_incomplete_or_embedded_data(
     """MM-367: refs stay compact and cannot carry inline image payloads."""
 
     with pytest.raises(ValidationError):
-        TaskExecutionSpec.model_validate(
+        WorkflowExecutionSpec.model_validate(
             {
                 "instructions": "Inspect image.",
                 "inputAttachments": [attachment],
@@ -1257,7 +1257,7 @@ def test_task_input_attachment_validation_error_carries_objective_diagnostic() -
     """MM-375: validation failures expose target-aware diagnostic evidence."""
 
     with pytest.raises(ValidationError) as exc_info:
-        TaskExecutionSpec.model_validate(
+        WorkflowExecutionSpec.model_validate(
             {
                 "instructions": "Inspect image.",
                 "inputAttachments": [
@@ -1288,7 +1288,7 @@ def test_task_input_attachment_validation_diagnostic_accepts_field_names() -> No
     """MM-375: field-name payloads still produce canonical diagnostic keys."""
 
     with pytest.raises(ValidationError) as exc_info:
-        TaskExecutionSpec.model_validate(
+        WorkflowExecutionSpec.model_validate(
             {
                 "instructions": "Inspect image.",
                 "input_attachments": [
@@ -1319,7 +1319,7 @@ def test_task_input_attachment_validation_error_carries_step_diagnostic() -> Non
     """MM-375: step validation failures identify the affected step target."""
 
     with pytest.raises(ValidationError) as exc_info:
-        TaskExecutionSpec.model_validate(
+        WorkflowExecutionSpec.model_validate(
             {
                 "instructions": "Inspect image.",
                 "steps": [
@@ -1357,7 +1357,7 @@ def test_task_input_attachments_must_be_lists() -> None:
     """MM-367: canonical attachment fields are arrays."""
 
     with pytest.raises(ValidationError, match="task.inputAttachments must be a list"):
-        TaskExecutionSpec.model_validate(
+        WorkflowExecutionSpec.model_validate(
             {
                 "instructions": "Inspect image.",
                 "inputAttachments": {
@@ -1393,12 +1393,12 @@ def _canonical_task_payload(task_overrides: dict) -> dict:
     return payload
 
 
-# FR-001: TaskRecoveryKind must accept exactly three values
+# FR-001: WorkflowRecoveryKind must accept exactly three values
 
 def test_fr001_task_recovery_kind_accepts_valid_literals() -> None:
     """MM-638 FR-001: Each canonical recovery kind is accepted."""
     for kind in ("exact_full_rerun", "edited_full_retry", "recover_from_failed_step"):
-        prov = TaskRecoveryProvenance.model_validate(
+        prov = WorkflowRecoveryProvenance.model_validate(
             {"kind": kind, "sourceWorkflowId": "mm:x", "sourceRunId": "r1"}
         )
         assert prov.kind == kind
@@ -1407,28 +1407,28 @@ def test_fr001_task_recovery_kind_accepts_valid_literals() -> None:
 def test_fr001_task_recovery_kind_rejects_invalid_literal() -> None:
     """MM-638 FR-001: Values outside the three canonical literals are rejected."""
     with pytest.raises(ValidationError):
-        TaskRecoveryProvenance.model_validate(
+        WorkflowRecoveryProvenance.model_validate(
             {"kind": "unknown_kind", "sourceWorkflowId": "mm:x", "sourceRunId": "r1"}
         )
 
 
-# FR-002: TaskRecoveryProvenance required/optional fields
+# FR-002: WorkflowRecoveryProvenance required/optional fields
 
 def test_fr002_recovery_provenance_requires_non_empty_source_ids() -> None:
     """MM-638 FR-002: sourceWorkflowId and sourceRunId must be non-empty."""
     with pytest.raises(ValidationError):
-        TaskRecoveryProvenance.model_validate(
+        WorkflowRecoveryProvenance.model_validate(
             {"kind": "exact_full_rerun", "sourceWorkflowId": "", "sourceRunId": "r1"}
         )
     with pytest.raises(ValidationError):
-        TaskRecoveryProvenance.model_validate(
+        WorkflowRecoveryProvenance.model_validate(
             {"kind": "exact_full_rerun", "sourceWorkflowId": "mm:x", "sourceRunId": ""}
         )
 
 
 def test_fr002_recovery_provenance_optional_fields_absent_is_valid() -> None:
     """MM-638 FR-002: requestedBy and requestedAt are optional."""
-    prov = TaskRecoveryProvenance.model_validate(
+    prov = WorkflowRecoveryProvenance.model_validate(
         {"kind": "exact_full_rerun", "sourceWorkflowId": "mm:x", "sourceRunId": "r1"}
     )
     assert prov.requested_by is None
@@ -1455,19 +1455,19 @@ def test_fr003_recovery_ref_optional_fields_absent_is_valid() -> None:
     assert ref.plan_digest is None
 
 
-# FR-004/005: TaskExecutionSpec accepts recovery and resume as optional fields
+# FR-004/005: WorkflowExecutionSpec accepts recovery and resume as optional fields
 
 def test_fr004_fr005_plain_task_unaffected_by_new_fields() -> None:
     """MM-638 FR-004/005: A plain task without recovery/resume is accepted and unaffected."""
-    spec = TaskExecutionSpec.model_validate({"instructions": "Do work"})
+    spec = WorkflowExecutionSpec.model_validate({"instructions": "Do work"})
     assert spec.recovery is None
     assert spec.resume is None
     assert spec.depends_on is None
 
 
 def test_fr004_recovery_field_accepted_on_task_execution_spec() -> None:
-    """MM-638 FR-004: recovery field is accepted on TaskExecutionSpec."""
-    spec = TaskExecutionSpec.model_validate({
+    """MM-638 FR-004: recovery field is accepted on WorkflowExecutionSpec."""
+    spec = WorkflowExecutionSpec.model_validate({
         "instructions": "Retry",
         "recovery": {"kind": "exact_full_rerun", "sourceWorkflowId": "mm:x", "sourceRunId": "r1"},
     })
@@ -1478,9 +1478,9 @@ def test_fr004_recovery_field_accepted_on_task_execution_spec() -> None:
 # FR-006: recover_from_failed_step without resume block → error
 
 def test_fr006_recover_from_failed_step_without_recovery_block_is_rejected() -> None:
-    """MM-638 FR-006: Missing resume block with recover_from_failed_step recovery kind raises TaskContractError."""
-    with pytest.raises(TaskContractError, match="task.resume is required"):
-        build_canonical_task_view(
+    """MM-638 FR-006: Missing resume block with recover_from_failed_step recovery kind raises WorkflowContractError."""
+    with pytest.raises(WorkflowContractError, match="task.resume is required"):
+        build_canonical_workflow_view(
             job_type="task",
             payload=_canonical_task_payload({
                 "recovery": {
@@ -1495,9 +1495,9 @@ def test_fr006_recover_from_failed_step_without_recovery_block_is_rejected() -> 
 # FR-007: resume block without matching recovery.kind → error
 
 def test_fr007_recovery_block_without_matching_recovery_kind_is_rejected() -> None:
-    """MM-638 FR-007: resume block paired with wrong recovery.kind raises TaskContractError."""
-    with pytest.raises(TaskContractError, match="recover_from_failed_step"):
-        build_canonical_task_view(
+    """MM-638 FR-007: resume block paired with wrong recovery.kind raises WorkflowContractError."""
+    with pytest.raises(WorkflowContractError, match="recover_from_failed_step"):
+        build_canonical_workflow_view(
             job_type="task",
             payload=_canonical_task_payload({
                 "recovery": {
@@ -1511,9 +1511,9 @@ def test_fr007_recovery_block_without_matching_recovery_kind_is_rejected() -> No
 
 
 def test_fr007_recovery_block_without_any_recovery_is_rejected() -> None:
-    """MM-638 FR-007: resume block with no recovery field raises TaskContractError."""
-    with pytest.raises(TaskContractError, match="task.recovery must be present"):
-        build_canonical_task_view(
+    """MM-638 FR-007: resume block with no recovery field raises WorkflowContractError."""
+    with pytest.raises(WorkflowContractError, match="task.recovery must be present"):
+        build_canonical_workflow_view(
             job_type="task",
             payload=_canonical_task_payload({"resume": _VALID_RESUME_BLOCK}),
         )
@@ -1523,7 +1523,7 @@ def test_fr007_recovery_block_without_any_recovery_is_rejected() -> None:
 
 def test_fr008_exact_full_rerun_accepted_with_source_ids() -> None:
     """MM-638 FR-008: exact_full_rerun with sourceWorkflowId and sourceRunId is accepted."""
-    result = build_canonical_task_view(
+    result = build_canonical_workflow_view(
         job_type="task",
         payload=_canonical_task_payload({
             "recovery": {
@@ -1539,7 +1539,7 @@ def test_fr008_exact_full_rerun_accepted_with_source_ids() -> None:
 
 def test_fr008_edited_full_retry_accepted_with_source_ids() -> None:
     """MM-638 FR-008: edited_full_retry with sourceWorkflowId and sourceRunId is accepted."""
-    result = build_canonical_task_view(
+    result = build_canonical_workflow_view(
         job_type="task",
         payload=_canonical_task_payload({
             "recovery": {
@@ -1553,9 +1553,9 @@ def test_fr008_edited_full_retry_accepted_with_source_ids() -> None:
 
 
 def test_fr008_exact_full_rerun_with_recovery_is_rejected() -> None:
-    """MM-638 FR-008: exact_full_rerun paired with a resume block raises TaskContractError."""
-    with pytest.raises(TaskContractError, match="recover_from_failed_step"):
-        build_canonical_task_view(
+    """MM-638 FR-008: exact_full_rerun paired with a resume block raises WorkflowContractError."""
+    with pytest.raises(WorkflowContractError, match="recover_from_failed_step"):
+        build_canonical_workflow_view(
             job_type="task",
             payload=_canonical_task_payload({
                 "recovery": {
@@ -1569,9 +1569,9 @@ def test_fr008_exact_full_rerun_with_recovery_is_rejected() -> None:
 
 
 def test_fr008_edited_full_retry_with_recovery_is_rejected() -> None:
-    """MM-638 FR-008: edited_full_retry paired with a resume block raises TaskContractError."""
-    with pytest.raises(TaskContractError, match="recover_from_failed_step"):
-        build_canonical_task_view(
+    """MM-638 FR-008: edited_full_retry paired with a resume block raises WorkflowContractError."""
+    with pytest.raises(WorkflowContractError, match="recover_from_failed_step"):
+        build_canonical_workflow_view(
             job_type="task",
             payload=_canonical_task_payload({
                 "recovery": {
@@ -1586,7 +1586,7 @@ def test_fr008_edited_full_retry_with_recovery_is_rejected() -> None:
 
 def test_mm644_edited_full_retry_requires_pinned_source_run_ids() -> None:
     """MM-644 FR-010: edited full retry provenance pins the source workflow and run."""
-    result = build_canonical_task_view(
+    result = build_canonical_workflow_view(
         job_type="task",
         payload=_canonical_task_payload({
             "instructions": "MM-644 edited retry instructions.",
@@ -1606,8 +1606,8 @@ def test_mm644_edited_full_retry_requires_pinned_source_run_ids() -> None:
 
 def test_mm644_edited_full_retry_rejects_recovery_pairing() -> None:
     """MM-644 FR-009: edited full retry must not carry failed-step recovery refs."""
-    with pytest.raises(TaskContractError, match="recover_from_failed_step"):
-        build_canonical_task_view(
+    with pytest.raises(WorkflowContractError, match="recover_from_failed_step"):
+        build_canonical_workflow_view(
             job_type="task",
             payload=_canonical_task_payload({
                 "instructions": "MM-644 edited retry instructions.",
@@ -1625,7 +1625,7 @@ def test_mm644_edited_full_retry_rejects_recovery_pairing() -> None:
 
 def test_fr009_depends_on_preserved_verbatim() -> None:
     """MM-638 FR-009: dependsOn list is accepted and preserved verbatim."""
-    result = build_canonical_task_view(
+    result = build_canonical_workflow_view(
         job_type="task",
         payload=_canonical_task_payload({
             "dependsOn": ["mm:workflow-1", "mm:workflow-2"],
@@ -1636,7 +1636,7 @@ def test_fr009_depends_on_preserved_verbatim() -> None:
 
 def test_fr009_empty_depends_on_normalized_to_none() -> None:
     """MM-638 FR-009: Empty dependsOn list is normalized to None."""
-    spec = TaskExecutionSpec.model_validate({
+    spec = WorkflowExecutionSpec.model_validate({
         "instructions": "Work",
         "dependsOn": [],
     })
@@ -1647,7 +1647,7 @@ def test_fr009_empty_depends_on_normalized_to_none() -> None:
 
 def test_fr010_branch_is_canonical_authored_field() -> None:
     """MM-638 FR-010: task.git.branch is accepted and present in canonical output."""
-    result = build_canonical_task_view(
+    result = build_canonical_workflow_view(
         job_type="task",
         payload=_canonical_task_payload({"git": {"branch": "feature/my-branch"}}),
     )
@@ -1656,7 +1656,7 @@ def test_fr010_branch_is_canonical_authored_field() -> None:
 
 def test_mm668_target_branch_is_not_active_authored_branch_input() -> None:
     """MM-668: targetBranch must not be normalized into active authored branch."""
-    result = build_canonical_task_view(
+    result = build_canonical_workflow_view(
         job_type="task",
         payload=_canonical_task_payload({
             "git": {"targetBranch": "feature/legacy"},
@@ -1670,7 +1670,7 @@ def test_mm668_target_branch_is_not_active_authored_branch_input() -> None:
 
 def test_sc001_well_formed_recovery_payload_accepted() -> None:
     """MM-638 SC-001: A complete recover_from_failed_step payload is accepted and preserved."""
-    result = build_canonical_task_view(
+    result = build_canonical_workflow_view(
         job_type="task",
         payload=_canonical_task_payload({
             "recovery": {
@@ -1689,8 +1689,8 @@ def test_sc001_well_formed_recovery_payload_accepted() -> None:
 
 def test_sc001_recovery_source_workflow_id_must_match_recovery() -> None:
     """MM-638: recovery and resume must pin the same source workflow."""
-    with pytest.raises(TaskContractError, match="sourceWorkflowId"):
-        build_canonical_task_view(
+    with pytest.raises(WorkflowContractError, match="sourceWorkflowId"):
+        build_canonical_workflow_view(
             job_type="task",
             payload=_canonical_task_payload({
                 "recovery": {
@@ -1708,8 +1708,8 @@ def test_sc001_recovery_source_workflow_id_must_match_recovery() -> None:
 
 def test_sc001_recovery_source_run_id_must_match_recovery() -> None:
     """MM-638: recovery and resume must pin the same source run."""
-    with pytest.raises(TaskContractError, match="sourceRunId"):
-        build_canonical_task_view(
+    with pytest.raises(WorkflowContractError, match="sourceRunId"):
+        build_canonical_workflow_view(
             job_type="task",
             payload=_canonical_task_payload({
                 "recovery": {
@@ -1736,7 +1736,7 @@ def test_edge_case_recovery_checkpoint_ref_empty_is_rejected() -> None:
 
 def test_edge_case_branch_and_starting_branch_both_preserved() -> None:
     """MM-638 edge case: branch and startingBranch are distinct fields and both preserved."""
-    result = build_canonical_task_view(
+    result = build_canonical_workflow_view(
         job_type="task",
         payload=_canonical_task_payload({
             "git": {"branch": "main", "startingBranch": "sha-abc123"},

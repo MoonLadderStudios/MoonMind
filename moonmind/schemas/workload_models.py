@@ -431,6 +431,10 @@ class WorkloadOwnershipMetadata(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     kind: WorkloadOwnershipKind = Field("workload", alias="kind")
+    # legacy_run contract — "taskRunId" wire keys and "moonmind.task_run_id"
+    # runtime labels are persisted in activity payloads and live container
+    # labels; they rename to agent-run naming at the MoonMind.UserWorkflow v2
+    # cutover (MM-730, hard-switch plan §14.2).
     task_run_id: NonBlankStr = Field(..., alias="taskRunId")
     step_id: NonBlankStr = Field(..., alias="stepId")
     attempt: int = Field(..., alias="attempt", ge=1)
