@@ -264,6 +264,8 @@ Key diagnostics:
 - Existing execution/artifact stores only; no new persistence (001-workflow-console-routes)
 - Python 3.12; TypeScript/React for Mission Control visible copy + Pydantic v2, FastAPI, Temporal Python SDK, pytest, React, Vitest (001-step-execution-contracts)
 - Existing Temporal artifact store and workflow history; no new persistent storage (001-step-execution-contracts)
+- Python 3.12 with Pydantic v2 and Temporal Python SDK. + Temporal Python SDK activities, existing `TemporalActivityCatalog`, `TemporalAgentRuntimeActivities`, Docker workload launcher/registry substrate, artifact service helpers, existing PentestGPT Pydantic contracts in `moonmind/integrations/pentest/models.py`. (001-pentest-activity-handler)
+- Existing artifact store and workflow history only; no new persistent database tables planned. (001-pentest-activity-handler)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
