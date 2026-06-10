@@ -2063,10 +2063,10 @@ def test_moonspec_verify_gate_detects_remaining_remediation_budget(
         },
         {
             "id": "remediate-2",
+            "annotations": {"jiraOrchestrateRole": "moonspec-remediation"},
+            "skill": {"id": "moonspec-implement"},
             "inputs": {
                 "title": "Remediate verification gaps 2 of 6",
-                "selectedSkill": "moonspec-implement",
-                "annotations": {"jiraOrchestrateRole": "moonspec-remediation"},
             },
         },
         {
@@ -2080,11 +2080,11 @@ def test_moonspec_verify_gate_detects_remaining_remediation_budget(
 
     assert mock_run_workflow._has_remaining_moonspec_remediation_step(
         ordered_nodes=ordered_nodes,
-        current_index=1,
+        current_index=0,
     )
     assert not mock_run_workflow._has_remaining_moonspec_remediation_step(
         ordered_nodes=ordered_nodes,
-        current_index=2,
+        current_index=1,
     )
 
 

@@ -2402,7 +2402,8 @@ class PresetCatalogService:
                 )
                 created += 1
             except PresetConflictError:
-                pass
+                # Seed templates are idempotent; an existing conflicting row is skipped.
+                continue
         if created > 0:
             await self._session.commit()
         return created

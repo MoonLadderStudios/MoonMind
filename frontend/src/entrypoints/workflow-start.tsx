@@ -208,17 +208,23 @@ interface DashboardConfig {
   };
   features?: {
     temporalDashboard?: {
+      temporalWorkflowEditing?: boolean;
       temporalTaskEditing?: boolean;
     };
   };
   system?: {
     defaultRepository?: string;
+    defaultRuntime?: string;
     defaultAgentRuntime?: string;
+    defaultModel?: string;
     defaultTaskModel?: string;
+    defaultEffort?: string;
     defaultTaskEffort?: string;
     defaultPublishMode?: string;
     defaultProposeTasks?: boolean;
+    defaultModelByRuntime?: Record<string, string>;
     defaultTaskModelByRuntime?: Record<string, string>;
+    defaultEffortByRuntime?: Record<string, string>;
     defaultTaskEffortByRuntime?: Record<string, string>;
     supportedAgentRuntimes?: string[];
     repositoryOptions?: {
@@ -3687,7 +3693,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     [],
   );
   const temporalTaskEditingEnabled = Boolean(
-    dashboardConfig.features?.temporalDashboard?.temporalTaskEditing,
+    dashboardConfig.features?.temporalDashboard?.temporalWorkflowEditing ??
+      dashboardConfig.features?.temporalDashboard?.temporalTaskEditing,
   );
   const temporalCreateEndpoint = String(
     dashboardConfig.sources?.temporal?.create || "/api/executions",
@@ -3780,7 +3787,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   }, [dashboardConfig.system?.attachmentPolicy]);
 
   const defaultRuntime = String(
-    dashboardConfig.system?.defaultAgentRuntime || "codex_cli",
+    dashboardConfig.system?.defaultRuntime ||
+      dashboardConfig.system?.defaultAgentRuntime ||
+      "codex_cli",
   );
   const defaultRepository = String(
     dashboardConfig.system?.defaultRepository || "",
@@ -3806,9 +3815,13 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     dashboardConfig.system?.defaultProposeTasks,
   );
   const defaultTaskModelByRuntime =
-    dashboardConfig.system?.defaultTaskModelByRuntime || {};
+    dashboardConfig.system?.defaultModelByRuntime ||
+    dashboardConfig.system?.defaultTaskModelByRuntime ||
+    {};
   const defaultTaskEffortByRuntime =
-    dashboardConfig.system?.defaultTaskEffortByRuntime || {};
+    dashboardConfig.system?.defaultEffortByRuntime ||
+    dashboardConfig.system?.defaultTaskEffortByRuntime ||
+    {};
   const supportedAgentRuntimes = dashboardConfig.system
     ?.supportedAgentRuntimes || ["codex_cli", "gemini_cli", "claude_code"];
 
@@ -3820,6 +3833,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   const [model, setModel] = useState(
     String(
       defaultTaskModelByRuntime[defaultRuntime] ||
+        dashboardConfig.system?.defaultModel ||
         dashboardConfig.system?.defaultTaskModel ||
         "",
     ),
@@ -3828,6 +3842,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   const [effort, setEffort] = useState(
     String(
       defaultTaskEffortByRuntime[defaultRuntime] ||
+        dashboardConfig.system?.defaultEffort ||
         dashboardConfig.system?.defaultTaskEffort ||
         "",
     ),
@@ -4177,6 +4192,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     setEffort(
       String(
         defaultTaskEffortByRuntime[runtime] ||
+          dashboardConfig.system?.defaultEffort ||
           dashboardConfig.system?.defaultTaskEffort ||
           "",
       ),
@@ -4197,6 +4213,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       setModel(
         String(
           defaultTaskModelByRuntime[runtime] ||
+            dashboardConfig.system?.defaultModel ||
             dashboardConfig.system?.defaultTaskModel ||
             "",
         ),
@@ -4204,7 +4221,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     }
   }, [
     dashboardConfig.system?.defaultTaskEffort,
+    dashboardConfig.system?.defaultEffort,
     dashboardConfig.system?.defaultTaskModel,
+    dashboardConfig.system?.defaultModel,
     defaultTaskEffortByRuntime,
     defaultTaskModelByRuntime,
     modelManualOverride,
@@ -5458,11 +5477,13 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         new Set(
           [
             String(defaultTaskModelByRuntime[runtime] || ""),
+            String(dashboardConfig.system?.defaultModel || ""),
             String(dashboardConfig.system?.defaultTaskModel || ""),
           ].filter(Boolean),
         ),
       ),
     [
+      dashboardConfig.system?.defaultModel,
       dashboardConfig.system?.defaultTaskModel,
       defaultTaskModelByRuntime,
       runtime,
@@ -5484,11 +5505,13 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
             "high",
             "xhigh",
             String(defaultTaskEffortByRuntime[runtime] || ""),
+            String(dashboardConfig.system?.defaultEffort || ""),
             String(dashboardConfig.system?.defaultTaskEffort || ""),
           ].filter(Boolean),
         ),
       ),
     [
+      dashboardConfig.system?.defaultEffort,
       dashboardConfig.system?.defaultTaskEffort,
       defaultTaskEffortByRuntime,
       runtime,

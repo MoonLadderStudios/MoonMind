@@ -21,6 +21,7 @@ type DashboardConfig = {
   features?: {
     temporalDashboard?: {
       actionsEnabled?: boolean;
+      temporalWorkflowEditing?: boolean;
       temporalTaskEditing?: boolean;
       debugFieldsEnabled?: boolean;
     };
@@ -4523,7 +4524,10 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const agentRunRoutes = readAgentRunRouteTemplates(cfg);
   const detailPoll = cfg?.pollIntervalsMs?.detail ?? 2000;
   const actionsOn = Boolean(cfg?.features?.temporalDashboard?.actionsEnabled);
-  const taskEditingOn = Boolean(cfg?.features?.temporalDashboard?.temporalTaskEditing);
+  const taskEditingOn = Boolean(
+    cfg?.features?.temporalDashboard?.temporalWorkflowEditing ??
+      cfg?.features?.temporalDashboard?.temporalTaskEditing,
+  );
   const debugOn = Boolean(cfg?.features?.temporalDashboard?.debugFieldsEnabled);
   const logStreamingEnabled = cfg?.features?.logStreamingEnabled !== false;
   const structuredHistoryEnabled = shouldUseStructuredHistory(cfg);

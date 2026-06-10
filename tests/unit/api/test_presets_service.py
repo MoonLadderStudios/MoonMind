@@ -1423,7 +1423,7 @@ async def test_template_recents_declares_unique_user_version_constraint() -> Non
         for constraint in PresetRecent.__table__.constraints
         if isinstance(constraint, UniqueConstraint)
     }
-    assert "uq_task_template_recent_user_version" in constraint_names
+    assert "uq_preset_recent_user_version" in constraint_names
 
 async def test_save_from_workflow_rejects_secret_patterns(tmp_path):
     user_id = uuid4()

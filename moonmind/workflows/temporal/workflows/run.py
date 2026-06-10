@@ -2309,15 +2309,22 @@ class MoonMindRunWorkflow:
 
     def _is_moonspec_remediation_step(self, node: Mapping[str, Any]) -> bool:
         node_inputs = self._node_inputs_mapping(node)
-        annotations = node_inputs.get("annotations")
+        annotations = node_inputs.get("annotations") or node.get("annotations")
         if isinstance(annotations, Mapping):
             role = str(annotations.get("jiraOrchestrateRole") or "").strip().lower()
             if role == "moonspec-remediation":
                 return True
+        skill_node = node.get("skill")
+        skill_id_from_node = (
+            skill_node.get("id") or skill_node.get("name")
+            if isinstance(skill_node, Mapping)
+            else skill_node
+        )
         selected_skill = str(
             node_inputs.get("selectedSkill")
             or node_inputs.get("skillId")
             or node_inputs.get("targetSkill")
+            or skill_id_from_node
             or ""
         ).strip().lower()
         if selected_skill != "moonspec-implement":
@@ -2335,7 +2342,7 @@ class MoonMindRunWorkflow:
         ordered_nodes: Sequence[Mapping[str, Any]],
         current_index: int,
     ) -> bool:
-        for node in ordered_nodes[current_index:]:
+        for node in ordered_nodes[current_index + 1:]:
             if self._is_moonspec_remediation_step(node):
                 return True
         return False
