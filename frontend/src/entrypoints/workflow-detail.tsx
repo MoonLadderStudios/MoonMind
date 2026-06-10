@@ -951,6 +951,8 @@ const StepLedgerArtifactsSchema = z
     runtimeMergedLogs: z.string().nullable().optional(),
     runtimeDiagnostics: z.string().nullable().optional(),
     providerSnapshot: z.string().nullable().optional(),
+    stepExecutionManifestRef: z.string().nullable().optional(),
+    stepExecutionManifestRefs: z.array(z.string()).nullable().optional(),
   })
   .default({
     outputSummary: null,
@@ -960,6 +962,8 @@ const StepLedgerArtifactsSchema = z
     runtimeMergedLogs: null,
     runtimeDiagnostics: null,
     providerSnapshot: null,
+    stepExecutionManifestRef: null,
+    stepExecutionManifestRefs: [],
   });
 
 const StepLedgerWorkloadSchema = z
@@ -1015,6 +1019,7 @@ const StepLedgerRowSchema = z
       .nullable()
       .optional(),
     workload: StepLedgerWorkloadSchema.nullable().optional(),
+    stateCheckpointRef: z.string().nullable().optional(),
     lastError: z.unknown().nullable().optional(),
   })
   .passthrough();
@@ -2646,6 +2651,65 @@ function stepStatusIcon(status: string): { icon: string; cssClass: string } {
   return { icon: '○', cssClass: 'step-icon-pending' };
 }
 
+// MM-815: Collect the latest attempt's evidence refs for the default (collapsed)
+// step row. These are ref-only pointers (artifact + gate refs) derived from the
+// current row; no transcripts, diffs, or provider payloads are inlined, and no
+// prior-attempt history is mixed in.
+function collectStepEvidenceRefs(
+  row: z.infer<typeof StepLedgerRowSchema>,
+): Array<{ label: string; ref: string }> {
+  if (!row) return [];
+  const manifestRefs = row.artifacts?.stepExecutionManifestRefs ?? [];
+  const latestManifestRef =
+    row.artifacts?.stepExecutionManifestRef ??
+    (manifestRefs.length > 0 ? manifestRefs[manifestRefs.length - 1] : null);
+  const entries: Array<[string, string | null | undefined]> = [
+    ['Output', row.artifacts?.outputPrimary ?? row.artifacts?.outputSummary],
+    ['Diagnostics', row.artifacts?.runtimeDiagnostics],
+    ['Provider', row.artifacts?.providerSnapshot],
+    ['Manifest', latestManifestRef],
+    ['Checkpoint', row.stateCheckpointRef],
+  ];
+  const refs = entries
+    .filter(([, value]) => Boolean(value))
+    .map(([label, value]) => ({ label, ref: value as string }));
+  const checks = row.checks ?? [];
+  for (const check of checks) {
+    if (check.artifactRef) {
+      refs.push({ label: `${check.kind.replaceAll('_', ' ')} verdict`, ref: check.artifactRef });
+    }
+  }
+  return refs;
+}
+
+function StepEvidenceRefs({ row }: { row: z.infer<typeof StepLedgerRowSchema> }) {
+  const refs = collectStepEvidenceRefs(row);
+  if (refs.length === 0) return null;
+  return (
+    <div className="step-evidence-refs" aria-label="Latest evidence refs">
+      <span className="step-evidence-label">Evidence</span>
+      {refs.map(({ label, ref }, index) => (
+        <span className="step-evidence-ref" key={`${label}-${ref}-${index}`} title={ref}>
+          {label}: <code className="text-xs break-all">{ref}</code>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function StepProvenanceMarker({ row }: { row: z.infer<typeof StepLedgerRowSchema> }) {
+  if (!row.preservedFrom) return null;
+  const source = row.preservedFrom;
+  return (
+    <span
+      className="step-provenance-marker"
+      title={`Preserved from source run ${source.workflowId} run ${source.runId} execution ${source.executionOrdinal}.`}
+    >
+      Preserved
+    </span>
+  );
+}
+
 function StepLedgerRowCard({
   apiBase,
   logStreamingEnabled,
@@ -2692,6 +2756,7 @@ function StepLedgerRowCard({
               <code className="step-tl-tool">{formatStepToolLabel(row.tool)}</code>
               <span {...executionStatusPillProps(row.status)}>{formatStatusLabel(row.status)}</span>
               {row.executionOrdinal > 1 ? <span className="step-execution-pill">Execution {row.executionOrdinal}</span> : null}
+              <StepProvenanceMarker row={row} />
               <span className={`step-tl-chevron${expanded ? ' step-tl-chevron-open' : ''}`} aria-hidden="true">›</span>
             </span>
           </div>
@@ -2705,6 +2770,7 @@ function StepLedgerRowCard({
               ))}
             </div>
           ) : null}
+          {!expanded ? <StepEvidenceRefs row={row} /> : null}
         </button>
         {expanded ? (
           <div className="step-tl-details">
