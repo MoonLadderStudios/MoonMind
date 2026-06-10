@@ -1,14 +1,15 @@
 # 🌙 MoonMind Roadmap
 
-> Tracking the major milestones remaining to fully deliver on the README promise.
+> Tracking the major milestones remaining to fully deliver on the README promise:
+> **safety, resiliency, and observability for Claude Code and Codex CLI.**
 >
-> Last updated: 2026-06-03
+> Last updated: 2026-06-09
 
 ---
 
 ## How to read this document
 
-Each milestone maps to a specific claim in the [README](../../README.md). Status uses:
+Each milestone maps to a specific claim in the [README](../README.md). Status uses:
 
 | Tag | Meaning |
 |-----|---------|
@@ -21,293 +22,267 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - `[x]` = done
 - `[ ]` = still remaining
 
+The README was reframed (2026-06-09) around three headline value propositions — **Safety** (Milestones 9, 12), **Resiliency** (Milestones 4, 13), and **Observability** (Milestones 11, 14) — layered on top of managed agent runtimes (Milestone 1). Milestones 12–14 are new and carry the README's aspirational "where this is headed" commitments.
+
 ---
 
 ## Milestone 1 — Managed Agent Runtimes ✅
 
-**README claim:** *"MoonMind can run Claude Code, Gemini CLI, and Codex CLI as managed workers on your own infrastructure."*
+**README claim:** *"MoonMind runs owned CLI runtimes on your own infrastructure using your existing subscriptions or API keys. Codex CLI is the live first-class task-scoped managed-session runtime; Claude Code is a first-class managed-runtime target … on the path to the same live session controller."*
 
 ### What's shipped
 - Codex, Gemini, and Claude Temporal activity workers (`codex-worker`, `gemini-worker`, `claude-worker`)
-- OAuth auth-volume bootstrap for Codex and Gemini (`tools/auth-*.sh`)
-- Docker-socket-proxy sandboxing for all workers
 - Runtime adapter pattern (`moonmind/agents/`, `moonmind/workflows/temporal/runtime/`)
-- Claude API key gate removed — Claude runtime available without API key (#795)
-
-- Auto-seeding of default auth profiles on API startup
+- Codex CLI task-scoped managed sessions with per-session sidecar Docker daemon
+- Auth profile management UI in Mission Control; auto-seeding of default auth profiles on startup
+- Worker health checks & readiness probes; per-worker shard health view (MM-775)
+- Graceful worker pause / unpause — API (`system_operations.py`) + Settings Operations surface
+- MoonMind-native xterm.js OAuth terminal for provider login (spec 306 `finalize-oauth-terminal`, `frontend/src/entrypoints/oauth-terminal.tsx`) — supersedes the earlier Tmate-based design
+- OAuth runner bootstrap over PTY with session guardrails (specs 192, 245)
 
 ### Remaining tasks
-- [x] **1.1** Claude auth volume flow matches Codex/Gemini parity — Spec 072 (`managed-agents-auth`)
-- [x] **1.2** Auth profile management UI in Mission Control — API router (`auth_profiles.py`) + dashboard
-- [x] **1.3** Worker health checks & readiness probes — Constitution IX
-
-- [x] **1.5** Remove Claude API key gate — #795
-- [x] **1.6** Auto-seed auth profiles on startup
-- [ ] **1.7** Graceful worker pause / unpause — Spec 038/040 (`worker-pause`), API exists, dashboard wiring needed
-- [ ] **1.8** Universal Tmate OAuth sessions — Design doc in `docs/ManagedAgents/TmateArchitecture.md` (4 phases: session table, API, UI modal, tmate runner, provider registry)
+- [x] **1.1–1.6** Auth parity, profile UI, health checks, API key gate removal, auto-seeding — all shipped
+- [x] **1.7** Graceful worker pause / unpause — API + Settings Operations wiring
+- [x] **1.8** Universal OAuth sessions — Delivered as the native xterm.js OAuth terminal (spec 306); Tmate architecture retired
+- [ ] **1.9** Claude Code task-scoped managed-session controller — Claude-specific session design exists (`docs/ManagedAgents/ClaudeCodeManagedSessions.md`) but Claude does not yet enter the live `ManagedSession*` controller path that Codex uses. This is the top runtime-parity gap against the README headline.
 
 ---
 
 ## Milestone 2 — External / Black-Box Agent Coordination 🔧
 
-**README claim:** *"Even cloud-hosted agents like Jules and Codex Cloud benefit from coordination. MoonMind tracks status, injects context, and responds with feedback."*
+**README claim:** *"Cloud-hosted agents like Jules and Codex Cloud are coordinated through external-agent adapters. MoonMind tracks status, injects context, and closes the feedback loop."*
 
 ### What's shipped
-- Jules Temporal external-event contract and adapter (`moonmind/jules/`, `docs/ExternalAgents/`)
-- External-agent integration system design doc
 - Jules end-to-end external event workflow — adapter, event wiring, multi-step `sendMessage` flow, status polling
-- External Runs tab removed from Mission Control (external runs now integrated into main task view)
+- Generic external-agent adapter pattern (MM-741) — shared contract, registry-based provider selection, polling and streaming-gateway execution styles
+- Generic integration callback receiver with correlation lookup and polling fallback (MM-779)
+- External runs integrated into the main task dashboard
 
 ### Remaining tasks
-- [x] **2.1** Jules end-to-end external event workflow — Spec 048/066, adapter exists, event wiring complete
-- [x] **2.2** Remove External Runs tab — External runs integrated into main dashboard
-- [ ] **2.3** Codex Cloud integration adapter — No adapter yet for the hosted Codex product
-- [x] **2.4** Generic external-agent adapter pattern — MM-741; shared adapter contract, registry-based provider selection, polling and streaming-gateway execution styles
+- [ ] **2.3** Codex Cloud integration adapter — Runtime gate/settings exist (`moonmind/codex_cloud/settings.py`); full adapter for the hosted Codex product not yet implemented
 
 ---
 
 ## Milestone 3 — Multi-Step Planning & Step-Based Context 🔧
 
-**README claim:** *"Break a massive goal into discrete steps with presets, and let MoonMind schedule and sequence them."* / *"Inject the right context into each step and clear it between steps."*
+**README claim:** *"Agents perform better on small, focused tasks. MoonMind injects the right context into each step and clears it between steps to prevent context-window pollution."*
 
 ### What's shipped
-- Task presets system (spec 026/028/055 — `WorkflowPresetsSystem.md`)
-- Task step templates & step sequencing API (`task_step_templates.py`, `WorkflowStepSystem.md`)
-- Manifest-based task submission (`manifest.schema.json`, `moonmind/manifest/`)
-- Task proposal queue for automated step generation
-- `proposal_generate` activity implemented
-- Task proposal admin/recovery UI surfacing and review actions — MM-743
-- Context clearing between ordered Codex managed-session steps via the
-  task-scoped AgentSession reset boundary (MM-745)
+- Workflow presets, step templates, and step sequencing (`docs/Workflows/WorkflowPresetsSystem.md`, `WorkflowStepSystem.md`)
+- Manifest-based task submission; task proposal queue with `proposal_generate`
+- Tracker-native proposal delivery and review — GitHub/Jira delivery records and process-tracker decision handling (specs 312, 313, 357)
+- Context clearing between ordered Codex managed-session steps via the task-scoped AgentSession reset boundary (MM-745)
+- Target-aware prepared inputs per step — prepared-input manifests selected per step at the runtime prompt boundary (specs 325, 349; `moonmind/workflows/tasks/prepared_context.py`)
+- Preset-driven scheduling — goal-only submissions deterministically mapped to seeded presets (MM-747)
+- Schema-driven capability inputs and Create-page authoring validation (specs 308, 340)
 
 ### Remaining tasks
-- [ ] **3.1** Fix task proposal system end-to-end — tracker-native GitHub/Jira proposal delivery and review remains the desired primary workflow; `/proposals` is admin/recovery coverage only
-- [ ] **3.2** Automatic context injection per step — Context pack exists (`rag/context_pack.py`), not wired into step execution
-- [x] **3.3** Context clearing between steps — Task-scoped Codex managed sessions clear to a new epoch before reuse by a later ordered step (MM-745)
-- [ ] **3.4** Multi-step workflow visualization in Mission Control — Dashboard shows tasks but not step DAGs
-- [x] **3.5** Preset-driven scheduling (auto-sequence from goal) — Goal-only task submissions are deterministically mapped to seeded presets before backend expansion (MM-747)
-- [x] **3.6** Overhaul and streamline schedules UI — Current schedules interface needs UX improvement
+- [x] **3.1** Tracker-native proposal delivery/review — specs 312/313 shipped; `/proposals` remains admin/recovery coverage
+- [ ] **3.2** Automatic RAG context injection per step — Target-aware *prepared file* context is wired (specs 325/349), but retrieval-backed context packs (`rag/context_pack.py`) are still not injected into step execution (tracked with 5.3)
+- [x] **3.3** Context clearing between steps — MM-745
+- [ ] **3.4** Multi-step workflow visualization in Mission Control — Workflow detail subroute tabs shipped (MM-801), but no step-DAG rendering yet
+- [x] **3.5 / 3.6** Preset-driven scheduling; schedules UI overhaul — shipped
 
 ---
 
-## Milestone 4 — Fire-and-Forget Resiliency 🔧
+## Milestone 4 — Fire-and-Forget Resiliency ✅
 
-**README claim:** *"Submit a refactoring job, close your laptop, and let MoonMind handle the rest. Backed by Temporal, workflows survive container crashes and restarts. Automatic stuck detection and smart retries."*
+**README claim:** *"Submit a refactoring job, close your laptop, and let MoonMind handle the rest. Every run is backed by Temporal, so workflows survive container crashes, worker restarts, and host reboots."*
 
 ### What's shipped
-- Temporal foundation (server, DB, namespace init)
-- Durable workflows for agent runs (`agent_run.py`, `run.py`)
-- Worker crash recovery via Temporal replay
-- Recurring task schedules (spec 049)
-- TRY_CANCEL activity cancellation — fast cancellation without waiting for activity completion
-- Force-terminate path for stuck tasks
-- Runtime-specific agent-run resiliency policies, generic no-progress detection, intervention escalation, and completion webhooks (MM-749)
+- Temporal foundation, durable agent-run workflows, crash recovery via replay
+- Recurring task schedules; fast cancellation (`TRY_CANCEL`) and force-terminate path
+- Runtime-specific resiliency policies, generic no-progress detection, intervention escalation, completion webhooks (MM-749); hardened managed-runtime no-progress handling (#2389)
+- Provider rate-limit detection in live output with slot-based concurrency and cooldowns (`max_parallel_runs`, `cooldown_after_429_seconds`)
+- Idempotent side effects keyed by deterministic execution tuples `(workflow_id, step_id, attempt)`
 
 ### Remaining tasks
-- [x] **4.1** Fast cancellation via `TRY_CANCEL` — All `execute_activity` calls now use `ActivityCancellationType.TRY_CANCEL`
-- [x] **4.2** Force-terminate path for stuck tasks — Shipped in `9050b4d9`
-- [x] **4.3** Automatic stuck-detection for agent runs — AgentRun detects repeated no-progress status observations and escalates to `intervention_requested`
-- [x] **4.4** Smart retry policies per runtime — AgentRun records runtime-specific resiliency policy metadata for managed and external runtimes
-- [x] **4.5** Intervention request signaling (agent asks for human help) — Non-auto-answer feedback requests signal `intervention_requested` to the parent workflow
-- [x] **4.6** Notification system (email/webhook on completion) — `execution.notify_completion` emits opt-in terminal-result webhooks via `MOONMIND_EXECUTION_NOTIFICATIONS_*`
+- [x] **4.1–4.6** All shipped. Deeper recovery work continues in **Milestone 13 — Self-Healing Remediation & Recovery**.
 
 ---
 
 ## Milestone 5 — RAG & Document Retrieval 🔧
 
-**README claim:** *"Ground agents with built-in loaders for GitHub, Jira, Confluence, Google Drive, and local files."*
+**README claim (supporting):** *Grounding agents with loaders for GitHub, Jira, Confluence, Google Drive, and local files.*
 
 ### What's shipped
-- LlamaIndex + Qdrant RAG pipeline (`moonmind/rag/` — 12 source files)
-- Data loaders / indexers: GitHub, Jira, Confluence, Google Drive, local files (`moonmind/indexers/`)
-- Manifest system: schema validation, reader adapters, pipeline, evaluation (`moonmind/manifest/` — 12 source files)
-- Manifest CLI (`moonmind manifest validate|plan|run|evaluate`)
-- Manifest ingest Temporal workflow (`moonmind/workflows/temporal/manifest_ingest.py`)
-- Spec 088 manifest schema pipeline spec implemented (#796)
-- Embedding model updated to current Gemini default (#787)
-- Context pack primitives (`rag/context_pack.py`)
-- RAG retrieval CLI (`moonmind rag search`)
-- RAG overlay and guardrails
-- Index health monitoring for Mission Control — indexed collections, document counts, and freshness (MM-758)
-- RAG doc ↔ spec consolidation completed (see `docs/MoonMindRoadmap.md`)
+- LlamaIndex + Qdrant pipeline; GitHub/Jira/Confluence/Drive/local indexers; manifest schema, CLI, and Temporal ingest workflow
+- Retrieval quality validation — golden smoke dataset with `hitRate@10` / `ndcg@10` baselines
+- Index health monitoring in Mission Control (MM-758); federated multi-collection retrieval
+- End-to-end manifest ingest integration test (`tests/integration/temporal/test_manifest_pipeline_e2e.py`, MM-754)
+- Retrieval transport separation and retrieval evidence guardrails (specs 256, 257)
 
 ### Remaining tasks
-- [ ] **5.1** End-to-end manifest ingest testing — Manifest pipeline built but not fully tested against live data sources
-- [x] **5.2** RAG retrieval quality validation — Golden smoke dataset and baseline `hitRate@10` / `ndcg@10` thresholds established for `manifest/evaluation.py`
-- [ ] **5.3** Context pack assembly wired into agent runs — Primitives exist; not integrated into Temporal activity execution
-- [x] **5.4** Index health monitoring — Mission Control shows indexed collections, document counts, and freshness
-- [ ] **5.5** Incremental re-indexing — Full reindex only; no delta/incremental update path
-- [x] **5.6** Multi-collection retrieval — Federated retrieval supports configured and request-selected collection sets
+- [x] **5.1** End-to-end manifest ingest testing — MM-754
+- [ ] **5.3** Context pack assembly wired into agent runs — Primitives exist; not integrated into Temporal step execution (pairs with 3.2)
+- [ ] **5.5** Incremental re-indexing — Full reindex only; no delta path
 
 ---
 
-## Milestone 6 — Memory & Procedural Learning 📐
+## Milestone 6 — Memory & Procedural Learning ✅
 
-**README claim:** *"Procedural memory retains structured summaries from past runs so agents don't repeat the same mistakes."*
+**README claim:** *"Switch providers without losing what your agents have learned."*
 
-### What's shipped
-- Memory architecture design doc (`docs/Memory/MemoryArchitecture.md` — "Desired State")
-- MM-761 memory foundation contracts and fail-open services:
-  - runtime controls for `MEMORY_ENABLED`, `MEMORY_PLANNING`, `MEMORY_HISTORY`, `MEMORY_LONG_TERM`, `MEMORY_FAIL_OPEN`, and `MEMORY_CONTEXT_BUDGET_TOKENS`
-  - Plane B run digests and error-signature/fix-pattern procedural memory models
-  - Plane C Mem0-compatible long-term memory adapter boundary with approved-memory retrieval
-  - Plane A Beads-compatible planning adapter boundary
-  - provenance-carrying, token-budgeted context-pack assembly
-- Fix Patterns / Error Signatures procedural memory primitive
-  (`moonmind/memory/procedural.py`) with compact evidence-backed JSONL
-  storage and prepared-context projection
-- Planning Memory (Beads / Plane A) runtime adapter with optional context-pack prefetch
-- **MM-762 / 6.1** Run Digests (Plane B — task history summaries) — terminal execution summaries are derived from execution records and indexed as retrieval memory
-
-### Remaining tasks
-- [x] **6.1** Run Digests (Plane B — task history summaries) — MM-761 foundation implemented
-- [x] **6.2** Fix Patterns / Error Signatures (procedural memory) — MM-761 foundation implemented
-- [x] **6.3** Long-Term Memory integration (Mem0 / Plane C) — MM-761 adapter boundary implemented
-- [x] **6.4** Planning Memory (Beads / Plane A) — Runtime adapter, optional context-pack prefetch, and MM-761 adapter boundary implemented
-- [x] **6.5** Token budgeting & provenance tracking — MM-761 context-pack implementation
-- [x] **6.6** Memory feature flags (`MEMORY_ENABLED`, etc.) — MM-761 runtime settings implemented
+All six items (run digests, fix patterns/error signatures, Mem0 long-term adapter, Beads planning adapter, token budgeting/provenance, feature flags) shipped under MM-761/MM-762. See `docs/Memory/MemoryArchitecture.md`.
 
 ---
 
 ## Milestone 7 — Mission Control Dashboard 🔧
 
-**README claim:** *"Track real-time run status, browse generated artifacts, monitor intervention requests, and audit full execution histories."*
+**README claim:** *"Track run status in real time, inspect per-step progress, open step-scoped logs and diagnostics, browse generated artifacts, monitor intervention requests, and audit execution histories from a single UI."*
 
 ### What's shipped
-- Task dashboard with queue view, dark mode, Tailwind styling
-- Real-time SSE for live task status (spec 023)
-- Temporal artifact presentation (spec 063)
-- Task editing, cancellation, resubmission
-- Runtime selector on submit (with runtime column in task list — #793)
-- Task detail fields: Runtime, Model, Effort
-- Fast cancellation UX (TRY_CANCEL + force-terminate)
-- External runs integrated into main task dashboard
-- Intervention requests surface as the `intervention_requested` execution state in the task dashboard and live status stream
+- Task dashboard with live SSE status, task editing/cancel/resubmit, runtime/model/effort selection
+- Execution history / audit view (`/workflows/{workflowId}/runs`, MM-772); workflow detail subroute tabs (MM-801)
+- Intervention request monitoring via `intervention_requested` state
+- Settings unified into Mission Control — sparse overrides, server-side validation, settings backup & migration services, MM-713 guardrail suite (specs 339, 341, 358, 359; `api_service/services/settings_backup.py`, `settings_migrations.py`)
+- Attachment upload/binding UX with recovery diagnostics by target (specs 321, 329); column filter popovers; mobile/accessibility stability (specs 301, 304)
+- Worker fleet health dashboard (MM-775)
 
 ### Remaining tasks
-- [ ] **7.1** Migrate settings page to Mission Control — Settings currently in separate profile page, should be unified
-- [ ] **7.2** Artifact browsing UI (files/logs/patches) — API exists (`temporal_artifacts.py`), dashboard integration partial
-- [x] **7.3** Intervention request monitoring — Agent requests for human help surface through `intervention_requested` run status monitoring
-- [x] **7.4** Execution history / audit trail view — Spec 067 (`run-history-rerun`), `/workflows/{workflowId}/runs` now exposes the Mission Control execution history/audit view (MM-772)
-- [ ] **7.5** Side-by-side comparison view — README promises "run the same task with different models and runtimes to compare results"
-- [ ] **7.6** Multi-step / step DAG visualization — Steps are tracked but no graphical visualization
-- [x] **7.7** Worker fleet health dashboard — Per-worker Codex shard health view in Settings Operations (MM-775)
+- [x] **7.1** Settings migrated to Mission Control — specs 339/341/358/359
+- [ ] **7.2** Artifact browsing UI — API exists (`temporal_artifacts.py`); dashboard browsing of files/logs/patches still partial
+- [ ] **7.5** Side-by-side comparison view — Comparison runs preserve lineage (MM-773), but no side-by-side UI
+- [ ] **7.6** Multi-step / step DAG visualization — Same gap as 3.4
+- [ ] **7.7** Remediation panels — Tracked as 13.4
 
 ---
 
 ## Milestone 8 — Universal Integration (MCP & APIs) 🔧
 
-**README claim:** *"Connect any agent through MCP or standard API endpoints."*
+**README claim (supporting):** *Connect any agent through MCP or standard API endpoints.*
 
 ### What's shipped
-- MCP Streamable HTTP endpoint (`/mcp` — `mcp_tools.py`, MM-777)
-- Legacy context completion endpoint (`/context` — `context_protocol.py`)
-- MCP resource and tools wrapper (`mcp_tools.py`)
-- MCP JSON helper routes (`/mcp/tools`, `/mcp/tools/call`)
-- OpenAI-compatible chat API (`chat.py`)
-- Operator doc [`docs/ExternalAgents/ModelContextProtocol.md`](ExternalAgents/ModelContextProtocol.md) (`/mcp` Streamable HTTP endpoint, legacy `/context`, and JSON helper routes; supersedes removed `CodexMcpToolsAdapter.md`)
+- `/mcp` Streamable HTTP endpoint (2025 spec, MM-777) with resource & tool discovery; JSON helper routes
+- Webhook/callback API for external agents (MM-779); OpenAI-compatible chat API
 
 ### Remaining tasks
-- [x] **8.1** MCP Streamable HTTP Transport (2025 spec) — `/mcp` accepts JSON-RPC over the 2025 Streamable HTTP transport shape (MM-777)
-- [x] **8.2** MCP resource & tool discovery — Clients can list MoonMind MCP resources and tools
-- [x] **8.3** Webhook / callback API for external agents — Generic integration callback receiver, correlation lookup, callback URL provisioning, and polling fallback are available for external agents that advertise callback support (MM-779)
 - [ ] **8.4** OpenAI Responses API compatibility — Only Chat Completions format supported
 
 ---
 
-## Milestone 9 — Sandboxed Execution & Security 🔧
+## Milestone 9 — Sandboxed Execution & Security ✅
 
-**README claim:** *"Runtimes run behind a Docker socket proxy with strict capability routing. File allowlists restrict modifications, and credentials are automatically sanitized from logs."*
+**README claim:** *"Managed runtime sessions and specialized workloads run in isolated Docker boundaries with strict capability routing. Ordinary sessions get a private sidecar Docker daemon — never the host socket. File allowlists restrict what a run may modify."*
 
 ### What's shipped
-- Docker-socket-proxy (`tecnativa/docker-socket-proxy`) with restricted API endpoints
-- Agent workspace volume isolation
-- Auth-volume separation per runtime
-- Per-runtime managed-session Docker capability policy (MM-784): explicit
-  `no-docker`/disabled runtime policy cannot inherit unrestricted Docker proxy
-  access, and unrestricted workflow mode uses the per-session sidecar path
-  instead of passing proxy authority into the agent
-- File allowlist enforcement for sandbox command and patch activities (`MM-782`)
+- Docker-socket-proxy with restricted endpoints for control-plane workloads; per-session sidecar daemon for ordinary managed sessions
+- Per-runtime managed-session Docker capability policy (MM-784); explicit `no-docker` runtimes cannot inherit proxy access
+- File allowlist enforcement for sandbox command and patch activities (MM-782)
+- Network egress restriction for sandbox workers (MM-785)
+- Workspace mount session-boundary isolation for workload containers (spec 251)
+- Credential sanitization — `redact_sensitive_text` / `SecretRedactor` applied across runtime, remediation, and publish paths
 
 ### Remaining tasks
-- [ ] **9.2** Credential sanitization from logs — Agent rules prohibit secrets in output; no runtime log scrubber
-- [x] **9.3** Per-runtime capability routing policy — MM-784 enforces
-  managed-session Docker mode before Docker proxy exposure
-- [x] **9.4** Network egress policies for sandboxes — Sandbox worker containers use an internal restricted egress network
+- [x] **9.2** Credential sanitization from logs — runtime redaction shipped; outbound-boundary scanning continues in Milestone 12
+- [x] **9.3 / 9.4** Capability routing policy; sandbox egress — shipped
 
 ---
 
 ## Milestone 10 — Vendor Portability & Model Flexibility ✅
 
-**README claim:** *"Swap between proprietary cloud models and local open-source models with a single configuration change."* / *"Multi-Agent Chaining: Break massive goals into smaller steps. Only use expensive models for steps that need them."*
+**README claim:** *"Swap between proprietary cloud models and local open-source models with a single configuration change. Use expensive models only for the steps that need them."*
 
-### What's shipped
-- Provider SDK clients (OpenAI, Google, Anthropic)
-- Optional vLLM compose profiles
-- Runtime selector per task submission
-- Model routing in chat endpoint
-- Per-step runtime/model/effort selection in multi-step task submissions (MM-786)
-- Compact billing-aware routing metadata on step execution context bundles (MM-786)
-- Model/runtime comparison runs linked to source executions (MM-773)
-- Artifact and memory portability provenance across model switches (MM-786)
-
-### Remaining tasks
-- [x] **10.1** Per-step model/runtime selection in multi-step flows — Steps can independently select runtime, model, and effort
-- [x] **10.2** Cost tracking / billing-aware routing — MM-788 adds token cost estimates, cost telemetry, profile pricing-aware selection, and deterministic routing metadata
-- [x] **10.3** Model comparison mode (same task, different models) — Comparison runs preserve source-run lineage and runtime/model metadata
-- [x] **10.4** Artifact/memory portability across model switches — Artifacts and memory keep model-agnostic metadata while execution context records runtime/model provenance beside their refs
+All items shipped: per-step runtime/model/effort selection (MM-786/787), cost tracking and billing-aware routing (MM-788), comparison runs with source lineage (MM-773), artifact/memory portability provenance (MM-790). Default models updated to current generation (MM-802).
 
 ---
 
-## Milestone 11 — Observability & Continuous Improvement 🔧
+## Milestone 11 — Observability & Continuous Improvement ✅
 
 **README claim (Constitution X):** *"Every run MUST end with a structured outcome summary"* / *"The system SHOULD capture improvement signals and route them into a reviewable backlog."*
 
 ### What's shipped
-- Temporal visibility / execution queries (spec 064)
-- Structured workflow run states in Postgres
-- Task finish summary system (spec 079)
-- Deterministic improvement signal capture for retry, loop/no-progress, and flaky-test run-quality proposals (MM-793)
-
-### Remaining tasks
-- [x] **11.1** Structured outcome summaries on every run — MM-792 wires the finish summary artifact into indexed execution projections
-- [x] **11.2** Improvement signal capture (retries, loops, flaky tests) — Constitution X mandates this
-- [ ] **11.3** Reviewable improvement backlog / proposals queue — Task proposals exist; not fed by telemetry
-- [ ] **11.4** Metrics / dashboards (run duration, success rate, cost) — No operational metrics endpoint
-- [x] **11.5** Structured logging enrichment (run IDs, worker IDs) — MM-796 adds shared structlog JSON enrichment for run and worker correlation
+- Structured outcome summaries wired into indexed execution projections (MM-792)
+- Improvement signal capture for retry, loop/no-progress, and flaky-test run quality (MM-793)
+- Telemetry fed into the proposal queue as a reviewable improvement backlog (MM-794)
+- Operational execution metrics (MM-795); structured logging enrichment with run/worker correlation (MM-796)
+- Milestone closed out under MM-791. Deeper tracing, cost attribution, and live-log work continues in **Milestone 14**.
 
 ---
 
-## Housekeeping — Codebase Cleanup 🔧
+## Milestone 12 — Safety Guardrails & Governance 🔧 *(new)*
 
-These are technical debt items that don't map to README claims but improve code quality and maintainability.
+**README claim:** *"Typed policy envelopes that declare per-run what an agent may touch, governance telemetry that records every privileged action an agent took and why, and a complete audit trail for the secret lifecycle."*
+
+### What's shipped
+- High-security outbound scan contract — deterministic scan boundaries with `OutboundScanDecision` / `OutboundFinding` models (MM-811, `moonmind/security/outbound_scan.py`)
+- Outbound scanning of PR/issue comments before posting (MM-812)
+- SecretRef-based settings integration — durable contracts carry secret references, resolved only at launch boundaries (spec `001-secretref-settings-integration`, `docs/Security/SecretsSystem.md`)
+- Claude OAuth guardrails and bootstrap-PTY session controls (specs 192, 245)
+- GitHub token permission scoping (spec 294)
+- PR publishing gated on MoonSpec verification (#2386)
+- Deliberately gated exceptional workloads — approved-scope artifact loading and dedicated activity handling keep high-risk workloads behind explicit operator approval
 
 ### Remaining tasks
-- [x] **H.1** Complete legacy system removal — Code removal is complete (migration `c1d2e3f4a5b6`); requirements and guard tests in `specs/087-orchestrator-removal/` and `tests/unit/orchestrator_removal/`. Remaining documentation updates are tracked in `docs/MoonMindRoadmap.md`.
-- [x] **H.2** Spec deduplication — Duplicate spec directories were removed with the retired specs tree; canonical desired-state docs remain for Worker Pause ([docs/Temporal/WorkerPauseSystem.md](Temporal/WorkerPauseSystem.md)), Claude gating ([docs/ManagedAgents/ClaudeCodeManagedSessions.md](ManagedAgents/ClaudeCodeManagedSessions.md)), Manifest Phase 0 ([docs/Rag/ManifestIngestDesign.md](Rag/ManifestIngestDesign.md) and [docs/Rag/LlamaIndexManifestSystem.md](Rag/LlamaIndexManifestSystem.md)), Jules events ([docs/ExternalAgents/JulesTemporalExternalEventContract.md](ExternalAgents/JulesTemporalExternalEventContract.md)), and Task Presets ([docs/Tasks/WorkflowPresetsSystem.md](Tasks/WorkflowPresetsSystem.md)).
-- [x] **H.3** Legacy skill dispatch cleanup — Removed the dead `tool.type == "skill"` dispatch branch from `MoonMind.Run`; current plan execution accepts `agent_runtime` nodes.
-- [x] **H.4** Delete legacy docs identified by the legacy docs review (MM-800) — Removed the legacy docs flagged for deletion (`CodexCliWorkers.md`, `GeminiCliWorkers.md`, `SpecKitAutomation.md`, etc.).
+- [ ] **12.1** Typed per-run policy envelopes — Compact runtime contracts declaring what a run may touch (spec 185 `claude-policy-envelope`); contracts specified, not yet enforced in the launch path
+- [ ] **12.2** Governance telemetry — Durable record of privileged agent actions with export sinks (spec 191 `claude-governance-telemetry`); spec-only
+- [ ] **12.3** Secret lifecycle audit surface — Who created/rotated/deleted a secret, which profiles reference it, which launches resolved it (`docs/Security/SecretsSystem.md` §13); contract defined, operator surface missing
+- [ ] **12.4** Outbound scan coverage at all publish boundaries — Extend MM-811/812 scanning from comments to artifact publication, commits/pushes, and external tool calls under high-security mode
+
+---
+
+## Milestone 13 — Self-Healing Remediation & Recovery 🔧 *(new)*
+
+**README claim:** *"Self-healing remediation workflows — a dedicated supervisor can target a failed run, read its durable evidence, and execute typed recovery actions with privilege separation and a full audit trail. The aspiration is a system where a failed run at 3 a.m. is diagnosed, repaired, and resumed before you wake up."*
+
+### What's shipped
+- Remediation action contracts and services — typed administrative actions with guard/ledger state (spec 320; `moonmind/workflows/temporal/remediation_actions.py`, `remediation_context.py`, `remediation_tools.py`)
+- Bounded-evidence remediation context — remediation reads a target run's durable evidence under redaction (spec 232); live remediation runs are merging real fixes (#2346, #2347)
+- Canonical remediation submissions via `execution_remediation_links` (specs 226, 317)
+- Remediation lifecycle repair prevention — locks/ledger prevent duplicate or conflicting repairs (spec 322)
+- Durable step ledger & checkpoints — step state, attempts, and evidence refs persisted as artifacts (`step_ledger.py`, `step_checkpoints.py`; specs 345, 716, `001-step-attempt-manifest`); latest-attempt evidence refs surfaced in the default ledger row (MM-815)
+- Resume foundations — distinct full-retry vs. recovery actions (spec 326), checkpoint-evidence gating for resume availability (spec 327), editable full retry (spec 343), resume-from-last-failed-step (spec 310)
+
+### Remaining tasks
+- [ ] **13.1** Resume-from-checkpoint as the default recovery path — checkpoint restore logic exists but is not yet the primary operator flow for failed runs
+- [ ] **13.2** Queryable remediation audit events — publish remediation lifecycle audit through the control-event mechanism (spec 323)
+- [ ] **13.3** Mission Control remediation panels — operator-facing remediation status/action surfaces (spec 324); partial wiring in `workflow-detail.tsx`
+- [ ] **13.4** Autonomous remediation supervisor — scheduled/triggered remediation that diagnoses and repairs failed runs without an operator prompt (the README's "3 a.m." aspiration); currently remediation runs are operator-initiated
+
+---
+
+## Milestone 14 — Deep Observability: Tracing, Cost & Live Logs 🔧 *(new)*
+
+**README claim:** *"End-to-end OpenTelemetry tracing from API request through workflow, activity, and provider call — with token and cost attribution per step. Any question about a run — what it changed, what it spent, why it failed — has a durable, queryable answer."*
+
+### What's shipped
+- Artifact-first durable run outputs — large content stored as immutable, content-addressed artifacts referenced from compact workflow payloads
+- Live-log spool transport (`moonmind/observability/transport.py` — `SpoolLogPublisher` / `SpoolLogReader`) with SSE delivery to Mission Control
+- Structured JSON logs with run/worker correlation context (MM-796)
+- Token cost estimates and pricing-aware routing metadata (MM-788, `moonmind/billing/costs.py`)
+- Live logs desired-state contract — session-aware merged timeline, ANSI parsing, virtualized rendering, artifact-backed replay (`docs/Observability/LiveLogs.md`)
+
+### Remaining tasks
+- [ ] **14.1** OpenTelemetry instrumentation — FastAPI middleware, Temporal client/worker interceptors, activity-layer spans with provider/model/token attributes (`docs/Observability/OpenTelemetrySystem.md`); spec complete, no instrumentation code yet
+- [ ] **14.2** Per-step token/cost attribution in Mission Control — cost primitives exist (MM-788) but are not attributed and displayed per step
+- [ ] **14.3** Session-aware live-log timeline viewer — complete the LiveLogs.md rollout: merged stdout/stderr/system/session timeline, session epoch/reset markers, shared cross-process transport as the authoritative path
+- [ ] **14.4** Trace/log deep links from task detail — jump from a step in Mission Control to its correlated trace and log slice
+
+---
+
+## Housekeeping — Codebase Cleanup ✅
+
+- [x] **H.1–H.4** Legacy system removal, spec deduplication, legacy skill dispatch cleanup, legacy docs deletion — complete (MM-797 through MM-800)
+- [x] **H.5** Tasks→Workflows doc rename — `docs/Tasks/*` renamed to `docs/Workflows/*` with content updated (#2395)
 
 ---
 
 ## Summary: Priority Ordering
 
-The milestones below are ordered by **impact on delivering the README promise** (highest first):
+Milestones ordered by **impact on delivering the README promise** (highest first). The three new milestones carry the README's aspirational safety/resiliency/observability commitments and lead the queue.
 
 | Priority | Milestone | Current Status | Remaining |
 |----------|-----------|----------------|-----------|
-| 🔴 P0 | **5 — RAG & Document Retrieval** | 🔧 Partial | 6 items |
-| 🔴 P0 | **6 — Memory & Procedural Learning** | 📐 Designed only | 6 items |
-| 🔴 P0 | **3 — Multi-Step Planning & Context** | 🔧 Partial | 6 items |
-| 🟠 P1 | **4 — Resiliency (stuck detection, intervention)** | 🔧 Partial | 4 items |
-| 🟠 P1 | **7 — Mission Control Dashboard** | 🔧 Partial | 7 items |
-| 🟠 P1 | **2 — External Agent Coordination** | 🔧 Partial | 2 items |
-| 🟡 P2 | **9 — Sandboxed Execution & Security** | 🔧 Partial | 4 items |
-| 🟡 P2 | **11 — Observability & Improvement** | 🔧 Partial | 5 items |
-| 🟡 P2 | **8 — Universal Integration (MCP)** | 🔧 Partial | 4 items |
-| 🟢 P3 | **10 — Vendor Portability & Model Flexibility** | 🔧 Partial | 4 items |
-| 🟢 P3 | **1 — Managed Agent Runtimes** | ✅ Shipped | 2 items |
-| 🟢 P3 | **H — Housekeeping / Cleanup** | ✅ Shipped | 0 items |
+| 🔴 P0 | **13 — Self-Healing Remediation & Recovery** | 🔧 Partial | 4 items |
+| 🔴 P0 | **1 — Claude Code managed-session parity (1.9)** | 🔧 One gap | 1 item |
+| 🔴 P0 | **12 — Safety Guardrails & Governance** | 🔧 Partial | 4 items |
+| 🟠 P1 | **14 — Deep Observability (OTel, cost, live logs)** | 🔧 Partial | 4 items |
+| 🟠 P1 | **3 — Multi-Step Planning & Context** | 🔧 Partial | 2 items |
+| 🟠 P1 | **7 — Mission Control Dashboard** | 🔧 Partial | 4 items |
+| 🟡 P2 | **5 — RAG & Document Retrieval** | 🔧 Partial | 2 items |
+| 🟡 P2 | **2 — External Agent Coordination** | 🔧 Partial | 1 item |
+| 🟡 P2 | **8 — Universal Integration (MCP)** | 🔧 Partial | 1 item |
+| 🟢 Done | **4, 6, 9, 10, 11, H** | ✅ Shipped | 0 items |
 
 ---
 
@@ -315,7 +290,7 @@ The milestones below are ordered by **impact on delivering the README promise** 
 
 | File | Disposition | Rationale |
 |------|-------------|-----------|
-| `Roadmap.md` | **Keep** | This file — the living roadmap |
-| `CancellationAnalysis.md` | **Delete** | Recommendations shipped (TRY_CANCEL in all activities, force-terminate path). Analysis preserved in Milestone 4 entries. |
-| `OrchestratorRemovalPlan.md` | **Deleted** | Superseded by spec 087, in-repo removal work, and `016-SingleSubstrateMigration.md`. |
-| `RagDocUpdates.md` | **Delete** | Marked "Status: Complete". Spec merge plan fully executed (spec 088 shipped). |
+| `Roadmap.md` | **Keep** | Superseded by this file — the living roadmap |
+| `CancellationAnalysis.md` | **Delete** | Recommendations shipped; analysis preserved in Milestone 4 |
+| `OrchestratorRemovalPlan.md` | **Deleted** | Superseded by spec 087 and in-repo removal work |
+| `RagDocUpdates.md` | **Delete** | Spec merge plan fully executed (spec 088 shipped) |
