@@ -1,4 +1,4 @@
-# Task Cancellation
+# Workflow Cancellation
 
 Status: Active  
 Owners: MoonMind Engineering  
@@ -6,10 +6,10 @@ Last Updated: 2026-03-24
 
 ## 1. Purpose
 
-This document outlines **Task Cancellation** in MoonMind so that:
+This document outlines **Workflow Cancellation** in MoonMind so that:
 
-* Tasks can be cancelled while **queued** (pending execution).
-* Tasks can be cancelled while **running natively as Temporal Workflows** (via Temporal Cancellation Requests).
+* Workflow Executions can be cancelled while **queued** (pending execution).
+* Workflow Executions can be cancelled while **running natively as Temporal Workflows** (via Temporal Cancellation Requests).
 * Cancellation is exposed through:
   * **Mission Control UI** (thin dashboard over REST)
   * **REST API endpoint(s)** (under `/api/queue`)
@@ -35,10 +35,10 @@ This document outlines **Task Cancellation** in MoonMind so that:
 
 ## 3. Architecture
 
-MoonMind task runs are durably orchestrated by Temporal Workflows (e.g., `MoonMind.Run`). The cancellation flow mirrors standard Temporal patterns.
+MoonMind Workflow runs are durably orchestrated by Temporal Workflows (e.g., `MoonMind.Run`). The cancellation flow mirrors standard Temporal patterns.
 
 * Mission Control UI issues a cancel command to the Control Plane API (`POST /api/queue/jobs/{job_id}/cancel`).
-* If the task is purely queued in the database and hasn't started a workflow, the API marks it `cancelled` in Postgres directly.
+* If the Workflow Execution is purely queued in the database and hasn't started a workflow, the API marks it `cancelled` in Postgres directly.
 * If a Temporal Workflow Execution `MoonMind.Run` is currently active for this run, the API sends a standard **Temporal Cancellation Request** to the workflow via the Temporal Client.
 
 ### 3.1 Temporal Workflow Graceful Cancellation
@@ -88,7 +88,7 @@ Managed agent runs (`MoonMind.AgentRun`) acquire provider profile slots from the
 
 * When a managed `AgentRun` workflow is cancelled (or times out, or fails), it **must** release its provider profile slot.
 * The `ProviderProfileManager` must **not** rely solely on the child workflow's cleanup code to release slots. A defense-in-depth approach is required.
-* Slot recovery must happen within a **reasonable bound** (minutes, not hours) to avoid blocking subsequent task submissions.
+* Slot recovery must happen within a **reasonable bound** (minutes, not hours) to avoid blocking subsequent Workflow Execution submissions.
 
 ### 6.2 Defense-in-Depth Layers
 

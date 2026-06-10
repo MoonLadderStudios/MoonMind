@@ -1,10 +1,10 @@
-# Task Dependencies — Operator Guide
+# Workflow Dependencies — Operator Guide
 
-This document describes operational behavior, limits, diagnostics, and remediation for the **Task Dependencies** feature in MoonMind.
+This document describes operational behavior, limits, diagnostics, and remediation for the **Workflow Dependencies** feature in MoonMind.
 
 ---
 
-## 1. What Are Task Dependencies?
+## 1. What Are Workflow Dependencies?
 
 A `MoonMind.Run` execution can declare up to **10 prerequisite `workflowId` values** at create time via `payload.task.dependsOn`. The dependent run:
 
@@ -122,7 +122,7 @@ The following structured log events are emitted during dependency lifecycle:
 
 Under the wait-through-rerun contract, a failed prerequisite does **not** fail the dependent. Instead the dependent stays in `waiting_on_dependencies` with a per-dependency outcome marked `waiting_for_successful_rerun`.
 
-1. Open the dependent's task detail panel (or read `reports/run_summary.json` under `dependencies.outcomes`) and find any per-dependency outcome with `resolution = "waiting_for_successful_rerun"`.
+1. Open the dependent's Workflow detail panel (or read `reports/run_summary.json` under `dependencies.outcomes`) and find any per-dependency outcome with `resolution = "waiting_for_successful_rerun"`.
 2. The `failureCount` and `lastFailedAt` fields tell you how many failure cycles have happened and when the most recent failure occurred.
 3. The `terminalState`, `closeStatus`, and `failureCategory` fields explain the nature of the most recent failure.
 4. **Remediation paths:**
@@ -137,7 +137,7 @@ Workflows that started **before** `dependency-wait-through-rerun-v1` was deploye
 1. Check the `DependencyFailureError` detail in the run summary artifact (`reports/run_summary.json`) under the `dependencies` block.
 2. The `failedDependencyId` field identifies which prerequisite caused the failure.
 3. The `terminalState` and `failureCategory` fields explain the nature of the failure.
-4. **Remediation**: Fix or rerun the failed prerequisite, then rerun the dependent task. Newly created dependent runs use the wait-through-rerun behavior automatically.
+4. **Remediation**: Fix or rerun the failed prerequisite, then rerun the dependent Workflow Execution. Newly created dependent runs use the wait-through-rerun behavior automatically.
 
 ### Reverse Lookup Shows No Dependents
 
@@ -206,18 +206,18 @@ Sent to dependent workflows when a prerequisite reaches terminal state.
 - Automatic transitive dependency expansion
 - Auto-canceling prerequisite runs
 - Auto-rerunning failed prerequisites
-- Auto-creating remediation tasks for failed prerequisites
+- Auto-creating remediation Workflow Executions for failed prerequisites
 - Dependency-based priority or queue-order guarantees
-- Replacing child workflows with task dependencies
+- Replacing child workflows with Workflow dependencies
 - Storing large dependency history in Search Attributes
 
 ---
 
 ## 10. Recommended Remediation When a Prerequisite Fails
 
-1. Identify the failed prerequisite from the dependent run's task detail dependency panel or run summary artifact (look for an outcome with `resolution = "waiting_for_successful_rerun"`).
+1. Identify the failed prerequisite from the dependent run's Workflow detail dependency panel or run summary artifact (look for an outcome with `resolution = "waiting_for_successful_rerun"`).
 2. Diagnose the prerequisite failure (its terminal state, close status, failure category, and message are surfaced on the prerequisite link, and `failureCount` / `lastFailedAt` on the dependent's outcome).
-3. **Rerun the prerequisite task** — keeping the same `workflowId` is automatic when you use the standard rerun action.
+3. **Rerun the prerequisite Workflow Execution** — keeping the same `workflowId` is automatic when you use the standard rerun action.
 4. Once the prerequisite reaches `completed`, the dependent unblocks itself; no action is required on the dependent. Its dependency resolution becomes `satisfied_after_rerun`.
 5. If the prerequisite cannot be recovered:
    - **Bypass the dependency wait** on the dependent if the remaining prerequisites are no longer required, or

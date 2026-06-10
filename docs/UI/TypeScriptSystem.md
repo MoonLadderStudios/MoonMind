@@ -3,7 +3,7 @@
 Status: **Active**
 Owners: MoonMind Engineering
 Last Updated: 2026-04-03
-Related: `README.md`, `api_service/static/task_dashboard/`, `docs/Tasks/TaskArchitecture.md`
+Related: `README.md`, `api_service/static/task_dashboard/`, `docs/Tasks/WorkflowArchitecture.md`
 
 **Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 

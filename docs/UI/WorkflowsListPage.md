@@ -1,9 +1,9 @@
-# Tasks List Page
+# Workflows List Page
 
 Status: Proposed desired-state contract  
 Owners: MoonMind Engineering  
 Last updated: 2026-05-04  
-Canonical for: Mission Control tasks list route, execution-list controls, table sorting, column filters, filter URL state, and Google Sheets-like list filtering behavior
+Canonical for: Mission Control Workflows list route, execution-list controls, table sorting, column filters, filter URL state, and Google Sheets-like list filtering behavior
 
 **Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs, or other local-only files. This document defines the product and UI contract for the page.
 
@@ -11,9 +11,9 @@ Canonical for: Mission Control tasks list route, execution-list controls, table 
 
 ## 1. Purpose
 
-This document defines the canonical design for the MoonMind **Tasks List** page.
+This document defines the canonical design for the MoonMind **Workflows List** page.
 
-The page helps operators inspect Temporal-backed MoonMind task executions in a task-oriented table. It must support fast scanning, stable pagination, clear status visibility, accessible sorting, and column-level filtering that can replace the current top-of-page filter dropdowns.
+The page helps operators inspect Temporal-backed MoonMind Workflow Executions in a Workflow-oriented table. It must support fast scanning, stable pagination, clear status visibility, accessible sorting, and column-level filtering that can replace the current top-of-page filter dropdowns.
 
 The desired column filtering model is intentionally similar to Google Sheets filters: each column header owns both sorting and a filter popover where users can search values, select or deselect values, include blanks, clear the column filter, and apply or cancel changes.
 
@@ -21,7 +21,7 @@ The desired column filtering model is intentionally similar to Google Sheets fil
 
 ## 2. Related docs and implementation surfaces
 
-Use this document for Tasks List page behavior.
+Use this document for Workflows List page behavior.
 
 Use related docs for system-level contracts:
 
@@ -29,7 +29,7 @@ Use related docs for system-level contracts:
 - `docs/Temporal/VisibilityAndUiQueryModel.md` — Temporal Visibility and UI query model.
 - `docs/UI/MissionControlArchitecture.md` — Mission Control shell and shared frontend architecture.
 - `docs/UI/MissionControlDesignSystem.md` — shared Mission Control visual language.
-- `docs/UI/CreatePage.md` — task authoring surface that creates many rows shown on this page.
+- `docs/UI/CreatePage.md` — Workflow authoring surface that creates many rows shown on this page.
 
 Representative current implementation surfaces:
 
@@ -45,7 +45,7 @@ frontend/src/styles/mission-control.css
 
 ## 3. Route and hosting model
 
-The canonical Tasks List route is:
+The canonical Workflows List route is:
 
 ```text
 /tasks/list
@@ -53,7 +53,7 @@ The canonical Tasks List route is:
 
 Rules:
 
-1. `/tasks/list` is the canonical Tasks List route.
+1. `/tasks/list` is the canonical Workflows List route.
 2. `/tasks` redirects to `/tasks/list`.
 3. `/tasks/tasks-list` is a legacy alias and redirects to `/tasks/list`.
 4. The page is server-hosted by FastAPI and rendered by the shared Mission Control React/Vite frontend.
@@ -66,15 +66,15 @@ Rules:
 
 ## 4. Product stance
 
-The Tasks List page is an operator scanning surface, not a generic Temporal namespace browser.
+The Workflows List page is an operator scanning surface, not a generic Temporal namespace browser.
 
 Core rules:
 
-1. The default view is task-oriented and shows ordinary user-created task executions.
-2. The normal Tasks List page is not a workflow-kind browser. It does not need a `Kind` column.
-3. System workflows are hidden from ordinary Tasks List users. Provider-profile managers, internal monitors, maintenance workflows, and other platform-owned executions belong in an admin diagnostics surface instead of the main task table.
-4. Manifest-ingest workflows belong on the Manifests page or a future user-workflow diagnostics view. They should not force a `Kind`, `Workflow Type`, or `Entry` column into the default task list.
-5. Sorting and filtering are table behaviors and should be expressed on the relevant task columns instead of as detached dropdowns above the table.
+1. The default view is Workflow-oriented and shows ordinary user-created Workflow Executions.
+2. The normal Workflows List page is not a workflow-kind browser. It does not need a `Kind` column.
+3. System workflows are hidden from ordinary Workflows List users. Provider-profile managers, internal monitors, maintenance workflows, and other platform-owned executions belong in an admin diagnostics surface instead of the main Workflow table.
+4. Manifest-ingest workflows belong on the Manifests page or a future user-workflow diagnostics view. They should not force a `Kind`, `Workflow Type`, or `Entry` column into the default Workflows list.
+5. Sorting and filtering are table behaviors and should be expressed on the relevant Workflow columns instead of as detached dropdowns above the table.
 6. The page should make the active query obvious through column filter indicators and active filter chips.
 7. URL state must be shareable and reloadable.
 8. Pagination, sorting, and filtering must be deterministic across refreshes.
@@ -84,7 +84,7 @@ Core rules:
 
 ## 5. Current page behavior
 
-This section describes the current Tasks List page before the proposed column-filter redesign.
+This section describes the current Workflows List page before the proposed column-filter redesign.
 
 ### 5.1 Page shell
 
@@ -95,7 +95,7 @@ The current page renders a single vertical stack with two major surfaces:
 
 The control deck contains:
 
-- page title: `Tasks List`;
+- page title: `Workflows List`;
 - `Live updates` checkbox;
 - polling status copy;
 - disabled-state notice when the Temporal list feature is disabled;
@@ -208,7 +208,7 @@ The current table row model includes these display fields:
 
 | Field | Meaning |
 | --- | --- |
-| `taskId` | Task-oriented execution identifier; linked to detail view. |
+| `taskId` | Workflow-oriented execution identifier; linked to detail view. |
 | `source` | Execution source, currently Temporal for this page. |
 | `workflowType` | Root workflow type when returned. |
 | `repository` | Repository display value, if available. |
@@ -261,7 +261,7 @@ Rules:
 The current mobile layout renders a card list with:
 
 - title link;
-- task ID;
+- Workflow ID;
 - runtime, skill, and workflow type metadata;
 - status pill;
 - field grid for ID, Runtime, Skill, Repository, Scheduled, Created, and Finished;
@@ -272,9 +272,9 @@ The current mobile layout renders a card list with:
 
 Rules:
 
-1. Loading state shows `Loading tasks...`.
+1. Loading state shows `Loading Workflows...`.
 2. API errors render a visible error notice.
-3. Empty first pages show `No tasks found for the current filters.`
+3. Empty first pages show `No Workflows found for the current filters.`
 4. Empty later pages keep the previous-page button enabled.
 5. Pagination uses an opaque `nextPageToken` plus a client-side cursor stack for previous-page navigation.
 6. The results toolbar shows `Page N`, row range, and count when available.
@@ -303,8 +303,8 @@ Rules:
 2. Repository filtering moves from the top text input to the Repository column filter.
 3. Status filtering moves from the top Status dropdown to the Status column filter.
 4. Runtime filtering is added to the Runtime column filter.
-5. Scope, workflow type, and entry controls are removed from the normal Tasks List page instead of being represented by a `Kind` column.
-6. The normal page always queries the user-visible task scope; system workflows are not available from the ordinary task table.
+5. Scope, workflow type, and entry controls are removed from the normal Workflows List page instead of being represented by a `Kind` column.
+6. The normal page always queries the user-visible Workflow scope; system workflows are not available from the ordinary Workflow table.
 7. Active filters are still summarized in a row of chips so users do not have to inspect every header.
 8. Filter chips must be clickable and reopen the corresponding column filter.
 9. `Clear filters` remains available when any filter is active.
@@ -332,26 +332,26 @@ The desired desktop table uses this default column model:
 
 Rules:
 
-1. The normal Tasks List table does not include a `Kind` column.
+1. The normal Workflows List table does not include a `Kind` column.
 2. The normal table does not include `Workflow Type` or `Entry` columns by default.
-3. The default query is the task-run list. In current API terms, this is equivalent to `scope=tasks`, which is `WorkflowType=MoonMind.Run` and `mm_entry=run`.
-4. System workflow rows must not appear in the normal task table, even through column filters or old URL parameters.
+3. The default query is the Workflow-run list. In current API terms, this is equivalent to `scope=tasks`, which is `WorkflowType=MoonMind.Run` and `mm_entry=run`.
+4. System workflow rows must not appear in the normal Workflow table, even through column filters or old URL parameters.
 5. Manifest ingest rows should stay on the Manifests page unless a separate user-workflow diagnostics view is explicitly designed.
 6. The table may hide optional columns by default to preserve width, but optional columns must not reintroduce ordinary access to system workflow browsing.
-7. The mobile filter sheet must expose the same filterable task columns as the desktop table.
+7. The mobile filter sheet must expose the same filterable Workflow columns as the desktop table.
 8. The table must not expose raw Temporal Visibility query syntax to ordinary users.
 
 ### 7.1 Admin diagnostics escape hatch
 
-System and all-workflow browsing is useful for debugging, but it is not part of the normal Tasks List UX.
+System and all-workflow browsing is useful for debugging, but it is not part of the normal Workflows List UX.
 
 Rules:
 
 1. System workflows belong in an admin diagnostics surface such as Settings -> Operations -> Workflow Diagnostics, `/tasks/diagnostics`, or a similarly explicit route.
 2. A diagnostics surface may expose workflow type, entry, owner, namespace, run ID, raw Temporal status, and system workflow filters because its purpose is platform debugging.
 3. Diagnostics access must be permission-gated. Ordinary users cannot widen `/tasks/list` into system workflow visibility by editing URL parameters.
-4. If compatibility routes or query parameters such as `scope=system` are still accepted, the normal Tasks List page must either ignore them safely, redirect authorized admins to diagnostics, or show a recoverable message explaining that system workflows moved to diagnostics.
-5. The product contract for `/tasks/list` remains task-oriented even if the underlying `/api/executions` endpoint can list broader workflow scopes.
+4. If compatibility routes or query parameters such as `scope=system` are still accepted, the normal Workflows List page must either ignore them safely, redirect authorized admins to diagnostics, or show a recoverable message explaining that system workflows moved to diagnostics.
+5. The product contract for `/tasks/list` remains Workflow-oriented even if the underlying `/api/executions` endpoint can list broader workflow scopes.
 
 ---
 
@@ -569,7 +569,7 @@ Rules:
 1. Every active column filter has a chip.
 2. Clicking a chip opens the corresponding column filter popover.
 3. Each chip has a remove action that clears only that column filter.
-4. `Clear filters` clears every column filter and restores the default task-run view.
+4. `Clear filters` clears every column filter and restores the default Workflow-run view.
 5. Chips use product labels, not raw API parameter names.
 6. Chips must remain visible on mobile through a horizontally scrollable row or compact filter summary button.
 
@@ -595,24 +595,24 @@ Existing URLs must continue to fail safe:
 
 | Existing parameter | Desired mapping |
 | --- | --- |
-| `scope=tasks` | Default task-run view. No visible column filter is required. |
-| `scope=user` | Prefer the default task-run view on `/tasks/list`; manifest ingest belongs on the Manifests page or diagnostics. |
-| `scope=system` | Not honored by the normal Tasks List page. Authorized admins may be redirected to diagnostics; ordinary users stay in the default task-run view or see a recoverable message. |
-| `scope=all` | Not honored by the normal Tasks List page. Authorized admins may be redirected to diagnostics; ordinary users stay in the default task-run view or see a recoverable message. |
-| `workflowType=MoonMind.Run` | Default task-run view when paired with `entry=run` or no entry. |
-| `workflowType=MoonMind.ManifestIngest` | Redirect to the Manifests page or show a recoverable message; do not add a `Workflow Type` column to the task table. |
-| `workflowType=<system value>` | Not honored by the normal Tasks List page; use admin diagnostics when authorized. |
+| `scope=tasks` | Default Workflow-run view. No visible column filter is required. |
+| `scope=user` | Prefer the default Workflow-run view on `/tasks/list`; manifest ingest belongs on the Manifests page or diagnostics. |
+| `scope=system` | Not honored by the normal Workflows List page. Authorized admins may be redirected to diagnostics; ordinary users stay in the default Workflow-run view or see a recoverable message. |
+| `scope=all` | Not honored by the normal Workflows List page. Authorized admins may be redirected to diagnostics; ordinary users stay in the default Workflow-run view or see a recoverable message. |
+| `workflowType=MoonMind.Run` | Default Workflow-run view when paired with `entry=run` or no entry. |
+| `workflowType=MoonMind.ManifestIngest` | Redirect to the Manifests page or show a recoverable message; do not add a `Workflow Type` column to the Workflow table. |
+| `workflowType=<system value>` | Not honored by the normal Workflows List page; use admin diagnostics when authorized. |
 | `state=<value>` | Status column include filter for one value. |
-| `entry=run` | Default task-run view. No visible column filter is required. |
+| `entry=run` | Default Workflow-run view. No visible column filter is required. |
 | `entry=manifest` | Redirect to the Manifests page or show a recoverable message. |
 | `repo=<value>` | Repository exact include filter for one value. |
 
 Rules:
 
 1. Existing query parameters remain accepted on load so old shared links do not break.
-2. Compatibility handling must never reveal system workflows in the ordinary Tasks List page.
-3. After the user changes filters in the new UI, the URL should rewrite to the new canonical task-column filter encoding.
-4. Shared old links should either preserve meaning inside the task-focused page, redirect to the more appropriate page, or explain why the old workflow scope moved.
+2. Compatibility handling must never reveal system workflows in the ordinary Workflows List page.
+3. After the user changes filters in the new UI, the URL should rewrite to the new canonical Workflow-column filter encoding.
+4. Shared old links should either preserve meaning inside the Workflow-focused page, redirect to the more appropriate page, or explain why the old workflow scope moved.
 5. Filter changes reset `nextPageToken` and the previous-page cursor stack.
 
 ### 12.2 Canonical filter encoding
@@ -675,7 +675,7 @@ Rules:
 3. Exclude filters are evaluated after field normalization.
 4. Display labels are never sent as canonical filter values when raw values exist.
 5. The API remains the authority for access control; users cannot widen their visibility through filter params.
-6. The normal Tasks List query is always bounded to user-visible task executions. Backend list support for broader workflow scopes must not leak into this page.
+6. The normal Workflows List query is always bounded to user-visible Workflow Executions. Backend list support for broader workflow scopes must not leak into this page.
 
 ### 13.2 Facet query requirements
 
@@ -713,7 +713,7 @@ Rules:
 6. If exact counts are expensive, the response may set `countMode` to an estimated or unknown mode; the UI must label those counts accordingly or omit counts.
 7. Large facets may be paginated and searched server-side.
 8. Facet failure must not break the table; the UI can fall back to values in the currently loaded page with a visible “current page values only” notice.
-9. Facet results must not include system-only workflow values or counts on the normal Tasks List page.
+9. Facet results must not include system-only workflow values or counts on the normal Workflows List page.
 
 ---
 
@@ -765,7 +765,7 @@ Rules:
 5. Card fields may expose small contextual filter actions, such as filtering to a visible runtime or status, but those actions are optional.
 6. Mobile filter changes reset pagination to the first page just like desktop.
 7. Mobile users must not need the removed top dropdowns to reach status, runtime, skill, repository, title, ID, or date filters.
-8. Mobile users cannot reveal system workflows from the ordinary task-card view; diagnostics remains a separate admin surface.
+8. Mobile users cannot reveal system workflows from the ordinary Workflow-card view; diagnostics remains a separate admin surface.
 
 ---
 
@@ -773,12 +773,12 @@ Rules:
 
 Rules:
 
-1. If no rows match active filters on the first page, show `No tasks found for the current filters.`
+1. If no rows match active filters on the first page, show `No Workflows found for the current filters.`
 2. The empty state should include `Clear filters` when filters are active.
 3. If a specific filter is likely too narrow, the empty state may summarize active chips but should not guess which filter is wrong.
 4. If a facet request fails, show an inline warning inside the popover and allow retry.
 5. If the list request rejects a filter parameter, show the API error and preserve the user's filter state so it can be edited.
-6. If an old URL contains unsupported filter combinations, the page should either map it to a valid task-list state, redirect to an appropriate page, or show a recoverable error with `Clear filters`.
+6. If an old URL contains unsupported filter combinations, the page should either map it to a valid Workflows-list state, redirect to an appropriate page, or show a recoverable error with `Clear filters`.
 
 ---
 
@@ -802,9 +802,9 @@ Rules:
 
 The implementation should add or preserve tests for the following behaviors:
 
-1. `/tasks/list` renders the Tasks List page with one control deck and one data slab.
+1. `/tasks/list` renders the Workflows List page with one control deck and one data slab.
 2. Existing `state` and `repo` URLs load into equivalent column filters.
-3. Existing `scope`, `workflowType`, and `entry` URLs fail safe: ordinary users are kept in the task-run view, routed to the appropriate page, or shown a recoverable message without revealing system workflows.
+3. Existing `scope`, `workflowType`, and `entry` URLs fail safe: ordinary users are kept in the Workflow-run view, routed to the appropriate page, or shown a recoverable message without revealing system workflows.
 4. The top Scope, Workflow Type, Status, Entry, and Repository controls are absent once column filters are enabled.
 5. The default desktop table has no `Kind`, `Workflow Type`, or `Entry` column.
 6. Header label activation toggles sort without opening the filter popover.
@@ -816,11 +816,11 @@ The implementation should add or preserve tests for the following behaviors:
 12. Deselecting `canceled` from an all-selected Status checklist applies an exclude filter and creates a chip such as `Status: not canceled`.
 13. Selecting only `Codex CLI` and `Claude Code` applies a Runtime include filter.
 14. Applying any filter resets `nextPageToken` and the previous-page cursor stack.
-15. `Clear filters` clears all column filters and returns to the default task-run view.
+15. `Clear filters` clears all column filters and returns to the default Workflow-run view.
 16. Filter chips can clear individual filters.
 17. Old single-value query params still round-trip to active filters.
-18. Mobile filter sheet exposes the same filterable task columns as desktop.
-19. System/all workflow scopes remain absent from the normal Tasks List and are available only through an admin diagnostics surface when authorized.
+18. Mobile filter sheet exposes the same filterable Workflow columns as desktop.
+19. System/all workflow scopes remain absent from the normal Workflows List and are available only through an admin diagnostics surface when authorized.
 20. Facet failure falls back gracefully or shows a recoverable inline error.
 21. Live polling does not mutate staged filter popover selections.
 22. Empty later pages keep previous-page navigation available.
@@ -840,7 +840,7 @@ The column filter design does not require:
 6. saving named filter views in the first version;
 7. replacing page size or pagination controls;
 8. removing the Live updates toggle;
-9. exposing system workflow browsing through the normal Tasks List page.
+9. exposing system workflow browsing through the normal Workflows List page.
 
 ---
 
@@ -853,11 +853,11 @@ Recommended order:
 1. Preserve the current page behavior and URL compatibility.
 2. Add the reusable column header sort/filter component behind a feature flag.
 3. Add column filter state, chips, and URL mapping while the old top filters still exist.
-4. Add API support for multi-value task filters and facets.
+4. Add API support for multi-value Workflow filters and facets.
 5. Move Status and Repository behavior into column filters.
 6. Remove ordinary Scope, Workflow Type, and Entry controls from `/tasks/list`; keep a compatibility parser that fails safe and sends system/all workflow browsing to admin diagnostics when authorized.
 7. Add Runtime and Skill column filters.
 8. Remove the old top filter controls after parity tests pass.
 9. Keep old URL parameter parsing indefinitely or until a documented compatibility window ends.
 
-Final desired state: the Tasks List page feels like a compact, operational spreadsheet for user-visible task executions, where each task column owns its own sort and filter behavior and the page no longer needs detached filter dropdowns above the table.
+Final desired state: the Workflows List page feels like a compact, operational spreadsheet for user-visible Workflow Executions, where each Workflow column owns its own sort and filter behavior and the page no longer needs detached filter dropdowns above the table.
