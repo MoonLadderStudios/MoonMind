@@ -65,9 +65,9 @@ This document is the architecture hub. Detailed contracts live in:
 - `docs/Temporal/WorkflowArtifactSystemDesign.md`
 - `docs/Temporal/ArtifactPresentationContract.md`
 - `docs/Temporal/SourceOfTruthAndProjectionModel.md`
-- `docs/Temporal/TaskExecutionCompatibilityModel.md`
+- `docs/Temporal/WorkflowExecutionProductModel.md`
 - `docs/Temporal/TemporalTypeSafety.md`
-- `docs/Temporal/RunHistoryAndRerunSemantics.md`
+- `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`
 - `docs/Temporal/ErrorTaxonomy.md`
 - `docs/Temporal/WorkflowSchedulingGuide.md`
 - `docs/Security/ProviderProfiles.md`
@@ -429,7 +429,7 @@ Default rules:
 - Rerun of the same logical execution uses Continue-As-New only where the run-history/rerun contract permits it.
 - Failed-step recovery is a linked follow-up execution with its own Workflow ID unless a future in-place continuation model is explicitly designed.
 
-The exact per-type matrix belongs in `WorkflowTypeCatalogAndLifecycle.md` and `RunHistoryAndRerunSemantics.md`.
+The exact per-type matrix belongs in `WorkflowTypeCatalogAndLifecycle.md` and `WorkflowRunHistoryAndNewRunSemantics.md`.
 
 ---
 

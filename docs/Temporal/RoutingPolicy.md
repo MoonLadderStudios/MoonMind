@@ -11,7 +11,7 @@ This document defines how backend routing is handled across the `queue`, `system
 - **Queue/system** vs **Temporal**: Temporal should be selected by routing rules based on `TEMPORAL_DASHBOARD_SUBMIT_ENABLED` and associated feature flags.
 
 ## Runtime Picker Exclusion
-Consistent with `docs/UI/MissionControlArchitecture.md`, the `temporal` source is kept **out** of the worker runtime picker. It is treated as a backend substrate layer, not a user-facing choice.
+Consistent with `docs/UI/WorkflowConsoleArchitecture.md`, the `temporal` source is kept **out** of the worker runtime picker. It is treated as a backend substrate layer, not a user-facing choice.
 
 ## Source Resolution
 Source resolution in `api_service/api/routers/task_dashboard.py` ensures deterministic outcomes for list/detail routes.

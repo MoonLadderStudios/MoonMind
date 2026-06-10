@@ -31,7 +31,7 @@ def test_matches_backend_schema_descendants_from_stdin() -> None:
 def test_ignores_unrelated_paths() -> None:
     result = _run_script(
         "frontend/src/entrypoints/workflow-detail.tsx",
-        "docs/UI/MissionControlArchitecture.md",
+        "docs/UI/WorkflowConsoleArchitecture.md",
     )
 
     assert result.returncode == 1

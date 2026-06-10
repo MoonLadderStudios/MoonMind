@@ -33,9 +33,9 @@ Primary:
 Adjacent / expected follow-ups:
 
 - `docs/Temporal/VisibilityAndUiQueryModel.md`
-- `docs/Temporal/TaskExecutionCompatibilityModel.md`
-- `docs/UI/MissionControlArchitecture.md`
-- `docs/Temporal/RunHistoryAndRerunSemantics.md`
+- `docs/Temporal/WorkflowExecutionProductModel.md`
+- `docs/UI/WorkflowConsoleArchitecture.md`
+- `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`
 
 Implementation touchpoints:
 

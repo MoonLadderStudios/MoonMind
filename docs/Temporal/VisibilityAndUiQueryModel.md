@@ -37,7 +37,7 @@ This document is intentionally the bridge between:
 - `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
 - `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
 - `docs/Temporal/WorkflowArtifactSystemDesign.md`
-- `docs/UI/MissionControlArchitecture.md`
+- `docs/UI/WorkflowConsoleArchitecture.md`
 
 This document narrows several open items from those docs so frontend and backend work can proceed without inventing ad hoc query behavior.
 

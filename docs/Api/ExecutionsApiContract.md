@@ -69,10 +69,10 @@ That implementation detail is important for current behavior, but it is **not** 
 - `docs/Temporal/TemporalPlatformFoundation.md`
 - `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
 - `docs/Temporal/SourceOfTruthAndProjectionModel.md`
-- `docs/Temporal/RunHistoryAndRerunSemantics.md`
+- `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`
 - `docs/Temporal/StepLedgerAndProgressModel.md`
-- `docs/Temporal/TaskExecutionCompatibilityModel.md`
-- `docs/UI/MissionControlArchitecture.md`
+- `docs/Temporal/WorkflowExecutionProductModel.md`
+- `docs/UI/WorkflowConsoleArchitecture.md`
 - `docs/Temporal/WorkflowArtifactSystemDesign.md`
 - `docs/UI/MissionControlStyleGuide.md`
 - `docs/Temporal/VisibilityAndUiQueryModel.md`

@@ -114,7 +114,7 @@ The legacy `/api/queue/jobs` lifecycle routes and `/api/queue` worker callback r
 
 - [../Api/ExecutionsApiContract.md](../Api/ExecutionsApiContract.md) — Direct execution lifecycle contract
 - [WorkflowArchitecture.md](WorkflowArchitecture.md) — Overall Workflow system design
-- [../UI/MissionControlArchitecture.md](../UI/MissionControlArchitecture.md) — Workflow-oriented UI over execution APIs
+- [../UI/WorkflowConsoleArchitecture.md](../UI/WorkflowConsoleArchitecture.md) — Workflow-oriented UI over execution APIs
 - [WorkflowProposalSystem.md](WorkflowProposalSystem.md) — Workflow proposal generation
 - [WorkflowCancellation.md](WorkflowCancellation.md) — Cancellation flow
 - [../ManagedAgents/LiveLogs.md](../ManagedAgents/LiveLogs.md) — Managed-run log and observability design

@@ -7,7 +7,7 @@ Last updated: 2026-04-20
 
 Define the desired-state design system for the MoonMind Mission Control UI: visual language, design tokens, surface hierarchy, layout rules, motion, component behavior, and page composition. This document is declarative. It describes what Mission Control should look and feel like when it is correct.
 
-For route ownership, runtime config, API boundaries, and task-oriented architecture, see `docs/UI/MissionControlArchitecture.md`.
+For route ownership, runtime config, API boundaries, and workflow console architecture, see `docs/UI/WorkflowConsoleArchitecture.md`.
 
 ---
 

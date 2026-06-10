@@ -3,7 +3,7 @@
 Status: Active desired state
 Owners: MoonMind Engineering
 Last Updated: 2026-05-06
-Related: `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/WorkflowFinishSummarySystem.md`, `docs/Api/ExecutionsApiContract.md`, `docs/UI/MissionControlArchitecture.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/ExternalAgents/ExternalAgentIntegrationSystem.md`, `docs/Steps/SkillSystem.md`, `docs/Workflows/SkillAndPlanContracts.md`
+Related: `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/WorkflowFinishSummarySystem.md`, `docs/Api/ExecutionsApiContract.md`, `docs/UI/WorkflowConsoleArchitecture.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/ExternalAgents/ExternalAgentIntegrationSystem.md`, `docs/Steps/SkillSystem.md`, `docs/Workflows/SkillAndPlanContracts.md`
 
 ---
 

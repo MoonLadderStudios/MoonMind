@@ -79,8 +79,8 @@ The existing MoonMind docs already show the desired direction:
 
 - `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md` states that once work is represented inside Temporal, it is treated as a **Workflow Execution**.
 - `docs/Temporal/ActivityCatalogAndWorkerTopology.md` states that Workflow Executions orchestrate, Activities perform side effects, and Task Queues are internal routing labels rather than product semantics.
-- `docs/Temporal/TaskExecutionCompatibilityModel.md` exists as a bridge from task-oriented surfaces to Temporal-backed Workflow Executions. This plan removes that bridge rather than preserving it.
-- `docs/UI/MissionControlArchitecture.md` currently frames Mission Control as a task console backed by Temporal. This plan replaces that posture with a Workflow Execution console.
+- The former task-execution compatibility bridge doc has been deleted; `docs/Temporal/WorkflowExecutionProductModel.md` is the canonical product model.
+- `docs/UI/WorkflowConsoleArchitecture.md` frames Mission Control as a Workflow Execution console, replacing the earlier task-console posture.
 - `docs/Steps/StepExecutionsAndCheckpointing.md` defines Step Execution as one semantic execution of a logical step. This plan renames that concept to **Step Execution**.
 
 The hard switch reduces ambiguity, makes MoonMind feel Temporal-native, and prevents future APIs, docs, and UI flows from reintroducing parallel task semantics.
@@ -1039,9 +1039,9 @@ merge_automation
 
 | Current doc | Hard-switch action |
 | --- | --- |
-| `docs/Temporal/TaskExecutionCompatibilityModel.md` | Delete or replace with `docs/Temporal/WorkflowExecutionProductModel.md`. Do not keep as normative. |
-| `docs/UI/MissionControlArchitecture.md` | Rewrite as `docs/UI/WorkflowConsoleArchitecture.md`. |
-| `docs/Temporal/RunHistoryAndRerunSemantics.md` | Rename to `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`. |
+| `docs/Temporal/WorkflowExecutionProductModel.md` | Done: the former compatibility bridge doc is deleted; the product model doc is canonical. |
+| `docs/UI/WorkflowConsoleArchitecture.md` | Done: rewritten as the Workflow Execution console architecture. |
+| `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md` | Done: renamed and updated to Workflow Execution terms. |
 | `docs/Steps/StepExecutionsAndCheckpointing.md` | Rename to `docs/Steps/StepExecutionsAndCheckpointing.md`. |
 | `docs/Workflows/WorkflowArchitecture.md` | Delete or replace with `docs/Temporal/WorkflowExecutionArchitecture.md`. |
 | `docs/Workflows/WorkflowPresetsSystem.md` | Rename to `docs/Steps/WorkflowPresetsSystem.md` or fold into Step/Preset docs. |

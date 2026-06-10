@@ -32,7 +32,7 @@ This document is intentionally downstream of the artifact storage, execution ide
   - Owns live-log and observability APIs, artifact-backed tails, live streaming, and diagnostics presentation for managed runs.
 - `docs/Artifacts/ReportArtifacts.md`
   - Owns report-specific artifact classes, report bundle conventions, report metadata, evidence separation, and report-first UI behavior.
-- `docs/UI/MissionControlArchitecture.md`
+- `docs/UI/WorkflowConsoleArchitecture.md`
   - Owns dashboard route wiring, source resolution, and mixed-source UI integration.
 
 This document owns the **generic consumer-facing artifact presentation contract** layered on top of those decisions.

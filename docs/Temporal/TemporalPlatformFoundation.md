@@ -32,7 +32,7 @@ MoonMind aligns to Temporal's core abstractions:
 - `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
 - `docs/Temporal/ActivityCatalogAndWorkerTopology.md`
 - `docs/Temporal/VisibilityAndUiQueryModel.md`
-- `docs/Temporal/TaskExecutionCompatibilityModel.md`
+- `docs/Temporal/WorkflowExecutionProductModel.md`
 
 These docs define the normative contracts that build on this platform foundation.
 

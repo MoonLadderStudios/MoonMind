@@ -15,8 +15,8 @@ This guide covers how to start Temporal workflows at a specific time and how to 
 
 - [TemporalArchitecture.md](TemporalArchitecture.md) — platform foundation and Temporal architecture
 - [WorkflowTypeCatalogAndLifecycle.md](WorkflowTypeCatalogAndLifecycle.md) — workflow types, state model, update/signal contracts
-- [MissionControlArchitecture.md](../UI/MissionControlArchitecture.md) — dashboard source model, route map, schedule source config
-- [TaskExecutionCompatibilityModel.md](TaskExecutionCompatibilityModel.md) — task/workflow compatibility bridge
+- [WorkflowConsoleArchitecture.md](../UI/WorkflowConsoleArchitecture.md) — workflow console source model, route map, schedule source config
+- [WorkflowExecutionProductModel.md](WorkflowExecutionProductModel.md) — canonical Workflow Execution product model
 - [VisibilityAndUiQueryModel.md](VisibilityAndUiQueryModel.md) — query model and status mapping
 - [ActivityCatalogAndWorkerTopology.md](ActivityCatalogAndWorkerTopology.md) — activity routing and worker fleet
 

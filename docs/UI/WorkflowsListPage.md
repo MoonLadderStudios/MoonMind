@@ -27,7 +27,7 @@ Use related docs for system-level contracts:
 
 - `docs/Api/ExecutionsApiContract.md` — `/api/executions` list contract, execution lifecycle fields, filters, count, and pagination semantics.
 - `docs/Temporal/VisibilityAndUiQueryModel.md` — Temporal Visibility and UI query model.
-- `docs/UI/MissionControlArchitecture.md` — Mission Control shell and shared frontend architecture.
+- `docs/UI/WorkflowConsoleArchitecture.md` — workflow console shell and shared frontend architecture.
 - `docs/UI/MissionControlDesignSystem.md` — shared Mission Control visual language.
 - `docs/UI/CreatePage.md` — Workflow authoring surface that creates many rows shown on this page.
 

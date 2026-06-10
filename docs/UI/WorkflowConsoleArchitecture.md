@@ -1,21 +1,21 @@
-# Mission Control Architecture
+# Workflow Console Architecture
 
-Status: Active 
-Owners: MoonMind Engineering 
-Last updated: 2026-04-04
+Status: Active
+Owners: MoonMind Engineering
+Last updated: 2026-06-10
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
+**Implementation tracking:** Rollout and backlog notes live in `docs/tmp/` or gitignored local-only paths (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 ## 1. Purpose
 
-Define the concrete architecture for the MoonMind Mission Control UI: route model, source model, runtime config, Temporal integration, action mapping, artifact flows, and task-oriented presentation rules.
+Define the concrete architecture for the MoonMind Mission Control UI: route model, source model, runtime config, Temporal integration, action mapping, artifact flows, and workflow-oriented presentation rules.
 
-Mission Control presents MoonMind primarily as a **Temporal-backed task console**. The product surface remains task-oriented, while the durable substrate is workflow-oriented.
+Mission Control is MoonMind's **Workflow Execution console**. The product surface and the durable substrate are both workflow-oriented: the canonical product entity is the **Workflow Execution**, identified by `workflowId`, exactly as defined in `docs/Temporal/WorkflowExecutionProductModel.md`.
 
 This document covers:
 
 - canonical routes and page responsibilities
-- how task-oriented UI maps to Temporal-backed executions
+- how the workflow console maps to Temporal-backed executions
 - list/detail field and action posture
 - runtime config and feature-flag expectations
 - artifact interaction patterns
@@ -28,37 +28,40 @@ Detailed backend contracts live in the Temporal docs. This document defines the 
 
 ## 2. Related docs
 
+- `docs/Temporal/WorkflowExecutionProductModel.md` — canonical product model and terminology
 - `docs/Temporal/TemporalArchitecture.md`
 - `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
+- `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`
 - `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
 - `docs/Temporal/StepLedgerAndProgressModel.md`
 - `docs/Temporal/VisibilityAndUiQueryModel.md`
 - `docs/Temporal/WorkflowArtifactSystemDesign.md`
 - `docs/ManagedAgents/LiveLogs.md` — canonical design for artifact-first logs, MoonMind-owned observability APIs, SSE live follow, and the non-terminal log viewer UI
 - `docs/Steps/SkillSystem.md`
-- `docs/UI/MissionControlStyleGuide.md`
+- `docs/UI/MissionControlDesignSystem.md`
 - `docs/UI/TypeScriptSystem.md`
 
 ---
 
 ## 3. Product stance
 
-Mission Control is the operator and user console for MoonMind work.
+Mission Control is the operator and user console for MoonMind Workflow Executions.
 
 The primary UX posture is:
 
-- present work as **tasks**
+- present work as **Workflow Executions** (shortened to **workflows** in UI copy when unambiguous)
 - use Temporal-backed executions as the durable source of truth
 - keep provider/runtime internals mostly out of the main scanning experience
 - expose exact execution state without forcing users to think in raw Temporal or provider-native terms unless they choose advanced/debug detail surfaces
 
 Important distinctions:
 
-- **task** is the primary product term
-- **workflow execution** is the implementation/debug term
+- **Workflow Execution** is the primary product term; **workflow** is the UI shorthand
+- `workflowId` is the stable product identity and route key; `runId` is the current/latest Temporal run instance
 - **runtime** is the agent or execution target choice
 - **agent skills** are instruction bundles, not runtimes
 - **Temporal** is the orchestration substrate, not a selectable runtime
+- unqualified MoonMind work is never called a "task"; that word is reserved for Temporal internals (Temporal Task, Workflow Task, Activity Task, Task Queue) and qualified external systems (Jira task, Codex provider task)
 
 ---
 
@@ -78,12 +81,12 @@ Representative pieces:
 - HTML shell: `api_service/templates/react_dashboard.html`
 - navigation partials: `api_service/templates/_navigation.html`
 - shared entrypoint: `frontend/src/entrypoints/mission-control.tsx`
-- lazy-loaded page modules: `frontend/src/entrypoints/*.tsx`
+- lazy-loaded page modules: `frontend/src/entrypoints/*.tsx` (for example `workflow-list.tsx`, `workflow-start.tsx`, `workflow-detail.tsx`, `proposals.tsx`, `schedules.tsx`, `manifests.tsx`, `skills.tsx`, `settings.tsx`, `oauth-terminal.tsx`, `index-health.tsx`)
 - shared stylesheet source: `frontend/src/styles/mission-control.css`
-- generated JS/CSS bundles: `api_service/static/task_dashboard/dist/`
-- React/Vite build output: `api_service/static/task_dashboard/dist/`
-- runtime config builder: `api_service/api/routers/task_dashboard_view_model.py`
-- route shell: `api_service/api/routers/task_dashboard.py`
+- generated JS/CSS bundles: `api_service/static/workflow_console/dist/`
+- React/Vite build output: `api_service/static/workflow_console/dist/`
+- runtime config builder: `api_service/api/routers/workflow_console_view_model.py`
+- route shell: `api_service/api/routers/workflow_console.py`
 
 ---
 
@@ -103,7 +106,7 @@ Tailwind must scan all sources that can contain utility classes, including:
 
 Mission Control relies on two generated outputs with different ownership:
 
-- Vite `dist/` bundles (JS plus extracted CSS) under `api_service/static/task_dashboard/dist/`
+- Vite `dist/` bundles (JS plus extracted CSS) under `api_service/static/workflow_console/dist/`
 - `frontend/src/generated/openapi.ts`
 
 The shared Mission Control stylesheet is emitted as part of the Vite build from `frontend/src/styles/mission-control.css`. The Vite `dist/` tree is runtime build output only and is built from source in local verification, CI, and Docker; it is not committed to git. Frontend-consumed API types remain the checked-in generated artifact.
@@ -113,7 +116,7 @@ The canonical local commands are:
 1. `npm run ui:build:check`
 2. `npm run generate`
 
-`npm run ui:build:check` rebuilds `api_service/static/task_dashboard/dist/` from source and verifies the manifest. `npm run generate` regenerates `frontend/src/generated/openapi.ts`.
+`npm run ui:build:check` rebuilds `api_service/static/workflow_console/dist/` from source and verifies the manifest. `npm run generate` regenerates `frontend/src/generated/openapi.ts`.
 
 The canonical CI drift gate for tracked generated files is `npm run contracts:check`, which verifies `frontend/src/generated/openapi.ts` is synchronized with backend schema sources when OpenAPI-affecting files change. OpenAPI generation writes its intermediate schema to a temporary file instead of dirtying a tracked repo-root `openapi.json`.
 
@@ -134,25 +137,37 @@ If a React route renders structurally correct HTML but spacing, grids, or layout
 
 | Route | Purpose |
 | --- | --- |
-| `/tasks/list` | Primary task list backed by Temporal execution semantics |
-| `/tasks/new` | Unified submit page for new tasks |
-| `/tasks/queue/new` | Compatibility alias to `/tasks/new` |
-| `/tasks/:taskId` | Primary task detail route |
-| `/tasks/proposals` | Proposal queue list |
-| `/tasks/proposals/:proposalId` | Proposal detail |
-| `/tasks/schedules/:definitionId` | Recurring schedule detail when schedule creation is enabled |
+| `/workflows` | Primary workflow list backed by Temporal execution semantics |
+| `/workflows/new` | Start Workflow page for new submissions |
+| `/workflows/{workflowId}` | Primary workflow detail route |
+| `/workflows/{workflowId}/steps` | Workflow detail, Steps tab |
+| `/workflows/{workflowId}/artifacts` | Workflow detail, Artifacts tab |
+| `/workflows/{workflowId}/runs` | Workflow detail, Runs tab |
+| `/proposals` | Proposal queue list |
+| `/proposals/{proposalId}` | Proposal detail |
+| `/schedules` | Recurring schedule list |
+| `/schedules/{definitionId}` | Recurring schedule detail |
+| `/manifests`, `/manifests/{manifestName}` | Manifest pages |
+| `/skills` | Agent skill management |
+| `/settings` | Settings (provider profiles, secrets, operations) |
+| `/oauth-terminal` | OAuth terminal sessions (xterm.js lives here only) |
+| `/index-health` | Index health page |
+
+Convenience redirects: `/secrets` → `/settings?section=providers-secrets`, `/workers` → `/settings?section=operations`, `/manifests/new` → `/manifests`.
 
 Rules:
 
-- `/tasks/list` and `/tasks/:taskId` are the primary product routes
-- task detail should not require users to understand source-specific route families
-- any execution/debug aliases should remain secondary and redirect or resolve back to task-oriented canonical routes where possible
+- `/workflows` and `/workflows/{workflowId}` are the primary product routes
+- legacy `/tasks/*` routes are removed from the route table; they are not redirected (hard switch, no aliases)
+- unknown console routes return a 404 with the `dashboard_route_not_found` detail naming the canonical `/workflows*` routes
+- workflow detail should not require users to understand source-specific route families
+- any execution/debug aliases should remain secondary and resolve back to workflow-oriented canonical routes where possible
 
 ---
 
 ## 7. Route query parameters
 
-Supported query parameters for task list/detail routing include:
+Supported query parameters for workflow list/detail routing include:
 
 | Query parameter | Meaning |
 | --- | --- |
@@ -169,7 +184,7 @@ Supported query parameters for task list/detail routing include:
 
 Rules:
 
-- normal end-user task pages should be implicitly scoped to the authenticated principal
+- normal end-user workflow pages should be implicitly scoped to the authenticated principal
 - normal end-user UI should not expose arbitrary owner pickers
 - `source=temporal` is an implementation/debug affordance, not a first-class user concept
 - `limit` is pagination/view state, not a primary filter
@@ -179,35 +194,33 @@ Rules:
 
 ## 8. Source model
 
-Mission Control navigation may still span multiple product areas, but the main task list/detail flow should behave as a **Temporal-native task surface**.
+Mission Control navigation may still span multiple product areas, but the main workflow list/detail flow behaves as a **Temporal-native workflow surface**.
 
 ## 8.1 Runtime-config sources
 
 Runtime config may still expose sources such as:
 
-- `queue`
-- `system`
 - `proposals`
-- `manifests`
 - `schedules`
 - `temporal`
+- `manifests`
 - `githubBranches` or equivalent MoonMind-owned repository branch lookup endpoint
 
-That does not mean the user-facing task UI should give all of those equal primary visibility.
+That does not mean the user-facing workflow UI should give all of those equal primary visibility.
 
-The Create page branch selector is a data dependency on MoonMind-owned GitHub branch lookup. The browser must call the configured MoonMind API source, not GitHub directly. Runtime config supplies the endpoint template or source key used to fetch branches for the selected repository.
+The Start Workflow page branch selector is a data dependency on MoonMind-owned GitHub branch lookup. The browser must call the configured MoonMind API source, not GitHub directly. Runtime config supplies the endpoint template or source key used to fetch branches for the selected repository.
 
-## 8.2 Task surface posture
+## 8.2 Workflow surface posture
 
-`/tasks/list` and `/tasks/:taskId` should treat Temporal-backed executions as the default task experience.
+`/workflows` and `/workflows/{workflowId}` treat Temporal-backed executions as the default workflow experience.
 
 Rules:
 
-- keep `/tasks*` as the primary navigation surface
+- keep `/workflows*` as the primary navigation surface
 - do not make browser clients talk directly to Temporal Server or Temporal Web UI
 - always go through MoonMind REST APIs
-- keep `source` routing/query state as an implementation detail or temporary compatibility bridge
-- avoid wasting primary UI space on a `Source` filter or a constant `Type = Temporal` column when Temporal is the main live task source
+- keep `source` routing/query state as an implementation detail
+- avoid wasting primary UI space on a `Source` filter or a constant `Type = Temporal` column when Temporal is the main live execution source
 
 ## 8.3 Temporal is not a runtime
 
@@ -222,7 +235,7 @@ Rules:
 
 ---
 
-## 9. Task-oriented information hierarchy
+## 9. Workflow-oriented information hierarchy
 
 Mission Control should use a strong hierarchy between list and detail.
 
@@ -238,7 +251,7 @@ High-value list fields:
 - runtime
 - start time
 - duration or updated time
-- compact task ID
+- compact workflow ID
 
 Secondary or overflow metadata should move to detail or row expansion.
 
@@ -261,18 +274,18 @@ The detail page is the right place for:
 - managed-run observability (artifact-backed logs, diagnostics — not terminal embeds)
 - action surfaces
 
-## 9.3 Preset provenance on task surfaces
+## 9.3 Preset provenance on workflow surfaces
 
-Mission Control may explain preset-derived work in task list, task detail, and edit/rerun reconstruction surfaces, but **Preset provenance** is explanatory metadata, not a runtime execution model.
+Mission Control may explain preset-derived work in the workflow list, workflow detail, and edit/rerun reconstruction surfaces, but **Preset provenance** is explanatory metadata, not a runtime execution model.
 
 Rules:
 
-* task list rows may show compact preset-derived context only when it helps scanning and does not crowd out title, status, workflow label, runtime, and timing fields
-* task detail may show provenance summaries and chips for **Manual**, **Preset**, and **Preset path**
-* edit/rerun reconstruction may show preserved preset bindings, detached state, and include-path context when those values are available from the submitted task snapshot
+* workflow list rows may show compact preset-derived context only when it helps scanning and does not crowd out title, status, workflow label, runtime, and timing fields
+* workflow detail may show provenance summaries and chips for **Manual**, **Preset**, and **Preset path**
+* edit/rerun reconstruction may show preserved preset bindings, detached state, and include-path context when those values are available from the submitted workflow input snapshot
 * flat steps remain the primary execution ordering model, even when the UI groups or labels steps by preset origin
 * if preset provenance is unavailable, stale, or policy-hidden, the UI falls back to the flat step presentation without implying missing runtime work
-* preset grouping must never imply nested runtime behavior, subtasks, sub-plans, or separate workflow runs for preset includes
+* preset grouping must never imply nested runtime behavior, sub-plans, or separate workflow runs for preset includes
 
 ## 9.4 Advanced/debug information stays secondary
 
@@ -284,7 +297,7 @@ Examples:
 - exact `closeStatus`
 - raw `rawState`
 - provider/integration-specific metadata
-- latest `temporalRunId`
+- latest run ID
 
 ---
 
@@ -292,9 +305,9 @@ Examples:
 
 ## 10.1 `sources.temporal`
 
-The runtime config should expose a `sources.temporal` block for Mission Control.
+The runtime config exposes a `sources.temporal` block for Mission Control.
 
-Representative shape:
+Representative shape (current live endpoint templates from `moonmind/config/settings.py`):
 
 ```json
 {
@@ -316,6 +329,8 @@ Representative shape:
  }
 }
 ```
+
+The `{temporalRunId}` placeholder in the artifacts endpoint template is the current live template token (renames to `{runId}` in the hard switch).
 
 Rules:
 
@@ -363,19 +378,15 @@ Rollout order should remain read-first:
 
 The canonical product detail route is:
 
-* `/tasks/:taskId`
+* `/workflows/{workflowId}`
 
-For Temporal-backed tasks:
-
-* `taskId == workflowId`
-
-This keeps product routing stable while preserving the correct durable identifier.
+`workflowId` is the durable product identity. This keeps product routing stable while preserving the correct durable identifier.
 
 ## 11.2 Source resolution order
 
 Mission Control should resolve detail routes in this order:
 
-1. canonical server-side source mapping / task index
+1. canonical server-side source mapping / execution index
 2. explicit `?source=temporal` override when present
 3. temporary fallback heuristics only as an implementation safety net
 
@@ -393,17 +404,17 @@ Minimum fetch sequence for a Temporal-backed detail page:
 Rules:
 
 * the Steps surface should load before generic artifact browsing because it is the primary operator comprehension surface
-* artifact fetch must use the latest `temporalRunId` returned by the detail response
-* detail routing remains anchored to `taskId == workflowId`
-* reruns or Continue-As-New should not force a route identity change
+* artifact fetch must use the latest `runId` returned by the detail response
+* detail routing remains anchored to `workflowId`
+* new runs or Continue-As-New should not force a route identity change
 
 ## 11.4 Observability fetch sequence
 
-For the task detail observability area (Live Logs panel), the correct fetch sequence is:
+For the workflow detail observability area (Live Logs panel), the correct fetch sequence is:
 
-1. `GET /api/task-runs/{id}/observability-summary` — fetch observability summary (run status, artifact refs, live stream availability, and the freshest managed-session snapshot when present)
-2. `GET /api/task-runs/{id}/logs/merged` — fetch initial merged log tail; **initial content must be visible before any SSE connection is attempted**
-3. If the run is active and `supports_live_streaming: true`, attach to `GET /api/task-runs/{id}/logs/stream`
+1. `GET /api/agent-runs/{id}/observability-summary` — fetch observability summary (run status, artifact refs, live stream availability, and the freshest managed-session snapshot when present)
+2. `GET /api/agent-runs/{id}/logs/merged` — fetch initial merged log tail; **initial content must be visible before any SSE connection is attempted**
+3. If the run is active and `supports_live_streaming: true`, attach to `GET /api/agent-runs/{id}/logs/stream`
 4. If the stream connection fails or is unavailable, remain in artifact-backed mode — do not leave the panel blank
 
 Rules:
@@ -441,7 +452,7 @@ Temporal-backed detail should render:
 * secondary facts rail or metadata panel:
 
  * workflow ID
- * latest `temporalRunId`
+ * latest run ID
  * namespace
  * repository
  * integration
@@ -459,7 +470,7 @@ Temporal-backed detail should render:
 
 ## 12.2 Steps and Observability sections
 
-The task detail page must include a dedicated **Steps** section above Timeline and above the generic Artifacts panel.
+The workflow detail page must include a dedicated **Steps** section above Timeline and above the generic Artifacts panel.
 
 Each step row should show:
 
@@ -467,7 +478,7 @@ Each step row should show:
 * exact step status
 * short summary
 * elapsed time or timestamps
-* attempt count
+* execution/attempt count
 * dependency blockers when present
 * quick evidence links
 
@@ -483,12 +494,12 @@ Rules:
 
 * the default Steps view is for the latest/current run only
 * the plan artifact is the canonical planned-step source; the step-ledger API is the canonical live-state source
-* step rows may carry `childWorkflowId`, `childRunId`, and `taskRunId`
-* when a step has `taskRunId`, the Logs & Diagnostics area should embed or deep-link the existing `/api/task-runs/*` observability surfaces for that step
+* step rows may carry `childWorkflowId`, `childRunId`, and `taskRunId` (the `taskRunId` ref slot renames to an agent-run identifier in the hard switch)
+* when a step has a `taskRunId` ref, the Logs & Diagnostics area should embed or deep-link the existing `/api/agent-runs/*` observability surfaces for that step
 * the client must not infer step completion or “latest output” by parsing logs or sorting raw artifacts locally
 * preset-derived step metadata may be rendered as Manual, Preset, or Preset path chips, but those chips explain provenance only and do not change step order, dependency semantics, or completion rules
 
-The task detail page must include a dedicated **Observability** area for managed-run evidence. This is the canonical UI hierarchy:
+The workflow detail page must include a dedicated **Observability** area for managed-run evidence. This is the canonical UI hierarchy:
 
 * **Live Logs** — merged log stream viewer (artifact-backed by default; upgrades to live follow when active)
 * **Stdout** — artifact-backed stdout viewer with tail, download, copy, and line-wrap
@@ -498,7 +509,7 @@ The task detail page must include a dedicated **Observability** area for managed
 
 Rules:
 
-* Steps remains the primary task-detail comprehension surface; generic Observability and Artifacts are supporting evidence areas
+* Steps remains the primary detail comprehension surface; generic Observability and Artifacts are supporting evidence areas
 * managed-run observability is artifact-backed and MoonMind-native — it does not use terminal embeds
 * `xterm.js` must not appear in this area; it is reserved for OAuth sessions only
 * the observability area follows the fetch sequence defined in §11.4
@@ -559,7 +570,7 @@ Stream provenance is required for correct line rendering and for the merged view
 ## 12.7 Feature flags for observability rollout
 
 * `logStreamingEnabled` — operator-visible disable switch for the observability panel and live-follow behavior; default `true` via `MOONMIND_LOG_STREAMING_ENABLED`
-* a separate UI flag for the new observability panel layout may be used if a side-by-side rollout with the legacy task-detail view is required
+* a separate UI flag for the new observability panel layout may be used if a side-by-side rollout with a legacy detail view is required
 
 Rollout posture: default-on with an explicit disable path. The read-first fetch sequence still applies: artifact-backed tail before live follow.
 
@@ -581,7 +592,7 @@ Temporal-backed detail should show a synthesized execution timeline based on:
 * notable action results
 * artifact evidence
 * proposal/finalization transitions
-* task-level outcome summaries
+* workflow-level outcome summaries
 
 Raw Temporal event history browsing is out of scope unless a dedicated backend contract exists.
 
@@ -600,12 +611,12 @@ When an execution is blocked:
 
 ## 13.1 Product posture
 
-`/tasks/list` is the primary Mission Control task console.
+`/workflows` is the primary Mission Control workflow console surface.
 
 Rules:
 
-* treat Temporal executions as the authoritative dataset for the main task list UX
-* do not expose `Source` as a first-order normal task filter
+* treat Temporal executions as the authoritative dataset for the main list UX
+* do not expose `Source` as a first-order filter
 * keep `source=temporal` as a debug/implementation detail
 * avoid queue-era framing like a constant `Type = Temporal` column
 
@@ -644,15 +655,16 @@ The list page should use a two-width strategy:
 
 ## 13.4 Row model for Temporal-backed items
 
-| Dashboard field | Temporal source |
+| Console field | Temporal source |
 | ------------------- | ---------------------------------------------- |
-| `id` / `taskId` | `workflowId` |
+| `workflowId` | `workflowId` (stable product identity) |
+| `runId` | latest run instance ID |
 | `title` | `memo.title` or fallback |
 | `summary` | `memo.summary` |
 | `workflowType` | `workflowType` |
 | `runtime` | runtime target from execution fields |
 | `entry` | `searchAttributes.mm_entry` |
-| `status` | `dashboardStatus` |
+| `status` / `dashboardStatus` | normalized status grouping |
 | `rawState` | exact `state` |
 | `temporalStatus` | `temporalStatus` |
 | `closeStatus` | `closeStatus` |
@@ -666,14 +678,12 @@ The list page should use a two-width strategy:
 | `updatedAt` | `updatedAt` |
 | `closedAt` | `closedAt` |
 | `duration` | derived |
-| `workflowId` | `workflowId` |
-| `temporalRunId` | latest run instance ID |
 
 Recommended desktop priorities:
 
 * primary column: `title`
 * strong supporting columns: `status`, `workflowType`, `runtime`, `startedAt`, `duration` or `updatedAt`
-* compact secondary column: `id` / `taskId`
+* compact secondary column: `workflowId`
 
 Move these to detail or expansion surfaces:
 
@@ -708,15 +718,16 @@ Pagination rules:
 
 ## 14.1 Supported Temporal actions
 
-| Dashboard action | Temporal API | Contract |
+| Console action | Temporal API | Contract |
 | ---------------- | ------------------------------------------ | -------------------------- |
-| Create execution | `POST /api/executions` | Start workflow |
+| Start workflow | `POST /api/executions` | Start workflow |
 | Edit inputs | `POST /api/executions/{workflowId}/update` | `UpdateInputs` |
 | Rename / retitle | `POST /api/executions/{workflowId}/update` | `SetTitle` |
-| Rerun | `POST /api/executions/{workflowId}/update` | `RequestRerun` |
+| Start new run | `POST /api/executions/{workflowId}/update` | `RequestRerun` (renames to `RequestNewRun` in the hard switch) |
 | Approve | `POST /api/executions/{workflowId}/signal` | `Approve` |
 | Pause | `POST /api/executions/{workflowId}/signal` | `Pause` |
-| Resume | `POST /api/executions/{workflowId}/signal` | `Resume` |
+| Resume paused workflow | `POST /api/executions/{workflowId}/signal` | `Resume` |
+| Recover from failed step | `POST /api/executions/{workflowId}/recover-from-failed-step` | Linked follow-up execution |
 | Cancel | `POST /api/executions/{workflowId}/cancel` | Graceful cancel by default |
 
 `ExternalEvent` is part of the execution contract, but normally appears as a system/integration path rather than a direct user-facing button.
@@ -729,15 +740,16 @@ Pagination rules:
 | `executing` / `proposals` | cancel, pause, set title |
 | `awaiting_external` | cancel, pause, resume, approve when applicable |
 | `finalizing` | cancel only if policy allows |
-| terminal (`completed`, `failed`, `canceled`) | rerun, view/download artifacts |
+| terminal (`completed`, `failed`, `canceled`) | new run / recovery per policy, view/download artifacts |
 
 ## 14.3 Copy guidance
 
 Prefer product language:
 
-* **Rerun** instead of Continue-As-New
-* **Task title** instead of workflow memo title
-* **Pause task** / **Resume task** instead of raw Temporal jargon
+* **Start New Run** instead of Continue-As-New
+* **Workflow title** instead of workflow memo title
+* **Pause workflow** / **Resume workflow** instead of raw Temporal jargon
+* **Recover from Failed Step** for checkpointed failed-step recovery; never bare “Resume” for recovery
 
 Advanced/debug views may disclose the underlying implementation terms.
 
@@ -747,31 +759,31 @@ Advanced/debug views may disclose the underlying implementation terms.
 
 ## 15.1 Default posture
 
-Temporal dashboard integration should remain **read-first**.
+Temporal console integration should remain **read-first**.
 
 Rollout order:
 
 1. list/detail visibility
-2. task actions on existing Temporal-backed executions
-3. direct submit from `/tasks/new`
+2. workflow actions on existing Temporal-backed executions
+3. direct submit from `/workflows/new`
 
 ## 15.2 Submit UX rules
 
 * runtime selection and skill selection are distinct concerns
 * do not overload the runtime picker to represent skill sets
 * do not expose raw source-precedence logic directly to ordinary users
-* keep submit flows organized around task-shaped product language
+* keep submit flows organized around workflow-shaped product language
 * let the backend decide the workflow type and execution routing
 * browser clients call MoonMind APIs only; Jira, GitHub, object storage, Temporal Server, and model providers remain behind MoonMind-controlled API surfaces
-* `/tasks/new` expands composed presets into editable executable steps before submission
-* unresolved preset includes must be rejected before runtime submission; they must not be sent as task work for a worker or adapter to resolve later
-* submit surfaces may explain preset provenance, but the submitted execution payload remains flat resolved steps plus durable task snapshot metadata
+* `/workflows/new` expands composed presets into editable executable steps before submission
+* unresolved preset includes must be rejected before runtime submission; they must not be sent as workflow work for a worker or adapter to resolve later
+* submit surfaces may explain preset provenance, but the submitted execution payload remains flat resolved steps plus durable workflow input snapshot metadata
 * repository, branch, and publish controls live together in the Steps card: choose repo, fetch branch options through the MoonMind branch source, populate the Branch dropdown, then render Publish Mode alongside it
-* `Publish Mode` remains part of task submission semantics; this is a visual placement change, not removal from the contract
+* `Publish Mode` remains part of workflow submission semantics; this is a visual placement change, not removal from the contract
 
 ## 15.3 Backend mapping for submit
 
-The dashboard submits task-shaped requests plus task-level intent such as:
+The console submits workflow-shaped requests plus workflow-level intent such as:
 
 * instructions
 * runtime choice
@@ -784,26 +796,22 @@ The backend resolves those into workflow start inputs and immutable runtime cont
 
 Representative mappings:
 
-* run-shaped submit flows → `MoonMind.Run`
+* user workflow submit flows → `MoonMind.Run` (renames to `MoonMind.UserWorkflow` in the hard switch)
 * manifest-oriented submit flows → `MoonMind.ManifestIngest`
 
 The UI should submit **selection intent**, not full mutable skill bodies inline.
 
 ## 15.4 Redirect after create
 
-* immediate execution → `/tasks/{taskId}?source=temporal`
-* deferred one-time execution → `/tasks/{taskId}?source=temporal`
-* recurring schedule creation → `/tasks/schedules/{definitionId}`
+* immediate execution → `/workflows/{workflowId}?source=temporal`
+* deferred one-time execution → `/workflows/{workflowId}?source=temporal`
+* recurring schedule creation → `/schedules/{definitionId}`
 
-For Temporal-backed records:
-
-* `taskId == workflowId`
-
-The route should remain stable across reruns and new Temporal runs.
+The route should remain stable across new runs and Continue-As-New.
 
 ## 15.5 Inline scheduling on submit
 
-`/tasks/new` may include an inline schedule panel allowing:
+`/workflows/new` may include an inline schedule panel allowing:
 
 * run immediately
 * schedule for later
@@ -851,10 +859,10 @@ The default list table should not carry heavy skill-set columns.
 
 Temporal-managed flows remain artifact-first for large inputs and outputs.
 
-Dashboard implications:
+Console implications:
 
 * large user inputs upload as artifacts before create/update when needed
-* task detail shows execution-linked artifacts as the durable evidence surface
+* workflow detail shows execution-linked artifacts as the durable evidence surface
 * downloads go through MoonMind artifact authorization/grant flows
 
 ## 17.2 Required artifact behaviors
@@ -885,7 +893,7 @@ Execution-scoped artifact listing is keyed by:
 
 * `namespace`
 * `workflowId`
-* `temporalRunId`
+* the run instance ID (the `{temporalRunId}` template token in the current artifacts endpoint)
 
 Default to showing artifacts for the **latest run**. Prior-run browsing, if added later, should be an explicit detail feature.
 
@@ -893,44 +901,44 @@ The generic artifact panel remains secondary to the step-expander artifact group
 
 ---
 
-## 18. Compatibility rules
+## 18. Vocabulary and identifier rules
 
 ## 18.1 Vocabulary
 
-* primary user-facing term: **task**
-* advanced/debug term: **workflow execution**
+* primary product term: **Workflow Execution** (**workflow** in UI copy when unambiguous)
+* `workflowId` is the product identity; `runId` is the current/latest Temporal run instance
 * use **agent skill** or **skill set** for instruction bundles
 * never present Temporal Task Queues as the UI meaning of “queue”
 * use **preset** for operator-facing authored preset concepts
 * use **binding** or **provenance** for internal preset metadata
-* do not describe preset includes as subtasks, sub-plans, or separate workflow runs
+* do not describe preset includes as sub-plans or separate workflow runs
+* the word “task” appears only when qualified: Temporal Task, Workflow Task, Activity Task, Task Queue, Jira task, Codex provider task
 
 ## 18.2 Identifier policy
 
-For Temporal-backed task surfaces:
+For Temporal-backed workflow surfaces:
 
-* `taskId`
-* `workflowId`
-* latest `temporalRunId`
+* `workflowId` — the durable Temporal identity and the main console route handle
+* `runId` — the current/latest run instance; detail/debug metadata, not the main identifier
+* `agentRunId` — managed agent run linkage for observability surfaces
 
-Rules:
+Pending hard-switch renames still visible in live contracts (do not rewrite ahead of the code change):
 
-* `taskId == workflowId`
-* `taskId` remains the main dashboard route handle
-* `workflowId` is the durable Temporal identity
-* `temporalRunId` is detail/debug metadata, not the main identifier
-* do not reuse old queue/system `runId` concepts for Temporal-backed task payloads
+* the step-ref slot `taskRunId` (renames to an agent-run identifier)
+* the execution field `taskInstructions` (renames in the hard switch)
+* the `{temporalRunId}` artifacts endpoint template token (renames to `{runId}`)
+* frontend fallback parsing of legacy `taskId`/`temporalRunId` response fields (removed when the frontend rename lands)
 
 ## 18.3 Source visibility policy
 
-* do not require normal operators to reason about `source` for the main task list/detail flow
-* keep source-specific routing/query compatibility behind the scenes unless another live task source becomes product-relevant again
+* do not require normal operators to reason about `source` for the main workflow list/detail flow
+* keep source-specific routing/query behavior behind the scenes unless another live execution source becomes product-relevant again
 
 ---
 
 ## 19. Open questions
 
-1. Should `/tasks/:taskId` remain the only canonical Temporal detail route, or should `/tasks/executions/:workflowId` exist as a first-class secondary alias?
+1. Should `/workflows/{workflowId}` remain the only canonical Temporal detail route, or should an execution-scoped secondary alias exist for debugging?
 2. Is `awaiting_action` still sufficient as a compatibility grouping once `waitingReason` and `attentionRequired` are fully exposed?
 3. Should direct Temporal-backed create remain fully hidden behind backend routing, or ever be exposed as an advanced feature-flagged path?
 4. Do we need explicit prior-run artifact browsing once Continue-As-New becomes common in real usage?

@@ -685,7 +685,7 @@ Use the related docs for detailed behavior:
 - `docs/Workflows/ImageSystem.md` for image-input upload, artifact storage, materialization, context generation, and preview/download behavior
 - `docs/Steps/SkillSystem.md` for skill selection and resolution
 - `docs/Temporal/TemporalArchitecture.md` for workflow lifecycle and worker topology
-- `docs/Temporal/RunHistoryAndRerunSemantics.md` for Workflow ID, Run ID, full rerun, and Resume identity semantics
+- `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md` for Workflow ID, Run ID, new-run, and failed-step recovery identity semantics
 - `docs/Temporal/StepLedgerAndProgressModel.md` for step ledger, preserved-step, and recovery checkpoint semantics
 
 ---
