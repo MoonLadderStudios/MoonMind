@@ -8,6 +8,8 @@ import posixpath
 import re
 from typing import Any, Literal
 
+from pydantic import ValidationError
+
 from moonmind.schemas.step_execution_models import (
     StepExecutionReason,
     StepExecutionStatus,
@@ -521,3 +523,82 @@ def build_step_execution_manifest_payload(
         budget=dict(budget or {}),
     )
     return manifest.model_dump(by_alias=True, mode="json")
+
+
+def validate_step_execution_manifest_payload(
+    manifest_payload: Mapping[str, Any],
+    *,
+    manifest_artifact_ref: str | None = None,
+) -> dict[str, Any]:
+    """Validate raw Step Execution manifests at workflow read/replay boundaries.
+
+    Writers use ``StepExecutionManifestModel`` directly and remain strict. This
+    helper gives boundaries that consume already-persisted manifests a compact
+    invalid result instead of crashing on blank, unknown, or newly introduced
+    enum values during a rolling deployment.
+    """
+
+    try:
+        manifest = StepExecutionManifestModel.model_validate(manifest_payload)
+    except ValidationError as exc:
+        return {
+            "valid": False,
+            "failureCode": "invalid_step_execution_manifest",
+            "message": _validation_error_summary(
+                exc,
+                fallback="step execution manifest rejected at workflow boundary",
+            ),
+            "manifestArtifactRef": _non_blank_text(
+                manifest_artifact_ref
+                or manifest_payload.get("manifestArtifactRef")
+                or manifest_payload.get("artifactRef")
+            ),
+            "stepExecutionId": _non_blank_text(
+                manifest_payload.get("stepExecutionId")
+            ),
+            "logicalStepId": _non_blank_text(manifest_payload.get("logicalStepId")),
+            "executionOrdinal": _positive_int_or_none(
+                manifest_payload.get("executionOrdinal")
+            ),
+        }
+    return {
+        "valid": True,
+        "failureCode": None,
+        "message": "step execution manifest validation passed",
+        "manifestArtifactRef": _non_blank_text(manifest_artifact_ref),
+        "stepExecutionId": manifest.step_execution_id,
+        "logicalStepId": manifest.logical_step_id,
+        "executionOrdinal": manifest.execution_ordinal,
+        "reason": manifest.reason,
+        "status": manifest.status,
+        "terminalDisposition": manifest.terminal_disposition,
+    }
+
+
+def _validation_error_summary(exc: ValidationError, *, fallback: str) -> str:
+    errors = exc.errors(include_input=False)
+    if not errors:
+        return fallback
+    first = errors[0]
+    location = ".".join(
+        str(part) for part in first.get("loc", ()) if part != "__root__"
+    )
+    message = str(first.get("msg") or "").strip()
+    if location and message:
+        return f"{fallback}: {location}: {message}"[:1000]
+    if message:
+        return f"{fallback}: {message}"[:1000]
+    return fallback
+
+
+def _non_blank_text(value: Any) -> str | None:
+    candidate = str(value or "").strip()
+    return candidate or None
+
+
+def _positive_int_or_none(value: Any) -> int | None:
+    try:
+        candidate = int(value)
+    except (TypeError, ValueError):
+        return None
+    return candidate if candidate > 0 else None

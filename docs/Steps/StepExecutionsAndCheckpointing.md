@@ -1175,6 +1175,14 @@ This design does not require:
 
 Implementation should be phased.
 
+Payload-affecting Step Execution and checkpoint changes follow a versioned
+cutover rule: canonical writers fail fast for unsupported values, while
+workflow read/replay boundaries must turn degraded, blank, unknown, or future
+values from already-persisted payloads into typed invalid boundary decisions
+instead of crashing workflow tasks. Additive `v1` fields remain optional or
+default-initialized; incompatible payload changes require a new content-type
+version and an explicit cutover before new writers emit that version.
+
 ### Phase 1: Step execution manifests and evidence
 
 1. Add step execution manifest artifact type.

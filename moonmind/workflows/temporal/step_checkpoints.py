@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
+from pydantic import ValidationError
+
 from moonmind.schemas.temporal_models import (
     STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
     StepExecutionCheckpointBoundary,
@@ -184,6 +186,56 @@ def validate_step_checkpoint(
     )
 
 
+def validate_step_checkpoint_payload(
+    checkpoint_payload: Mapping[str, Any],
+    *,
+    expected_source: StepExecutionIdentityModel,
+    expected_task_input_snapshot_ref: str,
+    expected_plan_ref: str | None = None,
+    expected_plan_digest: str | None = None,
+    workspace_policy: str | None = None,
+    required_artifact_refs: list[str] | tuple[str, ...] = (),
+    unauthorized_artifact_refs: list[str] | tuple[str, ...] = (),
+    corrupted_artifact_refs: list[str] | tuple[str, ...] = (),
+    expected_workspace: Mapping[str, Any] | None = None,
+    checkpoint_ref: str | None = None,
+) -> StepCheckpointValidationResultModel:
+    """Validate raw workflow-boundary checkpoint payloads without crashing replay.
+
+    Canonical checkpoint writers still use the strict Pydantic models directly.
+    This helper is for replay, Resume, and other workflow boundaries that may read
+    persisted payloads created before a deployment completed.
+    """
+
+    try:
+        checkpoint = StepExecutionCheckpointModel.model_validate(checkpoint_payload)
+        request = StepCheckpointValidationRequestModel(
+            checkpoint=checkpoint,
+            expectedSource=expected_source,
+            expectedTaskInputSnapshotRef=expected_task_input_snapshot_ref,
+            expectedPlanRef=expected_plan_ref,
+            expectedPlanDigest=expected_plan_digest,
+            workspacePolicy=workspace_policy,
+            requiredArtifactRefs=list(required_artifact_refs),
+            unauthorizedArtifactRefs=list(unauthorized_artifact_refs),
+            corruptedArtifactRefs=list(corrupted_artifact_refs),
+            expectedWorkspace=dict(expected_workspace or {}),
+            checkpointRef=checkpoint_ref,
+        )
+    except ValidationError as exc:
+        return StepCheckpointValidationResultModel(
+            valid=False,
+            failureCode="invalid_checkpoint",
+            message=_validation_error_summary(
+                exc,
+                fallback="checkpoint payload rejected at workflow boundary",
+            ),
+            checkpointId=_checkpoint_id_from_payload(checkpoint_payload),
+            checkpointRef=checkpoint_ref,
+        )
+    return validate_step_checkpoint(request)
+
+
 def _invalid(
     request: StepCheckpointValidationRequestModel,
     failure_code: str,
@@ -196,6 +248,27 @@ def _invalid(
         checkpointId=request.checkpoint.checkpoint_id,
         checkpointRef=request.checkpoint_ref,
     )
+
+
+def _checkpoint_id_from_payload(payload: Mapping[str, Any]) -> str:
+    checkpoint_id = str(payload.get("checkpointId") or "").strip()
+    return checkpoint_id or "unknown-checkpoint"
+
+
+def _validation_error_summary(exc: ValidationError, *, fallback: str) -> str:
+    errors = exc.errors(include_input=False)
+    if not errors:
+        return fallback
+    first = errors[0]
+    location = ".".join(
+        str(part) for part in first.get("loc", ()) if part != "__root__"
+    )
+    message = str(first.get("msg") or "").strip()
+    if location and message:
+        return f"{fallback}: {location}: {message}"[:1000]
+    if message:
+        return f"{fallback}: {message}"[:1000]
+    return fallback
 
 
 def _checkpoint_artifact_refs(

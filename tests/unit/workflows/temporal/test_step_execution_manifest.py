@@ -12,6 +12,9 @@ from moonmind.schemas.temporal_models import (
     build_step_execution_id,
     build_step_execution_idempotency_key,
 )
+from moonmind.workflows.temporal.step_executions import (
+    validate_step_execution_manifest_payload,
+)
 
 
 def _identity() -> dict[str, object]:
@@ -105,6 +108,86 @@ def test_step_execution_manifest_accepts_canonical_payload_and_content_type() ->
     assert manifest.lineage is not None
     assert manifest.lineage.source_execution_ordinal == 1
     assert manifest.model_dump(by_alias=True)["terminalDisposition"] == "accepted"
+
+
+def test_step_execution_manifest_boundary_accepts_previous_compact_payload_shape() -> (
+    None
+):
+    payload = {
+        **_identity(),
+        "schemaVersion": "v1",
+        "executionScope": "run",
+        "reason": "quality_gate_failed",
+        "status": "failed",
+        "terminalDisposition": "retryable",
+        "startedAt": "2026-05-17T12:00:00Z",
+        "updatedAt": "2026-05-17T12:03:00Z",
+        "input": {"taskInputSnapshotRef": "artifact-input"},
+        "context": {"contextBundleRef": "artifact-context"},
+        "workspace": {"policy": "continue_from_previous_execution"},
+        "execution": {"kind": "agent_run"},
+        "outputs": {"summaryRef": "artifact-summary"},
+        "checks": [],
+        "sideEffects": {"external": []},
+        "dependencyEffects": {"invalidatedLogicalStepIds": []},
+        "budget": {"attemptLimit": 3},
+    }
+
+    result = validate_step_execution_manifest_payload(
+        payload,
+        manifest_artifact_ref="artifact-step-execution-2",
+    )
+
+    assert result == {
+        "valid": True,
+        "failureCode": None,
+        "message": "step execution manifest validation passed",
+        "manifestArtifactRef": "artifact-step-execution-2",
+        "stepExecutionId": "workflow-1:run-1:implement-story:execution:2",
+        "logicalStepId": "implement-story",
+        "executionOrdinal": 2,
+        "reason": "quality_gate_failed",
+        "status": "failed",
+        "terminalDisposition": "retryable",
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("reason", ""),
+        ("status", "paused_by_future_worker"),
+        ("terminalDisposition", "accepted_with_warnings"),
+    ],
+)
+def test_step_execution_manifest_boundary_reports_degraded_values_without_crashing(
+    field: str,
+    value: str,
+) -> None:
+    payload = {
+        **_identity(),
+        "schemaVersion": "v1",
+        "executionScope": "run",
+        "reason": "quality_gate_failed",
+        "status": "failed",
+        "terminalDisposition": "retryable",
+        "startedAt": "2026-05-17T12:00:00Z",
+        "updatedAt": "2026-05-17T12:03:00Z",
+    }
+    payload[field] = value
+
+    result = validate_step_execution_manifest_payload(
+        payload,
+        manifest_artifact_ref="artifact-step-execution-2",
+    )
+
+    assert result["valid"] is False
+    assert result["failureCode"] == "invalid_step_execution_manifest"
+    assert field in result["message"]
+    assert result["manifestArtifactRef"] == "artifact-step-execution-2"
+    assert result["stepExecutionId"] is None
+    assert result["logicalStepId"] == "implement-story"
+    assert result["executionOrdinal"] == 2
 
 
 def test_step_execution_manifest_accepts_compact_evidence_refs() -> None:
