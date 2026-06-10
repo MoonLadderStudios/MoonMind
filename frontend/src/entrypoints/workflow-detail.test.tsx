@@ -492,7 +492,10 @@ describe('Workflow Detail Entrypoint', () => {
             runtimeMergedLogs: null,
             runtimeDiagnostics: null,
             providerSnapshot: null,
+            stepExecutionManifestRef: null,
+            stepExecutionManifestRefs: ['art-plan-manifest'],
           },
+          stateCheckpointRef: 'art-plan-checkpoint',
           preservedFrom: {
             workflowId: 'test-123',
             runId: '01-run',
@@ -570,6 +573,10 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('art-apply-output')).toBeTruthy();
     expect(screen.getByText('art-apply-diagnostics')).toBeTruthy();
     expect(screen.getByText('art-gate-verdict')).toBeTruthy();
+    // Step-execution manifest and recovery checkpoint refs are surfaced as the
+    // only durable latest evidence for running/recovered rows.
+    expect(screen.getByText('art-plan-manifest')).toBeTruthy();
+    expect(screen.getByText('art-plan-checkpoint')).toBeTruthy();
   });
 
   it('MM-801 renders Artifacts as the focused report and artifact route', async () => {

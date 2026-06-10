@@ -951,6 +951,8 @@ const StepLedgerArtifactsSchema = z
     runtimeMergedLogs: z.string().nullable().optional(),
     runtimeDiagnostics: z.string().nullable().optional(),
     providerSnapshot: z.string().nullable().optional(),
+    stepExecutionManifestRef: z.string().nullable().optional(),
+    stepExecutionManifestRefs: z.array(z.string()).nullable().optional(),
   })
   .default({
     outputSummary: null,
@@ -960,6 +962,8 @@ const StepLedgerArtifactsSchema = z
     runtimeMergedLogs: null,
     runtimeDiagnostics: null,
     providerSnapshot: null,
+    stepExecutionManifestRef: null,
+    stepExecutionManifestRefs: [],
   });
 
 const StepLedgerWorkloadSchema = z
@@ -1015,6 +1019,7 @@ const StepLedgerRowSchema = z
       .nullable()
       .optional(),
     workload: StepLedgerWorkloadSchema.nullable().optional(),
+    stateCheckpointRef: z.string().nullable().optional(),
     lastError: z.unknown().nullable().optional(),
   })
   .passthrough();
@@ -2653,15 +2658,23 @@ function stepStatusIcon(status: string): { icon: string; cssClass: string } {
 function collectStepEvidenceRefs(
   row: z.infer<typeof StepLedgerRowSchema>,
 ): Array<{ label: string; ref: string }> {
+  if (!row) return [];
+  const manifestRefs = row.artifacts?.stepExecutionManifestRefs ?? [];
+  const latestManifestRef =
+    row.artifacts?.stepExecutionManifestRef ??
+    (manifestRefs.length > 0 ? manifestRefs[manifestRefs.length - 1] : null);
   const entries: Array<[string, string | null | undefined]> = [
-    ['Output', row.artifacts.outputPrimary ?? row.artifacts.outputSummary],
-    ['Diagnostics', row.artifacts.runtimeDiagnostics],
-    ['Provider', row.artifacts.providerSnapshot],
+    ['Output', row.artifacts?.outputPrimary ?? row.artifacts?.outputSummary],
+    ['Diagnostics', row.artifacts?.runtimeDiagnostics],
+    ['Provider', row.artifacts?.providerSnapshot],
+    ['Manifest', latestManifestRef],
+    ['Checkpoint', row.stateCheckpointRef],
   ];
   const refs = entries
     .filter(([, value]) => Boolean(value))
     .map(([label, value]) => ({ label, ref: value as string }));
-  for (const check of row.checks) {
+  const checks = row.checks ?? [];
+  for (const check of checks) {
     if (check.artifactRef) {
       refs.push({ label: `${check.kind.replaceAll('_', ' ')} verdict`, ref: check.artifactRef });
     }
@@ -2675,8 +2688,8 @@ function StepEvidenceRefs({ row }: { row: z.infer<typeof StepLedgerRowSchema> })
   return (
     <div className="step-evidence-refs" aria-label="Latest evidence refs">
       <span className="step-evidence-label">Evidence</span>
-      {refs.map(({ label, ref }) => (
-        <span className="step-evidence-ref" key={`${label}-${ref}`} title={ref}>
+      {refs.map(({ label, ref }, index) => (
+        <span className="step-evidence-ref" key={`${label}-${ref}-${index}`} title={ref}>
           {label}: <code className="text-xs break-all">{ref}</code>
         </span>
       ))}
