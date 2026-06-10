@@ -15,6 +15,8 @@ from moonmind.schemas.agent_runtime_models import AgentRunResult
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
 )
+from moonmind.security.git_push_scan import GitPushScanBlockedError
+from moonmind.security.outbound_scan import OutboundScanResult
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -769,6 +771,68 @@ class TestPushWorkspaceBranch:
                 "-C",
                 workspace,
             ]
+
+    @pytest.mark.asyncio
+    async def test_push_blocks_before_git_push_when_high_security_scan_blocks(self):
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        recorded_calls: list[tuple[object, ...]] = []
+        workspace = "/work/agent_jobs/run-1/repo"
+        call_count = 0
+        raw_secret = "blocked-temporal-secret"
+
+        async def _mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            recorded_calls.append(args)
+            proc = AsyncMock()
+            if call_count == 1:  # rev-parse
+                proc.communicate = AsyncMock(return_value=(b"feature/safe-branch\n", b""))
+                proc.returncode = 0
+            elif call_count == 2:  # status --porcelain
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 3:  # remote default branch
+                proc.communicate = AsyncMock(return_value=(b"origin/main\n", b""))
+                proc.returncode = 0
+            elif call_count == 4:  # remote branch sha before push
+                proc.communicate = AsyncMock(return_value=(b"safe-remote-sha\n", b""))
+                proc.returncode = 0
+            else:
+                raise AssertionError(f"unexpected subprocess call #{call_count}: {args!r}")
+            return proc
+
+        async def _blocked_scan(**kwargs):
+            raise GitPushScanBlockedError(
+                branch="feature/safe-branch",
+                diagnostics=["Blocked outbound content: credential at git.diff"],
+                result=OutboundScanResult(
+                    allowed=False,
+                    decision="block",
+                    high_security_mode=True,
+                    findings=[],
+                    sanitized_diagnostics=[
+                        "Blocked outbound content: credential at git.diff"
+                    ],
+                ),
+            )
+
+        with (
+            patch("asyncio.create_subprocess_exec", side_effect=_mock_exec),
+            patch(
+                "moonmind.workflows.temporal.activity_runtime.scan_git_push_range_before_push",
+                side_effect=_blocked_scan,
+            ),
+        ):
+            result = await activities._push_workspace_branch(
+                "run-1",
+                high_security_mode=True,
+            )
+
+        assert result["push_status"] == "blocked"
+        assert result["diagnostic_kind"] == "high_security_pre_push_scan_blocked"
+        assert raw_secret not in result["push_error"]
+        assert not any("push" in call for call in recorded_calls)
 
     @pytest.mark.asyncio
     async def test_push_uses_ls_remote_when_tracking_ref_is_missing(self):

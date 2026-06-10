@@ -80,6 +80,11 @@ from moonmind.workflows.adapters.managed_agent_adapter import (
     managed_run_status_metadata,
 )
 from moonmind.utils.logging import SecretRedactor, redact_sensitive_payload, redact_sensitive_text
+from moonmind.security.git_push_scan import (
+    GitPushScanBlockedError,
+    GitPushScanMaterializationError,
+    scan_git_push_range_before_push,
+)
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
 from moonmind.workflows.adapters.codex_cloud_agent_adapter import CodexCloudAgentAdapter
 from moonmind.workflows.adapters.codex_cloud_client import CodexCloudClient as CodexCloudHttpClient
@@ -8307,6 +8312,7 @@ class TemporalAgentRuntimeActivities:
         commit_message: str | None = None,
         allow_target_branch_push: bool = False,
         github_token: str | None = None,
+        high_security_mode: bool | None = None,
     ) -> dict[str, Any]:
         """Push the workspace branch to origin.
 
@@ -8533,6 +8539,43 @@ class TemporalAgentRuntimeActivities:
                 env=auth_command_env,
             )
 
+            async def _run_git_for_scan(command: list[str], *, cwd: Path) -> str:
+                scan_proc = await asyncio.create_subprocess_exec(
+                    *self._workspace_git_command(str(cwd), *command[1:]),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=command_env,
+                )
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                    scan_proc.communicate(), timeout=120,
+                )
+                if scan_proc.returncode != 0:
+                    detail = (
+                        stderr_bytes.decode("utf-8", errors="replace").strip()
+                        or stdout_bytes.decode("utf-8", errors="replace").strip()
+                        or "(no stderr)"
+                    )
+                    raise RuntimeError(detail)
+                return stdout_bytes.decode("utf-8", errors="replace")
+
+            try:
+                await scan_git_push_range_before_push(
+                    repo_dir=Path(workspace),
+                    branch=current_branch,
+                    base_ref=base_ref,
+                    run_git=_run_git_for_scan,
+                    high_security_mode=high_security_mode,
+                )
+            except (GitPushScanBlockedError, GitPushScanMaterializationError) as exc:
+                return {
+                    "push_status": "blocked",
+                    "push_branch": current_branch,
+                    "push_base_branch": base_branch_name,
+                    "push_base_ref": base_ref,
+                    "push_error": str(exc),
+                    "diagnostic_kind": "high_security_pre_push_scan_blocked",
+                }
+
             push_proc = await asyncio.create_subprocess_exec(
                 *self._workspace_git_command(
                     workspace,
@@ -8692,6 +8735,29 @@ class TemporalAgentRuntimeActivities:
 
                         retry_metadata["rebase_status"] = "rebased"
                         retry_remote_sha = remote_sha_after_fetch
+                        try:
+                            await scan_git_push_range_before_push(
+                                repo_dir=Path(workspace),
+                                branch=current_branch,
+                                base_ref=base_ref,
+                                run_git=_run_git_for_scan,
+                                high_security_mode=high_security_mode,
+                            )
+                        except (
+                            GitPushScanBlockedError,
+                            GitPushScanMaterializationError,
+                        ) as exc:
+                            return {
+                                "push_status": "blocked",
+                                "push_branch": current_branch,
+                                "push_base_branch": base_branch_name,
+                                "push_base_ref": base_ref,
+                                "push_error": str(exc),
+                                "diagnostic_kind": (
+                                    "high_security_pre_push_scan_blocked"
+                                ),
+                                **retry_metadata,
+                            }
                         retry_push_proc = await asyncio.create_subprocess_exec(
                             *self._workspace_git_command(
                                 workspace,

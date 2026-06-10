@@ -60,6 +60,8 @@ Effective high-security mode uses deterministic precedence:
 
 When high-security mode is enabled, MoonMind-owned outbound callers should scan text payloads and commit-like payload bundles before send, post, or push side effects. A scan returns a structured allow/block result. Any secret-like or credential-like finding returns a blocked result, and diagnostics identify only the finding category and caller-provided location. Diagnostics, errors, artifacts, logs, and user-visible summaries must not echo the raw detected value.
 
+For MoonMind-controlled git publishing, the pre-push scan should materialize the outbound commit range, include commit metadata and bounded changed-content text in the scan bundle, and fail closed before invoking `git push` when high-security mode is enabled and the range cannot be scanned.
+
 When high-security mode is disabled, the scan contract returns an allow result and does not silently mutate caller-supplied outbound content.
 
 ---

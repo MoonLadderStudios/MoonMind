@@ -14,6 +14,7 @@ from moonmind.publish.sanitization import (
     sanitize_metadata_footer_value,
     sanitize_publish_subject,
 )
+from moonmind.security.git_push_scan import scan_git_push_range_before_push
 
 class CommandResult(Protocol):
     """Protocol for a command result with stdout."""
@@ -118,6 +119,7 @@ class PublishService:
         repo_dir: Path,
         run_command: CommandRunner,
         repo: str | None = None,
+        high_security_mode: bool | None = None,
     ) -> str | None:
         """Publish the changes to a branch or a pull request.
 
@@ -175,6 +177,20 @@ class PublishService:
             if token:
                 push_env["GITHUB_TOKEN"] = token
                 push_env["GH_TOKEN"] = token
+
+        async def _run_git_for_scan(command: list[str], *, cwd: Path) -> str:
+            scan_result = await run_command(command, cwd=cwd, check=True)
+            return str(scan_result.stdout or "")
+
+        scan_base_ref = f"origin/{publish_base_branch or 'main'}"
+        await scan_git_push_range_before_push(
+            repo_dir=repo_dir,
+            branch=branch_name,
+            base_ref=scan_base_ref,
+            run_git=_run_git_for_scan,
+            git_binary=self._git_binary,
+            high_security_mode=high_security_mode,
+        )
         await run_command(
             [self._git_binary, "push", "-u", "origin", branch_name],
             cwd=repo_dir,

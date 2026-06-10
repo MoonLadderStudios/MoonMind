@@ -28,6 +28,7 @@ import httpx
 from pydantic import ValidationError
 
 import moonmind.utils.logging as moonmind_logging
+from moonmind.security.git_push_scan import scan_git_push_range_before_push
 from moonmind.agents.codex_worker.handlers import (
     ArtifactUpload,
     CodexExecHandler,
@@ -6373,6 +6374,23 @@ class CodexWorker:
                 log_path=prepared.publish_log_path,
                 env=prepared.publish_command_env,
                 redaction_values=(commit_message,),
+            )
+
+            async def _run_git_for_scan(command: list[str], *, cwd: Path) -> str:
+                result = await self._run_stage_command(
+                    command,
+                    cwd=cwd,
+                    log_path=prepared.publish_log_path,
+                    env=prepared.publish_command_env,
+                )
+                return str(result.stdout or "")
+
+            scan_base_ref = f"origin/{pr_base or prepared.starting_branch}"
+            await scan_git_push_range_before_push(
+                repo_dir=prepared.repo_dir,
+                branch=prepared.working_branch,
+                base_ref=scan_base_ref,
+                run_git=_run_git_for_scan,
             )
             await self._run_stage_command(
                 ["git", "push", "-u", "origin", prepared.working_branch],

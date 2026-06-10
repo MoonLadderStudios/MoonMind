@@ -42,6 +42,45 @@ async def test_publish_branch_push_uses_resolved_token_env(monkeypatch, tmp_path
     assert "publish-token" in push_call["redaction_values"]
 
 
+async def test_publish_branch_blocks_push_when_pre_push_scan_finds_secret(
+    monkeypatch, tmp_path: Path
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "publish-token")
+    raw_secret = "blocked-publish-secret"
+    calls: list[dict[str, object]] = []
+
+    async def _run(command, **kwargs):
+        calls.append({"command": command, **kwargs})
+        if command[:3] == ["git", "status", "--porcelain"]:
+            return SimpleNamespace(stdout=" M file.py\n")
+        if command[:3] == ["git", "rev-parse", "--verify"]:
+            return SimpleNamespace(stdout="base-sha\n")
+        if command[:2] == ["git", "rev-list"]:
+            return SimpleNamespace(stdout="1\n")
+        if command[:2] == ["git", "log"]:
+            return SimpleNamespace(stdout="abc123 Clean commit\n")
+        if command[:2] == ["git", "diff"]:
+            return SimpleNamespace(stdout=f"diff --git a/app.py b/app.py\n+token={raw_secret}\n")
+        return SimpleNamespace(stdout="")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await PublishService().publish(
+            job_id=uuid4(),
+            instruction="make change",
+            publish_mode="branch",
+            publish_base_branch="main",
+            runtime_mode="codex",
+            repo_dir=tmp_path,
+            run_command=_run,
+            repo="owner/repo",
+            high_security_mode=True,
+        )
+
+    assert raw_secret not in str(exc_info.value)
+    assert "git.diff" in str(exc_info.value)
+    assert not any(call["command"][:2] == ["git", "push"] for call in calls)
+
+
 async def test_publish_pr_uses_rest_service_without_ambient_gh(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("GITHUB_TOKEN", "publish-token")
     monkeypatch.setenv("GH_TOKEN", "ambient-gh-token")
