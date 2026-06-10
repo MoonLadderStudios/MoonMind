@@ -1025,6 +1025,17 @@ class RecoverFromFailedStepRequest(BaseModel):
             )
         return value
 
+
+class RecoverFromSelectedStepRequest(RecoverFromFailedStepRequest):
+    """Request payload for creating a selected-step recovery follow-up execution."""
+
+    source_workflow_id: str = Field(..., alias="sourceWorkflowId", min_length=1)
+    source_run_id: str = Field(..., alias="sourceRunId", min_length=1)
+    selected_start_step_id: str = Field(
+        ..., alias="selectedStartStepId", min_length=1
+    )
+
+
 class RecoveryCheckpointSourceModel(BaseModel):
     """Source identity embedded in failed-step Recovery checkpoint evidence."""
 
@@ -1156,6 +1167,13 @@ class RecoverySourceModel(BaseModel):
     source_plan_digest: Optional[str] = Field(None, alias="sourcePlanDigest")
     failed_step_id: str = Field(..., alias="failedStepId", min_length=1)
     failed_step_execution: int = Field(..., alias="failedStepExecution", ge=1)
+    recovery_mode: Literal["last_failed_step", "selected_step"] = Field(
+        "last_failed_step", alias="recoveryMode"
+    )
+    selected_start_step_id: Optional[str] = Field(None, alias="selectedStartStepId")
+    selected_start_step_execution: Optional[int] = Field(
+        None, alias="selectedStartStepExecution", ge=1
+    )
     recovery_checkpoint_ref: str = Field(..., alias="recoveryCheckpointRef", min_length=1)
     recovery_workspace: dict[str, Any] = Field(
         default_factory=dict, alias="recoveryWorkspace"
@@ -1182,9 +1200,9 @@ class RecoverFromFailedStepResponse(BaseModel):
     )
     source: ResumeExecutionRefModel = Field(..., alias="source")
     execution: ResumeExecutionRefModel = Field(..., alias="execution")
-    relationship: Literal["Recovered from failed step"] = Field(
-        "Recovered from failed step", alias="relationship"
-    )
+    relationship: Literal[
+        "Recovered from failed step", "Recovered from selected step"
+    ] = Field("Recovered from failed step", alias="relationship")
     recovery_checkpoint_ref: str = Field(..., alias="recoveryCheckpointRef")
 
 class SignalExecutionRequest(BaseModel):

@@ -2389,9 +2389,147 @@ describe('Workflow Detail Entrypoint', () => {
       expect(calls.some((call) => call.url.includes('/recover-from-failed-step'))).toBe(true);
     });
     const resumeCall = calls.find((call) => call.url.includes('/recover-from-failed-step'));
-    expect(JSON.parse(String(resumeCall?.init?.body || '{}')).resumeCheckpointRef).toBe(
+    expect(JSON.parse(String(resumeCall?.init?.body || '{}')).recoveryCheckpointRef).toBe(
       'artifact://checkpoint/source',
     );
+    confirmSpy.mockRestore();
+  });
+
+  it('submits selected-step recovery with pinned source identity', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const actionPayload: BootPayload = {
+      ...mockPayload,
+      initialData: {
+        dashboardConfig: {
+          features: {
+            temporalDashboard: {
+              actionsEnabled: true,
+              temporalTaskEditing: true,
+            },
+          },
+        },
+      },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Failed workflow',
+      summary: 'Execution summary',
+      status: 'failed',
+      state: 'failed',
+      rawState: 'failed',
+      temporalStatus: 'failed',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      stepsHref: '/api/executions/test-123/steps',
+      actions: {
+        canResume: false,
+        canResumeFromFailedStep: true,
+      },
+      resume: {
+        available: true,
+        checkpointRef: 'artifact://checkpoint/source',
+        failedStepId: 'implement',
+        sourceRunId: '01-run',
+      },
+      relatedRuns: [],
+    };
+    const stepLedger = {
+      workflowId: 'test-123',
+      runId: '01-run',
+      runScope: 'latest',
+      steps: [
+        {
+          logicalStepId: 'plan',
+          order: 1,
+          title: 'Plan',
+          status: 'succeeded',
+          executionOrdinal: 1,
+          updatedAt: '2026-03-28T00:00:01Z',
+          refs: {},
+          artifacts: { outputSummary: 'artifact://summary/plan' },
+          recoveryPreservation: {
+            eligible: true,
+            reason: 'complete',
+            message: 'Step has recoverable output refs and state checkpoint evidence.',
+          },
+        },
+        {
+          logicalStepId: 'implement',
+          order: 2,
+          title: 'Implement',
+          status: 'failed',
+          executionOrdinal: 1,
+          updatedAt: '2026-03-28T00:00:02Z',
+          refs: {},
+          artifacts: {},
+          recoveryPreservation: {
+            eligible: false,
+            reason: 'not_completed',
+            message: 'Step is not completed and cannot be preserved for Resume.',
+          },
+        },
+        {
+          logicalStepId: 'publish',
+          order: 3,
+          title: 'Publish',
+          status: 'pending',
+          executionOrdinal: 0,
+          updatedAt: '2026-03-28T00:00:03Z',
+          refs: {},
+          artifacts: {},
+          recoveryPreservation: {
+            eligible: false,
+            reason: 'not_completed',
+            message: 'Step is not completed and cannot be preserved for Resume.',
+          },
+        },
+      ],
+    };
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push(init === undefined ? { url } : { url, init });
+      if (url.includes('/recover-from-selected-step')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ accepted: true }),
+        } as Response);
+      }
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({ ok: true, json: async () => stepLedger } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
+
+    const select = await screen.findByLabelText('Recovery start step');
+    fireEvent.change(select, { target: { value: 'plan' } });
+    expect(
+      (screen.getByRole('option', { name: /Publish - after failed step/ }) as HTMLOptionElement).disabled,
+    ).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Recover from selected step' }));
+
+    await waitFor(() => {
+      expect(calls.some((call) => call.url.includes('/recover-from-selected-step'))).toBe(true);
+    });
+    const selectedCall = calls.find((call) => call.url.includes('/recover-from-selected-step'));
+    const body = JSON.parse(String(selectedCall?.init?.body || '{}'));
+    expect(body).toMatchObject({
+      sourceWorkflowId: 'test-123',
+      sourceRunId: '01-run',
+      selectedStartStepId: 'plan',
+      recoveryCheckpointRef: 'artifact://checkpoint/source',
+    });
     confirmSpy.mockRestore();
   });
 
