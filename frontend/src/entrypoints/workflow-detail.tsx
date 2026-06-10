@@ -2772,6 +2772,9 @@ function StepLedgerRowCard({
           {!expanded && row.summary ? (
             <p className="step-tl-summary">{row.summary}</p>
           ) : null}
+          {!expanded && row.dependsOn.length > 0 ? (
+            <p className="step-tl-summary">Depends on: {row.dependsOn.join(', ')}</p>
+          ) : null}
           {!expanded && row.checks.length > 0 ? (
             <div className="step-check-badges">
               {row.checks.map((check, index) => (

@@ -681,12 +681,14 @@ describe('Workflow Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
-      expect(screen.getAllByText('Plan work').length).toBeGreaterThan(0);
-      expect(screen.getAllByText('Apply patch').length).toBeGreaterThan(0);
-      expect(screen.getAllByText('Verify tests').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Plan work')).toHaveLength(1);
+      expect(screen.getAllByText('Apply patch')).toHaveLength(1);
+      expect(screen.getAllByText('Verify tests')).toHaveLength(1);
       expect(screen.queryByRole('heading', { name: 'Step DAG' })).toBeNull();
       expect(screen.getAllByText('02-run').length).toBeGreaterThan(0);
     });
+
+    expect(screen.getByText((_, element) => element?.textContent === 'Depends on: plan')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Show details for Apply patch' }));
     expect(screen.getByText((_, element) => element?.textContent === 'Depends on: plan')).toBeTruthy();
