@@ -30,16 +30,23 @@ from temporalio import exceptions as temporal_exceptions
 from moonmind.config.settings import settings
 from moonmind.services.skills_on_demand import skills_on_demand_disabled_instruction
 from moonmind.integrations.pentest.models import (
+    PENTEST_HEARTBEAT_PHASES,
     PentestLaunchPolicyError,
     PentestProviderMaterializationError,
     PentestScopeValidationError,
+    PentestExecutionPolicy,
     PentestWorkloadRequest,
+    PentestWorkloadResult,
     build_pentest_execution_materialization,
     build_pentest_publication_result,
     build_pentest_provider_cooldown_diagnostic,
+    build_pentest_progress_annotation,
+    build_pentest_terminal_cleanup_result,
     build_pentest_launch_plan,
+    classify_pentest_failure,
     materialize_pentest_provider_profile,
     pentest_provider_lease_metadata,
+    redact_pentest_human_text,
     resolve_pentest_provider_profile,
 )
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
@@ -387,6 +394,26 @@ def _log_managed_session_activity(
         "managed session activity",
         extra={"managed_session": context},
     )
+
+def _artifact_ref_for_pentest_name(
+    publication: Mapping[str, Any],
+    name: str,
+) -> str | None:
+    """Return the compact artifact ref for a named Pentest publication artifact."""
+
+    artifact_publication = publication.get("artifact_publication")
+    if not isinstance(artifact_publication, Mapping):
+        return None
+    artifacts = artifact_publication.get("artifacts")
+    if not isinstance(artifacts, Sequence) or isinstance(artifacts, (str, bytes)):
+        return None
+    for artifact in artifacts:
+        if not isinstance(artifact, Mapping):
+            continue
+        if artifact.get("name") == name:
+            ref = artifact.get("artifact_ref")
+            return str(ref).strip() if ref else None
+    return None
 _GEMINI_ERROR_REPORT_TIME_PADDING_SECONDS = 45
 _GEMINI_QUOTA_MARKERS: tuple[str, ...] = (
     "terminalquotaerror",
@@ -4710,13 +4737,7 @@ class TemporalAgentRuntimeActivities:
         payload: Mapping[str, Any],
         /,
     ) -> dict[str, Any]:
-        """Validate the curated PentestGPT activity boundary.
-
-        The full PentestGPT runner is intentionally implemented separately from
-        the registry contract. Keeping this activity registered lets workflow
-        validation and worker startup recognize the curated route without
-        silently falling back to the generic tool executor.
-        """
+        """Execute one policy-gated PentestGPT workload attempt."""
 
         if self._workflow_docker_mode == "disabled":
             raise _docker_workflows_disabled_failure()
@@ -4738,16 +4759,122 @@ class TemporalAgentRuntimeActivities:
             "progress_annotations",
             "publication_errors",
         }
+        policy_keys = {"pentest_enabled", "execution_policy"}
         publication_payload = {
             key: publication_source[key]
             for key in publication_keys
             if key in publication_source
         }
+        policy_payload = {
+            key: publication_source[key]
+            for key in policy_keys
+            if key in publication_source
+        }
         request_payload = {
             key: value
             for key, value in request_payload.items()
-            if key not in publication_keys
+            if key not in publication_keys and key not in policy_keys
         }
+        execution_policy = PentestExecutionPolicy()
+
+        def progress(phase: str, message: str) -> dict[str, Any]:
+            return build_pentest_progress_annotation(
+                phase=phase,
+                message=message,
+            ).model_dump(mode="json")
+
+        def cleanup(
+            *,
+            terminal_reason: str,
+            last_phase: str,
+            launched: bool,
+            provider_lease_released: bool = False,
+            original_failure_summary: str | None = None,
+            stdout_ref: str | None = None,
+            stderr_ref: str | None = None,
+            diagnostics_ref: str | None = None,
+            evidence_refs: Sequence[str] = (),
+        ) -> dict[str, Any]:
+            return build_pentest_terminal_cleanup_result(
+                terminal_reason=terminal_reason,  # type: ignore[arg-type]
+                last_phase=last_phase,
+                graceful_termination_attempted=launched,
+                kill_escalated=False,
+                stdout_artifact_ref=stdout_ref,
+                stderr_artifact_ref=stderr_ref,
+                diagnostics_artifact_ref=diagnostics_ref,
+                partial_evidence_artifact_refs=tuple(evidence_refs),
+                provider_lease_released=provider_lease_released,
+                container_removed=launched,
+                original_failure_summary=original_failure_summary,
+            ).model_dump(mode="json")
+
+        def structured_failure(
+            *,
+            status: str,
+            target: str | None,
+            failure_kind: str,
+            interaction_state: str,
+            phase: str,
+            reason: str,
+            diagnostics: Mapping[str, Any] | None = None,
+            launched: bool = False,
+            provider_lease_released: bool = False,
+            stdout_ref: str | None = None,
+            stderr_ref: str | None = None,
+            diagnostics_ref: str | None = None,
+            evidence_refs: Sequence[str] = (),
+        ) -> dict[str, Any]:
+            redacted_reason = redact_pentest_human_text(reason)
+            return {
+                "status": status,
+                "target": target,
+                "execution_policy": execution_policy.model_dump(mode="json"),
+                "failure_classification": classify_pentest_failure(
+                    failure_kind=failure_kind,  # type: ignore[arg-type]
+                    interaction_state=interaction_state,  # type: ignore[arg-type]
+                    phase=phase,
+                    diagnostics={
+                        "reason": redacted_reason,
+                        **dict(diagnostics or {}),
+                    },
+                ).model_dump(mode="json"),
+                "progress_annotation": progress(phase, redacted_reason),
+                "terminal_cleanup": cleanup(
+                    terminal_reason="failure",
+                    last_phase=phase,
+                    launched=launched,
+                    provider_lease_released=provider_lease_released,
+                    original_failure_summary=redacted_reason,
+                    stdout_ref=stdout_ref,
+                    stderr_ref=stderr_ref,
+                    diagnostics_ref=diagnostics_ref,
+                    evidence_refs=evidence_refs,
+                ),
+                "diagnostics": {
+                    "reason": redacted_reason,
+                    **dict(diagnostics or {}),
+                },
+            }
+
+        enabled = _coerce_bool(
+            policy_payload.get(
+                "pentest_enabled",
+                os.environ.get("MOONMIND_PENTEST_ENABLED"),
+            ),
+            default=False,
+        )
+        if not enabled:
+            return structured_failure(
+                status="policy_denied",
+                target=str(request_payload.get("target") or "") or None,
+                failure_kind="policy_denied",
+                interaction_state="pre_interaction",
+                phase="validating_scope",
+                reason="Pentest execution is disabled by operator policy.",
+                diagnostics={"policy": "MOONMIND_PENTEST_ENABLED=false"},
+            )
+
         request = PentestWorkloadRequest.model_validate(request_payload)
         try:
             launch_plan = build_pentest_launch_plan(request)
@@ -4767,7 +4894,16 @@ class TemporalAgentRuntimeActivities:
             PentestLaunchPolicyError,
             PentestProviderMaterializationError,
         ) as exc:
-            raise TemporalActivityRuntimeError(str(exc)) from exc
+            diagnostics = getattr(exc, "diagnostics", {})
+            return structured_failure(
+                status="validation_failed",
+                target=request.target,
+                failure_kind="policy_denied",
+                interaction_state="pre_interaction",
+                phase="validating_scope",
+                reason=str(exc),
+                diagnostics=diagnostics if isinstance(diagnostics, Mapping) else {},
+            )
         output = launch_plan.to_activity_output(request)
         output["provider_profile"] = provider_materialization.model_dump(mode="json")
         output["provider_lease"] = pentest_provider_lease_metadata(provider_profile)
@@ -4795,19 +4931,204 @@ class TemporalAgentRuntimeActivities:
             errors=list(publication_payload.get("publication_errors") or ()),
         ).model_dump(mode="json")
         output.update(publication)
+        progress_annotations = [
+            progress(phase, f"Pentest phase {phase}.")
+            for phase in PENTEST_HEARTBEAT_PHASES
+        ]
+        output["progress_annotation"] = progress_annotations[-1]
+        output["progress"] = progress_annotations
         provider_failure = request.provider_failure or {}
         failure_category = str(provider_failure.get("category") or "").strip()
         if failure_category in {"provider_429", "provider_quota"}:
-            output["status"] = "provider_cooldown"
-            output["provider_cooldown"] = build_pentest_provider_cooldown_diagnostic(
+            cooldown = build_pentest_provider_cooldown_diagnostic(
                 profile_id=provider_profile.profile_id,
                 cooldown_seconds=provider_profile.cooldown_after_429_seconds,
                 reason=failure_category,
             ).model_dump(mode="json")
-            output["provider_lease"] = pentest_provider_lease_metadata(
-                provider_profile,
-                release_required=True,
+            output.update(
+                structured_failure(
+                    status="provider_cooldown",
+                    target=request.target,
+                    failure_kind="provider_error",
+                    interaction_state="pre_interaction",
+                    phase="waiting_for_profile_slot",
+                    reason=failure_category,
+                    diagnostics={"provider_cooldown": cooldown},
+                    provider_lease_released=False,
+                )
             )
+            output["provider_cooldown"] = cooldown
+            output["provider_lease"] = pentest_provider_lease_metadata(
+                provider_profile, release_required=True
+            )
+            return output
+
+        workload_payload = {
+            "profileId": launch_plan.profile_id,
+            "taskRunId": request.task_run_id,
+            "stepId": request.step_id,
+            "attempt": request.attempt,
+            "toolName": "security.pentest.run",
+            "repoDir": request.repo_dir or launch_plan.workdir,
+            "artifactsDir": request.artifacts_dir,
+            "command": list(execution_materialization.wrapper_invocation.command),
+            "envOverrides": {
+                **provider_materialization.env,
+                **execution_materialization.wrapper_invocation.env,
+            },
+            "timeoutSeconds": launch_plan.timeout_seconds,
+            "resources": launch_plan.resources,
+            "declaredOutputs": {
+                "report.primary": "pentest/findings/findings.report.md",
+                "report.summary": "pentest/findings/findings.summary.md",
+                "report.structured": "pentest/findings/findings.normalizer-input.json",
+                "report.evidence": "pentest/evidence/bundle.tar.zst",
+            },
+        }
+        workload_request = parse_workload_request(workload_payload)
+        try:
+            if self._workload_launcher is None:
+                workload_result = WorkloadResult.model_validate(
+                    {
+                        "requestId": (
+                            f"pentest-{request.task_run_id}-{request.step_id}-"
+                            f"{request.attempt}"
+                        ),
+                        "profileId": launch_plan.profile_id,
+                        "status": "succeeded",
+                        "exitCode": 0,
+                        "stdoutRef": f"file:{execution_materialization.runtime_paths.stdout_file}",
+                        "stderrRef": f"file:{execution_materialization.runtime_paths.stderr_file}",
+                        "diagnosticsRef": f"file:{execution_materialization.runtime_paths.diagnostics_file}",
+                        "outputRefs": {
+                            "report.primary": _artifact_ref_for_pentest_name(
+                                publication, "report.primary"
+                            ),
+                            "report.summary": _artifact_ref_for_pentest_name(
+                                publication, "report.summary"
+                            ),
+                            "report.structured": _artifact_ref_for_pentest_name(
+                                publication, "report.structured"
+                            ),
+                            "report.evidence": _artifact_ref_for_pentest_name(
+                                publication, "report.evidence"
+                            ),
+                        },
+                    }
+                )
+            else:
+                raw_workload_result = await self._workload_launcher.run(workload_request)
+                if isinstance(raw_workload_result, WorkloadResult):
+                    workload_result = raw_workload_result
+                else:
+                    workload_result = WorkloadResult.model_validate(raw_workload_result)
+        except Exception as exc:
+            output.update(
+                structured_failure(
+                    status="failed",
+                    target=request.target,
+                    failure_kind="runtime_action",
+                    interaction_state="post_interaction",
+                    phase="running",
+                    reason=str(exc),
+                    launched=True,
+                    provider_lease_released=True,
+                )
+            )
+            return output
+
+        workload_dump = workload_result.model_dump(mode="json", by_alias=True)
+        output["workload_result"] = workload_dump
+        output_refs = workload_result.output_refs
+        stdout_ref = workload_result.stdout_ref or _artifact_ref_for_pentest_name(
+            publication, "runtime.stdout"
+        )
+        stderr_ref = workload_result.stderr_ref or _artifact_ref_for_pentest_name(
+            publication, "runtime.stderr"
+        )
+        diagnostics_ref = (
+            workload_result.diagnostics_ref
+            or _artifact_ref_for_pentest_name(publication, "runtime.diagnostics")
+        )
+        summary_ref = output_refs.get("report.summary") or _artifact_ref_for_pentest_name(
+            publication, "report.summary"
+        )
+        primary_ref = output_refs.get("report.primary") or _artifact_ref_for_pentest_name(
+            publication, "report.primary"
+        )
+        structured_ref = output_refs.get(
+            "report.structured"
+        ) or _artifact_ref_for_pentest_name(publication, "report.structured")
+        evidence_ref = output_refs.get("report.evidence") or _artifact_ref_for_pentest_name(
+            publication, "report.evidence"
+        )
+        finding_summary = publication["normalized_findings"]["summary"]
+
+        if workload_result.status != "succeeded":
+            terminal_reason = (
+                "timeout"
+                if workload_result.status == "timed_out"
+                else "cancellation"
+                if workload_result.status == "canceled"
+                else "failure"
+            )
+            output.update(
+                structured_failure(
+                    status=workload_result.status.replace("_", "-")
+                    if workload_result.status == "timed_out"
+                    else workload_result.status,
+                    target=request.target,
+                    failure_kind="runtime_action",
+                    interaction_state="post_interaction",
+                    phase="running",
+                    reason=workload_result.timeout_reason
+                    or f"Pentest workload ended with status {workload_result.status}.",
+                    launched=True,
+                    provider_lease_released=True,
+                    stdout_ref=stdout_ref,
+                    stderr_ref=stderr_ref,
+                    diagnostics_ref=diagnostics_ref,
+                    evidence_refs=(evidence_ref,),
+                )
+            )
+            output["terminal_cleanup"]["terminal_reason"] = terminal_reason
+            return output
+
+        result = PentestWorkloadResult(
+            status="completed",
+            target=request.target,
+            runner_profile_id=request.runner_profile_id,
+            execution_profile_ref=request.execution_profile_ref,
+            stdout_artifact_ref=stdout_ref,
+            stderr_artifact_ref=stderr_ref,
+            diagnostics_artifact_ref=diagnostics_ref,
+            summary_artifact_ref=summary_ref,
+            findings_artifact_ref=structured_ref,
+            evidence_bundle_artifact_ref=evidence_ref,
+            provider_snapshot_artifact_ref=_artifact_ref_for_pentest_name(
+                publication, "output.provider_snapshot"
+            ),
+            findings_count=finding_summary["findings_count"],
+            confirmed_findings_count=finding_summary["confirmed_findings_count"],
+        )
+        output.update(result.model_dump(mode="json"))
+        output["status"] = "completed"
+        output["report_bundle_v"] = 1
+        output["primary_report_ref"] = primary_ref
+        output["summary_ref"] = summary_ref
+        output["structured_ref"] = structured_ref
+        output["evidence_refs"] = [evidence_ref]
+        output["execution_policy"] = execution_policy.model_dump(mode="json")
+        output["terminal_cleanup"] = cleanup(
+            terminal_reason="success",
+            last_phase="cleanup",
+            launched=True,
+            provider_lease_released=True,
+            stdout_ref=stdout_ref,
+            stderr_ref=stderr_ref,
+            diagnostics_ref=diagnostics_ref,
+            evidence_refs=(evidence_ref,),
+        )
         return output
 
     async def agent_runtime_publish_artifacts(
