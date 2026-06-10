@@ -17,7 +17,7 @@ MoonMind does not replace your agent. It gives your agent an operational envelop
 2. Install git
 3. `git clone https://github.com/MoonLadderStudios/MoonMind.git`
 4. Run `docker compose up -d` to start the service
-5. Open [http://localhost:8000/tasks](http://localhost:8000/tasks)
+5. Open [http://localhost:8000/workflows](http://localhost:8000/workflows)
 6. In Settings:
     - Add a GitHub personal access token
     - Add an API key or click OAuth to authenticate a provider profile
