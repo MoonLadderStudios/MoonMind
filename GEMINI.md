@@ -266,6 +266,8 @@ Key diagnostics:
 - Existing Temporal artifact store and workflow history; no new persistent storage (001-step-execution-contracts)
 - Python 3.12 with Pydantic v2 models + Temporal Python SDK activity runtime, FastAPI/MCP executable-tool registry, SQLAlchemy-backed Temporal artifact service, existing Docker workload launcher/registry contracts (001-load-pentest-scope-artifact)
 - Existing Temporal artifact metadata/content store only; no new persistent tables (001-load-pentest-scope-artifact)
+- Python 3.12 with Pydantic v2 and Temporal Python SDK. + Temporal Python SDK activities, existing `TemporalActivityCatalog`, `TemporalAgentRuntimeActivities`, Docker workload launcher/registry substrate, artifact service helpers, existing PentestGPT Pydantic contracts in `moonmind/integrations/pentest/models.py`. (001-pentest-activity-handler)
+- Existing artifact store and workflow history only; no new persistent database tables planned. (001-pentest-activity-handler)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
