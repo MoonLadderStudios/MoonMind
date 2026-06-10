@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. docs/ReleaseNotes/2026-06-02-jira-implement-workflow-batch.md (score: 1.000, trust: canonical)\n    line 33: - `MM-770` input parameters contained 8 expanded Jira Implement steps, from\n2. api_service/ui_boot.py (score: 1.000, trust: canonical)\n    line 16: \"\"\"Generates the JSON payload for the UI boot script.\"\"\"\n3. docs/ReleaseNotes/MM-730-hard-switch-cutover.md (score: 1.000, trust: canonical)\n    line 3: MoonMind no longer exposes Tasks as a product/runtime concept. Use Workflow Execution, workflowId, runId, and Step Execution.\n4. docs/MoonMindRoadmap.md (score: 1.000, trust: canonical)\n    line 3: > Tracking the major milestones remaining to fully deliver on the README promise:\n5. docs/Development/FrontendDevelopment.md (score: 1.000, trust: canonical)\n    line 51: Assume the normal MoonMind development stack is already running, for example:\n6. docs/MoonMindArchitecture.md (score: 1.000, trust: canonical)\n    line 21: > **Artifact rule:** Artifacts remain execution-centric evidence. Task-, step-, run-, and session-oriented UI views are projections over execution-linked artifacts and compact metadata; they do not create a second durable source of truth.\n7. tests/helpers/step_type_payloads.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Reusable Step Type payload fixtures for MM-569 tests.\"\"\"\n8. docs/Temporal/TaskExecutionCompatibilityModel.md (score: 1.000, trust: canonical)\n    line 8: This document is retained only as a pointer for readers who arrive through older links. The normative product model is now [`WorkflowExecutionProductModel.md`](./WorkflowExecutionProductModel.md).",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "docs/ReleaseNotes/2026-06-02-jira-implement-workflow-batch.md",
+      "text": "line 33: - `MM-770` input parameters contained 8 expanded Jira Implement steps, from",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 33,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/ui_boot.py",
+      "text": "line 16: \"\"\"Generates the JSON payload for the UI boot script.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 16,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ReleaseNotes/MM-730-hard-switch-cutover.md",
+      "text": "line 3: MoonMind no longer exposes Tasks as a product/runtime concept. Use Workflow Execution, workflowId, runId, and Step Execution.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/MoonMindRoadmap.md",
+      "text": "line 3: > Tracking the major milestones remaining to fully deliver on the README promise:",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Development/FrontendDevelopment.md",
+      "text": "line 51: Assume the normal MoonMind development stack is already running, for example:",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 51,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/MoonMindArchitecture.md",
+      "text": "line 21: > **Artifact rule:** Artifacts remain execution-centric evidence. Task-, step-, run-, and session-oriented UI views are projections over execution-linked artifacts and compact metadata; they do not create a second durable source of truth.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 21,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "tests/helpers/step_type_payloads.py",
+      "text": "line 1: \"\"\"Reusable Step Type payload fixtures for MM-569 tests.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Temporal/TaskExecutionCompatibilityModel.md",
+      "text": "line 8: This document is retained only as a pointer for readers who arrive through older links. The normative product model is now [`WorkflowExecutionProductModel.md`](./WorkflowExecutionProductModel.md).",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 8,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-06-10T13:26:45Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}

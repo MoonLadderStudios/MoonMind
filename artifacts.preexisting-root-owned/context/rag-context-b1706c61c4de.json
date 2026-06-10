@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. moonmind/jules/__init__.py (score: 1.000, trust: canonical)\n    line 3: from .runtime import (\n2. api_service/ui_assets.py (score: 1.000, trust: canonical)\n    line 1: import json\n3. moonmind/rag/guardrails.py (score: 1.000, trust: canonical)\n    line 3: from __future__ import annotations\n4. moonmind/rag/__init__.py (score: 1.000, trust: canonical)\n    line 1: from .retriever import QdrantRAG\n5. docs/Workflows/WorkflowEditingSystem.md (score: 1.000, trust: canonical)\n    line 11: The legacy application allowed operators to open a Workflow Execution from the Workflow details page, edit its configuration, and resubmit the Workflow Execution. That behavior was lost during the migration away from queue-job-centric Workflow execution. The Temporal-native design restores that capability without reintroducing queue-era assumptions.\n6. moonmind/rag/retriever.py (score: 1.000, trust: canonical)\n    line 2: from typing import List\n7. docs/Workflows/ImageSystem.md (score: 1.000, trust: canonical)\n    line 13: - attach images to the task objective target or to individual steps from the Create page\n8. moonmind/rag/cli.py (score: 1.000, trust: canonical)\n    line 3: from __future__ import annotations",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "moonmind/jules/__init__.py",
+      "text": "line 3: from .runtime import (",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/ui_assets.py",
+      "text": "line 1: import json",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/rag/guardrails.py",
+      "text": "line 3: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/rag/__init__.py",
+      "text": "line 1: from .retriever import QdrantRAG",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Workflows/WorkflowEditingSystem.md",
+      "text": "line 11: The legacy application allowed operators to open a Workflow Execution from the Workflow details page, edit its configuration, and resubmit the Workflow Execution. That behavior was lost during the migration away from queue-job-centric Workflow execution. The Temporal-native design restores that capability without reintroducing queue-era assumptions.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 11,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/rag/retriever.py",
+      "text": "line 2: from typing import List",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 2,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Workflows/ImageSystem.md",
+      "text": "line 13: - attach images to the task objective target or to individual steps from the Create page",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 13,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/rag/cli.py",
+      "text": "line 3: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-06-10T13:27:40Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
