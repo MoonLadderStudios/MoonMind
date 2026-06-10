@@ -37,6 +37,8 @@ from moonmind.agents.codex_worker.worker import (
     ResolvedTaskStep,
 )
 from moonmind.config.settings import settings
+from moonmind.security.git_push_scan import GitPushScanBlockedError
+from moonmind.security.outbound_scan import OutboundScanResult
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -9053,6 +9055,119 @@ async def test_run_publish_stage_rejects_invalid_pr_metadata_before_pr_creation(
 
     assert not any(call[:3] == ("gh", "pr", "create") for call in run_calls)
     assert not any(call[:3] == ("git", "commit", "-m") for call in run_calls)
+    assert not any(call[:2] == ("git", "push") for call in run_calls)
+
+
+async def test_run_publish_stage_blocks_git_push_when_pre_push_scan_blocks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex worker publish must stop before git push when the scan blocks."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:8000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    run_calls: list[tuple[str, ...]] = []
+
+    async def _capture_stage_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+    ):
+        _ = (cwd, log_path, check, env, redaction_values, cancel_event)
+        normalized = tuple(str(part) for part in command)
+        run_calls.append(normalized)
+        if normalized[:2] == ("git", "status"):
+            return CommandResult(normalized, 0, " M worker.py\n", "")
+        return CommandResult(normalized, 0, "", "")
+
+    raw_secret = "blocked-codex-worker-secret"
+
+    async def _blocked_scan(**kwargs):
+        _ = kwargs
+        raise GitPushScanBlockedError(
+            branch="feature/branch",
+            diagnostics=["Blocked outbound content: credential at git.diff"],
+            result=OutboundScanResult(
+                allowed=False,
+                decision="block",
+                high_security_mode=True,
+                findings=[],
+                sanitized_diagnostics=[
+                    "Blocked outbound content: credential at git.diff"
+                ],
+            ),
+        )
+
+    monkeypatch.setattr(worker, "_run_stage_command", _capture_stage_command)
+    monkeypatch.setattr(
+        "moonmind.agents.codex_worker.worker.scan_git_push_range_before_push",
+        _blocked_scan,
+    )
+
+    job_id = uuid4()
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path / str(job_id),
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=tmp_path / "context",
+        publish_result_path=tmp_path / "publish-result.json",
+        default_branch="main",
+        starting_branch="main",
+        new_branch="feature/branch",
+        working_branch="feature/branch",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+    prepared.repo_dir.mkdir(parents=True, exist_ok=True)
+    prepared.task_context_path.mkdir(parents=True, exist_ok=True)
+    prepared.execute_log_path.write_text(
+        "[command] $ ./tools/test_unit.sh\nok\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(GitPushScanBlockedError) as exc_info:
+        await worker._run_publish_stage(
+            job_id=job_id,
+            canonical_payload={
+                "repository": "MoonLadderStudios/MoonMind",
+                "task": {
+                    "instructions": "unused",
+                    "runtime": {"mode": "codex"},
+                    "publish": {"mode": "branch"},
+                },
+            },
+            prepared=prepared,
+            skill_meta={},
+            job_type="task",
+            staged_artifacts=[],
+        )
+
+    assert raw_secret not in str(exc_info.value)
+    assert any(call[:3] == ("git", "commit", "-m") for call in run_calls)
     assert not any(call[:2] == ("git", "push") for call in run_calls)
 
 
