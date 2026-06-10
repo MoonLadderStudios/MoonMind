@@ -10,6 +10,7 @@ from moonmind.workflows.temporal.runtime.terminal_bridge import (
     TerminalBridgeConnection,
     TerminalBridgeFrameError,
     start_terminal_bridge_container,
+    start_tmate_auth_runner_container,
 )
 
 def test_terminal_bridge_handles_resize_input_output_and_heartbeat() -> None:
@@ -169,13 +170,19 @@ async def test_terminal_bridge_streams_output_to_async_callback() -> None:
     assert bridge.output_event_count == 2
 
 class _FakeProcess:
-    def __init__(self, returncode: int = 0, stderr: bytes = b"") -> None:
+    def __init__(
+        self,
+        returncode: int = 0,
+        stderr: bytes = b"",
+        stdout: bytes = b"container-id\n",
+    ) -> None:
         self.returncode = returncode
         self._stderr = stderr
+        self._stdout = stdout
         self.killed = False
 
     async def communicate(self) -> tuple[bytes, bytes]:
-        return b"container-id\n", self._stderr
+        return self._stdout, self._stderr
 
     def kill(self) -> None:
         self.killed = True
@@ -218,6 +225,52 @@ async def test_start_terminal_bridge_container_uses_provider_bootstrap_command(
     assert "sleep 1800" in observed[-1]
     assert observed[-1].count("codex") == 2
     assert observed[-1] != "codex login --device-auth"
+
+@pytest.mark.asyncio
+async def test_start_tmate_auth_runner_container_returns_connection_refs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    async def fake_create_subprocess_exec(*args, **_kwargs):
+        calls.append(tuple(str(arg) for arg in args))
+        if args[:2] == ("docker", "exec"):
+            return _FakeProcess(
+                stdout=(
+                    b"https://tmate.io/t/oas_terminal_tmate\n"
+                    b"ssh tmate.io/t/oas_terminal_tmate\n"
+                )
+            )
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        terminal_bridge.asyncio,
+        "create_subprocess_exec",
+        fake_create_subprocess_exec,
+    )
+
+    result = await start_tmate_auth_runner_container(
+        session_id="oas_terminal_tmate",
+        runtime_id="codex_cli",
+        volume_ref="codex_auth_volume",
+        volume_mount_path="/home/app/.codex",
+        session_ttl=1800,
+        bootstrap_command=("codex", "login", "--device-auth"),
+    )
+
+    assert result == {
+        "container_name": "moonmind_auth_oas_terminal_tmate",
+        "terminal_session_id": "https://tmate.io/t/oas_terminal_tmate",
+        "terminal_bridge_id": "ssh tmate.io/t/oas_terminal_tmate",
+        "session_transport": "tmate",
+    }
+    assert len(calls) == 2
+    assert calls[0][:3] == ("docker", "run", "-d")
+    assert "moonmind.oauth_session_transport=tmate" in calls[0]
+    assert "command -v tmate" in calls[0][-1]
+    assert calls[1][:4] == ("docker", "exec", "moonmind_auth_oas_terminal_tmate", "/bin/sh")
+    assert "tmate -S" in calls[1][-1]
+    assert "codex login --device-auth" in calls[1][-1]
 
 @pytest.mark.asyncio
 async def test_start_terminal_bridge_container_uses_claude_home_environment(

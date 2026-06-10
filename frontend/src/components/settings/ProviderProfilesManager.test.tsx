@@ -581,6 +581,36 @@ describe('ProviderProfilesManager form controls', () => {
     expect(await screen.findByText('OAuth: Pending')).toBeTruthy();
   });
 
+  it('shows a Tmate OAuth modal instead of opening the xterm terminal', async () => {
+    vi.spyOn(window, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        session_id: 'oas_settings_tmate',
+        runtime_id: 'codex_cli',
+        profile_id: 'codex-oauth',
+        status: 'awaiting_user',
+        terminal_session_id: 'https://tmate.io/t/oas_settings_tmate',
+        terminal_bridge_id: 'ssh tmate.io/t/oas_settings_tmate',
+        session_transport: 'tmate',
+      }),
+    } as Response);
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(null);
+
+    renderProviderProfilesManager([codexOauthProfile]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'OAuth codex-oauth' }));
+
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Tmate OAuth session',
+    });
+    expect(dialog.textContent).toContain('https://tmate.io/t/oas_settings_tmate');
+    expect(dialog.textContent).toContain('ssh tmate.io/t/oas_settings_tmate');
+    expect(screen.getByRole('link', { name: 'Open Tmate' }).getAttribute('href')).toBe(
+      'https://tmate.io/t/oas_settings_tmate',
+    );
+    expect(openSpy).not.toHaveBeenCalled();
+  });
+
   it('supports OAuth finalize without offering reconnect after success', async () => {
     const fetchSpy = vi.spyOn(window, 'fetch')
       .mockResolvedValueOnce({

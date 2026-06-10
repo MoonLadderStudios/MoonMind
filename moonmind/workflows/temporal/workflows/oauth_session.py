@@ -211,6 +211,7 @@ class MoonMindOAuthSessionWorkflow:
                         "runtime_id": runtime_id,
                         "volume_ref": volume_ref,
                         "volume_mount_path": volume_mount_path,
+                        "session_transport": session_transport,
                         "session_ttl": session_ttl,
                     },
                     task_queue=RUNNER_ACTIVITY_TASK_QUEUE,

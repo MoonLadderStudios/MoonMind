@@ -395,6 +395,43 @@ async def test_start_auth_runner_resolves_claude_bootstrap_command(
     assert observed["volume_mount_path"] == "/home/app/.claude"
 
 @pytest.mark.asyncio
+async def test_start_auth_runner_routes_tmate_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    async def fake_start_tmate_auth_runner_container(**kwargs):
+        observed.update(kwargs)
+        return {
+            "container_name": "moonmind_auth_oas_tmate_activityrunner",
+            "terminal_session_id": "https://tmate.io/t/oas_tmate_activityrunner",
+            "terminal_bridge_id": "ssh tmate.io/t/oas_tmate_activityrunner",
+            "session_transport": "tmate",
+        }
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.terminal_bridge.start_tmate_auth_runner_container",
+        fake_start_tmate_auth_runner_container,
+    )
+
+    result = await oauth_session_start_auth_runner(
+        {
+            "session_id": "oas_tmate_activityrunner",
+            "runtime_id": "codex_cli",
+            "volume_ref": "codex_auth_volume",
+            "volume_mount_path": "/home/app/.codex",
+            "session_transport": "tmate",
+            "session_ttl": 120,
+        }
+    )
+
+    assert result["session_transport"] == "tmate"
+    assert result["terminal_session_id"] == "https://tmate.io/t/oas_tmate_activityrunner"
+    assert observed["bootstrap_command"] == ("codex", "login", "--device-auth")
+    assert observed["volume_ref"] == "codex_auth_volume"
+    assert observed["volume_mount_path"] == "/home/app/.codex"
+
+@pytest.mark.asyncio
 async def test_start_auth_runner_rejects_missing_provider_command(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

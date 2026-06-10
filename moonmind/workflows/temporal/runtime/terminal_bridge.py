@@ -20,6 +20,7 @@ _SECRET_ASSIGNMENT_PATTERN = re.compile(
 )
 _DEFAULT_OAUTH_RUNNER_IMAGE = "ghcr.io/moonladderstudios/moonmind:latest"
 _DEFAULT_OAUTH_RUNNER_USER = "1000:1000"
+_TMATE_SOCKET = "/tmp/moonmind-oauth-tmate.sock"
 
 class TerminalBridgeFrameError(ValueError):
     """Raised when a browser terminal frame is unsupported or unsafe."""
@@ -122,6 +123,11 @@ def _runner_environment_args(runtime_id: str, volume_mount_path: str) -> list[st
             ]
         )
     return args
+
+def _docker_command_error(stderr: bytes, returncode: int) -> RuntimeError:
+    error_output = _redact_startup_output(stderr)
+    detail = f": {error_output}" if error_output else ""
+    return RuntimeError(f"Failed to start auth container with exit code {returncode}{detail}")
 
 class DockerExecPtyAdapter:
     """Docker exec PTY adapter for the OAuth auth-runner container."""
@@ -337,15 +343,116 @@ async def start_terminal_bridge_container(
         raise TimeoutError("Timed out while starting auth container")
 
     if proc.returncode != 0:
-        error_output = _redact_startup_output(stderr)
-        detail = f": {error_output}" if error_output else ""
-        raise RuntimeError(
-            f"Failed to start auth container with exit code {proc.returncode}{detail}"
-        )
+        raise _docker_command_error(stderr, proc.returncode)
 
     return {
         "container_name": container_name,
         "terminal_session_id": f"term_{session_id}",
         "terminal_bridge_id": f"br_{session_id}",
         "session_transport": "moonmind_pty_ws",
+    }
+
+async def start_tmate_auth_runner_container(
+    session_id: str,
+    runtime_id: str,
+    volume_ref: str,
+    volume_mount_path: str,
+    session_ttl: int,
+    bootstrap_command: tuple[str, ...] | list[str],
+) -> dict[str, Any]:
+    """Start a Tmate-backed OAuth auth runner and return safe connection refs."""
+    command = tuple(str(part).strip() for part in bootstrap_command)
+    if not command or any(not part for part in command):
+        raise ValueError("provider bootstrap command is not configured")
+
+    container_name = f"moonmind_auth_{session_id}"
+    runner_image = os.environ.get(
+        "MOONMIND_OAUTH_RUNNER_IMAGE",
+        _DEFAULT_OAUTH_RUNNER_IMAGE,
+    )
+    executable = shlex.quote(command[0])
+    idle_command = (
+        "command -v tmate >/dev/null 2>&1 "
+        "|| { echo 'OAuth runner image does not contain tmate' >&2; exit 127; }; "
+        f"command -v {executable} >/dev/null 2>&1 "
+        f"|| {{ echo 'OAuth runner image does not contain {executable}' >&2; exit 127; }}; "
+        f"sleep {int(session_ttl)}"
+    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "run", "-d", "--init", "-i", "-t", "--rm",
+            "--name", container_name,
+            "--label", "moonmind.oauth_session=true",
+            "--label", f"moonmind.oauth_session_id={session_id}",
+            "--label", f"moonmind.runtime_id={runtime_id}",
+            "--label", "moonmind.oauth_session_transport=tmate",
+            "--user", _oauth_runner_user(),
+            *_runner_environment_args(runtime_id, volume_mount_path),
+            "-v", f"{volume_ref}:{volume_mount_path}",
+            runner_image,
+            "/bin/sh",
+            "-lc",
+            idle_command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "Docker CLI is not available on this worker. "
+            "Ensure Docker is installed and 'docker' is on the PATH before using Tmate OAuth sessions."
+        ) from exc
+
+    try:
+        _stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.communicate()
+        raise TimeoutError("Timed out while starting Tmate auth container")
+
+    if proc.returncode != 0:
+        raise _docker_command_error(stderr, proc.returncode)
+
+    bootstrap_shell = " ".join(shlex.quote(part) for part in command)
+    tmate_start_command = (
+        f"tmate -S {shlex.quote(_TMATE_SOCKET)} new-session -d {shlex.quote(bootstrap_shell)} && "
+        f"tmate -S {shlex.quote(_TMATE_SOCKET)} wait tmate-ready && "
+        f"tmate -S {shlex.quote(_TMATE_SOCKET)} display -p '#{{tmate_web}}' && "
+        f"tmate -S {shlex.quote(_TMATE_SOCKET)} display -p '#{{tmate_ssh}}'"
+    )
+    try:
+        exec_proc = await asyncio.create_subprocess_exec(
+            "docker",
+            "exec",
+            container_name,
+            "/bin/sh",
+            "-lc",
+            tmate_start_command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "Docker CLI is not available on this worker. "
+            "Ensure Docker is installed and 'docker' is on the PATH before using Tmate OAuth sessions."
+        ) from exc
+
+    try:
+        stdout, stderr = await asyncio.wait_for(exec_proc.communicate(), timeout=45)
+    except asyncio.TimeoutError:
+        raise TimeoutError("Timed out while starting Tmate OAuth session")
+
+    if exec_proc.returncode != 0:
+        raise _docker_command_error(stderr, exec_proc.returncode)
+
+    refs = [line.strip() for line in stdout.decode("utf-8", errors="replace").splitlines() if line.strip()]
+    web_url = refs[0] if refs else ""
+    ssh_command = refs[1] if len(refs) > 1 else ""
+    if not web_url:
+        raise RuntimeError("Tmate did not return a web connection URL")
+
+    return {
+        "container_name": container_name,
+        "terminal_session_id": web_url,
+        "terminal_bridge_id": ssh_command,
+        "session_transport": "tmate",
     }
