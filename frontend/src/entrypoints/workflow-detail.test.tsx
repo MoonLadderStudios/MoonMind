@@ -434,10 +434,12 @@ describe('Workflow Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(screen.getAllByRole('heading', { name: 'Workflow Steps' }).length).toBeGreaterThan(0);
-      expect(screen.queryByRole('heading', { name: 'Step DAG' })).toBeNull();
-      expect(screen.getAllByText('Plan work')).toHaveLength(1);
-      expect(screen.getAllByText('Apply patch')).toHaveLength(1);
-      expect(screen.getAllByText('Verify tests')).toHaveLength(1);
+      expect(screen.getByRole('heading', { name: 'Step DAG' })).toBeTruthy();
+      expect(screen.getAllByText('Plan work').length).toBeGreaterThan(0);
+      expect(screen.getByLabelText('start to plan')).toBeTruthy();
+      expect(screen.getByLabelText('plan to apply')).toBeTruthy();
+      expect(screen.getByLabelText('apply to verify')).toBeTruthy();
+      expect(screen.getByLabelText('Step dependency edges')).toBeTruthy();
       expect(screen.getByRole('link', { name: 'Steps' }).getAttribute('aria-current')).toBe('page');
       expect(screen.queryByRole('heading', { name: 'Workflow Preview' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Workflow Artifacts' })).toBeNull();
@@ -445,7 +447,54 @@ describe('Workflow Detail Entrypoint', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Show details for Apply patch' }));
-    expect(screen.getByText((_, element) => element?.textContent === 'Depends on: plan')).toBeTruthy();
+    expect(screen.getAllByText((_, element) => element?.textContent === 'Depends on: plan').length).toBeGreaterThan(0);
+  });
+
+  it('MM-746 renders an empty step DAG without a fake start edge', async () => {
+    window.history.pushState({}, 'Empty Steps Test', '/workflows/test-123/steps?source=temporal');
+    const emptyStepsSnapshot = { ...latestStepsSnapshot, steps: [] };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Empty step ledger',
+      summary: 'No steps recorded yet',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => emptyStepsSnapshot,
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Step DAG' })).toBeTruthy();
+      expect(screen.getByText('No steps in the ledger yet.')).toBeTruthy();
+      expect(screen.queryByLabelText('start to none')).toBeNull();
+      expect(screen.queryByLabelText('Step dependency edges')).toBeNull();
+    });
   });
 
   it('MM-815 surfaces latest evidence refs and preserved provenance markers in the default step row', async () => {
@@ -681,17 +730,20 @@ describe('Workflow Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
-      expect(screen.getAllByText('Plan work')).toHaveLength(1);
-      expect(screen.getAllByText('Apply patch')).toHaveLength(1);
-      expect(screen.getAllByText('Verify tests')).toHaveLength(1);
-      expect(screen.queryByRole('heading', { name: 'Step DAG' })).toBeNull();
+      expect(screen.getAllByText('Plan work').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Apply patch').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Verify tests').length).toBeGreaterThan(0);
+      expect(screen.getByRole('heading', { name: 'Step DAG' })).toBeTruthy();
+      expect(screen.getAllByText('Depends on: plan').length).toBeGreaterThan(0);
+      expect(screen.getByLabelText('plan to apply')).toBeTruthy();
+      expect(screen.getByLabelText('apply to verify')).toBeTruthy();
       expect(screen.getAllByText('02-run').length).toBeGreaterThan(0);
     });
 
-    expect(screen.getByText((_, element) => element?.textContent === 'Depends on: plan')).toBeTruthy();
+    expect(screen.getAllByText((_, element) => element?.textContent === 'Depends on: plan').length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole('button', { name: 'Show details for Apply patch' }));
-    expect(screen.getByText((_, element) => element?.textContent === 'Depends on: plan')).toBeTruthy();
+    expect(screen.getAllByText((_, element) => element?.textContent === 'Depends on: plan').length).toBeGreaterThan(0);
 
     const stepsHeading = screen.getByRole('heading', { name: 'Workflow Steps' });
     const timelineHeading = screen.getByRole('heading', { name: 'Timeline' });
