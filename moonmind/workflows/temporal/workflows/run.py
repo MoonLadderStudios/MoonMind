@@ -106,6 +106,8 @@ from moonmind.workflows.temporal.step_executions import (
     build_step_execution_manifest_payload,
     git_effect_metadata,
     logical_step_success_allowed,
+    plan_reattempt_compensation,
+    side_effect_record,
     step_execution_operation_idempotency_key,
     workspace_policy_metadata,
 )
@@ -623,6 +625,15 @@ class MoonMindRunWorkflow:
         self._previous_step_checkpoint_refs: dict[str, str] = {}
         self._step_execution_launch_blocks: set[str] = set()
         self._step_dependency_effects: dict[str, dict[str, Any]] = {}
+        # Side-effect records observed per logical step across attempts, keyed by
+        # logical step id. Used to detect already-occurred non-idempotent
+        # external effects when a reattempt starts (Section 11, rules 3-4).
+        self._step_side_effect_records: dict[str, list[dict[str, Any]]] = {}
+        # Subjects (prior-effect identities) already compensated, so a given
+        # non-idempotent effect is reconciled at most once across reattempts.
+        self._step_compensated_subjects: dict[str, set[str]] = {}
+        # Observable compensation plan for the latest reattempt of each step.
+        self._step_reattempt_compensations: dict[str, dict[str, Any]] = {}
 
         # State tracking
         self._paused: bool = False
@@ -1842,6 +1853,106 @@ class MoonMindRunWorkflow:
             self._mark_real_work_started(now=updated_at)
         self._sync_progress_snapshot(updated_at=updated_at)
 
+    def _record_step_side_effect(
+        self,
+        logical_step_id: str,
+        *,
+        effect_class: str,
+        operation: str,
+        target: str | None = None,
+        idempotency_key: str | None = None,
+        workflow_state_accepted: bool = False,
+        effect_kind: str = "normal",
+        reason: str | None = None,
+        approved_workspace_roots: Sequence[str] = (),
+    ) -> dict[str, Any]:
+        """Classify and record one side effect for the current step attempt.
+
+        Records accumulate per logical step so that, when a later attempt
+        starts, already-occurred non-idempotent external effects can be
+        detected and compensated explicitly.
+        """
+
+        record = side_effect_record(
+            effect_class=effect_class,  # type: ignore[arg-type]
+            operation=operation,
+            target=target,
+            idempotency_key=idempotency_key,
+            workflow_state_accepted=workflow_state_accepted,
+            effect_kind=effect_kind,  # type: ignore[arg-type]
+            reason=reason,
+            approved_workspace_roots=approved_workspace_roots,
+        )
+        self._step_side_effect_records.setdefault(logical_step_id, []).append(record)
+        return record
+
+    def _orchestrate_reattempt_compensation(
+        self,
+        logical_step_id: str,
+        *,
+        execution_ordinal: int,
+        updated_at: datetime,
+        policy_permits_non_idempotent_reattempt: bool = False,
+    ) -> dict[str, Any] | None:
+        """Plan and record idempotent, observable compensation for a reattempt.
+
+        On any reattempt (``execution_ordinal > 1``) this inspects the side
+        effects recorded on prior attempts of the same logical step. For each
+        already-occurred non-idempotent external effect it derives an explicit
+        compensation side-effect record with a deterministic idempotency key,
+        records it as a side effect of the new attempt, and stores an
+        observable plan projection. Compensation subjects are deduped across
+        reattempts so a given external mutation is compensated at most once.
+
+        Returns the compensation plan, or ``None`` when there is no prior
+        attempt to reconcile.
+        """
+
+        if execution_ordinal is None or execution_ordinal <= 1:
+            return None
+        prior_records = list(self._step_side_effect_records.get(logical_step_id, ()))
+        already_compensated = self._step_compensated_subjects.setdefault(
+            logical_step_id, set()
+        )
+        plan = plan_reattempt_compensation(
+            workflow_id=workflow.info().workflow_id,
+            run_id=workflow.info().run_id,
+            logical_step_id=logical_step_id,
+            execution_ordinal=execution_ordinal,
+            prior_side_effect_records=prior_records,
+            already_compensated_subjects=sorted(already_compensated),
+            policy_permits_non_idempotent_reattempt=(
+                policy_permits_non_idempotent_reattempt
+            ),
+        )
+        # Record each compensation as a side effect of the new attempt and mark
+        # its subject compensated so successive reattempts do not repeat it.
+        for compensation in plan.get("compensations", ()):
+            self._step_side_effect_records.setdefault(logical_step_id, []).append(
+                dict(compensation)
+            )
+        for effect in plan.get("outstandingEffects", ()):
+            subject = str(effect.get("subject") or "").strip()
+            if subject:
+                already_compensated.add(subject)
+        if plan.get("requiresCompensation"):
+            self._step_reattempt_compensations[logical_step_id] = plan
+            self._get_logger().info(
+                "Orchestrated reattempt compensation for %s execution %d: "
+                "%d effect(s) accounted for",
+                logical_step_id,
+                execution_ordinal,
+                len(plan.get("outstandingEffects", ())),
+                extra={
+                    "event": "step_reattempt_compensation",
+                    "logical_step_id": logical_step_id,
+                    "execution_ordinal": execution_ordinal,
+                    "compensation_count": len(plan.get("compensations", ())),
+                    "reattempt_allowed": plan.get("reattemptAllowed"),
+                },
+            )
+        return plan
+
     async def _record_step_execution_manifest_started(
         self,
         logical_step_id: str,
@@ -1870,6 +1981,16 @@ class MoonMindRunWorkflow:
             attempt=attempt,
             source_execution_ordinal=source_execution_ordinal,
         )
+        compensation_plan = self._orchestrate_reattempt_compensation(
+            logical_step_id,
+            execution_ordinal=attempt,
+            updated_at=updated_at,
+        )
+        side_effects_payload: dict[str, Any] = {}
+        side_effect_records: list[Mapping[str, Any]] = []
+        if compensation_plan and compensation_plan.get("requiresCompensation"):
+            side_effects_payload["reattemptCompensation"] = compensation_plan
+            side_effect_records = list(compensation_plan.get("compensations", ()))
         launch_blocked = self._workspace_policy_launch_blocked(workspace)
         manifest_payload = build_step_execution_manifest_payload(
             workflow_id=workflow.info().workflow_id,
@@ -1891,6 +2012,8 @@ class MoonMindRunWorkflow:
                 **self._step_execution_compact_execution_refs(logical_step_id),
                 **(execution or {}),
             },
+            side_effects=side_effects_payload,
+            side_effect_records=side_effect_records,
             budget=budget,
         )
         if launch_blocked:

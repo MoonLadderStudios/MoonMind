@@ -4,9 +4,12 @@ from datetime import UTC, datetime
 
 from moonmind.schemas.step_execution_models import STEP_EXECUTION_CONTENT_TYPE
 from moonmind.workflows.temporal.step_executions import (
+    already_occurred_non_idempotent_effects,
     build_step_execution_manifest_payload,
+    compensation_subject_key,
     git_effect_metadata,
     logical_step_success_allowed,
+    plan_reattempt_compensation,
     side_effect_record,
     step_execution_id,
     step_execution_operation_idempotency_key,
@@ -199,6 +202,124 @@ def test_side_effect_records_sanitize_diagnostics_and_gate_workspace_writes() ->
     assert approved_workspace["target"].endswith(
         "/moonmind/workflows/temporal/run.py"
     )
+
+
+def _occurred_non_idempotent_effect(
+    *,
+    effect_class: str = "external_non_idempotent",
+    operation: str = "jira.transition_issue",
+    target: str = "MM-705",
+    idempotency_key: str = "wf-1:run-1:implement:execution:1:jira-transition",
+) -> dict[str, object]:
+    return side_effect_record(
+        effect_class=effect_class,  # type: ignore[arg-type]
+        operation=operation,
+        target=target,
+        idempotency_key=idempotency_key,
+        workflow_state_accepted=True,
+    )
+
+
+def test_already_occurred_filters_to_accepted_non_idempotent_effects() -> None:
+    occurred = _occurred_non_idempotent_effect()
+    blocked = side_effect_record(
+        effect_class="external_non_idempotent",
+        operation="jira.transition_issue",
+        target="MM-705",
+        idempotency_key="wf-1:run-1:implement:execution:1:jira-transition",
+        workflow_state_accepted=False,
+    )
+    idempotent = side_effect_record(
+        effect_class="external_idempotent",
+        operation="jira.add_comment",
+        target="MM-705",
+        idempotency_key="wf-1:run-1:implement:execution:1:comment",
+        workflow_state_accepted=True,
+    )
+    workspace = side_effect_record(
+        effect_class="workspace_mutation",
+        operation="workspace.write",
+        target="/work/repo/file.py",
+    )
+
+    accounted = already_occurred_non_idempotent_effects(
+        [occurred, blocked, idempotent, workspace]
+    )
+
+    assert len(accounted) == 1
+    assert accounted[0]["operation"] == "jira.transition_issue"
+
+
+def test_plan_reattempt_compensation_is_explicit_idempotent_and_observable() -> None:
+    occurred = _occurred_non_idempotent_effect()
+
+    plan = plan_reattempt_compensation(
+        workflow_id="wf-1",
+        run_id="run-1",
+        logical_step_id="implement",
+        execution_ordinal=2,
+        prior_side_effect_records=[occurred],
+    )
+
+    assert plan["requiresCompensation"] is True
+    assert plan["compensationComplete"] is True
+    assert plan["reattemptAllowed"] is True
+    assert len(plan["compensations"]) == 1
+    compensation = plan["compensations"][0]
+    # Explicit: classified as a compensation that reconciles the prior effect.
+    assert compensation["kind"] == "compensation"
+    assert compensation["operation"] == "compensate:jira.transition_issue"
+    assert compensation["disposition"] == "accepted"
+    assert compensation["compensates"]["operation"] == "jira.transition_issue"
+    # Idempotent: deterministic key derived from the new attempt identity.
+    assert (
+        compensation["idempotencyKey"]
+        == "wf-1:run-1:implement:execution:2:compensate:jira.transition_issue"
+    )
+
+    # Deterministic: replanning the same reattempt yields identical records.
+    replan = plan_reattempt_compensation(
+        workflow_id="wf-1",
+        run_id="run-1",
+        logical_step_id="implement",
+        execution_ordinal=2,
+        prior_side_effect_records=[occurred],
+    )
+    assert replan == plan
+
+
+def test_plan_reattempt_compensation_dedupes_already_compensated_subjects() -> None:
+    occurred = _occurred_non_idempotent_effect()
+    subject = compensation_subject_key(occurred)
+
+    plan = plan_reattempt_compensation(
+        workflow_id="wf-1",
+        run_id="run-1",
+        logical_step_id="implement",
+        execution_ordinal=3,
+        prior_side_effect_records=[occurred],
+        already_compensated_subjects=[subject],
+    )
+
+    assert plan["requiresCompensation"] is False
+    assert plan["compensations"] == []
+    assert plan["alreadyCompensated"][0]["subject"] == subject
+    assert plan["reattemptAllowed"] is True
+
+
+def test_plan_reattempt_compensation_noop_without_prior_effects() -> None:
+    plan = plan_reattempt_compensation(
+        workflow_id="wf-1",
+        run_id="run-1",
+        logical_step_id="implement",
+        execution_ordinal=2,
+        prior_side_effect_records=[],
+    )
+
+    assert plan["requiresCompensation"] is False
+    assert plan["compensations"] == []
+    assert plan["reattemptAllowed"] is True
+    assert "reason" not in plan
 
 
 def test_manifest_payload_embeds_policy_git_effect_and_side_effect_records() -> None:
