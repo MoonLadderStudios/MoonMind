@@ -1420,6 +1420,10 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
     workflow._owner_id = "owner-1"
     written_review_payloads: list[dict[str, Any]] = []
     skill_inputs: list[dict[str, Any]] = []
+    plan_payload = _approval_policy_plan_payload()
+    plan_payload["policy"]["approval_policy"][
+        "max_consecutive_no_progress_attempts"
+    ] = 1
     review_artifact_ids = iter(("art_review_1", "art_review_2"))
     step_execution_artifact_ids = iter(
         (
@@ -1441,6 +1445,8 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
                         "evidence": "stderr tail",
                     }
                 ],
+                "remainingWorkRef": "art_remaining_work_1",
+                "recommendedNextAction": "reattempt_current_step",
             },
             {
                 "verdict": "PASS",
@@ -1492,7 +1498,7 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
         if activity_type == "artifact.read":
             artifact_ref = getattr(payload, "artifact_ref", None)
             if artifact_ref == "art_plan_1":
-                return json.dumps(_approval_policy_plan_payload()).encode("utf-8")
+                return json.dumps(plan_payload).encode("utf-8")
             if artifact_ref == "artifact://registry/1":
                 return json.dumps(_registry_payload()).encode("utf-8")
         if activity_type == "artifact.write_complete":

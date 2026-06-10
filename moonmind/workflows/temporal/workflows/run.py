@@ -2650,6 +2650,23 @@ class MoonMindRunWorkflow:
             getattr(verdict, "recoverable_in_current_runtime", False)
         )
 
+    @staticmethod
+    def _review_gate_verdict_made_progress(verdict: Any) -> bool:
+        normalized = str(getattr(verdict, "verdict", "") or "").strip().upper()
+        recommended_next_action = (
+            str(getattr(verdict, "recommended_next_action", "") or "")
+            .strip()
+            .lower()
+        )
+        remaining_work_ref = str(
+            getattr(verdict, "remaining_work_ref", "") or ""
+        ).strip()
+        return (
+            normalized == "ADDITIONAL_WORK_NEEDED"
+            and recommended_next_action == "reattempt_current_step"
+            and bool(remaining_work_ref)
+        )
+
     def _terminal_disposition_for_gate_stop(self, verdict: Any) -> str:
         normalized = str(getattr(verdict, "verdict", "") or "").strip().upper()
         if normalized == "BLOCKED":
@@ -4771,7 +4788,10 @@ class MoonMindRunWorkflow:
                 )
 
                 if review_verdict.verdict != "FULLY_IMPLEMENTED":
-                    consecutive_no_progress_attempts += 1
+                    if self._review_gate_verdict_made_progress(review_verdict):
+                        consecutive_no_progress_attempts = 0
+                    else:
+                        consecutive_no_progress_attempts += 1
                     failed_review_summary = self._bounded_review_summary(
                         review_verdict.feedback,
                         fallback="Structured gate did not approve advancement",
