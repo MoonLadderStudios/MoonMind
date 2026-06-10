@@ -26,7 +26,7 @@ The README was reframed (2026-06-09) around three headline value propositions �
 
 ---
 
-## Milestone 1 — Managed Agent Runtimes ✅
+## Milestone 1 — Managed Agent Runtimes 🔧
 
 **README claim:** *"MoonMind runs owned CLI runtimes on your own infrastructure using your existing subscriptions or API keys. Codex CLI is the live first-class task-scoped managed-session runtime; Claude Code is a first-class managed-runtime target … on the path to the same live session controller."*
 
@@ -44,7 +44,13 @@ The README was reframed (2026-06-09) around three headline value propositions �
 - [x] **1.1–1.6** Auth parity, profile UI, health checks, API key gate removal, auto-seeding — all shipped
 - [x] **1.7** Graceful worker pause / unpause — API + Settings Operations wiring
 - [x] **1.8** Universal OAuth sessions — Delivered as the native xterm.js OAuth terminal (spec 306); Tmate architecture retired
-- [ ] **1.9** Claude Code task-scoped managed-session controller — Claude-specific session design exists (`docs/ManagedAgents/ClaudeCodeManagedSessions.md`) but Claude does not yet enter the live `ManagedSession*` controller path that Codex uses. This is the top runtime-parity gap against the README headline.
+- [ ] **1.9** Claude Code task-scoped managed-session parity — Claude-specific session design exists (`docs/ManagedAgents/ClaudeCodeManagedSessions.md`) but Claude does not yet enter the live `ManagedSession*` controller path that Codex uses. This is the top runtime-parity gap against the README headline. Split into acceptance-level sub-items so progress is visible:
+  - [ ] **1.9a** Claude session launch/transport adapter — runtime-specific controller entering the shared `ManagedSession*` path
+  - [ ] **1.9b** Normalized turn lifecycle and session state — identity fields, epochs, clear/reset boundaries
+  - [ ] **1.9c** Policy enforcement at Claude session launch — enforcement hook only; envelope contracts are 12.1
+  - [ ] **1.9d** Checkpoint / resume / fork semantics for Claude sessions
+  - [ ] **1.9e** Live logs, artifacts, and diagnostics parity with the Codex session plane
+  - [ ] **1.9f** Parity tests against the Codex managed-session contract — adapter-boundary and in-flight compatibility coverage per repo testing rules
 
 ---
 
@@ -205,8 +211,8 @@ All items shipped: per-step runtime/model/effort selection (MM-786/787), cost tr
 **README claim:** *"Typed policy envelopes that declare per-run what an agent may touch, governance telemetry that records every privileged action an agent took and why, and a complete audit trail for the secret lifecycle."*
 
 ### What's shipped
-- High-security outbound scan contract — deterministic scan boundaries with `OutboundScanDecision` / `OutboundFinding` models (MM-811, `moonmind/security/outbound_scan.py`)
-- Outbound scanning of PR/issue comments before posting (MM-812)
+- High-security outbound scan contract — deterministic scan boundaries with `OutboundScanDecision` / `OutboundFinding` models (MM-811, `moonmind/security/outbound_scan.py`); per-caller adoption is follow-up scope under 12.4
+- Outbound scan adopted at the Jira comment-posting boundary (MM-812, `moonmind/integrations/jira/tool.py`) — GitHub comment boundaries were *not* changed in MM-812
 - SecretRef-based settings integration — durable contracts carry secret references, resolved only at launch boundaries (spec `001-secretref-settings-integration`, `docs/Security/SecretsSystem.md`)
 - Claude OAuth guardrails and bootstrap-PTY session controls (specs 192, 245)
 - GitHub token permission scoping (spec 294)
@@ -214,10 +220,16 @@ All items shipped: per-step runtime/model/effort selection (MM-786/787), cost tr
 - Deliberately gated exceptional workloads — approved-scope artifact loading and dedicated activity handling keep high-risk workloads behind explicit operator approval
 
 ### Remaining tasks
-- [ ] **12.1** Typed per-run policy envelopes — Compact runtime contracts declaring what a run may touch (spec 185 `claude-policy-envelope`); contracts specified, not yet enforced in the launch path
-- [ ] **12.2** Governance telemetry — Durable record of privileged agent actions with export sinks (spec 191 `claude-governance-telemetry`); spec-only
-- [ ] **12.3** Secret lifecycle audit surface — Who created/rotated/deleted a secret, which profiles reference it, which launches resolved it (`docs/Security/SecretsSystem.md` §13); contract defined, operator surface missing
-- [ ] **12.4** Outbound scan coverage at all publish boundaries — Extend MM-811/812 scanning from comments to artifact publication, commits/pushes, and external tool calls under high-security mode
+- [ ] **12.1** Typed per-run policy envelopes — Compact runtime contracts declaring what a run may touch (spec 185 `claude-policy-envelope`); contracts specified, not yet enforced in the launch path.
+  *Done means:* envelopes compiled per run, enforced at launch/control boundaries, violations fail fast, adapter-boundary tests.
+- [ ] **12.2** Governance telemetry — Durable record of privileged agent actions with export sinks (spec 191 `claude-governance-telemetry`); spec-only.
+  *Done means:* privileged actions recorded with actor/action/target/decision and exportable, with boundary tests.
+- [ ] **12.3** Secret lifecycle audit surface — Who created/rotated/deleted a secret, which profiles reference it, which launches resolved it (`docs/Security/SecretsSystem.md` §13); contract defined, operator surface missing.
+  *Done means:* those questions answerable from Mission Control without exposing secret values.
+- [ ] **12.4** Outbound scan coverage at all publish boundaries — Adopt the MM-811 contract at GitHub PR/issue comments, commits/pushes, artifact publication, and external tool calls under high-security mode (only the Jira comment path is adopted today).
+  *Done means:* every send/post/push/publish boundary invokes the scan in high-security mode, with block-on-match tests per boundary.
+- [ ] **12.5** Risk-gated action review policy — Classify risky actions before execution and route them through deterministic policy, optional second-model review, or human approval. The current step-review path is a non-blocking placeholder (`moonmind/workflows/temporal/activities/step_review.py`).
+  *Done means:* risky actions classified pre-execution; the review decision and its rationale recorded as governance telemetry (12.2).
 
 ---
 
@@ -234,10 +246,14 @@ All items shipped: per-step runtime/model/effort selection (MM-786/787), cost tr
 - Resume foundations — distinct full-retry vs. recovery actions (spec 326), checkpoint-evidence gating for resume availability (spec 327), editable full retry (spec 343), resume-from-last-failed-step (spec 310)
 
 ### Remaining tasks
-- [ ] **13.1** Resume-from-checkpoint as the default recovery path — checkpoint restore logic exists but is not yet the primary operator flow for failed runs
-- [ ] **13.2** Queryable remediation audit events — publish remediation lifecycle audit through the control-event mechanism (spec 323)
-- [ ] **13.3** Mission Control remediation panels — operator-facing remediation status/action surfaces (spec 324); partial wiring in `workflow-detail.tsx`
-- [ ] **13.4** Autonomous remediation supervisor — scheduled/triggered remediation that diagnoses and repairs failed runs without an operator prompt (the README's "3 a.m." aspiration); currently remediation runs are operator-initiated
+- [ ] **13.1** Resume-from-checkpoint as the default recovery path — checkpoint restore logic exists but is not yet the primary operator flow for failed runs.
+  *Done means:* a failed run's default operator flow offers evidence-gated checkpoint resume (spec 327) with replay-safe cutover.
+- [ ] **13.2** Queryable remediation audit events — publish remediation lifecycle audit through the control-event mechanism (spec 323).
+  *Done means:* remediation lifecycle events queryable per target run.
+- [ ] **13.3** Mission Control remediation panels — operator-facing remediation status/action surfaces (spec 324); partial wiring in `workflow-detail.tsx`.
+  *Done means:* operators can view remediation state and trigger typed actions from workflow detail.
+- [ ] **13.4** Autonomous remediation supervisor — scheduled/triggered remediation that diagnoses and repairs failed runs without an operator prompt (the README's "3 a.m." aspiration); currently remediation runs are operator-initiated.
+  **Gated on:** 12.1 (enforced policy envelopes), 12.2 (governance telemetry), 12.3 (secret lifecycle audit), and 14.1/14.3/14.4 (post-hoc forensics). Autonomous repair must not outrun the safety and audit substrate it depends on.
 
 ---
 
@@ -253,17 +269,22 @@ All items shipped: per-step runtime/model/effort selection (MM-786/787), cost tr
 - Live logs desired-state contract — session-aware merged timeline, ANSI parsing, virtualized rendering, artifact-backed replay (`docs/Observability/LiveLogs.md`)
 
 ### Remaining tasks
-- [ ] **14.1** OpenTelemetry instrumentation — FastAPI middleware, Temporal client/worker interceptors, activity-layer spans with provider/model/token attributes (`docs/Observability/OpenTelemetrySystem.md`); spec complete, no instrumentation code yet
-- [ ] **14.2** Per-step token/cost attribution in Mission Control — cost primitives exist (MM-788) but are not attributed and displayed per step
-- [ ] **14.3** Session-aware live-log timeline viewer — complete the LiveLogs.md rollout: merged stdout/stderr/system/session timeline, session epoch/reset markers, shared cross-process transport as the authoritative path
-- [ ] **14.4** Trace/log deep links from task detail — jump from a step in Mission Control to its correlated trace and log slice
+- [ ] **14.1** OpenTelemetry instrumentation — FastAPI middleware, Temporal client/worker interceptors, activity-layer spans with provider/model/token attributes (`docs/Observability/OpenTelemetrySystem.md`); spec complete, no instrumentation code yet.
+  *Done means:* API→workflow→activity→provider spans correlated end-to-end with bounded metric labels.
+- [ ] **14.2** Per-step token/cost attribution in Mission Control — cost primitives exist (MM-788) but are not attributed and displayed per step.
+  *Done means:* per-step cost visible in task detail and reconcilable with MM-788 estimates.
+- [ ] **14.3** Session-aware live-log timeline viewer — complete the LiveLogs.md rollout: merged stdout/stderr/system/session timeline, session epoch/reset markers, shared cross-process transport as the authoritative path.
+  *Done means:* live timeline plus artifact-backed replay; live-stream failure never fails a run.
+- [ ] **14.4** Trace/log deep links from task detail — jump from a step in Mission Control to its correlated trace and log slice.
+  *Done means:* every step row links to its trace and log slice via correlation IDs.
 
 ---
 
-## Housekeeping — Codebase Cleanup ✅
+## Housekeeping — Codebase Cleanup 🔧
 
 - [x] **H.1–H.4** Legacy system removal, spec deduplication, legacy skill dispatch cleanup, legacy docs deletion — complete (MM-797 through MM-800)
 - [x] **H.5** Tasks→Workflows doc rename — `docs/Tasks/*` renamed to `docs/Workflows/*` with content updated (#2395)
+- [ ] **H.6** Release/docs metadata hygiene — `pyproject.toml` (version `0.1.0`, MIT, "RAG application…" description) and `package.json` (version `1.0.0`, ISC, legacy "chat, memory, and automation" description) disagree with each other and with the README positioning. Align versions, license declarations, and public descriptions under one release/versioning policy.
 
 ---
 
@@ -273,16 +294,18 @@ Milestones ordered by **impact on delivering the README promise** (highest first
 
 | Priority | Milestone | Current Status | Remaining |
 |----------|-----------|----------------|-----------|
-| 🔴 P0 | **13 — Self-Healing Remediation & Recovery** | 🔧 Partial | 4 items |
-| 🔴 P0 | **1 — Claude Code managed-session parity (1.9)** | 🔧 One gap | 1 item |
-| 🔴 P0 | **12 — Safety Guardrails & Governance** | 🔧 Partial | 4 items |
+| 🔴 P0 | **1 — Claude Code managed-session parity (1.9a–f)** | 🔧 Partial | 6 sub-items |
+| 🔴 P0 | **13 — Operator-driven recovery (13.1–13.3)** | 🔧 Partial | 3 items |
+| 🔴 P0 | **12 — Safety Guardrails & Governance** | 🔧 Partial | 5 items |
 | 🟠 P1 | **14 — Deep Observability (OTel, cost, live logs)** | 🔧 Partial | 4 items |
+| 🟠 P1 (gated) | **13.4 — Autonomous remediation supervisor** | 📐 Designed | Gated on 12.1–12.3, 14.1/14.3/14.4 |
 | 🟠 P1 | **3 — Multi-Step Planning & Context** | 🔧 Partial | 2 items |
 | 🟠 P1 | **7 — Mission Control Dashboard** | 🔧 Partial | 4 items |
 | 🟡 P2 | **5 — RAG & Document Retrieval** | 🔧 Partial | 2 items |
 | 🟡 P2 | **2 — External Agent Coordination** | 🔧 Partial | 1 item |
 | 🟡 P2 | **8 — Universal Integration (MCP)** | 🔧 Partial | 1 item |
-| 🟢 Done | **4, 6, 9, 10, 11, H** | ✅ Shipped | 0 items |
+| 🟡 P2 | **H — Housekeeping (H.6 metadata hygiene)** | 🔧 Partial | 1 item |
+| 🟢 Done | **4, 6, 9, 10, 11** | ✅ Shipped | 0 items |
 
 ---
 
@@ -290,7 +313,7 @@ Milestones ordered by **impact on delivering the README promise** (highest first
 
 | File | Disposition | Rationale |
 |------|-------------|-----------|
-| `Roadmap.md` | **Keep** | Superseded by this file — the living roadmap |
+| `Roadmap.md` | **Delete** | Superseded by this file (`docs/MoonMindRoadmap.md`), which is the living roadmap |
 | `CancellationAnalysis.md` | **Delete** | Recommendations shipped; analysis preserved in Milestone 4 |
 | `OrchestratorRemovalPlan.md` | **Deleted** | Superseded by spec 087 and in-repo removal work |
 | `RagDocUpdates.md` | **Delete** | Spec merge plan fully executed (spec 088 shipped) |
