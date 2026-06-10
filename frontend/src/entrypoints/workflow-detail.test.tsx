@@ -443,6 +443,135 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
+  it('MM-815 surfaces latest evidence refs and preserved provenance markers in the default step row', async () => {
+    window.history.pushState({}, 'Steps Test', '/workflows/test-123/steps?source=temporal');
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Resumed task',
+      summary: 'Execution summary',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+    };
+    const resumedSnapshot = {
+      workflowId: 'test-123',
+      runId: '02-run',
+      runScope: 'latest',
+      steps: [
+        {
+          logicalStepId: 'plan',
+          order: 1,
+          title: 'Plan work',
+          tool: { type: 'skill', name: 'plan.generate', version: '1' },
+          dependsOn: [],
+          status: 'succeeded',
+          waitingReason: null,
+          attentionRequired: false,
+          executionOrdinal: 1,
+          startedAt: '2026-04-08T00:00:01Z',
+          updatedAt: '2026-04-08T00:00:02Z',
+          summary: 'Plan complete',
+          checks: [],
+          refs: { childWorkflowId: null, childRunId: null, taskRunId: null },
+          artifacts: {
+            outputSummary: null,
+            outputPrimary: 'art-plan-output',
+            runtimeStdout: null,
+            runtimeStderr: null,
+            runtimeMergedLogs: null,
+            runtimeDiagnostics: null,
+            providerSnapshot: null,
+          },
+          preservedFrom: {
+            workflowId: 'test-123',
+            runId: '01-run',
+            logicalStepId: 'plan',
+            executionOrdinal: 1,
+          },
+          lastError: null,
+        },
+        {
+          logicalStepId: 'apply',
+          order: 2,
+          title: 'Apply patch',
+          tool: { type: 'agent_runtime', name: 'codex_cli', version: '1' },
+          dependsOn: ['plan'],
+          status: 'failed',
+          waitingReason: null,
+          attentionRequired: false,
+          executionOrdinal: 2,
+          startedAt: '2026-04-09T00:00:03Z',
+          updatedAt: '2026-04-09T00:00:04Z',
+          summary: 'Applying repository changes',
+          checks: [
+            {
+              kind: 'merge_gate',
+              status: 'failed',
+              summary: 'Gate failed',
+              retryCount: 1,
+              artifactRef: 'art-gate-verdict',
+            },
+          ],
+          refs: { childWorkflowId: null, childRunId: null, taskRunId: null },
+          artifacts: {
+            outputSummary: 'art-apply-summary',
+            outputPrimary: 'art-apply-output',
+            runtimeStdout: null,
+            runtimeStderr: null,
+            runtimeMergedLogs: null,
+            runtimeDiagnostics: 'art-apply-diagnostics',
+            providerSnapshot: null,
+          },
+          lastError: null,
+        },
+      ],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({ ok: true, json: async () => resumedSnapshot } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    // Default (collapsed) rows must surface latest evidence refs and the
+    // preserved-provenance marker without expanding full attempt history.
+    await waitFor(() => {
+      expect(screen.getAllByText('Apply patch').length).toBeGreaterThan(0);
+    });
+
+    // Preserved provenance marker on the resumed row (and not yet the expanded text).
+    expect(screen.getAllByText('Preserved').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Preserved from source run/)).toBeNull();
+
+    // Latest attempt count is surfaced on the re-run row.
+    expect(screen.getByText('Execution 2')).toBeTruthy();
+
+    // Latest evidence refs are surfaced ref-only in the collapsed rows.
+    expect(screen.getAllByLabelText('Latest evidence refs').length).toBeGreaterThan(0);
+    expect(screen.getByText('art-plan-output')).toBeTruthy();
+    expect(screen.getByText('art-apply-output')).toBeTruthy();
+    expect(screen.getByText('art-apply-diagnostics')).toBeTruthy();
+    expect(screen.getByText('art-gate-verdict')).toBeTruthy();
+  });
+
   it('MM-801 renders Artifacts as the focused report and artifact route', async () => {
     window.history.pushState({}, 'Artifacts Test', '/workflows/test-123/artifacts?source=temporal');
     mockWorkflowDetailSubrouteFetch();
