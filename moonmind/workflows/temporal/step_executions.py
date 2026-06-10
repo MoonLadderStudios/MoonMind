@@ -44,6 +44,15 @@ _GATED_SIDE_EFFECT_CLASSES = {
     "publication",
     "provider_account",
 }
+# Side-effect classes whose effects cannot safely repeat. When one of these
+# already occurred on a prior attempt, a later attempt must account for it
+# explicitly (Section 11, rule 3) rather than pretending the step can reset.
+_NON_IDEMPOTENT_SIDE_EFFECT_CLASSES = {
+    "external_non_idempotent",
+    "publication",
+    "provider_account",
+}
+_COMPENSATION_OPERATION_PREFIX = "compensate"
 _GATED_OPERATION_PREFIXES = (
     "jira.transition",
     "repo.merge",
@@ -309,6 +318,149 @@ def side_effect_record(
     elif reason:
         record["reason"] = _sanitize_diagnostic_text(reason)
     return record
+
+
+def _side_effect_already_occurred(record: Mapping[str, Any]) -> bool:
+    """Return whether a recorded side effect is a non-idempotent effect that ran."""
+
+    if record.get("kind", "normal") not in (None, "normal"):
+        # cleanup/compensation records are reconciliation, not original effects.
+        return False
+    if record.get("class") not in _NON_IDEMPOTENT_SIDE_EFFECT_CLASSES:
+        return False
+    # Only effects that were actually allowed to run need to be reconciled. A
+    # blocked or discarded effect never mutated external state.
+    return record.get("disposition") == "accepted"
+
+
+def compensation_subject_key(record: Mapping[str, Any]) -> str:
+    """Return a stable identity for the prior effect a compensation reconciles.
+
+    Used to dedupe compensation across successive reattempts so an
+    already-occurred non-idempotent effect is compensated at most once.
+    """
+
+    existing_key = str(record.get("idempotencyKey") or "").strip()
+    if existing_key:
+        return existing_key
+    effect_class = str(record.get("class") or "").strip()
+    operation = str(record.get("operation") or "").strip()
+    target = str(record.get("target") or "").strip()
+    return f"{effect_class}:{operation}:{target}"
+
+
+def already_occurred_non_idempotent_effects(
+    records: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Filter recorded side effects to non-idempotent effects that already ran."""
+
+    return [
+        dict(record)
+        for record in records
+        if isinstance(record, Mapping) and _side_effect_already_occurred(record)
+    ]
+
+
+def plan_reattempt_compensation(
+    *,
+    workflow_id: str,
+    run_id: str,
+    logical_step_id: str,
+    execution_ordinal: int,
+    prior_side_effect_records: Sequence[Mapping[str, Any]] = (),
+    already_compensated_subjects: Sequence[str] = (),
+    policy_permits_non_idempotent_reattempt: bool = False,
+) -> dict[str, Any]:
+    """Plan explicit, idempotent, observable compensation for a reattempt.
+
+    Implements Section 11 rules 3 and 4: when a non-idempotent external effect
+    already occurred on a prior attempt, a later attempt must account for it
+    explicitly with compensation that is explicit, idempotent, and observable —
+    not merely reset the step.
+
+    The plan is deterministic: each outstanding effect maps to exactly one
+    compensation side-effect record whose idempotency key derives from the new
+    attempt identity, and effects already compensated on an earlier reattempt
+    are skipped so the same external mutation is never compensated twice.
+    """
+
+    already_compensated = {
+        str(subject).strip()
+        for subject in already_compensated_subjects
+        if str(subject).strip()
+    }
+    outstanding = already_occurred_non_idempotent_effects(prior_side_effect_records)
+    compensations: list[dict[str, Any]] = []
+    accounted: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for effect in outstanding:
+        subject = compensation_subject_key(effect)
+        effect_summary = {
+            "class": effect.get("class"),
+            "operation": effect.get("operation"),
+            "target": effect.get("target"),
+            "idempotencyKey": effect.get("idempotencyKey"),
+            "subject": subject,
+        }
+        if subject in already_compensated:
+            skipped.append(effect_summary)
+            continue
+        operation = str(effect.get("operation") or "").strip()
+        compensation_operation = f"{_COMPENSATION_OPERATION_PREFIX}:{operation or 'unknown'}"
+        compensation_key = step_execution_operation_idempotency_key(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            logical_step_id=logical_step_id,
+            execution_ordinal=execution_ordinal,
+            operation=compensation_operation,
+        )
+        record = side_effect_record(
+            effect_class="external_idempotent",
+            operation=compensation_operation,
+            target=effect.get("target"),
+            idempotency_key=compensation_key,
+            effect_kind="compensation",
+            # Compensation is the authorized reconciliation action that makes a
+            # reattempt safe; it must be allowed to run rather than gated.
+            workflow_state_accepted=True,
+            reason=f"compensate_prior_{effect.get('class')}",
+        )
+        record["compensates"] = effect_summary
+        compensations.append(record)
+        accounted.append(effect_summary)
+
+    requires_compensation = bool(accounted)
+    # Compensation is only complete when every planned compensation was actually
+    # accepted. A blocked compensation leaves the prior non-idempotent effect
+    # uncompensated, so the count-based check (always true, since compensations
+    # and accounted grow in lockstep) would wrongly report completion.
+    compensation_complete = all(
+        record.get("disposition") == "accepted" for record in compensations
+    )
+    # A reattempt is only safe to advance once every already-occurred
+    # non-idempotent effect is accounted for: either compensated here, already
+    # compensated on an earlier reattempt, or explicitly permitted by policy.
+    reattempt_allowed = (
+        not requires_compensation
+        or compensation_complete
+        or policy_permits_non_idempotent_reattempt
+    )
+    plan: dict[str, Any] = {
+        "logicalStepId": logical_step_id,
+        "reattemptExecutionOrdinal": execution_ordinal,
+        "requiresCompensation": requires_compensation,
+        "outstandingEffects": accounted,
+        "alreadyCompensated": skipped,
+        "compensations": compensations,
+        "compensationComplete": compensation_complete,
+        "policyPermitsNonIdempotentReattempt": bool(
+            policy_permits_non_idempotent_reattempt
+        ),
+        "reattemptAllowed": bool(reattempt_allowed),
+    }
+    if not reattempt_allowed:
+        plan["reason"] = "uncompensated_non_idempotent_effects"
+    return plan
 
 
 def build_step_execution_manifest_payload(
