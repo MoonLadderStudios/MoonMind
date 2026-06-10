@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. tests/helpers/step_type_payloads.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Reusable Step Type payload fixtures for MM-569 tests.\"\"\"\n2. tests/helpers/codex_session_runtime.py (score: 1.000, trust: canonical)\n    line 12: complete_turn_on_read: bool = True,\n3. moonmind/models_cache.py (score: 1.000, trust: canonical)\n    line 3: from threading import Lock, Thread\n4. api_service/ui_assets.py (score: 1.000, trust: canonical)\n    line 1: import json\n5. docs/ManagedAgents/ManagedAgentArchitecture.md (score: 1.000, trust: canonical)\n    line 157: - `MoonMind.Run` owns the task envelope and step ordering,\n6. moonmind/schemas/step_execution_models.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Typed Step Execution manifest contracts.\"\"\"\n7. docs/ManagedAgents/SharedManagedAgentAbstractions.md (score: 1.000, trust: canonical)\n    line 32: - runtime-native process, thread, container, transcript, and session identifiers remain opaque outside the owning plane.\n8. moonmind/workflows/temporal/service.py (score: 1.000, trust: canonical)\n    line 13: import json",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "tests/helpers/step_type_payloads.py",
+      "text": "line 1: \"\"\"Reusable Step Type payload fixtures for MM-569 tests.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "tests/helpers/codex_session_runtime.py",
+      "text": "line 12: complete_turn_on_read: bool = True,",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 12,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/models_cache.py",
+      "text": "line 3: from threading import Lock, Thread",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/ui_assets.py",
+      "text": "line 1: import json",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ManagedAgents/ManagedAgentArchitecture.md",
+      "text": "line 157: - `MoonMind.Run` owns the task envelope and step ordering,",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 157,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/schemas/step_execution_models.py",
+      "text": "line 1: \"\"\"Typed Step Execution manifest contracts.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ManagedAgents/SharedManagedAgentAbstractions.md",
+      "text": "line 32: - runtime-native process, thread, container, transcript, and session identifiers remain opaque outside the owning plane.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 32,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/workflows/temporal/service.py",
+      "text": "line 13: import json",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 13,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-06-10T08:06:04Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}

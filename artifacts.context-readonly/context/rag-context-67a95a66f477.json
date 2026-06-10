@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. api_service/auth_providers.py (score: 1.000, trust: canonical)\n    line 6: from fastapi import APIRouter, Depends, HTTPException\n2. moonmind/memory/__init__.py (score: 1.000, trust: canonical)\n    line 3: from moonmind.memory.context_pack import (\n3. moonmind/memory/models.py (score: 1.000, trust: canonical)\n    line 1: from __future__ import annotations\n4. docs/tmp/TaskTerminologyCleanupPlan.md (score: 1.000, trust: canonical)\n    line 9: Per the hard-switch plan §1 and §5, the following remain correct and are excluded from every count below: `Temporal Task`, `Workflow Task`, `Activity Task`, `Task Queue` / `task_queue`, `Jira task`, `Codex provider task`. All other unqualified MoonMind \"task\" usage is residual.\n5. docs/ManagedAgents/CodexManagedSessionPlane.md (score: 1.000, trust: canonical)\n    line 21: for Codex continuity. It owns the session container, thread and turn lifecycle,\n6. docs/Temporal/IntegrationsMonitoringDesign.md (score: 1.000, trust: canonical)\n    line 23: This design is intentionally **provider-neutral**. Jules is the default example throughout because MoonMind already has a Jules adapter and current Jules polling behavior elsewhere in the codebase.\n7. docs/Temporal/TemporalSignalsResearch.md (score: 1.000, trust: canonical)\n    line 23: From the SDK side, Temporal’s Python SDK documentation emphasizes that signals and updates are implemented via decorated handlers, invoked as concurrent asyncio tasks; use locks as needed; and ensure in-progress handler tasks don’t get abandoned when the workflow completes. citeturn54search2 It also recommends using a **single dataclass or Pydantic model argument** for signals/updates/queries to support safe evolution via defaults. citeturn53search2\n8. docs/Temporal/WorkflowExecutionProductModel.md (score: 1.000, trust: canonical)\n    line 37: ```json",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "api_service/auth_providers.py",
+      "text": "line 6: from fastapi import APIRouter, Depends, HTTPException",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 6,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/memory/__init__.py",
+      "text": "line 3: from moonmind.memory.context_pack import (",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/memory/models.py",
+      "text": "line 1: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/tmp/TaskTerminologyCleanupPlan.md",
+      "text": "line 9: Per the hard-switch plan §1 and §5, the following remain correct and are excluded from every count below: `Temporal Task`, `Workflow Task`, `Activity Task`, `Task Queue` / `task_queue`, `Jira task`, `Codex provider task`. All other unqualified MoonMind \"task\" usage is residual.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 9,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ManagedAgents/CodexManagedSessionPlane.md",
+      "text": "line 21: for Codex continuity. It owns the session container, thread and turn lifecycle,",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 21,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Temporal/IntegrationsMonitoringDesign.md",
+      "text": "line 23: This design is intentionally **provider-neutral**. Jules is the default example throughout because MoonMind already has a Jules adapter and current Jules polling behavior elsewhere in the codebase.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 23,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Temporal/TemporalSignalsResearch.md",
+      "text": "line 23: From the SDK side, Temporal’s Python SDK documentation emphasizes that signals and updates are implemented via decorated handlers, invoked as concurrent asyncio tasks; use locks as needed; and ensure in-progress handler tasks don’t get abandoned when the workflow completes. citeturn54search2 It also recommends using a **single dataclass or Pydantic model argument** for signals/updates/queries to support safe evolution via defaults. citeturn53search2",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 23,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Temporal/WorkflowExecutionProductModel.md",
+      "text": "line 37: ```json",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 37,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-06-10T08:06:40Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
