@@ -29,6 +29,11 @@ from temporalio import exceptions as temporal_exceptions
 
 from moonmind.config.settings import settings
 from moonmind.services.skills_on_demand import skills_on_demand_disabled_instruction
+from moonmind.security.outbound_scan import (
+    OutboundBundleItem,
+    resolve_high_security_mode,
+    scan_outbound_bundle,
+)
 from moonmind.integrations.pentest.models import (
     PENTEST_HEARTBEAT_PHASES,
     PentestApprovedScope,
@@ -199,6 +204,10 @@ async def _run_command(cmd, **kwargs):
     return CmdRes(stdout)
 
 logger = getLogger(__name__)
+
+_GIT_PUSH_SCAN_MAX_COMMIT_METADATA_CHARS = 100_000
+_GIT_PUSH_SCAN_MAX_FILE_DIFF_CHARS = 200_000
+_GIT_PUSH_SCAN_MAX_CHANGED_FILES = 200
 
 _PROPOSAL_TELEMETRY_SIGNAL_TAGS = {
     "retry",
@@ -8532,6 +8541,16 @@ class TemporalAgentRuntimeActivities:
                 run_id=run_id,
                 env=auth_command_env,
             )
+            pre_push_scan_result = await self._scan_workspace_push_range(
+                workspace=workspace,
+                run_id=run_id,
+                base_ref=base_ref,
+                branch=current_branch,
+                remote_sha=remote_sha,
+                env=command_env,
+            )
+            if pre_push_scan_result is not None:
+                return pre_push_scan_result
 
             push_proc = await asyncio.create_subprocess_exec(
                 *self._workspace_git_command(
@@ -8692,6 +8711,17 @@ class TemporalAgentRuntimeActivities:
 
                         retry_metadata["rebase_status"] = "rebased"
                         retry_remote_sha = remote_sha_after_fetch
+                        retry_scan_result = await self._scan_workspace_push_range(
+                            workspace=workspace,
+                            run_id=run_id,
+                            base_ref=base_ref,
+                            branch=current_branch,
+                            remote_sha=retry_remote_sha,
+                            env=command_env,
+                        )
+                        if retry_scan_result is not None:
+                            retry_scan_result.update(retry_metadata)
+                            return retry_scan_result
                         retry_push_proc = await asyncio.create_subprocess_exec(
                             *self._workspace_git_command(
                                 workspace,
@@ -8890,6 +8920,140 @@ class TemporalAgentRuntimeActivities:
             return None
         head_sha = stdout_bytes.decode("utf-8", errors="replace").strip()
         return head_sha or None
+
+    async def _scan_workspace_push_range(
+        self,
+        *,
+        workspace: str,
+        run_id: str,
+        base_ref: str,
+        branch: str,
+        remote_sha: str | None,
+        env: Mapping[str, str],
+    ) -> dict[str, Any] | None:
+        """Block MoonMind-owned pushes when outbound commit content has secrets."""
+
+        if not resolve_high_security_mode():
+            return None
+
+        range_base = str(remote_sha or base_ref or "").strip()
+        branch_name = str(branch or "").strip()
+        if not range_base or not branch_name:
+            return {
+                "push_status": "blocked",
+                "push_branch": branch_name or "(unknown)",
+                "push_error": (
+                    "outbound git push blocked: could not resolve deterministic "
+                    "commit range for high security scan"
+                ),
+                "diagnostic_kind": "outbound_scan_blocked",
+            }
+
+        commit_range = f"{range_base}..{branch_name}"
+        try:
+            commit_metadata = await self._read_workspace_git_text(
+                workspace=workspace,
+                env=env,
+                timeout=15,
+                args=(
+                    "log",
+                    "--format=commit %H%nparents %P%nauthor %an <%ae>%n"
+                    "subject %s%nbody%n%B%n---END-COMMIT---",
+                    commit_range,
+                ),
+            )
+            changed_files_text = await self._read_workspace_git_text(
+                workspace=workspace,
+                env=env,
+                timeout=15,
+                args=("diff", "--name-only", commit_range),
+            )
+            changed_files = [
+                line.strip()
+                for line in changed_files_text.splitlines()
+                if line.strip()
+            ][:_GIT_PUSH_SCAN_MAX_CHANGED_FILES]
+            bundle: list[OutboundBundleItem] = [
+                OutboundBundleItem(
+                    location=f"git.push.commits:{commit_range}",
+                    content=commit_metadata[
+                        :_GIT_PUSH_SCAN_MAX_COMMIT_METADATA_CHARS
+                    ],
+                )
+            ]
+            for changed_file in changed_files:
+                file_diff = await self._read_workspace_git_text(
+                    workspace=workspace,
+                    env=env,
+                    timeout=20,
+                    args=("diff", "--no-ext-diff", commit_range, "--", changed_file),
+                )
+                bundle.append(
+                    OutboundBundleItem(
+                        location=f"git.push.diff:{changed_file}",
+                        content=file_diff[:_GIT_PUSH_SCAN_MAX_FILE_DIFF_CHARS],
+                    )
+                )
+        except Exception as exc:
+            safe_detail = redact_sensitive_text(str(exc))
+            return {
+                "push_status": "blocked",
+                "push_branch": branch_name,
+                "push_base_ref": base_ref,
+                "push_error": (
+                    "outbound git push blocked: could not build high security "
+                    f"scan payload for {commit_range}: {safe_detail}"
+                ),
+                "diagnostic_kind": "outbound_scan_blocked",
+            }
+
+        scan_result = scan_outbound_bundle(bundle, high_security_mode=True)
+        if scan_result.allowed:
+            return None
+
+        diagnostics = list(scan_result.sanitized_diagnostics)
+        return {
+            "push_status": "blocked",
+            "push_branch": branch_name,
+            "push_base_ref": base_ref,
+            "push_error": (
+                "outbound git push blocked by high security scan: "
+                + "; ".join(diagnostics)
+            ),
+            "diagnostic_kind": "outbound_scan_blocked",
+            "outbound_scan_diagnostics": diagnostics,
+        }
+
+    async def _read_workspace_git_text(
+        self,
+        *,
+        workspace: str,
+        env: Mapping[str, str],
+        timeout: int,
+        args: Sequence[str],
+    ) -> str:
+        proc = await asyncio.create_subprocess_exec(
+            *self._workspace_git_command(workspace, *args),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise
+        if proc.returncode != 0:
+            detail = (
+                stderr_bytes.decode("utf-8", errors="replace").strip()
+                or stdout_bytes.decode("utf-8", errors="replace").strip()
+                or f"git exited with {proc.returncode}"
+            )
+            raise RuntimeError(detail)
+        return stdout_bytes.decode("utf-8", errors="replace")
 
     async def _resolve_workspace_default_branch(
         self,

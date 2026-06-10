@@ -695,6 +695,126 @@ class TestPushWorkspaceBranch:
         assert "push_error" not in result
 
     @pytest.mark.asyncio
+    async def test_push_blocks_high_security_scan_before_git_push(self, monkeypatch):
+        monkeypatch.setattr(settings.security, "high_security_mode", True)
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        recorded_calls: list[tuple[object, ...]] = []
+        call_count = 0
+
+        async def _mock_exec(*args, **kwargs):
+            nonlocal call_count
+            del kwargs
+            call_count += 1
+            recorded_calls.append(args)
+            command = list(args)
+            assert "push" not in command
+            proc = AsyncMock()
+            if call_count == 1:  # rev-parse --abbrev-ref HEAD
+                proc.communicate = AsyncMock(return_value=(b"feature/scan-block\n", b""))
+                proc.returncode = 0
+            elif call_count == 2:  # status --porcelain
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 3:  # remote default branch
+                proc.communicate = AsyncMock(return_value=(b"origin/main\n", b""))
+                proc.returncode = 0
+            elif call_count == 4:  # remote branch sha before scan/push
+                proc.communicate = AsyncMock(return_value=(b"remote-sha\n", b""))
+                proc.returncode = 0
+            elif call_count == 5:  # commit metadata
+                proc.communicate = AsyncMock(
+                    return_value=(
+                        b"commit local-sha\nsubject MM-813 scanned push\n",
+                        b"",
+                    )
+                )
+                proc.returncode = 0
+            elif call_count == 6:  # changed file list
+                proc.communicate = AsyncMock(return_value=(b"app/config.py\n", b""))
+                proc.returncode = 0
+            elif call_count == 7:  # per-file changed content
+                proc.communicate = AsyncMock(
+                    return_value=(b"+password=do-not-print-this-value\n", b"")
+                )
+                proc.returncode = 0
+            else:
+                raise AssertionError(f"Unexpected subprocess call #{call_count}: {args!r}")
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._push_workspace_branch("run-1")
+
+        assert result["push_status"] == "blocked"
+        assert result["diagnostic_kind"] == "outbound_scan_blocked"
+        assert "git.push.diff:app/config.py" in result["push_error"]
+        assert "do-not-print-this-value" not in result["push_error"]
+        assert not any("push" in call for call in recorded_calls)
+
+    @pytest.mark.asyncio
+    async def test_push_allows_clean_high_security_scan(self, monkeypatch):
+        monkeypatch.setattr(settings.security, "high_security_mode", True)
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        recorded_calls: list[tuple[object, ...]] = []
+        call_count = 0
+
+        async def _mock_exec(*args, **kwargs):
+            nonlocal call_count
+            del kwargs
+            call_count += 1
+            recorded_calls.append(args)
+            proc = AsyncMock()
+            if call_count == 1:  # rev-parse --abbrev-ref HEAD
+                proc.communicate = AsyncMock(return_value=(b"feature/scan-allow\n", b""))
+                proc.returncode = 0
+            elif call_count == 2:  # status --porcelain
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 3:  # remote default branch
+                proc.communicate = AsyncMock(return_value=(b"origin/main\n", b""))
+                proc.returncode = 0
+            elif call_count == 4:  # remote branch sha before scan/push
+                proc.communicate = AsyncMock(return_value=(b"remote-sha\n", b""))
+                proc.returncode = 0
+            elif call_count == 5:  # commit metadata
+                proc.communicate = AsyncMock(
+                    return_value=(
+                        b"commit local-sha\nsubject MM-813 clean scanned push\n",
+                        b"",
+                    )
+                )
+                proc.returncode = 0
+            elif call_count == 6:  # changed file list
+                proc.communicate = AsyncMock(return_value=(b"app/service.py\n", b""))
+                proc.returncode = 0
+            elif call_count == 7:  # per-file changed content
+                proc.communicate = AsyncMock(
+                    return_value=(b"+return 'ordinary value'\n", b"")
+                )
+                proc.returncode = 0
+            elif call_count == 8:  # push
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 9:  # rev-parse HEAD
+                proc.communicate = AsyncMock(return_value=(b"pushed-head-sha\n", b""))
+                proc.returncode = 0
+            elif call_count == 10:  # rev-list --count
+                proc.communicate = AsyncMock(return_value=(b"1\n", b""))
+                proc.returncode = 0
+            else:
+                raise AssertionError(f"Unexpected subprocess call #{call_count}: {args!r}")
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._push_workspace_branch("run-1")
+
+        assert result["push_status"] == "pushed"
+        assert result["push_branch"] == "feature/scan-allow"
+        assert result["push_head_sha"] == "pushed-head-sha"
+        assert any("push" in call for call in recorded_calls)
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("raw_ref", [b"origin/\n", b"origin/HEAD\n", b"HEAD\n"])
     async def test_resolve_workspace_default_branch_rejects_non_branch_refs(
         self,
