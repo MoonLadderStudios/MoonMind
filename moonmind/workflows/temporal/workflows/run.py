@@ -692,7 +692,7 @@ class MoonMindRunWorkflow:
         self._last_publish_repair_node_id: str | None = None
         self._codex_session_handle: Any | None = None
         self._codex_session_binding: CodexManagedSessionBinding | None = None
-        self._codex_session_cleared_before_step_ids: set[str] = set()
+        self._codex_session_cleared_before_step_attempts: set[tuple[str, int]] = set()
         self._trusted_jira_context: dict[str, Any] | None = None
         self._step_ledger_rows: list[dict[str, Any]] = []
         self._step_ledger_by_id: dict[str, dict[str, Any]] = {}
@@ -6090,7 +6090,9 @@ class MoonMindRunWorkflow:
     ) -> None:
         if not workflow.patched(RUN_TASK_SCOPED_SESSION_CLEAR_BETWEEN_STEPS_PATCH):
             return
-        if logical_step_id in self._codex_session_cleared_before_step_ids:
+        execution_ordinal = self._step_execution_for(logical_step_id) or 1
+        clear_key = (logical_step_id, execution_ordinal)
+        if clear_key in self._codex_session_cleared_before_step_attempts:
             return
         binding = self._codex_session_binding
         if binding is None:
@@ -6103,7 +6105,7 @@ class MoonMindRunWorkflow:
             workflow_id=workflow.info().workflow_id,
             run_id=workflow.info().run_id,
             logical_step_id=logical_step_id,
-            execution_ordinal=self._step_execution_for(logical_step_id) or 1,
+            execution_ordinal=execution_ordinal,
             operation="clear_session",
         )
         if workflow.patched(RUN_TASK_SCOPED_SESSION_CLEAR_ACTIVITY_SIGNAL_PATCH):
@@ -6152,7 +6154,7 @@ class MoonMindRunWorkflow:
                     reason=reason,
                     request_id=request_id,
                 )
-        self._codex_session_cleared_before_step_ids.add(logical_step_id)
+        self._codex_session_cleared_before_step_attempts.add(clear_key)
 
     async def _terminate_task_scoped_sessions(self, *, reason: str) -> None:
         binding = self._codex_session_binding
