@@ -1070,6 +1070,10 @@ class RecoveryCheckpointPreservedStepModel(BaseModel):
     source_execution_ordinal: int = Field(..., alias="sourceExecutionOrdinal", ge=1)
     artifacts: dict[str, Any] = Field(default_factory=dict, alias="artifacts")
     state_checkpoint_ref: Optional[str] = Field(None, alias="stateCheckpointRef")
+    workspace_checkpoint_ref: Optional[str] = Field(
+        None, alias="workspaceCheckpointRef"
+    )
+    step_checkpoint_ref: Optional[str] = Field(None, alias="stepCheckpointRef")
 
     @field_validator("artifacts", mode="before")
     @classmethod
@@ -1081,6 +1085,14 @@ class RecoveryCheckpointPreservedStepModel(BaseModel):
     @field_validator("state_checkpoint_ref", mode="before")
     @classmethod
     def _normalize_state_checkpoint_ref(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        return candidate or None
+
+    @field_validator("workspace_checkpoint_ref", "step_checkpoint_ref", mode="before")
+    @classmethod
+    def _normalize_optional_checkpoint_ref(cls, value: Any) -> str | None:
         if value is None:
             return None
         candidate = str(value).strip()
@@ -1759,6 +1771,8 @@ class StepLedgerRowModel(BaseModel):
         None, alias="preservedFrom"
     )
     state_checkpoint_ref: str | None = Field(None, alias="stateCheckpointRef")
+    workspace_checkpoint_ref: str | None = Field(None, alias="workspaceCheckpointRef")
+    step_checkpoint_ref: str | None = Field(None, alias="stepCheckpointRef")
     resume_preservation: StepLedgerResumePreservationModel | None = Field(
         None, alias="recoveryPreservation"
     )

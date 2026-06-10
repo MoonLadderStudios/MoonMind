@@ -296,6 +296,9 @@ RUN_DEFER_TASK_SCOPED_SESSION_UNTIL_SLOT_PATCH = (
 RUN_TASK_SCOPED_SESSION_CLEAR_BETWEEN_STEPS_PATCH = (
     "run-task-scoped-session-clear-between-steps-v1"
 )
+RUN_TASK_SCOPED_SESSION_CLEAR_PER_EXECUTION_PATCH = (
+    "run-task-scoped-session-clear-per-execution-v2"
+)
 RUN_TASK_SCOPED_SESSION_CLEAR_ACTIVITY_SIGNAL_PATCH = (
     "run-task-scoped-session-clear-activity-signal-v1"
 )
@@ -692,7 +695,9 @@ class MoonMindRunWorkflow:
         self._last_publish_repair_node_id: str | None = None
         self._codex_session_handle: Any | None = None
         self._codex_session_binding: CodexManagedSessionBinding | None = None
-        self._codex_session_cleared_before_step_attempts: set[tuple[str, int]] = set()
+        self._codex_session_cleared_before_step_attempts: set[
+            str | tuple[str, int]
+        ] = set()
         self._trusted_jira_context: dict[str, Any] | None = None
         self._step_ledger_rows: list[dict[str, Any]] = []
         self._step_ledger_by_id: dict[str, dict[str, Any]] = {}
@@ -1553,14 +1558,30 @@ class MoonMindRunWorkflow:
         if prepared_refs:
             context_refs["preparedInputRefs"] = prepared_refs
 
+        row = self._step_ledger_row_for(logical_step_id)
+        row_state_checkpoint_ref = (
+            str(row.get("stateCheckpointRef") or "").strip()
+            if isinstance(row, Mapping)
+            else ""
+        )
         checkpoint_ref = self._step_checkpoint_refs.get(
             logical_step_id
-        ) or self._previous_step_checkpoint_refs.get(logical_step_id)
-        checkpoint_evidence: dict[str, Any] = (
-            {"stateCheckpointRef": checkpoint_ref}
-            if checkpoint_ref
-            else {"available": False}
+        ) or row_state_checkpoint_ref or self._previous_step_checkpoint_refs.get(
+            logical_step_id
         )
+        checkpoint_evidence: dict[str, Any] = {}
+        if checkpoint_ref:
+            checkpoint_evidence["stateCheckpointRef"] = checkpoint_ref
+        if isinstance(row, Mapping):
+            for source_key, target_key in (
+                ("workspaceCheckpointRef", "workspaceCheckpointRef"),
+                ("stepCheckpointRef", "stepCheckpointRef"),
+            ):
+                value = row.get(source_key)
+                if isinstance(value, str) and value.strip():
+                    checkpoint_evidence[target_key] = value.strip()
+        if not checkpoint_evidence:
+            checkpoint_evidence["available"] = False
         records = [
             dict(record)
             for record in self._step_side_effect_records.get(logical_step_id, ())
@@ -6179,7 +6200,14 @@ class MoonMindRunWorkflow:
         if not workflow.patched(RUN_TASK_SCOPED_SESSION_CLEAR_BETWEEN_STEPS_PATCH):
             return
         execution_ordinal = self._step_execution_for(logical_step_id) or 1
-        clear_key = (logical_step_id, execution_ordinal)
+        # New histories dedupe by Step Execution identity (logical step +
+        # attempt ordinal). Histories that predate this patch keep the old
+        # logical-step dedupe key so replay does not schedule a new clear
+        # activity when a later attempt is observed.
+        if workflow.patched(RUN_TASK_SCOPED_SESSION_CLEAR_PER_EXECUTION_PATCH):
+            clear_key: str | tuple[str, int] = (logical_step_id, execution_ordinal)
+        else:
+            clear_key = logical_step_id
         if clear_key in self._codex_session_cleared_before_step_attempts:
             return
         binding = self._codex_session_binding
