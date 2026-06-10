@@ -28,7 +28,7 @@ When writing code that interacts with skills:
 ## Documentation: canonical vs feature artifacts
 
 - **Canonical docs** (`docs/`): describe **declarative desired state** — architecture, contracts, operator-visible behavior, target semantics. Avoid making phased migration or implementation checklists the main story in these files.
-- **Migration, rollout, and MoonSpec execution notes** belong under **`specs/<feature>/`** (and similar feature-local artifacts) or in **local-only / gitignored paths** (e.g. `artifacts/` for tool handoffs), not as the primary framing of canonical docs.
+- **Migration, rollout, and MoonSpec execution notes** belong under **`docs/tmp/`** or in **local-only / gitignored paths** (e.g. `artifacts/` for tool handoffs), not as the primary framing of canonical docs. `specs/` is no longer a version-controlled source of guidance.
 - Align with **Constitution principle XII** in `.specify/memory/constitution.md`.
 
 ## Testing Instructions
@@ -301,4 +301,4 @@ Key diagnostics:
 - Existing artifact store and workflow history only; no new persistent database tables planned. (001-pentest-activity-handler)
 
 ## Recent Changes
-- 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
+- 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal work
