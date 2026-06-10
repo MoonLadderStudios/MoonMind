@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. docs/MoonMindRoadmap.md (score: 1.000, trust: canonical)\n    line 3: > Tracking the major milestones remaining to fully deliver on the README promise:\n2. docs/Development/FrontendDevelopment.md (score: 1.000, trust: canonical)\n    line 42: asset set from the same server that owns the Mission Control HTML shell and API\n3. docs/Development/PreCommitWorkflow.md (score: 1.000, trust: canonical)\n    line 73: If you prefer the Windows wrappers, `tools/test-unit.ps1`, `tools/test-integration.ps1`, and `tools/test-e2e.ps1` already include step 1 for you.\n4. docs/ReleaseNotes/2026-06-02-jira-implement-workflow-batch.md (score: 1.000, trust: canonical)\n    line 33: - `MM-770` input parameters contained 8 expanded Jira Implement steps, from\n5. docs/Temporal/TaskExecutionCompatibilityModel.md (score: 1.000, trust: canonical)\n    line 8: This document is retained only as a pointer for readers who arrive through older links. The normative product model is now [`WorkflowExecutionProductModel.md`](./WorkflowExecutionProductModel.md).\n6. docs/Temporal/TemporalPlatformFoundation.md (score: 1.000, trust: canonical)\n    line 82: All true agent execution steps are dispatched as `MoonMind.AgentRun` child workflows from `MoonMind.Run`. They are not plain activity invocations. When a managed run uses a task-scoped session, `MoonMind.AgentSession` owns the session container and turn/control lifecycle separately from the step-scoped `MoonMind.AgentRun`.\n7. docs/Security/SettingsLocalFirstBringUp.md (score: 1.000, trust: canonical)\n    line 11: go from a clean database to a working Settings configuration **through\n8. docs/Temporal/WorkflowSchedulingGuide.md (score: 1.000, trust: canonical)\n    line 51: - Cancellation before the scheduled time stops further work, but the Temporal execution has already been started (and may appear as `RUNNING` while idle).",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "docs/MoonMindRoadmap.md",
+      "text": "line 3: > Tracking the major milestones remaining to fully deliver on the README promise:",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Development/FrontendDevelopment.md",
+      "text": "line 42: asset set from the same server that owns the Mission Control HTML shell and API",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 42,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Development/PreCommitWorkflow.md",
+      "text": "line 73: If you prefer the Windows wrappers, `tools/test-unit.ps1`, `tools/test-integration.ps1`, and `tools/test-e2e.ps1` already include step 1 for you.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 73,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ReleaseNotes/2026-06-02-jira-implement-workflow-batch.md",
+      "text": "line 33: - `MM-770` input parameters contained 8 expanded Jira Implement steps, from",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 33,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Temporal/TaskExecutionCompatibilityModel.md",
+      "text": "line 8: This document is retained only as a pointer for readers who arrive through older links. The normative product model is now [`WorkflowExecutionProductModel.md`](./WorkflowExecutionProductModel.md).",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 8,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Temporal/TemporalPlatformFoundation.md",
+      "text": "line 82: All true agent execution steps are dispatched as `MoonMind.AgentRun` child workflows from `MoonMind.Run`. They are not plain activity invocations. When a managed run uses a task-scoped session, `MoonMind.AgentSession` owns the session container and turn/control lifecycle separately from the step-scoped `MoonMind.AgentRun`.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 82,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Security/SettingsLocalFirstBringUp.md",
+      "text": "line 11: go from a clean database to a working Settings configuration **through",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 11,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Temporal/WorkflowSchedulingGuide.md",
+      "text": "line 51: - Cancellation before the scheduled time stops further work, but the Temporal execution has already been started (and may appear as `RUNNING` while idle).",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 51,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-06-10T13:29:10Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
