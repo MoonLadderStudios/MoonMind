@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. moonmind/jules/__init__.py (score: 1.000, trust: canonical)\n    line 3: from .runtime import (\n2. docs/Development/FrontendDevelopment.md (score: 1.000, trust: canonical)\n    line 42: asset set from the same server that owns the Mission Control HTML shell and API\n3. docs/Development/PreCommitWorkflow.md (score: 1.000, trust: canonical)\n    line 73: If you prefer the Windows wrappers, `tools/test-unit.ps1`, `tools/test-integration.ps1`, and `tools/test-e2e.ps1` already include step 1 for you.\n4. docs/ReleaseNotes/2026-06-02-jira-implement-workflow-batch.md (score: 1.000, trust: canonical)\n    line 33: - `MM-770` input parameters contained 8 expanded Jira Implement steps, from\n5. docs/Temporal/TaskExecutionCompatibilityModel.md (score: 1.000, trust: canonical)\n    line 8: This document is retained only as a pointer for readers who arrive through older links. The normative product model is now [`WorkflowExecutionProductModel.md`](./WorkflowExecutionProductModel.md).\n6. moonmind/jules/runtime.py (score: 1.000, trust: canonical)\n    line 3: from __future__ import annotations\n7. api_service/auth_providers.py (score: 1.000, trust: canonical)\n    line 6: from fastapi import APIRouter, Depends, HTTPException\n8. moonmind/claude/runtime.py (score: 1.000, trust: canonical)\n    line 3: from __future__ import annotations",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "moonmind/jules/__init__.py",
+      "text": "line 3: from .runtime import (",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Development/FrontendDevelopment.md",
+      "text": "line 42: asset set from the same server that owns the Mission Control HTML shell and API",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 42,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Development/PreCommitWorkflow.md",
+      "text": "line 73: If you prefer the Windows wrappers, `tools/test-unit.ps1`, `tools/test-integration.ps1`, and `tools/test-e2e.ps1` already include step 1 for you.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 73,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ReleaseNotes/2026-06-02-jira-implement-workflow-batch.md",
+      "text": "line 33: - `MM-770` input parameters contained 8 expanded Jira Implement steps, from",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 33,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Temporal/TaskExecutionCompatibilityModel.md",
+      "text": "line 8: This document is retained only as a pointer for readers who arrive through older links. The normative product model is now [`WorkflowExecutionProductModel.md`](./WorkflowExecutionProductModel.md).",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 8,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/jules/runtime.py",
+      "text": "line 3: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/auth_providers.py",
+      "text": "line 6: from fastapi import APIRouter, Depends, HTTPException",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 6,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/claude/runtime.py",
+      "text": "line 3: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-06-10T13:28:26Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
