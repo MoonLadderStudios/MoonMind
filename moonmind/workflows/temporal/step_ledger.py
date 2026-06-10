@@ -472,6 +472,16 @@ def materialize_preserved_steps(
             or preserved.get("state_checkpoint_ref")
             or ""
         ).strip()
+        workspace_checkpoint_ref = str(
+            preserved.get("workspaceCheckpointRef")
+            or preserved.get("workspace_checkpoint_ref")
+            or ""
+        ).strip()
+        step_checkpoint_ref = str(
+            preserved.get("stepCheckpointRef")
+            or preserved.get("step_checkpoint_ref")
+            or ""
+        ).strip()
         if not state_checkpoint_ref:
             raise ValueError(
                 f"preserved step {logical_step_id} requires a state checkpoint ref"
@@ -490,6 +500,14 @@ def materialize_preserved_steps(
         row["attentionRequired"] = False
         row["artifacts"] = artifacts
         row["stateCheckpointRef"] = state_checkpoint_ref
+        if workspace_checkpoint_ref:
+            row["workspaceCheckpointRef"] = workspace_checkpoint_ref
+        else:
+            row.pop("workspaceCheckpointRef", None)
+        if step_checkpoint_ref:
+            row["stepCheckpointRef"] = step_checkpoint_ref
+        else:
+            row.pop("stepCheckpointRef", None)
         row["recoveryPreservation"] = _recovery_preservation(
             eligible=True,
             reason="complete",
@@ -515,6 +533,8 @@ def mark_step_checkpoint_evidence(
     *,
     updated_at: datetime,
     state_checkpoint_ref: str | None = None,
+    workspace_checkpoint_ref: str | None = None,
+    step_checkpoint_ref: str | None = None,
 ) -> dict[str, Any]:
     """Attach checkpoint evidence and preservation eligibility to a step row."""
 
@@ -523,6 +543,10 @@ def mark_step_checkpoint_evidence(
             continue
         if state_checkpoint_ref is not None:
             row["stateCheckpointRef"] = state_checkpoint_ref
+        if workspace_checkpoint_ref is not None:
+            row["workspaceCheckpointRef"] = workspace_checkpoint_ref
+        if step_checkpoint_ref is not None:
+            row["stepCheckpointRef"] = step_checkpoint_ref
         existing_checkpoint = str(row.get("stateCheckpointRef") or "").strip()
         status = str(row.get("status") or "").strip()
         if status not in {"succeeded", "skipped"}:
@@ -604,6 +628,8 @@ def clear_step_checkpoint_evidence(
         if row.get("logicalStepId") != logical_step_id:
             continue
         row.pop("stateCheckpointRef", None)
+        row.pop("workspaceCheckpointRef", None)
+        row.pop("stepCheckpointRef", None)
         row.pop("recoveryPreservation", None)
         row["updatedAt"] = updated_at.isoformat()
         return row

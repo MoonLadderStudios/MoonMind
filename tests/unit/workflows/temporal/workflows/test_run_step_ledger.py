@@ -811,6 +811,116 @@ async def test_step_execution_manifest_merges_explicit_execution_with_refs(
 
 
 @pytest.mark.asyncio
+async def test_external_continuation_manifest_records_side_effects_and_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Under external_provider_continuation MoonMind still records attempt
+    identity, context refs, known side effects, and available checkpoint
+    evidence for the attempt even though it cannot reset the external runtime."""
+
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+    writes: list[dict[str, Any]] = []
+
+    async def fake_write_json_artifact(
+        *,
+        name: str,
+        payload: dict[str, Any],
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
+    ) -> str:
+        writes.append({"name": name, "payload": payload})
+        return f"artifact-attempt-{len(writes)}"
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[
+            {
+                "id": "delegate-external",
+                "tool": {"type": "agent_runtime", "name": "jules", "version": ""},
+                "inputs": {"title": "Delegate external agent"},
+            }
+        ],
+        dependency_map={"delegate-external": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running(
+        "delegate-external",
+        updated_at=now,
+        summary="Launching external runtime",
+    )
+    workflow._record_step_result_evidence(
+        "delegate-external",
+        execution_result={
+            "status": "RUNNING",
+            "outputs": {
+                "childWorkflowId": "wf-child-external",
+                "childRunId": "run-child-external",
+            },
+        },
+        updated_at=now,
+    )
+    # Durable checkpoint evidence recorded on the step ledger row.
+    workflow._step_ledger_rows[0]["stateCheckpointRef"] = (
+        "artifact://checkpoints/external-step"
+    )
+    workflow._step_ledger_rows[0]["workspaceCheckpointRef"] = (
+        "artifact://checkpoints/workspace"
+    )
+    workflow._step_ledger_rows[0]["stepCheckpointRef"] = "artifact://checkpoints/step"
+    # A known, already-occurred external side effect from this attempt.
+    workflow._record_step_side_effect(
+        "delegate-external",
+        effect_class="external_idempotent",
+        operation="open_pull_request",
+        target="github_pr",
+        idempotency_key="pr-key-1",
+        workflow_state_accepted=True,
+    )
+
+    await workflow._record_step_execution_manifest_started(
+        "delegate-external",
+        updated_at=now,
+        reason="initial_execution",
+    )
+
+    execution = writes[0]["payload"]["execution"]
+    assert execution["runtimeContextPolicy"] == "external_provider_continuation"
+    # Attempt identity / context refs are still recorded.
+    assert execution["childWorkflowId"] == "wf-child-external"
+    assert execution["childRunId"] == "run-child-external"
+    continuation = execution["externalProviderContinuation"]
+    assert continuation["attemptIdentity"] == {
+        "workflowId": "wf-run-1",
+        "runId": "run-1",
+        "logicalStepId": "delegate-external",
+        "executionOrdinal": 1,
+        "stepExecutionId": "wf-run-1:run-1:delegate-external:execution:1",
+    }
+    # Known side effects are recorded under the continuation path.
+    assert continuation["knownSideEffects"] == {
+        "records": [
+            {
+                "class": "external_idempotent",
+                "kind": "normal",
+                "operation": "open_pull_request",
+                "target": "github_pr",
+                "idempotencyKey": "pr-key-1",
+                "disposition": "accepted",
+                "workflowStateAccepted": True,
+            }
+        ]
+    }
+    # Available checkpoint evidence is recorded under the continuation path.
+    assert continuation["checkpointEvidence"] == {
+        "stateCheckpointRef": "artifact://checkpoints/external-step",
+        "workspaceCheckpointRef": "artifact://checkpoints/workspace",
+        "stepCheckpointRef": "artifact://checkpoints/step",
+    }
+
+
+@pytest.mark.asyncio
 async def test_run_records_terminal_step_execution_manifest_with_result_refs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
