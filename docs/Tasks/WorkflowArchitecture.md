@@ -1,4 +1,4 @@
-# Task Architecture (Control Plane)
+# Workflow Architecture (Control Plane)
 
 Status: Active
 Owners: MoonMind Engineering
@@ -6,11 +6,11 @@ Last updated: 2026-05-06
 
 ## 1. Purpose
 
-This document defines the high-level desired-state control-plane architecture for MoonMind tasks.
+This document defines the high-level desired-state control-plane architecture for MoonMind Workflow Executions.
 
 It maps how the control plane translates user intent from Mission Control — including:
 
-- task objective text
+- Workflow objective text
 - step-authored instructions
 - objective-scoped and step-scoped input attachments
 - runtime and publish choices
@@ -30,23 +30,23 @@ MoonMind uses a Temporal-backed execution model in which Mission Control acts as
 
 The control plane already centers on these product objects:
 
-- `MoonMind.Run` as the standard task execution workflow
+- `MoonMind.Run` as the standard Workflow Execution type
 - first-class artifacts for large or binary inputs and outputs
-- step-authored tasks rather than opaque queue jobs
-- reusable task presets
+- step-authored Workflows rather than opaque queue jobs
+- reusable Workflow presets
 - runtime and provider selection intent
 - durable execution actions such as pause, resume, cancel, approve, and rerun
 
 Desired-state additions clarified by this document:
 
-- image inputs are first-class structured task inputs
+- image inputs are first-class structured Workflow inputs
 - attachment targeting is explicit and durable
 - presets are recursively composable authoring objects resolved entirely in the control plane
-- create, edit, and rerun preserve attachment bindings through an authoritative task input snapshot
-- submitted tasks preserve authored preset metadata and flattened step provenance alongside resolved execution payloads
+- create, edit, and rerun preserve attachment bindings through an authoritative Workflow input snapshot
+- submitted Workflows preserve authored preset metadata and flattened step provenance alongside resolved execution payloads
 - runtime preparation and prompt composition are target-aware rather than attachment-bucket-driven
-- failed-task recovery has two explicit user workflows:
-  - edit the task input and retry the whole task from the beginning
+- failed-Workflow Execution recovery has two explicit user workflows:
+  - edit the Workflow input and retry the whole Workflow from the beginning
   - press **Resume** to retry the last failed step with the work completed before that step preserved
 - failed-step resume depends on durable step ledgers, output refs, and workspace checkpoints rather than log parsing or UI reconstruction
 
@@ -54,14 +54,14 @@ Desired-state additions clarified by this document:
 
 ## 3. Core architectural principles
 
-### 3.1 Task-first control plane
+### 3.1 Workflow-first control plane
 
-The user authors tasks, not workflow internals.
+The user authors Workflows, not workflow internals.
 
 Rules:
 
-- the Create page defines user intent in task terms
-- the control plane translates that task intent into execution-plane contracts
+- the Create page defines user intent in Workflow terms
+- the control plane translates that Workflow intent into execution-plane contracts
 - the execution plane owns lifecycle progression, retries, waiting, and history
 
 ### 3.2 Artifact-first binary handling
@@ -78,7 +78,7 @@ Rules:
 
 - an input attachment must belong to an explicit target
 - the supported target kinds are:
-  - task objective target
+  - Workflow objective target
   - step target
 - target binding must survive create, edit, rerun, prepare, prompt composition, and detail rendering
 
@@ -86,8 +86,8 @@ Rules:
 
 Rules:
 
-- task input reconstruction uses an authoritative snapshot
-- text-only reconstruction is insufficient for attachment-aware tasks
+- Workflow input reconstruction uses an authoritative snapshot
+- text-only reconstruction is insufficient for attachment-aware Workflows
 - silent loss of attachment bindings is a contract violation
 
 ### 3.5 Separation of text from structured inputs
@@ -102,9 +102,9 @@ Rules:
 
 Rules:
 
-- failed-task recovery has two separate workflows, and the user's chosen workflow is explicit
-- **Edit and retry whole task** loads the original task snapshot into the authoring UI, permits edits, and starts execution from the beginning
-- **Resume** does not open an authoring form; it retries the last failed step using the original task input and the durable work completed before that step
+- failed-Workflow Execution recovery has two separate workflows, and the user's chosen workflow is explicit
+- **Edit and retry whole Workflow** loads the original Workflow snapshot into the authoring UI, permits edits, and starts execution from the beginning
+- **Resume** does not open an authoring form; it retries the last failed step using the original Workflow input and the durable work completed before that step
 - Resume must never silently edit instructions, steps, attachments, runtime, publish mode, branch, dependencies, or preset metadata
 - Resume is available only when the platform can identify the failed step and restore the work completed before it from durable evidence
 - if the prior work cannot be restored faithfully, Resume must be unavailable or fail explicitly with an operator-readable reason
@@ -121,9 +121,9 @@ flowchart LR
         UI --> API[Executions API]
         UI --> ART[Artifact API]
         UI --> JIRA[Jira Browser API]
-        API --> SNAP[Authoritative Task Input Snapshot]
+        API --> SNAP[Authoritative Workflow Input Snapshot]
         API --> PROF[Provider Profile + Runtime Defaults]
-        API --> PRESETS[Task Preset APIs]
+        API --> PRESETS[Workflow Preset APIs]
     end
 
     subgraph Execution Plane
@@ -168,9 +168,9 @@ The control plane is responsible for all of the following.
 - finalize artifact creation and reject incomplete uploads
 - submit only structured attachment refs to the execution API
 
-### 5.3 Task contract normalization
+### 5.3 Workflow contract normalization
 
-- normalize the task-shaped payload
+- normalize the Workflow-shaped payload
 - preserve `task.inputAttachments` and `task.steps[].inputAttachments`
 - preserve step identity and order
 - preserve runtime and publish intent
@@ -192,7 +192,7 @@ Rules:
 
 ### 5.5 Snapshot durability
 
-- persist an authoritative task input snapshot for edit and rerun
+- persist an authoritative Workflow input snapshot for edit and rerun
 - reconstruct from that snapshot rather than from lossy derived projections
 - preserve attachment target binding in the snapshot
 - preserve pinned preset bindings, include-tree summary, per-step provenance, detachment state, and final submitted order in the snapshot
@@ -203,19 +203,19 @@ Rules:
 - surface attachment metadata by target in detail, edit, and rerun flows
 - expose enough diagnostics for operators to understand attachment-related failures
 
-### 5.7 Failed-task recovery orchestration
+### 5.7 Failed-Workflow Execution recovery orchestration
 
 The control plane exposes distinct recovery actions instead of treating every recovery path as a generic rerun.
 
 Rules:
 
-- failed task details may expose **Edit task**, **Rerun**, and **Resume** as separate actions when their capability fields are true
-- **Edit task** on a failed execution is the editable full retry path; submitting it creates a new execution from the beginning with a new authoritative task input snapshot
-- **Rerun** is the exact full retry path; it starts from the beginning using the original task input without edits
+- failed Workflow details may expose **Edit Workflow**, **Rerun**, and **Resume** as separate actions when their capability fields are true
+- **Edit Workflow** on a failed execution is the editable full retry path; submitting it creates a new execution from the beginning with a new authoritative Workflow input snapshot
+- **Rerun** is the exact full retry path; it starts from the beginning using the original Workflow input without edits
 - **Resume** is the failed-step recovery path; it starts a linked follow-up execution that imports completed prior progress and retries the last failed step
 - Resume eligibility must be computed by the backend, not inferred by the UI
 - Resume eligibility requires, at minimum:
-  - an authoritative original task input snapshot
+  - an authoritative original Workflow input snapshot
   - a pinned source `workflowId` and `runId`
   - a step ledger that identifies the last failed step
   - durable refs for all completed steps before the failed step
@@ -225,7 +225,7 @@ Rules:
 
 ---
 
-## 6. Canonical task-shaped contract
+## 6. Canonical Workflow-shaped contract
 
 Representative contract:
 
@@ -325,15 +325,15 @@ Rules:
 
 - `task.inputAttachments` is the objective-scoped input target
 - `task.steps[n].inputAttachments` is the step-scoped input target
-- `task.authoredPresets` preserves optional preset binding metadata used to compile the submitted task
+- `task.authoredPresets` preserves optional preset binding metadata used to compile the submitted Workflow
 - `task.steps[n].source` preserves optional source provenance for manual, preset-derived, included, or detached steps
-- these fields are part of the task contract, not incidental UI metadata
+- these fields are part of the Workflow contract, not incidental UI metadata
 - the absence of attachments is valid
 - the presence of attachments must be preserved across create, detail, edit, and rerun
 - `task.git.branch` is the single authored branch field; new create, edit, and rerun payloads do not include `targetBranch`
 - for `publish.mode === "pr"`, `task.git.branch` is the selected repository branch / PR base and the PR head branch is runtime-generated or provider-managed
 - for `publish.mode === "branch"`, `task.git.branch` is the branch to update/push
-- `Publish Mode` remains part of task submission semantics; only its Create page placement changes
+- `Publish Mode` remains part of Workflow submission semantics; only its Create page placement changes
 - the execution-facing payload is resolved before workers consume it; `authoredPresets` and `source` metadata are for reconstruction, audit, diagnostics, and safe rerun semantics
 - `task.recovery.kind === "edited_full_retry"` or `"exact_full_rerun"` means the new execution starts from the beginning
 - `task.resume.kind === "recover_from_failed_step"` means the new execution must restore completed progress from `recoveryCheckpointRef` and start at `failedStepId`
@@ -344,12 +344,12 @@ Rules:
 
 ## 7. Snapshot, full retry, and Resume architecture
 
-The original task input snapshot is the authoritative representation of the authored draft.
+The original Workflow input snapshot is the authoritative representation of the authored draft.
 
 Rules:
 
 - it must preserve:
-  - task objective text
+  - Workflow objective text
   - objective-scoped attachment refs
   - step text
   - step-scoped attachment refs
@@ -363,7 +363,7 @@ Rules:
   - detachment state
   - final submitted order after manual and preset-derived steps are flattened
   - dependency declarations that remain part of the editable contract
-- edit, exact full rerun, edited full retry, and Resume all depend on this snapshot for the original authored task input
+- edit, exact full rerun, edited full retry, and Resume all depend on this snapshot for the original authored Workflow input
 - edit and full retry derive their initial browser state from this snapshot
 - Resume reuses this snapshot without presenting it as an editable authoring surface
 - edit, rerun, full retry, and Resume must not depend on current live preset catalog correctness to reconstruct already submitted work
@@ -372,43 +372,43 @@ Rules:
 
 ### 7.1 Editable full retry
 
-Editable full retry is the workflow used when the user wants to change the overall instructions or any other task input and then retry the task.
+Editable full retry is the workflow used when the user wants to change the overall instructions or any other Workflow input and then retry the Workflow.
 
 Rules:
 
-- the Create page opens in edit-for-rerun mode from the authoritative task input snapshot
+- the Create page opens in edit-for-rerun mode from the authoritative Workflow input snapshot
 - the user may edit instructions, steps, attachments, runtime, publish mode, branch, presets, dependencies, and other authoring fields subject to normal validation
 - submitting the form creates a new execution from the beginning
-- the edited execution gets its own authoritative task input snapshot
+- the edited execution gets its own authoritative Workflow input snapshot
 - the original failed execution, its snapshot, step ledger, artifacts, and checkpoints remain immutable
 - no completed execution progress is imported into the edited full retry
 
 ### 7.2 Exact full rerun
 
-Exact full rerun is the workflow used when the user wants to retry the whole task with the same original task input.
+Exact full rerun is the workflow used when the user wants to retry the whole Workflow with the same original Workflow input.
 
 Rules:
 
-- the original task input snapshot is reused as the execution input
-- the task starts from the beginning
+- the original Workflow input snapshot is reused as the execution input
+- the Workflow starts from the beginning
 - prepare, prompt composition, planning or plan hydration, and all steps run again according to the normal execution path
 - no completed execution progress is imported from the failed source run
 
 ### 7.3 Resume from failed step
 
-Resume is the workflow used when the user presses **Resume** on a failed task to retry the last failed step with the completed work up to that step preserved.
+Resume is the workflow used when the user presses **Resume** on a failed Workflow Execution to retry the last failed step with the completed work up to that step preserved.
 
 Rules:
 
-- Resume is not an edit flow and must not allow task input changes in v1
+- Resume is not an edit flow and must not allow Workflow input changes in v1
 - Resume pins the source execution with both `sourceWorkflowId` and `sourceRunId`
 - Resume identifies the last failed step from the source run's step ledger
 - Resume creates or resolves a `recoveryCheckpointRef` that records the completed steps, their output refs, the prepared input refs, and the workspace or branch state immediately before the failed step
 - the new execution imports completed prior steps as preserved progress rather than re-executing them
 - the failed step is retried as a new attempt in the new execution
 - later steps execute normally after the failed step succeeds
-- the task detail view must show preserved prior steps as reused from the source run, not freshly executed by the resumed run
-- if checkpoint restoration is incomplete, corrupted, unauthorized, or inconsistent with the original task input and plan digest, Resume must fail explicitly before executing the failed step
+- the Workflow detail view must show preserved prior steps as reused from the source run, not freshly executed by the resumed run
+- if checkpoint restoration is incomplete, corrupted, unauthorized, or inconsistent with the original Workflow input and plan digest, Resume must fail explicitly before executing the failed step
 
 Representative recovery checkpoint artifact:
 
@@ -451,13 +451,13 @@ Representative recovery checkpoint artifact:
 
 ## 8. Execution-plane responsibilities
 
-The execution plane consumes the normalized task contract after control-plane preset compilation has produced a resolved execution payload.
+The execution plane consumes the normalized Workflow contract after control-plane preset compilation has produced a resolved execution payload.
 
 Rules:
 
 - workers consume resolved steps and structured input refs
 - workers do not expand presets
-- workers do not read the live preset catalog to recover missing task structure
+- workers do not read the live preset catalog to recover missing Workflow structure
 - workers do not depend on live preset catalog correctness for already submitted work
 
 ### 8.1 Workflow responsibilities
@@ -485,7 +485,7 @@ Prepare owns:
 
 Step execution owns:
 
-- consuming task-level objective context when relevant
+- consuming Workflow-level objective context when relevant
 - consuming only the current step’s step-scoped image context by default
 - avoiding accidental leakage of unrelated step attachments into the wrong step execution
 
@@ -517,7 +517,7 @@ Rules:
 When a new execution starts with `task.resume.kind === "recover_from_failed_step"`, `MoonMind.Run` owns:
 
 - loading and validating the recovery checkpoint
-- verifying the checkpoint source `workflowId`, `runId`, task snapshot, and plan identity
+- verifying the checkpoint source `workflowId`, `runId`, Workflow snapshot, and plan identity
 - materializing the restored workspace state before the failed step
 - marking completed prior steps as preserved from the source run without re-executing them
 - injecting preserved outputs so the failed step and downstream steps observe the same contracts as a continuous run
@@ -542,7 +542,7 @@ Rules:
 - user preview and download are authorized by execution ownership and view permissions
 - worker-side download and materialization use service credentials and execution authorization
 - artifact links are execution-scoped
-- target binding is preserved by task contract and snapshot semantics, not inferred from storage paths alone
+- target binding is preserved by Workflow contract and snapshot semantics, not inferred from storage paths alone
 
 Recommended metadata may include:
 
@@ -564,22 +564,22 @@ The control plane does not dictate provider-native multimodal payloads.
 
 Rules:
 
-- the control plane passes normalized task intent plus artifact refs
+- the control plane passes normalized Workflow intent plus artifact refs
 - text-first runtimes consume generated image context through the canonical `INPUT ATTACHMENTS` contract
-- multimodal runtimes may consume raw image refs through runtime adapters without changing the control-plane task contract
+- multimodal runtimes may consume raw image refs through runtime adapters without changing the control-plane Workflow contract
 - runtime adapters must not invent new attachment targeting rules that the Create page cannot express
 
 ---
 
 ## 11. Invariants
 
-The following invariants define the desired-state task system.
+The following invariants define the desired-state Workflow Execution system.
 
 1. **No binary payloads in Temporal history**
    Image bytes do not belong in execution histories or inline create payload text.
 
 2. **Explicit attachment targets**
-   Every input attachment belongs either to the task objective target or to a declared step target.
+   Every input attachment belongs either to the Workflow objective target or to a declared step target.
 
 3. **No silent attachment loss**
    Create, edit, rerun, and prepare must fail explicitly rather than silently dropping attachments.
@@ -588,13 +588,13 @@ The following invariants define the desired-state task system.
    Instruction fields remain textual authoring surfaces. Images remain structured inputs.
 
 5. **Snapshot-based durability**
-   Attachment-aware edit and rerun require an authoritative task input snapshot.
+   Attachment-aware edit and rerun require an authoritative Workflow input snapshot.
 
 6. **Compile-time preset composition**
    Preset composition is compile-time control-plane behavior. Submitted execution payloads must not require live preset lookup.
 
 7. **Preset provenance durability**
-   Task snapshots preserve pinned bindings, include-tree summary, per-step provenance, detachment state, and final submitted order.
+   Workflow snapshots preserve pinned bindings, include-tree summary, per-step provenance, detachment state, and final submitted order.
 
 8. **Server-defined policy**
    Attachment policy is defined by server configuration and enforced by both browser and API.
@@ -615,7 +615,7 @@ The following invariants define the desired-state task system.
    Full rerun, edited full retry, and Resume are distinct intents. The system must not infer Resume from a generic rerun request.
 
 14. **Resume preserves original inputs**
-   Resume uses the original task input snapshot unchanged. Any user edit to instructions, steps, attachments, runtime, publish mode, branch, presets, or dependencies requires edited full retry instead.
+   Resume uses the original Workflow input snapshot unchanged. Any user edit to instructions, steps, attachments, runtime, publish mode, branch, presets, or dependencies requires edited full retry instead.
 
 15. **Resume requires checkpointed progress**
    Resume may be offered only when completed work before the failed step is recoverable from durable step refs and workspace or branch checkpoints.
@@ -632,12 +632,12 @@ The following invariants define the desired-state task system.
 
 ### 12.1 `MoonMind.Run`
 
-This is the canonical attachment-aware task workflow.
+This is the canonical attachment-aware Workflow type.
 
 Rules:
 
-- attachment-aware task authoring is defined against `MoonMind.Run`
-- create, edit, rerun, and detail flows for attachment-aware tasks are all modeled in task-shaped `MoonMind.Run` terms
+- attachment-aware Workflow authoring is defined against `MoonMind.Run`
+- create, edit, rerun, and detail flows for attachment-aware Workflows are all modeled in Workflow-shaped `MoonMind.Run` terms
 - `MoonMind.Run` is the canonical workflow that produces step ledger state and recovery checkpoints for failed-step recovery
 - `MoonMind.Run` may start from the beginning for full retry or start at a failed step when given a validated recovery checkpoint
 - checkpoint durability remains a parent `MoonMind.Run` responsibility even when an individual step delegates work to `MoonMind.AgentRun`
@@ -653,7 +653,7 @@ Rules:
 
 ### 12.3 Other workflow types
 
-Other workflow types may reuse artifact infrastructure, but they do not redefine the Create-page attachment contract.
+Other Workflow types may reuse artifact infrastructure, but they do not redefine the Create-page attachment contract.
 
 ---
 
@@ -663,13 +663,13 @@ The architecture must support operator understanding without requiring raw histo
 
 Rules:
 
-- task detail should expose attachment metadata by target
+- Workflow detail should expose attachment metadata by target
 - diagnostics should expose manifest and generated context refs where appropriate
 - attachment failures should identify:
   - which target failed
   - whether the failure happened during upload, validation, materialization, or context generation
 - step-aware surfaces should identify the current step’s attachment context separately from unrelated step inputs
-- task detail should identify resumed executions and show preserved prior steps as reused from the source run
+- Workflow detail should identify resumed executions and show preserved prior steps as reused from the source run
 - diagnostics for failed Resume attempts should identify whether the failure happened during checkpoint validation, workspace restoration, preserved-output injection, or failed-step execution
 
 ---
@@ -681,7 +681,7 @@ Use this document to understand the architectural contract.
 Use the related docs for detailed behavior:
 
 - `docs/UI/CreatePage.md` for page sections, field behavior, Jira targeting, edit/rerun UX, and validation copy
-- `docs/UI/TaskDetailsPage.md` for failed-task action presentation, including **Resume**
+- `docs/UI/WorkflowDetailsPage.md` for failed-Workflow Execution action presentation, including **Resume**
 - `docs/Tasks/ImageSystem.md` for image-input upload, artifact storage, materialization, context generation, and preview/download behavior
 - `docs/Tasks/AgentSkillSystem.md` for skill selection and resolution
 - `docs/Temporal/TemporalArchitecture.md` for workflow lifecycle and worker topology
@@ -692,15 +692,15 @@ Use the related docs for detailed behavior:
 
 ## 15. Summary
 
-MoonMind’s control plane is task-first, artifact-first, and target-aware.
+MoonMind’s control plane is Workflow-first, artifact-first, and target-aware.
 
 For image inputs that means:
 
 - the user authors text and image inputs in one draft
 - the control plane uploads and binds images to explicit targets
-- the task contract and authoritative snapshot preserve those bindings
+- the Workflow contract and authoritative snapshot preserve those bindings
 - the execution plane prepares and injects target-aware context
 - detail, edit, and rerun surfaces can round-trip the same authored intent without semantic loss
-- failed-task **Resume** can retry the last failed step only when durable checkpoints can restore the work completed before that step
+- failed-Workflow Execution **Resume** can retry the last failed step only when durable checkpoints can restore the work completed before that step
 
-That is the desired-state task architecture contract.
+That is the desired-state Workflow architecture contract.

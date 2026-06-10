@@ -3,7 +3,7 @@
 Status: **Design Draft**
 Owners: MoonMind Engineering
 Last Updated: 2026-03-18
-Related: `docs/Tasks/SkillAndPlanContracts.md`, `docs/Tasks/TasksStepSystem.md`, `docs/Tasks/TaskArchitecture.md`
+Related: `docs/Tasks/SkillAndPlanContracts.md`, `docs/Tasks/WorkflowStepSystem.md`, `docs/Tasks/WorkflowArchitecture.md`
 
 ---
 
