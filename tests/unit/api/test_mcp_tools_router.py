@@ -13,6 +13,7 @@ from api_service.api.routers import mcp_tools as mcp_tools_router
 from api_service.auth_providers import get_current_user
 from moonmind.integrations.jira.errors import JiraToolError
 from moonmind.mcp.jira_tool_registry import JiraToolRegistry
+from moonmind.mcp.skills_on_demand_registry import SkillsOnDemandToolRegistry
 from moonmind.mcp.tool_registry import QueueToolRegistry, ResourceListResponse
 
 pytestmark = [pytest.mark.asyncio]
@@ -38,10 +39,18 @@ def router_app(
     app.include_router(mcp_tools_router.router, prefix="/api")
     app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(id=None)
     monkeypatch.setattr(mcp_tools_router, "_queue_registry", QueueToolRegistry())
+    monkeypatch.setattr(
+        mcp_tools_router,
+        "_skills_on_demand_registry",
+        SkillsOnDemandToolRegistry(expose_commands=False),
+    )
     monkeypatch.setattr(mcp_tools_router, "_jira_registry", None)
     monkeypatch.setattr(mcp_tools_router, "_jira_service", None)
     monkeypatch.setattr(mcp_tools_router, "_jules_registry", None)
     monkeypatch.setattr(mcp_tools_router, "_jules_client", None)
+    app.dependency_overrides[mcp_tools_router.get_async_session] = (
+        lambda: SimpleNamespace()
+    )
     return app
 
 
@@ -69,6 +78,62 @@ async def test_list_tools_includes_enabled_jira_tools(
     assert response.status_code == 200
     names = {tool["name"] for tool in response.json()["tools"]}
     assert {"jira.get_issue", "jira.verify_connection"}.issubset(names)
+
+
+async def test_list_tools_includes_skills_on_demand_commands_when_enabled(
+    router_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        mcp_tools_router.settings.workflow,
+        "skills_on_demand_enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        mcp_tools_router,
+        "_skills_on_demand_registry",
+        SkillsOnDemandToolRegistry(expose_commands=True),
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get("/api/mcp/tools")
+
+    assert response.status_code == 200
+    names = {tool["name"] for tool in response.json()["tools"]}
+    assert "moonmind.skills.query" in names
+    assert "moonmind.skills.request" in names
+
+
+async def test_call_skills_on_demand_query_denies_when_disabled(
+    router_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        mcp_tools_router.settings.workflow,
+        "skills_on_demand_enabled",
+        False,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/mcp/tools/call",
+            json={
+                "tool": "moonmind.skills.query",
+                "arguments": {"query": "jira"},
+            },
+        )
+
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert result["status"] == "denied"
+    assert result["code"] == "feature_disabled"
+    assert result["results"] == []
 
 
 async def test_streamable_http_initialize_returns_mcp_capabilities(
@@ -278,7 +343,8 @@ async def test_streamable_http_tools_call_preserves_string_result_text(
     router_app: FastAPI,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def dispatch_tool(payload: Any, user: Any) -> str:
+    async def dispatch_tool(payload: Any, user: Any, session: Any = None) -> str:
+        del payload, user, session
         return "success"
 
     monkeypatch.setattr(mcp_tools_router, "_dispatch_tool_call", dispatch_tool)
