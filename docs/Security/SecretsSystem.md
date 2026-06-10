@@ -47,6 +47,21 @@ Secret values are resolved only at controlled execution boundaries and materiali
 
 This document builds on [`ProviderProfiles.md`](./ProviderProfiles.md). Provider Profiles own provider selection and secret references. The Secrets System defines what those references mean and how they are safely resolved.
 
+## 1.1 High Security Outbound Scans
+
+MoonMind runtime code exposes a high-security mode for outbound side-effect boundaries. The mode is controlled by `MOONMIND_HIGH_SECURITY_MODE` by default, and runtime callers may pass an explicit mode when a workflow or activity payload needs to bind the decision for one operation.
+
+Effective high-security mode uses deterministic precedence:
+
+1. explicit caller value,
+2. supplied app or security settings object,
+3. environment/config-derived security settings,
+4. default `false`.
+
+When high-security mode is enabled, MoonMind-owned outbound callers should scan text payloads and commit-like payload bundles before send, post, or push side effects. A scan returns a structured allow/block result. Any secret-like or credential-like finding returns a blocked result, and diagnostics identify only the finding category and caller-provided location. Diagnostics, errors, artifacts, logs, and user-visible summaries must not echo the raw detected value.
+
+When high-security mode is disabled, the scan contract returns an allow result and does not silently mutate caller-supplied outbound content.
+
 ---
 
 ## 2. Goals
