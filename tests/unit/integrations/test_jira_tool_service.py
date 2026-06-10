@@ -392,6 +392,65 @@ async def test_add_comment_scans_structured_body_before_provider_submission() ->
     assert raw_secret not in str(exc_info.value)
     assert service.calls == []
 
+async def test_add_comment_scans_consolidated_adf_text_nodes() -> None:
+    raw_secret = "split-structured-comment-secret"
+    service = _StubJiraToolService(
+        atlassian_settings=_build_settings(),
+        responses=[{"id": "must-not-post"}],
+        high_security_mode=True,
+    )
+
+    with pytest.raises(JiraToolError) as exc_info:
+        await service.add_comment(
+            AddCommentRequest(
+                issueKey="ENG-123",
+                body={
+                    "type": "doc",
+                    "version": 1,
+                    "content": [
+                        {
+                            "type": "paragraph",
+                            "content": [
+                                {"type": "text", "text": "password="},
+                                {"type": "text", "text": raw_secret},
+                            ],
+                        }
+                    ],
+                },
+            )
+        )
+
+    assert exc_info.value.code == "outbound_scan_blocked"
+    assert raw_secret not in str(exc_info.value)
+    assert service.calls == []
+
+async def test_add_comment_ignores_adf_metadata_during_outbound_scan() -> None:
+    service = _StubJiraToolService(
+        atlassian_settings=_build_settings(),
+        responses=[{"id": "20001"}],
+        high_security_mode=True,
+    )
+
+    result = await service.add_comment(
+        AddCommentRequest(
+            issueKey="ENG-123",
+            body={
+                "type": "doc",
+                "version": 1,
+                "attrs": {"localId": "password=metadata-only"},
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": "Ready to publish"}],
+                    }
+                ],
+            },
+        )
+    )
+
+    assert result == {"id": "20001"}
+    assert len(service.calls) == 1
+
 async def test_search_issues_preserves_order_by_after_project_scoping() -> None:
     service = _StubJiraToolService(
         atlassian_settings=_build_settings(),

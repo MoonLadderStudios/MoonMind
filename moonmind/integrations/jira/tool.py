@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 from typing import Any
 
@@ -308,12 +307,7 @@ class JiraToolService:
         if isinstance(request.body, str):
             comment_body = request.body
         else:
-            comment_body = json.dumps(
-                request.body,
-                ensure_ascii=True,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
+            comment_body = "\n".join(self._extract_adf_text(request.body))
         result = scan_outbound_text(
             comment_body,
             location="jira.add_comment.body",
@@ -330,6 +324,21 @@ class JiraToolService:
             status_code=422,
             action="add_comment",
         )
+
+    def _extract_adf_text(self, node: Any) -> list[str]:
+        if isinstance(node, dict):
+            if node.get("type") == "text" and isinstance(node.get("text"), str):
+                return [node["text"]]
+            text: list[str] = []
+            for value in node.values():
+                text.extend(self._extract_adf_text(value))
+            return text
+        if isinstance(node, list):
+            text: list[str] = []
+            for item in node:
+                text.extend(self._extract_adf_text(item))
+            return text
+        return []
 
     async def list_create_issue_types(
         self, request: ListCreateIssueTypesRequest
