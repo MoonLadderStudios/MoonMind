@@ -5826,8 +5826,10 @@ def _snapshot_workflow_from_artifact_payload(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     draft = artifact_payload.get("draft")
     source = draft if isinstance(draft, Mapping) else artifact_payload
-    task_value = source.get("task") if isinstance(source, Mapping) else None
-    task = dict(task_value) if isinstance(task_value, Mapping) else {}
+    workflow_value = source.get("workflow") if isinstance(source, Mapping) else None
+    if not isinstance(workflow_value, Mapping) and isinstance(source, Mapping):
+        workflow_value = source.get("task")
+    task = dict(workflow_value) if isinstance(workflow_value, Mapping) else {}
     instructions = str(source.get("instructions") or "").strip()
     if instructions and not str(task.get("instructions") or "").strip():
         task["instructions"] = instructions

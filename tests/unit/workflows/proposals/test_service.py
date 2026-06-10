@@ -869,7 +869,7 @@ async def test_promote_proposal_rejects_unresolved_preset_steps() -> None:
     repo.get_proposal_for_update.return_value = proposal
     service = WorkflowProposalService(repo, redactor=SecretRedactor([], "***"))
 
-    with pytest.raises(WorkflowProposalValidationError, match="stored task payload is invalid"):
+    with pytest.raises(WorkflowProposalValidationError, match="stored workflow payload is invalid"):
         await service.promote_proposal(
             proposal_id=proposal.id,
             promoted_by_user_id=uuid4(),

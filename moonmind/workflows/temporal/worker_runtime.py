@@ -1221,8 +1221,8 @@ def _build_runtime_planner():
             ).strip()
             if not pr_selector and not branch_selector:
                 raise RuntimeError(
-                    "pr-resolver task requires task.tool.inputs.pr or task.git.startingBranch "
-                    "when task.instructions is not explicitly provided"
+                    "pr-resolver workflow requires workflow.tool.inputs.pr or "
+                    "workflow.git.startingBranch when workflow.instructions is not explicitly provided"
                 )
             # Ensure the auto-generated instruction includes the PR/branch
             # selector so the agent knows which PR to target.  The selector

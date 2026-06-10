@@ -25,7 +25,7 @@ from tests.helpers.step_type_payloads import (
 )
 
 def test_task_skills_accepts_valid_properties() -> None:
-    """T001: Ensure task.skills structures successfully marshal."""
+    """T001: Ensure workflow.skills structures successfully marshal."""
     raw_payload = {
         "repository": "test/repo",
         "instructions": "execute",
@@ -419,7 +419,7 @@ def test_runtime_command_rejects_conflicting_objective_metadata() -> None:
 
 
 def test_runtime_command_rejects_conflicting_step_metadata() -> None:
-    with pytest.raises(WorkflowContractError, match="task.steps\\[0\\].runtimeCommand conflicts"):
+    with pytest.raises(WorkflowContractError, match="workflow.steps\\[0\\].runtimeCommand conflicts"):
         build_authoritative_workflow_input_snapshot(
             task_payload={
                 "instructions": "Run task.",
@@ -443,28 +443,28 @@ def test_runtime_command_rejects_conflicting_step_metadata() -> None:
 def test_task_skills_rejects_invalid_values() -> None:
     """T001: Assert structure validation handles edge cases for skills."""
     from pydantic import ValidationError
-    with pytest.raises(ValidationError, match="task.skills.sets must be a list"):
+    with pytest.raises(ValidationError, match="workflow.skills.sets must be a list"):
         WorkflowExecutionSpec.model_validate({
             "repository": "test/repo",
             "instructions": "foo",
             "skills": {"sets": "not-a-list"},
         })
 
-    with pytest.raises(ValidationError, match="task.skills.include must be a list"):
+    with pytest.raises(ValidationError, match="workflow.skills.include must be a list"):
         WorkflowExecutionSpec.model_validate({
             "repository": "test/repo",
             "instructions": "foo",
             "skills": {"include": "not-a-list"},
         })
 
-    with pytest.raises(ValidationError, match="task.skills.exclude must be a list"):
+    with pytest.raises(ValidationError, match="workflow.skills.exclude must be a list"):
         WorkflowExecutionSpec.model_validate({
             "repository": "test/repo",
             "instructions": "foo",
             "skills": {"exclude": "not-a-list"},
         })
 
-    with pytest.raises(ValidationError, match="task\\.skills\\.materializationMode must be hybrid"):
+    with pytest.raises(ValidationError, match="workflow\\.skills\\.materializationMode must be hybrid"):
         WorkflowExecutionSpec.model_validate({
             "repository": "test/repo",
             "instructions": "foo",
@@ -514,7 +514,7 @@ def test_canonical_task_payload_accepts_legacy_preset_version_keys() -> None:
         }
     )
 
-    task = payload.model_dump(by_alias=True, exclude_none=True)["task"]
+    task = payload.model_dump(by_alias=True, exclude_none=True)["workflow"]
     assert task["authoredPresets"] == [
         {
             "presetId": "runtime-quality-followup",
@@ -700,7 +700,7 @@ def test_canonical_task_payload_preserves_recursive_preset_source_original_step_
         }
     )
 
-    task = payload.model_dump(by_alias=True, exclude_none=True)["task"]
+    task = payload.model_dump(by_alias=True, exclude_none=True)["workflow"]
     assert task["steps"][0]["source"]["originalStepId"] == "lint-target"
     assert task["authoredPresets"][1]["inputMapping"] == {
         "target": "preset composition"
@@ -735,7 +735,7 @@ def test_canonical_task_payload_preserves_detached_template_source_provenance() 
         }
     )
 
-    task = payload.model_dump(by_alias=True, exclude_none=True)["task"]
+    task = payload.model_dump(by_alias=True, exclude_none=True)["workflow"]
     assert task["steps"][0]["source"] == {
         "kind": "detached",
         "presetSlug": "quality-flow",
@@ -789,7 +789,7 @@ def test_task_authored_presets_accept_recursive_bindings() -> None:
         }
     )
 
-    task = payload.model_dump(by_alias=True, exclude_none=True)["task"]
+    task = payload.model_dump(by_alias=True, exclude_none=True)["workflow"]
     assert task["authoredPresets"][1] == {
         "presetSlug": "child-checks",
         "presetVersion": "1.0.0",
@@ -820,7 +820,7 @@ def test_task_steps_reject_unresolved_preset_include_work() -> None:
 
 @pytest.mark.parametrize("step_type", ["preset", "activity", "Activity"])
 def test_task_steps_reject_non_executable_step_types(step_type: str) -> None:
-    with pytest.raises(ValidationError, match="task\\.steps\\[\\]\\.type"):
+    with pytest.raises(ValidationError, match="workflow\\.steps\\[\\]\\.type"):
         WorkflowExecutionSpec.model_validate(
             {
                 "instructions": "Run explicit steps.",
@@ -886,7 +886,7 @@ def test_task_steps_reject_skill_step_with_non_skill_tool_payload() -> None:
 def test_task_steps_reject_shell_like_executable_fields(field: str) -> None:
     with pytest.raises(
         ValidationError,
-        match="task\\.steps entries may not define workflow-scoped overrides",
+        match="workflow\\.steps entries may not define workflow-scoped overrides",
     ):
         WorkflowExecutionSpec.model_validate(
             {
@@ -931,7 +931,7 @@ def test_mm569_accepts_executable_tool_and_skill_payload_fixtures() -> None:
         payload=task_payload(tool_step(), skill_step()),
     )
 
-    steps = result["task"]["steps"]
+    steps = result["workflow"]["steps"]
     assert steps[0]["type"] == "tool"
     assert steps[0]["tool"]["id"] == "jira.get_issue"
     assert steps[1]["type"] == "skill"
@@ -945,7 +945,7 @@ def test_mm569_rejects_mixed_and_unresolved_preset_runtime_steps() -> None:
             payload=task_payload(mixed_tool_skill_step()),
         )
 
-    with pytest.raises(WorkflowContractError, match="task\\.steps\\[\\]\\.type"):
+    with pytest.raises(WorkflowContractError, match="workflow\\.steps\\[\\]\\.type"):
         build_canonical_workflow_view(
             job_type="task",
             payload=task_payload(preset_step()),
@@ -971,7 +971,7 @@ def test_mm569_tool_validation_error_identifies_required_field_path() -> None:
     with pytest.raises(WorkflowContractError) as excinfo:
         build_canonical_workflow_view(job_type="task", payload=task_payload(invalid))
 
-    assert "task.steps[].tool.id" in str(excinfo.value)
+    assert "workflow.steps[].tool.id" in str(excinfo.value)
     assert "tool.name" in str(excinfo.value)
 
 
@@ -1034,7 +1034,7 @@ def test_jira_orchestrate_preset_context_allows_first_step_skill_pr_publish() ->
         },
     )
 
-    assert result["task"]["publish"]["mode"] == "pr"
+    assert result["workflow"]["publish"]["mode"] == "pr"
     assert "gh" in result["requiredCapabilities"]
 
 
@@ -1151,7 +1151,7 @@ def test_task_input_attachments_preserve_objective_and_step_targets() -> None:
         },
     )
 
-    assert canonical["task"]["inputAttachments"] == [
+    assert canonical["workflow"]["inputAttachments"] == [
         {
             "artifactId": "art-objective",
             "filename": "same-name.png",
@@ -1159,7 +1159,7 @@ def test_task_input_attachments_preserve_objective_and_step_targets() -> None:
             "sizeBytes": 10,
         }
     ]
-    assert canonical["task"]["steps"][0]["inputAttachments"] == [
+    assert canonical["workflow"]["steps"][0]["inputAttachments"] == [
         {
             "artifactId": "art-step",
             "filename": "same-name.png",
@@ -1204,7 +1204,7 @@ def test_task_input_attachments_accept_field_name_keys() -> None:
         },
     )
 
-    assert canonical["task"]["inputAttachments"] == [
+    assert canonical["workflow"]["inputAttachments"] == [
         {
             "artifactId": "art-objective",
             "filename": "objective.png",
@@ -1212,7 +1212,7 @@ def test_task_input_attachments_accept_field_name_keys() -> None:
             "sizeBytes": 10,
         }
     ]
-    assert canonical["task"]["steps"][0]["inputAttachments"] == [
+    assert canonical["workflow"]["steps"][0]["inputAttachments"] == [
         {
             "artifactId": "art-step",
             "filename": "step.png",
@@ -1356,7 +1356,7 @@ def test_task_input_attachment_validation_error_carries_step_diagnostic() -> Non
 def test_task_input_attachments_must_be_lists() -> None:
     """MM-367: canonical attachment fields are arrays."""
 
-    with pytest.raises(ValidationError, match="task.inputAttachments must be a list"):
+    with pytest.raises(ValidationError, match="workflow.inputAttachments must be a list"):
         WorkflowExecutionSpec.model_validate(
             {
                 "instructions": "Inspect image.",
@@ -1383,13 +1383,13 @@ _VALID_RESUME_BLOCK = {
 
 _BASE_TASK_PAYLOAD = {
     "repository": "test/repo",
-    "task": {"instructions": "Do work"},
+    "workflow": {"instructions": "Do work"},
 }
 
 
 def _canonical_task_payload(task_overrides: dict) -> dict:
     payload = dict(_BASE_TASK_PAYLOAD)
-    payload["task"] = {**_BASE_TASK_PAYLOAD["task"], **task_overrides}
+    payload["workflow"] = {**_BASE_TASK_PAYLOAD["workflow"], **task_overrides}
     return payload
 
 
@@ -1533,8 +1533,8 @@ def test_fr008_exact_full_rerun_accepted_with_source_ids() -> None:
             },
         }),
     )
-    assert result["task"]["recovery"]["kind"] == "exact_full_rerun"
-    assert result["task"].get("resume") is None
+    assert result["workflow"]["recovery"]["kind"] == "exact_full_rerun"
+    assert result["workflow"].get("resume") is None
 
 
 def test_fr008_edited_full_retry_accepted_with_source_ids() -> None:
@@ -1549,7 +1549,7 @@ def test_fr008_edited_full_retry_accepted_with_source_ids() -> None:
             },
         }),
     )
-    assert result["task"]["recovery"]["kind"] == "edited_full_retry"
+    assert result["workflow"]["recovery"]["kind"] == "edited_full_retry"
 
 
 def test_fr008_exact_full_rerun_with_recovery_is_rejected() -> None:
@@ -1598,7 +1598,7 @@ def test_mm644_edited_full_retry_requires_pinned_source_run_ids() -> None:
         }),
     )
 
-    recovery = result["task"]["recovery"]
+    recovery = result["workflow"]["recovery"]
     assert recovery["kind"] == "edited_full_retry"
     assert recovery["sourceWorkflowId"] == "mm:failed-source"
     assert recovery["sourceRunId"] == "run-source"
@@ -1631,7 +1631,7 @@ def test_fr009_depends_on_preserved_verbatim() -> None:
             "dependsOn": ["mm:workflow-1", "mm:workflow-2"],
         }),
     )
-    assert result["task"]["dependsOn"] == ["mm:workflow-1", "mm:workflow-2"]
+    assert result["workflow"]["dependsOn"] == ["mm:workflow-1", "mm:workflow-2"]
 
 
 def test_fr009_empty_depends_on_normalized_to_none() -> None:
@@ -1651,7 +1651,7 @@ def test_fr010_branch_is_canonical_authored_field() -> None:
         job_type="task",
         payload=_canonical_task_payload({"git": {"branch": "feature/my-branch"}}),
     )
-    assert result["task"]["git"]["branch"] == "feature/my-branch"
+    assert result["workflow"]["git"]["branch"] == "feature/my-branch"
 
 
 def test_mm668_target_branch_is_not_active_authored_branch_input() -> None:
@@ -1662,8 +1662,8 @@ def test_mm668_target_branch_is_not_active_authored_branch_input() -> None:
             "git": {"targetBranch": "feature/legacy"},
         }),
     )
-    assert result["task"]["git"]["branch"] is None
-    assert "targetBranch" not in result["task"]["git"]
+    assert result["workflow"]["git"]["branch"] is None
+    assert "targetBranch" not in result["workflow"]["git"]
 
 
 # SC-001: Full recover_from_failed_step acceptance scenario
@@ -1681,10 +1681,10 @@ def test_sc001_well_formed_recovery_payload_accepted() -> None:
             "resume": _VALID_RESUME_BLOCK,
         }),
     )
-    assert result["task"]["recovery"]["kind"] == "recover_from_failed_step"
-    assert result["task"]["resume"]["failedStepId"] == "step-3"
-    assert result["task"]["resume"]["recoveryCheckpointRef"] == "art_ckpt_abc"
-    assert result["task"]["resume"]["taskInputSnapshotRef"] == "art_snap_abc"
+    assert result["workflow"]["recovery"]["kind"] == "recover_from_failed_step"
+    assert result["workflow"]["resume"]["failedStepId"] == "step-3"
+    assert result["workflow"]["resume"]["recoveryCheckpointRef"] == "art_ckpt_abc"
+    assert result["workflow"]["resume"]["taskInputSnapshotRef"] == "art_snap_abc"
 
 
 def test_sc001_recovery_source_workflow_id_must_match_recovery() -> None:
@@ -1742,6 +1742,6 @@ def test_edge_case_branch_and_starting_branch_both_preserved() -> None:
             "git": {"branch": "main", "startingBranch": "sha-abc123"},
         }),
     )
-    git = result["task"]["git"]
+    git = result["workflow"]["git"]
     assert git["branch"] == "main"
     assert git["startingBranch"] == "sha-abc123"

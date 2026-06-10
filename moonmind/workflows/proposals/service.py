@@ -332,21 +332,26 @@ class WorkflowProposalService:
         """Normalize proposal payloads to PR publish mode for promoted follow-up jobs."""
 
         normalized_payload = dict(payload)
-        task_node = normalized_payload.get("task")
-        task = dict(task_node) if isinstance(task_node, Mapping) else {}
-        publish_node = task.get("publish")
+        workflow_node = normalized_payload.get("workflow")
+        if not isinstance(workflow_node, Mapping):
+            workflow_node = normalized_payload.get("task")
+        workflow_payload = dict(workflow_node) if isinstance(workflow_node, Mapping) else {}
+        publish_node = workflow_payload.get("publish")
         publish = dict(publish_node) if isinstance(publish_node, Mapping) else {}
         publish["mode"] = "pr"
-        task["publish"] = publish
-        normalized_payload["task"] = task
+        workflow_payload["publish"] = publish
+        normalized_payload["workflow"] = workflow_payload
+        normalized_payload.pop("task", None)
         return normalized_payload
 
     @staticmethod
     def _enforce_flat_preset_derived_steps(payload: Mapping[str, Any]) -> None:
-        task = payload.get("task")
-        if not isinstance(task, Mapping):
+        workflow_payload = payload.get("workflow")
+        if not isinstance(workflow_payload, Mapping):
+            workflow_payload = payload.get("task")
+        if not isinstance(workflow_payload, Mapping):
             return
-        steps = task.get("steps")
+        steps = workflow_payload.get("steps")
         if not isinstance(steps, Sequence) or isinstance(steps, (str, bytes)):
             return
         for index, raw_step in enumerate(steps):
@@ -364,8 +369,8 @@ class WorkflowProposalService:
             if step_type == "skill" and isinstance(raw_step.get("skill"), Mapping):
                 continue
             raise WorkflowProposalValidationError(
-                "stored task payload is invalid: preset-derived proposal steps "
-                f"must be flat executable Tool or Skill steps at task.steps[{index}]"
+                "stored workflow payload is invalid: preset-derived proposal steps "
+                f"must be flat executable Tool or Skill steps at workflow.steps[{index}]"
             )
 
     @staticmethod
@@ -382,10 +387,12 @@ class WorkflowProposalService:
         """Validate proposal payload shape without applying runtime defaults."""
 
         payload_for_validation = self._normalize_proposal_runtime_payload(payload)
-        task_node = payload_for_validation.get("task")
-        task = dict(task_node) if isinstance(task_node, Mapping) else {}
-        if not task:
-            task = {
+        workflow_node = payload_for_validation.get("workflow")
+        if not isinstance(workflow_node, Mapping):
+            workflow_node = payload_for_validation.get("task")
+        workflow_payload = dict(workflow_node) if isinstance(workflow_node, Mapping) else {}
+        if not workflow_payload:
+            workflow_payload = {
                 "instructions": (
                     self._clean_str(
                         payload_for_validation.get("instructions")
@@ -399,16 +406,17 @@ class WorkflowProposalService:
                 "publish": {"mode": "pr"},
             }
         elif not self._clean_str(
-            task.get("instructions")
-        ) and not self._proposal_has_explicit_skill(task):
-            task["instructions"] = (
+            workflow_payload.get("instructions")
+        ) and not self._proposal_has_explicit_skill(workflow_payload):
+            workflow_payload["instructions"] = (
                 self._clean_str(
                     payload_for_validation.get("instructions")
                     or payload_for_validation.get("instruction")
                 )
                 or "Queue job"
             )
-        payload_for_validation["task"] = task
+        payload_for_validation["workflow"] = workflow_payload
+        payload_for_validation.pop("task", None)
 
         try:
             model = CanonicalWorkflowExecutionPayload.model_validate(payload_for_validation)
@@ -447,7 +455,7 @@ class WorkflowProposalService:
     def _normalize_proposal_runtime_payload(
         cls, payload: Mapping[str, Any]
     ) -> dict[str, Any]:
-        """Normalize proposal runtime ids to the task contract vocabulary."""
+        """Normalize proposal runtime ids to the workflow contract vocabulary."""
 
         normalized = deepcopy(dict(payload))
 
@@ -457,20 +465,21 @@ class WorkflowProposalService:
                     normalized.get(key)
                 )
 
-        task_node = normalized.get("workflow") or normalized.get("task")
-        if not isinstance(task_node, Mapping):
+        workflow_node = normalized.get("workflow") or normalized.get("task")
+        if not isinstance(workflow_node, Mapping):
             return normalized
 
-        task = dict(task_node)
+        workflow_payload = dict(workflow_node)
         for key in ("targetRuntime", "target_runtime", "runtime"):
-            if key not in task:
+            if key not in workflow_payload:
                 continue
-            value = task.get(key)
+            value = workflow_payload.get(key)
             if key == "runtime" and isinstance(value, Mapping):
-                task["runtime"] = cls._normalize_proposal_runtime_mapping(value)
+                workflow_payload["runtime"] = cls._normalize_proposal_runtime_mapping(value)
                 continue
-            task[key] = cls._normalize_proposal_runtime_mode(value)
-        normalized["workflow"] = task
+            workflow_payload[key] = cls._normalize_proposal_runtime_mode(value)
+        normalized["workflow"] = workflow_payload
+        normalized.pop("task", None)
         return normalized
 
     def _prepare_workflow_create_request(
@@ -1330,7 +1339,7 @@ class WorkflowProposalService:
             payload = parsed.model_dump(by_alias=True, exclude_none=True)
         except ValidationError as exc:
             raise WorkflowProposalValidationError(
-                f"stored task payload is invalid: {exc}"
+                f"stored workflow payload is invalid: {exc}"
             ) from exc
         self._enforce_flat_preset_derived_steps(payload)
         if runtime_mode_override is not None:
@@ -1345,13 +1354,16 @@ class WorkflowProposalService:
                 raise WorkflowProposalValidationError(
                     f"runtimeMode must be one of: {supported}"
                 )
-            task_node = payload.get("task")
-            task = dict(task_node) if isinstance(task_node, Mapping) else {}
-            runtime_node = task.get("runtime")
+            workflow_node = payload.get("workflow")
+            if not isinstance(workflow_node, Mapping):
+                workflow_node = payload.get("task")
+            workflow_payload = dict(workflow_node) if isinstance(workflow_node, Mapping) else {}
+            runtime_node = workflow_payload.get("runtime")
             runtime = dict(runtime_node) if isinstance(runtime_node, Mapping) else {}
             runtime["mode"] = normalized_runtime_mode
-            task["runtime"] = runtime
-            payload["task"] = task
+            workflow_payload["runtime"] = runtime
+            payload["workflow"] = workflow_payload
+            payload.pop("task", None)
             payload["targetRuntime"] = normalized_runtime_mode
             try:
                 parsed = CanonicalWorkflowExecutionPayload.model_validate(payload)

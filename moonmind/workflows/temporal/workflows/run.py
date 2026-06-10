@@ -9360,7 +9360,7 @@ class MoonMindRunWorkflow:
                     )
                 except Exception as exc:
                     self._get_logger().warning(
-                        "Failed to validate task.proposalPolicy: %s", exc
+                        "Failed to validate workflow.proposalPolicy: %s", exc
                     )
             origin = {
                 "source": "workflow",

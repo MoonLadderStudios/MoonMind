@@ -64,40 +64,42 @@ def _require_proposal_recovery_admin(user: User) -> None:
 
 
 def _build_workflow_preview(
-    task_request: dict[str, object],
+    workflow_request: dict[str, object],
 ) -> WorkflowProposalPreview | None:
-    payload = task_request.get("payload") if isinstance(task_request, dict) else None
+    payload = workflow_request.get("payload") if isinstance(workflow_request, dict) else None
     if not isinstance(payload, dict):
         return None
     repository = str(payload.get("repository") or "").strip()
     if not repository:
         return None
-    task_node = payload.get("task")
-    task = task_node if isinstance(task_node, dict) else {}
-    runtime_node = task.get("runtime")
+    workflow_node = payload.get("workflow")
+    if not isinstance(workflow_node, dict):
+        workflow_node = payload.get("task")
+    workflow_payload = workflow_node if isinstance(workflow_node, dict) else {}
+    runtime_node = workflow_payload.get("runtime")
     runtime = runtime_node if isinstance(runtime_node, dict) else {}
-    git_node = task.get("git")
+    git_node = workflow_payload.get("git")
     git = git_node if isinstance(git_node, dict) else {}
-    publish_node = task.get("publish")
+    publish_node = workflow_payload.get("publish")
     publish = publish_node if isinstance(publish_node, dict) else {}
-    skill_node = task.get("skill")
+    skill_node = workflow_payload.get("skill")
     skill = skill_node if isinstance(skill_node, dict) else {}
 
     runtime_mode = runtime.get("mode") or payload.get("targetRuntime")
     skill_id = skill.get("id")
     publish_mode = publish.get("mode")
-    priority = task_request.get("priority")
-    max_attempts = task_request.get("maxAttempts")
+    priority = workflow_request.get("priority")
+    max_attempts = workflow_request.get("maxAttempts")
     starting_branch = git.get("startingBranch")
     target_branch = git.get("targetBranch")
-    raw_skills = task.get("skills") or payload.get("skills")
+    raw_skills = workflow_payload.get("skills") or payload.get("skills")
     task_skills = raw_skills if isinstance(raw_skills, list) else None
-    instructions = task.get("instructions") or payload.get("instruction")
-    authored_presets = task.get("authoredPresets")
+    instructions = workflow_payload.get("instructions") or payload.get("instruction")
+    authored_presets = workflow_payload.get("authoredPresets")
     authored_preset_count = (
         len(authored_presets) if isinstance(authored_presets, list) else 0
     )
-    raw_steps = task.get("steps")
+    raw_steps = workflow_payload.get("steps")
     steps = raw_steps if isinstance(raw_steps, list) else []
     step_source_kinds: list[str] = []
     preset_source_metadata: list[dict[str, object]] = []
@@ -305,9 +307,11 @@ async def _resolve_actor(
 def _promotion_title(
     proposal: WorkflowProposal, initial_parameters: dict[str, object]
 ) -> str:
-    task_node = initial_parameters.get("task")
-    task = task_node if isinstance(task_node, dict) else {}
-    instructions = str(task.get("instructions") or "")
+    workflow_node = initial_parameters.get("workflow")
+    if not isinstance(workflow_node, dict):
+        workflow_node = initial_parameters.get("task")
+    workflow_payload = workflow_node if isinstance(workflow_node, dict) else {}
+    instructions = str(workflow_payload.get("instructions") or "")
     title_lines = [line.strip() for line in instructions.splitlines() if line.strip()]
     if title_lines:
         title = title_lines[0][:200]

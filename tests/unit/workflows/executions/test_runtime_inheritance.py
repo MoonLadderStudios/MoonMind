@@ -113,13 +113,13 @@ def _parent_record(
         parameters["effort"] = effort
     if profile_id is not None:
         parameters["profileId"] = profile_id
-    task_runtime: dict[str, Any] = {}
+    workflow_runtime: dict[str, Any] = {}
     if target_runtime is not None:
-        task_runtime["mode"] = target_runtime
+        workflow_runtime["mode"] = target_runtime
     if execution_profile_ref is not None:
-        task_runtime["executionProfileRef"] = execution_profile_ref
-    if task_runtime:
-        parameters["task"] = {"runtime": task_runtime}
+        workflow_runtime["executionProfileRef"] = execution_profile_ref
+    if workflow_runtime:
+        parameters["workflow"] = {"runtime": workflow_runtime}
     return SimpleNamespace(
         workflow_id=workflow_id,
         owner_id=owner_id,

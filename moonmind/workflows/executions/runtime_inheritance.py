@@ -1,6 +1,6 @@
 """Resolve child-agent runtime inheritance for ``POST /api/executions``.
 
-When a parent task creates follow-up work via the execution API, the child
+When a parent workflow creates follow-up work via the execution API, the child
 should run with the same effective runtime/provider profile as the parent
 unless the request explicitly overrides it.  This module owns the contract
 the executions router uses to detect and authorise inheritance.
@@ -18,7 +18,7 @@ INHERIT_CALLER = "caller"
 INHERIT_PARENT = "parent"
 _VALID_DIRECTIVES = frozenset({INHERIT_CALLER, INHERIT_PARENT})
 
-# Scopes that gate task-principal inheritance.
+# Scopes that gate workflow-principal inheritance.
 SCOPE_CREATE_CHILD = "executions:create-child"
 SCOPE_INHERIT_RUNTIME = "executions:inherit-runtime"
 
@@ -40,7 +40,7 @@ class ExecutionPrincipal:
 
     ``user_id`` and ``is_superuser`` describe the OIDC/user principal that
     FastAPI resolved.  ``workflow_id`` / ``run_id`` / ``agent_run_id`` are
-    populated when the caller asserts a task identity through trusted
+    populated when the caller asserts a workflow identity through trusted
     transport headers, *and* that identity has been verified (the executions
     router verifies ownership via ``TemporalExecutionService.describe_execution``).
     ``scopes`` carries the capabilities granted to the principal.
@@ -98,11 +98,19 @@ def _normalise_directive(value: Any) -> Optional[str]:
     return lowered
 
 
+def _workflow_payload_from_request(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    workflow_payload = payload.get("workflow")
+    if isinstance(workflow_payload, Mapping):
+        return workflow_payload
+    legacy_payload = payload.get("task")
+    return legacy_payload if isinstance(legacy_payload, Mapping) else {}
+
+
 def extract_inheritance_directive(
     payload: Mapping[str, Any] | None,
     task_payload: Mapping[str, Any] | None = None,
 ) -> tuple[Optional[str], Optional[str]]:
-    """Return ``(directive, parent_workflow_id)`` from a task-shaped payload.
+    """Return ``(directive, parent_workflow_id)`` from a workflow-shaped payload.
 
     Accepts both shapes documented in the story:
 
@@ -116,9 +124,7 @@ def extract_inheritance_directive(
     if payload is None:
         payload = {}
     if task_payload is None:
-        task_payload = (
-            payload.get("task") if isinstance(payload.get("task"), Mapping) else {}
-        )
+        task_payload = _workflow_payload_from_request(payload)
 
     candidates: list[Any] = [
         payload.get("runtimeInheritance"),
@@ -169,9 +175,7 @@ def has_explicit_child_runtime(
     if payload is None:
         payload = {}
     if task_payload is None:
-        task_payload = (
-            payload.get("task") if isinstance(payload.get("task"), Mapping) else {}
-        )
+        task_payload = _workflow_payload_from_request(payload)
 
     if _coerce_str(payload.get("targetRuntime")):
         return True
@@ -195,16 +199,23 @@ def _extract_parent_runtime_fields(record: Any) -> InheritedRuntime:
     ``record.parameters`` is authoritative for resolved values: the
     executions router writes ``targetRuntime`` (canonical), the resolved
     ``model`` (via ``resolve_effective_model``), ``effort``, and
-    ``profileId``/``task.runtime.executionProfileRef`` into ``parameters``
-    when the parent task was created.  Memo/search attributes are used as
+    ``profileId``/``workflow.runtime.executionProfileRef`` into ``parameters``
+    when the parent workflow was created.  Memo/search attributes are used as
     a fallback for executions that pre-date that path.
     """
 
     parameters = dict(getattr(record, "parameters", None) or {})
-    task_block = parameters.get("task") if isinstance(parameters.get("task"), Mapping) else {}
-    task_runtime = (
-        dict(task_block.get("runtime") or {})
-        if isinstance(task_block, Mapping) and isinstance(task_block.get("runtime"), Mapping)
+    workflow_block = (
+        parameters.get("workflow")
+        if isinstance(parameters.get("workflow"), Mapping)
+        else parameters.get("task")
+        if isinstance(parameters.get("task"), Mapping)
+        else {}
+    )
+    workflow_runtime = (
+        dict(workflow_block.get("runtime") or {})
+        if isinstance(workflow_block, Mapping)
+        and isinstance(workflow_block.get("runtime"), Mapping)
         else {}
     )
     memo = dict(getattr(record, "memo", None) or {})
@@ -212,7 +223,7 @@ def _extract_parent_runtime_fields(record: Any) -> InheritedRuntime:
 
     target_runtime = (
         _coerce_str(parameters.get("targetRuntime"))
-        or _coerce_str(task_runtime.get("mode"))
+        or _coerce_str(workflow_runtime.get("mode"))
         or _coerce_str(memo.get("targetRuntime"))
         or _coerce_str(search_attributes.get("mm_target_runtime"))
         or _coerce_str(search_attributes.get("mm_runtime"))
@@ -222,19 +233,19 @@ def _extract_parent_runtime_fields(record: Any) -> InheritedRuntime:
 
     model = (
         _coerce_str(parameters.get("model"))
-        or _coerce_str(task_runtime.get("model"))
+        or _coerce_str(workflow_runtime.get("model"))
     )
     effort = (
         _coerce_str(parameters.get("effort"))
-        or _coerce_str(task_runtime.get("effort"))
+        or _coerce_str(workflow_runtime.get("effort"))
     )
     profile_id = (
         _coerce_str(parameters.get("profileId"))
-        or _coerce_str(task_runtime.get("profileId"))
-        or _coerce_str(task_runtime.get("providerProfile"))
+        or _coerce_str(workflow_runtime.get("profileId"))
+        or _coerce_str(workflow_runtime.get("providerProfile"))
     )
     execution_profile_ref = (
-        _coerce_str(task_runtime.get("executionProfileRef")) or profile_id
+        _coerce_str(workflow_runtime.get("executionProfileRef")) or profile_id
     )
 
     workflow_id = _coerce_str(getattr(record, "workflow_id", None))
@@ -385,11 +396,11 @@ def apply_inherited_runtime_to_payload(
     task_payload: dict[str, Any],
     inherited: InheritedRuntime,
 ) -> None:
-    """Stamp ``inherited`` runtime fields onto a normalised task payload.
+    """Stamp ``inherited`` runtime fields onto a normalised workflow payload.
 
     Mutates ``payload`` and ``task_payload`` in place.  Applied strictly
     non-destructively: any field the caller already set (``targetRuntime``,
-    ``task.runtime.{mode,model,effort,executionProfileRef,profileId,
+    ``workflow.runtime.{mode,model,effort,executionProfileRef,profileId,
     providerProfile}``, or top-level ``profileId`` / ``providerProfile``)
     is preserved; inheritance only fills in the gaps.  The downstream
     runtime resolution path then sees the merged request.

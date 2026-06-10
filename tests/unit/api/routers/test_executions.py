@@ -2650,7 +2650,7 @@ def test_create_remediation_convenience_route_rejects_malformed_remediation(
     assert response.status_code == 422
     assert response.json()["detail"] == {
         "code": "invalid_execution_request",
-        "message": "task.remediation must be an object",
+        "message": "workflow.remediation must be an object",
     }
     service.create_execution.assert_not_awaited()
 
@@ -3108,7 +3108,7 @@ def test_create_task_shaped_execution_rejects_invalid_proposal_policy(
     )
 
     assert response.status_code == 422
-    assert "task.proposalPolicy.targets" in response.json()["detail"]["message"]
+    assert "workflow.proposalPolicy.targets" in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
 
 def test_create_task_shaped_execution_accepts_provider_profile_alias() -> None:
@@ -4079,7 +4079,7 @@ def test_create_task_shaped_execution_rejects_pr_resolver_without_selector_or_in
     assert response.status_code == 422
     assert (
         response.json()["detail"]["message"]
-        == "pr-resolver task requires payload.workflow.instructions, payload.workflow.inputs.pr, "
+        == "pr-resolver workflow requires payload.workflow.instructions, payload.workflow.inputs.pr, "
         "or payload.workflow.git.startingBranch."
     )
     service.create_execution.assert_not_awaited()
@@ -8070,10 +8070,10 @@ def test_request_rerun_update_snapshot_hydrates_instructions_from_input_artifact
         "api_service.api.routers.executions.get_temporal_artifact_service",
         lambda _session: artifact_service,
     )
-    captured_task_payload: dict[str, object] = {}
+    captured_workflow_payload: dict[str, object] = {}
 
     async def _persist_snapshot(**kwargs) -> str:
-        captured_task_payload.update(kwargs["task_payload"])
+        captured_workflow_payload.update(kwargs["task_payload"])
         target_record = kwargs["record"]
         target_record.memo = {
             **dict(target_record.memo or {}),
@@ -8107,8 +8107,8 @@ def test_request_rerun_update_snapshot_hydrates_instructions_from_input_artifact
         allow_restricted_raw=True,
     )
     persist_mock.assert_awaited_once()
-    assert captured_task_payload["instructions"] == "Top-level rerun instructions."
-    steps = captured_task_payload["steps"]
+    assert captured_workflow_payload["instructions"] == "Top-level rerun instructions."
+    steps = captured_workflow_payload["steps"]
     assert steps[0]["instructions"] == "First step instructions."
     assert steps[1]["instructions"] == "Second step instructions."
     session.commit.assert_awaited_once()

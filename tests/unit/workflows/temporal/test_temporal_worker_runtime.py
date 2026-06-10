@@ -2348,8 +2348,8 @@ def test_runtime_planner_requires_selector_for_pr_resolver_without_instructions(
     with pytest.raises(
         RuntimeError,
         match=(
-            "pr-resolver task requires task.tool.inputs.pr or "
-            "task.git.startingBranch"
+            "pr-resolver workflow requires workflow.tool.inputs.pr or "
+            "workflow.git.startingBranch"
         ),
     ):
         planner(

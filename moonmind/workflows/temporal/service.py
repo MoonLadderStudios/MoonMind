@@ -474,7 +474,7 @@ class TemporalExecutionService:
         target = remediation.get("target")
         if not isinstance(target, Mapping):
             raise TemporalExecutionValidationError(
-                "task.remediation.target.workflowId is required."
+                "workflow.remediation.target.workflowId is required."
             )
 
         target_workflow_id = str(
@@ -482,7 +482,7 @@ class TemporalExecutionService:
         ).strip()
         if not target_workflow_id:
             raise TemporalExecutionValidationError(
-                "task.remediation.target.workflowId is required."
+                "workflow.remediation.target.workflowId is required."
             )
         if not target_workflow_id.startswith("mm:"):
             if await self._dependency_identifier_is_run_id(target_workflow_id):
@@ -538,7 +538,7 @@ class TemporalExecutionService:
         requested_run_id = str(target.get("runId") or target.get("run_id") or "").strip()
         if requested_run_id and requested_run_id != target_record.run_id:
             raise TemporalExecutionValidationError(
-                "task.remediation.target.runId must match the current target runId."
+                "workflow.remediation.target.runId must match the current target runId."
             )
         agent_run_ids = (
             target.get("agentRunIds")
@@ -551,14 +551,14 @@ class TemporalExecutionService:
                 for item in agent_run_ids
             ):
                 raise TemporalExecutionValidationError(
-                    "task.remediation.target.agentRunIds must be a list of strings."
+                    "workflow.remediation.target.agentRunIds must be a list of strings."
                 )
             allowed_agent_run_ids = self._target_agent_run_ids(target_record)
             if allowed_agent_run_ids:
                 requested_agent_run_ids = {str(item).strip() for item in agent_run_ids}
                 if not requested_agent_run_ids.issubset(allowed_agent_run_ids):
                     raise TemporalExecutionValidationError(
-                        "task.remediation.target.agentRunIds must belong to the target execution."
+                        "workflow.remediation.target.agentRunIds must belong to the target execution."
                     )
 
         trigger = remediation.get("trigger")
@@ -573,7 +573,7 @@ class TemporalExecutionService:
         if authority_mode not in ALLOWED_REMEDIATION_AUTHORITY_MODES:
             supported = ", ".join(sorted(ALLOWED_REMEDIATION_AUTHORITY_MODES))
             raise TemporalExecutionValidationError(
-                "Unsupported task.remediation.authorityMode "
+                "Unsupported workflow.remediation.authorityMode "
                 f"'{authority_mode}'. Supported values: {supported}."
             )
         action_policy_ref = str(remediation.get("actionPolicyRef") or "").strip()
@@ -583,7 +583,7 @@ class TemporalExecutionService:
         ):
             supported = ", ".join(sorted(ALLOWED_REMEDIATION_ACTION_POLICY_REFS))
             raise TemporalExecutionValidationError(
-                "Unsupported task.remediation.actionPolicyRef "
+                "Unsupported workflow.remediation.actionPolicyRef "
                 f"'{action_policy_ref}'. Supported values: {supported}."
             )
 
@@ -964,7 +964,7 @@ class TemporalExecutionService:
             if remediation is not None:
                 if not isinstance(remediation, Mapping):
                     raise TemporalExecutionValidationError(
-                        "task.remediation must be an object."
+                        "workflow.remediation must be an object."
                     )
                 remediation_link = await self._validate_remediation_link(
                     remediation=remediation,
