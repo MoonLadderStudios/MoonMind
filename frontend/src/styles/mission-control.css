@@ -3015,37 +3015,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   gap: 0.75rem;
 }
 
-.step-dag-edge-layer {
-  position: absolute;
-  inset: 0.25rem 0.4rem 3.2rem;
-  z-index: 0;
-  overflow: visible;
-  pointer-events: none;
-  color: rgb(71 85 105);
-}
-
-.dark .step-dag-edge-layer {
-  color: rgb(148 163 184);
-}
-
-.step-dag-edge-layer marker path {
-  fill: currentColor;
-}
-
-.step-dag-edge-main,
-.step-dag-edge-branch {
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-width: 1.35;
-  marker-end: url("#step-dag-arrowhead");
-}
-
-.step-dag-edge-branch {
-  opacity: 0.72;
-  stroke-dasharray: 2.5 2.5;
-}
-
 .step-dag-grid {
   position: relative;
   z-index: 1;
@@ -3117,10 +3086,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 @media (max-width: 720px) {
-  .step-dag-edge-layer {
-    display: none;
-  }
-
   .step-dag-edge-label {
     white-space: normal;
   }
