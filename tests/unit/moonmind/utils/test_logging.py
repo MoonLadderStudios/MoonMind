@@ -10,6 +10,7 @@ from moonmind.utils.logging import (
     _secret_variants,
     redact_profile_file_templates,
     redact_sensitive_payload,
+    redact_sensitive_text,
     scrub_github_tokens,
 )
 
@@ -128,6 +129,11 @@ def test_redact_sensitive_text_redacts_auth_paths_without_regex_backtracking():
     result = redact_sensitive_payload(f"token=sk-test in {repeated_path}")
 
     assert result == "token=[REDACTED] in [REDACTED_AUTH_PATH]"
+
+def test_redact_sensitive_text_redacts_quoted_secret_assignments():
+    result = redact_sensitive_text('api_key="raw-secret" password: \'other-secret\'')
+
+    assert result == "api_key=[REDACTED] password=[REDACTED]"
 
 def test_redact_sensitive_text_redacts_private_keys_without_regex_backtracking():
     private_key = (

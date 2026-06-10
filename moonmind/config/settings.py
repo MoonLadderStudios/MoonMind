@@ -1410,6 +1410,13 @@ class AppWorkflowSettings(WorkflowSettings):
 class SecuritySettings(BaseSettings):
     """Security settings"""
 
+    high_security_mode: bool = Field(
+        False,
+        alias="MOONMIND_HIGH_SECURITY_MODE",
+        description=(
+            "Enable fail-closed outbound scans for protected runtime side effects."
+        ),
+    )
     JWT_SECRET_KEY: Optional[str] = Field(
         "test_jwt_secret_key", alias="JWT_SECRET_KEY"
     )  # Made Optional and added default
