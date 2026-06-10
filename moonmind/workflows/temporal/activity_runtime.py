@@ -31,6 +31,7 @@ from moonmind.config.settings import settings
 from moonmind.services.skills_on_demand import skills_on_demand_disabled_instruction
 from moonmind.integrations.pentest.models import (
     PENTEST_HEARTBEAT_PHASES,
+    PentestApprovedScope,
     PentestLaunchPolicyError,
     PentestProviderMaterializationError,
     PentestScopeValidationError,
@@ -156,6 +157,7 @@ from moonmind.workflows.temporal.artifacts import (
     ArtifactRef,
     ArtifactUploadDescriptor,
     ExecutionRef,
+    TemporalArtifactError,
     TemporalArtifactService,
     build_artifact_ref,
 )
@@ -4263,6 +4265,70 @@ class TemporalAgentRuntimeActivities:
         self._client_adapter = client_adapter
         self._supervision_tasks: set[asyncio.Task] = set()
 
+    @staticmethod
+    def _pentest_scope_artifact_id(scope_artifact_ref: object) -> str:
+        if isinstance(scope_artifact_ref, ArtifactRef):
+            artifact_id = str(scope_artifact_ref.artifact_id or "").strip()
+        elif isinstance(scope_artifact_ref, Mapping):
+            artifact_id = str(scope_artifact_ref.get("artifact_id") or "").strip()
+        else:
+            artifact_id = str(scope_artifact_ref or "").strip()
+        if not artifact_id:
+            raise PentestScopeValidationError(
+                error_code="INVALID_SCOPE",
+                reasons=("scope_artifact_ref_required",),
+                diagnostics={"scope_artifact_ref": None},
+            )
+        return artifact_id
+
+    async def _load_pentest_approved_scope(
+        self,
+        request_payload: Mapping[str, Any],
+    ) -> PentestApprovedScope:
+        if self._artifact_service is None:
+            raise PentestScopeValidationError(
+                error_code="INVALID_SCOPE",
+                reasons=("scope_artifact_service_unavailable",),
+                diagnostics={"scope_artifact_ref": request_payload.get("scope_artifact_ref")},
+            )
+        artifact_id = self._pentest_scope_artifact_id(
+            request_payload.get("scope_artifact_ref")
+        )
+        principal = str(
+            request_payload.get("principal_id")
+            or request_payload.get("task_run_id")
+            or "workflow"
+        ).strip()
+        try:
+            _artifact, payload = await self._artifact_service.read(
+                artifact_id=artifact_id,
+                principal=principal,
+            )
+        except TemporalArtifactError as exc:
+            raise PentestScopeValidationError(
+                error_code="INVALID_SCOPE",
+                reasons=("scope_artifact_unreadable",),
+                diagnostics={"scope_artifact_ref": artifact_id},
+            ) from exc
+        try:
+            decoded = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise PentestScopeValidationError(
+                error_code="INVALID_SCOPE",
+                reasons=("scope_artifact_malformed",),
+                diagnostics={"scope_artifact_ref": artifact_id},
+            ) from exc
+        try:
+            return PentestApprovedScope.model_validate(decoded)
+        except ValidationError as exc:
+            raise PentestScopeValidationError(
+                error_code="INVALID_SCOPE",
+                reasons=("scope_artifact_invalid",),
+                diagnostics={
+                    "scope_artifact_ref": artifact_id,
+                    "error_count": exc.error_count(),
+                },
+            ) from exc
     async def execution_notify_completion(
         self,
         request: Any = None,
@@ -4737,7 +4803,49 @@ class TemporalAgentRuntimeActivities:
         payload: Mapping[str, Any],
         /,
     ) -> dict[str, Any]:
-        """Execute one policy-gated PentestGPT workload attempt."""
+        """Registry-dispatched PentestGPT activity boundary (untrusted input).
+
+        This is the entrypoint bound to the ``security.pentest.execute``
+        activity type, so its payload may originate from a caller-supplied
+        plan. The trusted/internal decision is therefore derived from the
+        entrypoint (here, always untrusted) rather than from request inputs:
+        an inline ``approved_scope`` is rejected and the scope is always loaded
+        from the artifact store. Trusted internal callers must use
+        :meth:`_security_pentest_execute_trusted_internal` instead.
+        """
+
+        return await self._run_security_pentest(payload, trusted_internal=False)
+
+    async def _security_pentest_execute_trusted_internal(
+        self,
+        payload: Mapping[str, Any],
+        /,
+    ) -> dict[str, Any]:
+        """Internal entrypoint that may honor an inline ``approved_scope``.
+
+        This method is intentionally **not** registered in
+        ``_ACTIVITY_HANDLER_ATTRS``, so it cannot be reached through
+        registry/plan dispatch. The trusted decision comes from the fact that
+        only trusted workflow-internal code can call this entrypoint, never
+        from a ``trusted_internal_execution`` flag in the request payload.
+        """
+
+        return await self._run_security_pentest(payload, trusted_internal=True)
+
+    async def _run_security_pentest(
+        self,
+        payload: Mapping[str, Any],
+        /,
+        *,
+        trusted_internal: bool,
+    ) -> dict[str, Any]:
+        """Shared policy-gated PentestGPT workload attempt.
+
+        The full PentestGPT runner is intentionally implemented separately from
+        the registry contract. Keeping this activity registered lets workflow
+        validation and worker startup recognize the curated route without
+        silently falling back to the generic tool executor.
+        """
 
         if self._workflow_docker_mode == "disabled":
             raise _docker_workflows_disabled_failure()
@@ -4875,8 +4983,37 @@ class TemporalAgentRuntimeActivities:
                 diagnostics={"policy": "MOONMIND_PENTEST_ENABLED=false"},
             )
 
-        request = PentestWorkloadRequest.model_validate(request_payload)
         try:
+            if trusted_internal:
+                request_payload["trusted_internal_execution"] = True
+                if not request_payload.get("scope_artifact_ref"):
+                    request_payload["scope_artifact_ref"] = (
+                        "trusted-internal-inline-scope"
+                    )
+            else:
+                # Untrusted callers can never assert trusted-internal execution
+                # or supply their own inline scope, regardless of what the
+                # request payload claims. Drop any caller-supplied trust flag
+                # and require an artifact-backed approved scope.
+                request_payload.pop("trusted_internal_execution", None)
+                if request_payload.get("approved_scope") is not None:
+                    raise PentestScopeValidationError(
+                        error_code="INVALID_SCOPE",
+                        reasons=("inline_scope_requires_trusted_internal_execution",),
+                        diagnostics={
+                            "scope_artifact_ref": request_payload.get(
+                                "scope_artifact_ref"
+                            ),
+                        },
+                    )
+                approved_scope = await self._load_pentest_approved_scope(
+                    request_payload
+                )
+                request_payload["approved_scope"] = approved_scope.model_dump(
+                    mode="json"
+                )
+                request_payload["scope_artifact_loaded"] = True
+            request = PentestWorkloadRequest.model_validate(request_payload)
             launch_plan = build_pentest_launch_plan(request)
             provider_profile = resolve_pentest_provider_profile(
                 execution_profile_ref=request.execution_profile_ref,
@@ -4897,7 +5034,7 @@ class TemporalAgentRuntimeActivities:
             diagnostics = getattr(exc, "diagnostics", {})
             return structured_failure(
                 status="validation_failed",
-                target=request.target,
+                target=str(request_payload.get("target") or "") or None,
                 failure_kind="policy_denied",
                 interaction_state="pre_interaction",
                 phase="validating_scope",
