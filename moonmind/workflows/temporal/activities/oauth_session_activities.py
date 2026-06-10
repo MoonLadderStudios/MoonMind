@@ -85,6 +85,7 @@ async def oauth_session_start_auth_runner(
     runtime_id = request.get("runtime_id", "")
     volume_ref = request.get("volume_ref", "")
     volume_mount_path = request.get("volume_mount_path", "")
+    session_transport = str(request.get("session_transport") or "moonmind_pty_ws").strip()
     session_ttl = int(request.get("session_ttl", 1800))
 
     if not session_id:
@@ -95,6 +96,27 @@ async def oauth_session_start_auth_runner(
         raise ValueError("volume_mount_path is required")
     session_ttl = max(60, min(session_ttl, 86400))
     bootstrap_command = get_provider_bootstrap_command(runtime_id)
+
+    if session_transport == "tmate":
+        from moonmind.workflows.temporal.runtime.terminal_bridge import start_tmate_auth_runner_container
+
+        bridge_info = await start_tmate_auth_runner_container(
+            session_id=session_id,
+            runtime_id=runtime_id,
+            volume_ref=volume_ref,
+            volume_mount_path=volume_mount_path,
+            session_ttl=session_ttl,
+            bootstrap_command=bootstrap_command,
+        )
+        bridge_info.setdefault(
+            "expires_at",
+            (datetime.now(timezone.utc) + timedelta(seconds=session_ttl)).isoformat(),
+        )
+        bridge_info.setdefault("session_transport", "tmate")
+        return bridge_info
+
+    if session_transport != "moonmind_pty_ws":
+        raise ValueError(f"Unsupported OAuth session transport: {session_transport}")
 
     from moonmind.workflows.temporal.runtime.terminal_bridge import start_terminal_bridge_container
     

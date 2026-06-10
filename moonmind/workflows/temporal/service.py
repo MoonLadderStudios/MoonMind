@@ -2848,6 +2848,7 @@ class TemporalExecutionService:
         recovery_checkpoint_ref: str | None,
         idempotency_key: str,
         checkpoint_payload: Mapping[str, Any] | None = None,
+        selected_start_step_id: str | None = None,
     ) -> dict[str, Any]:
         """Create a linked follow-up execution for failed-step recovery."""
 
@@ -2927,17 +2928,49 @@ class TemporalExecutionService:
                 raise TemporalExecutionRecoveryCheckpointError(
                     "Recovery checkpoint plan identity does not match source execution."
                 )
-        failed_step_id = checkpoint.failed_step.logical_step_id
-        failed_step_execution = checkpoint.failed_step.execution_ordinal
-        if not failed_step_id:
+        checkpoint_failed_step_id = checkpoint.failed_step.logical_step_id
+        checkpoint_failed_step_execution = checkpoint.failed_step.execution_ordinal
+        if not checkpoint_failed_step_id:
             raise TemporalExecutionRecoveryCheckpointError(
                 "Recovery failed step id is required."
             )
+        selected_step_id = str(selected_start_step_id or "").strip()
+        recovery_mode = "selected_step" if selected_step_id else "last_failed_step"
+        failed_step_id = checkpoint_failed_step_id
+        failed_step_execution = checkpoint_failed_step_execution
+        preserved_steps = list(checkpoint.preserved_steps)
+        if selected_step_id:
+            if selected_step_id == checkpoint_failed_step_id:
+                recovery_mode = "last_failed_step"
+            else:
+                selected_preserved = next(
+                    (
+                        step
+                        for step in checkpoint.preserved_steps
+                        if step.logical_step_id == selected_step_id
+                    ),
+                    None,
+                )
+                if selected_preserved is None:
+                    raise TemporalExecutionRecoveryCheckpointError(
+                        "Selected start step is not compatible with recovery checkpoint evidence."
+                    )
+                if selected_preserved.order >= checkpoint.failed_step.order:
+                    raise TemporalExecutionRecoveryCheckpointError(
+                        "Selected start step must precede the failed step."
+                    )
+                failed_step_id = selected_preserved.logical_step_id
+                failed_step_execution = selected_preserved.source_execution_ordinal
+                preserved_steps = [
+                    step
+                    for step in checkpoint.preserved_steps
+                    if step.order < selected_preserved.order
+                ]
 
         params = dict(record.parameters or {})
         for key in TASK_RUN_ID_PARAM_KEYS:
             params.pop(key, None)
-        params["recoverySource"] = RecoverySourceModel(
+        recovery_source_payload = RecoverySourceModel(
             sourceWorkflowId=record.workflow_id,
             sourceRunId=source_run_id,
             sourceTaskInputSnapshotRef=source_snapshot_ref,
@@ -2945,10 +2978,22 @@ class TemporalExecutionService:
             sourcePlanDigest=checkpoint.plan_digest,
             failedStepId=failed_step_id,
             failedStepExecution=failed_step_execution,
+            recoveryMode=recovery_mode,
+            selectedStartStepId=(
+                failed_step_id if recovery_mode == "selected_step" else None
+            ),
+            selectedStartStepExecution=(
+                failed_step_execution if recovery_mode == "selected_step" else None
+            ),
             recoveryCheckpointRef=checkpoint_ref,
             recoveryWorkspace=checkpoint.recovery_workspace,
-            preservedSteps=checkpoint.preserved_steps,
+            preservedSteps=preserved_steps,
         ).model_dump(by_alias=True, mode="json")
+        if recovery_mode == "last_failed_step":
+            recovery_source_payload.pop("recoveryMode", None)
+            recovery_source_payload.pop("selectedStartStepId", None)
+            recovery_source_payload.pop("selectedStartStepExecution", None)
+        params["recoverySource"] = recovery_source_payload
 
         task_payload = params.get("task")
         task_params = dict(task_payload) if isinstance(task_payload, Mapping) else {}
@@ -2966,6 +3011,10 @@ class TemporalExecutionService:
             "recoveryCheckpointRef": checkpoint_ref,
             "taskInputSnapshotRef": source_snapshot_ref,
         }
+        if recovery_mode == "selected_step":
+            recover_ref["recoveryMode"] = recovery_mode
+            recover_ref["selectedStartStepId"] = failed_step_id
+            recover_ref["selectedStartStepExecution"] = failed_step_execution
         plan_ref = checkpoint.plan_ref or source_plan_ref
         if plan_ref:
             recover_ref["planRef"] = plan_ref
@@ -2995,7 +3044,11 @@ class TemporalExecutionService:
             ),
             repository=repository,
             integration=None,
-            summary=f"Recovered from failed step of {record.workflow_id}.",
+            summary=(
+                f"Recovered from selected step of {record.workflow_id}."
+                if recovery_mode == "selected_step"
+                else f"Recovered from failed step of {record.workflow_id}."
+            ),
         )
         return {
             "accepted": True,
@@ -3009,7 +3062,11 @@ class TemporalExecutionService:
                 "runId": created.run_id,
                 "detailHref": f"/workflows/{created.workflow_id}",
             },
-            "relationship": "Recovered from failed step",
+            "relationship": (
+                "Recovered from selected step"
+                if recovery_mode == "selected_step"
+                else "Recovered from failed step"
+            ),
             "recoveryCheckpointRef": checkpoint_ref,
         }
 

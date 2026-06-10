@@ -785,6 +785,7 @@ class ApprovalPolicyPolicy:
 
     enabled: bool = False
     max_review_attempts: int = 2
+    max_consecutive_no_progress_attempts: int | None = None
     reviewer_model: str = "default"
     review_timeout_seconds: int = 120
     skip_tool_types: tuple[str, ...] = DEFAULT_SKIP_TOOL_TYPES
@@ -799,6 +800,14 @@ class ApprovalPolicyPolicy:
                 "invalid_policy",
                 "approval_policy.max_review_attempts must be >= 0",
             )
+        if (
+            self.max_consecutive_no_progress_attempts is not None
+            and self.max_consecutive_no_progress_attempts < 1
+        ):
+            raise ContractValidationError(
+                "invalid_policy",
+                "approval_policy.max_consecutive_no_progress_attempts must be >= 1",
+            )
         if self.review_timeout_seconds <= 0:
             raise ContractValidationError(
                 "invalid_policy",
@@ -806,13 +815,18 @@ class ApprovalPolicyPolicy:
             )
 
     def to_payload(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "enabled": self.enabled,
             "max_review_attempts": self.max_review_attempts,
             "reviewer_model": self.reviewer_model,
             "review_timeout_seconds": self.review_timeout_seconds,
             "skip_tool_types": list(self.skip_tool_types),
         }
+        if self.max_consecutive_no_progress_attempts is not None:
+            payload["max_consecutive_no_progress_attempts"] = (
+                self.max_consecutive_no_progress_attempts
+            )
+        return payload
 
 @dataclass(frozen=True, slots=True)
 class PlanPolicy:
@@ -1101,6 +1115,16 @@ def parse_plan_definition(payload: Mapping[str, Any]) -> PlanDefinition:
                 int(raw_attempts)
                 if (raw_attempts := approval_policy_raw.get("max_review_attempts")) is not None
                 else 2
+            ),
+            max_consecutive_no_progress_attempts=(
+                int(raw_no_progress_attempts)
+                if (
+                    raw_no_progress_attempts := approval_policy_raw.get(
+                        "max_consecutive_no_progress_attempts"
+                    )
+                )
+                is not None
+                else None
             ),
             reviewer_model=str(
                 approval_policy_raw.get("reviewer_model") or "default"

@@ -688,6 +688,21 @@ async def test_run_records_step_execution_manifest_ref_when_work_begins(
     assert writes[1]["payload"]["reason"] == "runtime_recovered"
     assert writes[1]["payload"]["execution"] == {
         "runtimeContextPolicy": "fresh_agent_run",
+        "runtimeSessionReset": {
+            "requestedPolicy": "reuse_session_new_epoch",
+            "resolvedPolicy": "fresh_agent_run",
+            "semantics": "new_epoch_cleared_context",
+            "clearContext": True,
+            "newEpoch": True,
+            "runtimeId": "codex",
+            "sourceExecutionOrdinal": {
+                "workflowId": "wf-run-1",
+                "runId": "run-1",
+                "logicalStepId": "delegate-agent",
+                "executionOrdinal": 1,
+            },
+            "availableCheckpointEvidence": {"available": False},
+        },
         "childWorkflowId": "wf-child-1",
         "childRunId": "run-child-1",
     }
@@ -776,6 +791,18 @@ async def test_step_execution_manifest_merges_explicit_execution_with_refs(
 
     assert writes[0]["payload"]["execution"] == {
         "runtimeContextPolicy": "external_provider_continuation",
+        "externalProviderContinuation": {
+            "attemptIdentity": {
+                "workflowId": "wf-run-1",
+                "runId": "run-1",
+                "logicalStepId": "delegate-external",
+                "executionOrdinal": 1,
+                "stepExecutionId": "wf-run-1:run-1:delegate-external:execution:1",
+            },
+            "contextRefs": {},
+            "knownSideEffects": {"records": []},
+            "checkpointEvidence": {"available": False},
+        },
         "childWorkflowId": "wf-child-explicit",
         "childRunId": "run-child-from-ledger",
         "diagnosticsRef": "artifact://diagnostics/external",
@@ -863,20 +890,30 @@ async def test_external_continuation_manifest_records_side_effects_and_checkpoin
     # Attempt identity / context refs are still recorded.
     assert execution["childWorkflowId"] == "wf-child-external"
     assert execution["childRunId"] == "run-child-external"
+    continuation = execution["externalProviderContinuation"]
+    assert continuation["attemptIdentity"] == {
+        "workflowId": "wf-run-1",
+        "runId": "run-1",
+        "logicalStepId": "delegate-external",
+        "executionOrdinal": 1,
+        "stepExecutionId": "wf-run-1:run-1:delegate-external:execution:1",
+    }
     # Known side effects are recorded under the continuation path.
-    assert execution["knownSideEffects"] == [
-        {
-            "class": "external_idempotent",
-            "kind": "normal",
-            "operation": "open_pull_request",
-            "target": "github_pr",
-            "idempotencyKey": "pr-key-1",
-            "disposition": "accepted",
-            "workflowStateAccepted": True,
-        }
-    ]
+    assert continuation["knownSideEffects"] == {
+        "records": [
+            {
+                "class": "external_idempotent",
+                "kind": "normal",
+                "operation": "open_pull_request",
+                "target": "github_pr",
+                "idempotencyKey": "pr-key-1",
+                "disposition": "accepted",
+                "workflowStateAccepted": True,
+            }
+        ]
+    }
     # Available checkpoint evidence is recorded under the continuation path.
-    assert execution["availableCheckpointEvidence"] == {
+    assert continuation["checkpointEvidence"] == {
         "stateCheckpointRef": "artifact://checkpoints/external-step",
         "workspaceCheckpointRef": "artifact://checkpoints/workspace",
         "stepCheckpointRef": "artifact://checkpoints/step",
@@ -1520,6 +1557,10 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
     workflow._owner_id = "owner-1"
     written_review_payloads: list[dict[str, Any]] = []
     skill_inputs: list[dict[str, Any]] = []
+    plan_payload = _approval_policy_plan_payload()
+    plan_payload["policy"]["approval_policy"][
+        "max_consecutive_no_progress_attempts"
+    ] = 1
     review_artifact_ids = iter(("art_review_1", "art_review_2"))
     step_execution_artifact_ids = iter(
         (
@@ -1541,6 +1582,8 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
                         "evidence": "stderr tail",
                     }
                 ],
+                "remainingWorkRef": "art_remaining_work_1",
+                "recommendedNextAction": "reattempt_current_step",
             },
             {
                 "verdict": "PASS",
@@ -1592,7 +1635,7 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
         if activity_type == "artifact.read":
             artifact_ref = getattr(payload, "artifact_ref", None)
             if artifact_ref == "art_plan_1":
-                return json.dumps(_approval_policy_plan_payload()).encode("utf-8")
+                return json.dumps(plan_payload).encode("utf-8")
             if artifact_ref == "artifact://registry/1":
                 return json.dumps(_registry_payload()).encode("utf-8")
         if activity_type == "artifact.write_complete":
@@ -1799,15 +1842,168 @@ async def test_run_execution_stage_stops_downstream_handoff_when_gate_budget_exh
         "maxAttempts": 1,
         "attemptsConsumed": 1,
         "remainingExecutions": 0,
+        "additionalStopDimension": {
+            "type": "consecutive_no_progress_attempts",
+            "limit": 1,
+            "consumed": 1,
+            "remaining": 0,
+            "exhausted": True,
+        },
         "stopRules": [
             "structured_gate_verdict_required",
             "accepted_output_evidence_required",
+            "consecutive_no_progress_attempts_exhaustion_stops_before_publication",
             "budget_exhaustion_stops_before_publication",
         ],
         "exhausted": True,
         "gateVerdict": "ADDITIONAL_WORK_NEEDED",
         "recommendedNextAction": "needs_human",
     }
+
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_stops_downstream_handoff_when_no_progress_budget_exhausts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    invoked_skills: list[str] = []
+    step_execution_payloads: list[dict[str, Any]] = []
+
+    plan_payload = _approval_policy_plan_payload()
+    plan_payload["policy"]["failure_mode"] = "CONTINUE"
+    plan_payload["policy"]["approval_policy"]["max_review_attempts"] = 2
+    plan_payload["policy"]["approval_policy"][
+        "max_consecutive_no_progress_attempts"
+    ] = 1
+    plan_payload["nodes"] = [
+        {
+            "id": "implement",
+            "tool": {"type": "agent_runtime", "name": "repo.apply_patch", "version": "1.0.0"},
+            "inputs": {"targetRuntime": "codex_cli", "instructions": "Apply patch"},
+            "options": {},
+        },
+        {
+            "id": "publish",
+            "tool": {"type": "agent_runtime", "name": "repo.publish", "version": "1.0.0"},
+            "inputs": {"targetRuntime": "codex_cli", "instructions": "Publish"},
+            "options": {},
+        },
+    ]
+    plan_payload["edges"] = [{"from": "implement", "to": "publish"}]
+    registry_payload = _registry_payload()
+    registry_payload["skills"].append(
+        {
+            **registry_payload["skills"][0],
+            "name": "repo.publish",
+        }
+    )
+    artifact_ids = iter(
+        (
+            "art_attempt_1",
+            "art_review_1",
+            "art_attempt_1_terminal",
+        )
+    )
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_type == "provider_profile.list":
+            return {"profiles": []}
+        if activity_type == "artifact.create":
+            return ({"artifact_id": next(artifact_ids)}, {"upload_url": "unused"})
+        if activity_type == "step.review":
+            return {
+                "verdict": "ADDITIONAL_WORK_NEEDED",
+                "confidence": "medium",
+                "feedback": "No material progress.",
+                "issues": [],
+                "remainingWorkRef": "art_remaining_work_1",
+                "recommendedNextAction": "needs_human",
+            }
+        raise AssertionError(f"unexpected activity: {activity_type}")
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        invoked_skills.append(str(kwargs["id"]).rsplit(":agent:", 1)[1])
+        return {
+            "summary": "Patch applied",
+            "metadata": {"outputSummaryRef": "art_summary_1"},
+            "output_refs": [],
+        }
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_type == "artifact.read":
+            artifact_ref = getattr(payload, "artifact_ref", None)
+            if artifact_ref == "art_plan_1":
+                return json.dumps(plan_payload).encode("utf-8")
+            if artifact_ref == "artifact://registry/1":
+                return json.dumps(registry_payload).encode("utf-8")
+        if activity_type == "artifact.write_complete":
+            decoded = json.loads(payload.payload.decode("utf-8"))
+            if getattr(payload, "content_type", "") == (
+                "application/vnd.moonmind.step-execution+json;version=1"
+            ):
+                step_execution_payloads.append(decoded)
+            return {"ok": True}
+        raise AssertionError(f"unexpected typed activity: {activity_type}")
+
+    monkeypatch.setattr(
+        run_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+
+    await workflow._run_execution_stage(
+        parameters={"repo": "MoonLadderStudios/MoonMind"},
+        plan_ref="art_plan_1",
+    )
+
+    assert invoked_skills == ["implement"]
+    step = workflow.get_step_ledger()["steps"][0]
+    assert step["status"] == "failed"
+    assert workflow._publish_status == "not_required"
+    assert workflow._publish_reason == (
+        "Structured gate stopped before downstream handoff."
+    )
+    budget = step_execution_payloads[-1]["budget"]
+    assert step_execution_payloads[-1]["terminalDisposition"] == (
+        "failed_with_remaining_work"
+    )
+    assert budget["maxAttempts"] == 3
+    assert budget["attemptsConsumed"] == 1
+    assert budget["remainingExecutions"] == 2
+    assert budget["additionalStopDimension"] == {
+        "type": "consecutive_no_progress_attempts",
+        "limit": 1,
+        "consumed": 1,
+        "remaining": 0,
+        "exhausted": True,
+    }
+    assert budget["exhausted"] is True
+    assert budget["gateVerdict"] == "ADDITIONAL_WORK_NEEDED"
 
 
 @pytest.mark.asyncio

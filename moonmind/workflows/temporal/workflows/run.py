@@ -695,7 +695,9 @@ class MoonMindRunWorkflow:
         self._last_publish_repair_node_id: str | None = None
         self._codex_session_handle: Any | None = None
         self._codex_session_binding: CodexManagedSessionBinding | None = None
-        self._codex_session_cleared_before_step_executions: set[str] = set()
+        self._codex_session_cleared_before_step_attempts: set[
+            str | tuple[str, int]
+        ] = set()
         self._trusted_jira_context: dict[str, Any] | None = None
         self._step_ledger_rows: list[dict[str, Any]] = []
         self._step_ledger_by_id: dict[str, dict[str, Any]] = {}
@@ -1456,17 +1458,32 @@ class MoonMindRunWorkflow:
         artifacts = row.get("artifacts")
         execution: dict[str, Any] = {}
         tool = row.get("tool")
-        runtime_context_policy: str | None = None
         if isinstance(tool, Mapping) and str(tool.get("type") or "").strip() == (
             "agent_runtime"
         ):
             agent_id = str(tool.get("name") or "").strip()
-            runtime_context_policy = (
+            agent_kind = self._agent_kind_for_id(agent_id)
+            execution["runtimeContextPolicy"] = (
                 "fresh_agent_run"
-                if self._agent_kind_for_id(agent_id) == "managed"
+                if agent_kind == "managed"
                 else "external_provider_continuation"
             )
-            execution["runtimeContextPolicy"] = runtime_context_policy
+            execution_ordinal = self._step_execution_for(logical_step_id) or 1
+            if agent_kind == "managed":
+                reset = self._managed_reattempt_session_reset_evidence(
+                    logical_step_id,
+                    agent_id=agent_id,
+                    execution_ordinal=execution_ordinal,
+                )
+                if reset:
+                    execution["runtimeSessionReset"] = reset
+            else:
+                execution["externalProviderContinuation"] = (
+                    self._external_provider_continuation_evidence(
+                        logical_step_id,
+                        execution_ordinal=execution_ordinal,
+                    )
+                )
         if isinstance(refs, Mapping):
             for source_key, target_key in (
                 ("childWorkflowId", "childWorkflowId"),
@@ -1480,78 +1497,107 @@ class MoonMindRunWorkflow:
             diagnostics_ref = artifacts.get("runtimeDiagnostics")
             if isinstance(diagnostics_ref, str) and diagnostics_ref.strip():
                 execution["diagnosticsRef"] = diagnostics_ref.strip()
-        if runtime_context_policy == "external_provider_continuation":
-            # External/coordinated agents have weaker runtime control: MoonMind
-            # cannot reset their state, so it still records attempt identity and
-            # context refs (above) together with the known side effects and any
-            # available checkpoint evidence, so the continuation attempt remains
-            # auditable (docs/Steps/StepExecutionsAndCheckpointing.md §16.1).
-            known_side_effects = self._external_continuation_known_side_effects(
-                logical_step_id
-            )
-            if known_side_effects:
-                execution["knownSideEffects"] = known_side_effects
-            checkpoint_evidence = self._external_continuation_checkpoint_evidence(row)
-            if checkpoint_evidence:
-                execution["availableCheckpointEvidence"] = checkpoint_evidence
         return execution
 
-    def _external_continuation_known_side_effects(
+    def _managed_reattempt_session_reset_evidence(
         self,
         logical_step_id: str,
-    ) -> list[dict[str, Any]]:
-        """Compact projection of side effects recorded across a step's attempts.
-
-        External or coordinated agents may have weaker runtime control, so
-        MoonMind records the side effects it observed rather than assuming the
-        step can be silently reset. Records accumulate per logical step, so this
-        surfaces evidence from prior attempts when an external continuation
-        reattempt is launched.
-        """
-        records = self._step_side_effect_records.get(logical_step_id, ())
-        projected: list[dict[str, Any]] = []
-        for record in records:
-            if not isinstance(record, Mapping):
-                continue
-            compact: dict[str, Any] = {}
-            for key in (
-                "class",
-                "kind",
-                "operation",
-                "target",
-                "idempotencyKey",
-                "disposition",
-            ):
-                value = record.get(key)
-                if isinstance(value, str) and value.strip():
-                    compact[key] = value.strip()
-            accepted = record.get("workflowStateAccepted")
-            if isinstance(accepted, bool):
-                compact["workflowStateAccepted"] = accepted
-            if compact:
-                projected.append(compact)
-        return projected
-
-    def _external_continuation_checkpoint_evidence(
-        self,
-        row: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        """Available checkpoint evidence for an external continuation attempt.
-
-        MoonMind records whatever durable checkpoint refs exist ("where
-        available") without assuming direct workspace restoration is possible
-        for an external/coordinated runtime.
-        """
-        evidence: dict[str, Any] = {}
-        for source_key, target_key in (
-            ("stateCheckpointRef", "stateCheckpointRef"),
-            ("workspaceCheckpointRef", "workspaceCheckpointRef"),
-            ("stepCheckpointRef", "stepCheckpointRef"),
-        ):
-            value = row.get(source_key)
-            if isinstance(value, str) and value.strip():
-                evidence[target_key] = value.strip()
+        *,
+        agent_id: str,
+        execution_ordinal: int,
+    ) -> dict[str, Any] | None:
+        if execution_ordinal <= 1:
+            return None
+        source_execution_ordinal = self._step_execution_source_identity(
+            logical_step_id,
+            attempt=execution_ordinal,
+        )
+        evidence: dict[str, Any] = {
+            "requestedPolicy": "reuse_session_new_epoch",
+            "resolvedPolicy": "fresh_agent_run",
+            "semantics": "new_epoch_cleared_context",
+            "clearContext": True,
+            "newEpoch": True,
+            "runtimeId": agent_id,
+        }
+        if source_execution_ordinal:
+            evidence["sourceExecutionOrdinal"] = source_execution_ordinal
+        previous_checkpoint_ref = self._previous_step_checkpoint_refs.get(
+            logical_step_id
+        )
+        if previous_checkpoint_ref:
+            evidence["availableCheckpointEvidence"] = {
+                "stateCheckpointRef": previous_checkpoint_ref
+            }
+        else:
+            evidence["availableCheckpointEvidence"] = {"available": False}
         return evidence
+
+    def _external_provider_continuation_evidence(
+        self,
+        logical_step_id: str,
+        *,
+        execution_ordinal: int,
+        context_bundle_ref: str | None = None,
+        prepared_input_refs: Sequence[str] = (),
+    ) -> dict[str, Any]:
+        identity = StepExecutionIdentityModel(
+            workflowId=workflow.info().workflow_id,
+            runId=workflow.info().run_id,
+            logicalStepId=logical_step_id,
+            executionOrdinal=execution_ordinal,
+        )
+        context_refs: dict[str, Any] = {}
+        if context_bundle_ref:
+            context_refs["contextBundleRef"] = context_bundle_ref
+        prepared_refs = [
+            str(ref).strip() for ref in prepared_input_refs if str(ref).strip()
+        ]
+        if not prepared_refs:
+            prepared_refs = list(self._prepared_artifact_refs)
+        if prepared_refs:
+            context_refs["preparedInputRefs"] = prepared_refs
+
+        row = self._step_ledger_row_for(logical_step_id)
+        row_state_checkpoint_ref = (
+            str(row.get("stateCheckpointRef") or "").strip()
+            if isinstance(row, Mapping)
+            else ""
+        )
+        checkpoint_ref = self._step_checkpoint_refs.get(
+            logical_step_id
+        ) or row_state_checkpoint_ref or self._previous_step_checkpoint_refs.get(
+            logical_step_id
+        )
+        checkpoint_evidence: dict[str, Any] = {}
+        if checkpoint_ref:
+            checkpoint_evidence["stateCheckpointRef"] = checkpoint_ref
+        if isinstance(row, Mapping):
+            for source_key, target_key in (
+                ("workspaceCheckpointRef", "workspaceCheckpointRef"),
+                ("stepCheckpointRef", "stepCheckpointRef"),
+            ):
+                value = row.get(source_key)
+                if isinstance(value, str) and value.strip():
+                    checkpoint_evidence[target_key] = value.strip()
+        if not checkpoint_evidence:
+            checkpoint_evidence["available"] = False
+        records = [
+            dict(record)
+            for record in self._step_side_effect_records.get(logical_step_id, ())
+        ]
+        return {
+            "attemptIdentity": {
+                "workflowId": identity.workflow_id,
+                "runId": identity.run_id,
+                "logicalStepId": identity.logical_step_id,
+                "executionOrdinal": identity.execution_ordinal,
+                "stepExecutionId": build_step_execution_id(identity),
+            },
+            "contextRefs": context_refs,
+            "knownSideEffects": {"records": records} if records else {"records": []},
+            "checkpointEvidence": checkpoint_evidence,
+        }
 
     def _step_execution_compact_output_refs(
         self,
@@ -2661,23 +2707,41 @@ class MoonMindRunWorkflow:
         *,
         max_review_attempts: int,
         review_retry_count: int,
+        max_consecutive_no_progress_attempts: int,
+        consecutive_no_progress_attempts: int,
         verdict: str | None = None,
         recommended_next_action: str | None = None,
     ) -> dict[str, Any]:
         attempts_allowed = max_review_attempts + 1
         attempts_consumed = review_retry_count + 1
         remaining_executions = max(0, attempts_allowed - attempts_consumed)
+        no_progress_exhausted = (
+            consecutive_no_progress_attempts
+            >= max_consecutive_no_progress_attempts
+        )
         metadata: dict[str, Any] = {
             "gate": "approval_policy",
             "maxAttempts": attempts_allowed,
             "attemptsConsumed": attempts_consumed,
             "remainingExecutions": remaining_executions,
+            "additionalStopDimension": {
+                "type": "consecutive_no_progress_attempts",
+                "limit": max_consecutive_no_progress_attempts,
+                "consumed": consecutive_no_progress_attempts,
+                "remaining": max(
+                    0,
+                    max_consecutive_no_progress_attempts
+                    - consecutive_no_progress_attempts,
+                ),
+                "exhausted": no_progress_exhausted,
+            },
             "stopRules": [
                 "structured_gate_verdict_required",
                 "accepted_output_evidence_required",
+                "consecutive_no_progress_attempts_exhaustion_stops_before_publication",
                 "budget_exhaustion_stops_before_publication",
             ],
-            "exhausted": remaining_executions == 0,
+            "exhausted": remaining_executions == 0 or no_progress_exhausted,
         }
         if verdict:
             metadata["gateVerdict"] = str(verdict).strip().upper()
@@ -2691,14 +2755,38 @@ class MoonMindRunWorkflow:
         verdict: Any,
         review_retry_count: int,
         max_review_attempts: int,
+        consecutive_no_progress_attempts: int,
+        max_consecutive_no_progress_attempts: int,
     ) -> bool:
         normalized = str(getattr(verdict, "verdict", "") or "").strip().upper()
         if review_retry_count >= max_review_attempts:
+            return False
+        if (
+            consecutive_no_progress_attempts
+            >= max_consecutive_no_progress_attempts
+        ):
             return False
         if normalized == "ADDITIONAL_WORK_NEEDED":
             return True
         return normalized == "NO_DETERMINATION" and bool(
             getattr(verdict, "recoverable_in_current_runtime", False)
+        )
+
+    @staticmethod
+    def _review_gate_verdict_made_progress(verdict: Any) -> bool:
+        normalized = str(getattr(verdict, "verdict", "") or "").strip().upper()
+        recommended_next_action = (
+            str(getattr(verdict, "recommended_next_action", "") or "")
+            .strip()
+            .lower()
+        )
+        remaining_work_ref = str(
+            getattr(verdict, "remaining_work_ref", "") or ""
+        ).strip()
+        return (
+            normalized == "ADDITIONAL_WORK_NEEDED"
+            and recommended_next_action == "reattempt_current_step"
+            and bool(remaining_work_ref)
         )
 
     def _terminal_disposition_for_gate_stop(self, verdict: Any) -> str:
@@ -4314,7 +4402,19 @@ class MoonMindRunWorkflow:
                 if review_gate_active
                 else 0
             )
+            max_consecutive_no_progress_attempts = max(1, max_review_attempts + 1)
+            if review_gate_active:
+                raw_no_progress_attempts = getattr(
+                    approval_policy,
+                    "max_consecutive_no_progress_attempts",
+                    None,
+                )
+                if raw_no_progress_attempts is not None:
+                    max_consecutive_no_progress_attempts = int(
+                        raw_no_progress_attempts
+                    )
             review_retry_count = 0
+            consecutive_no_progress_attempts = 0
             previous_review_feedback: str | None = None
             previous_review_issues: tuple[Mapping[str, Any], ...] = ()
             result_status: str | None = None
@@ -4408,6 +4508,12 @@ class MoonMindRunWorkflow:
                             budget=self._review_gate_budget_metadata(
                                 max_review_attempts=max_review_attempts,
                                 review_retry_count=review_retry_count,
+                                max_consecutive_no_progress_attempts=(
+                                    max_consecutive_no_progress_attempts
+                                ),
+                                consecutive_no_progress_attempts=(
+                                    consecutive_no_progress_attempts
+                                ),
                             )
                             if review_gate_active
                             else None,
@@ -4804,6 +4910,10 @@ class MoonMindRunWorkflow:
                 )
 
                 if review_verdict.verdict != "FULLY_IMPLEMENTED":
+                    if self._review_gate_verdict_made_progress(review_verdict):
+                        consecutive_no_progress_attempts = 0
+                    else:
+                        consecutive_no_progress_attempts += 1
                     failed_review_summary = self._bounded_review_summary(
                         review_verdict.feedback,
                         fallback="Structured gate did not approve advancement",
@@ -4820,6 +4930,12 @@ class MoonMindRunWorkflow:
                         verdict=review_verdict,
                         review_retry_count=review_retry_count,
                         max_review_attempts=max_review_attempts,
+                        consecutive_no_progress_attempts=(
+                            consecutive_no_progress_attempts
+                        ),
+                        max_consecutive_no_progress_attempts=(
+                            max_consecutive_no_progress_attempts
+                        ),
                     ):
                         review_retry_count += 1
                         previous_review_feedback = (
@@ -4849,6 +4965,12 @@ class MoonMindRunWorkflow:
                         budget=self._review_gate_budget_metadata(
                             max_review_attempts=max_review_attempts,
                             review_retry_count=review_retry_count,
+                            max_consecutive_no_progress_attempts=(
+                                max_consecutive_no_progress_attempts
+                            ),
+                            consecutive_no_progress_attempts=(
+                                consecutive_no_progress_attempts
+                            ),
                             verdict=review_verdict.verdict,
                             recommended_next_action=(
                                 review_verdict.recommended_next_action
@@ -4894,6 +5016,12 @@ class MoonMindRunWorkflow:
                         budget=self._review_gate_budget_metadata(
                             max_review_attempts=max_review_attempts,
                             review_retry_count=review_retry_count,
+                            max_consecutive_no_progress_attempts=(
+                                max_consecutive_no_progress_attempts
+                            ),
+                            consecutive_no_progress_attempts=(
+                                consecutive_no_progress_attempts
+                            ),
                             verdict=review_verdict.verdict,
                             recommended_next_action="needs_human",
                         ),
@@ -4950,6 +5078,12 @@ class MoonMindRunWorkflow:
                 budget=self._review_gate_budget_metadata(
                     max_review_attempts=max_review_attempts,
                     review_retry_count=review_retry_count,
+                    max_consecutive_no_progress_attempts=(
+                        max_consecutive_no_progress_attempts
+                    ),
+                    consecutive_no_progress_attempts=(
+                        consecutive_no_progress_attempts
+                    ),
                     verdict="FULLY_IMPLEMENTED",
                     recommended_next_action="advance",
                 )
@@ -6065,19 +6199,16 @@ class MoonMindRunWorkflow:
     ) -> None:
         if not workflow.patched(RUN_TASK_SCOPED_SESSION_CLEAR_BETWEEN_STEPS_PATCH):
             return
-        # Dedup by Step Execution identity (logical step + attempt ordinal), not
-        # by logical step alone. A same-attempt retry of an already-cleared
-        # execution must not re-clear, but a genuine reattempt
-        # (execution_ordinal > 1) is a clean-context reattempt: for managed
-        # sessions it resolves to fresh_agent_run plus a session reset to a new
-        # epoch before the attempt (reuse_session_new_epoch / clear_session
-        # semantics per docs/Steps/StepExecutionsAndCheckpointing.md §16.1).
         execution_ordinal = self._step_execution_for(logical_step_id) or 1
+        # New histories dedupe by Step Execution identity (logical step +
+        # attempt ordinal). Histories that predate this patch keep the old
+        # logical-step dedupe key so replay does not schedule a new clear
+        # activity when a later attempt is observed.
         if workflow.patched(RUN_TASK_SCOPED_SESSION_CLEAR_PER_EXECUTION_PATCH):
-            clear_dedupe_key = f"{logical_step_id}:{execution_ordinal}"
+            clear_key: str | tuple[str, int] = (logical_step_id, execution_ordinal)
         else:
-            clear_dedupe_key = logical_step_id
-        if clear_dedupe_key in self._codex_session_cleared_before_step_executions:
+            clear_key = logical_step_id
+        if clear_key in self._codex_session_cleared_before_step_attempts:
             return
         binding = self._codex_session_binding
         if binding is None:
@@ -6139,7 +6270,7 @@ class MoonMindRunWorkflow:
                     reason=reason,
                     request_id=request_id,
                 )
-        self._codex_session_cleared_before_step_executions.add(clear_dedupe_key)
+        self._codex_session_cleared_before_step_attempts.add(clear_key)
 
     async def _terminate_task_scoped_sessions(self, *, reason: str) -> None:
         binding = self._codex_session_binding
@@ -8773,6 +8904,39 @@ class MoonMindRunWorkflow:
             skill_source_policy["resolvedSkillsetRef"] = resolved_skillset_ref
         if selected_skill:
             skill_source_policy["selectedSkill"] = selected_skill
+        step_execution_payload: dict[str, Any] = {
+            "schemaVersion": "v1",
+            "workflowId": wf_info.workflow_id,
+            "runId": wf_info.run_id,
+            "logicalStepId": node_id,
+            "executionOrdinal": step_execution_identity.execution_ordinal,
+            "stepExecutionId": build_step_execution_id(step_execution_identity),
+            "reason": attempt_reason,
+            "runtimeContextPolicy": runtime_context_policy,
+            "contextBundleRef": attempt_context.context_bundle_ref,
+            "contextBundleDigest": attempt_context.context_bundle_digest,
+            "preparedInputRefs": list(attempt_context.prepared_input_refs),
+            "resolvedSkillsetRef": resolved_skillset_ref,
+            "runtimeSelection": dict(runtime_selection),
+            "skillSourcePolicy": skill_source_policy,
+        }
+        if agent_kind == "managed":
+            session_reset = self._managed_reattempt_session_reset_evidence(
+                node_id,
+                agent_id=agent_id,
+                execution_ordinal=step_execution_identity.execution_ordinal,
+            )
+            if session_reset:
+                step_execution_payload["runtimeSessionReset"] = session_reset
+        else:
+            step_execution_payload["externalProviderContinuation"] = (
+                self._external_provider_continuation_evidence(
+                    node_id,
+                    execution_ordinal=step_execution_identity.execution_ordinal,
+                    context_bundle_ref=attempt_context.context_bundle_ref,
+                    prepared_input_refs=attempt_context.prepared_input_refs,
+                )
+            )
 
         return AgentExecutionRequest(
             agent_kind=agent_kind,
@@ -8784,22 +8948,7 @@ class MoonMindRunWorkflow:
             or node_inputs.get("instructionRef"),
             runtime_command=node_inputs.get("runtimeCommand")
             or node_inputs.get("runtime_command"),
-            step_execution={
-                "schemaVersion": "v1",
-                "workflowId": wf_info.workflow_id,
-                "runId": wf_info.run_id,
-                "logicalStepId": node_id,
-                "executionOrdinal": step_execution_identity.execution_ordinal,
-                "stepExecutionId": build_step_execution_id(step_execution_identity),
-                "reason": attempt_reason,
-                "runtimeContextPolicy": runtime_context_policy,
-                "contextBundleRef": attempt_context.context_bundle_ref,
-                "contextBundleDigest": attempt_context.context_bundle_digest,
-                "preparedInputRefs": list(attempt_context.prepared_input_refs),
-                "resolvedSkillsetRef": resolved_skillset_ref,
-                "runtimeSelection": dict(runtime_selection),
-                "skillSourcePolicy": skill_source_policy,
-            },
+            step_execution=step_execution_payload,
             resolved_skillset_ref=resolved_skillset_ref,
             input_refs=input_refs,
             workspace_spec=workspace_spec,
