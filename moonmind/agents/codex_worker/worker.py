@@ -69,7 +69,7 @@ from moonmind.workflows.temporal.runtime.self_heal import (
 )
 from moonmind.workflows.adapters.github_service import GitHubService
 from moonmind.config.settings import settings
-from moonmind.services.skills_on_demand import skills_on_demand_disabled_instruction
+from moonmind.services.skills_on_demand import skills_on_demand_runtime_instruction
 from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
 from moonmind.jules.runtime import (
     build_runtime_gate_state as build_jules_runtime_gate_state,
@@ -11428,11 +11428,11 @@ class CodexWorker:
                 "- .agents/skills is a compatibility alias only when MoonMind can "
                 "create it without masking repo-authored skill source."
             )
-            disabled_instruction = skills_on_demand_disabled_instruction(
+            on_demand_instruction = skills_on_demand_runtime_instruction(
                 enabled=settings.workflow.skills_on_demand_enabled
             )
-            if disabled_instruction:
-                instruction += f"\n{disabled_instruction}"
+            if on_demand_instruction:
+                instruction += f"\n{on_demand_instruction}"
             instruction += (
                 f"\n\nRUNTIME ADAPTER: {runtime_mode}"
                 "\n\nSKILL USAGE:\n"
