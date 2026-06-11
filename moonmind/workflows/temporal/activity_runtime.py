@@ -1616,6 +1616,7 @@ def _scan_execution_notification_before_send(
     result = scan_outbound_text(
         json.dumps(dict(event), sort_keys=True, default=str),
         location=surface,
+        settings=settings,
     )
     if result.allowed:
         return None
@@ -4394,7 +4395,6 @@ class TemporalAgentRuntimeActivities:
         if not webhook_url and not email_configured:
             return {"status": "skipped", "reason": "no_channels"}
 
-        scan_event = _build_execution_notification_payload(payload, redact=False)
         event = _build_execution_notification_payload(payload, redact=True)
         results: list[dict[str, str]] = []
         errors: list[dict[str, str]] = []
@@ -4405,7 +4405,7 @@ class TemporalAgentRuntimeActivities:
             if authorization:
                 headers["Authorization"] = authorization
             blocked_reason = _scan_execution_notification_before_send(
-                scan_event,
+                event,
                 surface="execution.notification.webhook.payload",
             )
             if blocked_reason is not None:
@@ -4443,7 +4443,7 @@ class TemporalAgentRuntimeActivities:
                     )
         if email_configured:
             blocked_reason = _scan_execution_notification_before_send(
-                scan_event,
+                event,
                 surface="execution.notification.email.payload",
             )
             if blocked_reason is not None:

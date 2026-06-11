@@ -99,6 +99,218 @@ async def test_execution_notify_completion_skips_when_disabled(monkeypatch) -> N
     assert result == {"status": "skipped", "reason": "disabled"}
 
 
+async def test_execution_notify_completion_scans_emitted_event_not_internal_payload(
+    monkeypatch,
+) -> None:
+    post_calls: list[dict[str, Any]] = []
+    email_calls: list[dict[str, Any]] = []
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+    class _Client:
+        def __init__(self, *, timeout: int) -> None:
+            self.timeout = timeout
+
+        async def __aenter__(self) -> "_Client":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def post(
+            self,
+            url: str,
+            *,
+            json: dict[str, Any],
+            headers: dict[str, str],
+        ) -> _Response:
+            post_calls.append({"url": url, "json": json, "headers": headers})
+            return _Response()
+
+    def fake_send_email(*_args: Any, **kwargs: Any) -> None:
+        email_calls.append(kwargs)
+
+    monkeypatch.setattr(
+        activity_runtime_module.settings.security,
+        "high_security_mode",
+        True,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "webhook_url",
+        "https://hooks.example.test/notify",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "authorization",
+        None,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "email_to",
+        "ops@example.test",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "email_from",
+        "moonmind@example.test",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_host",
+        "smtp.example.test",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_port",
+        2525,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_username",
+        None,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_password",
+        None,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_use_tls",
+        False,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_use_ssl",
+        False,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "timeout_seconds",
+        5,
+    )
+    monkeypatch.setattr(activity_runtime_module.httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_send_execution_notification_email",
+        fake_send_email,
+    )
+
+    activities = TemporalAgentRuntimeActivities()
+    result = await activities.execution_notify_completion(
+        {
+            "workflowId": "wf-secret",
+            "status": "completed",
+            "result": {
+                "summary": "safe completion",
+                "metadata": {
+                    "agentRunId": "agent-run-1",
+                    "internalDiagnostics": "token=blocked-secret-value",
+                },
+            },
+        }
+    )
+
+    assert result["status"] == "sent"
+    assert "blocked-secret-value" not in json.dumps(result)
+    assert post_calls[0]["json"]["summary"] == "safe completion"
+    assert post_calls[0]["json"]["agentRunId"] == "agent-run-1"
+    assert "internalDiagnostics" not in post_calls[0]["json"]
+    assert email_calls
+
+
+async def test_execution_notify_completion_allows_clean_payload_with_high_security(
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+    class _Client:
+        def __init__(self, *, timeout: int) -> None:
+            self.timeout = timeout
+
+        async def __aenter__(self) -> "_Client":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def post(
+            self,
+            url: str,
+            *,
+            json: dict[str, Any],
+            headers: dict[str, str],
+        ) -> _Response:
+            calls.append({"url": url, "json": json, "headers": headers})
+            return _Response()
+
+    monkeypatch.setattr(
+        activity_runtime_module.settings.security,
+        "high_security_mode",
+        True,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "webhook_url",
+        "https://hooks.example.test/notify",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "authorization",
+        None,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "email_to",
+        "",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "email_from",
+        "",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_host",
+        "",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "timeout_seconds",
+        5,
+    )
+    monkeypatch.setattr(activity_runtime_module.httpx, "AsyncClient", _Client)
+
+    activities = TemporalAgentRuntimeActivities()
+    result = await activities.execution_notify_completion(
+        {
+            "workflowId": "wf-clean",
+            "status": "completed",
+            "result": {"summary": "clean completion"},
+        }
+    )
+
+    assert result == {"status": "sent", "target": "https://hooks.example.test/notify"}
+    assert calls[0]["json"]["summary"] == "clean completion"
+
+
 async def test_execution_notify_completion_posts_sanitized_payload(monkeypatch) -> None:
     calls: list[dict[str, Any]] = []
 
