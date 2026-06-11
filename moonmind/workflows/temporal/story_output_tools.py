@@ -1022,11 +1022,15 @@ def _downstream_task_payload(
     source_brief_ref = _string(
         traceability.get("sourceBriefRef") or traceability.get("source_brief_ref")
     )
+    source_design_path = _string(
+        mapping.get("sourceDesignPath") or mapping.get("source_design_path")
+    )
     instructions = (
         f"Run {preset_label} for {issue_key}.\n\n"
         f"Source story: {story_id or summary}.\n"
         f"Source summary: {summary}.\n"
         f"Source Jira issue: {source_issue_key or 'unknown'}.\n"
+        f"Source design document: {source_design_path or 'not provided'}.\n"
         f"Original brief reference: {source_brief_ref or 'not provided'}.\n\n"
         f"Use the existing {preset_label} workflow for this Jira issue. "
         "Do not run implementation inline inside the breakdown task."
@@ -1056,7 +1060,7 @@ def _downstream_task_payload(
         "instructions": instructions,
         "inputs": {
             "jira_issue_key": issue_key,
-            "source_design_path": "",
+            "source_design_path": source_design_path,
             "constraints": (
                 f"Preserve source issue {source_issue_key} traceability."
                 if source_issue_key
@@ -1546,11 +1550,16 @@ def _issue_mapping(
     issue: Mapping[str, Any],
     index: int,
     summary: str,
+    fallback_source_path: str = "",
 ) -> dict[str, Any]:
     mapping = dict(issue)
     mapping["storyId"] = _story_id(story, index=index)
     mapping["storyIndex"] = index
     mapping["summary"] = summary
+    source_reference = _story_source_reference(
+        story, fallback_path=fallback_source_path
+    )
+    mapping["sourceDesignPath"] = _string(source_reference.get("path"))
     return mapping
 
 async def _create_dependency_links(
@@ -2020,6 +2029,7 @@ async def create_jira_issues_from_stories(
                         issue=existing_issue,
                         index=index,
                         summary=summary,
+                        fallback_source_path=breakdown_source_path,
                     )
                 )
                 continue
@@ -2067,6 +2077,7 @@ async def create_jira_issues_from_stories(
                     issue=issue_result,
                     index=index,
                     summary=summary,
+                    fallback_source_path=breakdown_source_path,
                 )
             )
     except Exception as exc:

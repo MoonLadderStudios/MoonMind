@@ -1194,6 +1194,58 @@ async def test_create_jira_issues_linear_blocker_chain_creates_adjacent_links():
     assert [item["status"] for item in jira["linkResults"]] == ["created", "created"]
 
 @pytest.mark.asyncio
+async def test_create_jira_issues_issue_mappings_carry_source_design_path():
+    service = _FakeJiraService()
+
+    result = await create_jira_issues_from_stories(
+        {
+            "storyOutput": {
+                "mode": "jira",
+                "jira": {"projectKey": "MM", "issueTypeId": "10001"},
+            },
+            "stories": [
+                {
+                    "id": "STORY-001",
+                    "summary": "First",
+                    "sourceReference": {"path": "docs/Designs/RuntimeTypes.md"},
+                },
+                {
+                    "id": "STORY-002",
+                    "summary": "No reference",
+                },
+            ],
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    mappings = result.outputs["jira"]["issueMappings"]
+    assert mappings[0]["sourceDesignPath"] == "docs/Designs/RuntimeTypes.md"
+    assert mappings[1]["sourceDesignPath"] == ""
+
+@pytest.mark.asyncio
+async def test_create_jira_issues_issue_mappings_use_breakdown_source_fallback():
+    service = _FakeJiraService()
+
+    result = await create_jira_issues_from_stories(
+        {
+            "storyOutput": {
+                "mode": "jira",
+                "jira": {"projectKey": "MM", "issueTypeId": "10001"},
+            },
+            "storyBreakdown": {
+                "source": {"referencePath": "docs/Designs/RuntimeTypes.md"},
+                "stories": [
+                    {"id": "STORY-001", "summary": "First"},
+                ],
+            },
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    mappings = result.outputs["jira"]["issueMappings"]
+    assert mappings[0]["sourceDesignPath"] == "docs/Designs/RuntimeTypes.md"
+
+@pytest.mark.asyncio
 async def test_check_jira_blockers_blocks_on_single_outward_unresolved_blocks_link():
     service = _FakeJiraService()
     service.issue_responses["MM-2"] = {
@@ -1703,6 +1755,47 @@ async def test_create_jira_orchestrate_tasks_uses_input_previous_outputs_mapping
     assert creator.requests[0]["initial_parameters"]["workflow"]["inputs"][
         "jira_issue_key"
     ] == "MM-810"
+
+@pytest.mark.asyncio
+async def test_create_jira_orchestrate_tasks_propagates_source_design_path():
+    creator = _FakeExecutionCreator()
+
+    result = await create_jira_orchestrate_tasks_from_issue_mappings(
+        {
+            "jira": {
+                "issueMappings": [
+                    {
+                        "storyId": "STORY-001",
+                        "storyIndex": 1,
+                        "summary": "First",
+                        "issueKey": "MM-501",
+                        "sourceDesignPath": "docs/Designs/RuntimeTypes.md",
+                    },
+                    {
+                        "storyId": "STORY-002",
+                        "storyIndex": 2,
+                        "summary": "Legacy mapping without source path",
+                        "issueKey": "MM-502",
+                    },
+                ]
+            },
+            "traceability": {"sourceIssueKey": "MM-404"},
+        },
+        execution_creator=creator,
+    )
+
+    assert result.outputs["jiraOrchestration"]["status"] == "completed"
+    first_task = creator.requests[0]["initial_parameters"]["workflow"]
+    assert first_task["inputs"]["source_design_path"] == (
+        "docs/Designs/RuntimeTypes.md"
+    )
+    assert (
+        "Source design document: docs/Designs/RuntimeTypes.md"
+        in first_task["instructions"]
+    )
+    second_task = creator.requests[1]["initial_parameters"]["workflow"]
+    assert second_task["inputs"]["source_design_path"] == ""
+    assert "Source design document: not provided" in second_task["instructions"]
 
 @pytest.mark.asyncio
 async def test_create_jira_orchestrate_tasks_handles_one_and_zero_story_results():

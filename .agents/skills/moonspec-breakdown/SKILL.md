@@ -27,7 +27,22 @@ Do not use this skill for a single natural-language feature request. Use `moonsp
 - If no design text or readable design path is provided, stop with: `ERROR "No technical design provided"`.
 - Preserve the original design text verbatim in the breakdown output so later `/speckit.specify` output can keep it in `spec.md` `**Input**`.
 - Preserve the source document reference path whenever the source design came from a file. Use the repo-relative path when possible; otherwise use the absolute path provided by the user. This reference is required downstream so every Jira story can point back to the original declarative document.
+- The canonical source document, not the breakdown output, remains the source of truth for desired state. Breakdown output is a temporary derived view (see `docs/Workflows/MoonSpecDocumentModel.md`).
 - Do not implement, plan, generate tasks, create Jira issues, create `spec.md`, or create directories under `specs/`.
+
+## Input Classification
+
+Classify the source design before extracting coverage points, using the document classes in `docs/Workflows/MoonSpecDocumentModel.md`:
+
+- `canonical-declarative`: a readable repo path under `docs/` (or `.specify/memory/constitution.md`) describing desired state.
+- `declarative-text`: pasted declarative design text, or a file-backed declarative design outside `docs/`.
+- `imperative-override`: a document whose primary framing is steps, phases, checkboxes, status, or migration sequencing, accepted only with an explicit user override.
+
+A document is declarative when it describes what the system is or should be; it is imperative when its primary framing is steps, phases, checkboxes, or status. Mixed documents are classified by their primary framing.
+
+If the input is primarily imperative and the user has not explicitly confirmed imperative input, stop with: `ERROR "Imperative input: provide the underlying declarative design or explicitly confirm imperative input"`. Decomposing a checklist produces stories that mistake process steps for requirements; the underlying declarative document must be written or identified first.
+
+Record the resulting class as `sourceDocumentClass` in the breakdown output.
 
 ## Pre-Breakdown Hooks
 
@@ -165,7 +180,7 @@ Never name any breakdown output `spec.md`. Never write to `specs/` during breakd
 
 The JSON file must be an object with:
 
-- `source`: object containing `title`, `path`, `referencePath`, and the original design text. For file-backed designs, `path` and `referencePath` must both contain the original design document path. For pasted designs without a file path, set them to `null` and use a clear title such as `inline user request`.
+- `source`: object containing `title`, `path`, `referencePath`, `sourceDocumentClass`, and the original design text. For file-backed designs, `path` and `referencePath` must both contain the original design document path. For pasted designs without a file path, set them to `null` and use a clear title such as `inline user request`. `sourceDocumentClass` must be `canonical-declarative`, `declarative-text`, or `imperative-override` per the Input Classification section.
 - `extractedAt`: ISO-8601 timestamp.
 - `coverageGate`: exactly `PASS - every major design point is owned by at least one story.`
 - `stories`: ordered list of story objects.
@@ -247,6 +262,8 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 ## Key Rules
 
 - One breakdown story candidate equals one future `spec.md`.
+- The canonical source document remains the source of truth for desired state; breakdown output is a temporary derived view and is never cited as authority over its source.
+- Classify the input per `docs/Workflows/MoonSpecDocumentModel.md` and fail fast on imperative inputs without an explicit override.
 - Preserve the original technical or declarative design verbatim in the breakdown output for later specify.
 - Every story candidate must carry a `sourceReference.path` back to the original declarative document when the source came from a file.
 - Prefer vertical user or operational outcomes over technical-layer slices.

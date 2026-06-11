@@ -196,7 +196,7 @@ MoonMind development MUST be docs-first, with clear contracts and traceability. 
 Non-negotiable rules:
 
 - Durable, desired-state knowledge — architecture, contracts, operator-visible behavior, and target semantics — MUST live in the owning long-lived `docs/` files (and this constitution). These are the canonical surfaces that future readers and agents are expected to trust.
-- Per-feature Spec Kit / MoonSpec artifacts under `specs/<id>-<feature>/` (`spec.md`, `plan.md`, `tasks.md`, `research.md`, `contracts`) are **optional execution artifacts** — execution helpers and supplemental history. They MUST NOT be treated as canonical long-term architecture or behavior documentation.
+- Per-feature Spec Kit / MoonSpec artifacts under `specs/<id>-<feature>/` (`spec.md`, `plan.md`, `tasks.md`, `research.md`, `contracts`) are **temporary, run-local execution artifacts**. The `specs/` tree is gitignored: packets are disposable execution scaffolding, not version-controlled history, and MUST NOT be treated as canonical long-term architecture or behavior documentation.
 - When a non-trivial change lands, its durable decisions MUST be reflected in the owning `docs/` files; the `specs/` packet (if one was produced) remains supplemental execution evidence, not the system of record.
 - When a feature does use the optional execution workflow, `spec.md` SHOULD remain technology-agnostic with implementation details in `plan.md`, and `plan.md` MUST include a “Constitution Check” with PASS/FAIL coverage for each principle (documenting any violation and mitigation in “Complexity Tracking”).
 - Documentation MUST NOT silently drift from reality: when behavior changes, update the owning long-lived `docs/` files first; refresh any in-flight `specs/` execution packet only as supplemental history.
@@ -210,12 +210,12 @@ MoonMind MUST keep long-lived documentation readable as **what the system is for
 Non-negotiable rules:
 
 - Documentation under `docs/` MUST focus on **declarative, desired-state** descriptions: architecture, contracts, operator-visible behavior, and target semantics (including Temporal-native orchestration where that is the product direction).
-- **Migration narratives, phased implementation plans, rollout sequencing, and implementation backlogs** MUST be recorded in **MoonSpec feature artifacts** under `specs/<feature>/` (for example `plan.md`, `tasks.md`, `research.md`, and contracts) or in **local-only / gitignored handoff paths** (for example `artifacts/` for ephemeral tool outputs), not embedded as the primary framing of canonical docs.
-- Canonical docs MUST NOT link to or require disposable migration-only trees under `docs/`; time-bound work belongs in `specs/<feature>/`, `artifacts/`, or other explicitly local handoffs.
+- **Migration narratives, phased implementation plans, rollout sequencing, and implementation backlogs** MUST be recorded under **`docs/tmp/`** or in **local-only / gitignored handoff paths** (for example `artifacts/` for ephemeral tool outputs, or run-local `specs/<feature>/` packets), not embedded as the primary framing of canonical docs.
+- Canonical docs MUST NOT depend on disposable migration-only material to be readable; time-bound work belongs in `docs/tmp/`, `artifacts/`, run-local `specs/<feature>/` packets, or other explicitly local handoffs.
 - When a migration or implementation effort completes, **delete or archive** the corresponding scratch material rather than leaving obsolete plan sections in canonical files.
-- Canonical docs that still have open migration work SHOULD **point** to the relevant `specs/<feature>/` artifacts (or equivalent) instead of duplicating volatile checklists inline.
+- Canonical docs that still have open migration work SHOULD **point** to the relevant `docs/tmp/` plan or tracking issue instead of duplicating volatile checklists inline; they MUST NOT cite gitignored paths as required reading.
 
-Rationale: Canonical docs stay stable references for operators and implementers; time-bound work belongs in feature specs or disposable local artifacts.
+Rationale: Canonical docs stay stable references for operators and implementers; time-bound work belongs in `docs/tmp/` or disposable local artifacts.
 
 ### XIII. Pre-Release Velocity: Delete, Don't Deprecate
 
