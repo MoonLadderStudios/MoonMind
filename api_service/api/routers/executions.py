@@ -6200,18 +6200,31 @@ async def _create_execution_from_workflow_request(
     session: Any = None,
     principal_context: dict[str, Any] | None = None,
 ) -> ExecutionModel | ScheduleCreatedResponse:
-    if str(request.type).strip().lower() != "workflow":
+    request_type = str(request.type).strip().lower()
+    if request_type not in {"task", "workflow"}:
         raise _invalid_workflow_request(
-            "Only workflow-shaped submit requests can be mapped to Temporal executions."
+            "Only task-shaped submit requests can be mapped to Temporal executions."
         )
 
     payload = request.payload if isinstance(request.payload, dict) else {}
-    task_payload = (
-        payload.get("workflow") if isinstance(payload.get("workflow"), dict) else {}
-    )
-    if not task_payload:
+    task_node = payload.get("task")
+    workflow_node = payload.get("workflow")
+    if isinstance(task_node, dict) and isinstance(workflow_node, dict):
         raise _invalid_workflow_request(
-            "Workflow-shaped Temporal submit requests require payload.workflow."
+            "Temporal submit requests must include only one of payload.task or payload.workflow."
+        )
+    task_payload = {}
+    if isinstance(task_node, dict):
+        task_payload = task_node
+    elif isinstance(workflow_node, dict):
+        task_payload = workflow_node
+    if not task_payload:
+        required_field = (
+            "payload.workflow" if request_type == "workflow" else "payload.task"
+        )
+        shape_name = "Workflow-shaped" if request_type == "workflow" else "Task-shaped"
+        raise _invalid_workflow_request(
+            f"{shape_name} Temporal submit requests require {required_field}."
         )
 
     # Resolve child-agent runtime inheritance before downstream normalization
