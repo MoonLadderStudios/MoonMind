@@ -1572,6 +1572,42 @@ def test_create_task_shaped_execution_rejects_invalid_required_capabilities() ->
     )
     mock_service.create_execution.assert_not_awaited()
 
+def test_create_task_shaped_execution_rejects_missing_task_payload(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        json={"type": "task", "payload": {"repository": "Moon/Mind"}},
+    )
+
+    assert response.status_code == 422
+    assert (
+        response.json()["detail"]["message"]
+        == "Task-shaped Temporal submit requests require payload.task."
+    )
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_task_shaped_execution_rejects_missing_workflow_payload(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        json={"type": "workflow", "payload": {"repository": "Moon/Mind"}},
+    )
+
+    assert response.status_code == 422
+    assert (
+        response.json()["detail"]["message"]
+        == "Workflow-shaped Temporal submit requests require payload.workflow."
+    )
+    service.create_execution.assert_not_awaited()
+
+
 def test_create_task_shaped_execution_rejects_more_than_10_dependencies(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -4105,6 +4141,39 @@ def test_create_task_shaped_execution_allows_pr_resolver_with_starting_branch(
     assert initial_parameters["workflow"]["git"] == {
         "startingBranch": "feature/resolve-pr"
     }
+
+def test_create_task_shaped_submit_accepts_task_payload_pr_resolver(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "targetRuntime": "gemini_cli",
+                "task": {
+                    "instructions": "Resolve the current branch PR.",
+                    "runtime": {"mode": "gemini_cli"},
+                    "publish": {"mode": "none"},
+                    "skills": {"include": [{"name": "pr-resolver"}]},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["requestType"] == "task"
+    assert initial_parameters["workflow"]["skills"] == {
+        "include": [{"name": "pr-resolver"}]
+    }
+    assert initial_parameters["workflow"]["publish"] == {"mode": "none"}
 
 def test_create_task_shaped_execution_inherits_caller_runtime(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
