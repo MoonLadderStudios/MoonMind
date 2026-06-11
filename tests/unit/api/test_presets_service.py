@@ -2362,6 +2362,9 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
                 "instructions"
             ]
             assert expanded["steps"][25]["skill"]["id"] == "jira-issue-updater"
+            assert expanded["steps"][25]["annotations"] == {
+                "jiraOrchestrateRole": "code-review-handoff"
+            }
             assert "pull_request_url" in expanded["steps"][25]["instructions"]
             assert "stop without changing Jira" in expanded["steps"][25][
                 "instructions"

@@ -198,6 +198,9 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             if step["title"] == "Move Jira issue to Code Review"
         )
         assert code_review_step == jira_orchestrate_template.latest_version.steps[-1]
+        assert code_review_step["annotations"] == {
+            "jiraOrchestrateRole": "code-review-handoff"
+        }
         assert "Code Review" in code_review_step["instructions"]
         assert "pull_request_url" in code_review_step["instructions"]
 

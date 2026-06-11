@@ -984,6 +984,14 @@ async def test_run_records_terminal_step_execution_manifest_with_result_refs(
         updated_at=now,
         summary="Done",
     )
+    workflow._record_step_side_effect(
+        "run-tests",
+        effect_class="publication",
+        operation="repo.publish_pr",
+        target="PR-1",
+        idempotency_key="wf-run-1:run-1:run-tests:execution:1:publish-pr",
+        workflow_state_accepted=True,
+    )
     await workflow._record_step_execution_manifest_terminal(
         "run-tests",
         updated_at=now,
@@ -1004,6 +1012,21 @@ async def test_run_records_terminal_step_execution_manifest_with_result_refs(
     assert writes[1]["payload"]["outputs"] == {
         "summaryRef": "artifact://summary/attempt-1",
         "stdoutRef": "artifact://stdout/attempt-1",
+    }
+    assert writes[1]["payload"]["sideEffects"] == {
+        "records": [
+            {
+                "class": "publication",
+                "kind": "normal",
+                "operation": "repo.publish_pr",
+                "target": "PR-1",
+                "idempotencyKey": (
+                    "wf-run-1:run-1:run-tests:execution:1:publish-pr"
+                ),
+                "workflowStateAccepted": True,
+                "disposition": "accepted",
+            }
+        ]
     }
 
 

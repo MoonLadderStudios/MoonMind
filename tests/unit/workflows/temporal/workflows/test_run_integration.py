@@ -2157,6 +2157,84 @@ def test_moonspec_verify_gate_accepts_fully_implemented_publish(
     )
 
 
+def test_jira_orchestrate_external_handoff_requires_passing_moonspec_gate(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    handoff_node = {
+        "id": "code-review",
+        "inputs": {
+            "annotations": {"jiraOrchestrateRole": "code-review-handoff"},
+        },
+    }
+
+    assert (
+        mock_run_workflow._jira_orchestrate_external_handoff_block_reason(
+            handoff_node
+        )
+        == (
+            "Jira Orchestrate external handoff requires an accepted MoonSpec "
+            "verification terminal disposition; no controlling verification gate "
+            "has approved advancement."
+        )
+    )
+
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={"verdict": "ADDITIONAL_WORK_NEEDED"},
+    )
+
+    blocked_reason = (
+        mock_run_workflow._jira_orchestrate_external_handoff_block_reason(
+            handoff_node
+        )
+    )
+    assert blocked_reason is not None
+    assert "latest verdict was ADDITIONAL_WORK_NEEDED" in blocked_reason
+
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={"verdict": "FULLY_IMPLEMENTED"},
+    )
+
+    assert (
+        mock_run_workflow._jira_orchestrate_external_handoff_block_reason(
+            handoff_node
+        )
+        is None
+    )
+
+
+def test_step_side_effect_defaults_to_terminal_disposition_gate(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._step_terminal_dispositions["code-review"] = (
+        "failed_with_remaining_work"
+    )
+
+    blocked = mock_run_workflow._record_step_side_effect(
+        "code-review",
+        effect_class="external_idempotent",
+        operation="jira.transition_issue",
+        target="MM-826",
+        idempotency_key="wf:run:code-review:execution:1:jira-transition:Code Review",
+    )
+
+    assert blocked["workflowStateAccepted"] is False
+    assert blocked["disposition"] == "blocked"
+
+    mock_run_workflow._step_terminal_dispositions["code-review"] = "accepted"
+    accepted = mock_run_workflow._record_step_side_effect(
+        "code-review",
+        effect_class="external_idempotent",
+        operation="jira.transition_issue",
+        target="MM-826",
+        idempotency_key="wf:run:code-review:execution:2:jira-transition:Code Review",
+    )
+
+    assert accepted["workflowStateAccepted"] is True
+    assert accepted["disposition"] == "accepted"
+
+
 def test_native_pr_branch_resolution_prefers_publish_context_branch(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,
