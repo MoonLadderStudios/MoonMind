@@ -28,6 +28,7 @@ Do not use this skill to create a spec from a request. Use `moonspec-specify` or
 - If the spec is missing, contains multiple user stories, or has unresolved story-critical clarifications after research, stop with an error.
 - Use absolute paths in reports.
 - Treat `spec.md` as the desired behavior contract. Do not remove a requirement from the story because similar behavior already exists in the codebase.
+- `plan.md` and its design artifacts are imperative, temporary execution artifacts (see `docs/Workflows/MoonSpecDocumentModel.md`). Never copy their content into canonical `docs/` files.
 
 ## Pre-Plan Hooks
 

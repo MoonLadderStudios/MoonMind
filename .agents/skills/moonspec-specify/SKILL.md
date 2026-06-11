@@ -20,6 +20,7 @@ Do not use this skill to split a broad design into multiple specs; use `/speckit
 ## Inputs
 
 - Treat the user's request text as the feature description.
+- `spec.md` is a temporary execution artifact derived from the request or its canonical source document. It is never the source of truth for desired state (see `docs/Workflows/MoonSpecDocumentModel.md`).
 - Do not ask the user to repeat the request unless it is empty or no independently testable story can be derived.
 - If the feature description is empty, stop with: `ERROR "No feature description provided"`.
 - Preserve the original feature description verbatim in the generated spec's `**Input**` field. Do not summarize or normalize it; `/speckit.verify` relies on this source request.
@@ -46,6 +47,8 @@ For source-backed requests:
 4. Assign stable IDs: `DESIGN-REQ-001`, `DESIGN-REQ-002`, and so on.
 5. If the source artifact contains multiple independent stories, do not collapse them into one spec. Ask the user to choose one story, or direct them to `/speckit.breakdown` when the goal is to extract stories from a broader technical or declarative design.
 6. If a source requirement is intentionally out of scope for the selected story, keep it in the source mapping as out of scope with a short rationale. Do not silently drop it.
+7. Record the canonical source document path and its document class (per `docs/Workflows/MoonSpecDocumentModel.md`) in a `**Source Document**` line directly below `**Input**` in `spec.md`.
+8. If drafting reveals a conflict between the feature request and the canonical source document, surface it as a `[NEEDS CLARIFICATION]` marker or an explicitly flagged conflict in the spec. Do not silently resolve the conflict toward either side; the canonical document wins by default, and evidence that the document itself is wrong must flow to doc reconciliation, not be buried in the spec.
 
 Complete source reading, requirement extraction, and single-story selection before creating the feature directory.
 
@@ -200,6 +203,7 @@ After writing the initial spec, create `SPECIFY_FEATURE_DIRECTORY/checklists/req
 - [ ] Independent Test describes how the story can be validated end-to-end
 - [ ] Acceptance scenarios are concrete enough to derive unit and integration tests
 - [ ] No in-scope source design requirements are unmapped from functional requirements
+- [ ] Spec does not contradict its canonical source document, or contradictions are explicitly flagged
 - [ ] Edge cases are identified
 - [ ] Scope is clearly bounded
 - [ ] Dependencies and assumptions identified

@@ -30,6 +30,7 @@ When writing code that interacts with skills:
 - **Canonical docs** (`docs/`): describe **declarative desired state** — architecture, contracts, operator-visible behavior, target semantics. Avoid making phased migration or implementation checklists the main story in these files.
 - **Migration, rollout, and MoonSpec execution notes** belong under **`docs/tmp/`** or in **local-only / gitignored paths** (e.g. `artifacts/` for tool handoffs), not as the primary framing of canonical docs. `specs/` is no longer a version-controlled source of guidance.
 - Align with **Constitution principle XII** in `.specify/memory/constitution.md`.
+- Document classes, declarative-vs-imperative classification, and precedence rules are defined in `docs/Workflows/MoonSpecDocumentModel.md`.
 
 ## Testing Instructions
 

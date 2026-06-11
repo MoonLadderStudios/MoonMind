@@ -123,6 +123,7 @@ The markdown report must include:
 - Remaining work for partially implemented stories.
 - Skipped fully implemented stories.
 - Unverifiable stories and the exact missing evidence or ambiguity.
+- Doc-drift notes: when repository evidence shows the canonical source document itself is stale, wrong, or internally inconsistent (not just a story), record the document path, the contradicted claim, and the evidence. These notes are informational input for doc reconciliation; they do not change Jira actions.
 - Confirmation that Jira issue creation should consume the reconciled JSON, not the original unreconciled story list.
 
 ## Key Rules

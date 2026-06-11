@@ -202,6 +202,28 @@ Rules:
 - Refactor only after tests pass.
 - Preserve unrelated user changes in the worktree.
 
+## Discovery Ledger
+
+When implementation deviates from the canonical source document recorded in `spec.md`, or reveals that the document is wrong, incomplete, or internally inconsistent, append a structured entry to a gitignored handoff at `artifacts/doc-discoveries/<feature>.json` (create the file with a top-level `discoveries` array on first use):
+
+```json
+{
+  "docPath": "docs/Workflows/Example.md",
+  "section": "heading or anchor",
+  "claim": "what the document says",
+  "observed": "what implementation showed",
+  "evidence": "file paths, tests, or command output supporting the observation",
+  "severity": "definite | possible"
+}
+```
+
+Rules:
+
+- Use `definite` only when the document is factually wrong against verified behavior, internally inconsistent, or the implementation deliberately and correctly diverged for a defensible reason.
+- Use `possible` for unconfirmed suspicions; these never authorize doc edits.
+- Write no entry when there is nothing to report. Do not invent discoveries.
+- Discoveries do not authorize editing canonical `docs/` files during implementation. They feed the `moonspec-doc-reconcile` step that runs after verification (see `docs/Workflows/MoonSpecDocumentModel.md`).
+
 ## Completion Validation
 
 Before reporting completion:
@@ -279,4 +301,5 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 - Confirm tests fail for the intended reason before production code.
 - Preserve traceability to the original request and source design mappings.
 - Mark completed tasks `[X]` only after real completion.
+- Record canonical-doc drift in the discovery ledger instead of editing `docs/` files inline.
 - Run or recommend `/speckit.verify` as the final alignment check.

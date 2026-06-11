@@ -19,6 +19,9 @@ The generated task list must:
 - Include red-first confirmation tasks.
 - Preserve traceability to the original request or source design preserved in `spec.md`.
 - Include final `/speckit.verify` work after implementation and tests pass.
+- Include a final doc-reconciliation task (`moonspec-doc-reconcile`) after `/speckit.verify` when `spec.md` records a canonical source document under `docs/`.
+
+`tasks.md` is an imperative, temporary execution artifact (see `docs/Workflows/MoonSpecDocumentModel.md`). Never copy its content into canonical `docs/` files.
 
 ## Inputs
 

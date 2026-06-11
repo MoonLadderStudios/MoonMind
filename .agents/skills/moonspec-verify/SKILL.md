@@ -17,6 +17,7 @@ This skill answers:
 - Is the single story in `spec.md` fully implemented?
 - Do unit tests and integration tests provide credible evidence?
 - Which requirements, scenarios, source design mappings, or constitution rules remain partial, missing, conflicting, or unverified?
+- Did verified implementation evidence contradict claims in the canonical source document, indicating doc drift that reconciliation must handle?
 
 ## Inputs
 
@@ -123,6 +124,7 @@ Read:
 - `.specify/memory/constitution.md`: `MUST` constraints and quality gates.
 - `research.md`, `data-model.md`, `contracts/`, `quickstart.md`, and `checklists/` when present and relevant.
 - `specs/breakdown.md` when source design coverage or cross-spec dependencies matter.
+- The canonical source document named by `spec.md` `**Source Document**` when present, plus `artifacts/doc-discoveries/<feature>.json` when it exists, so source-document drift can be assessed.
 
 Do not use copied source requirement text in `spec.md` as evidence that behavior exists.
 
@@ -199,6 +201,7 @@ Rules:
 - Separate missing implementation from missing validation when both matter.
 - Treat violated constitution `MUST` rules as blocking failures.
 - Treat original request misalignment as blocking even if later tasks are complete.
+- Source-document drift alone does not block `FULLY_IMPLEMENTED` when the implementation is correct per the agreed story scope; record it in the Source Document Drift section as structured input for `moonspec-doc-reconcile`. Drift becomes blocking only when it reveals the implementation itself contradicts agreed scope.
 
 ## Verdict
 
@@ -253,6 +256,12 @@ Use this structure:
 
 - [Pass/fail summary against the verbatim original request]
 
+## Source Document Drift
+
+| Doc Claim | Observed Behavior | Evidence | Severity |
+|-----------|-------------------|----------|----------|
+| [docs/ path + claim] | [verified behavior] | [file/test/reference] | definite/possible |
+
 ## Gaps
 
 - [Blocking gaps first]
@@ -300,7 +309,7 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 ## Key Rules
 
 - Verification is read-only except ignored disposable test artifacts.
-- The original request in `spec.md` is the source of truth for final alignment.
+- The original request as preserved in `spec.md`, interpreted against the canonical source document per `docs/Workflows/MoonSpecDocumentModel.md`, is the alignment baseline. The canonical document — not the spec — remains the source of truth for desired state.
 - Moon Spec uses one story per spec.
 - `spec.md` plus `.specify/memory/constitution.md` define governing requirements.
 - `plan.md` and `tasks.md` are useful context but never proof of implementation.

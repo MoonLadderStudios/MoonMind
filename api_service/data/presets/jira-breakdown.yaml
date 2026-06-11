@@ -49,6 +49,9 @@ steps:
       {{ inputs.feature_request }}
 
       If the input is a readable repo path, use that file as the original declarative document and preserve its path in every story's sourceReference.
+      The canonical declarative document is the primary source of truth; the breakdown output is a temporary derived view (see docs/Workflows/MoonSpecDocumentModel.md).
+      Classify the input before extracting stories. If it is primarily an imperative checklist, status tracker, or migration plan and no explicit imperative override was given, fail fast with the moonspec-breakdown imperative-input error instead of decomposing it.
+      Record sourceDocumentClass in the breakdown output.
       Write the coverage-checked story breakdown to the runtime-provided story breakdown paths.
     skill:
       id: moonspec-breakdown
