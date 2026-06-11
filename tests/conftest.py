@@ -2,6 +2,9 @@ import asyncio
 import inspect
 import os
 import signal
+from functools import lru_cache
+from pathlib import Path
+
 import api_service.db.models  # noqa: F401  # Preload models to break circular import cycle
 
 import pytest
@@ -14,6 +17,83 @@ _DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000000"
 
 settings.workflow.test_mode = True
 settings.workflow.enable_proposals = False
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+_SLOW_TEST_MODULES = {
+    Path("tests/unit/api/routers/test_agent_runs.py"),
+    Path("tests/unit/api/routers/test_mcp_tools.py"),
+    Path("tests/unit/mcp/test_tool_registry.py"),
+}
+
+_COMPONENT_PATTERNS = (
+    "TestClient",
+    "dependency_overrides",
+)
+
+_TEMPORAL_BOUNDARY_PATTERNS = (
+    "WorkflowEnvironment",
+    "Replayer",
+    "from temporalio.worker import Worker",
+    "from temporalio.worker import UnsandboxedWorkflowRunner, Worker",
+    "from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker",
+    "from temporalio.worker import Worker, UnsandboxedWorkflowRunner",
+)
+
+
+@lru_cache(maxsize=None)
+def _test_source(path: str) -> str:
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def _relative_test_path(path: Path) -> Path:
+    try:
+        return path.resolve().relative_to(_REPO_ROOT)
+    except ValueError:
+        return path
+
+
+def _item_has_marker(item: pytest.Item, name: str) -> bool:
+    return item.get_closest_marker(name) is not None
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Classify tests by runtime resource usage for impact-aware CI selection."""
+
+    for item in items:
+        path = Path(str(item.fspath))
+        rel_path = _relative_test_path(path)
+        source = _test_source(str(path))
+
+        is_component = _item_has_marker(item, "component") or any(
+            pattern in source for pattern in _COMPONENT_PATTERNS
+        )
+        is_temporal_boundary = _item_has_marker(item, "temporal_boundary") or any(
+            pattern in source for pattern in _TEMPORAL_BOUNDARY_PATTERNS
+        )
+        is_slow = _item_has_marker(item, "slow") or rel_path in _SLOW_TEST_MODULES
+
+        if is_component:
+            item.add_marker(pytest.mark.component)
+        if is_temporal_boundary:
+            item.add_marker(pytest.mark.temporal_boundary)
+        if is_slow:
+            item.add_marker(pytest.mark.slow)
+
+        if (
+            len(rel_path.parts) >= 2
+            and rel_path.parts[:2] == ("tests", "unit")
+            and not is_component
+            and not is_temporal_boundary
+            and not is_slow
+            and not _item_has_marker(item, "integration")
+            and not _item_has_marker(item, "provider_verification")
+        ):
+            item.add_marker(pytest.mark.unit_fast)
+
 
 @pytest.fixture
 def disabled_env_keys(monkeypatch):
