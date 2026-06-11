@@ -483,6 +483,8 @@ steps:
       requiredCapabilities:
         - git
   - title: Move Jira issue to Code Review
+    annotations:
+      jiraOrchestrateRole: code-review-handoff
     instructions: |-
       Change Jira issue {{ inputs.jira_issue_key }} to status Code Review only after the pull request exists.
 
