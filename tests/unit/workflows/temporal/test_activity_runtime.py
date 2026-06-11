@@ -19,7 +19,7 @@ from temporalio import activity as temporal_activity
 from temporalio import exceptions as temporal_exceptions
 
 from api_service.db.models import Base
-from moonmind.config.settings import settings
+from moonmind.config.settings import PentestSettings, settings
 from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
 from moonmind.schemas.agent_runtime_models import AgentRunResult
 from moonmind.schemas.jules_models import JulesTaskResponse
@@ -76,6 +76,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactValidationError,
     build_artifact_ref,
 )
+from moonmind.workloads.registry import RunnerProfileRegistry
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -949,12 +950,32 @@ def _scope_artifact_bytes(**overrides: object) -> bytes:
     return json.dumps(_approved_pentest_scope() | overrides).encode("utf-8")
 
 class _FakePentestLauncher:
-    def __init__(self, *, status: str = "succeeded") -> None:
+    def __init__(
+        self,
+        *,
+        status: str = "succeeded",
+        findings_payload: dict[str, Any] | None = None,
+    ) -> None:
         self.status = status
+        self.findings_payload = findings_payload
         self.requests: list[object] = []
 
     async def run(self, request: object) -> WorkloadResult:
         self.requests.append(request)
+        workload_request = getattr(request, "request", request)
+        artifacts_dir = getattr(workload_request, "artifacts_dir", None)
+        if self.findings_payload is not None and artifacts_dir:
+            findings_path = (
+                Path(str(artifacts_dir))
+                / "pentest"
+                / "findings"
+                / "findings.normalizer-input.json"
+            )
+            findings_path.parent.mkdir(parents=True, exist_ok=True)
+            findings_path.write_text(
+                json.dumps(self.findings_payload, sort_keys=True, indent=2) + "\n",
+                encoding="utf-8",
+            )
         return WorkloadResult.model_validate(
             {
                 "requestId": "workload-run-123",
@@ -1291,6 +1312,43 @@ async def test_security_pentest_execute_includes_secret_safe_provider_preparatio
     assert result["provider_lease"]["lease_required"] is True
     assert "sk-" not in str(result)
 
+async def test_security_pentest_execute_resolves_mapping_secret_refs(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    resolved_refs: list[object] = []
+
+    async def _fake_resolver(ref: object, *, field_name: str) -> str:
+        resolved_refs.append(ref)
+        assert field_name == "pentest.ANTHROPIC_API_KEY"
+        return "sk-resolved-provider-value"
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.activity_runtime.resolve_managed_api_key_reference",
+        _fake_resolver,
+    )
+    launcher = _FakePentestLauncher()
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=launcher,
+        workload_registry=_RecordingPentestRegistry(),
+    )
+
+    result = await activities._security_pentest_execute_trusted_internal(
+        _pentest_activity_payload(
+            execution_profile_ref="pentestgpt_anthropic_api_team",
+        )
+    )
+
+    assert result["status"] == "completed"
+    assert resolved_refs == [
+        {
+            "secret_id": "sec_pentestgpt_anthropic_team",
+            "backend_type": "db_encrypted",
+        }
+    ]
+    request = launcher.requests[0].request
+    assert request.env_overrides["ANTHROPIC_API_KEY"] == "sk-resolved-provider-value"
+    assert "sk-resolved-provider-value" not in str(result)
+
 async def test_security_pentest_execute_filters_provider_runtime_state():
     activities = TemporalAgentRuntimeActivities(
         workload_launcher=_FakePentestLauncher(),
@@ -1357,6 +1415,13 @@ async def test_security_pentest_execute_includes_instruction_materialization_met
     assert "content" not in bundle
     assert len(bundle["sha256"]) == 64
     assert paths["instruction_file"] == "/tmp/artifacts/pentest/inputs/instruction.txt"
+    assert paths["input_manifest_file"] == "/tmp/artifacts/pentest/inputs/request.json"
+    assert paths["approved_scope_file"] == (
+        "/tmp/artifacts/pentest/inputs/approved-scope.json"
+    )
+    assert paths["provider_snapshot_file"] == (
+        "/tmp/artifacts/pentest/inputs/provider-snapshot.json"
+    )
     assert paths["stdout_file"] == "/tmp/artifacts/pentest/runtime/stdout.log"
     assert paths["stderr_file"] == "/tmp/artifacts/pentest/runtime/stderr.log"
     assert paths["diagnostics_file"] == "/tmp/artifacts/pentest/runtime/diagnostics.json"
@@ -1366,7 +1431,7 @@ async def test_security_pentest_execute_includes_instruction_materialization_met
     assert paths["normalizer_input_file"] == (
         "/tmp/artifacts/pentest/findings/findings.normalizer-input.json"
     )
-    assert invocation["command"][0] == "/usr/local/bin/moonmind-pentestgpt-run"
+    assert invocation["command"][0] == "--target"
     assert "--non-interactive" in invocation["command"]
     assert "--instruction-file" in invocation["command"]
     assert invocation["env"] == {
@@ -1430,6 +1495,14 @@ async def test_security_pentest_execute_includes_publication_metadata_without_se
     assert result["summary_ref"]
     assert result["structured_ref"]
     assert result["evidence_refs"]
+    assert result["report_bundle"]["report_type"] == "security_pentest_report"
+    assert result["report_bundle"]["report_scope"] == "final"
+    assert (
+        result["report_bundle"]["sensitivity"]["classification"]
+        == "security_restricted"
+    )
+    assert result["report_bundle"]["high_or_critical_count"] == 1
+    assert result["severity_counts"] == {"high": 1}
     assert "session.summary" not in artifact_names
     assert "session.step_checkpoint" not in artifact_names
     assert "session.control_event" not in artifact_names
@@ -1472,12 +1545,110 @@ async def test_security_pentest_execute_coerces_string_publication_flags():
 
     publication = result["artifact_publication"]
     artifact_names = {item["name"] for item in publication["artifacts"]}
-    assert "output.provider_snapshot" not in artifact_names
+    assert "output.provider_snapshot" in artifact_names
     assert "output.logs" not in artifact_names
-    assert publication["omitted_optional_artifacts"] == [
-        "output.provider_snapshot",
-        "output.logs",
-    ]
+    assert publication["omitted_optional_artifacts"] == ["output.logs"]
+
+async def test_pentest_settings_parse_safe_policy_csv_values():
+    parsed = PentestSettings(
+        MOONMIND_PENTEST_ENABLED="true",
+        MOONMIND_PENTEST_ALLOWED_RUNNER_PROFILES="pentestgpt-safe,pentestgpt-vpn-lab",
+        MOONMIND_PENTEST_ALLOWED_OPERATION_MODES="recon_only,validate_hypothesis",
+        MOONMIND_PENTEST_ALLOWED_EVIDENCE_LEVELS="minimal,standard",
+        MOONMIND_PENTEST_MAX_TIME_BUDGET_MINUTES="120",
+        MOONMIND_PENTEST_PROVIDER_LEASE_SECONDS="",
+    )
+
+    assert parsed.enabled is True
+    assert parsed.allowed_runner_profiles == (
+        "pentestgpt-safe",
+        "pentestgpt-vpn-lab",
+    )
+    assert parsed.allowed_operation_modes == ("recon_only", "validate_hypothesis")
+    assert parsed.allowed_evidence_levels == ("minimal", "standard")
+    assert parsed.max_time_budget_minutes == 120
+    assert parsed.provider_lease_seconds is None
+    assert (
+        PentestSettings.model_fields["enabled"].json_schema_extra["moonmind"][
+            "expose"
+        ]
+        is True
+    )
+
+async def test_pentest_settings_rejects_defaults_outside_allowlists():
+    with pytest.raises(ValueError, match="default pentest operation mode"):
+        PentestSettings(
+            MOONMIND_PENTEST_DEFAULT_OPERATION_MODE="validate_hypothesis",
+            MOONMIND_PENTEST_ALLOWED_OPERATION_MODES="recon_only",
+        )
+    with pytest.raises(ValueError, match="default pentest evidence level"):
+        PentestSettings(
+            MOONMIND_PENTEST_DEFAULT_EVIDENCE_LEVEL="full",
+            MOONMIND_PENTEST_ALLOWED_EVIDENCE_LEVELS="minimal,standard",
+        )
+    with pytest.raises(ValueError, match="default pentest runner profile"):
+        PentestSettings(
+            MOONMIND_PENTEST_DEFAULT_RUNNER_PROFILE="pentestgpt-vpn-lab",
+            MOONMIND_PENTEST_ALLOWED_RUNNER_PROFILES="pentestgpt-safe",
+        )
+
+async def test_pentest_workload_profile_registry_includes_safe_runner():
+    registry = RunnerProfileRegistry.load_file(
+        Path("config/workloads/default-runner-profiles.yaml"),
+        workspace_root="/work/agent_jobs",
+    )
+
+    profile = registry.get("pentestgpt-safe")
+    assert profile is not None
+    assert profile.image == "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0"
+    assert profile.network_policy == "bridge"
+    assert "ANTHROPIC_API_KEY" in profile.env_allowlist
+
+async def test_security_pentest_execute_materializes_input_files_without_secrets(
+    tmp_path: Path,
+):
+    artifacts_dir = tmp_path / "artifacts"
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=_FakePentestLauncher(),
+        workload_registry=_RecordingPentestRegistry(),
+    )
+
+    result = await activities._security_pentest_execute_trusted_internal(
+        _pentest_activity_payload(
+            artifacts_dir=str(artifacts_dir),
+            summary_text="password=hunter2",
+        )
+    )
+
+    assert result["status"] == "completed"
+    instruction_file = artifacts_dir / "pentest" / "inputs" / "instruction.txt"
+    manifest_file = artifacts_dir / "pentest" / "inputs" / "request.json"
+    scope_file = artifacts_dir / "pentest" / "inputs" / "approved-scope.json"
+    provider_file = artifacts_dir / "pentest" / "inputs" / "provider-snapshot.json"
+    assert instruction_file.read_text(encoding="utf-8").startswith("Objective:")
+    manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+    provider_snapshot = json.loads(provider_file.read_text(encoding="utf-8"))
+    scope_snapshot = json.loads(scope_file.read_text(encoding="utf-8"))
+    assert manifest["provider_snapshot_ref"] == f"file:{provider_file}"
+    assert provider_snapshot["profile_id"] == "pentestgpt_anthropic_api_team"
+    assert "secret_env_keys" not in provider_snapshot
+    assert provider_snapshot["credential_env_key_count"] == 1
+    assert provider_snapshot["missing_credential_env_key_count"] == 1
+    assert scope_snapshot["scope_id"] == "scope-123"
+    assert "hunter2" not in provider_file.read_text(encoding="utf-8")
+    assert "hunter2" not in manifest_file.read_text(encoding="utf-8")
+
+async def test_security_pentest_execute_fails_before_launch_when_policy_disallows_mode():
+    launcher = _FakePentestLauncher()
+    activities = TemporalAgentRuntimeActivities(workload_launcher=launcher)
+
+    result = await activities._security_pentest_execute_trusted_internal(
+        _pentest_activity_payload(operation_mode="full_authorized")
+    )
+
+    assert result["status"] == "validation_failed"
+    assert "operation_mode_disabled" in str(result["diagnostics"])
+    assert launcher.requests == []
 
 async def test_security_pentest_execute_sources_publication_payload_from_nested_request():
     activities = TemporalAgentRuntimeActivities(
@@ -1516,11 +1687,66 @@ async def test_security_pentest_execute_sources_publication_payload_from_nested_
     artifact_names = {item["name"] for item in publication["artifacts"]}
     findings = result["normalized_findings"]["findings"]
     assert [item["finding_id"] for item in findings] == ["nested-finding"]
-    assert "output.provider_snapshot" not in artifact_names
+    assert "output.provider_snapshot" in artifact_names
 
-async def test_security_pentest_execute_fails_closed_before_vpn_lab_launch_without_network_approval():
+async def test_security_pentest_execute_uses_runner_normalized_findings_after_launch(
+    tmp_path: Path,
+):
+    launcher = _FakePentestLauncher(
+        findings_payload={
+            "tool_name": "security.pentest.run",
+            "tool_version": "1.0.0",
+            "target": "https://lab.example.test",
+            "scope_artifact_ref": "art:sha256:approved-scope",
+            "operation_mode": "validate_hypothesis",
+            "runner_profile_id": "pentestgpt-safe",
+            "execution_profile_ref": "pentestgpt_anthropic_api_team",
+            "produced_at": "2026-01-01T00:00:00Z",
+            "findings": [
+                {
+                    "finding_id": "runner-finding",
+                    "title": "Runner finding",
+                    "severity": "critical",
+                    "confidence": "confirmed",
+                    "summary": "Runner-produced evidence.",
+                },
+                "ignored-non-object",
+            ],
+            "summary": {
+                "findings_count": 1,
+                "confirmed_findings_count": 1,
+                "high_or_critical_count": 1,
+            },
+            "evidence_refs": ["file:/tmp/evidence.json"],
+        }
+    )
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=launcher,
+        workload_registry=_RecordingPentestRegistry(),
+    )
+
+    result = await activities._security_pentest_execute_trusted_internal(
+        _pentest_activity_payload(artifacts_dir=str(tmp_path / "artifacts"))
+    )
+
+    assert result["status"] == "completed"
+    assert result["findings_count"] == 1
+    assert result["confirmed_findings_count"] == 1
+    assert result["report_bundle"]["high_or_critical_count"] == 1
+    assert result["severity_counts"] == {"critical": 1}
+    assert [
+        item["finding_id"] for item in result["normalized_findings"]["findings"]
+    ] == ["runner-finding"]
+
+async def test_security_pentest_execute_fails_closed_before_vpn_lab_launch_without_network_approval(
+    monkeypatch: pytest.MonkeyPatch,
+):
     launcher = _FakePentestLauncher()
     activities = TemporalAgentRuntimeActivities(workload_launcher=launcher)
+    monkeypatch.setattr(
+        settings.pentest, "allowed_runner_profiles", ("pentestgpt-vpn-lab",)
+    )
+    monkeypatch.setattr(settings.pentest, "allow_vpn_lab_profile", True)
 
     result = await activities._security_pentest_execute_trusted_internal(
         _pentest_activity_payload(
