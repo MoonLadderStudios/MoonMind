@@ -212,6 +212,7 @@ RUN pip install --disable-pip-version-check readmeai~=0.6.3 --no-deps
 COPY moonmind /app/moonmind/
 COPY api_service /app/api_service/
 COPY config /app/config/
+COPY docs/ReleaseNotes /app/docs/ReleaseNotes/
 COPY .agents /app/.agents/
 RUN pip install --disable-pip-version-check --no-deps .
 
