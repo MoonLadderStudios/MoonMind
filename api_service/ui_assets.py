@@ -170,11 +170,10 @@ def resolve_mission_control_dist_root(entrypoint: str = "mission-control") -> Pa
 
     local_root = local_ui_dist_root()
     bundled_root = bundled_ui_dist_root()
-    candidates = sorted(
-        (local_root, bundled_root),
-        key=_dist_root_manifest_mtime_ns,
-        reverse=True,
-    )
+    # In deployed containers the repository path may be bind-mounted with stale
+    # local build output. Prefer the image-baked bundle unless an operator
+    # explicitly configures VITE_MANIFEST_PATH or MOONMIND_UI_DEV_SERVER_URL.
+    candidates = (bundled_root, local_root)
     for candidate in candidates:
         if _manifest_tree_is_usable(candidate, entrypoint):
             return candidate

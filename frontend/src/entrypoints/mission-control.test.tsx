@@ -67,32 +67,6 @@ function cssRuleBlockMatching(css: string, matches: (rule: Rule) => boolean): st
   return block;
 }
 
-function mockExecutionMetricsResponse() {
-  return {
-    totalRuns: 42,
-    completedRuns: 28,
-    failedRuns: 7,
-    canceledRuns: 2,
-    terminalRuns: 37,
-    successRate: 0.7568,
-    duration: {
-      averageSeconds: 3661,
-      medianSeconds: 91,
-      minSeconds: 12,
-      maxSeconds: 7200,
-      observedCount: 35,
-    },
-    cost: {
-      totalEstimateUsd: 12.3456,
-      averageEstimateUsd: 0.3527,
-      observedCount: 35,
-    },
-    sampleSize: 42,
-    countMode: 'exact',
-    refreshedAt: '2026-06-10T12:00:00Z',
-  };
-}
-
 vi.mock('@xterm/xterm', () => {
   class MockTerminal {
     cols = 80;
@@ -158,12 +132,6 @@ describe('Mission Control shared entry', () => {
           json: async () => [],
         } as Response);
       }
-      if (url === '/api/executions/metrics?scope=tasks&sampleSize=500') {
-        return Promise.resolve({
-          ok: true,
-          json: async () => mockExecutionMetricsResponse(),
-        } as Response);
-      }
       return Promise.resolve({
         ok: false,
         status: 404,
@@ -191,15 +159,10 @@ describe('Mission Control shared entry', () => {
 
     renderWithClient(<MissionControlApp payload={payload} />);
 
-    expect(await screen.findByRole('heading', { name: 'Operational Metrics' }, { timeout: 10000 })).toBeTruthy();
-    expect(await screen.findByLabelText('Operational metrics')).toBeTruthy();
-    await waitFor(() => {
-      expect(
-        fetchSpy.mock.calls.some(
-          ([url]) => String(url) === '/api/executions/metrics?scope=tasks&sampleSize=500',
-        ),
-      ).toBe(true);
-    });
+    expect(await screen.findByRole('heading', { name: 'Workflows' }, { timeout: 10000 })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Open workflows' }).getAttribute('href')).toBe('/workflows');
+    expect(screen.queryByLabelText('Operational metrics')).toBeNull();
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/metrics'))).toBe(false);
     expect(await screen.findByText(/First-Run Setup:/i)).toBeTruthy();
     await waitFor(() => {
       expect(document.querySelector('.panel--data-wide')).toBeTruthy();
@@ -207,101 +170,20 @@ describe('Mission Control shared entry', () => {
     });
   });
 
-  it('renders operational metrics on the workflows home dashboard', async () => {
+  it('does not render operational metrics on the workflows home dashboard', async () => {
     renderWithClient(<MissionControlApp payload={{ page: 'workflows-home', apiBase: '/api' }} />);
 
-    expect(await screen.findByRole('heading', { name: 'Operational Metrics' })).toBeTruthy();
-    expect(await screen.findByText('42')).toBeTruthy();
-    expect(await screen.findByText('75.7%')).toBeTruthy();
-    expect(await screen.findByText('1h 1m')).toBeTruthy();
-    expect(await screen.findByText('$12.35')).toBeTruthy();
-    expect(screen.getByText('Median 1m 31s across 35 runs')).toBeTruthy();
-    expect(screen.getByText('Average $0.3527 across 35 runs')).toBeTruthy();
-  });
-
-  it('does not render placeholder operational metric details while home metrics are loading', async () => {
-    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url === '/api/executions/metrics?scope=tasks&sampleSize=500') {
-        return new Promise(() => {}) as Promise<Response>;
-      }
-      if (url === '/api/v1/secrets') {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ items: [] }),
-        } as Response);
-      }
-      if (url === '/api/v1/provider-profiles') {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [],
-        } as Response);
-      }
-      return Promise.resolve({
-        ok: false,
-        status: 404,
-        statusText: 'Not Found',
-        text: async () => 'Unhandled fetch',
-      } as Response);
-    });
-
-    renderWithClient(<MissionControlApp payload={{ page: 'workflows-home', apiBase: '/api' }} />);
-
-    expect(await screen.findByText('Loading operational metrics...')).toBeTruthy();
-    expect(screen.queryByText('0 terminal from 0 sampled')).toBeNull();
-    expect(screen.queryByText('0 completed, 0 failed')).toBeNull();
-    expect(screen.queryByText(/^Refreshed /)).toBeNull();
-  });
-
-  it('renders negative home metric durations as unavailable', async () => {
-    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url === '/api/executions/metrics?scope=tasks&sampleSize=500') {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            ...mockExecutionMetricsResponse(),
-            duration: {
-              averageSeconds: -3661,
-              medianSeconds: -91,
-              minSeconds: -91,
-              maxSeconds: -1,
-              observedCount: 35,
-            },
-          }),
-        } as Response);
-      }
-      if (url === '/api/v1/secrets') {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ items: [] }),
-        } as Response);
-      }
-      if (url === '/api/v1/provider-profiles') {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [],
-        } as Response);
-      }
-      return Promise.resolve({
-        ok: false,
-        status: 404,
-        statusText: 'Not Found',
-        text: async () => 'Unhandled fetch',
-      } as Response);
-    });
-
-    renderWithClient(<MissionControlApp payload={{ page: 'workflows-home', apiBase: '/api' }} />);
-
-    expect(await screen.findByText('Median — across 35 runs')).toBeTruthy();
-    expect(screen.queryByText('-1h 1m')).toBeNull();
-    expect(screen.queryByText('-1m 31s')).toBeNull();
+    expect(await screen.findByRole('heading', { name: 'Workflows' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Open workflows' }).getAttribute('href')).toBe('/workflows');
+    expect(screen.queryByLabelText('Operational metrics')).toBeNull();
+    expect(screen.queryByText('Operational metrics are unavailable.')).toBeNull();
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/metrics'))).toBe(false);
   });
 
   it('uses the constrained shell by default for non-table pages', async () => {
     renderWithClient(<MissionControlApp payload={{ page: 'workflows-home', apiBase: '/api' }} />);
 
-    expect(await screen.findByRole('heading', { name: 'Operational Metrics' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Workflows' })).toBeTruthy();
     expect(document.querySelector('.panel--data-wide')).toBeNull();
     expect(document.querySelector('.dashboard-shell-constrained--data-wide')).toBeNull();
     expect(document.querySelector('.dashboard-shell-constrained')).toBeTruthy();
