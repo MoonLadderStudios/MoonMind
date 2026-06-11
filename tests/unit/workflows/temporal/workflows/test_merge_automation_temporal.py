@@ -10,6 +10,7 @@ from temporalio.workflow import ChildWorkflowCancellationType
 
 from moonmind.workflows.temporal.workflows import merge_automation as merge_automation_module
 from moonmind.workflows.temporal.workflows.merge_automation import (
+    MERGE_AUTOMATION_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH,
     MoonMindMergeAutomationWorkflow,
 )
 from moonmind.workflows.temporal.workflows.merge_gate import (
@@ -89,6 +90,34 @@ def test_merge_automation_extracts_artifact_id_from_ref_shapes() -> None:
         )
         == "art-attr-camel"
     )
+
+
+def test_merge_automation_workflow_child_task_queue_is_replay_patched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    temporal_settings = merge_automation_module.settings.temporal.model_copy(
+        update={"user_workflow_v2_task_queue": "mm.workflow.custom.v2"}
+    )
+    monkeypatch.setattr(merge_automation_module.settings, "temporal", temporal_settings)
+
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        == MERGE_AUTOMATION_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH,
+    )
+    assert (
+        MoonMindMergeAutomationWorkflow._workflow_child_task_queue()
+        == "mm.workflow.custom.v2"
+    )
+
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "patched",
+        lambda _patch_id: False,
+    )
+    assert MoonMindMergeAutomationWorkflow._workflow_child_task_queue() == "mm.workflow"
+
 
 def test_merge_automation_summary_payload_bounds_published_artifact_refs() -> None:
     workflow = MoonMindMergeAutomationWorkflow()

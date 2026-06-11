@@ -8,9 +8,9 @@ from temporalio import activity
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 
+from moonmind.workflows.temporal.activity_catalog import WORKFLOW_TASK_QUEUE
 from moonmind.workflows.temporal.workflows.oauth_session import (
     MoonMindOAuthSessionWorkflow,
-    WORKFLOW_TASK_QUEUE,
     ACTIVITY_TASK_QUEUE,
     RUNNER_ACTIVITY_TASK_QUEUE,
 )

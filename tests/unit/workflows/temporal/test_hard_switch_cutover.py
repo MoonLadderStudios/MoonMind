@@ -9,7 +9,9 @@ from moonmind.config.settings import settings
 from moonmind.workflows.temporal import hard_switch_cutover
 from moonmind.workflows.temporal.activity_catalog import (
     WORKFLOW_FLEET,
+    WORKFLOW_TASK_QUEUE,
     build_default_activity_catalog,
+    get_workflow_task_queue,
 )
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.hard_switch_cutover import (
@@ -135,6 +137,15 @@ def test_renamed_contract_routes_new_starts_to_distinct_queue(tmp_path: Path) ->
     assert contract.workflow_type == RENAMED_USER_WORKFLOW_TYPE
     assert contract.task_queue == "mm.workflow.user.v2"
     assert contract.contract_mode == "renamed_contract"
+
+
+def test_workflow_task_queue_constant_stays_replay_stable_while_start_queue_is_lazy(
+    tmp_path: Path,
+) -> None:
+    temporal_settings = _renamed_contract_settings(tmp_path)
+
+    assert WORKFLOW_TASK_QUEUE == "mm.workflow"
+    assert get_workflow_task_queue(temporal_settings) == "mm.workflow.user.v2"
 
 
 def test_renamed_contract_resolution_caches_cutover_file_validation(

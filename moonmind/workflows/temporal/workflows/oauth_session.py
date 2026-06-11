@@ -22,7 +22,6 @@ from temporalio import exceptions, workflow
 
 with workflow.unsafe.imports_passed_through():
     from temporalio.common import RetryPolicy
-    from moonmind.workflows.temporal.activity_catalog import WORKFLOW_TASK_QUEUE
 
 WORKFLOW_NAME = "MoonMind.OAuthSession"
 ACTIVITY_TASK_QUEUE = "mm.activity.artifacts"

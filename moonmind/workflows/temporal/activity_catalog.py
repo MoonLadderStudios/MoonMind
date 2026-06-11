@@ -26,13 +26,22 @@ INTEGRATIONS_FLEET = "integrations"
 AGENT_RUNTIME_FLEET = "agent_runtime"
 DEPLOYMENT_FLEET = "deployment"
 
-WORKFLOW_TASK_QUEUE = resolve_user_workflow_start_contract(settings.temporal).task_queue
+WORKFLOW_TASK_QUEUE = "mm.workflow"
 ARTIFACTS_TASK_QUEUE = "mm.activity.artifacts"
 LLM_TASK_QUEUE = "mm.activity.llm"
 SANDBOX_TASK_QUEUE = "mm.activity.sandbox"
 INTEGRATIONS_TASK_QUEUE = "mm.activity.integrations"
 AGENT_RUNTIME_TASK_QUEUE = "mm.activity.agent_runtime"
 DEPLOYMENT_TASK_QUEUE = "mm.activity.deployment"
+
+def get_workflow_task_queue(
+    temporal_settings: TemporalSettings | None = None,
+) -> str:
+    """Resolve the currently configured workflow-fleet task queue lazily."""
+
+    return resolve_user_workflow_start_contract(
+        temporal_settings or settings.temporal
+    ).task_queue
 
 class TemporalActivityCatalogError(ValueError):
     """Raised when Temporal activity routing metadata is invalid."""
@@ -295,7 +304,7 @@ def build_default_activity_catalog(
     """Return the canonical Temporal activity catalog for MoonMind."""
 
     cfg = temporal_settings or settings.temporal
-    workflow_task_queue = resolve_user_workflow_start_contract(cfg).task_queue
+    workflow_task_queue = get_workflow_task_queue(cfg)
     
     # See docs/Temporal/ErrorTaxonomy.md
     NON_RETRYABLE_ERRORS = ("INVALID_INPUT", "ProfileResolutionError", "UnsupportedStatus")
@@ -1282,6 +1291,7 @@ __all__ = [
     "WORKFLOW_FLEET",
     "WORKFLOW_TASK_QUEUE",
     "build_default_activity_catalog",
+    "get_workflow_task_queue",
     "manifest_ingest_activity_routes",
     "skill_policy_as_route",
 ]

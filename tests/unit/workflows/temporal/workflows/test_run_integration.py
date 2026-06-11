@@ -17,6 +17,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
     RUN_PUBLISH_REPAIR_FEEDBACK_PATCH,
     RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH,
+    RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH,
     MoonMindRunWorkflow,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
@@ -60,6 +61,31 @@ def test_run_execution_stage_preserves_conditional_registry_patch_marker() -> No
         call_string
     )
     assert source.index(call_string) < source.index("await load_registry_snapshot()")
+
+
+def test_run_workflow_child_task_queue_is_replay_patched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    temporal_settings = run_workflow_module.settings.temporal.model_copy(
+        update={"user_workflow_v2_task_queue": "mm.workflow.custom.v2"}
+    )
+    monkeypatch.setattr(run_workflow_module.settings, "temporal", temporal_settings)
+    workflow = MoonMindRunWorkflow()
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH,
+    )
+    assert workflow._workflow_child_task_queue() == "mm.workflow.custom.v2"
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda _patch_id: False,
+    )
+    assert workflow._workflow_child_task_queue() == "mm.workflow"
+
 
 @pytest.fixture
 def mock_run_workflow(monkeypatch: pytest.MonkeyPatch) -> MoonMindRunWorkflow:
