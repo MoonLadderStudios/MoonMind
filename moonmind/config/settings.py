@@ -1,9 +1,9 @@
 import os
 import re
-from typing import Annotated, Any, Literal, Optional, Sequence
+from typing import Annotated, Any, Literal, Optional, Self, Sequence
 from urllib.parse import urlsplit
 
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from moonmind.claude.runtime import CLAUDE_RUNTIME_DISABLED_MESSAGE
@@ -1647,6 +1647,28 @@ class PentestSettings(BaseSettings):
             allowed = ", ".join(_PENTEST_ALLOWED_EVIDENCE_LEVELS)
             raise ValueError(f"allowed pentest evidence levels must be one of: {allowed}")
         return value or ("minimal", "standard", "full")
+
+    @model_validator(mode="after")
+    def _validate_default_values_are_allowlisted(self) -> Self:
+        if self.default_operation_mode not in self.allowed_operation_modes:
+            raise ValueError(
+                "default pentest operation mode must be included in "
+                "allowed pentest operation modes"
+            )
+        if self.default_evidence_level not in self.allowed_evidence_levels:
+            raise ValueError(
+                "default pentest evidence level must be included in "
+                "allowed pentest evidence levels"
+            )
+        effective_profiles = set(self.allowed_runner_profiles)
+        if self.allow_vpn_lab_profile:
+            effective_profiles.add(self.vpn_lab_profile_id)
+        if self.default_runner_profile not in effective_profiles:
+            raise ValueError(
+                "default pentest runner profile must be included in allowed "
+                "pentest runner profiles"
+            )
+        return self
 
 DEFAULT_GOOGLE_EMBEDDING_DIMENSIONS: int = 3072
 

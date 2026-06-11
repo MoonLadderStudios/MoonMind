@@ -4457,10 +4457,11 @@ class TemporalAgentRuntimeActivities:
             )
 
     @staticmethod
-    def _write_pentest_text(path: str, payload: str) -> None:
+    def _write_pentest_text(path: str, payload: str, *, redact: bool = True) -> None:
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(payload, encoding="utf-8")
+        safe_payload = redact_sensitive_text(payload) if redact else payload
+        target.write_text(safe_payload, encoding="utf-8")
 
     @staticmethod
     def _write_pentest_json(
@@ -4475,6 +4476,7 @@ class TemporalAgentRuntimeActivities:
         TemporalAgentRuntimeActivities._write_pentest_text(
             path,
             json.dumps(safe_payload, sort_keys=True, indent=2) + "\n",
+            redact=False,
         )
 
     async def _resolve_pentest_secret_env(
@@ -4490,16 +4492,19 @@ class TemporalAgentRuntimeActivities:
                 continue
 
             secret_ref_config = provider_materialization.secret_refs.get(logical_ref)
-            candidate_refs: list[str] = []
+            candidate_refs: list[str | Mapping[str, Any]] = []
             if isinstance(secret_ref_config, str):
                 candidate_refs.append(secret_ref_config)
             elif isinstance(secret_ref_config, Mapping):
+                candidate_refs.append(secret_ref_config)
                 for key in ("secret_ref", "secretRef", "secret_id", "secretId"):
                     value = str(secret_ref_config.get(key) or "").strip()
                     if value:
                         candidate_refs.append(value)
             for candidate in candidate_refs:
-                if not re.match(r"^[a-z][a-z0-9+.-]*://", candidate):
+                if isinstance(candidate, str) and not re.match(
+                    r"^[a-z][a-z0-9+.-]*://", candidate
+                ):
                     continue
                 try:
                     resolved_value = await resolve_managed_api_key_reference(
@@ -4510,7 +4515,6 @@ class TemporalAgentRuntimeActivities:
                     logger.warning(
                         "Failed to resolve PentestGPT secret ref for %s",
                         env_key,
-                        exc_info=True,
                     )
                     continue
                 if str(resolved_value or "").strip():
@@ -4586,6 +4590,41 @@ class TemporalAgentRuntimeActivities:
             "provider_snapshot_ref": f"file:{paths.provider_snapshot_file}",
             "provider_snapshot": provider_snapshot,
         }
+
+    @staticmethod
+    def _load_pentest_runner_findings(path: str) -> dict[str, Any] | None:
+        try:
+            payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, Mapping):
+            return None
+        normalized = redact_sensitive_payload(dict(payload))
+        findings = normalized.get("findings")
+        if not isinstance(findings, list):
+            normalized["findings"] = []
+        else:
+            normalized["findings"] = [
+                item for item in findings if isinstance(item, Mapping)
+            ]
+        summary = normalized.get("summary")
+        if not isinstance(summary, Mapping):
+            confirmed = sum(
+                1
+                for item in normalized["findings"]
+                if str(item.get("confidence") or "") == "confirmed"
+            )
+            high_or_critical = sum(
+                1
+                for item in normalized["findings"]
+                if str(item.get("severity") or "") in {"high", "critical"}
+            )
+            normalized["summary"] = {
+                "findings_count": len(normalized["findings"]),
+                "confirmed_findings_count": confirmed,
+                "high_or_critical_count": high_or_critical,
+            }
+        return dict(normalized)
 
     async def execution_notify_completion(
         self,
@@ -5517,6 +5556,12 @@ class TemporalAgentRuntimeActivities:
 
         workload_dump = workload_result.model_dump(mode="json", by_alias=True)
         output["workload_result"] = workload_dump
+        runner_findings = self._load_pentest_runner_findings(
+            execution_materialization.runtime_paths.normalizer_input_file
+        )
+        if runner_findings is not None:
+            publication["normalized_findings"] = runner_findings
+            output["normalized_findings"] = runner_findings
         output_refs = workload_result.output_refs or {}
         stdout_ref = workload_result.stdout_ref or _artifact_ref_for_pentest_name(
             publication, "runtime.stdout"
@@ -5543,6 +5588,8 @@ class TemporalAgentRuntimeActivities:
         finding_summary = publication["normalized_findings"]["summary"]
         severity_counts: dict[str, int] = {}
         for finding in publication["normalized_findings"].get("findings", []):
+            if not isinstance(finding, Mapping):
+                continue
             severity = str(finding.get("severity") or "informational").strip()
             severity_counts[severity] = severity_counts.get(severity, 0) + 1
 
