@@ -37,7 +37,7 @@ Supported methods:
 - `initialize` — negotiates protocol version and declares the `tools` capability.
 - `notifications/initialized` — accepted as a notification after initialization.
 - `ping` — returns an empty result object.
-- `tools/list` — returns immediately callable trusted tools; task-submission-only Temporal executable tools are excluded from this transport list.
+- `tools/list` — returns immediately callable trusted tools; workflow-submission-only Temporal executable tools are excluded from this transport list.
 - `tools/call` — invokes the same trusted immediate-call dispatch path as the helper invocation route, returning MCP tool content plus `structuredContent`. Tool execution failures are returned as successful JSON-RPC responses with `isError: true` in the result payload.
 
 MoonMind does not currently send server-initiated JSON-RPC messages, so `GET /mcp` returns `405 Method Not Allowed` for SSE stream attempts. This is allowed by the Streamable HTTP transport when a server does not offer an SSE stream.
@@ -189,7 +189,7 @@ Field names match the Pydantic models in [`moonmind/mcp/tool_registry.py`](../mo
 **What is registered today**
 
 - **Temporal executable tools** — The discovery response includes governed
-  task-submission tools such as **`security.pentest.run`** so Mission Control can
+  workflow-submission tools such as **`security.pentest.run`** so Mission Control can
   offer them in the Create page Tool picker. These tools execute through the
   Temporal task/plan path, not as immediate `/mcp/tools/call` RPCs; direct calls
   return `execution_tool_requires_task_submission`.
@@ -217,7 +217,7 @@ Successful response:
 }
 ```
 
-The shape of `result` is tool-specific (for Jules tools, task payloads are JSON-serialized per the Jules client). Errors use HTTP status codes with a JSON `detail` object; common `code` values include `tool_not_found`, `invalid_tool_arguments`, `execution_tool_requires_task_submission`, and Jules-specific `jules_rate_limited` / `jules_request_failed` (see [`mcp_tools.py`](../api_service/api/routers/mcp_tools.py)).
+The shape of `result` is tool-specific (for Jules tools, workflow execution payloads are JSON-serialized per the Jules client). Errors use HTTP status codes with a JSON `detail` object; common `code` values include `tool_not_found`, `invalid_tool_arguments`, `execution_tool_requires_task_submission`, and Jules-specific `jules_rate_limited` / `jules_request_failed` (see [`mcp_tools.py`](../api_service/api/routers/mcp_tools.py)).
 
 ### Configuring Codex (and similar clients)
 

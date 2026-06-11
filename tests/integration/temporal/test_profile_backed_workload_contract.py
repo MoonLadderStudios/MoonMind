@@ -38,7 +38,7 @@ def _profile_payload() -> dict[str, object]:
         "kind": "one_shot",
         "image": "python:3.12-slim",
         "entrypoint": ["/bin/bash", "-lc"],
-        "workdirTemplate": "/work/agent_jobs/${task_run_id}/repo",
+        "workdirTemplate": "/work/agent_jobs/${agent_run_id}/repo",
         "requiredMounts": [
             {
                 "type": "volume",
@@ -61,7 +61,7 @@ def _helper_profile_payload() -> dict[str, object]:
         "id": "redis-helper",
         "kind": "bounded_service",
         "image": "redis:7.2-alpine",
-        "workdirTemplate": "/work/agent_jobs/${task_run_id}/repo",
+        "workdirTemplate": "/work/agent_jobs/${agent_run_id}/repo",
         "requiredMounts": [
             {
                 "type": "volume",

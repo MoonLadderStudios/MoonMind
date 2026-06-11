@@ -65,7 +65,7 @@ async def test_create_execution_blocked_when_paused(mock_session, mock_client_ad
     with patch.object(svc, "check_system_paused", return_value=True):
         with pytest.raises(TemporalExecutionValidationError, match="System is paused"):
             await svc.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id="test-owner",
                 title="Test Run",
                 input_artifact_ref=None,
@@ -83,7 +83,7 @@ async def test_create_execution_allowed_when_not_paused(mock_session, mock_clien
     with patch.object(svc, "check_system_paused", return_value=False):
         try:
             await svc.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id="test-owner",
                 title="Test Run",
                 input_artifact_ref=None,

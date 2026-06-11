@@ -11,7 +11,7 @@ network_access = true
 codex_queue = "codex"
 artifact_root = "var/artifacts/workflows"
 
-[task_proposals]
+[workflow_proposals]
 # Proposal routing defaults shared by the API and workers. These map to
 # MOONMIND_PROPOSAL_TARGETS/MOONMIND_CI_REPOSITORY when sourced from env.
 proposal_targets_default = "project"
@@ -24,8 +24,8 @@ moonmind_severity_floor_default = "high"
 proposal_delivery_provider_default = "github"
 
 [feature_flags]
-# Disable the Task Preset Catalog (UI + API) when required.
-disable_task_template_catalog = false
+# Disable the Preset Catalog (UI + API) when required.
+disable_preset_catalog = false
 # Rollout scope for the session-aware Live Logs timeline contract:
 # off | internal | codex_managed | all_managed
 live_logs_session_timeline_rollout = "off"

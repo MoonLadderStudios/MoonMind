@@ -25,7 +25,7 @@ from api_service.services.deployment_operations import (
 )
 from moonmind.config.settings import settings
 from moonmind.utils.build_info import resolve_moonmind_build_id
-from moonmind.workflows.tasks.routing import TemporalSubmitDisabledError
+from moonmind.workflows.executions.routing import TemporalSubmitDisabledError
 from moonmind.workflows.temporal import (
     TemporalExecutionService,
     TemporalExecutionValidationError,
@@ -404,7 +404,7 @@ async def _recent_actions_from_executions(
 ) -> tuple[DeploymentRecentAction, ...]:
     try:
         result = await execution_service.list_executions(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             integration=DEPLOYMENT_UPDATE_TOOL_NAME,
             page_size=10,
         )

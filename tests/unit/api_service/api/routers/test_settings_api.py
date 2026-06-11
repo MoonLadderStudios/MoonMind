@@ -21,6 +21,7 @@ from api_service.db.models import (
 )
 from api_service.main import app
 from api_service.services.settings_catalog import (
+    _CATALOG_MIGRATION_RULES,
     SettingMigrationRule,
     SettingRegistryEntry,
     SettingsCatalogService,
@@ -32,9 +33,10 @@ SETTINGS_USER_DEP = get_current_user()
 
 def _install_settings_migration_rules(monkeypatch, rules):
     service_cls = SettingsCatalogService
+    merged_rules = (*_CATALOG_MIGRATION_RULES, *rules)
 
     def _factory(*args, **kwargs):
-        kwargs.setdefault("migration_rules", rules)
+        kwargs.setdefault("migration_rules", merged_rules)
         return service_cls(*args, **kwargs)
 
     monkeypatch.setattr(settings_router, "SettingsCatalogService", _factory)
@@ -122,17 +124,17 @@ async def test_settings_catalog_endpoint_returns_grouped_descriptors():
     descriptor = next(
         item
         for item in body["categories"]["Workflow"]
-        if item["key"] == "workflow.default_task_runtime"
+        if item["key"] == "workflow.default_runtime"
     )
     assert descriptor["type"] == "enum"
     assert descriptor["ui"] == "select"
     assert descriptor["source"] in {"config_file", "environment"}
-    assert descriptor["apply_mode"] == "next_task"
+    assert descriptor["apply_mode"] == "next_workflow"
     assert descriptor["activation_state"] == "active"
     assert descriptor["active"] is True
     assert descriptor["pending_value"] is None
     assert descriptor["completion_guidance"] == (
-        "New tasks will use this value when they are created."
+        "New workflows will use this value when they are created."
     )
     assert descriptor["audit"] == {
         "store_old_value": True,
@@ -1026,8 +1028,8 @@ async def test_mm657_documented_error_code_envelope_matrix(
             "/api/v1/settings/validate",
             json={
                 "scope": "workspace",
-                "changes": {"workflow.default_task_runtime": "codex"},
-                "expected_versions": {"workflow.default_task_runtime": 99},
+                "changes": {"workflow.default_runtime": "codex"},
+                "expected_versions": {"workflow.default_runtime": 99},
             },
         )
         requires_confirmation = await client.patch(
@@ -1089,7 +1091,7 @@ async def test_mm657_documented_error_code_envelope_matrix(
     _assert_settings_error_envelope(
         version_conflict.json(),
         error="version_conflict",
-        key="workflow.default_task_runtime",
+        key="workflow.default_runtime",
         scope="workspace",
     )
     assert requires_confirmation.status_code == 428
@@ -1515,7 +1517,7 @@ async def test_mm655_effective_setting_endpoint_exposes_complete_contract(monkey
         settings_path=("settings", "configured"),
         apply_mode="worker_reload",
         requires_reload=True,
-        applies_to=("worker", "task_creation"),
+        applies_to=("worker", "workflow_creation"),
         order=1,
     )
 
@@ -1545,7 +1547,7 @@ async def test_mm655_effective_setting_endpoint_exposes_complete_contract(monkey
     assert body["read_only"] is False
     assert body["read_only_reason"] is None
     assert body["requires_reload"] is True
-    assert body["applies_to"] == ["worker", "task_creation"]
+    assert body["applies_to"] == ["worker", "workflow_creation"]
 
 
 @pytest.mark.asyncio

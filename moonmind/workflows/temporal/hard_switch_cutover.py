@@ -13,17 +13,13 @@ from moonmind.config.settings import TemporalSettings
 
 LEGACY_USER_WORKFLOW_TYPE = "MoonMind.Run"
 RENAMED_USER_WORKFLOW_TYPE = "MoonMind.UserWorkflow"
-LEGACY_USER_WORKFLOW_CONTRACT = "legacy_run"
 RENAMED_USER_WORKFLOW_CONTRACT = "renamed_contract"
 MM730_RELEASE_NOTE_TEXT = (
     "MoonMind no longer exposes Tasks as a product/runtime concept. "
     "Use Workflow Execution, workflowId, runId, and Step Execution."
 )
 
-_VALID_CONTRACT_MODES = {
-    LEGACY_USER_WORKFLOW_CONTRACT,
-    RENAMED_USER_WORKFLOW_CONTRACT,
-}
+_VALID_CONTRACT_MODES = {RENAMED_USER_WORKFLOW_CONTRACT}
 _VALID_ENVIRONMENT_DECISIONS = {
     "drain",
     "pause_resume",
@@ -53,7 +49,7 @@ class UserWorkflowStartContract:
 def normalize_user_workflow_contract_mode(value: Any) -> str:
     """Normalize the configured user-workflow cutover mode."""
 
-    normalized = str(value or LEGACY_USER_WORKFLOW_CONTRACT).strip().lower()
+    normalized = str(value or RENAMED_USER_WORKFLOW_CONTRACT).strip().lower()
     if normalized not in _VALID_CONTRACT_MODES:
         raise HardSwitchCutoverError(
             "TEMPORAL_USER_WORKFLOW_CONTRACT_MODE must be one of "
@@ -70,13 +66,6 @@ def resolve_user_workflow_start_contract(
     mode = normalize_user_workflow_contract_mode(
         temporal_settings.user_workflow_contract_mode
     )
-    if mode == LEGACY_USER_WORKFLOW_CONTRACT:
-        return UserWorkflowStartContract(
-            workflow_type=LEGACY_USER_WORKFLOW_TYPE,
-            task_queue=str(temporal_settings.workflow_task_queue).strip(),
-            contract_mode=mode,
-        )
-
     return _resolve_renamed_user_workflow_start_contract(
         workflow_task_queue=str(temporal_settings.workflow_task_queue),
         user_workflow_v2_task_queue=str(temporal_settings.user_workflow_v2_task_queue),

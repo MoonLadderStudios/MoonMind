@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from api_service.api.execution_principal import resolve_execution_principal
-from moonmind.workflows.tasks.runtime_inheritance import (
+from moonmind.workflows.executions.runtime_inheritance import (
     SCOPE_CREATE_CHILD,
     SCOPE_INHERIT_RUNTIME,
 )
@@ -49,12 +49,12 @@ async def test_resolve_principal_with_verified_workflow_grants_scopes() -> None:
         service=service,
         workflow_id_header="mm:parent",
         run_id_header="run-1",
-        task_run_id_header="task-run-1",
+        agent_run_id_header="agent-run-1",
     )
 
     assert principal.workflow_id == "mm:parent"
     assert principal.run_id == "run-1"
-    assert principal.task_run_id == "task-run-1"
+    assert principal.agent_run_id == "agent-run-1"
     assert SCOPE_CREATE_CHILD in principal.scopes
     assert SCOPE_INHERIT_RUNTIME in principal.scopes
 

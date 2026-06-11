@@ -502,7 +502,7 @@ def test_run_groups_child_lineage_and_evidence_into_step_row(
             "outputs": {
                 "childWorkflowId": "wf-child-1",
                 "childRunId": "run-child-1",
-                "taskRunId": "550e8400-e29b-41d4-a716-446655440000",
+                "agentRunId": "550e8400-e29b-41d4-a716-446655440000",
                 "outputSummaryRef": "art_summary_1",
                 "outputAgentResultRef": "art_primary_1",
                 "stdoutArtifactRef": "art_stdout_1",
@@ -526,7 +526,7 @@ def test_run_groups_child_lineage_and_evidence_into_step_row(
     assert step["refs"] == {
         "childWorkflowId": "wf-child-1",
         "childRunId": "run-child-1",
-        "taskRunId": "550e8400-e29b-41d4-a716-446655440000",
+        "agentRunId": "550e8400-e29b-41d4-a716-446655440000",
         "latestStepExecutionManifestRef": None,
         "stepExecutionManifestRefs": [],
     }
@@ -580,7 +580,7 @@ def test_run_waiting_state_captures_child_workflow_lineage(
     assert step["refs"] == {
         "childWorkflowId": "wf-child-1",
         "childRunId": None,
-        "taskRunId": None,
+        "agentRunId": None,
         "latestStepExecutionManifestRef": None,
         "stepExecutionManifestRefs": [],
     }
@@ -811,6 +811,116 @@ async def test_step_execution_manifest_merges_explicit_execution_with_refs(
 
 
 @pytest.mark.asyncio
+async def test_external_continuation_manifest_records_side_effects_and_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Under external_provider_continuation MoonMind still records attempt
+    identity, context refs, known side effects, and available checkpoint
+    evidence for the attempt even though it cannot reset the external runtime."""
+
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+    writes: list[dict[str, Any]] = []
+
+    async def fake_write_json_artifact(
+        *,
+        name: str,
+        payload: dict[str, Any],
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
+    ) -> str:
+        writes.append({"name": name, "payload": payload})
+        return f"artifact-attempt-{len(writes)}"
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[
+            {
+                "id": "delegate-external",
+                "tool": {"type": "agent_runtime", "name": "jules", "version": ""},
+                "inputs": {"title": "Delegate external agent"},
+            }
+        ],
+        dependency_map={"delegate-external": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running(
+        "delegate-external",
+        updated_at=now,
+        summary="Launching external runtime",
+    )
+    workflow._record_step_result_evidence(
+        "delegate-external",
+        execution_result={
+            "status": "RUNNING",
+            "outputs": {
+                "childWorkflowId": "wf-child-external",
+                "childRunId": "run-child-external",
+            },
+        },
+        updated_at=now,
+    )
+    # Durable checkpoint evidence recorded on the step ledger row.
+    workflow._step_ledger_rows[0]["stateCheckpointRef"] = (
+        "artifact://checkpoints/external-step"
+    )
+    workflow._step_ledger_rows[0]["workspaceCheckpointRef"] = (
+        "artifact://checkpoints/workspace"
+    )
+    workflow._step_ledger_rows[0]["stepCheckpointRef"] = "artifact://checkpoints/step"
+    # A known, already-occurred external side effect from this attempt.
+    workflow._record_step_side_effect(
+        "delegate-external",
+        effect_class="external_idempotent",
+        operation="open_pull_request",
+        target="github_pr",
+        idempotency_key="pr-key-1",
+        workflow_state_accepted=True,
+    )
+
+    await workflow._record_step_execution_manifest_started(
+        "delegate-external",
+        updated_at=now,
+        reason="initial_execution",
+    )
+
+    execution = writes[0]["payload"]["execution"]
+    assert execution["runtimeContextPolicy"] == "external_provider_continuation"
+    # Attempt identity / context refs are still recorded.
+    assert execution["childWorkflowId"] == "wf-child-external"
+    assert execution["childRunId"] == "run-child-external"
+    continuation = execution["externalProviderContinuation"]
+    assert continuation["attemptIdentity"] == {
+        "workflowId": "wf-run-1",
+        "runId": "run-1",
+        "logicalStepId": "delegate-external",
+        "executionOrdinal": 1,
+        "stepExecutionId": "wf-run-1:run-1:delegate-external:execution:1",
+    }
+    # Known side effects are recorded under the continuation path.
+    assert continuation["knownSideEffects"] == {
+        "records": [
+            {
+                "class": "external_idempotent",
+                "kind": "normal",
+                "operation": "open_pull_request",
+                "target": "github_pr",
+                "idempotencyKey": "pr-key-1",
+                "disposition": "accepted",
+                "workflowStateAccepted": True,
+            }
+        ]
+    }
+    # Available checkpoint evidence is recorded under the continuation path.
+    assert continuation["checkpointEvidence"] == {
+        "stateCheckpointRef": "artifact://checkpoints/external-step",
+        "workspaceCheckpointRef": "artifact://checkpoints/workspace",
+        "stepCheckpointRef": "artifact://checkpoints/step",
+    }
+
+
+@pytest.mark.asyncio
 async def test_run_records_terminal_step_execution_manifest_with_result_refs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -860,7 +970,7 @@ async def test_run_records_terminal_step_execution_manifest_with_result_refs(
         execution_result={
             "status": "COMPLETED",
             "outputs": {
-                "taskRunId": "task-run-1",
+                "agentRunId": "agent-run-1",
                 "outputSummaryRef": "artifact://summary/attempt-1",
                 "stdoutArtifactRef": "artifact://stdout/attempt-1",
                 "diagnosticsRef": "artifact://diagnostics/attempt-1",
@@ -888,7 +998,7 @@ async def test_run_records_terminal_step_execution_manifest_with_result_refs(
     assert writes[1]["payload"]["status"] == "succeeded"
     assert writes[1]["payload"]["terminalDisposition"] == "accepted"
     assert writes[1]["payload"]["execution"] == {
-        "taskRunId": "task-run-1",
+        "agentRunId": "agent-run-1",
         "diagnosticsRef": "artifact://diagnostics/attempt-1",
     }
     assert writes[1]["payload"]["outputs"] == {
@@ -1014,7 +1124,7 @@ def test_run_projects_workload_artifacts_and_metadata_from_tool_result(
                     "test.report": "art_report_1",
                 },
                 "workloadMetadata": {
-                    "taskRunId": "wf-1",
+                    "agentRunId": "wf-1",
                     "stepId": "workload-step",
                     "attempt": 1,
                     "toolName": "container.run_workload",
@@ -1035,7 +1145,7 @@ def test_run_projects_workload_artifacts_and_metadata_from_tool_result(
 
     step = workflow.get_step_ledger()["steps"][0]
 
-    assert step["refs"]["taskRunId"] == "wf-1"
+    assert step["refs"]["agentRunId"] == "wf-1"
     assert step["artifacts"]["runtimeStdout"] == "art_stdout_1"
     assert step["artifacts"]["runtimeStderr"] == "art_stderr_1"
     assert step["artifacts"]["runtimeDiagnostics"] == "art_diag_1"
@@ -1279,7 +1389,7 @@ def test_run_reads_nested_workload_metadata_from_legacy_workload_result(
                     "metadata": {
                         "stdout": "large bounded stdout must not be ledger metadata",
                         "workload": {
-                            "taskRunId": "wf-legacy",
+                            "agentRunId": "wf-legacy",
                             "stepId": "workload-step",
                             "profileId": "local-python",
                         },
@@ -1292,8 +1402,8 @@ def test_run_reads_nested_workload_metadata_from_legacy_workload_result(
 
     step = workflow.get_step_ledger()["steps"][0]
 
-    assert step["refs"]["taskRunId"] == "wf-legacy"
-    assert step["workload"]["taskRunId"] == "wf-legacy"
+    assert step["refs"]["agentRunId"] == "wf-legacy"
+    assert step["workload"]["agentRunId"] == "wf-legacy"
     assert step["workload"]["stepId"] == "workload-step"
     assert step["workload"]["profileId"] == "local-python"
     assert "stdout" not in step["workload"]
@@ -1447,6 +1557,10 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
     workflow._owner_id = "owner-1"
     written_review_payloads: list[dict[str, Any]] = []
     skill_inputs: list[dict[str, Any]] = []
+    plan_payload = _approval_policy_plan_payload()
+    plan_payload["policy"]["approval_policy"][
+        "max_consecutive_no_progress_attempts"
+    ] = 1
     review_artifact_ids = iter(("art_review_1", "art_review_2"))
     step_execution_artifact_ids = iter(
         (
@@ -1468,6 +1582,8 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
                         "evidence": "stderr tail",
                     }
                 ],
+                "remainingWorkRef": "art_remaining_work_1",
+                "recommendedNextAction": "reattempt_current_step",
             },
             {
                 "verdict": "PASS",
@@ -1519,7 +1635,7 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
         if activity_type == "artifact.read":
             artifact_ref = getattr(payload, "artifact_ref", None)
             if artifact_ref == "art_plan_1":
-                return json.dumps(_approval_policy_plan_payload()).encode("utf-8")
+                return json.dumps(plan_payload).encode("utf-8")
             if artifact_ref == "artifact://registry/1":
                 return json.dumps(_registry_payload()).encode("utf-8")
         if activity_type == "artifact.write_complete":
@@ -1726,15 +1842,168 @@ async def test_run_execution_stage_stops_downstream_handoff_when_gate_budget_exh
         "maxAttempts": 1,
         "attemptsConsumed": 1,
         "remainingExecutions": 0,
+        "additionalStopDimension": {
+            "type": "consecutive_no_progress_attempts",
+            "limit": 1,
+            "consumed": 1,
+            "remaining": 0,
+            "exhausted": True,
+        },
         "stopRules": [
             "structured_gate_verdict_required",
             "accepted_output_evidence_required",
+            "consecutive_no_progress_attempts_exhaustion_stops_before_publication",
             "budget_exhaustion_stops_before_publication",
         ],
         "exhausted": True,
         "gateVerdict": "ADDITIONAL_WORK_NEEDED",
         "recommendedNextAction": "needs_human",
     }
+
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_stops_downstream_handoff_when_no_progress_budget_exhausts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    invoked_skills: list[str] = []
+    step_execution_payloads: list[dict[str, Any]] = []
+
+    plan_payload = _approval_policy_plan_payload()
+    plan_payload["policy"]["failure_mode"] = "CONTINUE"
+    plan_payload["policy"]["approval_policy"]["max_review_attempts"] = 2
+    plan_payload["policy"]["approval_policy"][
+        "max_consecutive_no_progress_attempts"
+    ] = 1
+    plan_payload["nodes"] = [
+        {
+            "id": "implement",
+            "tool": {"type": "agent_runtime", "name": "repo.apply_patch", "version": "1.0.0"},
+            "inputs": {"targetRuntime": "codex_cli", "instructions": "Apply patch"},
+            "options": {},
+        },
+        {
+            "id": "publish",
+            "tool": {"type": "agent_runtime", "name": "repo.publish", "version": "1.0.0"},
+            "inputs": {"targetRuntime": "codex_cli", "instructions": "Publish"},
+            "options": {},
+        },
+    ]
+    plan_payload["edges"] = [{"from": "implement", "to": "publish"}]
+    registry_payload = _registry_payload()
+    registry_payload["skills"].append(
+        {
+            **registry_payload["skills"][0],
+            "name": "repo.publish",
+        }
+    )
+    artifact_ids = iter(
+        (
+            "art_attempt_1",
+            "art_review_1",
+            "art_attempt_1_terminal",
+        )
+    )
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_type == "provider_profile.list":
+            return {"profiles": []}
+        if activity_type == "artifact.create":
+            return ({"artifact_id": next(artifact_ids)}, {"upload_url": "unused"})
+        if activity_type == "step.review":
+            return {
+                "verdict": "ADDITIONAL_WORK_NEEDED",
+                "confidence": "medium",
+                "feedback": "No material progress.",
+                "issues": [],
+                "remainingWorkRef": "art_remaining_work_1",
+                "recommendedNextAction": "needs_human",
+            }
+        raise AssertionError(f"unexpected activity: {activity_type}")
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        invoked_skills.append(str(kwargs["id"]).rsplit(":agent:", 1)[1])
+        return {
+            "summary": "Patch applied",
+            "metadata": {"outputSummaryRef": "art_summary_1"},
+            "output_refs": [],
+        }
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_type == "artifact.read":
+            artifact_ref = getattr(payload, "artifact_ref", None)
+            if artifact_ref == "art_plan_1":
+                return json.dumps(plan_payload).encode("utf-8")
+            if artifact_ref == "artifact://registry/1":
+                return json.dumps(registry_payload).encode("utf-8")
+        if activity_type == "artifact.write_complete":
+            decoded = json.loads(payload.payload.decode("utf-8"))
+            if getattr(payload, "content_type", "") == (
+                "application/vnd.moonmind.step-execution+json;version=1"
+            ):
+                step_execution_payloads.append(decoded)
+            return {"ok": True}
+        raise AssertionError(f"unexpected typed activity: {activity_type}")
+
+    monkeypatch.setattr(
+        run_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+
+    await workflow._run_execution_stage(
+        parameters={"repo": "MoonLadderStudios/MoonMind"},
+        plan_ref="art_plan_1",
+    )
+
+    assert invoked_skills == ["implement"]
+    step = workflow.get_step_ledger()["steps"][0]
+    assert step["status"] == "failed"
+    assert workflow._publish_status == "not_required"
+    assert workflow._publish_reason == (
+        "Structured gate stopped before downstream handoff."
+    )
+    budget = step_execution_payloads[-1]["budget"]
+    assert step_execution_payloads[-1]["terminalDisposition"] == (
+        "failed_with_remaining_work"
+    )
+    assert budget["maxAttempts"] == 3
+    assert budget["attemptsConsumed"] == 1
+    assert budget["remainingExecutions"] == 2
+    assert budget["additionalStopDimension"] == {
+        "type": "consecutive_no_progress_attempts",
+        "limit": 1,
+        "consumed": 1,
+        "remaining": 0,
+        "exhausted": True,
+    }
+    assert budget["exhausted"] is True
+    assert budget["gateVerdict"] == "ADDITIONAL_WORK_NEEDED"
 
 
 @pytest.mark.asyncio

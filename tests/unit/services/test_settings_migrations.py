@@ -66,8 +66,8 @@ def _new_runtime_registry() -> tuple[SettingRegistryEntry, ...]:
             scopes=("workspace",),
             default_value="default-runtime",
             order=1,
-            apply_mode="next_task",
-            applies_to=("task_creation",),
+            apply_mode="next_workflow",
+            applies_to=("workflow_creation",),
         ),
     )
 
@@ -84,8 +84,8 @@ def _retry_registry() -> tuple[SettingRegistryEntry, ...]:
             scopes=("workspace",),
             default_value=0,
             order=1,
-            apply_mode="next_task",
-            applies_to=("task_creation",),
+            apply_mode="next_workflow",
+            applies_to=("workflow_creation",),
         ),
     )
 

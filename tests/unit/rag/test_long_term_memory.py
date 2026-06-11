@@ -152,7 +152,7 @@ def test_add_or_update_sends_required_mem0_metadata() -> None:
         repo="MoonLadderStudios/MoonMind",
         scope="team",
         review_state="draft",
-        provenance={"workflowId": "wf-1", "taskRunId": "run-1"},
+        provenance={"workflowId": "wf-1", "agentRunId": "run-1"},
     )
 
     assert result == {"id": "memory-1"}
@@ -165,7 +165,7 @@ def test_add_or_update_sends_required_mem0_metadata() -> None:
                 "repo": "MoonLadderStudios/MoonMind",
                 "scope": "team",
                 "review_state": "draft",
-                "provenance": {"workflowId": "wf-1", "taskRunId": "run-1"},
+                "provenance": {"workflowId": "wf-1", "agentRunId": "run-1"},
             },
         }
     ]

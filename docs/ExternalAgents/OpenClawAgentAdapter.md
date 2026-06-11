@@ -274,7 +274,7 @@ The heartbeat payloads should remain compact and should not dump entire raw prov
 The execute activity should receive a MoonMind-oriented request and translate it into an OpenAI-style prompt/message payload using:
 
 - stable system instructions
-- user-facing task instructions
+- user-facing workflow instructions
 - any prepared context bundle text
 - any compact artifact-backed context that has already been materialized for external execution
 

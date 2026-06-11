@@ -42,7 +42,47 @@ class Rule:
     message: str
 
 
+LEGACY_AGENT_RUN_IDENTIFIER_PATTERN = re.compile(
+    "|".join(
+        re.escape(term)
+        for term in (
+            "task" + "RunId",
+            "task" + "RunIds",
+            "Task" + "RunId",
+            "Task" + "RunIds",
+            "TASK" + "_RUN_ID",
+            "TASK" + "_RUN_IDS",
+            "task" + "_run_id",
+            "task" + "_run_ids",
+            "mm_" + "task" + "_run_id",
+            "moonmind." + "task" + "_run_id",
+            "task" + "Run",
+            "Task" + "Run",
+            "task" + "Runs",
+            "Task" + "Runs",
+            "task" + "_runs",
+            "task" + "-run",
+            "Task" + "-run",
+            "task" + " run",
+            "Task" + " run",
+            "X-MoonMind-" + "Task-Run",
+        )
+    )
+)
+
+
 RUNTIME_RULES = (
+    Rule(
+        name="legacy-agent-run-identifier",
+        paths=(
+            "api_service",
+            "moonmind",
+            "frontend/src",
+            "tests",
+        ),
+        pattern=LEGACY_AGENT_RUN_IDENTIFIER_PATTERN,
+        message="Use agent-run identifier names.",
+    ),
     Rule(
         name="execution-attempt-route",
         paths=(
@@ -69,6 +109,52 @@ RUNTIME_RULES = (
         ),
         pattern=re.compile(r"\b(Create Task|Task Detail|Task ID|Step Attempt)\b"),
         message="Use workflow-native UI copy.",
+    ),
+    Rule(
+        name="legacy-user-workflow-type",
+        paths=(
+            "api_service",
+            "moonmind",
+            "frontend/src",
+            "tests",
+        ),
+        pattern=re.compile(r"MoonMind\.Run|TemporalWorkflowType\.RUN"),
+        message="Use MoonMind.UserWorkflow for the current user Workflow Execution build.",
+    ),
+    Rule(
+        name="legacy-proposal-contract",
+        paths=(
+            "api_service",
+            "moonmind",
+            "frontend/src",
+            "tests",
+        ),
+        pattern=re.compile(
+            r"taskCreateRequest|taskSnapshotRef|task_create_request|task_snapshot_ref|task_proposals"
+        ),
+        message="Use workflow proposal contract names.",
+    ),
+    Rule(
+        name="legacy-preset-contract",
+        paths=(
+            "api_service",
+            "frontend/src",
+            "tests",
+        ),
+        pattern=re.compile(
+            r"task-step-templates|task_step_templates|TaskTemplate|taskTemplateCatalog|saveFromTask|save_from_task"
+        ),
+        message="Use preset catalog route and contract names.",
+    ),
+    Rule(
+        name="legacy-recurring-workflow-contract",
+        paths=(
+            "api_service",
+            "frontend/src",
+            "tests",
+        ),
+        pattern=re.compile(r"recurring_tasks|recurring_task|RecurringTask"),
+        message="Use recurring workflow contract names.",
     ),
 )
 
@@ -102,8 +188,27 @@ class Finding:
 def _iter_rule_files(rule: Rule, root: Path) -> Iterable[Path]:
     for path_text in rule.paths:
         path = root / path_text
-        if path.exists():
+        if path.is_dir():
+            for child in path.rglob("*"):
+                if child.is_file() and child.suffix in {".py", ".ts", ".tsx"}:
+                    if _path_is_allowed_runtime_exception(child.relative_to(root)):
+                        continue
+                    yield child
+        elif path.exists():
             yield path
+
+
+def _path_is_allowed_runtime_exception(path: Path) -> bool:
+    normalized = path.as_posix()
+    return normalized in {
+        "moonmind/workflows/temporal/hard_switch_cutover.py",
+        "tests/unit/workflows/temporal/test_hard_switch_cutover.py",
+        "tests/unit/workflows/temporal/test_temporal_service.py",
+    }
+
+
+def _line_is_allowed_runtime_exception(line: str) -> bool:
+    return 'workflow.patched("enable_task_proposals_gate")' in line
 
 
 def _match_is_allowed(line: str, match: re.Match[str]) -> bool:
@@ -131,6 +236,8 @@ def check_rules(rules: Iterable[Rule], *, root: Path = REPO_ROOT) -> list[Findin
                 path.read_text(encoding="utf-8").splitlines(), start=1
             ):
                 for match in rule.pattern.finditer(line):
+                    if _line_is_allowed_runtime_exception(line):
+                        continue
                     if _match_is_allowed(line, match):
                         continue
                     findings.append(
@@ -159,20 +266,33 @@ def _literal_string_set(text: str, name: str) -> set[str] | None:
             return None
         values: set[str] = set()
         for element in node.value.elts:
-            if not isinstance(element, ast.Constant) or not isinstance(element.value, str):
+            value = _static_string_expr(element)
+            if value is None:
                 return None
-            values.add(element.value)
+            values.add(value)
         return values
     return None
 
 
+def _static_string_expr(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _static_string_expr(node.left)
+        right = _static_string_expr(node.right)
+        if left is not None and right is not None:
+            return left + right
+    return None
+
+
 def check_required_test_guard_sets(*, root: Path = REPO_ROOT) -> list[Finding]:
+    legacy_agent_run_key = "task" + "RunId"
     required_terms = {
         "attempt",
         "attempts",
         "stepAttemptId",
         "taskId",
-        "taskRunId",
+        legacy_agent_run_key,
         "taskStatus",
     }
     files = (

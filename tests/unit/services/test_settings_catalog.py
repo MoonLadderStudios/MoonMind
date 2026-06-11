@@ -55,7 +55,7 @@ def test_catalog_returns_exposed_descriptor_metadata_and_omits_unexposed_setting
 
     workflow = catalog.categories["Workflow"]
     default_runtime = next(
-        item for item in workflow if item.key == "workflow.default_task_runtime"
+        item for item in workflow if item.key == "workflow.default_runtime"
     )
     assert default_runtime.type == "enum"
     assert default_runtime.section == "user-workspace"
@@ -63,12 +63,12 @@ def test_catalog_returns_exposed_descriptor_metadata_and_omits_unexposed_setting
     assert default_runtime.scopes == ["workspace"]
     assert default_runtime.constraints is None
     assert default_runtime.source == "config_file"
-    assert default_runtime.apply_mode == "next_task"
+    assert default_runtime.apply_mode == "next_workflow"
     assert default_runtime.activation_state == "active"
     assert default_runtime.active is True
     assert default_runtime.pending_value is None
     assert default_runtime.completion_guidance == (
-        "New tasks will use this value when they are created."
+        "New workflows will use this value when they are created."
     )
     assert default_runtime.requires_reload is False
     assert default_runtime.requires_worker_restart is False
@@ -397,9 +397,9 @@ async def test_mm656_references_policy_boundaries_and_atomicity(settings_session
                 "provider_profile_disabled",
             ),
             (
-                {"workflow.default_task_runtime": "jules"},
-                {"workflow.default_task_runtime": 1},
-                "workflow.default_task_runtime",
+                {"workflow.default_runtime": "jules"},
+                {"workflow.default_runtime": 1},
+                "workflow.default_runtime",
                 "runtime_policy_denied",
             ),
             (
@@ -581,7 +581,7 @@ def test_mm656_boundary_validation_helpers_return_structured_issues():
 
     descriptor_issues = service.validate_descriptor_generation()
     preview_issues = service.validate_effective_preview(
-        "workflow.default_task_runtime",
+        "workflow.default_runtime",
         "jules",
         scope="workspace",
     )
@@ -941,7 +941,7 @@ def test_catalog_rejects_descriptor_without_apply_mode():
         scopes=("workspace",),
         order=999,
         apply_mode="",  # type: ignore[arg-type]
-        applies_to=("task_creation",),
+        applies_to=("workflow_creation",),
     )
     service = SettingsCatalogService(env={}, registry=(broken_entry,))
 
@@ -961,7 +961,7 @@ async def test_catalog_async_rejects_descriptor_without_apply_mode():
         scopes=("workspace",),
         order=999,
         apply_mode="",  # type: ignore[arg-type]
-        applies_to=("task_creation",),
+        applies_to=("workflow_creation",),
     )
     service = SettingsCatalogService(env={}, registry=(broken_entry,))
 
@@ -998,7 +998,7 @@ def test_activation_metadata_covers_supported_apply_modes():
             applies_to=("catalog",),
         ),
         entry_type(
-            key="test.next_task",
+            key="test.next_workflow",
             title="Next Task",
             category="Test",
             section="user-workspace",
@@ -1007,8 +1007,8 @@ def test_activation_metadata_covers_supported_apply_modes():
             scopes=("workspace",),
             default_value="queued",
             order=3,
-            apply_mode="next_task",
-            applies_to=("task_creation",),
+            apply_mode="next_workflow",
+            applies_to=("workflow_creation",),
         ),
         entry_type(
             key="test.next_launch",
@@ -1075,8 +1075,8 @@ def test_activation_metadata_covers_supported_apply_modes():
     assert by_key["test.immediate"].activation_state == "active"
     assert by_key["test.immediate"].pending_value is None
     assert by_key["test.next_request"].activation_state == "active"
-    assert by_key["test.next_task"].completion_guidance == (
-        "New tasks will use this value when they are created."
+    assert by_key["test.next_workflow"].completion_guidance == (
+        "New workflows will use this value when they are created."
     )
     assert by_key["test.next_launch"].completion_guidance == (
         "New launches will use this value the next time they start."
@@ -1098,7 +1098,7 @@ def test_catalog_exposes_provider_profile_reference_without_launch_semantics():
     assert provider_profile.type == "string"
     assert provider_profile.ui == "provider_profile_picker"
     assert provider_profile.applies_to == [
-        "task_creation",
+        "workflow_creation",
         "workflow_runtime",
         "provider_profiles",
     ]
@@ -1244,8 +1244,8 @@ async def test_rename_migration_preserves_old_workspace_override(settings_sessio
             scopes=("workspace",),
             default_value="default-runtime",
             order=1,
-            apply_mode="next_task",
-            applies_to=("task_creation",),
+            apply_mode="next_workflow",
+            applies_to=("workflow_creation",),
         ),
     )
     rules = (
@@ -1305,8 +1305,8 @@ def test_duplicate_rename_migration_targets_are_rejected():
             scopes=("workspace",),
             default_value="default-runtime",
             order=1,
-            apply_mode="next_task",
-            applies_to=("task_creation",),
+            apply_mode="next_workflow",
+            applies_to=("workflow_creation",),
         ),
     )
     rules = (
@@ -1345,8 +1345,8 @@ async def test_migration_diagnostic_is_cleared_after_direct_override_resolution(
             scopes=("workspace",),
             default_value="default-runtime",
             order=1,
-            apply_mode="next_task",
-            applies_to=("task_creation",),
+            apply_mode="next_workflow",
+            applies_to=("workflow_creation",),
         ),
     )
     rules = (
@@ -1472,8 +1472,8 @@ async def test_key_scoped_diagnostics_exclude_unrelated_deprecated_overrides(
             scopes=("workspace",),
             default_value="default-runtime",
             order=1,
-            apply_mode="next_task",
-            applies_to=("task_creation",),
+            apply_mode="next_workflow",
+            applies_to=("workflow_creation",),
         ),
     )
     rules = (
@@ -1525,8 +1525,8 @@ async def test_schema_version_mismatch_requires_explicit_type_migration(
             scopes=("workspace",),
             default_value=10,
             order=1,
-            apply_mode="next_task",
-            applies_to=("task_creation",),
+            apply_mode="next_workflow",
+            applies_to=("workflow_creation",),
         ),
     )
     rules = (
@@ -2246,7 +2246,7 @@ async def test_audit_entries_are_scoped_to_workspace_and_subject(
                 ),
                 SettingsAuditEvent(
                     event_type="settings.override.updated",
-                    key="workflow.default_task_runtime",
+                    key="workflow.default_runtime",
                     scope="user",
                     workspace_id=workspace_id,
                     user_id=user_id,
@@ -2264,7 +2264,7 @@ async def test_audit_entries_are_scoped_to_workspace_and_subject(
                 ),
                 SettingsAuditEvent(
                     event_type="settings.override.updated",
-                    key="workflow.default_task_runtime",
+                    key="workflow.default_runtime",
                     scope="user",
                     workspace_id=workspace_id,
                     user_id=other_user_id,
@@ -2379,8 +2379,8 @@ async def test_audit_entries_expose_apply_mode_and_affected_systems(
     assert entries[0].key == "workflow.default_publish_mode"
     assert entries[0].scope == "workspace"
     assert entries[0].source == "workspace_override"
-    assert entries[0].apply_mode == "next_task"
-    assert entries[0].affected_systems == ["task_creation", "publishing"]
+    assert entries[0].apply_mode == "next_workflow"
+    assert entries[0].affected_systems == ["workflow_creation", "publishing"]
     assert entries[0].validation_outcome == "accepted"
     assert entries[0].created_at is not None
 
@@ -2441,7 +2441,7 @@ async def test_apply_overrides_returns_setting_changed_event_with_refresh_target
                     order=1,
                     apply_mode="next_launch",
                     applies_to=(
-                        "task_creation",
+                        "workflow_creation",
                         "workflow_runtime",
                         "provider_profiles",
                     ),
@@ -2464,14 +2464,14 @@ async def test_apply_overrides_returns_setting_changed_event_with_refresh_target
     assert event.actor_user_id is not None
     assert event.changed_at is not None
     assert event.affected_systems == [
-        "task_creation",
+        "workflow_creation",
         "workflow_runtime",
         "provider_profiles",
     ]
     assert event.refresh_targets == [
         "provider_profile_manager",
         "settings_catalog",
-        "task_creation_defaults",
+        "workflow_creation_defaults",
     ]
 
 
@@ -2745,7 +2745,7 @@ def test_mm655_effective_value_metadata_and_canonical_source_vocabulary():
         settings_path=("settings", "configured"),
         apply_mode="worker_reload",
         requires_reload=True,
-        applies_to=("worker", "task_creation"),
+        applies_to=("worker", "workflow_creation"),
         order=1,
     )
     default_entry = SettingRegistryEntry(
@@ -2773,7 +2773,7 @@ def test_mm655_effective_value_metadata_and_canonical_source_vocabulary():
     assert configured.default_value == "built-in"
     assert configured.inheritance_state == "inherited"
     assert configured.requires_reload is True
-    assert configured.applies_to == ["worker", "task_creation"]
+    assert configured.applies_to == ["worker", "workflow_creation"]
     assert default_only.value == "catalog-default"
     assert default_only.source == "default"
     assert default_only.default_value == "catalog-default"
@@ -2990,7 +2990,7 @@ async def test_mm655_reference_sources_remain_secret_safe(settings_session_maker
 # MM-652: SettingsRegistry, SettingsCatalogBuilder, migration gate
 # ---------------------------------------------------------------------------
 
-def _minimal_entry(key: str = "workflow.default_task_runtime") -> SettingRegistryEntry:
+def _minimal_entry(key: str = "workflow.default_runtime") -> SettingRegistryEntry:
     return SettingRegistryEntry(
         key=key,
         title="Test Setting",
@@ -3044,33 +3044,33 @@ def test_settings_registry_orders_entries_at_initialization():
 
 
 def test_settings_registry_migration_gate_raises_for_removed_key_without_rule():
-    ledger = frozenset({"workflow.default_task_runtime", "workflow.old_key"})
-    entry = _minimal_entry("workflow.default_task_runtime")
+    ledger = frozenset({"workflow.default_runtime", "workflow.old_key"})
+    entry = _minimal_entry("workflow.default_runtime")
     with pytest.raises(ValueError, match="catalog_integrity_error"):
         SettingsRegistry((entry,), stable_key_ledger=ledger)
 
 
 def test_settings_registry_migration_gate_passes_with_migration_rule():
-    ledger = frozenset({"workflow.default_task_runtime", "workflow.old_key"})
-    entry = _minimal_entry("workflow.default_task_runtime")
+    ledger = frozenset({"workflow.default_runtime", "workflow.old_key"})
+    entry = _minimal_entry("workflow.default_runtime")
     rule = SettingMigrationRule(
         old_key="workflow.old_key",
         state="removed",
         message="removed in MM-652",
     )
     registry = SettingsRegistry((entry,), migration_rules=(rule,), stable_key_ledger=ledger)
-    assert registry.get("workflow.default_task_runtime") is entry
+    assert registry.get("workflow.default_runtime") is entry
 
 
 def test_settings_registry_migration_gate_skipped_when_no_ledger():
-    entry = _minimal_entry("workflow.default_task_runtime")
+    entry = _minimal_entry("workflow.default_runtime")
     registry = SettingsRegistry((entry,), stable_key_ledger=None)
     assert len(registry.entries) == 1
 
 
 def test_settings_registry_default_uses_catalog_key_ledger():
-    assert "workflow.default_task_runtime" in _CATALOG_KEY_LEDGER
-    assert len(_CATALOG_KEY_LEDGER) == 8
+    assert "workflow.default_runtime" in _CATALOG_KEY_LEDGER
+    assert len(_CATALOG_KEY_LEDGER) == 9
 
 
 def test_settings_registry_default_registry_passes_ledger_check():
@@ -3195,7 +3195,7 @@ def test_settings_registry_from_pydantic_model_extracts_exposed_field():
                     "ui": "toggle",
                     "type": "boolean",
                     "requires_reload": False,
-                    "apply_mode": "next_task",
+                    "apply_mode": "next_workflow",
                     "title": "My Flag",
                     "applies_to": ["test"],
                     "order": 1,
@@ -3227,7 +3227,7 @@ def test_settings_registry_from_pydantic_model_skips_unexposed_field():
                     "ui": "input",
                     "type": "string",
                     "requires_reload": False,
-                    "apply_mode": "next_task",
+                    "apply_mode": "next_workflow",
                     "title": "Exposed Field",
                     "applies_to": ["test"],
                     "order": 1,
@@ -3254,7 +3254,7 @@ def test_settings_registry_from_pydantic_model_does_not_expose_undefined_default
                 "scopes": ["workspace"],
                 "ui": "input",
                 "type": "string",
-                "apply_mode": "next_task",
+                "apply_mode": "next_workflow",
                 "applies_to": ["test"],
                 "order": 1,
             }
@@ -3288,7 +3288,7 @@ def test_workflow_settings_has_moonmind_expose_metadata():
         if mm.get("expose"):
             exposed_keys.add(mm["key"])
 
-    assert "workflow.default_task_runtime" in exposed_keys
+    assert "workflow.default_runtime" in exposed_keys
     assert "workflow.default_publish_mode" in exposed_keys
     assert "skills.policy_mode" in exposed_keys
     assert "skills.canary_percent" in exposed_keys
@@ -3327,17 +3327,17 @@ async def test_apply_overrides_dispatches_change_events_through_injected_publish
         )
         response = await service.apply_overrides(
             scope="workspace",
-            changes={"workflow.default_task_runtime": "claude_code"},
-            expected_versions={"workflow.default_task_runtime": 1},
+            changes={"workflow.default_runtime": "claude_code"},
+            expected_versions={"workflow.default_runtime": 1},
         )
 
     assert len(published) == 1
     assert len(published[0]) == 1
     dispatched = published[0][0]
-    assert dispatched.key == "workflow.default_task_runtime"
+    assert dispatched.key == "workflow.default_runtime"
     assert dispatched.scope == "workspace"
     assert dispatched.source == "workspace_override"
-    assert "task_creation_defaults" in dispatched.refresh_targets
+    assert "workflow_creation_defaults" in dispatched.refresh_targets
 
     response_event = response.change_events[0]
     assert response_event.key == dispatched.key
@@ -3405,15 +3405,15 @@ async def test_apply_overrides_fans_out_one_event_per_committed_key(
         await service.apply_overrides(
             scope="workspace",
             changes={
-                "workflow.default_task_runtime": "claude_code",
+                "workflow.default_runtime": "claude_code",
                 "workflow.default_publish_mode": "branch",
             },
             expected_versions={
-                "workflow.default_task_runtime": 1,
+                "workflow.default_runtime": 1,
                 "workflow.default_publish_mode": 1,
             },
         )
 
     assert len(published) == 2
     keys = {event.key for event in published}
-    assert keys == {"workflow.default_task_runtime", "workflow.default_publish_mode"}
+    assert keys == {"workflow.default_runtime", "workflow.default_publish_mode"}

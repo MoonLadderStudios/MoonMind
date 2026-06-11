@@ -11,11 +11,11 @@ async def log_stream_generator(
     publisher: Optional[ObservabilityPublisher] = None,
 ) -> AsyncGenerator[str, None]:
     """
-    Subscribes to a task run's log stream publisher and yields SSE-formatted strings.
+    Subscribes to a agent run's log stream publisher and yields SSE-formatted strings.
     Handles disconnection events cleanly pulling the subscriber queue from memory.
 
     Args:
-        run_id: UUID string for the task run.
+        run_id: UUID string for the agent run.
         request: FastAPI Request object — used to detect client disconnects.
         since: Optional sequence number to resume from history.
         publisher: Optionally inject an ObservabilityPublisher (for testing).

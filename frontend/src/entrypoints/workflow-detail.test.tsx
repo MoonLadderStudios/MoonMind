@@ -180,7 +180,7 @@ describe('Workflow Detail Entrypoint', () => {
         updatedAt: '2026-04-09T00:00:02Z',
         summary: 'Plan complete',
         checks: [],
-        refs: { childWorkflowId: null, childRunId: null, taskRunId: null },
+        refs: { childWorkflowId: null, childRunId: null, agentRunId: null },
         artifacts: {
           outputSummary: 'art-step-plan',
           outputPrimary: null,
@@ -217,7 +217,7 @@ describe('Workflow Detail Entrypoint', () => {
         refs: {
           childWorkflowId: 'child-wf-1',
           childRunId: 'child-run-1',
-          taskRunId: 'task-run-step-1',
+          agentRunId: 'agent-run-step-1',
         },
         artifacts: {
           outputSummary: 'art-step-summary',
@@ -244,7 +244,7 @@ describe('Workflow Detail Entrypoint', () => {
         updatedAt: '2026-04-09T00:00:04Z',
         summary: 'Ready to start',
         checks: [],
-        refs: { childWorkflowId: null, childRunId: null, taskRunId: null },
+        refs: { childWorkflowId: null, childRunId: null, agentRunId: null },
         artifacts: {
           outputSummary: null,
           outputPrimary: null,
@@ -328,7 +328,7 @@ describe('Workflow Detail Entrypoint', () => {
       runId: '02-run',
       stepsHref: '/api/executions/test-123/steps',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'MM-801 routed workflow',
       summary: 'Focused route summary',
       status: 'running',
@@ -434,10 +434,12 @@ describe('Workflow Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(screen.getAllByRole('heading', { name: 'Workflow Steps' }).length).toBeGreaterThan(0);
-      expect(screen.queryByRole('heading', { name: 'Step DAG' })).toBeNull();
-      expect(screen.getAllByText('Plan work')).toHaveLength(1);
-      expect(screen.getAllByText('Apply patch')).toHaveLength(1);
-      expect(screen.getAllByText('Verify tests')).toHaveLength(1);
+      expect(screen.getByRole('heading', { name: 'Step DAG' })).toBeTruthy();
+      expect(screen.getAllByText('Plan work').length).toBeGreaterThan(0);
+      expect(screen.getByLabelText('start to plan')).toBeTruthy();
+      expect(screen.getByLabelText('plan to apply')).toBeTruthy();
+      expect(screen.getByLabelText('apply to verify')).toBeTruthy();
+      expect(screen.getByLabelText('Step dependency edges')).toBeTruthy();
       expect(screen.getByRole('link', { name: 'Steps' }).getAttribute('aria-current')).toBe('page');
       expect(screen.queryByRole('heading', { name: 'Workflow Preview' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Workflow Artifacts' })).toBeNull();
@@ -445,7 +447,54 @@ describe('Workflow Detail Entrypoint', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Show details for Apply patch' }));
-    expect(screen.getByText((_, element) => element?.textContent === 'Depends on: plan')).toBeTruthy();
+    expect(screen.getAllByText((_, element) => element?.textContent === 'Depends on: plan').length).toBeGreaterThan(0);
+  });
+
+  it('MM-746 renders an empty step DAG without a fake start edge', async () => {
+    window.history.pushState({}, 'Empty Steps Test', '/workflows/test-123/steps?source=temporal');
+    const emptyStepsSnapshot = { ...latestStepsSnapshot, steps: [] };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'Empty step ledger',
+      summary: 'No steps recorded yet',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => emptyStepsSnapshot,
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Step DAG' })).toBeTruthy();
+      expect(screen.getByText('No steps in the ledger yet.')).toBeTruthy();
+      expect(screen.queryByLabelText('start to none')).toBeNull();
+      expect(screen.queryByLabelText('Step dependency edges')).toBeNull();
+    });
   });
 
   it('MM-815 surfaces latest evidence refs and preserved provenance markers in the default step row', async () => {
@@ -458,7 +507,7 @@ describe('Workflow Detail Entrypoint', () => {
       runId: '02-run',
       stepsHref: '/api/executions/test-123/steps',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'Resumed task',
       summary: 'Execution summary',
       status: 'running',
@@ -488,7 +537,7 @@ describe('Workflow Detail Entrypoint', () => {
           updatedAt: '2026-04-08T00:00:02Z',
           summary: 'Plan complete',
           checks: [],
-          refs: { childWorkflowId: null, childRunId: null, taskRunId: null },
+          refs: { childWorkflowId: null, childRunId: null, agentRunId: null },
           artifacts: {
             outputSummary: null,
             outputPrimary: 'art-plan-output',
@@ -531,7 +580,7 @@ describe('Workflow Detail Entrypoint', () => {
               artifactRef: 'art-gate-verdict',
             },
           ],
-          refs: { childWorkflowId: null, childRunId: null, taskRunId: null },
+          refs: { childWorkflowId: null, childRunId: null, agentRunId: null },
           artifacts: {
             outputSummary: 'art-apply-summary',
             outputPrimary: 'art-apply-output',
@@ -622,13 +671,13 @@ describe('Workflow Detail Entrypoint', () => {
   it('returns null for route templates with missing parameters', () => {
     expect(
       expandRouteTemplate('/api/agent-runs/{agentRunId}/artifact-sessions/{sessionId}', {
-        taskRunId: 'task-run-1',
+        agentRunId: 'agent-run-1',
         sessionId: null,
       }),
     ).toBeNull();
     expect(
       expandRouteTemplate('/api/agent-runs/{agentRunId}/artifact-sessions/{sessionId}', {
-        taskRunId: 'task-run-1',
+        agentRunId: 'agent-run-1',
       }),
     ).toBeNull();
   });
@@ -643,7 +692,7 @@ describe('Workflow Detail Entrypoint', () => {
       runId: '02-run',
       stepsHref: '/api/executions/test-123/steps',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'Step detail task',
       summary: 'Execution summary',
       status: 'running',
@@ -681,17 +730,20 @@ describe('Workflow Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
-      expect(screen.getAllByText('Plan work')).toHaveLength(1);
-      expect(screen.getAllByText('Apply patch')).toHaveLength(1);
-      expect(screen.getAllByText('Verify tests')).toHaveLength(1);
-      expect(screen.queryByRole('heading', { name: 'Step DAG' })).toBeNull();
+      expect(screen.getAllByText('Plan work').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Apply patch').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Verify tests').length).toBeGreaterThan(0);
+      expect(screen.getByRole('heading', { name: 'Step DAG' })).toBeTruthy();
+      expect(screen.getAllByText('Depends on: plan').length).toBeGreaterThan(0);
+      expect(screen.getByLabelText('plan to apply')).toBeTruthy();
+      expect(screen.getByLabelText('apply to verify')).toBeTruthy();
       expect(screen.getAllByText('02-run').length).toBeGreaterThan(0);
     });
 
-    expect(screen.getByText((_, element) => element?.textContent === 'Depends on: plan')).toBeTruthy();
+    expect(screen.getAllByText((_, element) => element?.textContent === 'Depends on: plan').length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole('button', { name: 'Show details for Apply patch' }));
-    expect(screen.getByText((_, element) => element?.textContent === 'Depends on: plan')).toBeTruthy();
+    expect(screen.getAllByText((_, element) => element?.textContent === 'Depends on: plan').length).toBeGreaterThan(0);
 
     const stepsHeading = screen.getByRole('heading', { name: 'Workflow Steps' });
     const timelineHeading = screen.getByRole('heading', { name: 'Timeline' });
@@ -722,7 +774,7 @@ describe('Workflow Detail Entrypoint', () => {
       namespace: 'default',
       stepsHref: '/api/executions/test-123/steps',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'Workflow detail labels',
       summary: 'Execution summary',
       status: 'running',
@@ -783,7 +835,7 @@ describe('Workflow Detail Entrypoint', () => {
       runId: '02-run',
       stepsHref: '/api/executions/test-123/steps',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'Artifact browser task',
       summary: 'Execution summary',
       status: 'running',
@@ -869,7 +921,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '02-run',
       runId: '02-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'Proposal detail task',
       summary: 'Execution summary',
       status: 'running',
@@ -976,7 +1028,7 @@ describe('Workflow Detail Entrypoint', () => {
       runId: '02-run',
       stepsHref: '/api/executions/test-123/steps',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'Terminal task',
       summary: 'Execution finished',
       status: 'completed',
@@ -1038,7 +1090,7 @@ describe('Workflow Detail Entrypoint', () => {
       runId: '02-run',
       stepsHref: '/api/executions/test-123/steps',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'Legacy slash task',
       summary: 'Execution summary',
       taskInstructions: '/future-command\nUse provider behavior.',
@@ -1084,7 +1136,7 @@ describe('Workflow Detail Entrypoint', () => {
       runId: '02-run',
       stepsHref: '/api/executions/test-123/steps',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'Slash task',
       summary: 'Execution summary',
       taskInstructions: '/review\nCheck the branch.',
@@ -1142,7 +1194,7 @@ describe('Workflow Detail Entrypoint', () => {
       runId: '02-run',
       stepsHref: '/api/executions/test-123/steps',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'Legacy slash task',
       summary: 'Execution summary',
       taskInstructions: '/review\nCheck the branch.',
@@ -1196,7 +1248,7 @@ describe('Workflow Detail Entrypoint', () => {
       runId: '02-run',
       stepsHref: '/api/executions/test-123/steps',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'Planning detail task',
       summary: 'Execution summary',
       status: 'running',
@@ -1261,7 +1313,7 @@ describe('Workflow Detail Entrypoint', () => {
       runId: '02-run',
       stepsHref: '/api/executions/test-123/steps',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'Workload detail task',
       summary: 'Execution summary',
       status: 'failed',
@@ -1291,7 +1343,7 @@ describe('Workflow Detail Entrypoint', () => {
           updatedAt: '2026-04-09T00:00:04Z',
           summary: 'Workload failed',
           checks: [],
-          refs: { childWorkflowId: null, childRunId: null, taskRunId: 'task-run-workload' },
+          refs: { childWorkflowId: null, childRunId: null, agentRunId: 'agent-run-workload' },
           artifacts: {
             outputSummary: 'art-summary',
             outputPrimary: 'art-report',
@@ -1302,7 +1354,7 @@ describe('Workflow Detail Entrypoint', () => {
             providerSnapshot: null,
           },
           workload: {
-            taskRunId: 'task-run-workload',
+            agentRunId: 'agent-run-workload',
             stepId: 'workload-step',
             executionOrdinal: 1,
             toolName: 'container.run_workload',
@@ -1334,12 +1386,12 @@ describe('Workflow Detail Entrypoint', () => {
           json: async () => workloadStepsSnapshot,
         } as Response);
       }
-      if (url.includes('/agent-runs/task-run-workload/observability-summary')) {
+      if (url.includes('/agent-runs/agent-run-workload/observability-summary')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
             summary: {
-              runId: 'task-run-workload',
+              runId: 'agent-run-workload',
               status: 'failed',
               supportsLiveStreaming: false,
               liveStreamStatus: 'ended',
@@ -1347,19 +1399,19 @@ describe('Workflow Detail Entrypoint', () => {
           }),
         } as Response);
       }
-      if (url.includes('/agent-runs/task-run-workload/observability/events')) {
+      if (url.includes('/agent-runs/agent-run-workload/observability/events')) {
         return Promise.resolve({ ok: true, json: async () => ({ events: [], truncated: false }) } as Response);
       }
-      if (url.includes('/agent-runs/task-run-workload/logs/merged')) {
+      if (url.includes('/agent-runs/agent-run-workload/logs/merged')) {
         return Promise.resolve({ ok: true, text: async () => 'workload stdout tail\n' } as unknown as Response);
       }
-      if (url.includes('/agent-runs/task-run-workload/logs/stdout')) {
+      if (url.includes('/agent-runs/agent-run-workload/logs/stdout')) {
         return Promise.resolve({ ok: true, text: async () => 'workload stdout\n' } as unknown as Response);
       }
-      if (url.includes('/agent-runs/task-run-workload/logs/stderr')) {
+      if (url.includes('/agent-runs/agent-run-workload/logs/stderr')) {
         return Promise.resolve({ ok: true, text: async () => 'workload stderr\n' } as unknown as Response);
       }
-      if (url.includes('/agent-runs/task-run-workload/diagnostics')) {
+      if (url.includes('/agent-runs/agent-run-workload/diagnostics')) {
         return Promise.resolve({ ok: true, text: async () => '{"status":"failed"}\n' } as unknown as Response);
       }
       if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
@@ -1397,7 +1449,7 @@ describe('Workflow Detail Entrypoint', () => {
       runId: '01-run',
       stepsHref: '/api/executions/test-123/steps',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'Run rotation task',
       summary: 'Execution summary',
       status: 'running',
@@ -1467,7 +1519,7 @@ describe('Workflow Detail Entrypoint', () => {
       runId: '02-run',
       stepsHref: '/api/executions/test-123/steps',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'Step detail task',
       summary: 'Execution summary',
       status: 'running',
@@ -1483,7 +1535,7 @@ describe('Workflow Detail Entrypoint', () => {
       if (url.includes('/executions/test-123/steps')) {
         return Promise.resolve({ ok: true, json: async () => latestStepsSnapshot } as Response);
       }
-      if (url.includes('/agent-runs/task-run-step-1/observability-summary')) {
+      if (url.includes('/agent-runs/agent-run-step-1/observability-summary')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -1495,7 +1547,7 @@ describe('Workflow Detail Entrypoint', () => {
           }),
         } as Response);
       }
-      if (url.includes('/agent-runs/task-run-step-1/observability/events')) {
+      if (url.includes('/agent-runs/agent-run-step-1/observability/events')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -1511,7 +1563,7 @@ describe('Workflow Detail Entrypoint', () => {
           }),
         } as Response);
       }
-      if (url.includes('/agent-runs/task-run-step-1/logs/merged')) {
+      if (url.includes('/agent-runs/agent-run-step-1/logs/merged')) {
         return Promise.resolve({ ok: true, text: async () => 'step scoped log line\n' } as unknown as Response);
       }
       if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
@@ -1529,7 +1581,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
     });
     expect(
-      fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/task-run-step-1/observability-summary')),
+      fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/agent-run-step-1/observability-summary')),
     ).toBe(false);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Show details for Apply patch' }));
@@ -1549,11 +1601,11 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getAllByText('approval policy: passed')[0]?.className).toContain('check-passed');
 
     expect(
-      fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/task-run-step-1/observability-summary')),
+      fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/agent-run-step-1/observability-summary')),
     ).toBe(true);
   });
 
-  it('keeps unbound rows free of task-run requests and upgrades expanded rows when taskRunId arrives later', async () => {
+  it('keeps unbound rows free of agent-run requests and upgrades expanded rows when agentRunId arrives later', async () => {
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -1562,7 +1614,7 @@ describe('Workflow Detail Entrypoint', () => {
       runId: '02-run',
       stepsHref: '/api/executions/test-123/steps',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'Delayed binding task',
       summary: 'Execution summary',
       status: 'running',
@@ -1590,7 +1642,7 @@ describe('Workflow Detail Entrypoint', () => {
                           ...step,
                           refs: {
                             ...step.refs,
-                            taskRunId: null,
+                            agentRunId: null,
                           },
                         }
                       : step,
@@ -1599,7 +1651,7 @@ describe('Workflow Detail Entrypoint', () => {
               : latestStepsSnapshot,
         } as Response);
       }
-      if (url.includes('/agent-runs/task-run-step-1/observability-summary')) {
+      if (url.includes('/agent-runs/agent-run-step-1/observability-summary')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -1611,10 +1663,10 @@ describe('Workflow Detail Entrypoint', () => {
           }),
         } as Response);
       }
-      if (url.includes('/agent-runs/task-run-step-1/observability/events')) {
+      if (url.includes('/agent-runs/agent-run-step-1/observability/events')) {
         return Promise.resolve({ ok: false, status: 404 } as Response);
       }
-      if (url.includes('/agent-runs/task-run-step-1/logs/merged')) {
+      if (url.includes('/agent-runs/agent-run-step-1/logs/merged')) {
         return Promise.resolve({ ok: true, text: async () => 'attached after refresh\n' } as unknown as Response);
       }
       if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
@@ -1632,7 +1684,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
     });
     expect(
-      fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/task-run-step-1/observability-summary')),
+      fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/agent-run-step-1/observability-summary')),
     ).toBe(false);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Show details for Apply patch' }));
@@ -1641,7 +1693,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByText('attached after refresh')).toBeTruthy();
     });
     expect(
-      fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/task-run-step-1/observability-summary')),
+      fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/agent-run-step-1/observability-summary')),
     ).toBe(true);
   });
 
@@ -1654,7 +1706,7 @@ describe('Workflow Detail Entrypoint', () => {
       runId: '02-run',
       stepsHref: '/api/executions/test-123/steps',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'Review detail task',
       summary: 'Execution summary',
       status: 'running',
@@ -1716,7 +1768,7 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
-  it('resolves step-level task-run routes against apiBase', async () => {
+  it('resolves step-level agent-run routes against apiBase', async () => {
     const apiBasePayload: BootPayload = {
       ...stepsPayload,
       apiBase: '/tenant/api',
@@ -1729,7 +1781,7 @@ describe('Workflow Detail Entrypoint', () => {
       runId: '02-run',
       stepsHref: '/tenant/api/executions/test-123/steps',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'Workflow behind apiBase',
       summary: 'Execution summary',
       status: 'running',
@@ -1745,7 +1797,7 @@ describe('Workflow Detail Entrypoint', () => {
       if (url.includes('/tenant/api/executions/test-123/steps')) {
         return Promise.resolve({ ok: true, json: async () => latestStepsSnapshot } as Response);
       }
-      if (url.includes('/tenant/api/agent-runs/task-run-step-1/observability-summary')) {
+      if (url.includes('/tenant/api/agent-runs/agent-run-step-1/observability-summary')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -1757,13 +1809,13 @@ describe('Workflow Detail Entrypoint', () => {
           }),
         } as Response);
       }
-      if (url.includes('/tenant/api/agent-runs/task-run-step-1/observability/events')) {
+      if (url.includes('/tenant/api/agent-runs/agent-run-step-1/observability/events')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({ events: [], truncated: false }),
         } as Response);
       }
-      if (url.includes('/tenant/api/agent-runs/task-run-step-1/logs/merged')) {
+      if (url.includes('/tenant/api/agent-runs/agent-run-step-1/logs/merged')) {
         return Promise.resolve({ ok: true, text: async () => '' } as unknown as Response);
       }
       if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
@@ -1786,7 +1838,7 @@ describe('Workflow Detail Entrypoint', () => {
     await waitFor(() => {
       expect(
         fetchSpy.mock.calls.some(([url]) =>
-          String(url).includes('/tenant/api/agent-runs/task-run-step-1/observability-summary'),
+          String(url).includes('/tenant/api/agent-runs/agent-run-step-1/observability-summary'),
         ),
       ).toBe(true);
     });
@@ -1799,10 +1851,10 @@ describe('Workflow Detail Entrypoint', () => {
       namespace: 'default',
       temporalRunId: '02-run',
       runId: '02-run',
-      taskRunId: 'task-run-root',
+      agentRunId: 'agent-run-root',
       stepsHref: '/api/executions/test-123/steps',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'Fallback observation task',
       summary: 'Execution summary',
       status: 'running',
@@ -1818,7 +1870,7 @@ describe('Workflow Detail Entrypoint', () => {
       if (url.includes('/executions/test-123/steps')) {
         return Promise.resolve({ ok: false, status: 403, statusText: '' } as Response);
       }
-      if (url.includes('/agent-runs/task-run-root/observability-summary')) {
+      if (url.includes('/agent-runs/agent-run-root/observability-summary')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -1830,7 +1882,7 @@ describe('Workflow Detail Entrypoint', () => {
           }),
         } as Response);
       }
-      if (url.includes('/agent-runs/task-run-root/observability/events')) {
+      if (url.includes('/agent-runs/agent-run-root/observability/events')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -1846,7 +1898,7 @@ describe('Workflow Detail Entrypoint', () => {
           }),
         } as Response);
       }
-      if (url.includes('/agent-runs/task-run-root/logs/merged')) {
+      if (url.includes('/agent-runs/agent-run-root/logs/merged')) {
         return Promise.resolve({ ok: true, text: async () => 'root observation log\n' } as unknown as Response);
       }
       if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
@@ -1869,7 +1921,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(
-        fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/task-run-root/observability-summary')),
+        fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/agent-run-root/observability-summary')),
       ).toBe(true);
     });
   });
@@ -1894,7 +1946,7 @@ describe('Workflow Detail Entrypoint', () => {
       runId: '02-run',
       stepsHref: '/api/executions/test-123/steps',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'Streaming disabled task',
       summary: 'Execution summary',
       status: 'running',
@@ -1931,7 +1983,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByText(/live log streaming is disabled in the server dashboard config/i)).toBeTruthy();
     });
     expect(
-      fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/task-run-step-1/observability-summary')),
+      fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/agent-run-step-1/observability-summary')),
     ).toBe(false);
   });
 
@@ -1975,7 +2027,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'Editable task',
       summary: 'Execution summary',
       status: 'running',
@@ -2049,7 +2101,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'Edited task',
       summary: 'Execution summary',
       status: 'running',
@@ -2103,7 +2155,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'Editable task',
       summary: 'Execution summary',
       status: 'running',
@@ -2170,7 +2222,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'Failed workflow',
       summary: 'Execution summary',
       status: 'failed',
@@ -2223,7 +2275,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'Running task',
       summary: 'Execution summary',
       status: 'running',
@@ -2278,7 +2330,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'Failed workflow without snapshot',
       summary: 'Execution summary',
       status: 'failed',
@@ -2339,7 +2391,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'Failed workflow',
       summary: 'Execution summary',
       status: 'failed',
@@ -2426,7 +2478,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'Failed workflow',
       summary: 'Execution summary',
       status: 'failed',
@@ -2563,7 +2615,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'Flagged off task',
       summary: 'Execution summary',
       status: 'running',
@@ -2604,7 +2656,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       entry: 'user_workflow',
       targetRuntime: 'gemini_cli',
       targetSkill: 'jira-pr-verify',
@@ -2735,7 +2787,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       entry: 'user_workflow',
       targetRuntime: 'codex_cli',
       title: 'Model display task',
@@ -2786,7 +2838,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       entry: 'user_workflow',
       targetRuntime: 'codex_cli',
       title: 'No model task',
@@ -2836,9 +2888,9 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       entry: 'user_workflow',
-      taskRunId: '123e4567-e89b-12d3-a456-426614174000',
+      agentRunId: '123e4567-e89b-12d3-a456-426614174000',
       title: 'Target diagnostic task',
       summary: 'Attachment preparation degraded.',
       status: 'failed',
@@ -2941,9 +2993,9 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       entry: 'user_workflow',
-      taskRunId: '123e4567-e89b-12d3-a456-426614174000',
+      agentRunId: '123e4567-e89b-12d3-a456-426614174000',
       title: 'Generated context diagnostic task',
       summary: 'Context preparation completed.',
       status: 'failed',
@@ -3011,9 +3063,9 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       entry: 'user_workflow',
-      taskRunId: '123e4567-e89b-12d3-a456-426614174000',
+      agentRunId: '123e4567-e89b-12d3-a456-426614174000',
       title: 'Failed Resume diagnostic task',
       summary: 'Resume failed during step execution.',
       status: 'failed',
@@ -3075,7 +3127,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       entry: 'user_workflow',
       title: 'Failed target task',
       summary: 'Needs remediation.',
@@ -3255,7 +3307,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       entry: 'user_workflow',
       title: 'Failed target with choices',
       summary: 'Needs remediation.',
@@ -3336,7 +3388,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       entry: 'user_workflow',
       title: 'Completed target task',
       summary: 'No follow-up needed.',
@@ -3379,7 +3431,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       entry: 'user_workflow',
       title: 'Remediation target task',
       summary: 'Needs remediation.',
@@ -3459,7 +3511,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       entry: 'user_workflow',
       title: 'Remediation task',
       summary: 'Remediation work with partial evidence.',
@@ -3527,7 +3579,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       entry: 'user_workflow',
       title: 'Rich remediation task',
       summary: 'Remediation work with live observation.',
@@ -3602,7 +3654,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       entry: 'user_workflow',
       title: 'Example task',
       summary: 'Did work',
@@ -3613,7 +3665,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalStatus: 'completed',
       closeStatus: 'COMPLETED',
       stepsHref: '/api/executions/test-123/steps',
-      taskRunId: 'task-run-1',
+      agentRunId: 'agent-run-1',
       createdAt: '2026-03-28T00:00:00Z',
       startedAt: '2026-03-28T00:00:01Z',
       updatedAt: '2026-03-28T00:00:02Z',
@@ -3694,7 +3746,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       entry: 'user_workflow',
       title: 'Example task',
       summary: 'Did work',
@@ -3746,7 +3798,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       entry: 'user_workflow',
       title: 'Explained task',
       summary: "publishMode 'pr' requested but no local changes were produced",
@@ -3831,7 +3883,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       entry: 'user_workflow',
       title: 'Unsafe task',
       summary: 'Ignore unsafe PR links',
@@ -3895,7 +3947,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       entry: 'user_workflow',
       title: 'Merge visibility task',
       summary: 'Waiting on merge automation',
@@ -3982,7 +4034,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       entry: 'user_workflow',
       title: 'Live merge visibility task',
       summary: 'Waiting on merge automation',
@@ -4050,7 +4102,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       entry: 'user_workflow',
       title: 'Null merge artifact refs task',
       summary: 'Waiting on merge automation',
@@ -4109,7 +4161,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       entry: 'user_workflow',
       title: 'Dependent task',
       summary: 'Waiting on upstream work',
@@ -4129,7 +4181,7 @@ describe('Workflow Detail Entrypoint', () => {
           summary: 'Finishing migrations',
           state: 'executing',
           closeStatus: null,
-          workflowType: 'MoonMind.Run',
+          workflowType: 'MoonMind.UserWorkflow',
         },
       ],
       dependents: [
@@ -4139,7 +4191,7 @@ describe('Workflow Detail Entrypoint', () => {
           summary: 'Blocked on this task',
           state: 'waiting_on_dependencies',
           closeStatus: null,
-          workflowType: 'MoonMind.Run',
+          workflowType: 'MoonMind.UserWorkflow',
         },
       ],
       createdAt: '2026-03-28T00:00:00Z',
@@ -4184,7 +4236,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       entry: 'user_workflow',
       title: 'Dependent task',
       summary: 'Waiting on upstream work',
@@ -4203,7 +4255,7 @@ describe('Workflow Detail Entrypoint', () => {
           summary: 'Finishing migrations',
           state: 'executing',
           closeStatus: null,
-          workflowType: 'MoonMind.Run',
+          workflowType: 'MoonMind.UserWorkflow',
         },
       ],
       dependents: [],
@@ -4556,7 +4608,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(fetchSpy).toHaveBeenCalledWith('/api/executions/mm%3Atest-123?source=temporal');
   });
 
-  it('shows launch-waiting message when no taskRunId is present yet', async () => {
+  it('shows launch-waiting message when no agentRunId is present yet', async () => {
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -4830,7 +4882,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'Comparison task',
       summary: 'Compare runs',
       status: 'completed',
@@ -4910,7 +4962,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'History task',
       summary: 'Audit history',
       status: 'completed',
@@ -4984,7 +5036,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalRunId: '01-run',
       runId: '01-run',
       source: 'temporal',
-      workflowType: 'MoonMind.Run',
+      workflowType: 'MoonMind.UserWorkflow',
       title: 'History task',
       summary: 'Audit history',
       status: 'completed',
@@ -5275,7 +5327,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.queryByRole('button', { name: 'Skip Dependency Wait' })).toBeNull();
   });
 
-  it('renders a Session Continuity panel for Codex managed-session task runs', async () => {
+  it('renders a Session Continuity panel for Codex managed-session agent runs', async () => {
     const codexPayload: BootPayload = {
       ...mockPayload,
       initialData: { dashboardConfig: { features: { temporalDashboard: { actionsEnabled: true } } } },
@@ -5293,7 +5345,7 @@ describe('Workflow Detail Entrypoint', () => {
       state: 'executing',
       rawState: 'executing',
       targetRuntime: 'codex',
-      taskRunId: 'wf-task-1',
+      agentRunId: 'wf-task-1',
       createdAt: '2026-03-28T00:00:00Z',
       updatedAt: '2026-03-28T00:00:02Z',
       actions: {
@@ -5307,7 +5359,7 @@ describe('Workflow Detail Entrypoint', () => {
         return Promise.resolve({
           ok: true,
           json: async () => ({
-            task_run_id: 'wf-task-1',
+            agent_run_id: 'wf-task-1',
             session_id: 'sess:wf-task-1:codex_cli',
             session_epoch: 2,
             grouped_artifacts: [
@@ -5389,7 +5441,7 @@ describe('Workflow Detail Entrypoint', () => {
       state: 'succeeded',
       rawState: 'succeeded',
       targetRuntime: 'codex_cli',
-      taskRunId: 'wf-task-1',
+      agentRunId: 'wf-task-1',
       createdAt: '2026-03-28T00:00:00Z',
       updatedAt: '2026-03-28T00:00:02Z',
       actions: {
@@ -5424,7 +5476,7 @@ describe('Workflow Detail Entrypoint', () => {
         return Promise.resolve({
           ok: true,
           json: async () => ({
-            task_run_id: 'wf-task-1',
+            agent_run_id: 'wf-task-1',
             session_id: 'sess:wf-task-1:codex_cli',
             session_epoch: 2,
             grouped_artifacts: [
@@ -5465,7 +5517,7 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
-  it('routes Session Continuity follow-up and reset controls through the task-run session control API', async () => {
+  it('routes Session Continuity follow-up and reset controls through the agent-run session control API', async () => {
     const codexPayload: BootPayload = {
       ...mockPayload,
       initialData: { dashboardConfig: { features: { temporalDashboard: { actionsEnabled: true } } } },
@@ -5483,7 +5535,7 @@ describe('Workflow Detail Entrypoint', () => {
       state: 'executing',
       rawState: 'executing',
       targetRuntime: 'codex_cli',
-      taskRunId: 'wf-task-1',
+      agentRunId: 'wf-task-1',
       createdAt: '2026-03-28T00:00:00Z',
       updatedAt: '2026-03-28T00:00:02Z',
       actions: {
@@ -5500,7 +5552,7 @@ describe('Workflow Detail Entrypoint', () => {
           json: async () => ({
             action: JSON.parse(String(init?.body || '{}')).action,
             projection: {
-              task_run_id: 'wf-task-1',
+              agent_run_id: 'wf-task-1',
               session_id: 'sess:wf-task-1:codex_cli',
               session_epoch: JSON.parse(String(init?.body || '{}')).action === 'clear_session' ? 2 : 1,
               grouped_artifacts: [],
@@ -5519,7 +5571,7 @@ describe('Workflow Detail Entrypoint', () => {
         return Promise.resolve({
           ok: true,
           json: async () => ({
-            task_run_id: 'wf-task-1',
+            agent_run_id: 'wf-task-1',
             session_id: 'sess:wf-task-1:codex_cli',
             session_epoch: 1,
             grouped_artifacts: [],
@@ -5603,7 +5655,7 @@ describe('Workflow Detail Entrypoint', () => {
       state: 'executing',
       rawState: 'executing',
       targetRuntime: 'codex_cli',
-      taskRunId: 'wf-task-1',
+      agentRunId: 'wf-task-1',
       createdAt: '2026-03-28T00:00:00Z',
       updatedAt: '2026-03-28T00:00:02Z',
       actions: {
@@ -5629,7 +5681,7 @@ describe('Workflow Detail Entrypoint', () => {
         return Promise.resolve({
           ok: true,
           json: async () => ({
-            task_run_id: 'wf-task-1',
+            agent_run_id: 'wf-task-1',
             session_id: 'sess:wf-task-1:codex_cli',
             session_epoch: 1,
             grouped_artifacts: [],
@@ -5711,7 +5763,7 @@ describe('LiveLogsPanel', () => {
     status: 'running',
     state: 'executing',
     rawState: 'executing',
-    taskRunId: '550e8400-e29b-41d4-a716-446655440000',
+    agentRunId: '550e8400-e29b-41d4-a716-446655440000',
     createdAt: '2026-03-28T00:00:00Z',
     updatedAt: '2026-03-28T00:00:02Z',
     actions: {},
@@ -6859,7 +6911,7 @@ describe('LiveLogsPanel', () => {
           workflowId: 'test-123',
           temporalRunId: '01-run',
           namespace: 'default',
-          taskRunId: '123e4567-e89b-12d3-a456-426614174000',
+          agentRunId: '123e4567-e89b-12d3-a456-426614174000',
           source: 'temporal',
           title: 'Mock task',
           summary: 'Mock summary',
@@ -6920,7 +6972,7 @@ describe('LiveLogsPanel', () => {
           workflowId: 'test-123',
           temporalRunId: '01-run',
           namespace: 'default',
-          taskRunId: 'mock-uuid-1',
+          agentRunId: 'mock-uuid-1',
           source: 'temporal',
           title: 'Mock task',
           summary: 'Mock summary',
@@ -6997,7 +7049,7 @@ describe('LiveLogsPanel', () => {
           workflowId: 'test-123',
           temporalRunId: '01-run',
           namespace: 'default',
-          taskRunId: 'mock-uuid-1',
+          agentRunId: 'mock-uuid-1',
           source: 'temporal',
           title: 'Mock task',
           summary: 'Mock summary',
@@ -7031,7 +7083,7 @@ describe('LiveLogsPanel', () => {
     expect(diagnosticsDetails?.hasAttribute('open')).toBe(true);
   });
 
-  it('polls execution detail until taskRunId appears and then attaches observability panels', async () => {
+  it('polls execution detail until agentRunId appears and then attaches observability panels', async () => {
     let detailCalls = 0;
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -7070,7 +7122,7 @@ describe('LiveLogsPanel', () => {
           detailCalls === 1
             ? {
                 ...activeExecution,
-                taskRunId: undefined,
+                agentRunId: undefined,
                 updatedAt: '2026-03-28T00:00:00Z',
               }
             : activeExecution,
@@ -7103,7 +7155,7 @@ describe('LiveLogsPanel', () => {
         ok: true,
         json: async () => ({
           ...terminalExecution,
-          taskRunId: undefined,
+          agentRunId: undefined,
           updatedAt: '2026-03-28T00:00:02Z',
         }),
       } as Response);
@@ -7131,7 +7183,7 @@ describe('LiveLogsPanel', () => {
         ok: true,
         json: async () => ({
           ...activeExecution,
-          taskRunId: undefined,
+          agentRunId: undefined,
           updatedAt: '2026-03-28T00:00:02Z',
         }),
       } as Response);

@@ -7,18 +7,18 @@ Read relevant documents in the following order before implementing tasks:
 1. **Constitution:** `.specify/memory/constitution.md` for non-negotiable principles and constraints
 2. **Standards:** Code style and guidance in `README.md`
 3. **Docs:** `docs/*.md` as needed for system architecture (see **Documentation: canonical vs feature artifacts** below).
-   - Start here for Agent Skills: `docs/Tasks/AgentSkillSystem.md`
-   - For Executable Tools: `docs/Tasks/SkillAndPlanContracts.md`
+   - Start here for Agent Skills: `docs/Steps/SkillSystem.md`
+   - For Executable Tools: `docs/Workflows/SkillAndPlanContracts.md`
    - For Runtime boundaries: `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
 
 ## Agent Skill System Terminology
 - Executable `tool.type = "skill"` contracts are **not** the same thing as agent instruction bundles (skill sets) under `.agents/skills`.
-- For agent instruction bundles and snapshot logic, the canonical design is in `docs/Tasks/AgentSkillSystem.md`.
-- For executable tool contracts, the canonical design is in `docs/Tasks/SkillAndPlanContracts.md`.
+- For agent instruction bundles and snapshot logic, the canonical design is in `docs/Steps/SkillSystem.md`.
+- For executable tool contracts, the canonical design is in `docs/Workflows/SkillAndPlanContracts.md`.
 
 ## When Modifying the Agent Skill System
 When writing code that interacts with skills:
-- Read `docs/Tasks/AgentSkillSystem.md`.
+- Read `docs/Steps/SkillSystem.md`.
 - Keep `.agents/skills` as the canonical active path.
 - Keep `.agents/skills/local` as a local-only overlay.
 - Do not mutate checked-in skill folders in place.
@@ -28,7 +28,7 @@ When writing code that interacts with skills:
 ## Documentation: canonical vs feature artifacts
 
 - **Canonical docs** (`docs/`): describe **declarative desired state** — architecture, contracts, operator-visible behavior, target semantics. Avoid making phased migration or implementation checklists the main story in these files.
-- **Migration, rollout, and MoonSpec execution notes** belong under **`specs/<feature>/`** (and similar feature-local artifacts) or in **local-only / gitignored paths** (e.g. `artifacts/` for tool handoffs), not as the primary framing of canonical docs.
+- **Migration, rollout, and MoonSpec execution notes** belong under **`docs/tmp/`** or in **local-only / gitignored paths** (e.g. `artifacts/` for tool handoffs), not as the primary framing of canonical docs. `specs/` is no longer a version-controlled source of guidance.
 - Align with **Constitution principle XII** in `.specify/memory/constitution.md`.
 
 ## Testing Instructions
@@ -173,7 +173,7 @@ Key diagnostics:
 - Existing OAuth session database row and workflow/activity payloads only; no new persistent storage (192-oauth-runner-bootstrap-pty)
 - Python 3.12; TypeScript/React for existing Create page tests if frontend behavior changes + Pydantic v2, FastAPI, SQLAlchemy async session fixtures, existing Temporal execution router/service, React/Vitest test harness (195-targeted-image-attachment-submission)
 - Existing Temporal execution records and artifact-backed original task input snapshots; no new persistent tables (195-targeted-image-attachment-submission)
-- TypeScript/React for Mission Control UI, Python 3.12 for FastAPI route tests + React, FastAPI, existing boot payload helpers, existing task dashboard router, Vitest, pytest (195-canonical-create-page-shell)
+- TypeScript/React for Mission Control UI, Python 3.12 for FastAPI route tests + React, FastAPI, existing boot payload helpers, existing workflow console router, Vitest, pytest (195-canonical-create-page-shell)
 - Python 3.12; TypeScript/React for existing Create-page behavior + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal artifact service, existing React Create page (195-enforce-image-artifact-policy)
 - Existing Temporal artifact metadata tables and configured artifact store; no new persistent storage (195-enforce-image-artifact-policy)
 - Python 3.12; TypeScript/React for Mission Control Create-page behavior + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal artifact service, React, Vitest, existing task editing helpers (196-preserve-attachment-bindings)
@@ -299,6 +299,8 @@ Key diagnostics:
 - N/A; deterministic runtime contracts and settings only (001-high-security-outbound-scan)
 - Python 3.12 with Pydantic v2 and Temporal Python SDK. + Temporal Python SDK activities, existing `TemporalActivityCatalog`, `TemporalAgentRuntimeActivities`, Docker workload launcher/registry substrate, artifact service helpers, existing PentestGPT Pydantic contracts in `moonmind/integrations/pentest/models.py`. (001-pentest-activity-handler)
 - Existing artifact store and workflow history only; no new persistent database tables planned. (001-pentest-activity-handler)
+- Python 3.12 + Pydantic v2, FastAPI, Temporal Python SDK, `httpx`, existing MoonMind outbound scan and redaction helpers (001-scan-message-send)
+- No new persistent storage; diagnostics are returned/logged through existing activity/API/workflow update failure result paths (001-scan-message-send)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers

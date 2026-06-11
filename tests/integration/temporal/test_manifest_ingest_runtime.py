@@ -125,7 +125,7 @@ async def test_manifest_ingest_child_lineage_preserved_across_db_reads(tmp_path)
 
             # Create child run with lineage in parameters
             child = await service.create_execution(
-                workflow_type=TemporalWorkflowType.RUN.value,
+                workflow_type=TemporalWorkflowType.USER_WORKFLOW.value,
                 owner_id=user_id,
                 title="Child run node-0",
                 input_artifact_ref=None,
@@ -227,7 +227,7 @@ async def test_large_fan_out_child_runs_all_persist_with_lineage(tmp_path):
             # Create children
             for i in range(fan_out_count):
                 await service.create_execution(
-                    workflow_type=TemporalWorkflowType.RUN.value,
+                    workflow_type=TemporalWorkflowType.USER_WORKFLOW.value,
                     owner_id=user_id,
                     title=f"Child run node-{i}",
                     input_artifact_ref=None,
@@ -249,7 +249,7 @@ async def test_large_fan_out_child_runs_all_persist_with_lineage(tmp_path):
             service = TemporalExecutionService(session)
             result = await service.list_executions(
                 owner_id=user_id,
-                workflow_type=TemporalWorkflowType.RUN.value,
+                workflow_type=TemporalWorkflowType.USER_WORKFLOW.value,
                 page_size=50,
             )
             assert len(result.items) == fan_out_count

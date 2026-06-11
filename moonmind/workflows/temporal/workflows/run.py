@@ -39,8 +39,8 @@ with workflow.unsafe.imports_passed_through():
         eligible_for_bundle,
         is_jules_agent_runtime_node,
     )
-    from moonmind.workflows.tasks.routing import _coerce_bool
-    from moonmind.workflows.tasks.prepared_context import (
+    from moonmind.workflows.executions.routing import _coerce_bool
+    from moonmind.workflows.executions.prepared_context import (
         build_execution_context_bundle,
         build_prepared_input_manifest,
         build_recovery_prepared_artifact_refs,
@@ -59,8 +59,8 @@ with workflow.unsafe.imports_passed_through():
         JIRA_CHECK_BLOCKERS_TOOL_NAME,
     )
     from moonmind.workflows.temporal.typed_execution import execute_typed_activity
-    from moonmind.workflows.tasks.task_contract import (
-        build_effective_task_skill_selectors,
+    from moonmind.workflows.executions.execution_contract import (
+        build_effective_workflow_skill_selectors,
     )
     from moonmind.workflows.temporal.workflows.provider_profile_manager import (
         workflow_id_for_runtime,
@@ -191,7 +191,7 @@ _MOONSPEC_GATE_VERDICT_TEXT_PATTERN = re.compile(
 )
 
 class RunWorkflowInput(TypedDict, total=False):
-    """Input payload for the MoonMind.Run workflow."""
+    """Input payload for the MoonMind.UserWorkflow workflow."""
 
     workflow_type: str
     title: Optional[str]
@@ -210,8 +210,8 @@ class RunWorkflowOutput(_RunWorkflowOutputBase, total=False):
     mergeAutomationDisposition: str
     headSha: str
 
-WORKFLOW_NAME = "MoonMind.Run"
 USER_WORKFLOW_NAME = "MoonMind.UserWorkflow"
+WORKFLOW_NAME = USER_WORKFLOW_NAME
 STATE_SCHEDULED = "scheduled"
 STATE_INITIALIZING = "initializing"
 STATE_WAITING_ON_DEPENDENCIES = "waiting_on_dependencies"
@@ -256,17 +256,17 @@ _JSON_OBJECT_CODE_FENCE_PATTERN = re.compile(
 INTEGRATION_POLL_LOOP_PATCH = "refactor-loop-1.2"
 # Replay-stable patch id for parent-initiated defensive slot release on child terminal state.
 RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH = "run-defensive-slot-release-1"
-# Replay-stable patch id for task-scoped Codex terminate activity+signal finalization.
-RUN_TASK_SCOPED_SESSION_TERMINATION_PATCH = "run-task-scoped-session-termination-v1"
+# Replay-stable patch id for workflow-scoped Codex terminate activity+signal finalization.
+RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_PATCH = "run-task-scoped-session-termination-v1"
 RUN_BLOCKED_OUTCOME_SHORT_CIRCUIT_PATCH = "run-blocked-outcome-short-circuit-v1"
 RUN_JIRA_BLOCKER_RECHECK_PATCH = "run-jira-blocker-recheck-v1"
-# Replay-stable patch id for the v2 task-scoped Codex termination path. The
+# Replay-stable patch id for the v2 workflow-scoped Codex termination path. The
 # identifier says "update" for in-flight history continuity, but current
 # Temporal external workflow handles expose the session control surface by signal.
-RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_PATCH = "run-task-scoped-session-termination-v2"
-# Replay-stable patch id for task-scoped Codex termination through the
+RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_UPDATE_PATCH = "run-task-scoped-session-termination-v2"
+# Replay-stable patch id for workflow-scoped Codex termination through the
 # AgentSession update handler. This path executes the remote terminate activity.
-RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_EXECUTE_PATCH = (
+RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_UPDATE_EXECUTE_PATCH = (
     "run-task-scoped-session-termination-v3"
 )
 # Replay-stable patch id for skipping registry reads on agent-runtime-only plans.
@@ -290,16 +290,19 @@ RUN_WORKFLOW_PUBLISH_OUTCOME_PATCH = "run-workflow-publish-outcome-v1"
 RUN_PUBLISH_REPAIR_FEEDBACK_PATCH = "run-publish-repair-feedback-v1"
 RUN_FETCH_PROFILE_SNAPSHOTS_PATCH = "fetch-profile-snapshots-v1"
 RUN_SLOT_CONTINUITY_PATCH = "run-slot-continuity-v1"
-RUN_DEFER_TASK_SCOPED_SESSION_UNTIL_SLOT_PATCH = (
+RUN_DEFER_WORKFLOW_SCOPED_SESSION_UNTIL_SLOT_PATCH = (
     "run-defer-task-scoped-session-until-slot-v1"
 )
-RUN_TASK_SCOPED_SESSION_CLEAR_BETWEEN_STEPS_PATCH = (
+RUN_WORKFLOW_SCOPED_SESSION_CLEAR_BETWEEN_STEPS_PATCH = (
     "run-task-scoped-session-clear-between-steps-v1"
 )
-RUN_TASK_SCOPED_SESSION_CLEAR_ACTIVITY_SIGNAL_PATCH = (
+RUN_WORKFLOW_SCOPED_SESSION_CLEAR_PER_EXECUTION_PATCH = (
+    "run-task-scoped-session-clear-per-execution-v2"
+)
+RUN_WORKFLOW_SCOPED_SESSION_CLEAR_ACTIVITY_SIGNAL_PATCH = (
     "run-task-scoped-session-clear-activity-signal-v1"
 )
-RUN_TASK_SCOPED_SESSION_TERMINATION_ACTIVITY_SIGNAL_PATCH = (
+RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_ACTIVITY_SIGNAL_PATCH = (
     "run-task-scoped-session-termination-v4"
 )
 RUN_TERMINAL_STATE_ACTIVITY_PATCH = "run-terminal-state-activity-v1"
@@ -330,7 +333,6 @@ def _legacy_manager_workflow_id(runtime_id: str) -> str:
     # provider-profile-manager IDs once the replay patch is active.
     return f"auth-profile-manager:{runtime_id}"
 
-@workflow.defn(name="MoonMind.Run")
 class MoonMindRunWorkflow:
     def _expected_workflow_name(self) -> str:
         return WORKFLOW_NAME
@@ -692,7 +694,9 @@ class MoonMindRunWorkflow:
         self._last_publish_repair_node_id: str | None = None
         self._codex_session_handle: Any | None = None
         self._codex_session_binding: CodexManagedSessionBinding | None = None
-        self._codex_session_cleared_before_step_attempts: set[tuple[str, int]] = set()
+        self._codex_session_cleared_before_step_attempts: set[
+            str | tuple[str, int]
+        ] = set()
         self._trusted_jira_context: dict[str, Any] | None = None
         self._step_ledger_rows: list[dict[str, Any]] = []
         self._step_ledger_by_id: dict[str, dict[str, Any]] = {}
@@ -1483,7 +1487,7 @@ class MoonMindRunWorkflow:
             for source_key, target_key in (
                 ("childWorkflowId", "childWorkflowId"),
                 ("childRunId", "childRunId"),
-                ("taskRunId", "taskRunId"),
+                ("agentRunId", "agentRunId"),
             ):
                 value = refs.get(source_key)
                 if isinstance(value, str) and value.strip():
@@ -1553,14 +1557,30 @@ class MoonMindRunWorkflow:
         if prepared_refs:
             context_refs["preparedInputRefs"] = prepared_refs
 
+        row = self._step_ledger_row_for(logical_step_id)
+        row_state_checkpoint_ref = (
+            str(row.get("stateCheckpointRef") or "").strip()
+            if isinstance(row, Mapping)
+            else ""
+        )
         checkpoint_ref = self._step_checkpoint_refs.get(
             logical_step_id
-        ) or self._previous_step_checkpoint_refs.get(logical_step_id)
-        checkpoint_evidence: dict[str, Any] = (
-            {"stateCheckpointRef": checkpoint_ref}
-            if checkpoint_ref
-            else {"available": False}
+        ) or row_state_checkpoint_ref or self._previous_step_checkpoint_refs.get(
+            logical_step_id
         )
+        checkpoint_evidence: dict[str, Any] = {}
+        if checkpoint_ref:
+            checkpoint_evidence["stateCheckpointRef"] = checkpoint_ref
+        if isinstance(row, Mapping):
+            for source_key, target_key in (
+                ("workspaceCheckpointRef", "workspaceCheckpointRef"),
+                ("stepCheckpointRef", "stepCheckpointRef"),
+            ):
+                value = row.get(source_key)
+                if isinstance(value, str) and value.strip():
+                    checkpoint_evidence[target_key] = value.strip()
+        if not checkpoint_evidence:
+            checkpoint_evidence["available"] = False
         records = [
             dict(record)
             for record in self._step_side_effect_records.get(logical_step_id, ())
@@ -2360,11 +2380,18 @@ class MoonMindRunWorkflow:
         refs = {
             "childWorkflowId": _output_ref("childWorkflowId", "child_workflow_id"),
             "childRunId": _output_ref("childRunId", "child_run_id"),
-            "taskRunId": _output_ref("taskRunId", "task_run_id")
+            "agentRunId": _output_ref("agentRunId", "agent_run_id")
+            or _output_ref("agentRunId", "agent_run_id")
             or (
-                str(workload_metadata.get("taskRunId")).strip()
+                str(
+                    workload_metadata.get("agentRunId")
+                    or workload_metadata.get("agentRunId")
+                ).strip()
                 if isinstance(workload_metadata, Mapping)
-                and workload_metadata.get("taskRunId") is not None
+                and (
+                    workload_metadata.get("agentRunId") is not None
+                    or workload_metadata.get("agentRunId") is not None
+                )
                 else None
             ),
         }
@@ -2524,6 +2551,51 @@ class MoonMindRunWorkflow:
                     and nested.strip().lower() == "moonspec-verify"
                 ):
                     return True
+        return False
+
+    @staticmethod
+    def _node_inputs_mapping(node: Mapping[str, Any]) -> Mapping[str, Any]:
+        inputs = node.get("inputs")
+        return inputs if isinstance(inputs, Mapping) else {}
+
+    def _is_moonspec_remediation_step(self, node: Mapping[str, Any]) -> bool:
+        node_inputs = self._node_inputs_mapping(node)
+        annotations = node_inputs.get("annotations") or node.get("annotations")
+        if isinstance(annotations, Mapping):
+            role = str(annotations.get("jiraOrchestrateRole") or "").strip().lower()
+            if role == "moonspec-remediation":
+                return True
+        skill_node = node.get("skill")
+        skill_id_from_node = (
+            skill_node.get("id") or skill_node.get("name")
+            if isinstance(skill_node, Mapping)
+            else skill_node
+        )
+        selected_skill = str(
+            node_inputs.get("selectedSkill")
+            or node_inputs.get("skillId")
+            or node_inputs.get("targetSkill")
+            or skill_id_from_node
+            or ""
+        ).strip().lower()
+        if selected_skill != "moonspec-implement":
+            return False
+        title = (
+            str(node_inputs.get("title") or node.get("title") or "")
+            .strip()
+            .lower()
+        )
+        return title.startswith("remediate verification gaps")
+
+    def _has_remaining_moonspec_remediation_step(
+        self,
+        *,
+        ordered_nodes: Sequence[Mapping[str, Any]],
+        current_index: int,
+    ) -> bool:
+        for node in ordered_nodes[current_index + 1:]:
+            if self._is_moonspec_remediation_step(node):
+                return True
         return False
 
     def _extract_moonspec_verify_verdict(
@@ -2686,23 +2758,41 @@ class MoonMindRunWorkflow:
         *,
         max_review_attempts: int,
         review_retry_count: int,
+        max_consecutive_no_progress_attempts: int,
+        consecutive_no_progress_attempts: int,
         verdict: str | None = None,
         recommended_next_action: str | None = None,
     ) -> dict[str, Any]:
         attempts_allowed = max_review_attempts + 1
         attempts_consumed = review_retry_count + 1
         remaining_executions = max(0, attempts_allowed - attempts_consumed)
+        no_progress_exhausted = (
+            consecutive_no_progress_attempts
+            >= max_consecutive_no_progress_attempts
+        )
         metadata: dict[str, Any] = {
             "gate": "approval_policy",
             "maxAttempts": attempts_allowed,
             "attemptsConsumed": attempts_consumed,
             "remainingExecutions": remaining_executions,
+            "additionalStopDimension": {
+                "type": "consecutive_no_progress_attempts",
+                "limit": max_consecutive_no_progress_attempts,
+                "consumed": consecutive_no_progress_attempts,
+                "remaining": max(
+                    0,
+                    max_consecutive_no_progress_attempts
+                    - consecutive_no_progress_attempts,
+                ),
+                "exhausted": no_progress_exhausted,
+            },
             "stopRules": [
                 "structured_gate_verdict_required",
                 "accepted_output_evidence_required",
+                "consecutive_no_progress_attempts_exhaustion_stops_before_publication",
                 "budget_exhaustion_stops_before_publication",
             ],
-            "exhausted": remaining_executions == 0,
+            "exhausted": remaining_executions == 0 or no_progress_exhausted,
         }
         if verdict:
             metadata["gateVerdict"] = str(verdict).strip().upper()
@@ -2716,14 +2806,38 @@ class MoonMindRunWorkflow:
         verdict: Any,
         review_retry_count: int,
         max_review_attempts: int,
+        consecutive_no_progress_attempts: int,
+        max_consecutive_no_progress_attempts: int,
     ) -> bool:
         normalized = str(getattr(verdict, "verdict", "") or "").strip().upper()
         if review_retry_count >= max_review_attempts:
+            return False
+        if (
+            consecutive_no_progress_attempts
+            >= max_consecutive_no_progress_attempts
+        ):
             return False
         if normalized == "ADDITIONAL_WORK_NEEDED":
             return True
         return normalized == "NO_DETERMINATION" and bool(
             getattr(verdict, "recoverable_in_current_runtime", False)
+        )
+
+    @staticmethod
+    def _review_gate_verdict_made_progress(verdict: Any) -> bool:
+        normalized = str(getattr(verdict, "verdict", "") or "").strip().upper()
+        recommended_next_action = (
+            str(getattr(verdict, "recommended_next_action", "") or "")
+            .strip()
+            .lower()
+        )
+        remaining_work_ref = str(
+            getattr(verdict, "remaining_work_ref", "") or ""
+        ).strip()
+        return (
+            normalized == "ADDITIONAL_WORK_NEEDED"
+            and recommended_next_action == "reattempt_current_step"
+            and bool(remaining_work_ref)
         )
 
     def _terminal_disposition_for_gate_stop(self, verdict: Any) -> str:
@@ -2992,18 +3106,18 @@ class MoonMindRunWorkflow:
                     "`publishMode=pr`:"
                 ),
                 (
-                    "- Ensure the completed task changes are committed on the "
+                    "- Ensure the completed workflow changes are committed on the "
                     "expected publish branch."
                 ),
                 (
                     "- If the work was committed on another local branch, move "
-                    "or cherry-pick the task commits onto the expected publish "
+                    "or cherry-pick the workflow commits onto the expected publish "
                     "branch."
                 ),
                 "- Do not transition Jira during this repair turn.",
                 (
                     "- Do not push or create a pull request unless an explicit "
-                    "task step still requires it; managed publishing will push "
+                    "workflow step still requires it; managed publishing will push "
                     "and create the PR after this turn."
                 ),
                 "- Finish with a concise summary of the branch and commit state.",
@@ -3075,7 +3189,7 @@ class MoonMindRunWorkflow:
                 "parameters": repair_parameters,
             }
         )
-        repair_request = await self._maybe_bind_task_scoped_session(repair_request)
+        repair_request = await self._maybe_bind_workflow_scoped_session(repair_request)
         child_workflow_id = (
             f"{wf_info.workflow_id}:agent:{repair_node_id}:"
             f"{self._publish_repair_attempts}"
@@ -3741,7 +3855,7 @@ class MoonMindRunWorkflow:
                 non_retryable=True,
             ) from exc
         self._get_logger().info(
-            "Starting MoonMind.Run workflow",
+            "Starting MoonMind.UserWorkflow workflow",
             extra={"workflow_type": workflow_type},
         )
 
@@ -4018,7 +4132,9 @@ class MoonMindRunWorkflow:
         )
         self._target_runtime = self._runtime_visibility_from_parameters(parameters)
         self._target_skill = self._skill_visibility_from_parameters(parameters)
-        task_parameters = self._mapping_value(parameters, "task")
+        task_parameters = self._mapping_value(parameters, "workflow")
+        if not task_parameters:
+            task_parameters = self._mapping_value(parameters, "task")
         self._declared_dependencies = normalize_dependency_ids(
             task_parameters.get("dependsOn")
         )
@@ -4290,7 +4406,7 @@ class MoonMindRunWorkflow:
         pull_request_url: str | None = None
         # Keep this patch command in its historical position, after the
         # jules-bundling marker and before any lazy registry read. Removing or
-        # reordering it strands in-flight MoonMind.Run histories before
+        # reordering it strands in-flight user workflow histories before
         # cancellation/failure handling.
         workflow.patched(RUN_CONDITIONAL_REGISTRY_READ_PATCH)
         previous_step_outputs: Mapping[str, Any] = {}
@@ -4339,7 +4455,19 @@ class MoonMindRunWorkflow:
                 if review_gate_active
                 else 0
             )
+            max_consecutive_no_progress_attempts = max(1, max_review_attempts + 1)
+            if review_gate_active:
+                raw_no_progress_attempts = getattr(
+                    approval_policy,
+                    "max_consecutive_no_progress_attempts",
+                    None,
+                )
+                if raw_no_progress_attempts is not None:
+                    max_consecutive_no_progress_attempts = int(
+                        raw_no_progress_attempts
+                    )
             review_retry_count = 0
+            consecutive_no_progress_attempts = 0
             previous_review_feedback: str | None = None
             previous_review_issues: tuple[Mapping[str, Any], ...] = ()
             result_status: str | None = None
@@ -4433,6 +4561,12 @@ class MoonMindRunWorkflow:
                             budget=self._review_gate_budget_metadata(
                                 max_review_attempts=max_review_attempts,
                                 review_retry_count=review_retry_count,
+                                max_consecutive_no_progress_attempts=(
+                                    max_consecutive_no_progress_attempts
+                                ),
+                                consecutive_no_progress_attempts=(
+                                    consecutive_no_progress_attempts
+                                ),
                             )
                             if review_gate_active
                             else None,
@@ -4489,11 +4623,11 @@ class MoonMindRunWorkflow:
                                     ordered_nodes=ordered_nodes,
                                     current_index=index,
                                 )
-                            await self._maybe_clear_task_scoped_session_before_step(
+                            await self._maybe_clear_workflow_scoped_session_before_step(
                                 request=request,
                                 logical_step_id=node_id,
                             )
-                            request = await self._maybe_bind_task_scoped_session(request)
+                            request = await self._maybe_bind_workflow_scoped_session(request)
                             selected_skill_for_repair = node_inputs.get(
                                 "selectedSkill"
                             )
@@ -4829,6 +4963,10 @@ class MoonMindRunWorkflow:
                 )
 
                 if review_verdict.verdict != "FULLY_IMPLEMENTED":
+                    if self._review_gate_verdict_made_progress(review_verdict):
+                        consecutive_no_progress_attempts = 0
+                    else:
+                        consecutive_no_progress_attempts += 1
                     failed_review_summary = self._bounded_review_summary(
                         review_verdict.feedback,
                         fallback="Structured gate did not approve advancement",
@@ -4845,6 +4983,12 @@ class MoonMindRunWorkflow:
                         verdict=review_verdict,
                         review_retry_count=review_retry_count,
                         max_review_attempts=max_review_attempts,
+                        consecutive_no_progress_attempts=(
+                            consecutive_no_progress_attempts
+                        ),
+                        max_consecutive_no_progress_attempts=(
+                            max_consecutive_no_progress_attempts
+                        ),
                     ):
                         review_retry_count += 1
                         previous_review_feedback = (
@@ -4874,6 +5018,12 @@ class MoonMindRunWorkflow:
                         budget=self._review_gate_budget_metadata(
                             max_review_attempts=max_review_attempts,
                             review_retry_count=review_retry_count,
+                            max_consecutive_no_progress_attempts=(
+                                max_consecutive_no_progress_attempts
+                            ),
+                            consecutive_no_progress_attempts=(
+                                consecutive_no_progress_attempts
+                            ),
                             verdict=review_verdict.verdict,
                             recommended_next_action=(
                                 review_verdict.recommended_next_action
@@ -4919,6 +5069,12 @@ class MoonMindRunWorkflow:
                         budget=self._review_gate_budget_metadata(
                             max_review_attempts=max_review_attempts,
                             review_retry_count=review_retry_count,
+                            max_consecutive_no_progress_attempts=(
+                                max_consecutive_no_progress_attempts
+                            ),
+                            consecutive_no_progress_attempts=(
+                                consecutive_no_progress_attempts
+                            ),
                             verdict=review_verdict.verdict,
                             recommended_next_action="needs_human",
                         ),
@@ -4975,6 +5131,12 @@ class MoonMindRunWorkflow:
                 budget=self._review_gate_budget_metadata(
                     max_review_attempts=max_review_attempts,
                     review_retry_count=review_retry_count,
+                    max_consecutive_no_progress_attempts=(
+                        max_consecutive_no_progress_attempts
+                    ),
+                    consecutive_no_progress_attempts=(
+                        consecutive_no_progress_attempts
+                    ),
                     verdict="FULLY_IMPLEMENTED",
                     recommended_next_action="advance",
                 )
@@ -5032,6 +5194,32 @@ class MoonMindRunWorkflow:
                         node_id=node_id,
                         outputs=outputs_for_gate,
                     )
+                    gate_verdict = self._normalize_moonspec_verify_verdict(
+                        self._moonspec_gate_verdict
+                    )
+                    blocking_gate_reason = self._blocking_moonspec_gate_reason()
+                    if blocking_gate_reason and not (
+                        gate_verdict == "ADDITIONAL_WORK_NEEDED"
+                        and self._has_remaining_moonspec_remediation_step(
+                            ordered_nodes=ordered_nodes,
+                            current_index=index,
+                        )
+                    ):
+                        self._plan_blocked_message = blocking_gate_reason
+                        self._publish_status = "not_required"
+                        self._publish_reason = blocking_gate_reason
+                        self._publish_context["publicationBlockedBy"] = (
+                            "moonspec_verify"
+                        )
+                        self._summary = blocking_gate_reason
+                        self._mark_remaining_plan_steps_skipped(
+                            ordered_nodes=ordered_nodes,
+                            completed_index=index - 1,
+                            summary=blocking_gate_reason,
+                        )
+                        self._refresh_step_readiness(updated_at=workflow.now())
+                        self._update_memo()
+                        break
             if self._publish_status == "not_required":
                 require_pull_request_url = False
                 pull_request_url = None
@@ -5234,7 +5422,9 @@ class MoonMindRunWorkflow:
                 pr_title = self._title or "Automated changes by MoonMind"
                 pr_body = self._summary or "Automated changes by MoonMind."
                 if workflow.patched(NATIVE_PR_CREATE_PAYLOAD_PATCH):
-                    task_payload = self._mapping_value(parameters, "task")
+                    task_payload = self._mapping_value(parameters, "workflow")
+                    if not task_payload:
+                        task_payload = self._mapping_value(parameters, "task")
                     pr_title = self._resolve_native_pr_title(
                         publish_payload=publish_payload,
                         task_payload=task_payload,
@@ -5416,13 +5606,9 @@ class MoonMindRunWorkflow:
             outputs.get("retry_recommendation"),
             provider_failure.get("retry_recommendation"),
         )
-        if not provider_error_code and not retry_recommendation:
-            return None
-
         reason = _first_text(
             provider_failure.get("reason"),
             outputs.get("summary"),
-            outputs.get("error"),
             self._get_from_result(result, "summary"),
         )
         profile_id = _first_text(
@@ -5431,6 +5617,58 @@ class MoonMindRunWorkflow:
             provider_failure.get("profileId"),
             provider_failure.get("profile_id"),
         )
+        failure_class = _first_text(
+            outputs.get("failureClass"),
+            outputs.get("failure_class"),
+            provider_failure.get("failureClass"),
+            provider_failure.get("failure_class"),
+            outputs.get("error"),
+        )
+        diagnostics_ref = _first_text(
+            outputs.get("diagnosticsRef"),
+            outputs.get("diagnostics_ref"),
+            provider_failure.get("diagnosticsRef"),
+            provider_failure.get("diagnostics_ref"),
+        )
+        turn_metadata = outputs.get("turnMetadata")
+        turn_failure_cause: str | None = None
+        retry_recommended_action: str | None = None
+        if isinstance(turn_metadata, Mapping):
+            turn_failure_cause = _first_text(
+                turn_metadata.get("failureCause"),
+                turn_metadata.get("failure_cause"),
+            )
+            retry_recommended_action = _first_text(
+                turn_metadata.get("retryRecommendedAction"),
+                turn_metadata.get("retry_recommended_action"),
+            )
+
+        if not provider_error_code and not retry_recommendation:
+            has_agent_failure_evidence = bool(
+                diagnostics_ref
+                or turn_failure_cause
+                or retry_recommended_action
+                or outputs.get("turnStatus") == "failed"
+            )
+            if not has_agent_failure_evidence or not reason:
+                return None
+
+            summary = "Agent runtime failed"
+            if failure_class:
+                summary = f"{summary} with {failure_class}"
+            if profile_id:
+                summary = f"{summary} for profile {profile_id}"
+            if turn_failure_cause:
+                summary = f"{summary} due to {turn_failure_cause}"
+            summary = f"{summary}: {reason}"
+            details = []
+            if retry_recommended_action:
+                details.append(f"retryRecommendedAction: {retry_recommended_action}")
+            if diagnostics_ref:
+                details.append(f"diagnosticsRef: {diagnostics_ref}")
+            if details:
+                summary = f"{summary} ({'; '.join(details)})"
+            return summary
 
         normalized_code = (provider_error_code or "").strip().lower()
         normalized_retry = (retry_recommendation or "").strip().lower()
@@ -5968,16 +6206,16 @@ class MoonMindRunWorkflow:
             return None
         return canonical_managed_session_runtime_id(request.agent_id)
 
-    def _task_scoped_session_workflow_id(self, runtime_id: str) -> str:
+    def _workflow_scoped_session_workflow_id(self, runtime_id: str) -> str:
         return f"{workflow.info().workflow_id}:session:{runtime_id}"
 
-    def _task_scoped_session_visibility(
+    def _workflow_scoped_session_visibility(
         self,
         *,
         binding: CodexManagedSessionBinding,
     ) -> dict[str, Any]:
         return {
-            "TaskRunId": [binding.task_run_id],
+            "AgentRunId": [binding.agent_run_id],
             "RuntimeId": [binding.runtime_id],
             "SessionId": [binding.session_id],
             "SessionEpoch": [binding.session_epoch],
@@ -5985,14 +6223,14 @@ class MoonMindRunWorkflow:
             "IsDegraded": [False],
         }
 
-    def _task_scoped_session_static_details(
+    def _workflow_scoped_session_static_details(
         self,
         *,
         binding: CodexManagedSessionBinding,
     ) -> str:
         return (
-            "Task-scoped managed runtime session | "
-            f"taskRunId={binding.task_run_id} | "
+            "Workflow-scoped managed runtime session | "
+            f"agentRunId={binding.agent_run_id} | "
             f"runtime={binding.runtime_id} | "
             f"session={binding.session_id} | "
             f"epoch={binding.session_epoch}"
@@ -6006,12 +6244,12 @@ class MoonMindRunWorkflow:
     ) -> dict[str, str]:
         refs = {"childWorkflowId": child_workflow_id}
         if request.managed_session is not None:
-            task_run_id = str(request.managed_session.task_run_id or "").strip()
-            if task_run_id:
-                refs["taskRunId"] = task_run_id
+            agent_run_id = str(request.managed_session.agent_run_id or "").strip()
+            if agent_run_id:
+                refs["agentRunId"] = agent_run_id
         return refs
 
-    async def _ensure_task_scoped_codex_session(
+    async def _ensure_workflow_scoped_codex_session(
         self, request: AgentExecutionRequest
     ) -> CodexManagedSessionBinding | None:
         runtime_id = self._managed_session_runtime_id(request)
@@ -6021,11 +6259,11 @@ class MoonMindRunWorkflow:
             return self._codex_session_binding
 
         session_input = CodexManagedSessionWorkflowInput(
-            taskRunId=workflow.info().workflow_id,
+            agentRunId=workflow.info().workflow_id,
             runtimeId=runtime_id,
             executionProfileRef=request.execution_profile_ref,
         )
-        session_workflow_id = self._task_scoped_session_workflow_id(runtime_id)
+        session_workflow_id = self._workflow_scoped_session_workflow_id(runtime_id)
         initial_binding = CodexManagedSessionBinding.from_input(
             workflow_id=session_workflow_id,
             session_input=session_input,
@@ -6035,21 +6273,21 @@ class MoonMindRunWorkflow:
             session_input,
             id=session_workflow_id,
             task_queue=WORKFLOW_TASK_QUEUE,
-            search_attributes=self._task_scoped_session_visibility(
+            search_attributes=self._workflow_scoped_session_visibility(
                 binding=initial_binding
             ),
-            static_summary="Task-scoped managed runtime session",
-            static_details=self._task_scoped_session_static_details(
+            static_summary="Workflow-scoped managed runtime session",
+            static_details=self._workflow_scoped_session_static_details(
                 binding=initial_binding
             ),
         )
         self._codex_session_binding = initial_binding
         return self._codex_session_binding
 
-    async def _maybe_bind_task_scoped_session(
+    async def _maybe_bind_workflow_scoped_session(
         self, request: AgentExecutionRequest
     ) -> AgentExecutionRequest:
-        if workflow.patched(RUN_DEFER_TASK_SCOPED_SESSION_UNTIL_SLOT_PATCH):
+        if workflow.patched(RUN_DEFER_WORKFLOW_SCOPED_SESSION_UNTIL_SLOT_PATCH):
             runtime_id = self._managed_session_runtime_id(request)
             if runtime_id is None:
                 return request
@@ -6071,27 +6309,34 @@ class MoonMindRunWorkflow:
             )
             moonmind_metadata["deferManagedSessionUntilSlot"] = {
                 "runtimeId": runtime_id,
-                "taskRunId": workflow.info().workflow_id,
+                "agentRunId": workflow.info().workflow_id,
             }
             metadata["moonmind"] = moonmind_metadata
             parameters["metadata"] = metadata
             return request.model_copy(update={"parameters": parameters})
 
-        binding = await self._ensure_task_scoped_codex_session(request)
+        binding = await self._ensure_workflow_scoped_codex_session(request)
         if binding is None:
             return request
         return request.model_copy(update={"managed_session": binding})
 
-    async def _maybe_clear_task_scoped_session_before_step(
+    async def _maybe_clear_workflow_scoped_session_before_step(
         self,
         *,
         request: AgentExecutionRequest,
         logical_step_id: str,
     ) -> None:
-        if not workflow.patched(RUN_TASK_SCOPED_SESSION_CLEAR_BETWEEN_STEPS_PATCH):
+        if not workflow.patched(RUN_WORKFLOW_SCOPED_SESSION_CLEAR_BETWEEN_STEPS_PATCH):
             return
         execution_ordinal = self._step_execution_for(logical_step_id) or 1
-        clear_key = (logical_step_id, execution_ordinal)
+        # New histories dedupe by Step Execution identity (logical step +
+        # attempt ordinal). Histories that predate this patch keep the old
+        # logical-step dedupe key so replay does not schedule a new clear
+        # activity when a later attempt is observed.
+        if workflow.patched(RUN_WORKFLOW_SCOPED_SESSION_CLEAR_PER_EXECUTION_PATCH):
+            clear_key: str | tuple[str, int] = (logical_step_id, execution_ordinal)
+        else:
+            clear_key = logical_step_id
         if clear_key in self._codex_session_cleared_before_step_attempts:
             return
         binding = self._codex_session_binding
@@ -6100,7 +6345,7 @@ class MoonMindRunWorkflow:
         if self._managed_session_runtime_id(request) != binding.runtime_id:
             return
         session_handle = workflow.get_external_workflow_handle(binding.workflow_id)
-        reason = f"Clearing task-scoped context before step {logical_step_id}"
+        reason = f"Clearing workflow-scoped context before step {logical_step_id}"
         request_id = step_execution_operation_idempotency_key(
             workflow_id=workflow.info().workflow_id,
             run_id=workflow.info().run_id,
@@ -6108,8 +6353,8 @@ class MoonMindRunWorkflow:
             execution_ordinal=execution_ordinal,
             operation="clear_session",
         )
-        if workflow.patched(RUN_TASK_SCOPED_SESSION_CLEAR_ACTIVITY_SIGNAL_PATCH):
-            await self._clear_task_scoped_session_via_activity_then_signal(
+        if workflow.patched(RUN_WORKFLOW_SCOPED_SESSION_CLEAR_ACTIVITY_SIGNAL_PATCH):
+            await self._clear_workflow_scoped_session_via_activity_then_signal(
                 session_handle=session_handle,
                 binding=binding,
                 reason=reason,
@@ -6143,12 +6388,12 @@ class MoonMindRunWorkflow:
                         )
             except AttributeError as exc:
                 self._get_logger().warning(
-                    "Task-scoped managed-session clear update unsupported for %s; "
+                    "Workflow-scoped managed-session clear update unsupported for %s; "
                     "falling back to activity and signal: %s",
                     binding.session_id,
                     exc,
                 )
-                await self._clear_task_scoped_session_via_activity_then_signal(
+                await self._clear_workflow_scoped_session_via_activity_then_signal(
                     session_handle=session_handle,
                     binding=binding,
                     reason=reason,
@@ -6156,7 +6401,7 @@ class MoonMindRunWorkflow:
                 )
         self._codex_session_cleared_before_step_attempts.add(clear_key)
 
-    async def _terminate_task_scoped_sessions(self, *, reason: str) -> None:
+    async def _terminate_workflow_scoped_sessions(self, *, reason: str) -> None:
         binding = self._codex_session_binding
         try:
             if binding is not None:
@@ -6164,15 +6409,15 @@ class MoonMindRunWorkflow:
                     binding.workflow_id
                 )
                 if workflow.patched(
-                    RUN_TASK_SCOPED_SESSION_TERMINATION_ACTIVITY_SIGNAL_PATCH
+                    RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_ACTIVITY_SIGNAL_PATCH
                 ):
-                    await self._terminate_task_scoped_session_via_activity_then_signal(
+                    await self._terminate_workflow_scoped_session_via_activity_then_signal(
                         session_handle=session_handle,
                         binding=binding,
                         reason=reason,
                     )
                 elif workflow.patched(
-                    RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_EXECUTE_PATCH
+                    RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_UPDATE_EXECUTE_PATCH
                 ):
                     try:
                         execute_update = getattr(session_handle, "execute_update", None)
@@ -6184,16 +6429,16 @@ class MoonMindRunWorkflow:
                         await execute_update("TerminateSession", {"reason": reason})
                     except Exception as exc:
                         self._get_logger().warning(
-                            "Task-scoped managed-session terminate update failed for %s: %s",
+                            "Workflow-scoped managed-session terminate update failed for %s: %s",
                             binding.session_id,
                             exc,
                         )
-                        await self._terminate_task_scoped_session_via_activity_then_signal(
+                        await self._terminate_workflow_scoped_session_via_activity_then_signal(
                             session_handle=session_handle,
                             binding=binding,
                             reason=reason,
                         )
-                elif workflow.patched(RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_PATCH):
+                elif workflow.patched(RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_UPDATE_PATCH):
                     await session_handle.signal(
                         "control_action",
                         {
@@ -6201,15 +6446,15 @@ class MoonMindRunWorkflow:
                             "reason": reason,
                         },
                     )
-                elif workflow.patched(RUN_TASK_SCOPED_SESSION_TERMINATION_PATCH):
+                elif workflow.patched(RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_PATCH):
                     try:
-                        await self._terminate_task_scoped_session_via_activity(
+                        await self._terminate_workflow_scoped_session_via_activity(
                             binding=binding,
                             reason=reason,
                         )
                     except Exception as exc:
                         self._get_logger().warning(
-                            "Task-scoped managed-session terminate activity failed for %s; "
+                            "Workflow-scoped managed-session terminate activity failed for %s; "
                             "falling back to session signal: %s",
                             binding.session_id,
                             exc,
@@ -6233,7 +6478,7 @@ class MoonMindRunWorkflow:
             self._codex_session_handle = None
             self._codex_session_binding = None
 
-    async def _clear_task_scoped_session_via_activity_then_signal(
+    async def _clear_workflow_scoped_session_via_activity_then_signal(
         self,
         *,
         session_handle: workflow.ExternalWorkflowHandle,
@@ -6241,7 +6486,7 @@ class MoonMindRunWorkflow:
         reason: str,
         request_id: str,
     ) -> None:
-        clear_handle = await self._clear_task_scoped_session_via_activity(
+        clear_handle = await self._clear_workflow_scoped_session_via_activity(
             binding=binding,
             reason=reason,
         )
@@ -6260,7 +6505,7 @@ class MoonMindRunWorkflow:
             },
         )
 
-    async def _clear_task_scoped_session_via_activity(
+    async def _clear_workflow_scoped_session_via_activity(
         self,
         *,
         binding: CodexManagedSessionBinding,
@@ -6277,7 +6522,7 @@ class MoonMindRunWorkflow:
         )
         snapshot = CodexManagedSessionSnapshot.model_validate(snapshot_payload)
         if not snapshot.container_id or not snapshot.thread_id:
-            raise ValueError("Task-scoped managed session cannot be cleared before launch")
+            raise ValueError("Workflow-scoped managed session cannot be cleared before launch")
         clear_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
             "agent_runtime.clear_session"
         )
@@ -6299,7 +6544,7 @@ class MoonMindRunWorkflow:
         )
         return CodexManagedSessionHandle.model_validate(clear_payload)
 
-    async def _terminate_task_scoped_session_via_activity_then_signal(
+    async def _terminate_workflow_scoped_session_via_activity_then_signal(
         self,
         *,
         session_handle: workflow.ExternalWorkflowHandle,
@@ -6307,13 +6552,13 @@ class MoonMindRunWorkflow:
         reason: str,
     ) -> None:
         try:
-            await self._terminate_task_scoped_session_via_activity(
+            await self._terminate_workflow_scoped_session_via_activity(
                 binding=binding,
                 reason=reason,
             )
         except Exception as exc:
             self._get_logger().warning(
-                "Task-scoped managed-session terminate activity failed for %s; "
+                "Workflow-scoped managed-session terminate activity failed for %s; "
                 "falling back to session signal: %s",
                 binding.session_id,
                 exc,
@@ -6326,7 +6571,7 @@ class MoonMindRunWorkflow:
             },
         )
 
-    async def _terminate_task_scoped_session_via_activity(
+    async def _terminate_workflow_scoped_session_via_activity(
         self,
         *,
         binding: CodexManagedSessionBinding,
@@ -6387,8 +6632,8 @@ class MoonMindRunWorkflow:
                 "execution initialized",
                 "planning execution strategy.",
                 "planning execution strategy",
-                "generating task proposals.",
-                "generating task proposals",
+                "generating workflow proposals.",
+                "generating workflow proposals",
                 "finalizing execution.",
                 "finalizing execution",
             }
@@ -6397,13 +6642,15 @@ class MoonMindRunWorkflow:
         )
 
     def _resolve_publish_payload(self, parameters: Mapping[str, Any]) -> dict[str, Any]:
-        task_payload = self._mapping_value(parameters, "task")
+        task_payload = self._mapping_value(parameters, "workflow")
+        if not task_payload:
+            task_payload = self._mapping_value(parameters, "task")
         publish_payload = self._mapping_value(parameters, "publish")
         if publish_payload:
             return publish_payload
         nested_publish = task_payload.get("publish") if isinstance(task_payload, dict) else None
         if isinstance(nested_publish, Mapping):
-            return self._json_mapping(nested_publish, path="parameters.task.publish")
+            return self._json_mapping(nested_publish, path="parameters.workflow.publish")
         return {}
 
     def _proposal_telemetry_signals(self) -> list[dict[str, Any]]:
@@ -7138,7 +7385,9 @@ class MoonMindRunWorkflow:
         *,
         include_applied_templates: bool = False,
     ) -> bool:
-        task_payload = self._mapping_value(parameters, "task")
+        task_payload = self._mapping_value(parameters, "workflow")
+        if not task_payload:
+            task_payload = self._mapping_value(parameters, "task")
         skill_names = self._task_skill_names(
             parameters,
             task_payload,
@@ -7357,7 +7606,7 @@ class MoonMindRunWorkflow:
         parts: list[str] = []
         if publish_mode == "pr" and pr_publish_optional:
             parts.append(
-                "No pull request was required because this Jira-oriented task "
+                "No pull request was required because this Jira-oriented workflow "
                 "completed without repository changes"
             )
         elif publish_mode == "pr":
@@ -7583,7 +7832,9 @@ class MoonMindRunWorkflow:
 
     def _report_requested(self, parameters: Mapping[str, Any]) -> bool:
         candidates = []
-        task_payload = self._mapping_value(parameters, "task")
+        task_payload = self._mapping_value(parameters, "workflow")
+        if not task_payload:
+            task_payload = self._mapping_value(parameters, "task")
         if isinstance(task_payload, Mapping):
             candidates.append(
                 task_payload.get("reportOutput") or task_payload.get("report_output")
@@ -7609,7 +7860,9 @@ class MoonMindRunWorkflow:
     ) -> dict[str, Any] | None:
         candidates: list[Any] = []
         publish_payload = self._resolve_publish_payload(parameters)
-        task_payload = self._mapping_value(parameters, "task")
+        task_payload = self._mapping_value(parameters, "workflow")
+        if not task_payload:
+            task_payload = self._mapping_value(parameters, "task")
         if isinstance(publish_payload, Mapping):
             candidates.append(
                 publish_payload.get("mergeAutomation")
@@ -8290,12 +8543,12 @@ class MoonMindRunWorkflow:
         node_id: str,
         existing_skillset_ref: str | None,
     ) -> str | None:
-        """Resolve effective task/step skill intent before AgentRun launch."""
+        """Resolve effective workflow/step skill intent before AgentRun launch."""
 
         if existing_skillset_ref:
             return existing_skillset_ref
 
-        effective = build_effective_task_skill_selectors(
+        effective = build_effective_workflow_skill_selectors(
             task_skills,
             node_skills if node_skills is not None else node_inputs.get("skills"),
         )
@@ -9163,7 +9416,7 @@ class MoonMindRunWorkflow:
         if (
             self._integration == "jules"
             and len(step_instructions) > 1
-            and workflow.patched("moonmind.run.jules_one_shot_bundle")
+            and workflow.patched("MoonMind.UserWorkflow.jules_one_shot_bundle")
         ):
             workspace_spec = integration_parameters.get("workspaceSpec") or {}
             repo_value = (
@@ -9228,7 +9481,7 @@ class MoonMindRunWorkflow:
         else:
             integration_parameters.setdefault(
                 "description",
-                f"Monitor MoonMind.Run workflow for {self._repo or 'the requested task'}.",
+                f"Monitor MoonMind.UserWorkflow workflow for {self._repo or 'the requested workflow'}.",
             )
 
         metadata = integration_parameters.get("metadata")
@@ -9471,11 +9724,11 @@ class MoonMindRunWorkflow:
             return
 
         if workflow.patched("enable_task_proposals_gate"):
-            if not settings.workflow.enable_task_proposals:
-                self._get_logger().info("Task proposal generation is globally disabled")
+            if not settings.workflow.enable_proposals:
+                self._get_logger().info("Workflow proposal generation is globally disabled")
                 return
 
-        self._set_state(STATE_PROPOSALS, summary="Generating task proposals.")
+        self._set_state(STATE_PROPOSALS, summary="Generating workflow proposals.")
 
         try:
             proposal_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
@@ -9525,22 +9778,24 @@ class MoonMindRunWorkflow:
 
         try:
             submit_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("proposal.submit")
-            task_node = parameters.get("task")
+            task_node = parameters.get("workflow")
+            if not isinstance(task_node, dict):
+                task_node = parameters.get("task")
             task = task_node if isinstance(task_node, dict) else {}
             policy = task.get("proposalPolicy")
             policy_payload: dict[str, Any] = {}
             if isinstance(policy, dict):
-                from moonmind.workflows.tasks.task_contract import TaskProposalPolicy
+                from moonmind.workflows.executions.execution_contract import WorkflowProposalPolicy
 
                 try:
-                    parsed_policy = TaskProposalPolicy.model_validate(policy)
+                    parsed_policy = WorkflowProposalPolicy.model_validate(policy)
                     policy_payload = parsed_policy.model_dump(
                         by_alias=True,
                         exclude_none=True,
                     )
                 except Exception as exc:
                     self._get_logger().warning(
-                        "Failed to validate task.proposalPolicy: %s", exc
+                        "Failed to validate workflow.proposalPolicy: %s", exc
                     )
             origin = {
                 "source": "workflow",
@@ -9612,10 +9867,10 @@ class MoonMindRunWorkflow:
         self, *, parameters: dict[str, Any], status: str, error: Optional[str] = None
     ) -> None:
         try:
-            await self._terminate_task_scoped_sessions(reason=status)
+            await self._terminate_workflow_scoped_sessions(reason=status)
         except Exception as exc:
             self._get_logger().warning(
-                "Failed to terminate task-scoped agent sessions: %s", exc
+                "Failed to terminate workflow-scoped agent sessions: %s", exc
             )
         try:
             self._get_logger().info("Generating finish summary.")
@@ -10226,7 +10481,7 @@ class MoonMindRunWorkflow:
 
     @workflow.signal
     def managed_session_bound(self, payload: dict) -> None:
-        """Record a task-scoped managed session started after slot admission."""
+        """Record a workflow-scoped managed session started after slot admission."""
 
         binding_payload = payload.get("binding") if isinstance(payload, dict) else None
         if not isinstance(binding_payload, Mapping):
@@ -10241,7 +10496,7 @@ class MoonMindRunWorkflow:
             return
         self._codex_session_binding = binding
         self._get_logger().debug(
-            "Task-scoped managed session bound: %s",
+            "Workflow-scoped managed session bound: %s",
             binding.session_id,
         )
 
@@ -10420,7 +10675,8 @@ class MoonMindRunWorkflow:
     def validate_send_message(self, payload: dict[str, Any] | None = None) -> None:
         if self._state in (STATE_COMPLETED, STATE_CANCELED, STATE_FAILED):
             raise ValueError("Cannot send a message to a completed workflow.")
-        if self._extract_operator_message(payload) is None:
+        message = self._extract_operator_message(payload)
+        if message is None:
             raise ValueError("message is required when sending an operator message.")
 
     @workflow.update(name="Cancel")

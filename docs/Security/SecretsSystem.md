@@ -1,10 +1,10 @@
 # Secrets System
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
+**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 Status: **Design Draft**
 Owners: MoonMind Engineering
-Last Updated: 2026-03-27
+Last Updated: 2026-06-11
 
 > [!NOTE]
 > This document defines the desired-state MoonMind Secrets System.
@@ -38,7 +38,7 @@ That rule applies to:
 - provider profiles,
 - runtime profiles,
 - workflow payloads,
-- task definitions,
+- workflow definitions,
 - scheduler state,
 - logs, and
 - durable run metadata.
@@ -61,6 +61,8 @@ Effective high-security mode uses deterministic precedence:
 When high-security mode is enabled, MoonMind-owned outbound callers should scan text payloads and commit-like payload bundles before send, post, or push side effects. Covered send-message boundaries include operator workflow messages, external-agent provider messages, chat provider requests, and notification webhook/email payloads. A scan returns a structured allow/block result. Any secret-like or credential-like finding returns a blocked result, and diagnostics identify only the finding category and caller-provided location. Diagnostics, errors, artifacts, logs, and user-visible summaries must not echo the raw detected value.
 
 The managed workspace publish path scans git pushes before invoking `git push`. It resolves the outbound range from the recorded remote branch SHA when available, otherwise from the publish base ref, and builds the scan bundle from commit metadata plus per-file diffs with bounded item sizes. A blocked scan returns file/commit locations such as `git.push.diff:<path>` without printing the detected value.
+
+MoonMind-owned send-message boundaries scan message content before provider or notification sends. This includes chat provider calls, provider-specific follow-up message clients, generated external-agent answers, and execution completion notification payloads. Clean messages continue through the existing sender unchanged. A blocked scan prevents the downstream send and emits redacted diagnostics that identify the message surface, such as `chat.openai.messages[0].content`, `jules.send_message.prompt`, `jules.answer_question.answer`, or `execution.notification.webhook.payload`.
 
 When high-security mode is disabled, the scan contract returns an allow result and does not silently mutate caller-supplied outbound content.
 
@@ -174,7 +176,7 @@ The system must not silently fall back to another secret source.
 
 A `SecretRef` is the durable identifier MoonMind uses to refer to sensitive material without storing the material itself in the referencing record.
 
-Provider Profiles, task configuration, and runtime materialization templates may point to `SecretRef` values.
+Provider Profiles, workflow configuration, and runtime materialization templates may point to `SecretRef` values.
 
 ### 5.2 SecretRef Shape
 
@@ -195,7 +197,7 @@ Secret references may appear in:
 - generated file templates,
 - runtime launch requests,
 - tool auth bindings,
-- scheduler-owned task configuration.
+- scheduler-owned workflow configuration.
 
 Secret references must not be replaced with resolved plaintext in persistent storage.
 
@@ -320,7 +322,7 @@ The resolved value must not be written back into:
 
 - workflow payloads,
 - provider profile rows,
-- task definitions,
+- workflow definitions,
 - durable run metadata,
 - artifacts by default.
 
@@ -391,7 +393,7 @@ MoonMind must not durably store raw secret values in:
 
 - workflow histories,
 - provider profile rows,
-- task payloads,
+- workflow execution payloads,
 - scheduler rows,
 - run summaries,
 - logs,
@@ -499,7 +501,7 @@ The expected first-run onboarding flow is:
 1. start MoonMind with `docker compose up -d` and no required `.env` editing,
 2. open Mission Control,
 3. add a small number of secrets such as a model-provider API key and GitHub PAT,
-4. bind those secrets to provider profiles or task settings through normal UI flows, and
+4. bind those secrets to provider profiles or workflow settings through normal UI flows, and
 5. launch workloads successfully without external secret-manager setup.
 
 The UI should show:

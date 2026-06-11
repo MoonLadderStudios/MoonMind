@@ -367,8 +367,8 @@ class WorkerPauseSnapshotResponse(BaseModel):
     )
     signal_status: Optional[str] = Field(None, alias="signalStatus")
 
-class TaskTemplateInputSchema(BaseModel):
-    """Input definition used by task template versions."""
+class PresetInputSchema(BaseModel):
+    """Input definition used by preset versions."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -390,7 +390,7 @@ class TaskTemplateInputSchema(BaseModel):
     options: list[str] = Field(default_factory=list)
     placeholder: Optional[str] = None
 
-class TaskTemplateStepSkillSchema(BaseModel):
+class PresetStepSkillSchema(BaseModel):
     """Skill payload attached to a template step."""
 
     model_config = ConfigDict(populate_by_name=True)
@@ -405,7 +405,7 @@ class TaskTemplateStepSkillSchema(BaseModel):
     autonomy: dict[str, Any] = Field(default_factory=dict)
     runtime: dict[str, Any] = Field(default_factory=dict)
 
-class TaskTemplateStepToolSchema(BaseModel):
+class PresetStepToolSchema(BaseModel):
     """Tool payload attached to a template step."""
 
     model_config = ConfigDict(populate_by_name=True)
@@ -424,7 +424,7 @@ class TaskTemplateStepToolSchema(BaseModel):
     execution: dict[str, Any] = Field(default_factory=dict)
     validation: dict[str, Any] = Field(default_factory=dict)
 
-class TaskTemplateStepBlueprintSchema(BaseModel):
+class PresetStepBlueprintSchema(BaseModel):
     """Template step blueprint definition."""
 
     model_config = ConfigDict(populate_by_name=True)
@@ -438,12 +438,12 @@ class TaskTemplateStepBlueprintSchema(BaseModel):
     alias: Optional[str] = None
     scope: Optional[Literal["global", "personal"]] = None
     input_mapping: dict[str, Any] = Field(default_factory=dict, alias="inputMapping")
-    tool: Optional[TaskTemplateStepToolSchema] = None
-    skill: Optional[TaskTemplateStepSkillSchema] = None
+    tool: Optional[PresetStepToolSchema] = None
+    skill: Optional[PresetStepSkillSchema] = None
     annotations: dict[str, Any] = Field(default_factory=dict)
 
-class TaskTemplateSummarySchema(BaseModel):
-    """List response model for task templates."""
+class PresetSummarySchema(BaseModel):
+    """List response model for presets."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -462,26 +462,26 @@ class TaskTemplateSummarySchema(BaseModel):
     )
     release_status: str = Field("draft", alias="releaseStatus")
 
-class TaskTemplateListResponseSchema(BaseModel):
+class PresetListResponseSchema(BaseModel):
     """Envelope for template list responses."""
 
     model_config = ConfigDict(populate_by_name=True)
 
-    items: list[TaskTemplateSummarySchema] = Field(default_factory=list)
+    items: list[PresetSummarySchema] = Field(default_factory=list)
 
-class TaskTemplateResponseSchema(TaskTemplateSummarySchema):
+class PresetResponseSchema(PresetSummarySchema):
     """Detail response model for one template version."""
 
-    inputs: list[TaskTemplateInputSchema] = Field(default_factory=list)
+    inputs: list[PresetInputSchema] = Field(default_factory=list)
     input_schema: dict[str, Any] = Field(default_factory=dict, alias="inputSchema")
     ui_schema: dict[str, Any] = Field(default_factory=dict, alias="uiSchema")
     defaults: dict[str, Any] = Field(default_factory=dict)
-    steps: list[TaskTemplateStepBlueprintSchema] = Field(default_factory=list)
+    steps: list[PresetStepBlueprintSchema] = Field(default_factory=list)
     annotations: dict[str, Any] = Field(default_factory=dict)
     reviewed_by: Optional[str] = Field(None, alias="reviewedBy")
     reviewed_at: Optional[str] = Field(None, alias="reviewedAt")
 
-class TaskTemplateCreateRequestSchema(BaseModel):
+class PresetCreateRequestSchema(BaseModel):
     """Request model for creating templates."""
 
     model_config = ConfigDict(populate_by_name=True)
@@ -492,21 +492,21 @@ class TaskTemplateCreateRequestSchema(BaseModel):
     scope: Literal["personal", "global"] = "personal"
     scope_ref: Optional[str] = Field(None, alias="scopeRef")
     tags: list[str] = Field(default_factory=list)
-    inputs: list[TaskTemplateInputSchema] = Field(default_factory=list)
-    steps: list[TaskTemplateStepBlueprintSchema] = Field(default_factory=list)
+    inputs: list[PresetInputSchema] = Field(default_factory=list)
+    steps: list[PresetStepBlueprintSchema] = Field(default_factory=list)
     annotations: dict[str, Any] = Field(default_factory=dict)
     required_capabilities: list[str] = Field(
         default_factory=list, alias="requiredCapabilities"
     )
 
-class TaskTemplateExpandOptionsSchema(BaseModel):
+class PresetExpandOptionsSchema(BaseModel):
     """Optional expansion flags."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     enforce_step_limit: bool = Field(True, alias="enforceStepLimit")
 
-class TaskTemplateExpandRequestSchema(BaseModel):
+class PresetExpandRequestSchema(BaseModel):
     """Request model for template expansion."""
 
     model_config = ConfigDict(populate_by_name=True)
@@ -514,11 +514,11 @@ class TaskTemplateExpandRequestSchema(BaseModel):
     version: str
     inputs: dict[str, Any] = Field(default_factory=dict)
     context: dict[str, Any] = Field(default_factory=dict)
-    options: TaskTemplateExpandOptionsSchema = Field(
-        default_factory=TaskTemplateExpandOptionsSchema
+    options: PresetExpandOptionsSchema = Field(
+        default_factory=PresetExpandOptionsSchema
     )
 
-class TaskTemplateAppliedMetadataSchema(BaseModel):
+class PresetAppliedMetadataSchema(BaseModel):
     """Audit metadata describing one template application."""
 
     model_config = ConfigDict(populate_by_name=True)
@@ -529,21 +529,21 @@ class TaskTemplateAppliedMetadataSchema(BaseModel):
     step_ids: list[str] = Field(default_factory=list, alias="stepIds")
     applied_at: Optional[str] = Field(None, alias="appliedAt")
 
-class TaskTemplateExpandResponseSchema(BaseModel):
+class PresetExpandResponseSchema(BaseModel):
     """Response model for expanded template step payloads."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     steps: list[dict[str, Any]] = Field(default_factory=list)
     composition: dict[str, Any] = Field(default_factory=dict)
-    applied_template: TaskTemplateAppliedMetadataSchema = Field(
+    applied_template: PresetAppliedMetadataSchema = Field(
         ..., alias="appliedTemplate"
     )
     capabilities: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
-class TaskTemplateSaveFromTaskRequestSchema(BaseModel):
-    """Request model for creating templates from draft task steps."""
+class PresetSaveFromWorkflowRequestSchema(BaseModel):
+    """Request model for creating presets from draft workflow steps."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -553,13 +553,13 @@ class TaskTemplateSaveFromTaskRequestSchema(BaseModel):
     title: str
     description: str
     selected_step_ids: list[str] = Field(default_factory=list, alias="selectedStepIds")
-    steps: list[TaskTemplateStepBlueprintSchema] = Field(default_factory=list)
-    suggested_inputs: list[TaskTemplateInputSchema] = Field(
+    steps: list[PresetStepBlueprintSchema] = Field(default_factory=list)
+    suggested_inputs: list[PresetInputSchema] = Field(
         default_factory=list, alias="suggestedInputs"
     )
     tags: list[str] = Field(default_factory=list)
 
-class TaskTemplateReviewRequestSchema(BaseModel):
+class PresetReviewRequestSchema(BaseModel):
     """Review workflow request for release status transitions."""
 
     model_config = ConfigDict(populate_by_name=True)
@@ -568,7 +568,7 @@ class TaskTemplateReviewRequestSchema(BaseModel):
         ..., alias="releaseStatus"
     )
 
-class TaskTemplateFavoriteRequestSchema(BaseModel):
+class PresetFavoriteRequestSchema(BaseModel):
     """Favorite toggle payload."""
 
     model_config = ConfigDict(populate_by_name=True)
@@ -719,20 +719,20 @@ __all__ = [
     "UserProfileUpdate",
     "UserProfileCreateSchema",
     "ApiKeyStatus",
-    "TaskTemplateAppliedMetadataSchema",
-    "TaskTemplateCreateRequestSchema",
-    "TaskTemplateExpandOptionsSchema",
-    "TaskTemplateExpandRequestSchema",
-    "TaskTemplateExpandResponseSchema",
-    "TaskTemplateFavoriteRequestSchema",
-    "TaskTemplateInputSchema",
-    "TaskTemplateListResponseSchema",
-    "TaskTemplateResponseSchema",
-    "TaskTemplateReviewRequestSchema",
-    "TaskTemplateSaveFromTaskRequestSchema",
-    "TaskTemplateStepBlueprintSchema",
-    "TaskTemplateStepSkillSchema",
-    "TaskTemplateSummarySchema",
+    "PresetAppliedMetadataSchema",
+    "PresetCreateRequestSchema",
+    "PresetExpandOptionsSchema",
+    "PresetExpandRequestSchema",
+    "PresetExpandResponseSchema",
+    "PresetFavoriteRequestSchema",
+    "PresetInputSchema",
+    "PresetListResponseSchema",
+    "PresetResponseSchema",
+    "PresetReviewRequestSchema",
+    "PresetSaveFromWorkflowRequestSchema",
+    "PresetStepBlueprintSchema",
+    "PresetStepSkillSchema",
+    "PresetSummarySchema",
     "SecretCreateRequest",
     "SecretUpdateRequest",
     "SecretStatusUpdateRequest",

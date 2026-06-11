@@ -41,7 +41,7 @@ describe('Workflows Entrypoint', () => {
 
   const lastExecutionListUrl = () => executionListCalls().at(-1)?.[0];
 
-  it('shows the loading state while the task list request is pending', () => {
+  it('shows the loading state while the workflow list request is pending', () => {
     fetchSpy.mockReturnValue(new Promise(() => {}) as Promise<Response>);
 
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
@@ -49,7 +49,7 @@ describe('Workflows Entrypoint', () => {
     expect(screen.getByText('Loading workflows...')).toBeTruthy();
   });
 
-  it('shows structured API validation detail when the task list request fails', async () => {
+  it('shows structured API validation detail when the workflow list request fails', async () => {
     fetchSpy.mockResolvedValue({
       ok: false,
       statusText: 'Bad Request',
@@ -114,7 +114,7 @@ describe('Workflows Entrypoint', () => {
 
     await screen.findAllByText('Example task');
     expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=tasks',
+      '/api/executions?source=temporal&pageSize=50',
     );
 
     const scheduledHeaderButton = await screen.findByRole('button', {
@@ -137,72 +137,11 @@ describe('Workflows Entrypoint', () => {
     });
   });
 
-  it('requests and renders operational metrics on the workflow overview', async () => {
+  it('does not query or render operational metrics on the workflow overview', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.startsWith('/api/executions/metrics?')) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            totalRuns: 12,
-            completedRuns: 9,
-            failedRuns: 2,
-            canceledRuns: 1,
-            terminalRuns: 12,
-            successRate: 0.75,
-            duration: {
-              averageSeconds: 125,
-              medianSeconds: 90,
-              observedCount: 8,
-            },
-            cost: {
-              totalEstimateUsd: 1.2345,
-              averageEstimateUsd: 0.1543,
-              observedCount: 8,
-            },
-            sampleSize: 8,
-            countMode: 'exact',
-            refreshedAt: '2026-03-28T00:00:10Z',
-          }),
-        } as Response);
-      }
-      return Promise.resolve({
-        ok: true,
-        json: async () => ({
-          items: [
-            {
-              taskId: 'task-123',
-              source: 'temporal',
-              title: 'Example task',
-              status: 'completed',
-              state: 'completed',
-              rawState: 'completed',
-              createdAt: '2026-03-28T00:00:00Z',
-            },
-          ],
-          count: 12,
-        }),
-      } as Response);
-    });
-
-    renderWithClient(<WorkflowListPage payload={mockPayload} />);
-
-    await screen.findAllByText('Example task');
-    expect(screen.getByLabelText('Operational metrics')).toBeTruthy();
-    expect(screen.getByText('Success Rate')).toBeTruthy();
-    expect(screen.getByText('75%')).toBeTruthy();
-    expect(screen.getByText('Run Duration')).toBeTruthy();
-    expect(screen.getByText('2m 5s')).toBeTruthy();
-    expect(screen.getByText('Cost')).toBeTruthy();
-    expect(screen.getByText('$1.2345')).toBeTruthy();
-    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/metrics?'))).toBe(true);
-  });
-
-  it('does not render placeholder operational metric details while metrics are loading', async () => {
-    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.startsWith('/api/executions/metrics?')) {
-        return new Promise(() => {}) as Promise<Response>;
+        throw new Error('Workflows should not request operational metrics.');
       }
       return Promise.resolve({
         ok: true,
@@ -225,102 +164,9 @@ describe('Workflows Entrypoint', () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
-    expect(screen.getByLabelText('Operational metrics')).toBeTruthy();
-    expect(screen.queryByText('0 terminal from 0 sampled')).toBeNull();
-    expect(screen.queryByText('0 completed, 0 failed')).toBeNull();
-    expect(screen.queryByText(/^Refreshed /)).toBeNull();
-  });
-
-  it('does not render placeholder operational metric details when metrics fail', async () => {
-    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.startsWith('/api/executions/metrics?')) {
-        return Promise.resolve({
-          ok: false,
-          statusText: 'Service Unavailable',
-          json: async () => ({}),
-        } as Response);
-      }
-      return Promise.resolve({
-        ok: true,
-        json: async () => ({
-          items: [
-            {
-              taskId: 'task-123',
-              source: 'temporal',
-              title: 'Example task',
-              status: 'completed',
-              state: 'completed',
-              rawState: 'completed',
-              createdAt: '2026-03-28T00:00:00Z',
-            },
-          ],
-        }),
-      } as Response);
-    });
-
-    renderWithClient(<WorkflowListPage payload={mockPayload} />);
-
-    await screen.findAllByText('Example task');
-    expect(await screen.findByText('Operational metrics are unavailable.')).toBeTruthy();
-    expect(screen.queryByText('0 terminal from 0 sampled')).toBeNull();
-    expect(screen.queryByText('0 completed, 0 failed')).toBeNull();
-    expect(screen.queryByText(/^Refreshed /)).toBeNull();
-  });
-
-  it('renders negative operational metric durations as unavailable', async () => {
-    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.startsWith('/api/executions/metrics?')) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            totalRuns: 1,
-            completedRuns: 1,
-            failedRuns: 0,
-            canceledRuns: 0,
-            terminalRuns: 1,
-            successRate: 1,
-            duration: {
-              averageSeconds: -10,
-              medianSeconds: -5,
-              observedCount: 1,
-            },
-            cost: {
-              totalEstimateUsd: 0,
-              averageEstimateUsd: 0,
-              observedCount: 1,
-            },
-            sampleSize: 1,
-            countMode: 'exact',
-            refreshedAt: '2026-03-28T00:00:10Z',
-          }),
-        } as Response);
-      }
-      return Promise.resolve({
-        ok: true,
-        json: async () => ({
-          items: [
-            {
-              taskId: 'task-123',
-              source: 'temporal',
-              title: 'Example task',
-              status: 'completed',
-              state: 'completed',
-              rawState: 'completed',
-              createdAt: '2026-03-28T00:00:00Z',
-            },
-          ],
-        }),
-      } as Response);
-    });
-
-    renderWithClient(<WorkflowListPage payload={mockPayload} />);
-
-    await screen.findAllByText('Example task');
-    expect(await screen.findByText('Median — across 1 runs')).toBeTruthy();
-    expect(screen.queryByText('-10s')).toBeNull();
-    expect(screen.queryByText('-5s')).toBeNull();
+    expect(screen.queryByLabelText('Operational metrics')).toBeNull();
+    expect(screen.queryByText('Operational metrics are unavailable.')).toBeNull();
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/metrics?'))).toBe(false);
   });
 
   it('surfaces intervention requests in list rows and status filters', async () => {
@@ -380,7 +226,7 @@ describe('Workflows Entrypoint', () => {
     expect(screen.queryByRole('dialog', { name: 'Scheduled filter' })).toBeNull();
   });
 
-  it('keeps task filters available outside the desktop-only table layout', async () => {
+  it('keeps workflow filters available outside the desktop-only table layout', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
@@ -410,7 +256,7 @@ describe('Workflows Entrypoint', () => {
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-        '/api/executions?source=temporal&pageSize=50&scope=tasks&workflowIdContains=task-123&stateIn=completed&repoExact=owner%2Frepo&targetRuntimeIn=codex_cloud&titleContains=Example',
+        '/api/executions?source=temporal&pageSize=50&workflowIdContains=task-123&stateIn=completed&repoExact=owner%2Frepo&targetRuntimeIn=codex_cloud&titleContains=Example',
       );
     });
   });
@@ -484,7 +330,7 @@ describe('Workflows Entrypoint', () => {
     ]);
   });
 
-  it('keeps workflow-kind browsing controls out of the normal task list', async () => {
+  it('keeps workflow-kind browsing controls out of the normal workflow list', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
@@ -493,11 +339,11 @@ describe('Workflows Entrypoint', () => {
     expect(screen.queryByLabelText('Workflow Type')).toBeNull();
     expect(screen.queryByLabelText('Entry')).toBeNull();
     expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=tasks',
+      '/api/executions?source=temporal&pageSize=50',
     );
   });
 
-  it('normalizes legacy workflow scope URLs to task visibility with recoverable notice', async () => {
+  it('normalizes legacy workflow scope URLs to workflow visibility with recoverable notice', async () => {
     window.history.pushState(
       {},
       'Legacy',
@@ -509,7 +355,7 @@ describe('Workflows Entrypoint', () => {
     await screen.findAllByText('Example task');
 
     expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=tasks&stateIn=completed&repoExact=moon%2Fdemo',
+      '/api/executions?source=temporal&pageSize=50&stateIn=completed&repoExact=moon%2Fdemo',
     );
     expect(screen.getByText(/Workflow scope filters are not available on Workflows/i)).toBeTruthy();
     expect(window.location.search).toBe('?stateIn=completed&repoExact=moon%2Fdemo&limit=50');
@@ -529,7 +375,7 @@ describe('Workflows Entrypoint', () => {
     await screen.findAllByText('Example task');
 
     expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=tasks&targetRuntimeIn=codex_cli%2Cclaude_code',
+      '/api/executions?source=temporal&pageSize=50&targetRuntimeIn=codex_cli%2Cclaude_code',
     );
     expect(window.location.search).toBe('?targetRuntimeIn=codex_cli%2Cclaude_code&limit=50');
     expect(screen.getByRole('button', { name: 'Runtime filter: Codex CLI +1' })).toBeTruthy();
@@ -547,7 +393,7 @@ describe('Workflows Entrypoint', () => {
     await screen.findAllByText('Example task');
 
     expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=tasks&targetRuntimeIn=claude_code',
+      '/api/executions?source=temporal&pageSize=50&targetRuntimeIn=claude_code',
     );
     expect(window.location.search).toBe('?targetRuntimeIn=claude_code&limit=50');
     expect(screen.getByRole('button', { name: 'Runtime filter: Claude Code' })).toBeTruthy();
@@ -565,7 +411,7 @@ describe('Workflows Entrypoint', () => {
     await screen.findAllByText('Example task');
 
     expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=tasks&targetRuntimeIn=codex%2Cclaude',
+      '/api/executions?source=temporal&pageSize=50&targetRuntimeIn=codex%2Cclaude',
     );
     expect(window.location.search).toBe('?targetRuntimeIn=codex%2Cclaude&limit=50');
     expect(screen.getByRole('button', { name: 'Runtime filter: Codex CLI +1' })).toBeTruthy();
@@ -583,7 +429,7 @@ describe('Workflows Entrypoint', () => {
     await screen.findAllByText('Example task');
 
     expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=tasks&targetRuntimeNotIn=codex%2Cclaude',
+      '/api/executions?source=temporal&pageSize=50&targetRuntimeNotIn=codex%2Cclaude',
     );
     expect(window.location.search).toBe('?targetRuntimeNotIn=codex%2Cclaude&limit=50');
     expect(screen.getByRole('button', { name: 'Runtime filter: not (Codex CLI +1)' })).toBeTruthy();
@@ -733,7 +579,7 @@ describe('Workflows Entrypoint', () => {
 
   });
 
-  it('keeps started time out of the task list presentation', async () => {
+  it('keeps started time out of the workflow list presentation', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
@@ -801,7 +647,7 @@ describe('Workflows Entrypoint', () => {
       expect(executionListCalls().length).toBe(baselineCalls + 1);
     });
     expect(lastExecutionListUrl()).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=tasks&repoExact=owner%2Frepo',
+      '/api/executions?source=temporal&pageSize=50&repoExact=owner%2Frepo',
     );
     await screen.findAllByText('Example task');
 
@@ -875,7 +721,7 @@ describe('Workflows Entrypoint', () => {
       expect(executionListCalls().length).toBe(baselineCalls + 1);
     });
     expect(lastExecutionListUrl()).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=tasks&stateIn=completed',
+      '/api/executions?source=temporal&pageSize=50&stateIn=completed',
     );
   });
 
@@ -902,7 +748,7 @@ describe('Workflows Entrypoint', () => {
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-        '/api/executions?source=temporal&pageSize=50&scope=tasks&stateIn=failed',
+        '/api/executions?source=temporal&pageSize=50&stateIn=failed',
       );
     });
   });
@@ -931,7 +777,7 @@ describe('Workflows Entrypoint', () => {
     fireEvent.mouseDown(document.body);
     expect(screen.queryByRole('dialog', { name: 'Status filter' })).toBeNull();
     expect(executionListCalls().length).toBe(baselineCalls);
-  });
+  }, 10000);
 
   it('moves focus into column filter dialogs and applies staged text filters with Enter', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
@@ -953,7 +799,7 @@ describe('Workflows Entrypoint', () => {
 
     await waitFor(() => {
       expect(lastExecutionListUrl()).toBe(
-        '/api/executions?source=temporal&pageSize=50&scope=tasks&titleContains=Example',
+        '/api/executions?source=temporal&pageSize=50&titleContains=Example',
       );
       expect(screen.queryByRole('dialog', { name: 'Title filter' })).toBeNull();
       expect(
@@ -976,7 +822,7 @@ describe('Workflows Entrypoint', () => {
     fireEvent.keyDown(clearButton, { key: 'Enter' });
 
     expect(executionListCalls().length).toBe(baselineCalls);
-    expect(lastExecutionListUrl()).toBe('/api/executions?source=temporal&pageSize=50&scope=tasks');
+    expect(lastExecutionListUrl()).toBe('/api/executions?source=temporal&pageSize=50');
     expect(screen.getByRole('dialog', { name: 'Title filter' })).toBeTruthy();
   });
 
@@ -1009,7 +855,7 @@ describe('Workflows Entrypoint', () => {
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-        '/api/executions?source=temporal&pageSize=50&scope=tasks&stateNotIn=canceled',
+        '/api/executions?source=temporal&pageSize=50&stateNotIn=canceled',
       );
     });
     expect(window.location.search).toBe('?stateNotIn=canceled&limit=50');
@@ -1019,7 +865,7 @@ describe('Workflows Entrypoint', () => {
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-        '/api/executions?source=temporal&pageSize=50&scope=tasks',
+        '/api/executions?source=temporal&pageSize=50',
       );
     });
   });
@@ -1037,7 +883,7 @@ describe('Workflows Entrypoint', () => {
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-        '/api/executions?source=temporal&pageSize=50&scope=tasks&stateIn=completed%2Cfailed',
+        '/api/executions?source=temporal&pageSize=50&stateIn=completed%2Cfailed',
       );
     });
     expect(screen.getByRole('button', { name: 'Status filter: completed, failed' })).toBeTruthy();
@@ -1066,7 +912,7 @@ describe('Workflows Entrypoint', () => {
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-        '/api/executions?source=temporal&pageSize=50&scope=tasks&stateNotIn=completed%2Cfailed%2Cplanning%2Ccanceled',
+        '/api/executions?source=temporal&pageSize=50&stateNotIn=completed%2Cfailed%2Cplanning%2Ccanceled',
       );
     });
     expect(screen.getByRole('button', { name: 'Status filter: not (completed, failed, planning +1)' })).toBeTruthy();
@@ -1078,7 +924,7 @@ describe('Workflows Entrypoint', () => {
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-        '/api/executions?source=temporal&pageSize=50&scope=tasks&nextPageToken=stale-token',
+        '/api/executions?source=temporal&pageSize=50&nextPageToken=stale-token',
       );
     });
     await screen.findAllByText('Example task');
@@ -1087,7 +933,7 @@ describe('Workflows Entrypoint', () => {
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-        '/api/executions?source=temporal&pageSize=100&scope=tasks',
+        '/api/executions?source=temporal&pageSize=100',
       );
     });
     expect(window.location.search).toBe('?limit=100');
@@ -1305,7 +1151,7 @@ describe('Workflows Entrypoint', () => {
     expect(Number(getComputedStyle(firstHeader as HTMLElement).zIndex)).toBeGreaterThan(1);
   });
 
-  it('keeps the task list surfaces to one control deck and one data slab', async () => {
+  it('keeps the workflow list surfaces to one control deck and one data slab', async () => {
     renderWithClient(
       <section className="panel" aria-live="polite">
         <WorkflowListPage payload={mockPayload} />
@@ -1378,7 +1224,7 @@ describe('Workflows Entrypoint', () => {
     expect(screen.getByRole('dialog', { name: 'Repository filter' })).toBeTruthy();
     await waitFor(() => {
       expect(lastExecutionListUrl()).toBe(
-        '/api/executions?source=temporal&pageSize=50&scope=tasks&stateIn=completed&repoExact=owner%2Frepo&targetRuntimeIn=codex_cli',
+        '/api/executions?source=temporal&pageSize=50&stateIn=completed&repoExact=owner%2Frepo&targetRuntimeIn=codex_cli',
       );
     });
 

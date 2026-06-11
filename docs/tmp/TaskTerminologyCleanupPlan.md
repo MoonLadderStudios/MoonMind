@@ -1,8 +1,35 @@
 # Task → Workflow Terminology Cleanup Plan
 
-**Status:** Audit complete, execution plan proposed
+**Status:** WP1-WP4 complete; WP5-WP9 hard-switch implementation is complete for the remaining agent-run identifier family
 **Audited at:** 2026-06-09, commit `638cdc278`
+**Updated at:** 2026-06-10
 **Canonical target semantics:** `docs/Temporal/WorkflowLanguageHardSwitchPlan.md` (referred to below as "the hard-switch plan"). This document does not redefine the target model; it inventories what is still task-named after PRs #2395 and the `tasks → workflows` route rename, and sequences the remaining work.
+
+## Progress update: 2026-06-10
+
+Completed:
+
+- **WP1:** Stale `docs/Tasks/...` references are removed from live docs, agent instructions, skill instructions, and tests. The only remaining `docs/Tasks` mentions are in this historical cleanup plan and the terminology checker rule text.
+- **WP2:** README and managed-agent documentation use **workflow-scoped session** and workflow-start copy.
+- **WP3:** `docs/UI/WorkflowConsoleArchitecture.md` and `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md` are the active docs; the former task compatibility document is gone from live docs and tests.
+- **WP4:** Docs/instruction-scope terminology enforcement exists in `tools/check_terminology.sh` and passes. The gate now also blocks canonical docs and checked-in agent instruction bundles from sending rollout/status tracking back to `specs/<feature>/` or MoonSpec feature artifacts.
+
+Still open:
+
+- **Broader task-shaped snapshot terminology:** The root user workflow type, workflow create envelope, workflow proposal contract, preset/recurring database names, frontend preset routes, code-scope enforcement, and agent-run identifiers are switched. Broader task-shaped snapshot keys such as original-input authoring fields and runtime draft-shape metadata remain compatibility-sensitive and should be handled as a separate cutover if the product contract is renamed further.
+
+Completed in the hard-switch pass:
+
+- `MoonMind.UserWorkflow` is the current user Workflow Execution type for new starts and workflow worker registration; `legacy_run` mode is rejected by the current build while explicit cutover records still name `MoonMind.Run` for drain decisions.
+- API create/remediation paths now require workflow-shaped envelopes (`type: "workflow"`, `payload.workflow`) and original-input snapshots use `workflowShape`, `workflow`, and `authoredWorkflowInput`.
+- Step ledger refs and execution-detail API projection now emit `agentRunId` for managed agent-run observability instead of `taskRunId`.
+- Workflow proposal storage/wire contracts use `workflowCreateRequest` and `workflowSnapshotRef`; proposal DB tables/columns were renamed to `workflow_proposals` and `workflow_*`.
+- Preset and recurring schedule database identifiers were renamed from task-prefixed names (`presets`, `preset_versions`, `recurring_workflow_definitions`, `recurring_workflow_runs`, and `agent_run_live_sessions`).
+- Frontend workflow start/detail surfaces now use the renamed workflow type, preset route fallbacks, workflow proposal payloads, and `agentRunId` in execution detail.
+- `tools/verify_workflow_terminology.py` now enforces the hard-switch surfaces above outside explicit cutover fixtures and replay-stable patch IDs.
+- The managed-session, workload, remediation context/tools, agent-run observability, memory, pentest, API principal headers, frontend detail routes, and related docs/tests now use `agentRunId` / `agent_run_id` for managed agent-run identifiers.
+- Runtime terminology enforcement blocks the old task-run identifier family across `api_service/`, `moonmind/`, `frontend/src/`, and `tests/`.
+- A residual scan for the former task-run identifier spellings is clean outside historical rollout notes and this temporary cleanup plan.
 
 ## Reserved terms (do not remove)
 
@@ -73,16 +100,16 @@ No banned-term lint/CI check exists yet, which is how the stale `docs/Tasks` lin
 
 Ordered work packages, each one PR-sized unless noted. WP1–WP4 are doc-only and safe immediately. WP5–WP8 are the code hard switch and must follow the hard-switch plan's Phase 3.1 in-flight compatibility gate (MM-730: `TEMPORAL_USER_WORKFLOW_CONTRACT_MODE`, distinct v2 Task Queue, cutover record, release notes path).
 
-**WP1 — Fix broken links and agent misdirection (do first).**
+**WP1 — Fix broken links and agent misdirection (done).**
 Repoint all 79 `docs/Tasks/...` references to current locations (`docs/Steps/...`, `docs/Workflows/...`); update `AGENTS.md`/`GEMINI.md` doc pointers and remove the outdated `specs/<feature>/` guidance in favor of `docs/tmp/`; fix the three test instruction strings. Verification: `rg -n "docs/Tasks" --hidden -g '!.git'` returns nothing outside gitignored `artifacts.*` dirs.
 
-**WP2 — README + terminology decision.**
+**WP2 — README + terminology decision (done).**
 Decide "task-scoped session" → "workflow-scoped session" (or alternative), then sweep `README.md`, `docs/MoonMindArchitecture.md`, and ManagedAgents docs for it. Fix README "submit a task" / "first task" copy. Leave "recurring tasks" wording until WP7 renames the feature, or adopt "scheduled workflows" copy now and note the code lag.
 
-**WP3 — Conceptual doc rewrites.**
+**WP3 — Conceptual doc rewrites (done).**
 Rewrite `docs/UI/MissionControlArchitecture.md` → `docs/UI/WorkflowConsoleArchitecture.md` on the Workflow Execution console posture (route tables reflect the already-shipped `/workflows/*` routes). Rename `RunHistoryAndRerunSemantics.md` → `WorkflowRunHistoryAndNewRunSemantics.md`. Delete `docs/Temporal/TaskExecutionCompatibilityModel.md` and update the doc test that pins it. Update all inbound links (repo-wide grep per the compatibility policy: no partial migrations).
 
-**WP4 — Docs prose sweep + enforcement (docs scope).**
+**WP4 — Docs prose sweep + enforcement (docs/instruction scope) (done).**
 Sweep the section-C list, rewriting product-concept prose while preserving still-live code identifiers as literals. Add the §18 banned-term CI check scoped to `docs/`, `README.md`, `AGENTS.md`, `GEMINI.md` now (unqualified `MoonMind task`, `task-oriented`, `task-first`, `taskId` outside code-literal contexts, `docs/Tasks` paths), so docs can't regress while code work proceeds.
 
 **WP5 — Backend API schema and service rename (hard-switch Phases 3–4).**

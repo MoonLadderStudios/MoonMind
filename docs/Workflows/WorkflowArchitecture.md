@@ -20,7 +20,7 @@ It maps how the control plane translates user intent from Mission Control — in
 
 into durable execution under Temporal.
 
-This document is architectural and declarative. Detailed page behavior belongs in `docs/UI/CreatePage.md`. Detailed image-input behavior belongs in `docs/Tasks/ImageSystem.md`.
+This document is architectural and declarative. Detailed page behavior belongs in `docs/UI/CreatePage.md`. Detailed image-input behavior belongs in `docs/Workflows/ImageSystem.md`.
 
 ---
 
@@ -30,7 +30,7 @@ MoonMind uses a Temporal-backed execution model in which Mission Control acts as
 
 The control plane already centers on these product objects:
 
-- `MoonMind.Run` as the standard Workflow Execution type
+- `MoonMind.UserWorkflow` as the standard Workflow Execution type
 - first-class artifacts for large or binary inputs and outputs
 - step-authored Workflows rather than opaque queue jobs
 - reusable Workflow presets
@@ -127,7 +127,7 @@ flowchart LR
     end
 
     subgraph Execution Plane
-        API -.-> RUN[MoonMind.Run]
+        API -.-> RUN[MoonMind.UserWorkflow]
         RUN --> PREP[Prepare / Artifact Activities]
         RUN --> VISION[Vision Context Activity]
         RUN --> STEP[Planner or Step Runtime]
@@ -230,14 +230,14 @@ Rules:
 Representative contract:
 
 ```ts
-interface TaskInputAttachmentRef {
+interface WorkflowInputAttachmentRef {
   artifactId: string;
   filename: string;
   contentType: string;
   sizeBytes: number;
 }
 
-interface TaskStepSource {
+interface WorkflowStepSource {
   kind?: "manual" | "preset-derived" | "preset-include" | "detached";
   presetId?: string;
   presetSlug?: string;
@@ -256,12 +256,12 @@ interface AuthoredPresetBinding {
   scope?: string;
 }
 
-interface TaskStepPayload {
+interface WorkflowStepPayload {
   id?: string;
   title?: string;
   instructions?: string;
-  inputAttachments?: TaskInputAttachmentRef[];
-  source?: TaskStepSource;
+  inputAttachments?: WorkflowInputAttachmentRef[];
+  source?: WorkflowStepSource;
   skill?: {
     id?: string;
     args?: Record<string, unknown>;
@@ -272,10 +272,10 @@ interface TaskStepPayload {
   };
 }
 
-interface TaskPayload {
+interface WorkflowExecutionPayload {
   instructions?: string;
-  inputAttachments?: TaskInputAttachmentRef[];
-  steps?: TaskStepPayload[];
+  inputAttachments?: WorkflowInputAttachmentRef[];
+  steps?: WorkflowStepPayload[];
   authoredPresets?: AuthoredPresetBinding[];
   runtime?: {
     mode?: string;
@@ -293,10 +293,10 @@ interface TaskPayload {
   dependsOn?: string[];
 }
 
-type TaskRecoveryKind = "exact_full_rerun" | "edited_full_retry" | "recover_from_failed_step";
+type WorkflowRecoveryKind = "exact_full_rerun" | "edited_full_retry" | "recover_from_failed_step";
 
-interface TaskRecoveryProvenance {
-  kind: TaskRecoveryKind;
+interface WorkflowRecoveryProvenance {
+  kind: WorkflowRecoveryKind;
   sourceWorkflowId: string;
   sourceRunId: string;
   requestedBy?: string;
@@ -315,8 +315,8 @@ interface ResumeFromFailedStepRef {
   planDigest?: string;
 }
 
-interface TaskPayloadWithRecovery extends TaskPayload {
-  recovery?: TaskRecoveryProvenance;
+interface WorkflowExecutionPayloadWithRecovery extends WorkflowExecutionPayload {
+  recovery?: WorkflowRecoveryProvenance;
   resume?: ResumeFromFailedStepRef;
 }
 ```
@@ -462,7 +462,7 @@ Rules:
 
 ### 8.1 Workflow responsibilities
 
-`MoonMind.Run` owns:
+`MoonMind.UserWorkflow` owns:
 
 - durable state progression
 - waiting, retry, and cancel semantics
@@ -514,7 +514,7 @@ Rules:
 
 ### 8.6 Resume execution responsibilities
 
-When a new execution starts with `task.resume.kind === "recover_from_failed_step"`, `MoonMind.Run` owns:
+When a new execution starts with `task.resume.kind === "recover_from_failed_step"`, `MoonMind.UserWorkflow` owns:
 
 - loading and validating the recovery checkpoint
 - verifying the checkpoint source `workflowId`, `runId`, Workflow snapshot, and plan identity
@@ -630,17 +630,17 @@ The following invariants define the desired-state Workflow Execution system.
 
 ## 12. Workload-specific behavior
 
-### 12.1 `MoonMind.Run`
+### 12.1 `MoonMind.UserWorkflow`
 
 This is the canonical attachment-aware Workflow type.
 
 Rules:
 
-- attachment-aware Workflow authoring is defined against `MoonMind.Run`
-- create, edit, rerun, and detail flows for attachment-aware Workflows are all modeled in Workflow-shaped `MoonMind.Run` terms
-- `MoonMind.Run` is the canonical workflow that produces step ledger state and recovery checkpoints for failed-step recovery
-- `MoonMind.Run` may start from the beginning for full retry or start at a failed step when given a validated recovery checkpoint
-- checkpoint durability remains a parent `MoonMind.Run` responsibility even when an individual step delegates work to `MoonMind.AgentRun`
+- attachment-aware Workflow authoring is defined against `MoonMind.UserWorkflow`
+- create, edit, rerun, and detail flows for attachment-aware Workflows are all modeled in Workflow-shaped `MoonMind.UserWorkflow` terms
+- `MoonMind.UserWorkflow` is the canonical workflow that produces step ledger state and recovery checkpoints for failed-step recovery
+- `MoonMind.UserWorkflow` may start from the beginning for full retry or start at a failed step when given a validated recovery checkpoint
+- checkpoint durability remains a parent `MoonMind.UserWorkflow` responsibility even when an individual step delegates work to `MoonMind.AgentRun`
 
 ### 12.2 `MoonMind.AgentRun`
 
@@ -682,10 +682,10 @@ Use the related docs for detailed behavior:
 
 - `docs/UI/CreatePage.md` for page sections, field behavior, Jira targeting, edit/rerun UX, and validation copy
 - `docs/UI/WorkflowDetailsPage.md` for failed-Workflow Execution action presentation, including **Resume**
-- `docs/Tasks/ImageSystem.md` for image-input upload, artifact storage, materialization, context generation, and preview/download behavior
-- `docs/Tasks/AgentSkillSystem.md` for skill selection and resolution
+- `docs/Workflows/ImageSystem.md` for image-input upload, artifact storage, materialization, context generation, and preview/download behavior
+- `docs/Steps/SkillSystem.md` for skill selection and resolution
 - `docs/Temporal/TemporalArchitecture.md` for workflow lifecycle and worker topology
-- `docs/Temporal/RunHistoryAndRerunSemantics.md` for Workflow ID, Run ID, full rerun, and Resume identity semantics
+- `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md` for Workflow ID, Run ID, new-run, and failed-step recovery identity semantics
 - `docs/Temporal/StepLedgerAndProgressModel.md` for step ledger, preserved-step, and recovery checkpoint semantics
 
 ---

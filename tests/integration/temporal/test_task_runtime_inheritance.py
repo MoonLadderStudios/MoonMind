@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.api.routers.executions import (
-    _build_original_task_input_snapshot_payload,
+    _build_original_workflow_input_snapshot_payload,
     _serialize_execution,
 )
 from api_service.db.models import (
@@ -68,7 +68,7 @@ def _inherited_runtime_params() -> dict[str, object]:
         "targetRuntime": "codex_cli",
         "model": "gpt-5.4",
         "effort": "high",
-        "task": {
+        "workflow": {
             "instructions": "Resolve child work.",
             "runtime": {
                 "mode": "codex_cli",
@@ -88,7 +88,7 @@ def test_child_execution_detail_exposes_inherited_runtime_metadata() -> None:
         memo={"title": "Child", "summary": "Created"},
         owner_id="user-1",
         entry="run",
-        workflow_type=TemporalWorkflowType.RUN,
+        workflow_type=TemporalWorkflowType.USER_WORKFLOW,
         state=MoonMindWorkflowState.EXECUTING,
         workflow_id="mm:child-runtime",
         namespace="moonmind",
@@ -111,7 +111,7 @@ def test_child_execution_detail_exposes_inherited_runtime_metadata() -> None:
     assert detail["model"] == "gpt-5.4"
     assert detail["effort"] == "high"
     assert detail["profileId"] == "codex_default"
-    assert detail["inputParameters"]["task"]["runtime"] == {
+    assert detail["inputParameters"]["workflow"]["runtime"] == {
         "mode": "codex_cli",
         "model": "gpt-5.4",
         "effort": "high",
@@ -175,7 +175,7 @@ async def test_idempotent_resubmit_preserves_original_inherited_runtime(
             service = TemporalExecutionService(session, client_adapter=AsyncMock())
             owner_id = str(uuid4())
             first = await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=owner_id,
                 title="Child runtime",
                 input_artifact_ref=None,
@@ -188,7 +188,7 @@ async def test_idempotent_resubmit_preserves_original_inherited_runtime(
                 summary="Created once",
             )
             second = await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=owner_id,
                 title="Child runtime changed",
                 input_artifact_ref=None,
@@ -208,32 +208,32 @@ async def test_idempotent_resubmit_preserves_original_inherited_runtime(
         assert second.workflow_id == first.workflow_id
         assert second.parameters["targetRuntime"] == "codex_cli"
         assert second.parameters["model"] == "gpt-5.4"
-        assert second.parameters["task"]["runtime"]["executionProfileRef"] == (
+        assert second.parameters["workflow"]["runtime"]["executionProfileRef"] == (
             "codex_default"
         )
     finally:
         await engine.dispose()
 
 
-def test_original_task_input_snapshot_contains_inherited_effective_runtime() -> None:
+def test_original_workflow_input_snapshot_contains_inherited_effective_runtime() -> None:
     parameters = _inherited_runtime_params()
 
-    snapshot = _build_original_task_input_snapshot_payload(
+    snapshot = _build_original_workflow_input_snapshot_payload(
         source_kind="create",
         payload={
             "repository": parameters["repository"],
             "targetRuntime": parameters["targetRuntime"],
             "requiredCapabilities": ["gh"],
         },
-        task_payload=parameters["task"],
+        task_payload=parameters["workflow"],
     )
 
     draft = snapshot["draft"]
     assert draft["targetRuntime"] == "codex_cli"
-    assert draft["task"]["runtime"] == {
+    assert draft["workflow"]["runtime"] == {
         "mode": "codex_cli",
         "model": "gpt-5.4",
         "effort": "high",
         "executionProfileRef": "codex_default",
     }
-    assert draft["authoredTaskInput"]["runtime"] == draft["task"]["runtime"]
+    assert draft["authoredWorkflowInput"]["runtime"] == draft["workflow"]["runtime"]

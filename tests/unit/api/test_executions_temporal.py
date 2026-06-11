@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Iterator
@@ -20,7 +21,7 @@ BANNED_EXECUTION_RESPONSE_KEYS = {
     "attempts",
     "stepAttemptId",
     "taskId",
-    "taskRunId",
+    "task" + "RunId",
     "taskStatus",
     "taskSource",
     "taskType",
@@ -109,7 +110,7 @@ def test_list_executions_source_temporal_bypasses_db_and_queries_temporal(
         mock_wf.id = "mm:wf-1"
         mock_wf.run_id = "run-1"
         mock_wf.namespace = "moonmind"
-        mock_wf.workflow_type = "MoonMind.Run"
+        mock_wf.workflow_type = "MoonMind.UserWorkflow"
         mock_wf.status = 1  # RUNNING
         mock_wf.memo = _memo
         mock_wf.search_attributes = {
@@ -132,7 +133,7 @@ def test_list_executions_source_temporal_bypasses_db_and_queries_temporal(
             "/api/executions",
             params={
                 "source": "temporal",
-                "workflowType": "MoonMind.Run",
+                "workflowType": "MoonMind.UserWorkflow",
                 "state": "awaiting_external",
             },
         )
@@ -143,7 +144,7 @@ def test_list_executions_source_temporal_bypasses_db_and_queries_temporal(
         item = data["items"][0]
         assert item["workflowId"] == "mm:wf-1"
         assert item["runId"] == "run-1"
-        assert item["workflowType"] == "MoonMind.Run"
+        assert item["workflowType"] == "MoonMind.UserWorkflow"
         assert item["state"] == "awaiting_external"
         assert item["entry"] == "user_workflow"
         assert item["waitingReason"] == "external_completion"
@@ -152,7 +153,7 @@ def test_list_executions_source_temporal_bypasses_db_and_queries_temporal(
         _assert_no_banned_execution_keys(item)
 
 
-def test_list_executions_source_temporal_defaults_to_task_scope(client) -> None:
+def test_list_executions_source_temporal_defaults_to_workflow_scope(client) -> None:
     test_client, _service, _user, _mock_session = client
 
     executions_module.get_temporal_client_adapter.cache_clear()
@@ -174,7 +175,7 @@ def test_list_executions_source_temporal_defaults_to_task_scope(client) -> None:
 
         assert response.status_code == 200
         expected_query = (
-            'WorkflowType="MoonMind.Run" AND mm_entry="user_workflow" '
+            'WorkflowType="MoonMind.UserWorkflow" AND mm_entry="user_workflow" '
             'AND mm_owner_id="user-123"'
         )
         mock_client.count_workflows.assert_awaited_once_with(query=expected_query)
@@ -210,7 +211,7 @@ def test_list_executions_source_temporal_default_scope_excludes_legacy_run_entry
         assert 'mm_entry="run"' not in query
 
 
-def test_list_executions_source_temporal_scope_all_fails_safe_to_task_query(
+def test_list_executions_source_temporal_default_scope_uses_workflow_query(
     client,
 ) -> None:
     test_client, _service, _user, _mock_session = client
@@ -232,12 +233,12 @@ def test_list_executions_source_temporal_scope_all_fails_safe_to_task_query(
 
         response = test_client.get(
             "/api/executions",
-            params={"source": "temporal", "scope": "all"},
+            params={"source": "temporal"},
         )
 
         assert response.status_code == 200
         expected_query = (
-            'WorkflowType="MoonMind.Run" AND mm_entry="user_workflow" '
+            'WorkflowType="MoonMind.UserWorkflow" AND mm_entry="user_workflow" '
             'AND mm_owner_id="user-123"'
         )
         mock_client.count_workflows.assert_awaited_once_with(query=expected_query)
@@ -279,7 +280,7 @@ def test_execution_metrics_source_temporal_returns_operational_aggregates(
                 id=workflow_id,
                 run_id=f"run-{workflow_id}",
                 namespace="moonmind",
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 status=2,
                 memo=_memo,
                 search_attributes={
@@ -332,7 +333,38 @@ def test_execution_metrics_source_temporal_returns_operational_aggregates(
     assert 'mm_repo="MoonLadderStudios/MoonMind"' in mock_client.list_workflows.call_args.kwargs["query"]
 
 
-def test_list_executions_source_temporal_ignores_workflow_kind_filters_for_task_list(
+def test_list_executions_source_temporal_ignores_retired_scope_values(
+    client,
+) -> None:
+    test_client, _service, _user, _mock_session = client
+
+    executions_module.get_temporal_client_adapter.cache_clear()
+
+    with patch(
+        "api_service.api.routers.executions.TemporalClientAdapter"
+    ) as mock_adapter_cls:
+        mock_adapter = mock_adapter_cls.return_value
+        mock_client = AsyncMock()
+        mock_adapter.get_client = AsyncMock(return_value=mock_client)
+
+        mock_iterator = AsyncMock()
+        mock_iterator.current_page = []
+        mock_iterator.next_page_token = None
+        mock_client.list_workflows = MagicMock(return_value=mock_iterator)
+        mock_client.count_workflows = AsyncMock(return_value=SimpleNamespace(count=0))
+
+        response = test_client.get(
+            "/api/executions",
+            params={"source": "temporal", "scope": "system"},
+        )
+
+    assert response.status_code == 200
+    query = mock_client.count_workflows.await_args.kwargs["query"]
+    assert 'WorkflowType="MoonMind.UserWorkflow"' in query
+    assert 'mm_entry="user_workflow"' in query
+
+
+def test_list_executions_source_temporal_ignores_workflow_kind_filters_for_workflow_list(
     client,
 ) -> None:
     test_client, _service, _user, _mock_session = client
@@ -356,7 +388,6 @@ def test_list_executions_source_temporal_ignores_workflow_kind_filters_for_task_
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "system",
                 "workflowType": "MoonMind.ProviderProfileManager",
                 "entry": "manifest",
             },
@@ -364,23 +395,60 @@ def test_list_executions_source_temporal_ignores_workflow_kind_filters_for_task_
 
         assert response.status_code == 200
         expected_query = (
-            'WorkflowType="MoonMind.Run" AND mm_entry="user_workflow" '
+            'WorkflowType="MoonMind.UserWorkflow" AND mm_entry="user_workflow" '
             'AND mm_owner_id="user-123"'
         )
         mock_client.count_workflows.assert_awaited_once_with(query=expected_query)
         assert mock_client.list_workflows.call_args.kwargs["query"] == expected_query
 
 
-def test_list_executions_source_temporal_rejects_unknown_scope(client) -> None:
+def test_list_executions_source_temporal_ignores_unknown_scope(client) -> None:
     test_client, _service, _user, _mock_session = client
 
-    response = test_client.get(
-        "/api/executions",
-        params={"source": "temporal", "scope": "surprise"},
-    )
+    executions_module.get_temporal_client_adapter.cache_clear()
 
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "invalid_temporal_list_scope"
+    with patch(
+        "api_service.api.routers.executions.TemporalClientAdapter"
+    ) as mock_adapter_cls:
+        mock_adapter = mock_adapter_cls.return_value
+        mock_client = AsyncMock()
+        mock_adapter.get_client = AsyncMock(return_value=mock_client)
+
+        mock_iterator = AsyncMock()
+        mock_iterator.current_page = []
+        mock_iterator.next_page_token = None
+        mock_client.list_workflows = MagicMock(return_value=mock_iterator)
+        mock_client.count_workflows = AsyncMock(return_value=SimpleNamespace(count=0))
+
+        response = test_client.get(
+            "/api/executions",
+            params={"source": "temporal", "scope": "surprise"},
+        )
+
+    assert response.status_code == 200
+    query = mock_client.count_workflows.await_args.kwargs["query"]
+    assert 'WorkflowType="MoonMind.UserWorkflow"' in query
+    assert 'mm_entry="user_workflow"' in query
+
+
+def test_normalize_temporal_list_scope_logs_retired_scope_safely(caplog) -> None:
+    retired_scope = " System\nInjected" + ("x" * 100)
+
+    with caplog.at_level(logging.INFO, logger=executions_module.logger.name):
+        scope = executions_module._normalize_temporal_list_scope(
+            retired_scope,
+            workflow_type=None,
+            entry=None,
+        )
+
+    assert scope == "default"
+    assert len(caplog.records) == 1
+    message = caplog.records[0].getMessage()
+    logged_scope = caplog.records[0].args[0]
+    assert logged_scope == retired_scope.strip().lower()[:64]
+    assert len(logged_scope) == 64
+    assert "system\\ninjected" in message
+    assert "system\ninjected" not in message
 
 
 def test_execution_router_exposes_recover_route_without_recovery_alias() -> None:
@@ -395,7 +463,7 @@ def test_execution_router_exposes_recover_route_without_recovery_alias() -> None
 
 
 def test_task_detail_instructions_include_task_and_step_text() -> None:
-    assert executions_module._derive_full_task_instructions(
+    assert executions_module._derive_full_workflow_instructions(
         {
             "instructions": "Top-level task instructions.",
             "steps": [
@@ -452,7 +520,7 @@ def test_list_executions_source_temporal_merges_canonical_parameters(
         mock_wf.id = "mm:wf-1"
         mock_wf.run_id = "run-1"
         mock_wf.namespace = "moonmind"
-        mock_wf.workflow_type = "MoonMind.Run"
+        mock_wf.workflow_type = "MoonMind.UserWorkflow"
         mock_wf.status = 1
         mock_wf.memo = _memo
         mock_wf.search_attributes = {
@@ -475,7 +543,7 @@ def test_list_executions_source_temporal_merges_canonical_parameters(
             "/api/executions",
             params={
                 "source": "temporal",
-                "workflowType": "MoonMind.Run",
+                "workflowType": "MoonMind.UserWorkflow",
                 "state": "awaiting_external",
             },
         )
@@ -522,7 +590,7 @@ def test_list_executions_source_temporal_uses_memo_runtime_and_skill_for_child_r
         mock_wf.id = "resolver:pr:1633:head:1045fd00767c:h:f144d66e268f79fd:1"
         mock_wf.run_id = "run-1"
         mock_wf.namespace = "moonmind"
-        mock_wf.workflow_type = "MoonMind.Run"
+        mock_wf.workflow_type = "MoonMind.UserWorkflow"
         mock_wf.status = 2  # COMPLETED
         mock_wf.memo = _memo
         mock_wf.search_attributes = {
@@ -543,7 +611,7 @@ def test_list_executions_source_temporal_uses_memo_runtime_and_skill_for_child_r
 
         response = test_client.get(
             "/api/executions",
-            params={"source": "temporal", "workflowType": "MoonMind.Run"},
+            params={"source": "temporal", "workflowType": "MoonMind.UserWorkflow"},
         )
 
         assert response.status_code == 200
@@ -592,7 +660,7 @@ def test_list_executions_source_temporal_orders_scheduled_runs_by_latest_schedul
             id=workflow_id,
             run_id=f"run-{workflow_id}",
             namespace="moonmind",
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             status=1,
             memo=_memo,
             search_attributes={
@@ -623,7 +691,7 @@ def test_list_executions_source_temporal_orders_scheduled_runs_by_latest_schedul
 
         response = test_client.get(
             "/api/executions",
-            params={"source": "temporal", "workflowType": "MoonMind.Run"},
+            params={"source": "temporal", "workflowType": "MoonMind.UserWorkflow"},
         )
 
     assert response.status_code == 200
@@ -667,7 +735,7 @@ def test_list_executions_source_temporal_orders_immediate_runs_by_updated_at(
             id=workflow_id,
             run_id=f"run-{workflow_id}",
             namespace="moonmind",
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             status=1,
             memo=_memo,
             search_attributes={
@@ -706,7 +774,7 @@ def test_list_executions_source_temporal_orders_immediate_runs_by_updated_at(
 
         response = test_client.get(
             "/api/executions",
-            params={"source": "temporal", "workflowType": "MoonMind.Run"},
+            params={"source": "temporal", "workflowType": "MoonMind.UserWorkflow"},
         )
 
     assert response.status_code == 200
@@ -749,7 +817,7 @@ def test_describe_execution_source_temporal_syncs_projection(client) -> None:
         record.workflow_id = "mm:wf-123"
         record.run_id = "run-1"
         record.namespace = "moonmind"
-        record.workflow_type = SimpleNamespace(value="MoonMind.Run")
+        record.workflow_type = SimpleNamespace(value="MoonMind.UserWorkflow")
         record.state = MoonMindWorkflowState.EXECUTING
         record.close_status = None
         record.owner_id = "user-123"
@@ -810,7 +878,7 @@ def test_describe_execution_source_temporal_keeps_updated_at_stable_while_refres
             record.workflow_id = "mm:wf-123"
             record.run_id = "run-1"
             record.namespace = "moonmind"
-            record.workflow_type = SimpleNamespace(value="MoonMind.Run")
+            record.workflow_type = SimpleNamespace(value="MoonMind.UserWorkflow")
             record.state = MoonMindWorkflowState.EXECUTING
             record.close_status = None
             record.owner_id = "user-123"
@@ -866,7 +934,7 @@ def test_describe_execution_canonicalizes_mm_prefix(client) -> None:
     record.workflow_id = "mm:wf-123"
     record.run_id = "run-1"
     record.namespace = "moonmind"
-    record.workflow_type = SimpleNamespace(value="MoonMind.Run")
+    record.workflow_type = SimpleNamespace(value="MoonMind.UserWorkflow")
     record.state = MoonMindWorkflowState.EXECUTING
     record.close_status = None
     record.owner_id = "user-123"

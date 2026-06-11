@@ -217,7 +217,7 @@ class Mem0LongTermMemoryService:
                 "scope": memory.scope,
                 "review_state": memory.review_state,
                 "workflow_id": memory.provenance.workflow_id,
-                "task_run_id": memory.provenance.task_run_id,
+                "agent_run_id": memory.provenance.agent_run_id,
                 "commits": ",".join(memory.provenance.commits),
                 "pull_request_url": memory.provenance.pull_request_url,
                 "artifact_refs": ",".join(memory.provenance.artifact_refs),
@@ -381,7 +381,7 @@ def _memory_from_mem0_result(
     )
     provenance = MemoryProvenance(
         workflow_id=_optional_str(metadata.get("workflow_id")),
-        task_run_id=_optional_str(metadata.get("task_run_id")),
+        agent_run_id=_optional_str(metadata.get("agent_run_id")),
         commits=_split_csv(metadata.get("commits")),
         pull_request_url=_optional_str(metadata.get("pull_request_url")),
         artifact_refs=_split_csv(metadata.get("artifact_refs")),

@@ -62,7 +62,7 @@ async def test_workflow_pause_resume(mock_run_environment):
             handle = await env.client.start_workflow(
                 MoonMindRunWorkflow.run,
                 {
-                    "workflow_type": "MoonMind.Run",
+                    "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {},
                     "plan_artifact_ref": "ref-123",
                 },
@@ -105,7 +105,7 @@ async def test_legacy_observability_cutoff(mock_run_environment):
             handle = await env.client.start_workflow(
                 MoonMindRunWorkflow.run,
                 {
-                    "workflow_type": "MoonMind.Run",
+                    "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {},
                     "plan_artifact_ref": "ref-123",
                 },

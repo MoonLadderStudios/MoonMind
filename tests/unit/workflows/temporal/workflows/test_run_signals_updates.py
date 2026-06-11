@@ -17,7 +17,7 @@ from moonmind.workflows.temporal.workflows.run import (
     DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE,
     STATE_AWAITING_SLOT,
     STATE_WAITING_ON_DEPENDENCIES,
-    MoonMindRunWorkflow,
+    MoonMindUserWorkflow,
 )
 
 class _NestedFailure(Exception):
@@ -84,7 +84,7 @@ def test_operator_failure_summary_uses_deep_actionable_cause() -> None:
     )
 
     assert (
-        MoonMindRunWorkflow._operator_failure_summary(failure)
+        MoonMindUserWorkflow._operator_failure_summary(failure)
         == "sessionEpoch does not match the active managed session"
     )
 
@@ -106,13 +106,13 @@ def test_operator_failure_summary_skips_temporal_activity_wrapper() -> None:
         failure.__cause__ = exc
 
     assert (
-        MoonMindRunWorkflow._operator_failure_summary(failure)
+        MoonMindUserWorkflow._operator_failure_summary(failure)
         == "sessionEpoch does not match the active managed session"
     )
 
 
-def _make_workflow_for_diagnostic() -> MoonMindRunWorkflow:
-    wf = MoonMindRunWorkflow()
+def _make_workflow_for_diagnostic() -> MoonMindUserWorkflow:
+    wf = MoonMindUserWorkflow()
     wf._state = "executing"
     return wf
 
@@ -224,7 +224,7 @@ def test_record_failure_diagnostic_keeps_first_root_cause() -> None:
 @pytest.fixture
 def mock_run_environment(monkeypatch):
     monkeypatch.setattr(
-        MoonMindRunWorkflow, "_trusted_owner_metadata", lambda self: ("user", "user-1")
+        MoonMindUserWorkflow, "_trusted_owner_metadata", lambda self: ("user", "user-1")
     )
     monkeypatch.setattr(workflow, "execute_activity", fake_execute_activity)
 
@@ -249,9 +249,9 @@ def mock_run_environment(monkeypatch):
                 lambda: not self._paused or self._cancel_requested
             )
 
-    monkeypatch.setattr(MoonMindRunWorkflow, "_run_planning_stage", fake_planning_stage)
+    monkeypatch.setattr(MoonMindUserWorkflow, "_run_planning_stage", fake_planning_stage)
     monkeypatch.setattr(
-        MoonMindRunWorkflow, "_run_execution_stage", fake_execution_stage
+        MoonMindUserWorkflow, "_run_execution_stage", fake_execution_stage
     )
 
 @pytest.mark.asyncio
@@ -260,13 +260,13 @@ async def test_run_workflow_pause_resume(mock_run_environment):
         async with Worker(
             env.client,
             task_queue="test-task-queue-signals",
-            workflows=[MoonMindRunWorkflow],
+            workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await env.client.start_workflow(
-                MoonMindRunWorkflow.run,
+                MoonMindUserWorkflow.run,
                 {
-                    "workflow_type": "MoonMind.Run",
+                    "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {},
                     "plan_artifact_ref": "ref-123",
                 },
@@ -290,13 +290,13 @@ async def test_run_workflow_update_parameters(mock_run_environment):
         async with Worker(
             env.client,
             task_queue="test-task-queue-signals",
-            workflows=[MoonMindRunWorkflow],
+            workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await env.client.start_workflow(
-                MoonMindRunWorkflow.run,
+                MoonMindUserWorkflow.run,
                 {
-                    "workflow_type": "MoonMind.Run",
+                    "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {},
                     "plan_artifact_ref": "ref-123",
                 },
@@ -320,13 +320,13 @@ async def test_run_workflow_cancel_signal(mock_run_environment):
         async with Worker(
             env.client,
             task_queue="test-task-queue-signals",
-            workflows=[MoonMindRunWorkflow],
+            workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await env.client.start_workflow(
-                MoonMindRunWorkflow.run,
+                MoonMindUserWorkflow.run,
                 {
-                    "workflow_type": "MoonMind.Run",
+                    "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {},
                     "plan_artifact_ref": "ref-123",
                 },
@@ -341,7 +341,7 @@ async def test_run_workflow_cancel_signal(mock_run_environment):
 
 @pytest.mark.asyncio
 async def test_recovery_forwards_operator_message_to_active_jules_child(monkeypatch):
-    workflow_instance = MoonMindRunWorkflow()
+    workflow_instance = MoonMindUserWorkflow()
     workflow_instance._active_agent_child_workflow_id = "wf:child"
     workflow_instance._active_agent_id = "jules"
     workflow_instance._awaiting_external = True
@@ -367,7 +367,7 @@ async def test_recovery_forwards_operator_message_to_active_jules_child(monkeypa
 
 @pytest.mark.asyncio
 async def test_send_message_forwards_operator_message_without_resuming(monkeypatch):
-    workflow_instance = MoonMindRunWorkflow()
+    workflow_instance = MoonMindUserWorkflow()
     workflow_instance._active_agent_child_workflow_id = "wf:child"
     workflow_instance._active_agent_id = "jules"
     workflow_instance._awaiting_external = True
@@ -389,9 +389,66 @@ async def test_send_message_forwards_operator_message_without_resuming(monkeypat
     )
     assert workflow_instance._recovery_requested is False
 
+
+@pytest.mark.asyncio
+async def test_send_message_does_not_scan_inside_workflow_replay_path(monkeypatch):
+    workflow_instance = MoonMindUserWorkflow()
+    workflow_instance._active_agent_child_workflow_id = "wf:child"
+    workflow_instance._active_agent_id = "jules"
+    workflow_instance._awaiting_external = True
+
+    forward_mock = AsyncMock()
+    monkeypatch.setattr(
+        workflow_instance,
+        "_forward_operator_message_to_active_child",
+        forward_mock,
+    )
+    monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
+    monkeypatch.setattr(
+        run_workflow_module.settings.security,
+        "high_security_mode",
+        True,
+    )
+
+    await workflow_instance.send_message(
+        {"message": "Please use token=blocked-secret-value"}
+    )
+
+    forward_mock.assert_awaited_once_with(
+        {"message": "Please use token=blocked-secret-value"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_send_message_forwards_clean_operator_message_with_scan(monkeypatch):
+    workflow_instance = MoonMindUserWorkflow()
+    workflow_instance._active_agent_child_workflow_id = "wf:child"
+    workflow_instance._active_agent_id = "jules"
+    workflow_instance._awaiting_external = True
+
+    forward_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        workflow_instance,
+        "_forward_operator_message_to_active_child",
+        forward_mock,
+    )
+    monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
+    monkeypatch.setattr(
+        run_workflow_module.settings.security,
+        "high_security_mode",
+        True,
+    )
+
+    message = "Please use Provider Profiles exactly."
+    await workflow_instance.send_message({"message": message})
+
+    forward_mock.assert_awaited_once_with({"message": message})
+    assert workflow_instance._recovery_requested is False
+
+
 @pytest.mark.asyncio
 async def test_update_inputs_forwards_runtime_selection_to_active_managed_child(monkeypatch):
-    workflow_instance = MoonMindRunWorkflow()
+    workflow_instance = MoonMindUserWorkflow()
     workflow_instance._active_agent_child_workflow_id = "wf:child"
     workflow_instance._active_agent_id = "claude_code"
 
@@ -451,7 +508,7 @@ async def test_run_workflow_send_message_update_uses_temporal_boundary(
         return True
 
     monkeypatch.setattr(
-        MoonMindRunWorkflow,
+        MoonMindUserWorkflow,
         "_forward_operator_message_to_active_child",
         fake_forward,
     )
@@ -460,13 +517,13 @@ async def test_run_workflow_send_message_update_uses_temporal_boundary(
         async with Worker(
             env.client,
             task_queue="test-task-queue-send-message",
-            workflows=[MoonMindRunWorkflow],
+            workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await env.client.start_workflow(
-                MoonMindRunWorkflow.run,
+                MoonMindUserWorkflow.run,
                 {
-                    "workflow_type": "MoonMind.Run",
+                    "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {},
                     "plan_artifact_ref": "ref-123",
                 },
@@ -495,13 +552,13 @@ async def test_run_workflow_send_message_update_rejects_non_canonical_payload(
         async with Worker(
             env.client,
             task_queue="test-task-queue-send-message-invalid",
-            workflows=[MoonMindRunWorkflow],
+            workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await env.client.start_workflow(
-                MoonMindRunWorkflow.run,
+                MoonMindUserWorkflow.run,
                 {
-                    "workflow_type": "MoonMind.Run",
+                    "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {},
                     "plan_artifact_ref": "ref-123",
                 },
@@ -531,13 +588,13 @@ async def test_run_workflow_send_message_update_rejects_blank_message(
         async with Worker(
             env.client,
             task_queue="test-task-queue-send-message-blank",
-            workflows=[MoonMindRunWorkflow],
+            workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await env.client.start_workflow(
-                MoonMindRunWorkflow.run,
+                MoonMindUserWorkflow.run,
                 {
-                    "workflow_type": "MoonMind.Run",
+                    "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {},
                     "plan_artifact_ref": "ref-123",
                 },
@@ -557,7 +614,7 @@ async def test_run_workflow_send_message_update_rejects_blank_message(
             assert result["status"] == "canceled"
 
 def test_update_inputs_extracts_clarification_message_from_parameters_patch():
-    workflow_instance = MoonMindRunWorkflow()
+    workflow_instance = MoonMindUserWorkflow()
 
     message = workflow_instance._extract_clarification_message(
         {
@@ -572,7 +629,7 @@ def test_update_inputs_extracts_clarification_message_from_parameters_patch():
 
 @pytest.mark.asyncio
 async def test_record_terminal_state_uses_canonical_activity_boundary(monkeypatch):
-    workflow_instance = MoonMindRunWorkflow()
+    workflow_instance = MoonMindUserWorkflow()
     workflow_instance._finish_summary = {"finishOutcome": {"code": "SUCCESS"}}
     captured = {}
 
@@ -643,7 +700,7 @@ async def test_record_terminal_state_uses_canonical_activity_boundary(monkeypatc
 
 @pytest.mark.asyncio
 async def test_record_terminal_state_supports_snake_case_finish_outcome(monkeypatch):
-    workflow_instance = MoonMindRunWorkflow()
+    workflow_instance = MoonMindUserWorkflow()
     captured = {}
 
     async def fake_execute_typed_activity(activity_type, payload, **kwargs):
@@ -699,7 +756,7 @@ async def test_record_terminal_state_supports_snake_case_finish_outcome(monkeypa
 
 @pytest.mark.asyncio
 async def test_record_terminal_state_skips_activity_without_patch(monkeypatch):
-    workflow_instance = MoonMindRunWorkflow()
+    workflow_instance = MoonMindUserWorkflow()
 
     async def fake_execute_typed_activity(activity_type, payload, **kwargs):
         raise AssertionError("terminal state activity should be patch-gated")
@@ -720,7 +777,7 @@ async def test_record_terminal_state_skips_activity_without_patch(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_wait_for_dependencies_records_dependency_metadata(monkeypatch):
-    workflow_instance = MoonMindRunWorkflow()
+    workflow_instance = MoonMindUserWorkflow()
     workflow_instance._owner_id = "owner-1"
     workflow_instance._owner_type = "user"
     memo_updates: list[dict[str, object]] = []
@@ -771,7 +828,7 @@ async def test_wait_for_dependencies_records_dependency_metadata(monkeypatch):
     )
 
 def test_child_state_changed_sets_provider_profile_waiting_reason(monkeypatch):
-    workflow_instance = MoonMindRunWorkflow()
+    workflow_instance = MoonMindUserWorkflow()
     monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
     monkeypatch.setattr(workflow_instance, "_update_memo", lambda: None)
     monkeypatch.setattr(workflow, "patched", lambda _patch_id: False)
@@ -803,7 +860,7 @@ def test_mm_started_at_stamped_on_launch_and_immutable_across_requeue(monkeypatc
     crossed from awaiting_slot into launching/running. A subsequent return to
     ``awaiting_slot`` (cooldown/requeue) and re-launch must not overwrite it.
     """
-    workflow_instance = MoonMindRunWorkflow()
+    workflow_instance = MoonMindUserWorkflow()
     monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
     monkeypatch.setattr(workflow_instance, "_update_memo", lambda: None)
     monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
@@ -837,7 +894,7 @@ def test_mm_started_at_stamped_on_launch_and_immutable_across_requeue(monkeypatc
 def test_mm_started_at_not_stamped_for_awaiting_slot(monkeypatch):
     """Awaiting a provider slot must not stamp mm_started_at — that is
     exactly the case the legacy behavior got wrong."""
-    workflow_instance = MoonMindRunWorkflow()
+    workflow_instance = MoonMindUserWorkflow()
     monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
     monkeypatch.setattr(workflow_instance, "_update_memo", lambda: None)
     monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
@@ -865,7 +922,7 @@ async def test_legacy_wait_for_dependencies_raises_dependency_specific_failure(m
         DEPENDENCY_WAIT_THROUGH_RERUN_PATCH,
     )
 
-    workflow_instance = MoonMindRunWorkflow()
+    workflow_instance = MoonMindUserWorkflow()
     workflow_instance._owner_id = "owner-1"
     workflow_instance._owner_type = "user"
 
@@ -913,7 +970,7 @@ async def test_legacy_wait_for_dependencies_raises_dependency_specific_failure(m
 
 @pytest.mark.asyncio
 async def test_wait_for_dependencies_can_be_bypassed_by_operator_signal(monkeypatch):
-    workflow_instance = MoonMindRunWorkflow()
+    workflow_instance = MoonMindUserWorkflow()
     workflow_instance._owner_id = "owner-1"
     workflow_instance._owner_type = "user"
     memo_updates: list[dict[str, object]] = []
@@ -985,7 +1042,7 @@ async def test_wait_for_dependencies_can_be_bypassed_by_operator_signal(monkeypa
 
 @pytest.mark.asyncio
 async def test_wait_for_dependencies_reconciles_again_after_timeout(monkeypatch):
-    workflow_instance = MoonMindRunWorkflow()
+    workflow_instance = MoonMindUserWorkflow()
     workflow_instance._owner_id = "owner-1"
     workflow_instance._owner_type = "user"
     reconcile_calls: list[list[str]] = []
@@ -1035,7 +1092,7 @@ async def test_wait_for_dependencies_reconciles_again_after_timeout(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_skip_dependency_wait_unblocks_dependency_gate(monkeypatch):
-    workflow_instance = MoonMindRunWorkflow()
+    workflow_instance = MoonMindUserWorkflow()
     workflow_instance._owner_id = "owner-1"
     workflow_instance._owner_type = "user"
     memo_updates: list[dict[str, object]] = []

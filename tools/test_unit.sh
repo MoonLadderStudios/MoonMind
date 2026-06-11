@@ -151,7 +151,17 @@ PY
 fi
 
 if [[ "$RUN_PYTHON_TESTS" == "1" ]]; then
-    "$PYTHON_BIN" -m pytest -q ${PYTEST_PARALLEL_ARGS[@]+"${PYTEST_PARALLEL_ARGS[@]}"} "${PYTEST_TARGETS[@]}"
+    PYTEST_DURATIONS="${MOONMIND_PYTEST_DURATIONS:-25}"
+    PYTEST_REPORT_ARGS=(--durations="$PYTEST_DURATIONS")
+    if [[ -n "${MOONMIND_PYTEST_JUNITXML:-}" ]]; then
+        mkdir -p "$(dirname "$MOONMIND_PYTEST_JUNITXML")"
+        PYTEST_REPORT_ARGS+=(--junitxml="$MOONMIND_PYTEST_JUNITXML")
+    elif [[ "${CI:-}" == "true" ]]; then
+        mkdir -p artifacts
+        PYTEST_REPORT_ARGS+=(--junitxml=artifacts/pytest-unit.xml)
+    fi
+
+    "$PYTHON_BIN" -m pytest -q ${PYTEST_PARALLEL_ARGS[@]+"${PYTEST_PARALLEL_ARGS[@]}"} "${PYTEST_REPORT_ARGS[@]}" "${PYTEST_TARGETS[@]}"
 fi
 
 if [[ "$RUN_DASHBOARD_TESTS" == "1" ]]; then

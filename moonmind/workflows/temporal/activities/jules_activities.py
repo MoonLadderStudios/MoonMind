@@ -11,6 +11,7 @@ import os
 
 from temporalio import activity
 
+from moonmind.config.settings import settings
 from moonmind.jules.runtime import build_runtime_gate_state, JULES_RUNTIME_DISABLED_MESSAGE
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
@@ -22,12 +23,18 @@ from moonmind.schemas.jules_models import (
     JulesSendMessageRequest,
 )
 from moonmind.security import scan_outbound_text
+from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
 from moonmind.workflows.adapters.jules_client import JulesClient
 
 logger = logging.getLogger(__name__)
 
 _JULES_FALLBACK_ANSWER = "Proceed with your recommendation."
+
+
+def _blocked_message_error(surface: str, diagnostics: list[str]) -> str:
+    joined = "; ".join(diagnostics) if diagnostics else surface
+    return f"Blocked outbound message send: {joined}"
 
 def _build_client() -> JulesClient:
     """Build a ``JulesClient`` from environment config.
@@ -61,6 +68,28 @@ def _build_adapter() -> JulesAgentAdapter:
     jules_key = os.environ.get("JULES_API_KEY", "").strip()
     client = JulesClient(base_url=jules_url, api_key=jules_key)
     return JulesAgentAdapter(client_factory=lambda: client)
+
+
+def _scan_jules_message_before_send(prompt: str, *, surface: str) -> None:
+    result = scan_outbound_text(
+        prompt,
+        location=surface,
+        settings=settings,
+    )
+    if result.allowed:
+        return
+    diagnostics = "; ".join(result.sanitized_diagnostics) or (
+        f"Blocked outbound content at {surface}"
+    )
+    logger.warning(
+        "Blocked Jules send-message attempt at %s: %s",
+        surface,
+        diagnostics,
+    )
+    raise RuntimeError(
+        f"Outbound message blocked by high security scan: {diagnostics}"
+    )
+
 
 async def _generate_llm_answer(prompt: str) -> str:
     """Dispatch a prompt to an LLM and return the generated answer.
@@ -156,18 +185,10 @@ async def jules_send_message_activity(payload: dict) -> AgentRunStatus:
             f"Invalid payload for jules_send_message_activity: {exc}"
         ) from exc
 
-    scan_result = scan_outbound_text(
+    _scan_jules_message_before_send(
         validated.prompt,
-        location="jules.send_message.prompt",
+        surface="jules.send_message.prompt",
     )
-    if not scan_result.allowed:
-        diagnostics = "; ".join(scan_result.sanitized_diagnostics) or (
-            "Blocked outbound content at jules.send_message.prompt"
-        )
-        raise ValueError(
-            f"Outbound message blocked by high security scan: {diagnostics}"
-        )
-
     adapter = _build_adapter()
     return await adapter.send_message(
         run_id=validated.session_id,
@@ -231,17 +252,22 @@ async def jules_answer_question_activity(payload: dict) -> dict:
     answer = await _generate_llm_answer(clarification_prompt)
     answer_text = str(answer or "")
 
-    scan_result = scan_outbound_text(
-        answer_text,
-        location="jules.answer_question.prompt",
-    )
-    if not scan_result.allowed:
-        diagnostics = "; ".join(scan_result.sanitized_diagnostics) or (
-            "Blocked outbound content at jules.answer_question.prompt"
-        )
-        return {"answered": False, "answer": "", "error": diagnostics}
-
     # Send the generated answer back to Jules
+    scan = scan_outbound_text(
+        answer_text,
+        location="jules.answer_question.answer",
+        settings=settings,
+    )
+    if not scan.allowed:
+        return {
+            "answered": False,
+            "answer": redact_sensitive_text(answer_text),
+            "error": _blocked_message_error(
+                "jules.answer_question.answer",
+                scan.sanitized_diagnostics,
+            ),
+        }
+
     client = _build_client()
     try:
         await client.send_message(
@@ -257,7 +283,11 @@ async def jules_answer_question_activity(payload: dict) -> dict:
             session_id, exc,
             exc_info=True,
         )
-        return {"answered": False, "answer": answer, "error": str(exc)}
+        return {
+            "answered": False,
+            "answer": redact_sensitive_text(answer_text),
+            "error": redact_sensitive_text(str(exc)),
+        }
     finally:
         await client.aclose()
 

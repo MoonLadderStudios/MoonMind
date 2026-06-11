@@ -192,7 +192,7 @@ for attempt in range(1, 61):
 PY
 }
 
-PROPOSALS_ENABLED_RAW="${MOONMIND_ENABLE_TASK_PROPOSALS:-${ENABLE_TASK_PROPOSALS:-true}}"
+PROPOSALS_ENABLED_RAW="${MOONMIND_ENABLE_PROPOSALS:-true}"
 ROTATE_TOKEN_FOR_PROPOSALS_RAW="${MOONMIND_WORKER_ROTATE_TOKEN_FOR_PROPOSALS:-false}"
 if is_truthy "$PROPOSALS_ENABLED_RAW"; then
   PROPOSALS_ENABLED="true"
@@ -206,7 +206,7 @@ else
 fi
 CAPABILITIES_CSV="$(normalize_csv "$CAPABILITIES_RAW")"
 if [[ "$PROPOSALS_ENABLED" == "true" ]] && [[ ",$CAPABILITIES_CSV," != *",proposals_write,"* ]]; then
-  log "MOONMIND_ENABLE_TASK_PROPOSALS is enabled; adding proposals_write to MOONMIND_WORKER_CAPABILITIES for proposal support."
+  log "MOONMIND_ENABLE_PROPOSALS is enabled; adding proposals_write to MOONMIND_WORKER_CAPABILITIES for proposal support."
   CAPABILITIES_RAW="${CAPABILITIES_RAW:+$CAPABILITIES_RAW,}proposals_write"
   CAPABILITIES_CSV="$(normalize_csv "$CAPABILITIES_RAW")"
 fi

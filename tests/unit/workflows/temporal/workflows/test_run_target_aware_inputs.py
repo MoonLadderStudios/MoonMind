@@ -13,7 +13,7 @@ from moonmind.memory.procedural import (
     FixPattern,
     extract_error_signature,
 )
-from moonmind.workflows.tasks.prepared_context import build_memory_manifest
+from moonmind.workflows.executions.prepared_context import build_memory_manifest
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
 

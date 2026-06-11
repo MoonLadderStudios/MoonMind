@@ -109,7 +109,7 @@ Settings Provider Profile row
 ```
 
 The terminal is for credential enrollment and repair only. It is not the normal
-task execution surface for Claude runs.
+workflow execution surface for Claude runs.
 
 ### 3.4 Claude Sign-In Ceremony
 
@@ -235,7 +235,7 @@ new runs can select the updated profile.
 
 ## 7. Runtime Launch Behavior
 
-At Claude task launch, MoonMind resolves the selected provider profile and
+At Claude workflow launch, MoonMind resolves the selected provider profile and
 materializes the OAuth home into the runtime container according to the
 provider-profile materialization contract:
 
@@ -275,7 +275,7 @@ the browser terminal.
   secret-like values.
 - Provider profile rows store refs and metadata only, never credential file
   contents.
-- OAuth auth volumes are credential stores, not task workspaces or audit
+- OAuth auth volumes are credential stores, not workflow workspaces or audit
   artifacts.
 
 ## 10. Related Documents

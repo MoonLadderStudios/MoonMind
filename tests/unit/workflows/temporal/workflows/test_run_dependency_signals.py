@@ -17,7 +17,7 @@ from temporalio.service import RPCError
 from temporalio import workflow
 from moonmind.workflows.temporal.workflows.run import (
     DEPENDENCY_GATE_PATCH,
-    MoonMindRunWorkflow,
+    MoonMindUserWorkflow,
 )
 
 # ---------------------------------------------------------------------------
@@ -42,7 +42,7 @@ async def fake_execute_activity(activity_name, *args, **kwargs):
 def mock_run_environment(monkeypatch):
     """Provide a time-skipping environment with workflow stubs."""
     monkeypatch.setattr(
-        MoonMindRunWorkflow, "_trusted_owner_metadata",
+        MoonMindUserWorkflow, "_trusted_owner_metadata",
         lambda self: ("user", "user-1"),
     )
     monkeypatch.setattr(workflow, "execute_activity", fake_execute_activity)
@@ -56,10 +56,10 @@ def mock_run_environment(monkeypatch):
         pass
 
     monkeypatch.setattr(
-        MoonMindRunWorkflow, "_run_planning_stage", fake_planning_stage
+        MoonMindUserWorkflow, "_run_planning_stage", fake_planning_stage
     )
     monkeypatch.setattr(
-        MoonMindRunWorkflow, "_run_execution_stage", fake_execution_stage
+        MoonMindUserWorkflow, "_run_execution_stage", fake_execution_stage
     )
 
 def _make_dependency_resolved_payload(
@@ -99,14 +99,14 @@ def _start_dep_workflow(
     wf_id: str,
     depends_on: list[str] | None = None,
 ):
-    """Helper: start a MoonMind.Run workflow on the given environment."""
+    """Helper: start a MoonMind.UserWorkflow workflow on the given environment."""
     initial_params: dict = {}
     if depends_on:
         initial_params["task"] = {"dependsOn": depends_on}
     return env.client.start_workflow(
-        MoonMindRunWorkflow.run,
+        MoonMindUserWorkflow.run,
         {
-            "workflow_type": "MoonMind.Run",
+            "workflow_type": "MoonMind.UserWorkflow",
             "initial_parameters": initial_params,
             "plan_artifact_ref": "ref-123",
         },
@@ -140,14 +140,14 @@ async def test_run_workflow_unblocked_by_real_dependency_resolved_signal(
         lambda patch_id: patch_id == DEPENDENCY_GATE_PATCH,
     )
     monkeypatch.setattr(
-        MoonMindRunWorkflow, "_reconcile_dependencies", fake_reconcile
+        MoonMindUserWorkflow, "_reconcile_dependencies", fake_reconcile
     )
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
             env.client,
             task_queue="test-signal-unblock",
-            workflows=[MoonMindRunWorkflow],
+            workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await _start_dep_workflow(
@@ -197,14 +197,14 @@ async def test_run_workflow_duplicate_signal_is_idempotent(
     )
     monkeypatch.setattr(workflow, "upsert_memo", lambda memo: memo_updates.append(memo))
     monkeypatch.setattr(
-        MoonMindRunWorkflow, "_reconcile_dependencies", fake_reconcile
+        MoonMindUserWorkflow, "_reconcile_dependencies", fake_reconcile
     )
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
             env.client,
             task_queue="test-signal-dup",
-            workflows=[MoonMindRunWorkflow],
+            workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await _start_dep_workflow(
@@ -271,14 +271,14 @@ async def test_run_workflow_ignores_undeclared_dependency_signal(
         lambda patch_id: patch_id == DEPENDENCY_GATE_PATCH,
     )
     monkeypatch.setattr(
-        MoonMindRunWorkflow, "_reconcile_dependencies", fake_reconcile
+        MoonMindUserWorkflow, "_reconcile_dependencies", fake_reconcile
     )
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
             env.client,
             task_queue="test-signal-stale",
-            workflows=[MoonMindRunWorkflow],
+            workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await _start_dep_workflow(
@@ -331,14 +331,14 @@ async def test_run_workflow_fails_when_prerequisite_is_canceled(
         lambda patch_id: patch_id == DEPENDENCY_GATE_PATCH,
     )
     monkeypatch.setattr(
-        MoonMindRunWorkflow, "_reconcile_dependencies", fake_reconcile
+        MoonMindUserWorkflow, "_reconcile_dependencies", fake_reconcile
     )
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
             env.client,
             task_queue="test-dep-canceled",
-            workflows=[MoonMindRunWorkflow],
+            workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await _start_dep_workflow(
@@ -383,14 +383,14 @@ async def test_run_workflow_fails_when_prerequisite_is_terminated(
         lambda patch_id: patch_id == DEPENDENCY_GATE_PATCH,
     )
     monkeypatch.setattr(
-        MoonMindRunWorkflow, "_reconcile_dependencies", fake_reconcile
+        MoonMindUserWorkflow, "_reconcile_dependencies", fake_reconcile
     )
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
             env.client,
             task_queue="test-dep-terminated",
-            workflows=[MoonMindRunWorkflow],
+            workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await _start_dep_workflow(
@@ -434,14 +434,14 @@ async def test_run_workflow_fails_when_prerequisite_timed_out(
         lambda patch_id: patch_id == DEPENDENCY_GATE_PATCH,
     )
     monkeypatch.setattr(
-        MoonMindRunWorkflow, "_reconcile_dependencies", fake_reconcile
+        MoonMindUserWorkflow, "_reconcile_dependencies", fake_reconcile
     )
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
             env.client,
             task_queue="test-dep-timedout",
-            workflows=[MoonMindRunWorkflow],
+            workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await _start_dep_workflow(
@@ -485,14 +485,14 @@ async def test_run_workflow_chained_dependencies(
         lambda patch_id: patch_id == DEPENDENCY_GATE_PATCH,
     )
     monkeypatch.setattr(
-        MoonMindRunWorkflow, "_reconcile_dependencies", fake_reconcile
+        MoonMindUserWorkflow, "_reconcile_dependencies", fake_reconcile
     )
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
             env.client,
             task_queue="test-chain",
-            workflows=[MoonMindRunWorkflow],
+            workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             # Start B (depends on A) and C (depends on B).
@@ -547,14 +547,14 @@ async def test_run_workflow_multi_dep_fan_in_via_signals(
         lambda patch_id: patch_id == DEPENDENCY_GATE_PATCH,
     )
     monkeypatch.setattr(
-        MoonMindRunWorkflow, "_reconcile_dependencies", fake_reconcile
+        MoonMindUserWorkflow, "_reconcile_dependencies", fake_reconcile
     )
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
             env.client,
             task_queue="test-fanin",
-            workflows=[MoonMindRunWorkflow],
+            workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await _start_dep_workflow(
@@ -602,14 +602,14 @@ async def test_run_workflow_pause_then_prerequisite_failure(
         lambda patch_id: patch_id == DEPENDENCY_GATE_PATCH,
     )
     monkeypatch.setattr(
-        MoonMindRunWorkflow, "_reconcile_dependencies", fake_reconcile
+        MoonMindUserWorkflow, "_reconcile_dependencies", fake_reconcile
     )
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
             env.client,
             task_queue="test-pause-fail",
-            workflows=[MoonMindRunWorkflow],
+            workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await _start_dep_workflow(
@@ -662,14 +662,14 @@ async def test_run_workflow_pause_then_prerequisite_success(
         lambda patch_id: patch_id == DEPENDENCY_GATE_PATCH,
     )
     monkeypatch.setattr(
-        MoonMindRunWorkflow, "_reconcile_dependencies", fake_reconcile
+        MoonMindUserWorkflow, "_reconcile_dependencies", fake_reconcile
     )
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
             env.client,
             task_queue="test-pause-ok",
-            workflows=[MoonMindRunWorkflow],
+            workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await _start_dep_workflow(

@@ -47,15 +47,28 @@ logger = logging.getLogger(__name__)
 
 def _scan_chat_messages_before_send(messages: List, *, surface: str) -> None:
     for index, msg in enumerate(messages):
-        content = getattr(msg, "content", "")
-        result = scan_outbound_text(
+        if isinstance(msg, dict):
+            role = msg.get("role", "message")
+            content = msg.get("content", "")
+        else:
+            role = getattr(msg, "role", "message")
+            content = getattr(msg, "content", "")
+        scan = scan_outbound_text(
             str(content or ""),
             location=f"{surface}.messages[{index}].content",
+            settings=settings,
         )
-        if result.allowed:
+        if scan.allowed:
             continue
-        diagnostics = "; ".join(result.sanitized_diagnostics) or (
+        diagnostics = "; ".join(scan.sanitized_diagnostics) or (
             f"Blocked outbound content at {surface}.messages[{index}].content"
+        )
+        logger.warning(
+            "Blocked chat send-message attempt at %s.messages[%s].content for role %s: %s",
+            surface,
+            index,
+            role,
+            diagnostics,
         )
         raise HTTPException(
             status_code=422,
@@ -577,8 +590,6 @@ async def create_response(
                 detail="OpenAI provider is disabled on the server.",
             )
         openai_model_name = get_openai_model(model_to_use)
-        _scan_chat_messages_before_send(processed_messages, surface="responses.openai")
-        client = AsyncOpenAI(api_key=user_api_key)
         openai_input = [
             {"role": msg.role, "content": msg.content}
             for msg in processed_messages
@@ -588,6 +599,10 @@ async def create_response(
             (msg.content for msg in processed_messages if msg.role == "system"),
             None,
         )
+        _scan_chat_messages_before_send(
+            processed_messages, surface="chat.openai.responses"
+        )
+        client = AsyncOpenAI(api_key=user_api_key)
         try:
             raw_response = await client.responses.create(
                 model=openai_model_name,
@@ -858,6 +873,7 @@ async def handle_anthropic_request(
         )
 
     logger.info(f"Routing to Anthropic for model: {model_to_use}")
+    _scan_chat_messages_before_send(messages, surface="chat.anthropic")
 
     # The AnthropicFactory.create_anthropic_model currently uses global settings.
     # We need to pass the api_key to it.
@@ -887,9 +903,6 @@ async def handle_anthropic_request(
             status_code=400,
             detail="No user or assistant messages provided for Anthropic.",
         )
-
-    _scan_chat_messages_before_send(messages, surface="chat.anthropic")
-
     try:
         # Note: Anthropic's SDK might use `messages` and `system` parameters differently
         # depending on the specific SDK version and method used.

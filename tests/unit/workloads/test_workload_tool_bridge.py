@@ -26,7 +26,7 @@ def _profile_payload(profile_id: str = "local-python") -> dict[str, object]:
         "id": profile_id,
         "kind": "one_shot",
         "image": "python:3.12-slim",
-        "workdirTemplate": "/work/agent_jobs/${task_run_id}/repo",
+        "workdirTemplate": "/work/agent_jobs/${agent_run_id}/repo",
         "requiredMounts": [
             {
                 "type": "volume",
@@ -53,7 +53,7 @@ def _helper_profile_payload(profile_id: str = "redis-helper") -> dict[str, objec
         "id": profile_id,
         "kind": "bounded_service",
         "image": "redis:7.2-alpine",
-        "workdirTemplate": "/work/agent_jobs/${task_run_id}/repo",
+        "workdirTemplate": "/work/agent_jobs/${agent_run_id}/repo",
         "requiredMounts": [
             {
                 "type": "volume",
@@ -114,7 +114,7 @@ class _FakeLauncher:
             metadata={
                 "containerName": validated.container_name,
                 "workload": {
-                    "taskRunId": validated.request.task_run_id,
+                    "agentRunId": validated.request.agent_run_id,
                     "stepId": validated.request.step_id,
                     "attempt": validated.request.attempt,
                     "toolName": validated.request.tool_name,
@@ -315,7 +315,7 @@ async def test_container_run_workload_handler_validates_and_calls_launcher() -> 
     assert result.status == "COMPLETED"
     assert launcher.validated is not None
     assert launcher.validated.request.tool_name == "container.run_workload"
-    assert launcher.validated.request.task_run_id == "task-1"
+    assert launcher.validated.request.agent_run_id == "task-1"
     assert launcher.validated.request.step_id == "step-test"
     assert launcher.validated.request.attempt == 2
     assert launcher.validated.request.session_id == "session-1"
@@ -498,7 +498,7 @@ async def test_container_run_workload_handler_accepts_explicit_ids_without_conte
     result = await handler(
         {
             "profileId": "local-python",
-            "taskRunId": "task-explicit",
+            "agentRunId": "task-explicit",
             "stepId": "step-explicit",
             "attempt": 3,
             "repoDir": "/work/agent_jobs/task-explicit/repo",
@@ -510,7 +510,7 @@ async def test_container_run_workload_handler_accepts_explicit_ids_without_conte
 
     assert result.status == "COMPLETED"
     assert launcher.validated is not None
-    assert launcher.validated.request.task_run_id == "task-explicit"
+    assert launcher.validated.request.agent_run_id == "task-explicit"
     assert launcher.validated.request.step_id == "step-explicit"
     assert launcher.validated.request.attempt == 3
 

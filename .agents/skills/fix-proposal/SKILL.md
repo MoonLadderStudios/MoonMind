@@ -1,13 +1,13 @@
 ---
 name: fix-proposal
-description: Generate one high-value follow-up task proposal when MoonMind execution quality issues are detected in a run.
+description: Generate one high-value follow-up workflow proposal when MoonMind execution quality issues are detected in a run.
 ---
 
 # Fix Proposal Skill
 
 ## Purpose
 
-Produce a targeted follow-up task proposal for MoonMind/system quality problems observed during a task run.
+Produce a targeted follow-up workflow proposal for MoonMind/system quality problems observed during a task run.
 
 ## Inputs
 
@@ -19,7 +19,7 @@ Produce a targeted follow-up task proposal for MoonMind/system quality problems 
 - `inputs.taskError`
 - `inputs.taskContextPath` (usually `../artifacts/task_context.json`)
 - `inputs.artifactsPath` (usually `../artifacts`)
-- `inputs.proposalOutputPath` (usually `../artifacts/task_proposals.json`)
+- `inputs.proposalOutputPath` (usually `../artifacts/workflow_proposals.json`)
 
 ## Detection Focus
 

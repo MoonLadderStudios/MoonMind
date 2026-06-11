@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -98,6 +99,218 @@ async def test_execution_notify_completion_skips_when_disabled(monkeypatch) -> N
     assert result == {"status": "skipped", "reason": "disabled"}
 
 
+async def test_execution_notify_completion_scans_emitted_event_not_internal_payload(
+    monkeypatch,
+) -> None:
+    post_calls: list[dict[str, Any]] = []
+    email_calls: list[dict[str, Any]] = []
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+    class _Client:
+        def __init__(self, *, timeout: int) -> None:
+            self.timeout = timeout
+
+        async def __aenter__(self) -> "_Client":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def post(
+            self,
+            url: str,
+            *,
+            json: dict[str, Any],
+            headers: dict[str, str],
+        ) -> _Response:
+            post_calls.append({"url": url, "json": json, "headers": headers})
+            return _Response()
+
+    def fake_send_email(*_args: Any, **kwargs: Any) -> None:
+        email_calls.append(kwargs)
+
+    monkeypatch.setattr(
+        activity_runtime_module.settings.security,
+        "high_security_mode",
+        True,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "webhook_url",
+        "https://hooks.example.test/notify",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "authorization",
+        None,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "email_to",
+        "ops@example.test",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "email_from",
+        "moonmind@example.test",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_host",
+        "smtp.example.test",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_port",
+        2525,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_username",
+        None,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_password",
+        None,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_use_tls",
+        False,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_use_ssl",
+        False,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "timeout_seconds",
+        5,
+    )
+    monkeypatch.setattr(activity_runtime_module.httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_send_execution_notification_email",
+        fake_send_email,
+    )
+
+    activities = TemporalAgentRuntimeActivities()
+    result = await activities.execution_notify_completion(
+        {
+            "workflowId": "wf-secret",
+            "status": "completed",
+            "result": {
+                "summary": "safe completion",
+                "metadata": {
+                    "agentRunId": "agent-run-1",
+                    "internalDiagnostics": "token=blocked-secret-value",
+                },
+            },
+        }
+    )
+
+    assert result["status"] == "sent"
+    assert "blocked-secret-value" not in json.dumps(result)
+    assert post_calls[0]["json"]["summary"] == "safe completion"
+    assert post_calls[0]["json"]["agentRunId"] == "agent-run-1"
+    assert "internalDiagnostics" not in post_calls[0]["json"]
+    assert email_calls
+
+
+async def test_execution_notify_completion_allows_clean_payload_with_high_security(
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+    class _Client:
+        def __init__(self, *, timeout: int) -> None:
+            self.timeout = timeout
+
+        async def __aenter__(self) -> "_Client":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def post(
+            self,
+            url: str,
+            *,
+            json: dict[str, Any],
+            headers: dict[str, str],
+        ) -> _Response:
+            calls.append({"url": url, "json": json, "headers": headers})
+            return _Response()
+
+    monkeypatch.setattr(
+        activity_runtime_module.settings.security,
+        "high_security_mode",
+        True,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "webhook_url",
+        "https://hooks.example.test/notify",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "authorization",
+        None,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "email_to",
+        "",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "email_from",
+        "",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_host",
+        "",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "timeout_seconds",
+        5,
+    )
+    monkeypatch.setattr(activity_runtime_module.httpx, "AsyncClient", _Client)
+
+    activities = TemporalAgentRuntimeActivities()
+    result = await activities.execution_notify_completion(
+        {
+            "workflowId": "wf-clean",
+            "status": "completed",
+            "result": {"summary": "clean completion"},
+        }
+    )
+
+    assert result == {"status": "sent", "target": "https://hooks.example.test/notify"}
+    assert calls[0]["json"]["summary"] == "clean completion"
+
+
 async def test_execution_notify_completion_posts_sanitized_payload(monkeypatch) -> None:
     calls: list[dict[str, Any]] = []
 
@@ -173,7 +386,7 @@ async def test_execution_notify_completion_posts_sanitized_payload(monkeypatch) 
             "result": {
                 "summary": "token=secret",
                 "failureClass": None,
-                "metadata": {"taskRunId": "task-1"},
+                "metadata": {"agentRunId": "task-1"},
             },
         }
     )
@@ -185,7 +398,270 @@ async def test_execution_notify_completion_posts_sanitized_payload(monkeypatch) 
     assert calls[0]["headers"]["Authorization"] == "Bearer secret"
     assert calls[0]["json"]["event"] == "moonmind.execution.completed"
     assert calls[0]["json"]["summary"] == "token=[REDACTED]"
-    assert calls[0]["json"]["taskRunId"] == "task-1"
+    assert calls[0]["json"]["agentRunId"] == "task-1"
+
+
+async def test_execution_notify_completion_blocks_secret_before_webhook(
+    monkeypatch,
+) -> None:
+    raw_secret = "unit-test-execution-notification-secret"
+
+    class _FailingClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            raise AssertionError("webhook sender must not be called")
+
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "webhook_url",
+        "https://hooks.example.test/notify?token=secret",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "authorization",
+        "Bearer secret",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "email_to",
+        None,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "email_from",
+        None,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_host",
+        None,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.security,
+        "high_security_mode",
+        True,
+    )
+    monkeypatch.setattr(activity_runtime_module.httpx, "AsyncClient", _FailingClient)
+
+    activities = TemporalAgentRuntimeActivities()
+    result = await activities.execution_notify_completion(
+        {
+            "workflowId": "wf-1",
+            "runId": "run-1",
+            "agentId": "codex_cli",
+            "agentKind": "managed",
+            "status": "failed",
+            "result": {
+                "summary": f"Investigate password={raw_secret}",
+                "failureClass": "permanent",
+                "metadata": {"agentRunId": "agent-run-1"},
+            },
+        }
+    )
+
+    assert result["status"] == "blocked"
+    assert "execution.notification.webhook.payload" in result["reason"]
+    assert raw_secret not in result["reason"]
+    assert result["target"] == "https://hooks.example.test/notify"
+
+
+async def test_execution_notify_completion_scans_unredacted_webhook_payload(
+    monkeypatch,
+) -> None:
+    raw_secret = "unit-test-unredacted-scan-secret"
+
+    class _FailingClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            raise AssertionError("webhook sender must not be called")
+
+    def mutating_redact(payload: Any) -> Any:
+        if isinstance(payload, dict):
+            result = payload.get("result")
+            if isinstance(result, dict):
+                result["summary"] = "summary=[REDACTED]"
+        return payload
+
+    def fake_scan(event: Any, *, surface: str) -> str | None:
+        assert surface == "execution.notification.webhook.payload"
+        if raw_secret in json.dumps(event, sort_keys=True, default=str):
+            return f"Blocked outbound content at {surface}"
+        return None
+
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "webhook_url",
+        "https://hooks.example.test/notify",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "email_to",
+        None,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "email_from",
+        None,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_host",
+        None,
+    )
+    monkeypatch.setattr(activity_runtime_module.httpx, "AsyncClient", _FailingClient)
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "redact_sensitive_payload",
+        mutating_redact,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_scan_execution_notification_before_send",
+        fake_scan,
+    )
+
+    activities = TemporalAgentRuntimeActivities()
+    result = await activities.execution_notify_completion(
+        {
+            "workflowId": "wf-1",
+            "runId": "run-1",
+            "agentId": "codex_cli",
+            "agentKind": "managed",
+            "status": "failed",
+            "result": {
+                "summary": f"Investigate password={raw_secret}",
+                "failureClass": "permanent",
+                "metadata": {"agentRunId": "agent-run-1"},
+            },
+        }
+    )
+
+    assert result == {
+        "status": "blocked",
+        "reason": "Blocked outbound content at execution.notification.webhook.payload",
+        "target": "https://hooks.example.test/notify",
+    }
+
+
+async def test_execution_notify_completion_blocks_secret_before_email(
+    monkeypatch,
+) -> None:
+    raw_secret = "unit-test-execution-email-secret"
+
+    class _FailingSMTP:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            raise AssertionError("SMTP sender must not be called")
+
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "webhook_url",
+        None,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "email_to",
+        "ops@example.test",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "email_from",
+        "moonmind@example.test",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_host",
+        "smtp.example.test",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.security,
+        "high_security_mode",
+        True,
+    )
+    monkeypatch.setattr(activity_runtime_module.smtplib, "SMTP", _FailingSMTP)
+
+    activities = TemporalAgentRuntimeActivities()
+    result = await activities.execution_notify_completion(
+        {
+            "workflowId": "wf-email",
+            "runId": "run-email",
+            "agentId": "codex_cli",
+            "agentKind": "managed",
+            "status": "failed",
+            "result": {
+                "summary": f"Investigate api_key={raw_secret}",
+                "failureClass": "permanent",
+            },
+        }
+    )
+
+    assert result["status"] == "blocked"
+    assert "execution.notification.email.payload" in result["reason"]
+    assert raw_secret not in result["reason"]
+    assert result["target"] == "email:1 recipient"
+
+
+async def test_execution_notify_completion_treats_fallback_block_as_blocked(
+    monkeypatch,
+) -> None:
+    class _FailingClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            raise AssertionError("webhook sender must not be called")
+
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "webhook_url",
+        "https://hooks.example.test/notify",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "email_to",
+        None,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "email_from",
+        None,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.execution_notifications,
+        "smtp_host",
+        None,
+    )
+    monkeypatch.setattr(activity_runtime_module.httpx, "AsyncClient", _FailingClient)
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_scan_execution_notification_before_send",
+        lambda event, *, surface: f"Blocked outbound content at {surface}",
+    )
+
+    activities = TemporalAgentRuntimeActivities()
+    result = await activities.execution_notify_completion(
+        {"workflowId": "wf-1", "status": "failed"}
+    )
+
+    assert result == {
+        "status": "blocked",
+        "reason": "Blocked outbound content at execution.notification.webhook.payload",
+        "target": "https://hooks.example.test/notify",
+    }
 
 async def test_execution_notify_completion_blocks_webhook_before_send(
     monkeypatch,
@@ -246,8 +722,8 @@ async def test_execution_notify_completion_blocks_webhook_before_send(
         }
     )
 
-    assert result["status"] == "failed"
-    assert "execution.notification.webhook.json" in result["reason"]
+    assert result["status"] == "blocked"
+    assert "execution.notification.webhook.payload" in result["reason"]
     assert calls == []
 
 
@@ -353,7 +829,7 @@ async def test_execution_notify_completion_sends_email_channel(monkeypatch) -> N
             "result": {
                 "summary": "password=secret",
                 "failureClass": "permanent",
-                "metadata": {"taskRunId": "task-email"},
+                "metadata": {"agentRunId": "task-email"},
             },
         }
     )
@@ -428,8 +904,8 @@ async def test_execution_notify_completion_blocks_email_before_smtp(
         }
     )
 
-    assert result["status"] == "failed"
-    assert "execution.notification.email.body" in result["reason"]
+    assert result["status"] == "blocked"
+    assert "execution.notification.email.payload" in result["reason"]
     assert calls == []
 
 
@@ -688,7 +1164,7 @@ async def test_publish_artifacts_notifies_terminal_result(monkeypatch) -> None:
                 "agentId": "codex_cli",
                 "agentKind": "managed",
                 "status": "completed",
-                "taskRunId": "task-1",
+                "agentRunId": "task-1",
             },
         )
     )
@@ -733,7 +1209,7 @@ def _session_record(session_id: str, *, status: str) -> dict[str, Any]:
     return CodexManagedSessionRecord(
         sessionId=session_id,
         sessionEpoch=1,
-        taskRunId="wf-run-1",
+        agentRunId="wf-run-1",
         containerId=f"container-{session_id}",
         threadId=f"thread-{session_id}",
         runtimeId="codex_cli",
@@ -1023,7 +1499,7 @@ async def test_fetch_result_exposes_task_run_and_runtime_artifact_metadata(
     )
 
     assert isinstance(result, AgentRunResult)
-    assert result.metadata["taskRunId"] == "550e8400-e29b-41d4-a716-446655440000"
+    assert result.metadata["agentRunId"] == "550e8400-e29b-41d4-a716-446655440000"
     assert result.metadata["stdoutArtifactRef"] == "art_stdout_1"
     assert result.metadata["stderrArtifactRef"] == "art_stderr_1"
     assert result.metadata["mergedLogArtifactRef"] == "art_merged_1"
@@ -1042,7 +1518,7 @@ async def test_launch_session_requires_session_controller() -> None:
     ):
         await activities.agent_runtime_launch_session(
             {
-                "taskRunId": "task-1",
+                "agentRunId": "task-1",
                 "sessionId": "sess-1",
                 "threadId": "thread-1",
                 "workspacePath": "/work/task/repo",
@@ -1071,7 +1547,7 @@ async def test_launch_session_delegates_to_remote_session_controller() -> None:
 
     result = await activities.agent_runtime_launch_session(
         {
-            "taskRunId": "task-1",
+            "agentRunId": "task-1",
             "sessionId": "sess-1",
             "threadId": "thread-1",
             "workspacePath": "/work/task/repo",
@@ -1122,7 +1598,7 @@ async def test_launch_session_heartbeats_while_waiting_for_remote_session_contro
 
     result = await activities.agent_runtime_launch_session(
         {
-            "taskRunId": "task-1",
+            "agentRunId": "task-1",
             "sessionId": "sess-1",
             "threadId": "thread-1",
             "workspacePath": "/work/task/repo",
@@ -1139,7 +1615,7 @@ async def test_launch_session_heartbeats_while_waiting_for_remote_session_contro
     assert all(
         heartbeat == {
             "activityType": "agent_runtime.launch_session",
-            "taskRunId": "task-1",
+            "agentRunId": "task-1",
             "runtimeFamily": "codex",
             "sessionId": "sess-1",
             "threadId": "thread-1",
@@ -1168,7 +1644,7 @@ async def test_launch_session_uses_github_descriptor_from_activity_environment(
 
     await activities.agent_runtime_launch_session(
         {
-            "taskRunId": "task-1",
+            "agentRunId": "task-1",
             "sessionId": "sess-1",
             "threadId": "thread-1",
             "workspacePath": "/work/task/repo",
@@ -1208,7 +1684,7 @@ async def test_launch_session_preserves_request_scoped_github_token_for_controll
 
     await activities.agent_runtime_launch_session(
         {
-            "taskRunId": "task-1",
+            "agentRunId": "task-1",
             "sessionId": "sess-1",
             "threadId": "thread-1",
             "workspacePath": "/work/task/repo",
@@ -1249,7 +1725,7 @@ async def test_launch_session_injects_moonmind_url_from_activity_environment(
 
     await activities.agent_runtime_launch_session(
         {
-            "taskRunId": "task-1",
+            "agentRunId": "task-1",
             "sessionId": "sess-1",
             "threadId": "thread-1",
             "workspacePath": "/work/task/repo",
@@ -1289,7 +1765,7 @@ async def test_launch_session_uses_github_descriptor_for_managed_secret_store(
 
     await activities.agent_runtime_launch_session(
         {
-            "taskRunId": "task-1",
+            "agentRunId": "task-1",
             "sessionId": "sess-1",
             "threadId": "thread-1",
             "workspacePath": "/work/task/repo",
@@ -1336,7 +1812,7 @@ async def test_launch_session_preserves_explicit_github_secret_ref_descriptor(
 
     await activities.agent_runtime_launch_session(
         {
-            "taskRunId": "task-1",
+            "agentRunId": "task-1",
             "sessionId": "sess-1",
             "threadId": "thread-1",
             "workspacePath": "/work/task/repo",
@@ -1372,7 +1848,7 @@ async def test_launch_session_redacts_github_token_in_failure_details() -> None:
     ) as exc_info:
         await activities.agent_runtime_launch_session(
             {
-                "taskRunId": "task-1",
+                "agentRunId": "task-1",
                 "sessionId": "sess-1",
                 "threadId": "thread-1",
                 "workspacePath": "/work/task/repo",
@@ -1412,7 +1888,7 @@ async def test_launch_session_materializes_profile_into_request_environment(
     await activities.agent_runtime_launch_session(
         {
             "request": {
-                "taskRunId": "task-1",
+                "agentRunId": "task-1",
                 "sessionId": "sess-1",
                 "threadId": "thread-1",
                 "workspacePath": str(tmp_path / "task-1" / "repo"),
@@ -1483,7 +1959,7 @@ async def test_launch_session_returns_safe_auth_diagnostics_metadata(
     result = await activities.agent_runtime_launch_session(
         {
             "request": {
-                "taskRunId": "task-1",
+                "agentRunId": "task-1",
                 "sessionId": "sess-1",
                 "threadId": "thread-1",
                 "workspacePath": str(tmp_path / "task-1" / "repo"),
@@ -1545,7 +2021,7 @@ async def test_launch_session_accepts_mapping_response_before_auth_diagnostics(
     result = await activities.agent_runtime_launch_session(
         {
             "request": {
-                "taskRunId": "task-1",
+                "agentRunId": "task-1",
                 "sessionId": "sess-1",
                 "threadId": "thread-1",
                 "workspacePath": str(tmp_path / "task-1" / "repo"),
@@ -1589,7 +2065,7 @@ async def test_launch_session_failure_reports_sanitized_auth_diagnostics(
         await activities.agent_runtime_launch_session(
             {
                 "request": {
-                    "taskRunId": "task-1",
+                    "agentRunId": "task-1",
                     "sessionId": "sess-1",
                     "threadId": "thread-1",
                     "workspacePath": str(tmp_path / "task-1" / "repo"),
@@ -1633,7 +2109,7 @@ async def test_launch_session_rejects_structured_secret_ref_values(
         await activities.agent_runtime_launch_session(
             {
                 "request": {
-                    "taskRunId": "task-1",
+                    "agentRunId": "task-1",
                     "sessionId": "sess-1",
                     "threadId": "thread-1",
                     "workspacePath": str(tmp_path / "task-1" / "repo"),
@@ -1670,7 +2146,7 @@ async def test_load_session_snapshot_queries_session_workflow_via_client_boundar
         return_value=CodexManagedSessionSnapshot(
             binding=CodexManagedSessionBinding(
                 workflowId="wf-task-1:session:codex_cli",
-                taskRunId="wf-task-1",
+                agentRunId="wf-task-1",
                 sessionId="sess:wf-task-1:codex_cli",
                 sessionEpoch=1,
                 runtimeId="codex_cli",
@@ -1703,7 +2179,7 @@ async def test_load_session_snapshot_queries_session_workflow_via_client_boundar
     result = await activities.agent_runtime_load_session_snapshot(
         {
             "workflowId": "wf-task-1:session:codex_cli",
-            "taskRunId": "wf-task-1",
+            "agentRunId": "wf-task-1",
             "sessionId": "sess:wf-task-1:codex_cli",
             "sessionEpoch": 1,
             "runtimeId": "codex_cli",
@@ -1725,7 +2201,7 @@ async def test_load_session_snapshot_reuses_client_adapter_across_calls(
         return_value=CodexManagedSessionSnapshot(
             binding=CodexManagedSessionBinding(
                 workflowId="wf-task-1:session:codex_cli",
-                taskRunId="wf-task-1",
+                agentRunId="wf-task-1",
                 sessionId="sess:wf-task-1:codex_cli",
                 sessionEpoch=1,
                 runtimeId="codex_cli",
@@ -1757,7 +2233,7 @@ async def test_load_session_snapshot_reuses_client_adapter_across_calls(
     activities = TemporalAgentRuntimeActivities()
     payload = {
         "workflowId": "wf-task-1:session:codex_cli",
-        "taskRunId": "wf-task-1",
+        "agentRunId": "wf-task-1",
         "sessionId": "sess:wf-task-1:codex_cli",
         "sessionEpoch": 1,
         "runtimeId": "codex_cli",
@@ -3100,7 +3576,7 @@ async def test_agent_runtime_launch_session_temporal_boundary(
             result = await env.client.execute_workflow(
                 AgentRuntimeLaunchSessionBoundaryTest.run,
                 {
-                    "taskRunId": "task-1",
+                    "agentRunId": "task-1",
                     "sessionId": "sess-boundary",
                     "threadId": "thread-1",
                     "workspacePath": "/work/task/repo",
@@ -3617,6 +4093,48 @@ async def test_agent_runtime_prepare_turn_instructions_warns_skills_on_demand_di
 
 
 @pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_exposes_on_demand_commands_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        activity_runtime_module.settings.workflow,
+        "skills_on_demand_enabled",
+        True,
+    )
+    workspace = tmp_path / "agent_jobs" / "job-1" / "repo"
+    workspace.mkdir(parents=True)
+
+    activities = TemporalAgentRuntimeActivities()
+    result = await activities.agent_runtime_prepare_turn_instructions(
+        {
+            "request": {
+                "agentKind": "managed",
+                "agentId": "codex",
+                "correlationId": "corr-1",
+                "idempotencyKey": "idem-1",
+                "parameters": {
+                    "instructions": "Use the active skill.",
+                    "metadata": {
+                        "moonmind": {
+                            "selectedSkill": "moonspec-implement",
+                        },
+                    },
+                },
+            },
+            "workspacePath": str(workspace),
+            "includePreparedRequestMetadata": True,
+            "skipSkillMaterialization": True,
+        }
+    )
+
+    instructions = result["instructions"]
+    assert "Skills On Demand is enabled." in instructions
+    assert "moonmind.skills.query" in instructions
+    assert "moonmind.skills.request" in instructions
+
+
+@pytest.mark.asyncio
 async def test_agent_runtime_prepare_turn_instructions_fails_before_launch_when_projection_missing(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3725,6 +4243,251 @@ async def test_agent_runtime_selected_skill_projection_rejects_non_mapping_manif
             visible_path=workspace / ".agents" / "skills",
             selected_skill="pr-resolver",
             resolved_skillset=resolved_skillset,
+        )
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_selected_skill_projection_enforces_repo_source_policy(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    skill_dir = workspace / ".agents" / "skills" / "repo-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("repo skill body\n", encoding="utf-8")
+    (workspace / ".agents" / "skills" / "_manifest.json").write_text(
+        json.dumps(
+            {
+                "snapshot_id": "skillset-repo",
+                "skills": [
+                    {
+                        "name": "repo-skill",
+                        "version": "1.0.0",
+                        "source_kind": "repo",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    resolved_skillset = ResolvedSkillSet(
+        snapshot_id="skillset-repo",
+        resolved_at=datetime.now(UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="repo-skill",
+                version="1.0.0",
+                content_ref="art-repo-skill-body",
+                content_digest="sha256:test",
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.REPO,
+                    source_path=".agents/skills/repo-skill",
+                ),
+            )
+        ],
+        policy_summary={
+            "repo_skills_allowed": False,
+            "local_skills_allowed": True,
+        },
+    )
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="repo skill source for 'repo-skill' is disabled by skill source policy",
+    ):
+        TemporalAgentRuntimeActivities._validate_selected_skill_projection(
+            visible_path=workspace / ".agents" / "skills",
+            selected_skill="repo-skill",
+            resolved_skillset=resolved_skillset,
+        )
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_selected_skill_projection_enforces_local_source_policy(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    skill_dir = workspace / ".agents" / "skills" / "local-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("local skill body\n", encoding="utf-8")
+    (workspace / ".agents" / "skills" / "_manifest.json").write_text(
+        json.dumps(
+            {
+                "snapshot_id": "skillset-local",
+                "skills": [
+                    {
+                        "name": "local-skill",
+                        "version": "1.0.0",
+                        "source_kind": "local",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    resolved_skillset = ResolvedSkillSet(
+        snapshot_id="skillset-local",
+        resolved_at=datetime.now(UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="local-skill",
+                version="1.0.0",
+                content_ref="art-local-skill-body",
+                content_digest="sha256:test",
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.LOCAL,
+                    source_path=".agents/skills/local/local-skill",
+                ),
+            )
+        ],
+        policy_summary={
+            "repo_skills_allowed": True,
+            "local_skills_allowed": False,
+        },
+    )
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="local skill source for 'local-skill' is disabled by skill source policy",
+    ):
+        TemporalAgentRuntimeActivities._validate_selected_skill_projection(
+            visible_path=workspace / ".agents" / "skills",
+            selected_skill="local-skill",
+            resolved_skillset=resolved_skillset,
+        )
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_selected_skill_projection_rejects_repo_skill_with_missing_policy_summary(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    skill_dir = workspace / ".agents" / "skills" / "repo-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("repo skill body\n", encoding="utf-8")
+    (workspace / ".agents" / "skills" / "_manifest.json").write_text(
+        json.dumps(
+            {
+                "snapshot_id": "skillset-repo",
+                "skills": [
+                    {
+                        "name": "repo-skill",
+                        "version": "1.0.0",
+                        "source_kind": "repo",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    resolved_skillset = ResolvedSkillSet(
+        snapshot_id="skillset-repo",
+        resolved_at=datetime.now(UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="repo-skill",
+                version="1.0.0",
+                content_ref="art-repo-skill-body",
+                content_digest="sha256:test",
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.REPO,
+                    source_path=".agents/skills/repo-skill",
+                ),
+            )
+        ],
+    )
+    resolved_skillset.policy_summary = None  # type: ignore[assignment]
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="repo skill source for 'repo-skill' is disabled by skill source policy",
+    ):
+        TemporalAgentRuntimeActivities._validate_selected_skill_projection(
+            visible_path=workspace / ".agents" / "skills",
+            selected_skill="repo-skill",
+            resolved_skillset=resolved_skillset,
+        )
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_enforces_dependency_source_policy_before_materialization(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    managed_root = tmp_path / "agent_jobs"
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(managed_root))
+    workspace = managed_root / "job-1" / "repo"
+    workspace.mkdir(parents=True)
+    resolved_skillset = ResolvedSkillSet(
+        snapshot_id="skillset-with-repo-dependency",
+        resolved_at=datetime.now(UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="pr-resolver",
+                version="1.0.0",
+                content_ref="art-pr-resolver-body",
+                content_digest="sha256:test",
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.BUILT_IN
+                ),
+            ),
+            ResolvedSkillEntry(
+                skill_name="repo-helper",
+                version="1.0.0",
+                content_ref="art-repo-helper-body",
+                content_digest="sha256:test",
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.REPO,
+                    source_path=".agents/skills/repo-helper",
+                ),
+            ),
+        ],
+        policy_summary={
+            "repo_skills_allowed": False,
+            "local_skills_allowed": True,
+        },
+    )
+    artifact_service = _StaticArtifactService(
+        {
+            "art-pr-resolver-snapshot": resolved_skillset.model_dump_json().encode(
+                "utf-8"
+            ),
+        }
+    )
+
+    class _UnexpectedMaterializer:
+        def __init__(self, **_kwargs: Any) -> None:
+            raise AssertionError("skill materializer should not be constructed")
+
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "AgentSkillMaterializer",
+        _UnexpectedMaterializer,
+    )
+    activities = TemporalAgentRuntimeActivities(artifact_service=artifact_service)
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="repo skill source for 'repo-helper' is disabled by skill source policy",
+    ):
+        await activities.agent_runtime_prepare_turn_instructions(
+            {
+                "request": {
+                    "agentKind": "managed",
+                    "agentId": "codex",
+                    "correlationId": "corr-1",
+                    "idempotencyKey": "idem-1",
+                    "resolvedSkillsetRef": "art-pr-resolver-snapshot",
+                    "parameters": {
+                        "instructions": "Resolve the PR.",
+                        "metadata": {
+                            "moonmind": {
+                                "selectedSkill": "pr-resolver",
+                            },
+                        },
+                    },
+                },
+                "workspacePath": str(workspace),
+            }
         )
 
 
@@ -4381,7 +5144,7 @@ async def test_launch_session_materializes_claude_oauth_home_environment(
     result = await activities.agent_runtime_launch_session(
         {
             "request": {
-                "taskRunId": "task-1",
+                "agentRunId": "task-1",
                 "sessionId": "sess-claude-1",
                 "threadId": "thread-claude-1",
                 "workspacePath": str(tmp_path / "task-1" / "repo"),
@@ -4444,7 +5207,7 @@ async def test_launch_session_failure_redacts_claude_auth_paths(
         await activities.agent_runtime_launch_session(
             {
                 "request": {
-                    "taskRunId": "task-1",
+                    "agentRunId": "task-1",
                     "sessionId": "sess-claude-1",
                     "threadId": "thread-claude-1",
                     "workspacePath": str(tmp_path / "task-1" / "repo"),
@@ -4497,7 +5260,7 @@ async def test_launch_session_claude_auth_diagnostics_do_not_alias_workspace_or_
     result = await activities.agent_runtime_launch_session(
         {
             "request": {
-                "taskRunId": "task-2",
+                "agentRunId": "task-2",
                 "sessionId": "sess-claude-2",
                 "threadId": "thread-claude-2",
                 "workspacePath": workspace_path,

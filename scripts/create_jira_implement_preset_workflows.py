@@ -155,7 +155,7 @@ def expand_jira_implement(
     )
     data = json.dumps(payload).encode("utf-8")
     req = request.Request(
-        f"{base_url.rstrip('/')}/api/task-step-templates/jira-implement:expand?scope=global",
+        f"{base_url.rstrip('/')}/api/presets/jira-implement:expand?scope=global",
         data=data,
         headers={"Content-Type": "application/json"},
         method="POST",

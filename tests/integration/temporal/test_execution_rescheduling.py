@@ -60,7 +60,7 @@ async def test_create_deferred_reschedule_verify(mock_run_environment):
             await env.client.start_workflow(
                 MoonMindRunWorkflow.run,
                 {
-                    "workflow_type": "MoonMind.Run",
+                    "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {},
                     "plan_artifact_ref": "ref-123",
                     "scheduled_for": future_time.isoformat()

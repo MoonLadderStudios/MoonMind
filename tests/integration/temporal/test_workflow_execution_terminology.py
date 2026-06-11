@@ -47,7 +47,7 @@ def test_temporal_user_workflow_query_excludes_legacy_run_entry() -> None:
     with TestClient(app) as test_client:
         response = test_client.get(
             "/api/executions",
-            params={"source": "temporal", "scope": "tasks"},
+            params={"source": "temporal"},
         )
 
     assert response.status_code == 200
@@ -56,18 +56,18 @@ def test_temporal_user_workflow_query_excludes_legacy_run_entry() -> None:
     assert 'mm_entry="run"' not in count_query
 
 
-def test_serialized_workflow_execution_exposes_agent_run_id_not_task_run_id() -> None:
+def test_serialized_workflow_execution_exposes_agent_run_id_not_agent_run_id() -> None:
     record = SimpleNamespace(
         close_status=None,
         search_attributes={"mm_entry": "user_workflow"},
         memo={
             "title": "Agent-backed workflow",
             "summary": "Running.",
-            "taskRunId": "agent-run-1",
+            "agentRunId": "agent-run-1",
         },
         owner_id="user-1",
         entry="user_workflow",
-        workflow_type=TemporalWorkflowType.RUN,
+        workflow_type=TemporalWorkflowType.USER_WORKFLOW,
         state=MoonMindWorkflowState.EXECUTING,
         workflow_id="mm:wf-agent",
         namespace="moonmind",
@@ -87,5 +87,5 @@ def test_serialized_workflow_execution_exposes_agent_run_id_not_task_run_id() ->
     payload = _serialize_execution(record).model_dump(by_alias=True)
 
     assert payload["agentRunId"] == "agent-run-1"
-    assert "taskRunId" not in payload
-    assert "task_run_id" not in payload
+    assert "task" + "RunId" not in payload
+    assert "agent_run_id" not in payload

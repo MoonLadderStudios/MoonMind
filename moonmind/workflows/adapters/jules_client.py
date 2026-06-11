@@ -131,6 +131,11 @@ class JulesClient:
             diagnostics = "; ".join(scan_result.sanitized_diagnostics) or (
                 "Blocked outbound content at jules.client.send_message.prompt"
             )
+            logger.warning(
+                "Blocked Jules client send-message attempt at %s: %s",
+                "jules.client.send_message.prompt",
+                diagnostics,
+            )
             raise JulesClientError(
                 f"Outbound message blocked by high security scan: {diagnostics}"
             )

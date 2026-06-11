@@ -198,7 +198,7 @@ async def test_codex_session_launch_environment_can_create_child_tasks(
 
     workspace_root = tmp_path / "agent_jobs"
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-parent",
+        agentRunId="task-parent",
         sessionId="sess-parent:codex_cli",
         threadId="thread-parent",
         workspacePath=str(workspace_root / "task-parent" / "repo"),
@@ -326,7 +326,7 @@ async def test_codex_session_launch_command_uses_workspace_and_explicit_auth_tar
 ) -> None:
     workspace_root = tmp_path / "agent_jobs"
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-parent",
+        agentRunId="task-parent",
         sessionId="sess-parent:codex_cli",
         threadId="thread-parent",
         workspacePath=str(workspace_root / "task-parent" / "repo"),
@@ -420,7 +420,7 @@ async def test_codex_session_workspace_git_metadata_is_managed_user_writable(
     workspace_root.chmod(0o755)
     target_branch = "feature/owned-ref"
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-parent",
+        agentRunId="task-parent",
         sessionId="sess-parent:codex_cli",
         threadId="thread-parent",
         workspacePath=str(workspace_root / "task-parent" / "repo"),

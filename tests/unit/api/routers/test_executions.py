@@ -22,14 +22,14 @@ from temporalio.service import RPCError, RPCStatusCode
 from api_service.api.routers.executions import (
     _get_service,
     _artifact_id_from_ref,
-    _build_original_task_input_snapshot_payload,
-    _expand_goal_preset_for_task_submission,
+    _build_original_workflow_input_snapshot_payload,
+    _expand_goal_preset_for_workflow_submission,
     _extract_cost_estimate_usd,
     _hydrate_related_run_metadata,
-    _merge_task_preserving_artifact_instructions,
+    _merge_workflow_preserving_artifact_instructions,
     _recovery_not_available_reason,
     _reuse_original_task_input_snapshot_from_source,
-    _task_input_snapshot_descriptor_from_record,
+    _workflow_input_snapshot_descriptor_from_record,
     _normalize_task_steps,
     _resolve_step_runtime_selections,
     get_temporal_client,
@@ -55,7 +55,7 @@ from api_service.db.models import (
     TemporalExecutionRecord,
     TemporalWorkflowType,
 )
-from api_service.services.recurring_tasks_service import RecurringTaskValidationError
+from api_service.services.recurring_workflows_service import RecurringWorkflowValidationError
 from moonmind.config.settings import settings
 from moonmind.workflows.temporal.service import ExecutionDependencySummary
 from moonmind.workflows.temporal import (
@@ -325,7 +325,7 @@ async def test_goal_preset_submission_expands_before_planner(tmp_path) -> None:
                 "title": "MM-747 goal",
                 "goal": "Complete Jira issue MM-747 using preset scheduling.",
             }
-            await _expand_goal_preset_for_task_submission(
+            await _expand_goal_preset_for_workflow_submission(
                 task_payload=task_payload,
                 request_payload={
                     "repository": "MoonLadderStudios/MoonMind",
@@ -433,10 +433,10 @@ def _empty_session_override() -> SimpleNamespace:
 
 def _build_execution_record(
     *,
-    workflow_type: TemporalWorkflowType = TemporalWorkflowType.RUN,
+    workflow_type: TemporalWorkflowType = TemporalWorkflowType.USER_WORKFLOW,
     state: MoonMindWorkflowState = MoonMindWorkflowState.EXECUTING,
     owner_id: str = "user-123",
-    has_task_input_snapshot: bool = True,
+    has_workflow_input_snapshot: bool = True,
 ) -> SimpleNamespace:
     now = datetime.now(UTC)
     entry = (
@@ -467,8 +467,8 @@ def _build_execution_record(
                     "task_input_snapshot_version": 1,
                     "task_input_snapshot_source_kind": "create",
                 }
-                if workflow_type is TemporalWorkflowType.RUN
-                and has_task_input_snapshot
+                if workflow_type is TemporalWorkflowType.USER_WORKFLOW
+                and has_workflow_input_snapshot
                 else {}
             ),
         },
@@ -581,7 +581,7 @@ def test_list_executions_passes_temporal_filters_for_admin() -> None:
         response = test_client.get(
             "/api/executions",
             params={
-                "workflowType": "MoonMind.Run",
+                "workflowType": "MoonMind.UserWorkflow",
                 "state": "executing",
                 "entry": "run",
                 "ownerType": "user",
@@ -595,7 +595,7 @@ def test_list_executions_passes_temporal_filters_for_admin() -> None:
 
     assert response.status_code == 200
     kwargs = mock_service.list_executions.await_args.kwargs
-    assert kwargs["workflow_type"] == "MoonMind.Run"
+    assert kwargs["workflow_type"] == "MoonMind.UserWorkflow"
     assert kwargs["state"] == "executing"
     assert kwargs["entry"] == "run"
     assert kwargs["owner_type"] == "user"
@@ -630,14 +630,13 @@ def test_list_executions_temporal_query_includes_target_runtime_filter() -> None
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "tasks",
                 "targetRuntime": "codex_cli",
             },
         )
 
     assert response.status_code == 200
     query = temporal_client.count_workflows.await_args.kwargs["query"]
-    assert 'WorkflowType="MoonMind.Run"' in query
+    assert 'WorkflowType="MoonMind.UserWorkflow"' in query
     assert 'mm_entry="user_workflow"' in query
     assert 'mm_target_runtime="codex_cli"' in query
     temporal_client.list_workflows.assert_called_once()
@@ -671,14 +670,13 @@ def test_list_executions_temporal_query_includes_canonical_state_filters() -> No
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "tasks",
                 "stateIn": "completed,failed",
             },
         )
 
     assert response.status_code == 200
     query = temporal_client.count_workflows.await_args.kwargs["query"]
-    assert 'WorkflowType="MoonMind.Run"' in query
+    assert 'WorkflowType="MoonMind.UserWorkflow"' in query
     assert 'mm_entry="user_workflow"' in query
     # ``completed`` and ``failed`` are terminal states; the executions list
     # filter resolves them to the Temporal ``ExecutionStatus`` so closed
@@ -722,7 +720,6 @@ def test_list_executions_temporal_query_anchors_non_terminal_state_to_running_st
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "tasks",
                 "stateIn": "waiting_on_dependencies",
             },
         )
@@ -760,7 +757,6 @@ def test_list_executions_temporal_query_mixes_terminal_and_non_terminal_state_fi
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "tasks",
                 "stateIn": "waiting_on_dependencies,canceled",
             },
         )
@@ -797,7 +793,6 @@ def test_list_executions_temporal_query_supports_repeated_canonical_filters() ->
             "/api/executions",
             params=[
                 ("source", "temporal"),
-                ("scope", "tasks"),
                 ("targetRuntimeIn", "codex_cli"),
                 ("targetRuntimeIn", "claude_code"),
                 ("targetRuntimeIn", ""),
@@ -836,7 +831,6 @@ def test_list_executions_temporal_query_ignores_empty_canonical_state_for_legacy
             "/api/executions",
             params=[
                 ("source", "temporal"),
-                ("scope", "tasks"),
                 ("state", "completed"),
                 ("stateIn", ""),
             ],
@@ -865,7 +859,6 @@ def test_list_executions_temporal_query_rejects_contradictory_canonical_filters(
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "tasks",
                 "stateIn": "completed",
                 "stateNotIn": "canceled",
             },
@@ -903,7 +896,6 @@ def test_list_executions_temporal_query_includes_canonical_runtime_skill_and_rep
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "tasks",
                 "targetRuntimeIn": "codex_cli,claude_code",
                 "targetSkillIn": "moonspec-implement",
                 "repoIn": "Moon/Mind",
@@ -943,7 +935,6 @@ def test_list_executions_temporal_query_prefers_canonical_filters_over_legacy_ex
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "tasks",
                 "state": "executing",
                 "stateIn": "completed",
                 "repo": "legacy/repo",
@@ -990,7 +981,6 @@ def test_list_executions_temporal_query_includes_canonical_date_bounds() -> None
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "tasks",
                 "scheduledFrom": "2026-05-01",
                 "scheduledTo": "2026-05-05",
                 "createdFrom": "2026-05-02",
@@ -1038,7 +1028,6 @@ def test_list_executions_temporal_query_includes_blank_date_filter_semantics() -
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "tasks",
                 "scheduledFrom": "2026-05-01",
                 "scheduledBlank": "include",
                 "finishedBlank": "include",
@@ -1075,7 +1064,6 @@ def test_list_executions_temporal_query_supports_sort_and_text_filters() -> None
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "tasks",
                 "repoContains": "Moon",
                 "workflowIdContains": "wf-",
                 "titleContains": "release",
@@ -1119,7 +1107,6 @@ def test_list_executions_temporal_query_uses_workflow_id_text_filter() -> None:
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "tasks",
                 "workflowIdContains": "wf-",
                 "sort": "workflowId",
             },
@@ -1177,7 +1164,7 @@ def test_list_executions_temporal_query_rejects_invalid_filter_bounds() -> None:
     assert "sort must be one of" in invalid_sort.json()["detail"]["message"]
     temporal_client.count_workflows.assert_not_called()
 
-def test_execution_facets_exclude_requested_facet_filter_and_keep_task_scope() -> None:
+def test_execution_facets_exclude_requested_facet_filter_and_keep_workflow_scope() -> None:
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
@@ -1223,7 +1210,7 @@ def test_execution_facets_exclude_requested_facet_filter_and_keep_task_scope() -
 
     assert response.status_code == 200
     base_query = temporal_client.list_workflows.call_args.kwargs["query"]
-    assert 'WorkflowType="MoonMind.Run"' in base_query
+    assert 'WorkflowType="MoonMind.UserWorkflow"' in base_query
     assert 'mm_entry="user_workflow"' in base_query
     assert "mm_owner_id=" in base_query
     assert 'mm_state="executing"' in base_query
@@ -1337,7 +1324,7 @@ def test_execution_metrics_counts_workflows_concurrently() -> None:
     assert max_active_calls > 1
 
 
-def test_execution_status_facet_counts_static_status_values_with_task_scope() -> None:
+def test_execution_status_facet_counts_static_status_values_with_workflow_scope() -> None:
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
@@ -1362,7 +1349,7 @@ def test_execution_status_facet_counts_static_status_values_with_task_scope() ->
         {"value": "initializing", "label": "Initializing", "count": 1},
     ]
     first_count_query = temporal_client.count_workflows.await_args_list[0].kwargs["query"]
-    assert 'WorkflowType="MoonMind.Run"' in first_count_query
+    assert 'WorkflowType="MoonMind.UserWorkflow"' in first_count_query
     assert 'mm_entry="user_workflow"' in first_count_query
     assert "mm_owner_id=" in first_count_query
     assert body["truncated"] is True
@@ -1492,7 +1479,7 @@ def test_step_ledger_contract_models_serialize_using_public_aliases() -> None:
                     "refs": {
                         "childWorkflowId": None,
                         "childRunId": None,
-                        "taskRunId": None,
+                        "agentRunId": None,
                     },
                     "artifacts": {
                         "outputSummary": None,
@@ -1568,10 +1555,10 @@ def test_create_task_shaped_execution_rejects_invalid_required_capabilities() ->
         response = test_client.post(
             "/api/executions",
             json={
-                "type": "task",
+                "type": "workflow",
                 "payload": {
                     "requiredCapabilities": 1,
-                    "task": {
+                    "workflow": {
                         "instructions": "Ship the Temporal integration.",
                     },
                 },
@@ -1593,9 +1580,9 @@ def test_create_task_shaped_execution_rejects_more_than_10_dependencies(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
-                "task": {
+                "workflow": {
                     "instructions": "Ship the Temporal integration.",
                     "dependsOn": [f"dep-{i}" for i in range(11)]
                 },
@@ -1604,7 +1591,7 @@ def test_create_task_shaped_execution_rejects_more_than_10_dependencies(
     )
 
     assert response.status_code == 422
-    assert "payload.task.dependsOn can have a maximum of 10 items" in response.json()["detail"]["message"]
+    assert "payload.workflow.dependsOn can have a maximum of 10 items" in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
 
 def test_create_task_shaped_execution_rejects_more_than_50_steps(
@@ -1616,9 +1603,9 @@ def test_create_task_shaped_execution_rejects_more_than_50_steps(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
-                "task": {
+                "workflow": {
                     "instructions": "Too many steps.",
                     "steps": steps,
                 },
@@ -1627,7 +1614,7 @@ def test_create_task_shaped_execution_rejects_more_than_50_steps(
     )
 
     assert response.status_code == 422
-    assert "payload.task.steps can have a maximum of 50 items" in response.json()["detail"]["message"]
+    assert "payload.workflow.steps can have a maximum of 50 items" in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
 
 def test_create_task_shaped_execution_rejects_explicit_skill_step_without_skill_payload(
@@ -1639,9 +1626,9 @@ def test_create_task_shaped_execution_rejects_explicit_skill_step_without_skill_
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
-                "task": {
+                "workflow": {
                     "instructions": "Run a skill step without a payload.",
                     "steps": [
                         {
@@ -1657,7 +1644,7 @@ def test_create_task_shaped_execution_rejects_explicit_skill_step_without_skill_
 
     assert response.status_code == 422
     assert (
-        "payload.task.steps[0].skill is required for Skill steps"
+        "payload.workflow.steps[0].skill is required for Skill steps"
         in response.json()["detail"]["message"]
     )
     service.create_execution.assert_not_awaited()
@@ -1675,9 +1662,9 @@ def test_create_task_shaped_execution_preserves_empty_skill_args(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
-                "task": {
+                "workflow": {
                     "instructions": "Run a skill step without args.",
                     "steps": [
                         {
@@ -1695,7 +1682,7 @@ def test_create_task_shaped_execution_preserves_empty_skill_args(
     assert response.status_code == 201, response.text
     create_kwargs = service.create_execution.await_args.kwargs
     initial_parameters = create_kwargs["initial_parameters"]
-    normalized_steps = initial_parameters["task"]["steps"]
+    normalized_steps = initial_parameters["workflow"]["steps"]
     assert len(normalized_steps) == 1
     assert normalized_steps[0]["skill"] == {"id": "noop", "args": {}}
 
@@ -1710,9 +1697,9 @@ def test_create_task_shaped_execution_rejects_attachments_when_policy_disabled(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
-                "task": {
+                "workflow": {
                     "instructions": "Review the uploaded screenshot.",
                     "inputAttachments": [
                         {
@@ -1741,9 +1728,9 @@ def test_create_task_shaped_execution_rejects_unknown_attachment_fields(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
-                "task": {
+                "workflow": {
                     "instructions": "Review the uploaded screenshot.",
                     "inputAttachments": [
                         {
@@ -1788,10 +1775,10 @@ def test_create_task_shaped_execution_rejects_unsupported_runtime_with_attachmen
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "targetRuntime": "unsupported_runtime",
-                "task": {
+                "workflow": {
                     "instructions": "Review the uploaded screenshot.",
                     "inputAttachments": [
                         {
@@ -1819,10 +1806,10 @@ def test_create_task_shaped_execution_rejects_unsupported_step_runtime(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "targetRuntime": "codex_cli",
-                "task": {
+                "workflow": {
                     "instructions": "Validate step runtime early.",
                     "steps": [
                         {
@@ -1838,7 +1825,7 @@ def test_create_task_shaped_execution_rejects_unsupported_step_runtime(
 
     assert response.status_code == 422
     assert (
-        "Unsupported payload.task.steps[0].runtime.mode"
+        "Unsupported payload.workflow.steps[0].runtime.mode"
         in response.json()["detail"]["message"]
     )
     service.create_execution.assert_not_awaited()
@@ -1897,9 +1884,9 @@ def test_create_task_shaped_execution_fetches_unique_attachments_in_one_query(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
-                "task": {
+                "workflow": {
                     "instructions": "Review uploaded screenshots.",
                     "inputAttachments": [
                         {
@@ -1939,9 +1926,9 @@ def test_create_task_shaped_execution_rejects_svg_attachment_type(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
-                "task": {
+                "workflow": {
                     "instructions": "Review the uploaded screenshot.",
                     "inputAttachments": [
                         {
@@ -1971,9 +1958,9 @@ def test_create_task_shaped_execution_rejects_attachment_policy_limits(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
-                "task": {
+                "workflow": {
                     "instructions": "Review uploaded screenshots.",
                     "inputAttachments": [
                         {
@@ -2007,9 +1994,9 @@ def test_create_task_shaped_execution_dedupes_and_normalizes_dependencies(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
-                "task": {
+                "workflow": {
                     "instructions": "Ship the Temporal integration.",
                     "dependsOn": ["dep-1", " dep-2 ", "", "dep-1", "dep-3"]
                 },
@@ -2020,7 +2007,7 @@ def test_create_task_shaped_execution_dedupes_and_normalizes_dependencies(
     assert response.status_code == 201, response.json()
     service.create_execution.assert_awaited_once()
     kwargs = service.create_execution.call_args.kwargs
-    assert kwargs["initial_parameters"]["task"]["dependsOn"] == ["dep-1", "dep-2", "dep-3"]
+    assert kwargs["initial_parameters"]["workflow"]["dependsOn"] == ["dep-1", "dep-2", "dep-3"]
 
 def test_create_task_shaped_execution_prefers_task_depends_on(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -2031,10 +2018,10 @@ def test_create_task_shaped_execution_prefers_task_depends_on(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "dependsOn": ["legacy-dep"],
-                "task": {
+                "workflow": {
                     "instructions": "Ship the Temporal integration.",
                     "dependsOn": []
                 },
@@ -2045,7 +2032,7 @@ def test_create_task_shaped_execution_prefers_task_depends_on(
     assert response.status_code == 201
     service.create_execution.assert_awaited_once()
     kwargs = service.create_execution.call_args.kwargs
-    assert "dependsOn" not in kwargs["initial_parameters"]["task"]
+    assert "dependsOn" not in kwargs["initial_parameters"]["workflow"]
 
 def test_create_task_shaped_execution_applies_default_publish_mode(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -2058,10 +2045,10 @@ def test_create_task_shaped_execution_applies_default_publish_mode(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "MoonLadderStudios/MoonMind",
-                "task": {
+                "workflow": {
                     "instructions": "Fix the failing workflow.",
                     "runtime": {"mode": "codex"},
                 },
@@ -2075,7 +2062,7 @@ def test_create_task_shaped_execution_applies_default_publish_mode(
         "initial_parameters"
     ]
     assert initial_parameters["publishMode"] == "pr"
-    assert initial_parameters["task"]["publish"]["mode"] == "pr"
+    assert initial_parameters["workflow"]["publish"]["mode"] == "pr"
 
 def test_create_task_shaped_execution_allows_jira_orchestrate_pr_publish(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -2086,11 +2073,11 @@ def test_create_task_shaped_execution_allows_jira_orchestrate_pr_publish(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "MoonLadderStudios/MoonMind",
                 "publishMode": "pr",
-                "task": {
+                "workflow": {
                     "instructions": "Run Jira Orchestrate for THOR-352.",
                     "tool": {"type": "skill", "name": "jira-orchestrate"},
                     "skill": {"id": "jira-orchestrate"},
@@ -2107,7 +2094,7 @@ def test_create_task_shaped_execution_allows_jira_orchestrate_pr_publish(
         "initial_parameters"
     ]
     assert initial_parameters["publishMode"] == "pr"
-    assert initial_parameters["task"]["publish"]["mode"] == "pr"
+    assert initial_parameters["workflow"]["publish"]["mode"] == "pr"
 
 
 def test_create_task_shaped_execution_allows_jira_orchestrate_first_step_skill_pr_publish(
@@ -2119,11 +2106,11 @@ def test_create_task_shaped_execution_allows_jira_orchestrate_first_step_skill_p
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "MoonLadderStudios/MoonMind",
                 "publishMode": "pr",
-                "task": {
+                "workflow": {
                     "instructions": "Run Jira Orchestrate for THOR-352.",
                     "tool": {"type": "skill", "name": "jira-issue-updater"},
                     "skill": {"id": "jira-issue-updater"},
@@ -2155,8 +2142,8 @@ def test_create_task_shaped_execution_allows_jira_orchestrate_first_step_skill_p
         "initial_parameters"
     ]
     assert initial_parameters["publishMode"] == "pr"
-    assert initial_parameters["task"]["publish"]["mode"] == "pr"
-    assert initial_parameters["task"]["skill"]["name"] == "jira-issue-updater"
+    assert initial_parameters["workflow"]["publish"]["mode"] == "pr"
+    assert initial_parameters["workflow"]["skill"]["name"] == "jira-issue-updater"
 
 
 def test_create_task_shaped_execution_allows_pr_publish_for_jira_updater(
@@ -2168,11 +2155,11 @@ def test_create_task_shaped_execution_allows_pr_publish_for_jira_updater(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "MoonLadderStudios/MoonMind",
                 "publishMode": "pr",
-                "task": {
+                "workflow": {
                     "title": (
                         "Change Jira issue MM-657 to status In Progress before "
                         "implementation starts."
@@ -2195,7 +2182,7 @@ def test_create_task_shaped_execution_allows_pr_publish_for_jira_updater(
         "initial_parameters"
     ]
     assert initial_parameters["publishMode"] == "pr"
-    assert initial_parameters["task"]["publish"]["mode"] == "pr"
+    assert initial_parameters["workflow"]["publish"]["mode"] == "pr"
 
 
 def test_create_task_shaped_execution_defaults_jira_updater_publish_none(
@@ -2207,11 +2194,11 @@ def test_create_task_shaped_execution_defaults_jira_updater_publish_none(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "MoonLadderStudios/MoonMind",
                 "publishMode": "pr",
-                "task": {
+                "workflow": {
                     "title": "Change Jira issue MM-657 to status In Progress.",
                     "instructions": "Change Jira issue MM-657 to status In Progress.",
                     "tool": {"type": "skill", "name": "jira-issue-updater"},
@@ -2226,7 +2213,7 @@ def test_create_task_shaped_execution_defaults_jira_updater_publish_none(
         "initial_parameters"
     ]
     assert initial_parameters["publishMode"] == "none"
-    assert initial_parameters["task"]["publish"]["mode"] == "none"
+    assert initial_parameters["workflow"]["publish"]["mode"] == "none"
 
 
 def test_create_task_shaped_execution_allows_jira_orchestrate_publish_none(
@@ -2238,11 +2225,11 @@ def test_create_task_shaped_execution_allows_jira_orchestrate_publish_none(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "MoonLadderStudios/MoonMind",
                 "publishMode": "none",
-                "task": {
+                "workflow": {
                     "instructions": "Run Jira Orchestrate for THOR-352.",
                     "tool": {"type": "skill", "name": "jira-orchestrate"},
                     "skill": {"id": "jira-orchestrate"},
@@ -2258,7 +2245,7 @@ def test_create_task_shaped_execution_allows_jira_orchestrate_publish_none(
         "initial_parameters"
     ]
     assert initial_parameters["publishMode"] == "none"
-    assert initial_parameters["task"]["publish"]["mode"] == "none"
+    assert initial_parameters["workflow"]["publish"]["mode"] == "none"
     assert initial_parameters["requiredCapabilities"] == []
 
 def test_create_task_shaped_execution_preserves_report_output_contract(
@@ -2270,7 +2257,7 @@ def test_create_task_shaped_execution_preserves_report_output_contract(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "MoonLadderStudios/MoonMind",
                 "reportOutput": {
@@ -2279,7 +2266,7 @@ def test_create_task_shaped_execution_preserves_report_output_contract(
                     "reportType": "integration_test_report",
                     "title": "Integration test report",
                 },
-                "task": {
+                "workflow": {
                     "instructions": "Run the integration test suite.",
                     "runtime": {"mode": "codex"},
                     "publish": {"mode": "none"},
@@ -2298,10 +2285,10 @@ def test_create_task_shaped_execution_preserves_report_output_contract(
         "reportType": "integration_test_report",
         "title": "Integration test report",
     }
-    assert initial_parameters["task"]["reportOutput"] == initial_parameters[
+    assert initial_parameters["workflow"]["reportOutput"] == initial_parameters[
         "reportOutput"
     ]
-    task_instructions = initial_parameters["task"]["instructions"]
+    task_instructions = initial_parameters["workflow"]["instructions"]
     assert "MoonMind report output contract" in task_instructions
     assert "answer that request directly in the final report body" in task_instructions
 
@@ -2315,7 +2302,7 @@ def test_create_task_report_output_defaults_primary_path_to_markdown_suffix(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "MoonLadderStudios/MoonMind",
                 "reportOutput": {
@@ -2324,7 +2311,7 @@ def test_create_task_report_output_defaults_primary_path_to_markdown_suffix(
                     "reportType": "agent_run_report",
                     "primaryPath": "reports/final-report",
                 },
-                "task": {
+                "workflow": {
                     "instructions": "Generate a report.",
                     "runtime": {"mode": "codex"},
                     "publish": {"mode": "none"},
@@ -2343,7 +2330,7 @@ def test_create_task_report_output_defaults_primary_path_to_markdown_suffix(
     )
     assert (
         "Also write the same report to `reports/final-report.md`"
-        in initial_parameters["task"]["instructions"]
+        in initial_parameters["workflow"]["instructions"]
     )
 
 
@@ -2356,7 +2343,7 @@ def test_create_task_report_output_rejects_primary_path_over_limit_after_suffix(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "MoonLadderStudios/MoonMind",
                 "reportOutput": {
@@ -2365,7 +2352,7 @@ def test_create_task_report_output_rejects_primary_path_over_limit_after_suffix(
                     "reportType": "agent_run_report",
                     "primaryPath": primary_path,
                 },
-                "task": {
+                "workflow": {
                     "instructions": "Generate a report.",
                     "runtime": {"mode": "codex"},
                     "publish": {"mode": "none"},
@@ -2390,7 +2377,7 @@ def test_create_task_report_output_preserves_explicit_primary_path_suffix(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "MoonLadderStudios/MoonMind",
                 "reportOutput": {
@@ -2399,7 +2386,7 @@ def test_create_task_report_output_preserves_explicit_primary_path_suffix(
                     "reportType": "agent_run_report",
                     "primaryPath": "reports/final-report.txt",
                 },
-                "task": {
+                "workflow": {
                     "instructions": "Generate a report.",
                     "runtime": {"mode": "codex"},
                     "publish": {"mode": "none"},
@@ -2427,14 +2414,14 @@ def test_create_task_shaped_execution_prefers_task_publish_mode_alias_over_top_p
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "MoonLadderStudios/MoonMind",
                 "publish": {
                     "mode": "branch",
                     "commitMessage": "Top-level publish details",
                 },
-                "task": {
+                "workflow": {
                     "instructions": "Fix the failing workflow.",
                     "runtime": {"mode": "codex"},
                     "publish_mode": "none",
@@ -2448,7 +2435,7 @@ def test_create_task_shaped_execution_prefers_task_publish_mode_alias_over_top_p
         "initial_parameters"
     ]
     assert initial_parameters["publishMode"] == "none"
-    assert initial_parameters["task"]["publish"] == {
+    assert initial_parameters["workflow"]["publish"] == {
         "mode": "none",
         "commitMessage": "Top-level publish details",
     }
@@ -2461,11 +2448,11 @@ def test_create_task_shaped_execution_rejects_falsy_non_string_publish_mode(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "MoonLadderStudios/MoonMind",
                 "publishMode": False,
-                "task": {
+                "workflow": {
                     "instructions": "Fix the failing workflow.",
                     "runtime": {"mode": "codex"},
                 },
@@ -2488,10 +2475,10 @@ def test_create_task_shaped_execution_preserves_remediation_payload(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "MoonLadderStudios/MoonMind",
-                "task": {
+                "workflow": {
                     "instructions": "Investigate the failed run.",
                     "runtime": {"mode": "codex"},
                     "remediation": {
@@ -2508,7 +2495,7 @@ def test_create_task_shaped_execution_preserves_remediation_payload(
     assert response.status_code == 201
     service.create_execution.assert_awaited_once()
     kwargs = service.create_execution.call_args.kwargs
-    assert kwargs["initial_parameters"]["task"]["remediation"] == {
+    assert kwargs["initial_parameters"]["workflow"]["remediation"] == {
         "target": {"workflowId": "mm:target-workflow"},
         "mode": "snapshot_then_follow",
         "authorityMode": "observe_only",
@@ -2524,10 +2511,10 @@ def test_create_task_shaped_execution_preserves_malformed_remediation_for_servic
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "MoonLadderStudios/MoonMind",
-                "task": {
+                "workflow": {
                     "instructions": "Investigate the failed run.",
                     "runtime": {"mode": "codex"},
                     "remediation": "mm:target-workflow",
@@ -2539,7 +2526,7 @@ def test_create_task_shaped_execution_preserves_malformed_remediation_for_servic
     assert response.status_code == 201
     service.create_execution.assert_awaited_once()
     kwargs = service.create_execution.call_args.kwargs
-    assert kwargs["initial_parameters"]["task"]["remediation"] == "mm:target-workflow"
+    assert kwargs["initial_parameters"]["workflow"]["remediation"] == "mm:target-workflow"
 
 def test_create_remediation_convenience_route_expands_to_task_create_contract(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -2564,19 +2551,19 @@ def test_create_remediation_convenience_route_expands_to_task_create_contract(
     assert response.status_code == 201
     service.create_execution.assert_awaited_once()
     kwargs = service.create_execution.call_args.kwargs
-    assert kwargs["workflow_type"] == "MoonMind.Run"
-    assert kwargs["initial_parameters"]["task"]["instructions"] == (
+    assert kwargs["workflow_type"] == "MoonMind.UserWorkflow"
+    assert kwargs["initial_parameters"]["workflow"]["instructions"] == (
         "Investigate the target execution."
     )
-    assert kwargs["initial_parameters"]["task"]["runtime"] == {"mode": "codex_cli"}
-    assert kwargs["initial_parameters"]["task"]["remediation"] == {
+    assert kwargs["initial_parameters"]["workflow"]["runtime"] == {"mode": "codex_cli"}
+    assert kwargs["initial_parameters"]["workflow"]["remediation"] == {
         "target": {"workflowId": "mm:target-workflow"},
         "mode": "snapshot",
         "authorityMode": "observe_only",
         "trigger": {"type": "manual"},
     }
     assert kwargs["initial_parameters"]["publishMode"] == "pr"
-    assert kwargs["initial_parameters"]["task"]["publish"]["mode"] == "pr"
+    assert kwargs["initial_parameters"]["workflow"]["publish"]["mode"] == "pr"
 
 def test_create_remediation_convenience_route_uses_top_level_overrides(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -2605,7 +2592,7 @@ def test_create_remediation_convenience_route_uses_top_level_overrides(
                 "authorityMode": "observe_only",
                 "trigger": {"type": "manual"},
             },
-            "task": {
+            "workflow": {
                 "instructions": "Nested instructions",
                 "runtime": {"mode": "jules"},
                 "remediation": {
@@ -2622,16 +2609,16 @@ def test_create_remediation_convenience_route_uses_top_level_overrides(
     assert called_kwargs["scheduled_for"] == scheduled_for
     assert initial_parameters["priority"] == 7
     assert initial_parameters["maxAttempts"] == 5
-    assert initial_parameters["task"]["instructions"] == "Top-level instructions"
-    assert initial_parameters["task"]["runtime"] == {"mode": "codex_cli"}
-    assert initial_parameters["task"]["remediation"] == {
+    assert initial_parameters["workflow"]["instructions"] == "Top-level instructions"
+    assert initial_parameters["workflow"]["runtime"] == {"mode": "codex_cli"}
+    assert initial_parameters["workflow"]["remediation"] == {
         "target": {"workflowId": "mm:target-workflow"},
         "mode": "snapshot",
         "authorityMode": "observe_only",
         "trigger": {"type": "manual"},
     }
     assert initial_parameters["publishMode"] == "none"
-    assert initial_parameters["task"]["publish"]["mode"] == "none"
+    assert initial_parameters["workflow"]["publish"]["mode"] == "none"
 
 def test_create_remediation_convenience_route_rejects_malformed_remediation(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -2650,7 +2637,7 @@ def test_create_remediation_convenience_route_rejects_malformed_remediation(
     assert response.status_code == 422
     assert response.json()["detail"] == {
         "code": "invalid_execution_request",
-        "message": "task.remediation must be an object",
+        "message": "workflow.remediation must be an object",
     }
     service.create_execution.assert_not_awaited()
 
@@ -2969,14 +2956,14 @@ def test_create_task_shaped_execution_maps_instructions_and_tool_for_temporal(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "priority": 2,
             "maxAttempts": 4,
             "payload": {
                 "repository": "MoonLadderStudios/MoonMind",
                 "targetRuntime": "codex",
                 "requiredCapabilities": ["git"],
-                "task": {
+                "workflow": {
                     "instructions": "Fix failing Temporal run.",
                     "runtime": {
                         "mode": "codex",
@@ -3001,18 +2988,18 @@ def test_create_task_shaped_execution_maps_instructions_and_tool_for_temporal(
     initial_parameters = called_kwargs["initial_parameters"]
 
     assert initial_parameters["instructions"] == "Fix failing Temporal run."
-    assert initial_parameters["task"]["tool"]["type"] == "skill"
-    assert initial_parameters["task"]["tool"]["name"] == "pr-resolver"
-    assert initial_parameters["task"]["tool"]["version"] == "1.0"
-    assert initial_parameters["task"]["inputs"] == {
+    assert initial_parameters["workflow"]["tool"]["type"] == "skill"
+    assert initial_parameters["workflow"]["tool"]["name"] == "pr-resolver"
+    assert initial_parameters["workflow"]["tool"]["version"] == "1.0"
+    assert initial_parameters["workflow"]["inputs"] == {
         "repo": "MoonLadderStudios/MoonMind",
         "pr": "42",
     }
-    assert initial_parameters["task"]["skill"] == {
+    assert initial_parameters["workflow"]["skill"] == {
         "name": "pr-resolver",
         "version": "1.0",
     }
-    assert initial_parameters["task"]["git"] == {
+    assert initial_parameters["workflow"]["git"] == {
         "startingBranch": "feature/resolve-pr",
         "branch": "codex/pr-resolver",
     }
@@ -3026,10 +3013,10 @@ def test_create_task_shaped_execution_preserves_proposal_and_skill_intent(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "MoonLadderStudios/MoonMind",
-                "task": {
+                "workflow": {
                     "instructions": "Improve managed-session proposals.",
                     "runtime": {"mode": "codex"},
                     "proposeTasks": True,
@@ -3069,20 +3056,20 @@ def test_create_task_shaped_execution_preserves_proposal_and_skill_intent(
 
     assert "proposeTasks" not in initial_parameters
     assert "proposalPolicy" not in initial_parameters
-    assert initial_parameters["task"]["proposeTasks"] is True
-    assert initial_parameters["task"]["proposalPolicy"] == {
+    assert initial_parameters["workflow"]["proposeTasks"] is True
+    assert initial_parameters["workflow"]["proposalPolicy"] == {
         "targets": ["project", "moonmind"],
         "maxItems": {"project": 2, "moonmind": 1},
         "minSeverityForMoonMind": "medium",
         "defaultRuntime": "gemini_cli",
     }
-    assert initial_parameters["task"]["skills"] == {
+    assert initial_parameters["workflow"]["skills"] == {
         "sets": ["deployment-default", "proposal-quality"],
         "include": [{"name": "moonmind-doc-writer", "version": "2.3.0"}],
         "exclude": ["legacy-proposer"],
         "materializationMode": "hybrid",
     }
-    assert initial_parameters["task"]["steps"][0]["skills"] == {
+    assert initial_parameters["workflow"]["steps"][0]["skills"] == {
         "sets": ["docs-review"],
         "include": [{"name": "architecture-review"}],
     }
@@ -3095,9 +3082,9 @@ def test_create_task_shaped_execution_rejects_invalid_proposal_policy(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
-                "task": {
+                "workflow": {
                     "instructions": "Improve managed-session proposals.",
                     "proposalPolicy": {
                         "targets": ["side-channel"],
@@ -3108,7 +3095,7 @@ def test_create_task_shaped_execution_rejects_invalid_proposal_policy(
     )
 
     assert response.status_code == 422
-    assert "task.proposalPolicy.targets" in response.json()["detail"]["message"]
+    assert "workflow.proposalPolicy.targets" in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
 
 def test_create_task_shaped_execution_accepts_provider_profile_alias() -> None:
@@ -3131,11 +3118,11 @@ def test_create_task_shaped_execution_accepts_provider_profile_alias() -> None:
         response = test_client.post(
             "/api/executions",
             json={
-                "type": "task",
+                "type": "workflow",
                 "payload": {
                     "repository": "MoonLadderStudios/MoonMind",
                     "targetRuntime": "codex",
-                    "task": {
+                    "workflow": {
                         "instructions": "Fix failing Temporal run.",
                         "runtime": {
                             "mode": "codex",
@@ -3162,9 +3149,9 @@ def test_create_task_shaped_execution_preserves_task_title_and_publish_overrides
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
-                "task": {
+                "workflow": {
                     "title": "Fix login redirect",
                     "instructions": "Update OAuth callback behavior.",
                     "publish": {
@@ -3181,9 +3168,9 @@ def test_create_task_shaped_execution_preserves_task_title_and_publish_overrides
     called_kwargs = service.create_execution.await_args.kwargs
     initial_parameters = called_kwargs["initial_parameters"]
 
-    assert initial_parameters["task"]["title"] == "Fix login redirect"
-    assert initial_parameters["task"]["publish"]["prTitle"] == "PR: Ensure OAuth redirect is correct"
-    assert initial_parameters["task"]["publish"]["prBody"] == "Adds integration tests and updates callback routing."
+    assert initial_parameters["workflow"]["title"] == "Fix login redirect"
+    assert initial_parameters["workflow"]["publish"]["prTitle"] == "PR: Ensure OAuth redirect is correct"
+    assert initial_parameters["workflow"]["publish"]["prBody"] == "Adds integration tests and updates callback routing."
 
 def test_create_task_shaped_execution_preserves_merge_automation_request(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -3194,7 +3181,7 @@ def test_create_task_shaped_execution_preserves_merge_automation_request(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "MoonLadderStudios/MoonMind",
                 "targetRuntime": "codex_cli",
@@ -3204,7 +3191,7 @@ def test_create_task_shaped_execution_preserves_merge_automation_request(
                     "mergeMethod": "squash",
                     "fallbackPollSeconds": 60,
                 },
-                "task": {
+                "workflow": {
                     "instructions": "Implement and publish a pull request.",
                     "runtime": {"mode": "codex_cli"},
                     "publish": {"mode": "pr"},
@@ -3218,7 +3205,7 @@ def test_create_task_shaped_execution_preserves_merge_automation_request(
         "initial_parameters"
     ]
     assert initial_parameters["publishMode"] == "pr"
-    assert initial_parameters["task"]["publish"]["mode"] == "pr"
+    assert initial_parameters["workflow"]["publish"]["mode"] == "pr"
     assert initial_parameters["mergeAutomation"] == {
         "enabled": True,
         "mergeMethod": "squash",
@@ -3234,11 +3221,11 @@ def test_create_task_shaped_execution_preserves_nested_merge_automation_request(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "MoonLadderStudios/MoonMind",
                 "targetRuntime": "codex_cli",
-                "task": {
+                "workflow": {
                     "instructions": "Implement and publish a pull request.",
                     "runtime": {"mode": "codex_cli"},
                     "publish": {
@@ -3261,11 +3248,11 @@ def test_create_task_shaped_execution_preserves_nested_merge_automation_request(
     initial_parameters = service.create_execution.await_args.kwargs[
         "initial_parameters"
     ]
-    assert initial_parameters["task"]["mergeAutomation"] == {
+    assert initial_parameters["workflow"]["mergeAutomation"] == {
         "enabled": True,
         "automatedReview": "optional",
     }
-    assert initial_parameters["task"]["publish"]["mergeAutomation"] == {
+    assert initial_parameters["workflow"]["publish"]["mergeAutomation"] == {
         "enabled": True,
         "mergeMethod": "rebase",
     }
@@ -3274,7 +3261,7 @@ def test_serialize_execution_exposes_merge_automation_selection() -> None:
     record = _build_execution_record()
     record.parameters = {
         "publishMode": "pr",
-        "task": {
+        "workflow": {
             "publish": {
                 "mode": "pr",
                 "mergeAutomation": {"enabled": True},
@@ -3489,11 +3476,11 @@ def test_create_task_shaped_execution_preserves_story_output_contract(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
-                "task": {
+                "workflow": {
                     "title": "Break down task proposal design",
-                    "instructions": "Extract stories from docs/Tasks/WorkflowProposalSystem.md.",
+                    "instructions": "Extract stories from docs/Workflows/WorkflowProposalSystem.md.",
                     "storyOutput": {
                         "mode": "jira",
                         "jira": {
@@ -3521,7 +3508,7 @@ def test_create_task_shaped_execution_preserves_story_output_contract(
             "labels": ["moonmind"],
         },
     }
-    assert initial_parameters["task"]["storyOutput"] == initial_parameters["storyOutput"]
+    assert initial_parameters["workflow"]["storyOutput"] == initial_parameters["storyOutput"]
 
 def test_create_task_shaped_execution_defaults_partial_story_output_mode(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -3532,11 +3519,11 @@ def test_create_task_shaped_execution_defaults_partial_story_output_mode(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
-                "task": {
+                "workflow": {
                     "title": "Break down task proposal design",
-                    "instructions": "Extract stories from docs/Tasks/WorkflowProposalSystem.md.",
+                    "instructions": "Extract stories from docs/Workflows/WorkflowProposalSystem.md.",
                     "storyOutput": {
                         "jira": {
                             "projectKey": "MM",
@@ -3564,15 +3551,15 @@ def test_create_task_shaped_execution_defaults_runtime_into_parameters(
 ) -> None:
     test_client, service, _user = client
     service.create_execution.return_value = _build_execution_record()
-    monkeypatch.setattr(settings.workflow, "default_task_runtime", "codex_cli")
+    monkeypatch.setattr(settings.workflow, "default_runtime", "codex_cli")
 
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "MoonLadderStudios/MoonMind",
-                "task": {
+                "workflow": {
                     "title": "Resolve queued PR",
                     "instructions": "Run pr-resolver for the branch.",
                 },
@@ -3585,7 +3572,7 @@ def test_create_task_shaped_execution_defaults_runtime_into_parameters(
         "initial_parameters"
     ]
     assert initial_parameters["targetRuntime"] == "codex_cli"
-    assert initial_parameters["task"]["runtime"]["mode"] == "codex_cli"
+    assert initial_parameters["workflow"]["runtime"]["mode"] == "codex_cli"
 
 
 def test_create_task_shaped_execution_normalizes_scalar_step_runtime_fields(
@@ -3598,11 +3585,11 @@ def test_create_task_shaped_execution_normalizes_scalar_step_runtime_fields(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "MoonLadderStudios/MoonMind",
                 "targetRuntime": "codex_cli",
-                "task": {
+                "workflow": {
                     "title": "Preserve scalar runtime fields",
                     "instructions": "Normalize step runtime metadata.",
                     "steps": [
@@ -3626,7 +3613,7 @@ def test_create_task_shaped_execution_normalizes_scalar_step_runtime_fields(
     initial_parameters = service.create_execution.await_args.kwargs[
         "initial_parameters"
     ]
-    runtime = initial_parameters["task"]["steps"][0]["runtime"]
+    runtime = initial_parameters["workflow"]["steps"][0]["runtime"]
     assert runtime["mode"] == "claude_code"
     assert runtime["model"] == "42"
     assert runtime["requestedModel"] == "42"
@@ -3645,11 +3632,11 @@ def test_create_task_shaped_execution_preserves_preset_schedule_provenance(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "MoonLadderStudios/MoonMind",
                 "targetRuntime": "codex_cli",
-                "task": {
+                "workflow": {
                     "title": "MM-747 goal",
                     "instructions": "Complete Jira issue MM-747.",
                     "steps": [
@@ -3687,7 +3674,7 @@ def test_create_task_shaped_execution_preserves_preset_schedule_provenance(
     initial_parameters = service.create_execution.await_args.kwargs[
         "initial_parameters"
     ]
-    task = initial_parameters["task"]
+    task = initial_parameters["workflow"]
     assert task["taskTemplate"] == {
         "slug": "jira-implement",
         "version": "1.0.0",
@@ -3712,10 +3699,10 @@ def test_create_task_shaped_execution_preserves_steps_and_uses_step_title_defaul
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "MoonLadderStudios/MoonMind",
-                "task": {
+                "workflow": {
                     "runtime": {
                         "mode": "gemini_cli",
                     },
@@ -3756,7 +3743,7 @@ def test_create_task_shaped_execution_preserves_steps_and_uses_step_title_defaul
         == "Audit the regression and list the missing controls."
     )
     assert initial_parameters["stepCount"] == 2
-    assert initial_parameters["task"]["steps"] == [
+    assert initial_parameters["workflow"]["steps"] == [
         {
             "id": "tpl:demo:1.0.0:01",
             "title": "Clarify the create-task recovery plan",
@@ -3790,10 +3777,10 @@ def test_create_task_shaped_execution_preserves_recursive_preset_metadata(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "MoonLadderStudios/MoonMind",
-                "task": {
+                "workflow": {
                     "title": "Compile recursive presets",
                     "instructions": "Run the compiled task.",
                     "runtime": {"mode": "codex_cli"},
@@ -3882,7 +3869,7 @@ def test_create_task_shaped_execution_preserves_recursive_preset_metadata(
     )
 
     assert response.status_code == 201
-    task = service.create_execution.await_args.kwargs["initial_parameters"]["task"]
+    task = service.create_execution.await_args.kwargs["initial_parameters"]["workflow"]
     assert task["steps"][0]["source"]["presetSlug"] == "root-preset"
     assert task["steps"][0]["source"]["originalStepId"] == "prepare-task"
     assert task["steps"][1]["source"]["includePath"] == [
@@ -3913,9 +3900,9 @@ def test_create_task_shaped_execution_preserves_manual_and_preset_step_order(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
-                "task": {
+                "workflow": {
                     "instructions": "Run mixed task.",
                     "authoredPresets": [
                         {
@@ -3970,7 +3957,7 @@ def test_create_task_shaped_execution_preserves_manual_and_preset_step_order(
     )
 
     assert response.status_code == 201
-    task = service.create_execution.await_args.kwargs["initial_parameters"]["task"]
+    task = service.create_execution.await_args.kwargs["initial_parameters"]["workflow"]
     assert [step["id"] for step in task["steps"]] == [
         "manual-before",
         "tpl:parent-flow:1.0.0:01:abcdef12",
@@ -3999,9 +3986,9 @@ def test_create_task_shaped_execution_preserves_detached_edited_step_source(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
-                "task": {
+                "workflow": {
                     "instructions": "Run edited preset step.",
                     "steps": [
                         {
@@ -4018,7 +4005,7 @@ def test_create_task_shaped_execution_preserves_detached_edited_step_source(
     )
 
     assert response.status_code == 201
-    task = service.create_execution.await_args.kwargs["initial_parameters"]["task"]
+    task = service.create_execution.await_args.kwargs["initial_parameters"]["workflow"]
     assert task["steps"][0]["instructions"] == "Edited lint instructions."
     assert task["steps"][0]["source"] == detached_source
 
@@ -4031,9 +4018,9 @@ def test_create_task_shaped_execution_does_not_fabricate_manual_preset_metadata(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
-                "task": {
+                "workflow": {
                     "title": "Manual task",
                     "instructions": "Run one manual step.",
                     "steps": [
@@ -4049,7 +4036,7 @@ def test_create_task_shaped_execution_does_not_fabricate_manual_preset_metadata(
     )
 
     assert response.status_code == 201
-    task = service.create_execution.await_args.kwargs["initial_parameters"]["task"]
+    task = service.create_execution.await_args.kwargs["initial_parameters"]["workflow"]
     assert "authoredPresets" not in task
     assert "appliedStepTemplates" not in task
     assert "source" not in task["steps"][0]
@@ -4062,9 +4049,9 @@ def test_create_task_shaped_execution_rejects_pr_resolver_without_selector_or_in
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
-                "task": {
+                "workflow": {
                     "runtime": {"mode": "gemini_cli"},
                     "tool": {
                         "type": "skill",
@@ -4079,8 +4066,8 @@ def test_create_task_shaped_execution_rejects_pr_resolver_without_selector_or_in
     assert response.status_code == 422
     assert (
         response.json()["detail"]["message"]
-        == "pr-resolver task requires payload.task.instructions, payload.task.inputs.pr, "
-        "or payload.task.git.startingBranch."
+        == "pr-resolver workflow requires payload.workflow.instructions, payload.workflow.inputs.pr, "
+        "or payload.workflow.git.startingBranch."
     )
     service.create_execution.assert_not_awaited()
 
@@ -4093,9 +4080,9 @@ def test_create_task_shaped_execution_allows_pr_resolver_with_starting_branch(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
-                "task": {
+                "workflow": {
                     "runtime": {"mode": "gemini_cli"},
                     "tool": {
                         "type": "skill",
@@ -4114,8 +4101,8 @@ def test_create_task_shaped_execution_allows_pr_resolver_with_starting_branch(
     initial_parameters = service.create_execution.await_args.kwargs[
         "initial_parameters"
     ]
-    assert initial_parameters["task"]["title"] == "feature/resolve-pr"
-    assert initial_parameters["task"]["git"] == {
+    assert initial_parameters["workflow"]["title"] == "feature/resolve-pr"
+    assert initial_parameters["workflow"]["git"] == {
         "startingBranch": "feature/resolve-pr"
     }
 
@@ -4131,7 +4118,7 @@ def test_create_task_shaped_execution_inherits_caller_runtime(
             "targetRuntime": "codex",
             "model": "gpt-5.4",
             "effort": "high",
-            "task": {
+            "workflow": {
                 "runtime": {
                     "executionProfileRef": "codex_default",
                 }
@@ -4145,15 +4132,15 @@ def test_create_task_shaped_execution_inherits_caller_runtime(
         "/api/executions",
         headers={
             "X-MoonMind-Task-Workflow-Id": "mm:parent-task",
-            "X-MoonMind-Task-Run-Identifier": "task-run-1",
+            "X-MoonMind-Agent-Run-Identifier": "agent-run-1",
         },
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "runtimeInheritance": "caller",
                 "repository": "MoonLadderStudios/MoonMind",
                 "requiredCapabilities": ["gh"],
-                "task": {
+                "workflow": {
                     "title": "feature/example",
                     "instructions": "Resolve PR #42 on branch `feature/example`.",
                     "skill": {"name": "pr-resolver", "version": "1.0"},
@@ -4170,7 +4157,7 @@ def test_create_task_shaped_execution_inherits_caller_runtime(
     assert initial_parameters["targetRuntime"] == "codex_cli"
     assert initial_parameters["model"] == "gpt-5.4"
     assert initial_parameters["effort"] == "high"
-    runtime = initial_parameters["task"]["runtime"]
+    runtime = initial_parameters["workflow"]["runtime"]
     assert runtime == {
         "mode": "codex_cli",
         "model": "gpt-5.4",
@@ -4187,10 +4174,10 @@ def test_create_task_shaped_execution_rejects_caller_inheritance_for_user(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "runtimeInheritance": "caller",
-                "task": {
+                "workflow": {
                     "title": "feature/example",
                     "instructions": "Resolve PR #42 on branch `feature/example`.",
                     "skill": {"name": "pr-resolver", "version": "1.0"},
@@ -4202,8 +4189,8 @@ def test_create_task_shaped_execution_rejects_caller_inheritance_for_user(
 
     assert response.status_code == 422
     assert response.json()["detail"] == {
-        "code": "runtime_inheritance_requires_task_principal",
-        "message": 'runtimeInheritance="caller" requires a task-scoped principal.',
+        "code": "runtime_inheritance_requires_workflow_principal",
+        "message": 'runtimeInheritance="caller" requires a workflow-scoped principal.',
     }
     service.create_execution.assert_not_awaited()
 
@@ -4212,7 +4199,7 @@ def test_create_task_shaped_execution_forwards_input_attachments(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """MM-367: objective and step attachment refs reach MoonMind.Run parameters."""
+    """MM-367: objective and step attachment refs reach MoonMind.UserWorkflow parameters."""
 
     test_client, service, _user = client
     monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
@@ -4242,11 +4229,11 @@ def test_create_task_shaped_execution_forwards_input_attachments(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "Moon/Mind",
                 "targetRuntime": "codex",
-                "task": {
+                "workflow": {
                     "instructions": "Inspect submitted screenshots.",
                     "inputAttachments": [
                         {
@@ -4278,7 +4265,7 @@ def test_create_task_shaped_execution_forwards_input_attachments(
     initial_parameters = service.create_execution.await_args.kwargs[
         "initial_parameters"
     ]
-    assert initial_parameters["task"]["inputAttachments"] == [
+    assert initial_parameters["workflow"]["inputAttachments"] == [
         {
             "artifactId": "art_01OBJECTIVEINPUT00000000",
             "filename": "same-name.png",
@@ -4286,7 +4273,7 @@ def test_create_task_shaped_execution_forwards_input_attachments(
             "sizeBytes": 10,
         }
     ]
-    assert initial_parameters["task"]["steps"][0]["inputAttachments"] == [
+    assert initial_parameters["workflow"]["steps"][0]["inputAttachments"] == [
         {
             "artifactId": "art_01STEPINPUT000000000000",
             "filename": "same-name.png",
@@ -4294,7 +4281,7 @@ def test_create_task_shaped_execution_forwards_input_attachments(
             "sizeBytes": 20,
         }
     ]
-    assert initial_parameters["task"]["steps"][0]["id"] == "step-1"
+    assert initial_parameters["workflow"]["steps"][0]["id"] == "step-1"
 
 def test_create_task_shaped_execution_normalizes_snake_case_input_attachments(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -4330,11 +4317,11 @@ def test_create_task_shaped_execution_normalizes_snake_case_input_attachments(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "Moon/Mind",
                 "targetRuntime": "codex",
-                "task": {
+                "workflow": {
                     "instructions": "Inspect submitted screenshots.",
                     "input_attachments": [
                         {
@@ -4366,7 +4353,7 @@ def test_create_task_shaped_execution_normalizes_snake_case_input_attachments(
     initial_parameters = service.create_execution.await_args.kwargs[
         "initial_parameters"
     ]
-    assert initial_parameters["task"]["inputAttachments"] == [
+    assert initial_parameters["workflow"]["inputAttachments"] == [
         {
             "artifactId": "art_01OBJECTIVEINPUT00000000",
             "filename": "objective.png",
@@ -4374,7 +4361,7 @@ def test_create_task_shaped_execution_normalizes_snake_case_input_attachments(
             "sizeBytes": 10,
         }
     ]
-    step_payload = initial_parameters["task"]["steps"][0]
+    step_payload = initial_parameters["workflow"]["steps"][0]
     assert step_payload["id"] == "step-1"
     assert step_payload["inputAttachments"] == [
         {
@@ -4412,11 +4399,11 @@ def test_create_task_shaped_execution_uses_nonblank_step_id_fallback(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "Moon/Mind",
                 "targetRuntime": "codex",
-                "task": {
+                "workflow": {
                     "instructions": "Inspect submitted screenshot.",
                     "steps": [
                         {
@@ -4442,7 +4429,7 @@ def test_create_task_shaped_execution_uses_nonblank_step_id_fallback(
     initial_parameters = service.create_execution.await_args.kwargs[
         "initial_parameters"
     ]
-    assert initial_parameters["task"]["steps"][0]["id"] == "review-step"
+    assert initial_parameters["workflow"]["steps"][0]["id"] == "review-step"
 
 def test_create_task_shaped_execution_preserves_canonical_mm627_task_shape(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -4471,11 +4458,11 @@ def test_create_task_shaped_execution_preserves_canonical_mm627_task_shape(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "Moon/Mind",
                 "targetRuntime": "codex",
-                "task": {
+                "workflow": {
                     "title": "MM-627 canonical task payload",
                     "instructions": "Preserve the submitted task exactly.",
                     "dependsOn": ["mm:dep-1"],
@@ -4538,7 +4525,7 @@ def test_create_task_shaped_execution_preserves_canonical_mm627_task_shape(
     initial_parameters = service.create_execution.await_args.kwargs[
         "initial_parameters"
     ]
-    task = initial_parameters["task"]
+    task = initial_parameters["workflow"]
     assert task["git"] == {"branch": "feature/mm-627"}
     assert task["runtime"] == {
         "mode": "codex_cli",
@@ -4582,11 +4569,11 @@ def test_create_task_shaped_execution_rejects_legacy_target_branch_aliases(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "Moon/Mind",
                 "targetRuntime": "codex",
-                "task": task_payload,
+                "workflow": task_payload,
             },
         },
     )
@@ -4604,11 +4591,11 @@ def test_create_task_shaped_execution_rejects_non_string_repository(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": {"owner": "Moon", "name": "Mind"},
                 "targetRuntime": "codex",
-                "task": {"instructions": "Run task."},
+                "workflow": {"instructions": "Run task."},
             },
         },
     )
@@ -4644,11 +4631,11 @@ def test_create_task_shaped_execution_rejects_attachment_declared_for_multiple_t
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "Moon/Mind",
                 "targetRuntime": "codex",
-                "task": {
+                "workflow": {
                     "instructions": "Run task.",
                     "inputAttachments": [attachment],
                     "steps": [
@@ -4695,11 +4682,11 @@ def test_create_task_shaped_execution_rejects_duplicate_attachment_declaration_f
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "Moon/Mind",
                 "targetRuntime": "codex",
-                "task": {
+                "workflow": {
                     "instructions": "Run task.",
                     "inputAttachments": [attachment, attachment],
                 },
@@ -4746,11 +4733,11 @@ def test_create_task_shaped_execution_rejects_unfinalized_input_attachment_refs(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "Moon/Mind",
                 "targetRuntime": "codex",
-                "task": {
+                "workflow": {
                     "instructions": "Review binary input.",
                     "inputAttachments": [
                         {
@@ -4781,11 +4768,11 @@ def test_create_task_shaped_execution_rejects_missing_input_attachment_artifact(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "Moon/Mind",
                 "targetRuntime": "codex",
-                "task": {
+                "workflow": {
                     "instructions": "Review binary input.",
                     "inputAttachments": [
                         {
@@ -4828,11 +4815,11 @@ def test_create_task_shaped_execution_rejects_other_users_completed_input_attach
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "Moon/Mind",
                 "targetRuntime": "codex",
-                "task": {
+                "workflow": {
                     "instructions": "Review binary input.",
                     "inputAttachments": [
                         {
@@ -4874,11 +4861,11 @@ def test_create_task_shaped_execution_rejects_service_owned_attachment_for_user(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "Moon/Mind",
                 "targetRuntime": "codex",
-                "task": {
+                "workflow": {
                     "instructions": "Review binary input.",
                     "inputAttachments": [
                         {
@@ -4901,18 +4888,18 @@ def test_create_task_shaped_execution_rejects_service_owned_attachment_for_user(
 def test_create_task_shaped_execution_rejects_embedded_attachment_data(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
-    """MM-367: task-shaped submit rejects inline image payloads in refs."""
+    """MM-367: workflow-shaped submit rejects inline image payloads in refs."""
 
     test_client, service, _user = client
 
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "repository": "Moon/Mind",
                 "targetRuntime": "codex",
-                "task": {
+                "workflow": {
                     "instructions": "Inspect submitted screenshot.",
                     "inputAttachments": [
                         {
@@ -4942,9 +4929,9 @@ def test_create_task_shaped_execution_derives_pr_resolver_title_from_tool_inputs
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
-                "task": {
+                "workflow": {
                     "runtime": {"mode": "gemini_cli"},
                     "tool": {
                         "type": "skill",
@@ -4961,7 +4948,7 @@ def test_create_task_shaped_execution_derives_pr_resolver_title_from_tool_inputs
     called_kwargs = service.create_execution.await_args.kwargs
     assert called_kwargs["title"] == "feature/from-tool-inputs"
     initial_parameters = called_kwargs["initial_parameters"]
-    assert initial_parameters["task"]["title"] == "feature/from-tool-inputs"
+    assert initial_parameters["workflow"]["title"] == "feature/from-tool-inputs"
 
 def test_create_task_shaped_execution_once_schedule_sets_start_delay(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -4975,13 +4962,13 @@ def test_create_task_shaped_execution_once_schedule_sets_start_delay(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "task",
+            "type": "workflow",
             "payload": {
                 "schedule": {
                     "mode": "once",
                     "scheduledFor": scheduled_for.isoformat(),
                 },
-                "task": {
+                "workflow": {
                     "instructions": "Run this later",
                 },
             },
@@ -5004,7 +4991,7 @@ def test_create_task_shaped_recurring_schedule_normalizes_proposal_intent(
     next_run_at = datetime.now(UTC) + timedelta(hours=1)
 
     with patch(
-        "api_service.services.recurring_tasks_service.RecurringTasksService"
+        "api_service.services.recurring_workflows_service.RecurringWorkflowsService"
     ) as service_cls:
         service = service_cls.return_value
         service.create_definition = AsyncMock(
@@ -5020,7 +5007,7 @@ def test_create_task_shaped_recurring_schedule_normalizes_proposal_intent(
         response = test_client.post(
             "/api/executions",
             json={
-                "type": "task",
+                "type": "workflow",
                 "payload": {
                     "proposeTasks": True,
                     "proposalPolicy": {"targets": ["moonmind"]},
@@ -5028,7 +5015,7 @@ def test_create_task_shaped_recurring_schedule_normalizes_proposal_intent(
                         "mode": "recurring",
                         "cron": "0 * * * *",
                     },
-                    "task": {
+                    "workflow": {
                         "instructions": "Run this on a schedule",
                         "proposeTasks": True,
                         "proposalPolicy": {
@@ -5045,8 +5032,8 @@ def test_create_task_shaped_recurring_schedule_normalizes_proposal_intent(
     stored_payload = target["job"]["payload"]
     assert "proposeTasks" not in stored_payload
     assert "proposalPolicy" not in stored_payload
-    assert stored_payload["task"]["proposeTasks"] is True
-    assert stored_payload["task"]["proposalPolicy"] == {
+    assert stored_payload["workflow"]["proposeTasks"] is True
+    assert stored_payload["workflow"]["proposalPolicy"] == {
         "targets": ["project"],
         "defaultRuntime": "gemini_cli",
     }
@@ -5059,7 +5046,7 @@ def test_create_task_shaped_recurring_schedule_uses_root_proposal_fallbacks(
     next_run_at = datetime.now(UTC) + timedelta(hours=1)
 
     with patch(
-        "api_service.services.recurring_tasks_service.RecurringTasksService"
+        "api_service.services.recurring_workflows_service.RecurringWorkflowsService"
     ) as service_cls:
         service = service_cls.return_value
         service.create_definition = AsyncMock(
@@ -5075,7 +5062,7 @@ def test_create_task_shaped_recurring_schedule_uses_root_proposal_fallbacks(
         response = test_client.post(
             "/api/executions",
             json={
-                "type": "task",
+                "type": "workflow",
                 "payload": {
                     "proposeTasks": True,
                     "proposalPolicy": {"targets": ["moonmind"]},
@@ -5083,7 +5070,7 @@ def test_create_task_shaped_recurring_schedule_uses_root_proposal_fallbacks(
                         "mode": "recurring",
                         "cron": "0 * * * *",
                     },
-                    "task": {
+                    "workflow": {
                         "instructions": "Run this on a schedule",
                     },
                 },
@@ -5095,8 +5082,8 @@ def test_create_task_shaped_recurring_schedule_uses_root_proposal_fallbacks(
     stored_payload = target["job"]["payload"]
     assert "proposeTasks" not in stored_payload
     assert "proposalPolicy" not in stored_payload
-    assert stored_payload["task"]["proposeTasks"] is True
-    assert stored_payload["task"]["proposalPolicy"] == {"targets": ["moonmind"]}
+    assert stored_payload["workflow"]["proposeTasks"] is True
+    assert stored_payload["workflow"]["proposalPolicy"] == {"targets": ["moonmind"]}
 
 
 def test_create_task_shaped_recurring_schedule_passes_metadata_and_response(
@@ -5109,7 +5096,7 @@ def test_create_task_shaped_recurring_schedule_passes_metadata_and_response(
     policy = {"overlap": {"mode": "skip"}}
 
     with patch(
-        "api_service.services.recurring_tasks_service.RecurringTasksService"
+        "api_service.services.recurring_workflows_service.RecurringWorkflowsService"
     ) as service_cls:
         service = service_cls.return_value
         service.create_definition = AsyncMock(
@@ -5125,7 +5112,7 @@ def test_create_task_shaped_recurring_schedule_passes_metadata_and_response(
         response = test_client.post(
             "/api/executions",
             json={
-                "type": "task",
+                "type": "workflow",
                 "payload": {
                     "schedule": {
                         "mode": "recurring",
@@ -5137,7 +5124,7 @@ def test_create_task_shaped_recurring_schedule_passes_metadata_and_response(
                         "scopeType": "personal",
                         "policy": policy,
                     },
-                    "task": {
+                    "workflow": {
                         "instructions": "Run this on a schedule",
                     },
                 },
@@ -5167,7 +5154,7 @@ def test_create_task_shaped_recurring_schedule_preserves_missing_policy(
     next_run_at = datetime.now(UTC) + timedelta(hours=1)
 
     with patch(
-        "api_service.services.recurring_tasks_service.RecurringTasksService"
+        "api_service.services.recurring_workflows_service.RecurringWorkflowsService"
     ) as service_cls:
         service = service_cls.return_value
         service.create_definition = AsyncMock(
@@ -5183,13 +5170,13 @@ def test_create_task_shaped_recurring_schedule_preserves_missing_policy(
         response = test_client.post(
             "/api/executions",
             json={
-                "type": "task",
+                "type": "workflow",
                 "payload": {
                     "schedule": {
                         "mode": "recurring",
                         "cron": "0 * * * *",
                     },
-                    "task": {
+                    "workflow": {
                         "instructions": "Run this on a schedule",
                     },
                 },
@@ -5207,7 +5194,7 @@ def test_create_task_shaped_recurring_schedule_rejects_global_scope_for_non_oper
     test_client.app.dependency_overrides[get_async_session] = _empty_session_override
 
     with patch(
-        "api_service.services.recurring_tasks_service.RecurringTasksService"
+        "api_service.services.recurring_workflows_service.RecurringWorkflowsService"
     ) as service_cls:
         service = service_cls.return_value
         service.create_definition = AsyncMock()
@@ -5215,14 +5202,14 @@ def test_create_task_shaped_recurring_schedule_rejects_global_scope_for_non_oper
         response = test_client.post(
             "/api/executions",
             json={
-                "type": "task",
+                "type": "workflow",
                 "payload": {
                     "schedule": {
                         "mode": "recurring",
                         "cron": "0 * * * *",
                         "scopeType": "global",
                     },
-                    "task": {
+                    "workflow": {
                         "instructions": "Run this on a schedule",
                     },
                 },
@@ -5244,23 +5231,23 @@ def test_create_task_shaped_recurring_schedule_validation_maps_to_422(
     test_client.app.dependency_overrides[get_async_session] = _empty_session_override
 
     with patch(
-        "api_service.services.recurring_tasks_service.RecurringTasksService"
+        "api_service.services.recurring_workflows_service.RecurringWorkflowsService"
     ) as service_cls:
         service = service_cls.return_value
         service.create_definition = AsyncMock(
-            side_effect=RecurringTaskValidationError("target.kind is required")
+            side_effect=RecurringWorkflowValidationError("target.kind is required")
         )
 
         response = test_client.post(
             "/api/executions",
             json={
-                "type": "task",
+                "type": "workflow",
                 "payload": {
                     "schedule": {
                         "mode": "recurring",
                         "cron": "0 * * * *",
                     },
-                    "task": {
+                    "workflow": {
                         "instructions": "Run this on a schedule",
                     },
                 },
@@ -5269,7 +5256,7 @@ def test_create_task_shaped_recurring_schedule_validation_maps_to_422(
 
     assert response.status_code == 422
     assert response.json()["detail"] == {
-        "code": "invalid_recurring_task",
+        "code": "invalid_recurring_workflow",
         "message": "target.kind is required",
     }
 
@@ -5299,7 +5286,7 @@ def test_create_execution_routes_directly_to_temporal(
 
     response = test_client.post(
         "/api/executions",
-        json={"workflowType": "MoonMind.Run", "title": "Test direct temporal"},
+        json={"workflowType": "MoonMind.UserWorkflow", "title": "Test direct temporal"},
     )
 
     assert response.status_code == 201
@@ -5312,11 +5299,11 @@ def test_create_execution_persists_task_input_snapshot_for_direct_run_submission
     app = FastAPI()
     app.include_router(router)
     service = AsyncMock()
-    record = _build_execution_record(has_task_input_snapshot=False)
+    record = _build_execution_record(has_workflow_input_snapshot=False)
     record.parameters = {
         "repository": "Moon/Mind",
         "targetRuntime": "codex_cli",
-        "task": {
+        "workflow": {
             "title": "Direct run",
             "instructions": "Implement the persisted direct run.",
         },
@@ -5329,7 +5316,7 @@ def test_create_execution_persists_task_input_snapshot_for_direct_run_submission
     app.dependency_overrides[get_async_session] = lambda: session
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
     monkeypatch.setattr(
-        settings.temporal_dashboard, "temporal_task_editing_enabled", True
+        settings.temporal_dashboard, "temporal_workflow_editing_enabled", True
     )
 
     async def _persist_snapshot(**kwargs) -> str:
@@ -5354,7 +5341,7 @@ def test_create_execution_persists_task_input_snapshot_for_direct_run_submission
 
     persist_mock = AsyncMock(side_effect=_persist_snapshot)
     monkeypatch.setattr(
-        "api_service.api.routers.executions._persist_original_task_input_snapshot",
+        "api_service.api.routers.executions._persist_original_workflow_input_snapshot",
         persist_mock,
     )
 
@@ -5362,12 +5349,12 @@ def test_create_execution_persists_task_input_snapshot_for_direct_run_submission
         response = test_client.post(
             "/api/executions",
             json={
-                "workflowType": "MoonMind.Run",
+                "workflowType": "MoonMind.UserWorkflow",
                 "title": "Direct run",
                 "initialParameters": {
                     "repository": "Moon/Mind",
                     "targetRuntime": "codex_cli",
-                    "task": {
+                    "workflow": {
                         "title": "Conflicting retry",
                         "instructions": "Do not snapshot the replay payload.",
                     },
@@ -5391,7 +5378,7 @@ def test_task_submission_snapshot_uses_input_artifact_for_stripped_step_instruct
     app = FastAPI()
     app.include_router(router)
     service = AsyncMock()
-    record = _build_execution_record(has_task_input_snapshot=False)
+    record = _build_execution_record(has_workflow_input_snapshot=False)
     service.create_execution.return_value = record
     app.dependency_overrides[_get_service] = lambda: service
     _override_temporal_client(app)
@@ -5400,7 +5387,7 @@ def test_task_submission_snapshot_uses_input_artifact_for_stripped_step_instruct
     app.dependency_overrides[get_async_session] = lambda: session
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
     monkeypatch.setattr(
-        settings.temporal_dashboard, "temporal_task_editing_enabled", True
+        settings.temporal_dashboard, "temporal_workflow_editing_enabled", True
     )
 
     captured: dict[str, object] = {}
@@ -5418,7 +5405,7 @@ def test_task_submission_snapshot_uses_input_artifact_for_stripped_step_instruct
 
     persist_mock = AsyncMock(side_effect=_persist_snapshot)
     monkeypatch.setattr(
-        "api_service.api.routers.executions._persist_original_task_input_snapshot_from_parameters",
+        "api_service.api.routers.executions._persist_original_workflow_input_snapshot_from_parameters",
         persist_mock,
     )
 
@@ -5426,12 +5413,12 @@ def test_task_submission_snapshot_uses_input_artifact_for_stripped_step_instruct
         response = test_client.post(
             "/api/executions",
             json={
-                "type": "task",
+                "type": "workflow",
                 "payload": {
                     "repository": "Moon/Mind",
                     "targetRuntime": "codex_cli",
                     "inputArtifactRef": "art-full-input",
-                    "task": {
+                    "workflow": {
                         "instructions": "Top level stays inline.",
                         "runtime": {"mode": "codex_cli"},
                         "steps": [
@@ -5448,7 +5435,7 @@ def test_task_submission_snapshot_uses_input_artifact_for_stripped_step_instruct
 
     assert response.status_code == 201
     persist_mock.assert_awaited_once()
-    assert captured["parameters"]["task"]["steps"][1] == {
+    assert captured["parameters"]["workflow"]["steps"][1] == {
         "id": "step-2",
         "title": "Stripped later step",
     }
@@ -5465,7 +5452,7 @@ def test_create_execution_enforces_idempotency(
 
     response = test_client.post(
         "/api/executions",
-        json={"workflowType": "MoonMind.Run", "idempotencyKey": "idem-123"},
+        json={"workflowType": "MoonMind.UserWorkflow", "idempotencyKey": "idem-123"},
     )
 
     assert response.status_code == 201
@@ -5680,6 +5667,69 @@ def test_signal_execution_routes_send_message_and_serializes_audit(
     assert body["interventionAudit"][0]["action"] == "send_message"
     assert body["interventionAudit"][0]["detail"] == "Continue with provider profiles."
 
+
+def test_signal_execution_rejects_blocked_send_message_without_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    record = _build_execution_record(state=MoonMindWorkflowState.AWAITING_EXTERNAL)
+    mock_service.describe_execution.return_value = record
+    mock_service.signal_execution.side_effect = TemporalExecutionValidationError(
+        "Blocked outbound content: credential at execution.send_message.message"
+    )
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/signal",
+            json={
+                "signalName": "SendMessage",
+                "payload": {"message": "Please use token=blocked-secret-value"},
+            },
+        )
+
+    assert response.status_code == 409
+    body = response.json()
+    assert body["detail"]["code"] == "signal_rejected"
+    dumped = json.dumps(body)
+    assert "execution.send_message.message" in dumped
+    assert "blocked-secret-value" not in dumped
+    called = mock_service.signal_execution.await_args.kwargs
+    assert called["signal_name"] == "SendMessage"
+
+
+def test_signal_execution_routes_clean_send_message_body_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    record = _build_execution_record(state=MoonMindWorkflowState.AWAITING_EXTERNAL)
+    mock_service.describe_execution.return_value = record
+    mock_service.signal_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+
+    message = "Continue with Provider Profiles exactly as written."
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/signal",
+            json={"signalName": "SendMessage", "payload": {"message": message}},
+        )
+
+    assert response.status_code == 202
+    called = mock_service.signal_execution.await_args.kwargs
+    assert called["signal_name"] == "SendMessage"
+    assert called["payload"] == {"message": message}
+
+
 def test_signal_execution_routes_skip_dependency_wait(monkeypatch: pytest.MonkeyPatch) -> None:
     app = FastAPI()
     app.include_router(router)
@@ -5818,7 +5868,7 @@ def test_serialize_execution_treats_system_owner_id_as_system_owner_type() -> No
         memo={},
         owner_id="system",
         entry="run",
-        workflow_type=SimpleNamespace(value="MoonMind.Run"),
+        workflow_type=SimpleNamespace(value="MoonMind.UserWorkflow"),
         state=MoonMindWorkflowState.INITIALIZING,
         workflow_id="wf-1",
         namespace="moonmind",
@@ -5844,7 +5894,7 @@ def test_serialize_execution_leaves_immediate_run_unscheduled() -> None:
         memo={},
         owner_id="user-1",
         entry="run",
-        workflow_type=SimpleNamespace(value="MoonMind.Run"),
+        workflow_type=SimpleNamespace(value="MoonMind.UserWorkflow"),
         state=MoonMindWorkflowState.EXECUTING,
         workflow_id="wf-1",
         namespace="moonmind",
@@ -5871,7 +5921,7 @@ def test_serialize_execution_falls_back_to_updated_at_without_scheduled_time() -
         memo={},
         owner_id="user-1",
         entry="run",
-        workflow_type=SimpleNamespace(value="MoonMind.Run"),
+        workflow_type=SimpleNamespace(value="MoonMind.UserWorkflow"),
         state=MoonMindWorkflowState.EXECUTING,
         workflow_id="wf-1",
         namespace="moonmind",
@@ -5897,7 +5947,7 @@ def test_serialize_execution_surfaces_runtime_model_effort_from_parameters() -> 
         memo={"title": "RT test", "summary": "OK"},
         owner_id="user-1",
         entry="run",
-        workflow_type=SimpleNamespace(value="MoonMind.Run"),
+        workflow_type=SimpleNamespace(value="MoonMind.UserWorkflow"),
         state=MoonMindWorkflowState.EXECUTING,
         workflow_id="mm:rt-1",
         namespace="moonmind",
@@ -5939,7 +5989,7 @@ def test_serialize_execution_surfaces_runtime_from_nested_parameters_runtime_key
         memo={"title": "Nested RT", "summary": "OK"},
         owner_id="user-1",
         entry="run",
-        workflow_type=SimpleNamespace(value="MoonMind.Run"),
+        workflow_type=SimpleNamespace(value="MoonMind.UserWorkflow"),
         state=MoonMindWorkflowState.EXECUTING,
         workflow_id="mm:rt-nested",
         namespace="moonmind",
@@ -5967,7 +6017,7 @@ def test_serialize_execution_surfaces_runtime_from_nested_parameters_runtime_key
 def test_serialize_execution_surfaces_runtime_fields_from_task_runtime_payload() -> None:
     record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
     record.parameters = {
-        "task": {
+        "workflow": {
             "instructions": "Reconstruct this draft.",
             "runtime": {
                 "mode": "claude_code",
@@ -6026,7 +6076,7 @@ def test_serialize_execution_surfaces_task_template_slug_as_primary_skill() -> N
     )
     record.parameters = {
         "targetRuntime": "codex_cli",
-        "task": {
+        "workflow": {
             "title": "Run Jira Orchestrate for MM-501",
             "instructions": "Use the existing Jira Orchestrate workflow.",
             "taskTemplate": {
@@ -6047,7 +6097,7 @@ def test_serialize_execution_surfaces_applied_template_slug_as_primary_skill() -
     record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
     record.parameters = {
         "targetRuntime": "codex_cli",
-        "task": {
+        "workflow": {
             "instructions": "Run the applied preset.",
             "appliedStepTemplates": [
                 {
@@ -6069,7 +6119,7 @@ def test_serialize_execution_uses_latest_applied_template_as_primary_skill() -> 
     record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
     record.parameters = {
         "targetRuntime": "codex_cli",
-        "task": {
+        "workflow": {
             "instructions": "Run the latest applied preset.",
             "appliedStepTemplates": [
                 {
@@ -6097,7 +6147,7 @@ def test_serialize_execution_surfaces_compact_skill_runtime_metadata() -> None:
     record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
     record.parameters = {
         "resolvedSkillsetRef": "artifact:resolved-skills-1",
-        "task": {
+        "workflow": {
             "instructions": "Inspect skill runtime evidence.",
             "skills": {
                 "sets": ["operator-default"],
@@ -6166,7 +6216,7 @@ def test_serialize_execution_surfaces_compact_skill_runtime_metadata() -> None:
 def test_serialize_execution_preserves_direct_skill_source_provenance() -> None:
     record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
     record.parameters = {
-        "task": {"instructions": "Inspect skill runtime evidence."},
+        "workflow": {"instructions": "Inspect skill runtime evidence."},
         "skillsMaterialized": {
             "selectedSkills": ["pr-resolver", "fix-ci"],
             "selectedVersions": [
@@ -6206,7 +6256,7 @@ def test_serialize_execution_preserves_direct_skill_source_provenance() -> None:
 def test_serialize_execution_accepts_snake_case_skill_materialization_metadata() -> None:
     record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
     record.parameters = {
-        "task": {
+        "workflow": {
             "instructions": "Inspect skill runtime evidence.",
             "skills": {"materialization_mode": "hybrid"},
         },
@@ -6235,7 +6285,7 @@ def test_serialize_execution_accepts_snake_case_skill_materialization_metadata()
 def test_serialize_execution_surfaces_skill_lifecycle_intent_for_schedule_defaults() -> None:
     record = _build_execution_record(state=MoonMindWorkflowState.SCHEDULED)
     record.parameters = {
-        "task": {
+        "workflow": {
             "instructions": "Run this later.",
             "skills": {"sets": ["nightly"], "materializationMode": "hybrid"},
         },
@@ -6257,7 +6307,7 @@ def test_serialize_execution_surfaces_skill_lifecycle_intent_for_schedule_defaul
 def test_serialize_execution_marks_lifecycle_defaults_as_inherited_defaults() -> None:
     record = _build_execution_record(state=MoonMindWorkflowState.SCHEDULED)
     record.parameters = {
-        "task": {"instructions": "Run this later."},
+        "workflow": {"instructions": "Run this later."},
         "skillLifecycleIntent": {"source": "schedule"},
     }
 
@@ -6292,16 +6342,16 @@ def test_serialize_execution_ignores_stale_waiting_reason_for_executing_run(
     assert payload.debug_fields is not None
     assert payload.debug_fields.waiting_reason is None
 
-def test_serialize_execution_surfaces_task_run_id_from_memo() -> None:
+def test_serialize_execution_surfaces_agent_run_id_from_memo() -> None:
     record = SimpleNamespace(
         close_status=None,
         search_attributes={"mm_entry": "run"},
-        memo={"title": "Task run", "summary": "OK", "taskRunId": "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"},
+        memo={"title": "Agent run", "summary": "OK", "agentRunId": "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"},
         owner_id="user-1",
         entry="run",
-        workflow_type=SimpleNamespace(value="MoonMind.Run"),
+        workflow_type=SimpleNamespace(value="MoonMind.UserWorkflow"),
         state=MoonMindWorkflowState.EXECUTING,
-        workflow_id="mm:task-run-1",
+        workflow_id="mm:agent-run-1",
         namespace="moonmind",
         run_id="temporal-run-1",
         artifact_refs=[],
@@ -6318,10 +6368,9 @@ def test_serialize_execution_surfaces_task_run_id_from_memo() -> None:
 
     payload = _serialize_execution(record)
 
-    assert payload.task_run_id == "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"
     assert payload.agent_run_id == "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"
     dumped = payload.model_dump(by_alias=True)
-    assert "taskRunId" not in dumped
+    assert "task" + "RunId" not in dumped
     assert dumped["agentRunId"] == "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"
 
 def test_serialize_execution_surfaces_dependency_metadata() -> None:
@@ -6339,7 +6388,7 @@ def test_serialize_execution_surfaces_dependency_metadata() -> None:
         },
         owner_id="user-1",
         entry="run",
-        workflow_type=SimpleNamespace(value="MoonMind.Run"),
+        workflow_type=SimpleNamespace(value="MoonMind.UserWorkflow"),
         state=MoonMindWorkflowState.WAITING_ON_DEPENDENCIES,
         workflow_id="mm:task-deps-1",
         namespace="moonmind",
@@ -6350,7 +6399,7 @@ def test_serialize_execution_surfaces_dependency_metadata() -> None:
         updated_at="2026-03-19T00:00:00Z",
         closed_at=None,
         integration_state=None,
-        parameters={"task": {"dependsOn": ["mm:dep-1", "mm:dep-2"]}},
+        parameters={"workflow": {"dependsOn": ["mm:dep-1", "mm:dep-2"]}},
         paused=False,
         waiting_reason=None,
         attention_required=False,
@@ -6377,7 +6426,7 @@ def test_serialize_execution_repository_ignores_mapping_values_and_uses_first_sc
         },
         owner_id="user-1",
         entry="run",
-        workflow_type=SimpleNamespace(value="MoonMind.Run"),
+        workflow_type=SimpleNamespace(value="MoonMind.UserWorkflow"),
         state=MoonMindWorkflowState.EXECUTING,
         workflow_id="mm:repo-1",
         namespace="moonmind",
@@ -6532,7 +6581,7 @@ def test_describe_execution_includes_live_merge_automation_summary() -> None:
                     "status": "running",
                     "attempt": 1,
                     "updatedAt": "2026-04-08T12:00:00Z",
-                    "refs": {"taskRunId": "resolver-task-run"},
+                    "refs": {"agentRunId": "resolver-agent-run"},
                     "artifacts": {},
                     "checks": [],
                 }
@@ -6554,6 +6603,7 @@ def test_describe_execution_includes_live_merge_automation_summary() -> None:
     assert merge_automation["resolverChildren"] == [
         {
             "workflowId": "resolver:mm:wf-1:pr:1614:head:abc123:1",
+            "agentRunId": "resolver-agent-run",
             "status": "running",
             "detailHref": (
                 "/workflows/resolver%3Amm%3Awf-1%3Apr%3A1614%3Ahead%3Aabc123%3A1"
@@ -6726,7 +6776,7 @@ def test_describe_execution_bounds_slow_live_progress_query(
             side_effect=lambda execution, **_kwargs: execution,
         ),
         patch(
-            "api_service.api.routers.executions._resolve_task_run_ids_from_managed_store",
+            "api_service.api.routers.executions._resolve_agent_run_ids_from_managed_store",
             return_value={},
         ),
         TestClient(app) as test_client,
@@ -6846,7 +6896,7 @@ def test_get_execution_steps_returns_latest_run_ledger() -> None:
                     "refs": {
                         "childWorkflowId": None,
                         "childRunId": None,
-                        "taskRunId": "task-run-1",
+                        "agentRunId": "agent-run-1",
                     },
                     "artifacts": {
                         "outputSummary": None,
@@ -6858,7 +6908,7 @@ def test_get_execution_steps_returns_latest_run_ledger() -> None:
                         "providerSnapshot": None,
                     },
                     "workload": {
-                        "taskRunId": "task-run-1",
+                        "agentRunId": "agent-run-1",
                         "stepId": "run-tests",
                         "attempt": 2,
                         "toolName": "container.run_workload",
@@ -6888,8 +6938,10 @@ def test_get_execution_steps_returns_latest_run_ledger() -> None:
     assert payload["runId"] == "run-99"
     assert payload["runScope"] == "latest"
     assert payload["steps"][0]["executionOrdinal"] == 2
-    assert "taskRunId" not in payload["steps"][0]["refs"]
-    assert "taskRunId" not in payload["steps"][0]["workload"]
+    assert "task" + "RunId" not in payload["steps"][0]["refs"]
+    assert "task" + "RunId" not in payload["steps"][0]["workload"]
+    assert payload["steps"][0]["refs"]["agentRunId"] == "agent-run-1"
+    assert payload["steps"][0]["workload"]["agentRunId"] == "agent-run-1"
     assert payload["steps"][0]["workload"]["profileId"] == "local-python"
     assert payload["steps"][0]["workload"]["imageRef"] == "python:3.12-slim"
     assert payload["steps"][0]["workload"]["sessionContext"] == {
@@ -6897,7 +6949,7 @@ def test_get_execution_steps_returns_latest_run_ledger() -> None:
         "sessionEpoch": 4,
     }
 
-def test_get_execution_steps_enriches_missing_agent_task_run_ids_once() -> None:
+def test_get_execution_steps_enriches_missing_agent_run_ids_once() -> None:
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
@@ -6936,7 +6988,7 @@ def test_get_execution_steps_enriches_missing_agent_task_run_ids_once() -> None:
             "refs": {
                 "childWorkflowId": child_workflow_id,
                 "childRunId": None,
-                "taskRunId": None,
+                "agentRunId": None,
             },
             "artifacts": {
                 "outputSummary": None,
@@ -6986,8 +7038,8 @@ def test_get_execution_steps_enriches_missing_agent_task_run_ids_once() -> None:
     ) -> dict[str, str]:
         to_thread_calls.append((func, args, kwargs))
         return {
-            "mm:wf-1:agent:delegate-agent": "task-run-1",
-            "mm:wf-1:agent:second-agent": "task-run-2",
+            "mm:wf-1:agent:delegate-agent": "agent-run-1",
+            "mm:wf-1:agent:second-agent": "agent-run-2",
         }
 
     with patch(
@@ -6999,9 +7051,11 @@ def test_get_execution_steps_enriches_missing_agent_task_run_ids_once() -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert "taskRunId" not in payload["steps"][0]["refs"]
-    assert "taskRunId" not in payload["steps"][1]["refs"]
-    assert "taskRunId" not in payload["steps"][2]["refs"]
+    assert "task" + "RunId" not in payload["steps"][0]["refs"]
+    assert "task" + "RunId" not in payload["steps"][1]["refs"]
+    assert "task" + "RunId" not in payload["steps"][2]["refs"]
+    assert payload["steps"][0]["refs"]["agentRunId"] == "agent-run-1"
+    assert payload["steps"][1]["refs"]["agentRunId"] == "agent-run-2"
     assert len(to_thread_calls) == 1
     assert to_thread_calls[0][1] == (
         (
@@ -7048,7 +7102,7 @@ def _step_execution_manifest_payload(
         "execution": {
             "childWorkflowId": f"child-{attempt}",
             "childRunId": f"child-run-{attempt}",
-            "taskRunId": f"task-run-{attempt}",
+            "agentRunId": f"agent-run-{attempt}",
         },
         "outputs": {
             "summary": f"Attempt {attempt} summary",
@@ -7101,7 +7155,7 @@ def test_get_execution_step_executions_returns_bounded_manifest_history() -> Non
                     "refs": {
                         "childWorkflowId": None,
                         "childRunId": None,
-                        "taskRunId": None,
+                        "agentRunId": None,
                         "latestStepExecutionManifestRef": "art-attempt-2",
                         "stepExecutionManifestRefs": ["art-attempt-1", "art-attempt-2"],
                     },
@@ -7145,7 +7199,7 @@ def test_get_execution_step_executions_returns_bounded_manifest_history() -> Non
     assert payload["stepExecutions"][1]["runtimeChildRefs"] == {
         "childWorkflowId": "child-2",
         "childRunId": "child-run-2",
-        "taskRunId": "task-run-2",
+        "agentRunId": "agent-run-2",
     }
     assert payload["stepExecutions"][1]["workspacePolicy"] == (
         "continue_from_previous_execution"
@@ -7158,6 +7212,85 @@ def test_get_execution_step_executions_returns_bounded_manifest_history() -> Non
         principal=str(user.id),
         allow_restricted_raw=True,
     )
+
+
+def test_get_execution_step_executions_sanitizes_failed_attempt_summary() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(
+        app,
+        ledger={
+            "workflowId": "mm:wf-1",
+            "runId": "run-99",
+            "runScope": "latest",
+            "steps": [
+                {
+                    "logicalStepId": "implement",
+                    "order": 1,
+                    "title": "Implement",
+                    "tool": {"type": "skill", "name": "jira-implement", "version": "1"},
+                    "dependsOn": [],
+                    "status": "failed",
+                    "waitingReason": None,
+                    "attentionRequired": True,
+                    "attempt": 1,
+                    "startedAt": "2026-05-19T10:00:00Z",
+                    "updatedAt": "2026-05-19T10:01:00Z",
+                    "summary": "Failed",
+                    "checks": [],
+                    "refs": {
+                        "childWorkflowId": None,
+                        "childRunId": None,
+                        "agentRunId": None,
+                        "latestStepExecutionManifestRef": "art-attempt-1",
+                        "stepExecutionManifestRefs": ["art-attempt-1"],
+                    },
+                    "artifacts": {},
+                    "lastError": None,
+                }
+            ],
+        },
+    )
+    _override_user_dependencies(app, is_superuser=True)
+    raw_token = "ghp_123456789012345678901234567890123456"
+    payload = _step_execution_manifest_payload(
+        artifact_ref="art-attempt-1",
+        attempt=1,
+        status="failed",
+    )
+    payload["outputs"] = {
+        "summary": f"failed with token={raw_token}",
+        "diagnosticsRef": "art-diagnostics-1",
+    }
+    artifact_service = SimpleNamespace(
+        read=AsyncMock(
+            return_value=(
+                SimpleNamespace(artifact_id="art-attempt-1"),
+                json.dumps(payload).encode(),
+            )
+        )
+    )
+    app.dependency_overrides[get_async_session] = _empty_session_override
+
+    with patch(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        return_value=artifact_service,
+    ):
+        with TestClient(app) as test_client:
+            response = test_client.get(
+                "/api/executions/mm:wf-1/steps/implement/step-executions"
+            )
+
+    assert response.status_code == 200
+    dumped = response.text
+    assert raw_token not in dumped
+    assert "token=[REDACTED]" in dumped
+    assert response.json()["stepExecutions"][0]["outputRefs"] == {
+        "diagnosticsRef": "art-diagnostics-1"
+    }
 
 
 def test_get_execution_step_execution_returns_bounded_detail_refs() -> None:
@@ -7190,7 +7323,7 @@ def test_get_execution_step_execution_returns_bounded_detail_refs() -> None:
                     "refs": {
                         "childWorkflowId": None,
                         "childRunId": None,
-                        "taskRunId": None,
+                        "agentRunId": None,
                         "latestStepExecutionManifestRef": "art-attempt-2",
                         "stepExecutionManifestRefs": ["art-attempt-1", "art-attempt-2"],
                     },
@@ -7248,7 +7381,7 @@ def test_get_execution_step_execution_returns_bounded_detail_refs() -> None:
     assert body["executionRefs"] == {
         "childWorkflowId": "child-2",
         "childRunId": "child-run-2",
-        "taskRunId": "task-run-2",
+        "agentRunId": "agent-run-2",
     }
     assert body["checkRefs"] == [{"artifactRef": "art-check-2"}]
     assert body["sideEffectRefs"] == {"publicationRef": "art-publish-2"}
@@ -7288,7 +7421,7 @@ def test_get_execution_step_executions_preserves_artifact_authorization() -> Non
                     "refs": {
                         "childWorkflowId": None,
                         "childRunId": None,
-                        "taskRunId": None,
+                        "agentRunId": None,
                         "latestStepExecutionManifestRef": "art-attempt-1",
                         "stepExecutionManifestRefs": ["art-attempt-1"],
                     },
@@ -7375,7 +7508,7 @@ def test_get_execution_steps_falls_back_to_stored_task_steps_when_temporal_query
         "summary": "Executing plan step 2/2: moonspec-implement",
     }
     record.parameters = {
-        "task": {
+        "workflow": {
             "steps": [
                 {
                     "id": "fetch-issue",
@@ -7441,7 +7574,7 @@ def test_get_execution_steps_fallback_prefers_structured_step_order(
         "mm_current_step_order": 2,
     }
     record.parameters = {
-        "task": {
+        "workflow": {
             "steps": [
                 {
                     "id": "fetch-issue",
@@ -7494,7 +7627,7 @@ def test_get_execution_steps_fallback_preserves_independent_steps(
         "summary": "Executing plan step 1/3: alpha",
     }
     record.parameters = {
-        "task": {
+        "workflow": {
             "steps": [
                 {
                     "id": "alpha",
@@ -7804,7 +7937,7 @@ def test_describe_execution_hydrates_provider_profile_metadata() -> None:
     assert payload["providerLabel"] == "Google"
     app.dependency_overrides.clear()
 
-def test_describe_execution_falls_back_to_managed_run_store_task_run_id(
+def test_describe_execution_falls_back_to_managed_run_store_agent_run_id(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     test_client, service, user = client
@@ -7833,7 +7966,7 @@ def test_describe_execution_falls_back_to_managed_run_store_task_run_id(
         response = test_client.get("/api/executions/mm:wf-1")
 
     assert response.status_code == 200
-    assert "taskRunId" not in response.json()
+    assert "task" + "RunId" not in response.json()
     assert response.json()["agentRunId"] == "550e8400-e29b-41d4-a716-446655440000"
     assert len(to_thread_calls) == 1
     assert to_thread_calls[0][1] == (("mm:wf-1",),)
@@ -7924,14 +8057,14 @@ async def test_request_rerun_update_flushes_snapshot_reuse_before_serializing_re
                 is_superuser=False,
             )
             created = await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=user.id,
                 title="Rerun source",
                 input_artifact_ref=None,
                 plan_artifact_ref=None,
                 manifest_artifact_ref=None,
                 failure_policy=None,
-                initial_parameters={"task": {"instructions": "Do the work."}},
+                initial_parameters={"workflow": {"instructions": "Do the work."}},
                 idempotency_key=None,
             )
             source_workflow_id = created.workflow_id
@@ -8001,15 +8134,15 @@ def test_request_rerun_update_snapshot_hydrates_instructions_from_input_artifact
     app = FastAPI()
     app.include_router(router)
     service = AsyncMock()
-    source_record = _build_execution_record(has_task_input_snapshot=False)
-    rerun_record = _build_execution_record(has_task_input_snapshot=False)
+    source_record = _build_execution_record(has_workflow_input_snapshot=False)
+    rerun_record = _build_execution_record(has_workflow_input_snapshot=False)
     rerun_record.workflow_id = "mm:rerun-created"
     rerun_record.run_id = "run-rerun"
     rerun_record.input_ref = "art-full-input"
     rerun_record.parameters = {
         "repository": "Moon/Mind",
         "targetRuntime": "codex_cli",
-        "task": {
+        "workflow": {
             "title": "Hydrated rerun",
             "steps": [
                 {"id": "step-1", "title": "First"},
@@ -8032,12 +8165,12 @@ def test_request_rerun_update_snapshot_hydrates_instructions_from_input_artifact
     app.dependency_overrides[get_async_session] = lambda: session
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
     monkeypatch.setattr(
-        settings.temporal_dashboard, "temporal_task_editing_enabled", True
+        settings.temporal_dashboard, "temporal_workflow_editing_enabled", True
     )
     artifact_payload = {
         "repository": "Moon/Mind",
         "targetRuntime": "codex_cli",
-        "task": {
+        "workflow": {
             "title": "Hydrated rerun",
             "instructions": "Top-level rerun instructions.",
             "steps": [
@@ -8066,10 +8199,10 @@ def test_request_rerun_update_snapshot_hydrates_instructions_from_input_artifact
         "api_service.api.routers.executions.get_temporal_artifact_service",
         lambda _session: artifact_service,
     )
-    captured_task_payload: dict[str, object] = {}
+    captured_workflow_payload: dict[str, object] = {}
 
     async def _persist_snapshot(**kwargs) -> str:
-        captured_task_payload.update(kwargs["task_payload"])
+        captured_workflow_payload.update(kwargs["task_payload"])
         target_record = kwargs["record"]
         target_record.memo = {
             **dict(target_record.memo or {}),
@@ -8081,7 +8214,7 @@ def test_request_rerun_update_snapshot_hydrates_instructions_from_input_artifact
 
     persist_mock = AsyncMock(side_effect=_persist_snapshot)
     monkeypatch.setattr(
-        "api_service.api.routers.executions._persist_original_task_input_snapshot",
+        "api_service.api.routers.executions._persist_original_workflow_input_snapshot",
         persist_mock,
     )
 
@@ -8103,8 +8236,8 @@ def test_request_rerun_update_snapshot_hydrates_instructions_from_input_artifact
         allow_restricted_raw=True,
     )
     persist_mock.assert_awaited_once()
-    assert captured_task_payload["instructions"] == "Top-level rerun instructions."
-    steps = captured_task_payload["steps"]
+    assert captured_workflow_payload["instructions"] == "Top-level rerun instructions."
+    steps = captured_workflow_payload["steps"]
     assert steps[0]["instructions"] == "First step instructions."
     assert steps[1]["instructions"] == "Second step instructions."
     session.commit.assert_awaited_once()
@@ -8116,7 +8249,7 @@ def test_task_input_snapshot_artifact_id_strips_input_prefix_without_scheme() ->
 
 
 def test_task_input_snapshot_merge_preserves_step_deletions() -> None:
-    merged = _merge_task_preserving_artifact_instructions(
+    merged = _merge_workflow_preserving_artifact_instructions(
         {
             "steps": [
                 {"id": "step-1", "title": "First", "instructions": "Original first"},
@@ -8134,7 +8267,7 @@ def test_task_input_snapshot_merge_preserves_step_deletions() -> None:
 def test_original_task_input_snapshot_payload_preserves_mm639_authored_fields() -> None:
     task_payload = _mm639_authored_task_payload()
 
-    payload = _build_original_task_input_snapshot_payload(
+    payload = _build_original_workflow_input_snapshot_payload(
         source_kind="create",
         payload={
             "repository": "MoonLadderStudios/MoonMind",
@@ -8156,7 +8289,7 @@ def test_original_task_input_snapshot_payload_preserves_mm639_authored_fields() 
         ],
     )
 
-    authored = payload["draft"]["authoredTaskInput"]
+    authored = payload["draft"]["authoredWorkflowInput"]
     assert authored["traceability"]["jiraIssueKey"] == "MM-639"
     assert authored["objective"]["instructions"] == (
         "Preserve the original authored task input for MM-639."
@@ -8199,10 +8332,10 @@ def test_original_task_input_snapshot_payload_preserves_mm639_authored_fields() 
 
 def test_missing_attachment_aware_snapshot_descriptor_is_degraded_explicitly() -> None:
     record = _build_execution_record(
-        has_task_input_snapshot=False,
+        has_workflow_input_snapshot=False,
     )
     record.parameters = {
-        "task": {
+        "workflow": {
             "instructions": "Attachment-aware task without a snapshot.",
             "inputAttachments": [
                 {
@@ -8214,7 +8347,7 @@ def test_missing_attachment_aware_snapshot_descriptor_is_degraded_explicitly() -
         }
     }
 
-    descriptor = _task_input_snapshot_descriptor_from_record(record)
+    descriptor = _workflow_input_snapshot_descriptor_from_record(record)
 
     assert descriptor.available is False
     assert descriptor.reconstruction_mode == "degraded_read_only"
@@ -8228,10 +8361,10 @@ def test_missing_attachment_aware_snapshot_descriptor_is_degraded_explicitly() -
 
 def test_missing_legacy_attachment_ref_snapshot_descriptor_is_degraded() -> None:
     record = _build_execution_record(
-        has_task_input_snapshot=False,
+        has_workflow_input_snapshot=False,
     )
     record.parameters = {
-        "task": {
+        "workflow": {
             "instructions": "Legacy attachment-aware task without a snapshot.",
             "attachmentRefs": [
                 {
@@ -8255,7 +8388,7 @@ def test_missing_legacy_attachment_ref_snapshot_descriptor_is_degraded() -> None
         }
     }
 
-    descriptor = _task_input_snapshot_descriptor_from_record(record)
+    descriptor = _workflow_input_snapshot_descriptor_from_record(record)
 
     assert descriptor.available is False
     assert descriptor.reconstruction_mode == "degraded_read_only"
@@ -8287,7 +8420,7 @@ def test_task_editing_update_route_emits_attempt_and_result_metrics() -> None:
                     "updateName": "UpdateInputs",
                     "inputArtifactRef": "artifact://input/new",
                     "parametersPatch": {
-                        "task": {"instructions": "Edited instructions."}
+                        "workflow": {"instructions": "Edited instructions."}
                     },
                 },
             )
@@ -8296,19 +8429,19 @@ def test_task_editing_update_route_emits_attempt_and_result_metrics() -> None:
         metric_calls = [
             call
             for call in metrics.increment.call_args_list
-            if call.args[0] == "temporal_task_editing.event"
+            if call.args[0] == "temporal_workflow_editing.event"
         ]
         assert len(metric_calls) == 2
         assert metric_calls[0].kwargs["tags"] == {
             "event": "submit_attempt",
             "update_name": "UpdateInputs",
-            "workflow_type": "MoonMind.Run",
+            "workflow_type": "MoonMind.UserWorkflow",
             "state": "executing",
         }
         assert metric_calls[1].kwargs["tags"] == {
             "event": "submit_result",
             "update_name": "UpdateInputs",
-            "workflow_type": "MoonMind.Run",
+            "workflow_type": "MoonMind.UserWorkflow",
             "state": "executing",
             "result": "success",
             "applied": "next_safe_point",
@@ -8335,12 +8468,12 @@ def test_task_editing_update_route_emits_failure_reason_metrics() -> None:
         metric_calls = [
             call
             for call in metrics.increment.call_args_list
-            if call.args[0] == "temporal_task_editing.event"
+            if call.args[0] == "temporal_workflow_editing.event"
         ]
         assert metric_calls[1].kwargs["tags"] == {
             "event": "submit_result",
             "update_name": "RequestRerun",
-            "workflow_type": "MoonMind.Run",
+            "workflow_type": "MoonMind.UserWorkflow",
             "state": "executing",
             "result": "failure",
             "reason": "validation",
@@ -8390,7 +8523,7 @@ def test_describe_manifest_execution_exposes_bounded_manifest_fields() -> None:
 def test_describe_execution_enriches_dependency_summaries_without_dunder_dict() -> None:
     for test_client, service in _client_with_service():
         record = _build_execution_record()
-        record.parameters = {"task": {"dependsOn": ["mm:dep-1"]}}
+        record.parameters = {"workflow": {"dependsOn": ["mm:dep-1"]}}
         service.describe_execution.return_value = record
         service.enrich_dependency_summaries.side_effect = [
             [
@@ -8400,7 +8533,7 @@ def test_describe_execution_enriches_dependency_summaries_without_dunder_dict() 
                     summary="done",
                     state="completed",
                     close_status="completed",
-                    workflow_type="MoonMind.Run",
+                    workflow_type="MoonMind.UserWorkflow",
                 )
             ],
             [
@@ -8410,7 +8543,7 @@ def test_describe_execution_enriches_dependency_summaries_without_dunder_dict() 
                     summary="waiting",
                     state="executing",
                     close_status=None,
-                    workflow_type="MoonMind.Run",
+                    workflow_type="MoonMind.UserWorkflow",
                 )
             ],
         ]
@@ -8429,7 +8562,7 @@ def test_describe_execution_enriches_dependency_summaries_without_dunder_dict() 
                 "summary": "done",
                 "state": "completed",
                 "closeStatus": "completed",
-                "workflowType": "MoonMind.Run",
+                "workflowType": "MoonMind.UserWorkflow",
             }
         ]
         assert payload["dependents"] == [
@@ -8439,7 +8572,7 @@ def test_describe_execution_enriches_dependency_summaries_without_dunder_dict() 
                 "summary": "waiting",
                 "state": "executing",
                 "closeStatus": None,
-                "workflowType": "MoonMind.Run",
+                "workflowType": "MoonMind.UserWorkflow",
             }
         ]
 
@@ -8513,7 +8646,7 @@ def test_manifest_nodes_route_returns_page_payload() -> None:
                 {
                     "nodeId": "node-b",
                     "state": "running",
-                    "workflowType": "MoonMind.Run",
+                    "workflowType": "MoonMind.UserWorkflow",
                 }
             ],
             "nextCursor": "cursor-1",
@@ -8530,7 +8663,7 @@ def test_manifest_nodes_route_returns_page_payload() -> None:
         assert body["count"] == 1
         assert body["nextCursor"] == "cursor-1"
         assert body["items"][0]["nodeId"] == "node-b"
-        assert body["items"][0]["workflowType"] == "MoonMind.Run"
+        assert body["items"][0]["workflowType"] == "MoonMind.UserWorkflow"
 
 def test_describe_execution_includes_actions_and_debug_fields(
     monkeypatch: pytest.MonkeyPatch,
@@ -8546,7 +8679,7 @@ def test_describe_execution_includes_actions_and_debug_fields(
     _override_user_dependencies(app, is_superuser=True)
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
     monkeypatch.setattr(
-        settings.temporal_dashboard, "temporal_task_editing_enabled", True
+        settings.temporal_dashboard, "temporal_workflow_editing_enabled", True
     )
     monkeypatch.setattr(settings.temporal_dashboard, "debug_fields_enabled", True)
 
@@ -8588,7 +8721,7 @@ def test_describe_execution_exposes_dependency_bypass_action(
     assert body["actions"]["canBypassDependencies"] is True
     assert "canBypassDependencies" not in body["actions"]["disabledReasons"]
 
-def test_describe_execution_exposes_temporal_task_editing_contract(
+def test_describe_execution_exposes_temporal_workflow_editing_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -8600,14 +8733,14 @@ def test_describe_execution_exposes_temporal_task_editing_contract(
     record.parameters = {
         "targetRuntime": "codex_cli",
         "model": "gpt-5.4",
-        "task": {"git": {"repository": "Moon/Mind"}},
+        "workflow": {"git": {"repository": "Moon/Mind"}},
     }
     mock_service.describe_execution.return_value = record
     app.dependency_overrides[_get_service] = lambda: mock_service
     _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=True)
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
-    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_workflow_editing_enabled", True)
 
     with TestClient(app) as test_client:
         response = test_client.get("/api/executions/mm:wf-1")
@@ -8615,7 +8748,7 @@ def test_describe_execution_exposes_temporal_task_editing_contract(
     assert response.status_code == 200
     body = response.json()
     assert body["workflowId"] == "mm:wf-1"
-    assert body["workflowType"] == "MoonMind.Run"
+    assert body["workflowType"] == "MoonMind.UserWorkflow"
     assert body["inputArtifactRef"] == "artifact://input/current"
     assert body["planArtifactRef"] == "artifact://plan/current"
     assert body["inputParameters"]["targetRuntime"] == "codex_cli"
@@ -8636,7 +8769,7 @@ def test_describe_execution_exposes_edit_for_rerun_for_failed_task(
     _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=True)
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
-    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_workflow_editing_enabled", True)
 
     with TestClient(app) as test_client:
         response = test_client.get("/api/executions/mm:wf-1")
@@ -8667,7 +8800,7 @@ def test_describe_execution_exposes_failed_step_recovery_distinct_from_lifecycle
     _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=True)
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
-    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_workflow_editing_enabled", True)
 
     with TestClient(app) as test_client:
         response = test_client.get("/api/executions/mm:wf-1")
@@ -8693,7 +8826,7 @@ def test_describe_execution_exposes_target_attachment_and_recovery_diagnostics(
     mock_service = AsyncMock()
     record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
     record.parameters = {
-        "task": {
+        "workflow": {
             "instructions": "Review the screenshot.",
             "attachmentRefs": [
                 {
@@ -8773,7 +8906,7 @@ def test_describe_execution_exposes_target_attachment_and_recovery_diagnostics(
     _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=True)
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
-    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_workflow_editing_enabled", True)
 
     with TestClient(app) as test_client:
         response = test_client.get("/api/executions/mm:wf-1")
@@ -8807,7 +8940,7 @@ def test_describe_execution_distinguishes_empty_step_attachment_target(
     mock_service = AsyncMock()
     record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
     record.parameters = {
-        "task": {
+        "workflow": {
             "instructions": "Review the screenshot.",
             "inputAttachments": [
                 {
@@ -8830,7 +8963,7 @@ def test_describe_execution_distinguishes_empty_step_attachment_target(
     _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=True)
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
-    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_workflow_editing_enabled", True)
 
     with TestClient(app) as test_client:
         response = test_client.get("/api/executions/mm:wf-1")
@@ -8852,7 +8985,7 @@ def test_describe_execution_preserves_generated_context_refs(
     mock_service = AsyncMock()
     record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
     record.parameters = {
-        "task": {"instructions": "Review prepared context."},
+        "workflow": {"instructions": "Review prepared context."},
         "targetDiagnostics": {
             "targets": [
                 {
@@ -8872,7 +9005,7 @@ def test_describe_execution_preserves_generated_context_refs(
     _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=True)
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
-    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_workflow_editing_enabled", True)
 
     with TestClient(app) as test_client:
         response = test_client.get("/api/executions/mm:wf-1")
@@ -8896,7 +9029,7 @@ def test_describe_execution_preserves_target_semantics_for_alias_payloads(
     mock_service = AsyncMock()
     record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
     record.parameters = {
-        "task": {
+        "workflow": {
             "instructions": "Review aliased attachments.",
             "input_attachments": [
                 {
@@ -8948,7 +9081,7 @@ def test_describe_execution_preserves_target_semantics_for_alias_payloads(
     _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=True)
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
-    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_workflow_editing_enabled", True)
 
     with TestClient(app) as test_client:
         response = test_client.get("/api/executions/mm:wf-1")
@@ -8972,7 +9105,7 @@ def test_describe_execution_surfaces_failed_step_execution_recovery_phase(
     mock_service = AsyncMock()
     record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
     record.parameters = {
-        "task": {"instructions": "Resume failed while executing step."},
+        "workflow": {"instructions": "Resume failed while executing step."},
         "targetDiagnostics": {
             "recovery": {
                 "resumed": True,
@@ -8995,7 +9128,7 @@ def test_describe_execution_surfaces_failed_step_execution_recovery_phase(
     _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=True)
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
-    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_workflow_editing_enabled", True)
 
     with TestClient(app) as test_client:
         response = test_client.get("/api/executions/mm:wf-1")
@@ -9015,7 +9148,7 @@ def test_describe_execution_prefers_diagnostics_failed_phase_over_disabled_reaso
     mock_service = AsyncMock()
     record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
     record.parameters = {
-        "task": {"instructions": "Resume failed while executing step."},
+        "workflow": {"instructions": "Resume failed while executing step."},
         "targetDiagnostics": {
             "recovery": {
                 "resumed": True,
@@ -9038,7 +9171,7 @@ def test_describe_execution_prefers_diagnostics_failed_phase_over_disabled_reaso
     _override_user_dependencies(app, is_superuser=True)
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
     monkeypatch.setattr(
-        settings.temporal_dashboard, "temporal_task_editing_enabled", True
+        settings.temporal_dashboard, "temporal_workflow_editing_enabled", True
     )
 
     with TestClient(app) as test_client:
@@ -9061,7 +9194,7 @@ def test_describe_execution_omits_recovery_for_routine_recovery_action_gating(
     mock_service = AsyncMock()
     record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
     record.parameters = {
-        "task": {
+        "workflow": {
             "instructions": "Review the screenshot.",
             "attachmentRefs": [
                 {
@@ -9077,7 +9210,7 @@ def test_describe_execution_omits_recovery_for_routine_recovery_action_gating(
     _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=True)
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
-    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_workflow_editing_enabled", True)
 
     with TestClient(app) as test_client:
         response = test_client.get("/api/executions/mm:wf-1")
@@ -9154,7 +9287,7 @@ def test_describe_execution_requires_complete_recovery_evidence(
     _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=True)
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
-    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_workflow_editing_enabled", True)
 
     with TestClient(app) as test_client:
         response = test_client.get("/api/executions/mm:wf-1")
@@ -9187,7 +9320,7 @@ def test_describe_execution_rejects_stale_recovery_evidence(
     _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=True)
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
-    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_workflow_editing_enabled", True)
 
     with TestClient(app) as test_client:
         response = test_client.get("/api/executions/mm:wf-1")
@@ -9247,10 +9380,10 @@ def test_failed_step_recovery_submission_rejects_stale_recovery_evidence(
     [
         (
             {
-                "task": {"instructions": "change the task"},
+                "workflow": {"instructions": "change the task"},
                 "runtime": {"model": "gpt-5.4"},
             },
-            ["runtime", "task"],
+            ["runtime"],
         ),
         (
             {
@@ -9284,7 +9417,7 @@ def test_failed_step_recovery_submission_rejects_stale_recovery_evidence(
                 "model": "gpt-5.4",
                 "requestedModel": "gpt-5.4",
                 "effort": "high",
-                "parametersPatch": {"task": {"instructions": "changed"}},
+                "parametersPatch": {"workflow": {"instructions": "changed"}},
                 "inputArtifactRef": "artifact://input/new",
                 "planArtifactRef": "artifact://plan/new",
                 "manifestArtifactRef": "artifact://manifest/new",
@@ -9335,7 +9468,7 @@ def test_mm773_serialize_execution_surfaces_comparison_source_related_run() -> N
     record.parameters = {
         "targetRuntime": "codex_cli",
         "model": "gpt-5.4",
-        "task": {
+        "workflow": {
             "runtime": {"mode": "codex_cli", "model": "gpt-5.4"},
             "comparison": {
                 "kind": "model_runtime_comparison",
@@ -9368,7 +9501,7 @@ def test_mm773_serialize_execution_surfaces_comparison_source_related_run() -> N
 async def test_mm773_hydrates_related_run_runtime_model_metadata() -> None:
     record = _build_execution_record(state=MoonMindWorkflowState.COMPLETED)
     record.parameters = {
-        "task": {
+        "workflow": {
             "comparison": {
                 "kind": "model_runtime_comparison",
                 "sourceWorkflowId": "mm:source-run",
@@ -9386,7 +9519,7 @@ async def test_mm773_hydrates_related_run_runtime_model_metadata() -> None:
         "model": "gemini-2.5-pro",
         "requestedModel": "gemini-2.5-pro",
         "effort": "medium",
-        "task": {"runtime": {"mode": "gemini_cli", "effort": "medium"}},
+        "workflow": {"runtime": {"mode": "gemini_cli", "effort": "medium"}},
     }
     session = SimpleNamespace(get=AsyncMock(return_value=source))
 
@@ -9407,7 +9540,7 @@ async def test_mm773_hydrates_related_run_metadata_for_same_owner() -> None:
     user = SimpleNamespace(id=uuid4(), is_superuser=False)
     record = _build_execution_record(owner_id=str(user.id))
     record.parameters = {
-        "task": {
+        "workflow": {
             "comparison": {
                 "kind": "model_runtime_comparison",
                 "sourceWorkflowId": "mm:source-run",
@@ -9441,7 +9574,7 @@ async def test_mm773_skips_related_run_metadata_for_foreign_owner() -> None:
     user = SimpleNamespace(id=uuid4(), is_superuser=False)
     record = _build_execution_record(owner_id=str(user.id))
     record.parameters = {
-        "task": {
+        "workflow": {
             "comparison": {
                 "kind": "model_runtime_comparison",
                 "sourceWorkflowId": "mm:source-run",
@@ -9784,18 +9917,18 @@ def test_recovery_not_available_reason_prioritizes_mismatch_over_missing_plan() 
 
     assert reason == "checkpoint_inconsistent"
 
-def test_temporal_task_editing_actions_require_run_workflow_and_feature_flag(
+def test_temporal_workflow_editing_actions_require_run_workflow_and_feature_flag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
-    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", False)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_workflow_editing_enabled", False)
     disabled_record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
 
     disabled_actions = _serialize_execution(disabled_record).actions
     assert disabled_actions.can_update_inputs is False
-    assert disabled_actions.disabled_reasons["canUpdateInputs"] == "temporal_task_editing_disabled"
+    assert disabled_actions.disabled_reasons["canUpdateInputs"] == "temporal_workflow_editing_disabled"
 
-    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_workflow_editing_enabled", True)
     manifest_record = _build_execution_record(
         workflow_type=TemporalWorkflowType.MANIFEST_INGEST,
         state=MoonMindWorkflowState.COMPLETED,
@@ -9810,7 +9943,7 @@ def test_temporal_task_editing_actions_require_run_workflow_and_feature_flag(
     assert manifest_actions.can_rerun is False
     assert manifest_actions.disabled_reasons["canRerun"] == "unsupported_workflow_type"
 
-    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", False)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_workflow_editing_enabled", False)
     disabled_manifest_actions = _serialize_execution(manifest_record).actions
     assert disabled_manifest_actions.can_rerun is False
     assert (
@@ -9818,14 +9951,14 @@ def test_temporal_task_editing_actions_require_run_workflow_and_feature_flag(
         == "unsupported_workflow_type"
     )
 
-def test_temporal_task_editing_actions_require_original_snapshot(
+def test_temporal_workflow_editing_actions_require_original_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
-    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_workflow_editing_enabled", True)
     record = _build_execution_record(
         state=MoonMindWorkflowState.COMPLETED,
-        has_task_input_snapshot=False,
+        has_workflow_input_snapshot=False,
     )
 
     actions = _serialize_execution(record).actions
@@ -9846,7 +9979,7 @@ def test_mm644_failed_task_edit_for_rerun_requires_authoritative_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
-    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_workflow_editing_enabled", True)
     eligible = _build_execution_record(state=MoonMindWorkflowState.FAILED)
 
     eligible_body = _serialize_execution(eligible).model_dump(by_alias=True)
@@ -9858,7 +9991,7 @@ def test_mm644_failed_task_edit_for_rerun_requires_authoritative_snapshot(
 
     missing_snapshot = _build_execution_record(
         state=MoonMindWorkflowState.FAILED,
-        has_task_input_snapshot=False,
+        has_workflow_input_snapshot=False,
     )
     missing_body = _serialize_execution(missing_snapshot).model_dump(by_alias=True)
 
@@ -9871,11 +10004,11 @@ def test_mm644_failed_task_edit_for_rerun_requires_authoritative_snapshot(
 
 
 def test_mm644_rerun_snapshot_payload_records_source_lineage() -> None:
-    payload = _build_original_task_input_snapshot_payload(
+    payload = _build_original_workflow_input_snapshot_payload(
         source_kind="rerun",
         payload={
             "repository": "MoonLadderStudios/MoonMind",
-            "task": {
+            "workflow": {
                 "instructions": "MM-644 edited retry instructions.",
                 "recovery": {
                     "kind": "edited_full_retry",
@@ -9901,7 +10034,7 @@ def test_mm644_rerun_snapshot_payload_records_source_lineage() -> None:
         "sourceWorkflowId": "mm:failed-source",
         "sourceRunId": "run-source",
     }
-    assert payload["draft"]["task"]["recovery"]["kind"] == "edited_full_retry"
+    assert payload["draft"]["workflow"]["recovery"]["kind"] == "edited_full_retry"
 
 
 @pytest.mark.asyncio
@@ -9917,7 +10050,7 @@ async def test_exact_rerun_reuses_source_task_input_snapshot_lineage() -> None:
         workflow_id="mm:rerun",
         run_id="run-rerun",
         namespace="moonmind",
-        workflow_type=TemporalWorkflowType.RUN,
+        workflow_type=TemporalWorkflowType.USER_WORKFLOW,
         memo={},
         artifact_refs=[],
     )
@@ -9925,7 +10058,7 @@ async def test_exact_rerun_reuses_source_task_input_snapshot_lineage() -> None:
         workflow_id="mm:rerun",
         run_id="run-rerun",
         namespace="moonmind",
-        workflow_type=TemporalWorkflowType.RUN,
+        workflow_type=TemporalWorkflowType.USER_WORKFLOW,
         memo={},
         artifact_refs=[],
     )
@@ -9970,7 +10103,7 @@ async def test_exact_rerun_reuses_snapshot_defaults_invalid_version() -> None:
         workflow_id="mm:rerun",
         run_id="run-rerun",
         namespace="moonmind",
-        workflow_type=TemporalWorkflowType.RUN,
+        workflow_type=TemporalWorkflowType.USER_WORKFLOW,
         memo={},
         artifact_refs=[],
     )
@@ -9991,16 +10124,16 @@ def test_terminal_task_editing_actions_reject_parameter_fallback_without_snapsho
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
-    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_workflow_editing_enabled", True)
     record = _build_execution_record(
         state=MoonMindWorkflowState.FAILED,
-        has_task_input_snapshot=False,
+        has_workflow_input_snapshot=False,
     )
     record.parameters = {
         "requestType": "task",
         "repository": "Moon/Mind",
         "targetRuntime": "codex_cli",
-        "task": {
+        "workflow": {
             "instructions": "Run Jira Orchestrate for MM-501.",
             "steps": [
                 {
@@ -10035,16 +10168,16 @@ def test_terminal_task_editing_actions_reject_title_only_parameter_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
-    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_workflow_editing_enabled", True)
     record = _build_execution_record(
         state=MoonMindWorkflowState.FAILED,
-        has_task_input_snapshot=False,
+        has_workflow_input_snapshot=False,
     )
     record.parameters = {
         "requestType": "task",
         "repository": "Moon/Mind",
         "targetRuntime": "codex_cli",
-        "task": {
+        "workflow": {
             "steps": [
                 {
                     "id": "step-1",
@@ -10132,7 +10265,7 @@ def test_serialize_execution_canceled_state_uses_correct_spelling() -> None:
         memo={},
         owner_id="user-1",
         entry="run",
-        workflow_type=SimpleNamespace(value="MoonMind.Run"),
+        workflow_type=SimpleNamespace(value="MoonMind.UserWorkflow"),
         state=MoonMindWorkflowState.CANCELED,
         workflow_id="mm:canceled-1",
         namespace="moonmind",

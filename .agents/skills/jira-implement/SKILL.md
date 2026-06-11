@@ -81,7 +81,7 @@ moonmind rag search \
    - Read applicable repo instructions before editing.
    - Use `rg` for targeted searches by feature terms, Jira keywords, API names, UI text, and related tests.
    - Identify the narrowest source, test, docs, migration, and fixture files needed for the issue.
-   - If the issue touches agent skills, read `docs/Tasks/AgentSkillSystem.md` and preserve `.agents/skills` as the canonical active path.
+   - If the issue touches agent skills, read `docs/Steps/SkillSystem.md` and preserve `.agents/skills` as the canonical active path.
 
 4. Implement the change.
    - Keep edits scoped to the Jira requirements and current repository patterns.

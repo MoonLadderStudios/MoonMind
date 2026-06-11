@@ -81,7 +81,7 @@ def test_initialize_from_payload_captures_input_and_plan_refs(
     _workflow_type, _parameters, input_ref, plan_ref, _scheduled_for = (
         workflow._initialize_from_payload(
             {
-                "workflowType": "MoonMind.Run",
+                "workflowType": "MoonMind.UserWorkflow",
                 "initialParameters": {"repo": "MoonLadderStudios/MoonMind"},
                 "inputArtifactRef": "art_input_1",
                 "planArtifactRef": "art_plan_1",
@@ -107,10 +107,10 @@ def test_initialize_from_payload_tracks_declared_dependencies(
 
     workflow._initialize_from_payload(
         {
-            "workflowType": "MoonMind.Run",
+            "workflowType": "MoonMind.UserWorkflow",
             "initialParameters": {
                 "repo": "MoonLadderStudios/MoonMind",
-                "task": {"dependsOn": ["mm:dep-1", "mm:dep-2"]},
+                "workflow": {"dependsOn": ["mm:dep-1", "mm:dep-2"]},
             },
         }
     )
@@ -675,7 +675,7 @@ async def test_run_execution_stage_stops_plan_after_structured_blocked_outcome(
             "output_refs": [],
         }
 
-    async def fake_bind_task_scoped_session(
+    async def fake_bind_workflow_scoped_session(
         self: MoonMindRunWorkflow,
         request: object,
     ) -> object:
@@ -739,8 +739,8 @@ async def test_run_execution_stage_stops_plan_after_structured_blocked_outcome(
     )
     monkeypatch.setattr(
         MoonMindRunWorkflow,
-        "_maybe_bind_task_scoped_session",
-        fake_bind_task_scoped_session,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
     )
 
     await workflow._run_execution_stage(
@@ -1758,7 +1758,7 @@ async def test_run_execution_stage_publish_mode_pr_uses_publish_overrides(
         parameters={
             "repo": "MoonLadderStudios/MoonMind",
             "publishMode": "pr",
-            "task": {
+            "workflow": {
                 "mergeAutomation": {"enabled": True},
                 "publish": {
                     "prTitle": "OAuth redirect cleanup",
@@ -1887,7 +1887,7 @@ async def test_run_execution_stage_publish_mode_pr_defaults_title_from_task_inte
         parameters={
             "repo": "MoonLadderStudios/MoonMind",
             "publishMode": "pr",
-            "task": {
+            "workflow": {
                 "title": "Refactor callback handling",
                 "instructions": "Update callback handler to support edge cases.",
             },
@@ -1910,7 +1910,7 @@ async def test_run_execution_stage_publish_mode_pr_prefers_pushed_branch_for_nat
     workflow._repo = "MoonLadderStudios/MoonMind"
     captured_create_payload: dict[str, Any] = {}
 
-    async def fake_bind_task_scoped_session(
+    async def fake_bind_workflow_scoped_session(
         self: MoonMindRunWorkflow,
         request: object,
     ) -> object:
@@ -2010,8 +2010,8 @@ async def test_run_execution_stage_publish_mode_pr_prefers_pushed_branch_for_nat
     monkeypatch.setattr(run_workflow_module.workflow, "execute_child_workflow", fake_execute_child_workflow)
     monkeypatch.setattr(
         MoonMindRunWorkflow,
-        "_maybe_bind_task_scoped_session",
-        fake_bind_task_scoped_session,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
     )
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
     monkeypatch.setattr(
@@ -2098,6 +2098,51 @@ def test_activity_result_provider_failure_summary_reads_profile_from_failure() -
         == "Provider authentication failed with HTTP 401 for profile codex_default: "
         "http 401 (retryRecommendation: reauthenticate)"
     )
+
+
+def test_activity_result_provider_failure_summary_includes_agent_runtime_reason() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    message = workflow._activity_result_provider_failure_summary(
+        {
+            "status": "FAILED",
+            "outputs": {
+                "error": "execution_error",
+                "summary": "codex app-server turn/completed produced no assistant output",
+                "diagnosticsRef": "art_empty_turn",
+                "profileId": "codex_default",
+                "turnStatus": "failed",
+                "turnMetadata": {
+                    "failureCause": "app_server_protocol_empty_turn",
+                    "retryRecommendedAction": "clear_session",
+                },
+            },
+        }
+    )
+
+    assert message == (
+        "Agent runtime failed with execution_error for profile codex_default "
+        "due to app_server_protocol_empty_turn: codex app-server turn/completed "
+        "produced no assistant output (retryRecommendedAction: clear_session; "
+        "diagnosticsRef: art_empty_turn)"
+    )
+
+
+def test_activity_result_provider_failure_summary_ignores_generic_activity_failure() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    message = workflow._activity_result_provider_failure_summary(
+        {
+            "status": "FAILED",
+            "outputs": {
+                "error": "execution_error",
+                "summary": "activity exited with code 1",
+            },
+        }
+    )
+
+    assert message is None
+
 
 @pytest.mark.asyncio
 async def test_skipped_jira_blocker_wait_restores_executing_state(
@@ -2238,7 +2283,7 @@ async def test_run_execution_stage_fail_fast_raises_provider_failure_summary(
     async def fake_resolve_skillset_ref(_self: object, **_kwargs: object) -> str:
         return "art_skillset_1"
 
-    async def fake_bind_task_scoped_session(_self: object, request: object) -> object:
+    async def fake_bind_workflow_scoped_session(_self: object, request: object) -> object:
         return request
 
     async def fake_fetch_profile_snapshots(_self: object) -> None:
@@ -2276,8 +2321,8 @@ async def test_run_execution_stage_fail_fast_raises_provider_failure_summary(
     )
     monkeypatch.setattr(
         MoonMindRunWorkflow,
-        "_maybe_bind_task_scoped_session",
-        fake_bind_task_scoped_session,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
     )
     monkeypatch.setattr(
         MoonMindRunWorkflow,
@@ -2296,6 +2341,208 @@ async def test_run_execution_stage_fail_fast_raises_provider_failure_summary(
             parameters={"repo": "MoonLadderStudios/MoonMind"},
             plan_ref="art_plan_1",
         )
+
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_fail_fast_raises_agent_runtime_failure_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.schemas.agent_runtime_models import AgentRunResult
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    step_execution_artifact_ids = count(1)
+    child_attempts = 0
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> object:
+        if activity_type == "artifact.create":
+            artifact_create_result = _step_execution_artifact_create_result(
+                payload,
+                step_execution_artifact_ids,
+            )
+            if artifact_create_result is not None:
+                return artifact_create_result
+        assert activity_type == "artifact.read"
+        return json.dumps(
+            {
+                "plan_version": "1.0",
+                "metadata": {
+                    "title": "Test Plan",
+                    "created_at": "2026-03-12T00:00:00Z",
+                    "registry_snapshot": {
+                        "digest": "reg:sha256:" + ("a" * 64),
+                        "artifact_ref": "artifact://registry/1",
+                    },
+                },
+                "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+                "nodes": [
+                    {
+                        "id": "node-1",
+                        "tool": {
+                            "type": "agent_runtime",
+                            "name": "codex_cli",
+                            "version": "1.0",
+                        },
+                        "inputs": {
+                            "instructions": "Resolve PR",
+                            "repository": "MoonLadderStudios/MoonMind",
+                            "runtime": {
+                                "mode": "codex_cli",
+                                "executionProfileRef": "codex_default",
+                            },
+                        },
+                        "options": {},
+                    }
+                ],
+                "edges": [],
+            }
+        ).encode("utf-8")
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **kwargs: Any,
+    ) -> object:
+        if activity_type == "artifact.write_complete":
+            return {"ok": True}
+        if activity_type == "agent_runtime.load_session_snapshot":
+            return {
+                "binding": {
+                    "workflowId": "wf-1:session:codex_cli",
+                    "agentRunId": "wf-1",
+                    "sessionId": "sess:wf-1:codex_cli",
+                    "sessionEpoch": 2,
+                    "runtimeId": "codex_cli",
+                    "executionProfileRef": "codex_default",
+                },
+                "status": "active",
+                "containerId": "container-1",
+                "threadId": "thread-1",
+                "activeTurnId": None,
+                "lastControlAction": "clear_session",
+                "lastControlReason": "retry_after_empty_assistant_output",
+                "terminationRequested": False,
+                "requestTrackingState": [],
+            }
+        if activity_type == "agent_runtime.clear_session":
+            return {
+                "runtimeFamily": "codex",
+                "protocol": "codex_app_server",
+                "containerBackend": "docker",
+                "controlMode": "remote_container",
+                "sessionState": {
+                    "sessionId": "sess:wf-1:codex_cli",
+                    "sessionEpoch": 3,
+                    "containerId": "container-1",
+                    "threadId": "thread-cleared",
+                    "activeTurnId": None,
+                },
+                "status": "ready",
+                "metadata": {},
+            }
+        if activity_type == "agent_runtime.terminate_session":
+            return {
+                "runtimeFamily": "codex",
+                "protocol": "codex_app_server",
+                "containerBackend": "docker",
+                "controlMode": "remote_container",
+                "sessionState": {
+                    "sessionId": "sess:wf-1:codex_cli",
+                    "sessionEpoch": 3,
+                    "containerId": "container-1",
+                    "threadId": "thread-cleared",
+                    "activeTurnId": None,
+                },
+                "status": "terminated",
+                "metadata": {},
+            }
+        return await fake_execute_activity(activity_type, payload, **kwargs)
+
+    async def fake_execute_child_workflow(*_args: object, **_kwargs: object) -> AgentRunResult:
+        nonlocal child_attempts
+        child_attempts += 1
+        return AgentRunResult(
+            summary="codex app-server turn/completed produced no assistant output",
+            failureClass="execution_error",
+            diagnosticsRef="art_empty_turn",
+            metadata={
+                "profileId": "codex_default",
+                "turnStatus": "failed",
+                "turnMetadata": {
+                    "failureCause": "app_server_protocol_empty_turn",
+                    "retryRecommendedAction": "clear_session",
+                },
+            },
+        )
+
+    async def fake_resolve_skillset_ref(_self: object, **_kwargs: object) -> str:
+        return "art_skillset_1"
+
+    async def fake_bind_workflow_scoped_session(_self: object, request: object) -> object:
+        return request
+
+    async def fake_fetch_profile_snapshots(_self: object) -> None:
+        return None
+
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(
+        run_workflow_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_resolve_agent_node_skillset_ref",
+        fake_resolve_skillset_ref,
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_fetch_profile_snapshots",
+        fake_fetch_profile_snapshots,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Agent runtime failed with execution_error for profile codex_default "
+            "due to app_server_protocol_empty_turn: codex app-server "
+            "turn/completed produced no assistant output"
+        ),
+    ):
+        await workflow._run_execution_stage(
+            parameters={"repo": "MoonLadderStudios/MoonMind"},
+            plan_ref="art_plan_1",
+        )
+
+    assert child_attempts == 4
 
 def test_blocked_outcome_message_detects_structured_agent_report() -> None:
     workflow = MoonMindRunWorkflow()
@@ -2380,7 +2627,7 @@ async def test_run_marks_blocked_outcome_as_failed_terminal_state(
         _self._owner_id = "owner-1"
         _self._entry = "run"
         return (
-            "MoonMind.Run",
+            "MoonMind.UserWorkflow",
             {"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
             None,
             "art_plan_1",
@@ -2501,7 +2748,7 @@ async def test_run_marks_blocked_outcome_as_failed_terminal_state(
     monkeypatch.setattr(MoonMindRunWorkflow, "_set_state", capture_set_state)
 
     with pytest.raises(run_workflow_module.exceptions.ApplicationError) as exc_info:
-        await workflow.run({"workflowType": "MoonMind.Run"})
+        await workflow.run({"workflowType": "MoonMind.UserWorkflow"})
 
     assert str(exc_info.value) == blocker_summary
     assert finalizing_calls == [{"status": "failed", "error": blocker_summary}]
@@ -2542,10 +2789,10 @@ def test_pr_publish_optional_for_task_requires_all_skills_pr_optional() -> None:
     workflow = MoonMindRunWorkflow()
 
     pure_task = {
-        "task": {"skills": {"include": [{"name": "jira-implement"}]}}
+        "workflow": {"skills": {"include": [{"name": "jira-implement"}]}}
     }
     mixed_task = {
-        "task": {
+        "workflow": {
             "skills": {
                 "include": [
                     {"name": "jira-implement"},
@@ -2554,7 +2801,7 @@ def test_pr_publish_optional_for_task_requires_all_skills_pr_optional() -> None:
             }
         }
     }
-    empty_task = {"task": {"skills": {"include": []}}}
+    empty_task = {"workflow": {"skills": {"include": []}}}
 
     assert workflow._pr_publish_optional_for_task(pure_task) is True
     assert workflow._pr_publish_optional_for_task(mixed_task) is False
@@ -2711,7 +2958,7 @@ async def test_run_execution_stage_jira_implement_not_required_skips_native_pr(
             "repo": "MoonLadderStudios/MoonMind",
             "publishMode": "pr",
             "mergeAutomation": {"enabled": True, "jiraIssueKey": "MM-697"},
-            "task": {
+            "workflow": {
                 "appliedStepTemplates": [
                     {
                         "slug": "jira-implement",
@@ -2840,7 +3087,7 @@ async def test_run_execution_stage_moonspec_verify_blocks_native_pr_creation(
             "output_refs": [],
         }
 
-    async def fake_bind_task_scoped_session(
+    async def fake_bind_workflow_scoped_session(
         self: MoonMindRunWorkflow,
         request: object,
     ) -> object:
@@ -2861,8 +3108,8 @@ async def test_run_execution_stage_moonspec_verify_blocks_native_pr_creation(
     )
     monkeypatch.setattr(
         MoonMindRunWorkflow,
-        "_maybe_bind_task_scoped_session",
-        fake_bind_task_scoped_session,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
     )
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
     monkeypatch.setattr(
@@ -3549,7 +3796,7 @@ async def test_run_proposals_stage_global_disable_halts_execution(
 ) -> None:
     from moonmind.config.settings import settings
     workflow = MoonMindRunWorkflow()
-    monkeypatch.setattr(settings.workflow, "enable_task_proposals", False)
+    monkeypatch.setattr(settings.workflow, "enable_proposals", False)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda x: True)
     
     # Enable proposing tasks in params, but global switch should stop it
@@ -3562,7 +3809,7 @@ async def test_run_proposals_stage_ignores_legacy_fallback_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from moonmind.config.settings import settings
-    monkeypatch.setattr(settings.workflow, "enable_task_proposals", True)
+    monkeypatch.setattr(settings.workflow, "enable_proposals", True)
 
     workflow = MoonMindRunWorkflow()
     workflow._owner_id = "owner-1"
@@ -3576,7 +3823,7 @@ async def test_run_proposals_stage_ignores_legacy_fallback_policy(
     async def mock_execute_activity(activity, payload, **kwargs):
         nonlocal captured_policy
         if activity == "proposal.generate":
-            return [{"title": "t1", "summary": "s1", "taskCreateRequest": {}}]
+            return [{"title": "t1", "summary": "s1", "workflowCreateRequest": {}}]
         if activity == "proposal.submit":
             captured_policy = payload["policy"]
             return {"submitted_count": 1, "errors": []}
@@ -3597,11 +3844,11 @@ async def test_run_proposals_stage_ignores_legacy_fallback_policy(
     assert captured_policy == {}
 
 @pytest.mark.asyncio
-async def test_run_proposals_stage_uses_task_proposal_policy(
+async def test_run_proposals_stage_uses_workflow_proposal_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from moonmind.config.settings import settings
-    monkeypatch.setattr(settings.workflow, "enable_task_proposals", True)
+    monkeypatch.setattr(settings.workflow, "enable_proposals", True)
 
     workflow = MoonMindRunWorkflow()
     workflow._owner_id = "owner-1"
@@ -3616,7 +3863,7 @@ async def test_run_proposals_stage_uses_task_proposal_policy(
     async def mock_execute_activity(activity, payload, **kwargs):
         nonlocal captured_policy, captured_origin
         if activity == "proposal.generate":
-            return [{"title": "t1", "summary": "s1", "taskCreateRequest": {}}]
+            return [{"title": "t1", "summary": "s1", "workflowCreateRequest": {}}]
         if activity == "proposal.submit":
             captured_policy = payload["policy"]
             captured_origin = payload["origin"]
@@ -3632,7 +3879,7 @@ async def test_run_proposals_stage_uses_task_proposal_policy(
             "proposalMaxItems": 8,
             "proposalTargets": "file",
             "proposalDefaultRuntime": "gemini",
-            "task": {
+            "workflow": {
                 "proposeTasks": True,
                 "proposalPolicy": {
                     "maxItems": {"project": 12},

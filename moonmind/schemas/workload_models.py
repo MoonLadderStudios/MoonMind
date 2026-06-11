@@ -91,25 +91,25 @@ def parse_size_bytes(value: str) -> int:
 
 def workload_container_name(
     *,
-    task_run_id: str,
+    agent_run_id: str,
     step_id: str,
     attempt: int,
 ) -> str:
     """Return the deterministic Phase 1 workload container name."""
 
-    task = _sanitize_name_part(task_run_id)
+    task = _sanitize_name_part(agent_run_id)
     step = _sanitize_name_part(step_id)
     return f"mm-workload-{task}-{step}-{attempt}"
 
 def helper_container_name(
     *,
-    task_run_id: str,
+    agent_run_id: str,
     step_id: str,
     attempt: int,
 ) -> str:
     """Return the deterministic bounded-helper container name."""
 
-    task = _sanitize_name_part(task_run_id)
+    task = _sanitize_name_part(agent_run_id)
     step = _sanitize_name_part(step_id)
     return f"mm-helper-{task}-{step}-{attempt}"
 
@@ -431,7 +431,11 @@ class WorkloadOwnershipMetadata(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     kind: WorkloadOwnershipKind = Field("workload", alias="kind")
-    task_run_id: NonBlankStr = Field(..., alias="taskRunId")
+    # legacy_run contract — "agentRunId" wire keys and "moonmind.agent_run_id"
+    # runtime labels are persisted in activity payloads and live container
+    # labels; they rename to agent-run naming at the MoonMind.UserWorkflow v2
+    # cutover (MM-730, hard-switch plan §14.2).
+    agent_run_id: NonBlankStr = Field(..., alias="agentRunId")
     step_id: NonBlankStr = Field(..., alias="stepId")
     attempt: int = Field(..., alias="attempt", ge=1)
     tool_name: NonBlankStr = Field(..., alias="toolName")
@@ -445,7 +449,7 @@ class WorkloadOwnershipMetadata(BaseModel):
     def labels(self) -> dict[str, str]:
         labels = {
             "moonmind.kind": self.kind,
-            "moonmind.task_run_id": self.task_run_id,
+            "moonmind.agent_run_id": self.agent_run_id,
             "moonmind.step_id": self.step_id,
             "moonmind.attempt": str(self.attempt),
             "moonmind.tool_name": self.tool_name,
@@ -465,7 +469,7 @@ class WorkloadRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     profile_id: NonBlankStr = Field(..., alias="profileId")
-    task_run_id: NonBlankStr = Field(..., alias="taskRunId")
+    agent_run_id: NonBlankStr = Field(..., alias="agentRunId")
     step_id: NonBlankStr = Field(..., alias="stepId")
     attempt: int = Field(..., alias="attempt", ge=1)
     tool_name: NonBlankStr = Field(..., alias="toolName")
@@ -518,7 +522,7 @@ class WorkloadRequest(BaseModel):
         self, *, workflow_docker_mode: WorkflowDockerMode = "profiles"
     ) -> WorkloadOwnershipMetadata:
         return WorkloadOwnershipMetadata(
-            taskRunId=self.task_run_id,
+            agentRunId=self.agent_run_id,
             stepId=self.step_id,
             attempt=self.attempt,
             toolName=self.tool_name,
@@ -532,7 +536,7 @@ class WorkloadRequest(BaseModel):
     @property
     def container_name(self) -> str:
         return workload_container_name(
-            task_run_id=self.task_run_id,
+            agent_run_id=self.agent_run_id,
             step_id=self.step_id,
             attempt=self.attempt,
         )
@@ -542,7 +546,7 @@ class UnrestrictedContainerRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    task_run_id: NonBlankStr = Field(..., alias="taskRunId")
+    agent_run_id: NonBlankStr = Field(..., alias="agentRunId")
     step_id: NonBlankStr = Field(..., alias="stepId")
     attempt: int = Field(..., alias="attempt", ge=1)
     tool_name: Literal["container.run_container"] = Field(..., alias="toolName")
@@ -590,7 +594,7 @@ class UnrestrictedContainerRequest(BaseModel):
         self, *, workflow_docker_mode: WorkflowDockerMode = "unrestricted"
     ) -> WorkloadOwnershipMetadata:
         return WorkloadOwnershipMetadata(
-            taskRunId=self.task_run_id,
+            agentRunId=self.agent_run_id,
             stepId=self.step_id,
             attempt=self.attempt,
             toolName=self.tool_name,
@@ -603,14 +607,14 @@ class UnrestrictedContainerRequest(BaseModel):
 
     @property
     def container_name(self) -> str:
-        return workload_container_name(task_run_id=self.task_run_id, step_id=self.step_id, attempt=self.attempt)
+        return workload_container_name(agent_run_id=self.agent_run_id, step_id=self.step_id, attempt=self.attempt)
 
 class UnrestrictedDockerRequest(BaseModel):
     """Canonical unrestricted Docker CLI request."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    task_run_id: NonBlankStr = Field(..., alias="taskRunId")
+    agent_run_id: NonBlankStr = Field(..., alias="agentRunId")
     step_id: NonBlankStr = Field(..., alias="stepId")
     attempt: int = Field(..., alias="attempt", ge=1)
     tool_name: Literal["container.run_docker"] = Field(..., alias="toolName")
@@ -647,7 +651,7 @@ class UnrestrictedDockerRequest(BaseModel):
         self, *, workflow_docker_mode: WorkflowDockerMode = "unrestricted"
     ) -> WorkloadOwnershipMetadata:
         return WorkloadOwnershipMetadata(
-            taskRunId=self.task_run_id,
+            agentRunId=self.agent_run_id,
             stepId=self.step_id,
             attempt=self.attempt,
             toolName=self.tool_name,
@@ -660,7 +664,7 @@ class UnrestrictedDockerRequest(BaseModel):
 
     @property
     def container_name(self) -> str:
-        return workload_container_name(task_run_id=self.task_run_id, step_id=self.step_id, attempt=self.attempt)
+        return workload_container_name(agent_run_id=self.agent_run_id, step_id=self.step_id, attempt=self.attempt)
 
 AnyWorkloadRequest = WorkloadRequest | UnrestrictedContainerRequest | UnrestrictedDockerRequest
 

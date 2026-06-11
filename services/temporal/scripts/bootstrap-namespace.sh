@@ -196,7 +196,7 @@ mm_integration:Keyword
 mm_scheduled_for:Datetime
 mm_has_dependencies:Bool
 mm_dependency_count:Int
-TaskRunId:Keyword
+AgentRunId:Keyword
 RuntimeId:Keyword
 SessionId:Keyword
 SessionEpoch:Int
@@ -215,6 +215,7 @@ CustomDoubleField
 CustomBoolField
 mm_continue_as_new_cause
 mm_dependency_state
+TaskRunId
 EOF
 )
 

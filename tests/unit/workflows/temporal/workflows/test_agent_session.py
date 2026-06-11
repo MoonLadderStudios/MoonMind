@@ -48,7 +48,7 @@ def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _workflow_input(**overrides: object) -> CodexManagedSessionWorkflowInput:
     payload: dict[str, object] = {
-        "taskRunId": "wf-run-1",
+        "agentRunId": "wf-run-1",
         "runtimeId": "codex_cli",
     }
     payload.update(overrides)
@@ -108,7 +108,7 @@ def _assert_forbidden_metadata_absent(value: object) -> None:
     ):
         assert forbidden not in rendered
 
-def test_agent_session_initializes_task_scoped_codex_binding(
+def test_agent_session_initializes_workflow_scoped_codex_binding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
@@ -120,13 +120,13 @@ def test_agent_session_initializes_task_scoped_codex_binding(
 
     assert status["status"] == AGENT_SESSION_STATUS_ACTIVE
     assert status["binding"]["workflowId"] == "wf-run-1:session:codex_cli"
-    assert status["binding"]["taskRunId"] == "wf-run-1"
+    assert status["binding"]["agentRunId"] == "wf-run-1"
     assert status["binding"]["runtimeId"] == "codex_cli"
     assert status["binding"]["sessionEpoch"] == 1
     assert status["binding"]["executionProfileRef"] == "codex-default"
     assert status["binding"]["sessionId"] == "sess:wf-run-1:codex_cli"
 
-def test_agent_session_rejects_task_scoped_claude_code_binding(
+def test_agent_session_rejects_workflow_scoped_claude_code_binding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
@@ -176,7 +176,7 @@ async def test_agent_session_run_initializes_bounded_temporal_visibility(
     ]
     assert search_attributes[:1] == [
         {
-            "TaskRunId": ["wf-run-1"],
+            "AgentRunId": ["wf-run-1"],
             "RuntimeId": ["codex_cli"],
             "SessionId": ["sess:wf-run-1:codex_cli"],
             "SessionEpoch": [1],
@@ -274,7 +274,7 @@ def test_agent_session_logs_bounded_telemetry_context_without_payload_values(
     assert telemetry_contexts == [
         {
             "transition": "active turn running",
-            "taskRunId": "wf-run-1",
+            "agentRunId": "wf-run-1",
             "runtimeId": "codex_cli",
             "sessionId": "sess:wf-run-1:codex_cli",
             "sessionEpoch": 1,
@@ -296,7 +296,7 @@ def test_agent_session_send_follow_up_validator_allows_pre_handle_request(
     workflow = MoonMindAgentSessionWorkflow(_workflow_input())
 
     workflow.validate_send_follow_up(
-        _send_follow_up({"message": "Continue the task-scoped session."})
+        _send_follow_up({"message": "Continue the workflow-scoped session."})
     )
 
 def test_agent_session_workflow_input_carries_request_tracking_state(
@@ -461,7 +461,7 @@ async def test_agent_session_request_tracking_prefers_temporal_update_id(
     await workflow.send_follow_up(
         _send_follow_up(
             {
-                "message": "Continue the task-scoped session.",
+                "message": "Continue the workflow-scoped session.",
                 "requestId": "caller-request-1",
             }
         )
@@ -868,7 +868,7 @@ async def test_agent_session_send_follow_up_update_executes_session_activity_sur
     result = await workflow.send_follow_up(
         _send_follow_up(
             {
-                "message": "Continue the task-scoped session.",
+                "message": "Continue the workflow-scoped session.",
                 "reason": "Operator follow-up",
                 "requestId": "request-send-1",
             }
@@ -883,7 +883,7 @@ async def test_agent_session_send_follow_up_update_executes_session_activity_sur
         "agent_runtime.fetch_session_summary",
         "agent_runtime.publish_session_artifacts",
     ]
-    assert captured[0][1]["instructions"] == "Continue the task-scoped session."
+    assert captured[0][1]["instructions"] == "Continue the workflow-scoped session."
     assert captured[0][1]["reason"] == "Operator follow-up"
     status = workflow.get_status()
     assert status["lastControlAction"] == "send_turn"
@@ -1004,7 +1004,7 @@ async def test_agent_session_updates_visibility_on_major_transitions(
         "controlRef=art-control-after-interrupt"
     )
     assert search_attributes[-1] == {
-        "TaskRunId": ["wf-run-1"],
+        "AgentRunId": ["wf-run-1"],
         "RuntimeId": ["codex_cli"],
         "SessionId": ["sess:wf-run-1:codex_cli"],
         "SessionEpoch": [1],
@@ -1013,7 +1013,7 @@ async def test_agent_session_updates_visibility_on_major_transitions(
     }
 
 @pytest.mark.asyncio
-async def test_agent_session_refresh_projection_uses_authoritative_binding_task_run_id(
+async def test_agent_session_refresh_projection_uses_authoritative_binding_agent_run_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
@@ -1086,7 +1086,7 @@ async def test_agent_session_refresh_projection_uses_authoritative_binding_task_
     assert publication_payloads[0]["sessionEpoch"] == 1
     assert publication_payloads[0]["containerId"] == "container-1"
     assert publication_payloads[0]["threadId"] == "thread-1"
-    assert publication_payloads[0]["taskRunId"] == "wf-run-1"
+    assert publication_payloads[0]["agentRunId"] == "wf-run-1"
     assert publication_payloads[0]["metadata"] == {
         "action": "send_follow_up",
         "reason": None,
@@ -1643,7 +1643,7 @@ async def test_agent_session_continue_as_new_carries_bounded_session_state(
     assert waited_for_handlers is True
     assert isinstance(captured_payload, CodexManagedSessionWorkflowInput)
     assert captured_payload.model_dump(mode="json", by_alias=True) == {
-        "taskRunId": "wf-run-1",
+        "agentRunId": "wf-run-1",
         "runtimeId": "codex_cli",
         "sessionId": "sess:wf-run-1:codex_cli",
         "sessionEpoch": 1,
