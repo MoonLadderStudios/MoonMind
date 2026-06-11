@@ -99,11 +99,15 @@ async def test_execution_notify_completion_skips_when_disabled(monkeypatch) -> N
     assert result == {"status": "skipped", "reason": "disabled"}
 
 
-async def test_execution_notify_completion_blocks_secret_before_webhook_or_email(
+async def test_execution_notify_completion_scans_emitted_event_not_internal_payload(
     monkeypatch,
 ) -> None:
     post_calls: list[dict[str, Any]] = []
     email_calls: list[dict[str, Any]] = []
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
 
     class _Client:
         def __init__(self, *, timeout: int) -> None:
@@ -121,9 +125,9 @@ async def test_execution_notify_completion_blocks_secret_before_webhook_or_email
             *,
             json: dict[str, Any],
             headers: dict[str, str],
-        ) -> object:
+        ) -> _Response:
             post_calls.append({"url": url, "json": json, "headers": headers})
-            return object()
+            return _Response()
 
     def fake_send_email(*_args: Any, **kwargs: Any) -> None:
         email_calls.append(kwargs)
@@ -204,16 +208,23 @@ async def test_execution_notify_completion_blocks_secret_before_webhook_or_email
     result = await activities.execution_notify_completion(
         {
             "workflowId": "wf-secret",
-            "status": "failed",
-            "result": {"summary": "failed with token=blocked-secret-value"},
+            "status": "completed",
+            "result": {
+                "summary": "safe completion",
+                "metadata": {
+                    "taskRunId": "task-1",
+                    "internalDiagnostics": "token=blocked-secret-value",
+                },
+            },
         }
     )
 
-    assert result["status"] == "blocked"
-    assert "execution.notify_completion.message" in result["reason"]
+    assert result["status"] == "sent"
     assert "blocked-secret-value" not in json.dumps(result)
-    assert post_calls == []
-    assert email_calls == []
+    assert post_calls[0]["json"]["summary"] == "safe completion"
+    assert post_calls[0]["json"]["taskRunId"] == "task-1"
+    assert "internalDiagnostics" not in post_calls[0]["json"]
+    assert email_calls
 
 
 async def test_execution_notify_completion_allows_clean_payload_with_high_security(

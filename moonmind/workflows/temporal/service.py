@@ -1630,6 +1630,7 @@ class TemporalExecutionService:
                 scan_result = scan_outbound_text(
                     operator_message,
                     location=SEND_MESSAGE_SCAN_LOCATION,
+                    settings=settings,
                 )
                 if not scan_result.allowed:
                     raise TemporalExecutionValidationError(

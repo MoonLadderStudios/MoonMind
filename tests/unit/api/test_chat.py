@@ -460,6 +460,21 @@ def test_chat_outbound_scan_allows_clean_messages_with_high_security(monkeypatch
     )
 
 
+def test_chat_outbound_scan_blocks_dict_messages_with_high_security(monkeypatch):
+    from api_service.api.routers.chat import _ensure_messages_pass_outbound_scan
+
+    monkeypatch.setattr(settings_in_chat_router.security, "high_security_mode", True)
+
+    with pytest.raises(Exception) as exc_info:
+        _ensure_messages_pass_outbound_scan(
+            [{"role": "user", "content": "Please use token=blocked-secret-value"}],
+            surface="chat.openai",
+        )
+
+    assert "chat.openai.messages[0].content" in str(exc_info.value)
+    assert "blocked-secret-value" not in str(exc_info.value)
+
+
 @patch("api_service.api.routers.chat.get_rag_context", new_callable=AsyncMock)
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
 @patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)

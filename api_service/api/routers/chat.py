@@ -57,8 +57,12 @@ def _ensure_messages_pass_outbound_scan(
     surface: str,
 ) -> None:
     for index, msg in enumerate(messages):
-        role = getattr(msg, "role", "message")
-        content = getattr(msg, "content", "")
+        if isinstance(msg, dict):
+            role = msg.get("role", "message")
+            content = msg.get("content", "")
+        else:
+            role = getattr(msg, "role", "message")
+            content = getattr(msg, "content", "")
         scan = scan_outbound_text(
             str(content or ""),
             location=f"{surface}.messages[{index}].content",

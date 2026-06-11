@@ -50,7 +50,6 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.workflows.agent_skills.selection import selected_agent_skill
     from moonmind.config.settings import settings
-    from moonmind.security.outbound_scan import scan_outbound_text
     from moonmind.utils.logging import scrub_github_tokens
     from moonmind.workflows.temporal.jira_agent_skills import (
         JIRA_AGENT_SKILLS,
@@ -137,7 +136,6 @@ DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
 )
 DEPENDENCY_RECONCILE_INTERVAL = timedelta(seconds=30)
 _TERMINAL_LAST_ERROR_UNSET = object()
-SEND_MESSAGE_SCAN_LOCATION = "execution.send_message.message"
 
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 _PR_OPTIONAL_AGENT_SKILLS = JIRA_AGENT_SKILLS
@@ -10531,7 +10529,6 @@ class MoonMindRunWorkflow:
     async def send_message(self, payload: dict[str, Any] | None = None) -> None:
         message = self._extract_operator_message(payload)
         if message is not None:
-            self._ensure_send_message_scan_allows(message)
             await self._forward_operator_message_to_active_child({"message": message})
         self._update_search_attributes()
 
@@ -10542,7 +10539,6 @@ class MoonMindRunWorkflow:
         message = self._extract_operator_message(payload)
         if message is None:
             raise ValueError("message is required when sending an operator message.")
-        self._ensure_send_message_scan_allows(message)
 
     @workflow.update(name="Cancel")
     def cancel(self, reason: Optional[str] = None) -> None:
@@ -10623,19 +10619,6 @@ class MoonMindRunWorkflow:
             return None
         normalized = str(candidate).strip()
         return normalized or None
-
-    @staticmethod
-    def _ensure_send_message_scan_allows(message: str) -> None:
-        scan_result = scan_outbound_text(
-            message,
-            location=SEND_MESSAGE_SCAN_LOCATION,
-        )
-        if scan_result.allowed:
-            return
-        diagnostics = scan_result.sanitized_diagnostics
-        if diagnostics:
-            raise ValueError("; ".join(diagnostics))
-        raise ValueError(f"Blocked outbound content at {SEND_MESSAGE_SCAN_LOCATION}")
 
     @staticmethod
     def _extract_clarification_message(payload: Mapping[str, Any] | None) -> str | None:
