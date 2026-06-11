@@ -665,20 +665,19 @@ class WorkflowProposalService:
             logger.warning(
                 "Proposal notification failed for %s: %s", proposal.id, error_message
             )
-        finally:
-            try:
-                await self._repository.log_notification(
-                    proposal_id=proposal.id,
-                    category=proposal.category or "",
-                    target=self._notification_webhook,
-                    status=status,
-                    error=error_message,
-                )
-                await self._repository.commit()
-            except Exception:  # pragma: no cover - logging only
-                logger.debug(
-                    "Notification audit insert failed for proposal %s", proposal.id
-                )
+        try:
+            await self._repository.log_notification(
+                proposal_id=proposal.id,
+                category=proposal.category or "",
+                target=self._notification_webhook,
+                status=status,
+                error=error_message,
+            )
+            await self._repository.commit()
+        except Exception:  # pragma: no cover - logging only
+            logger.debug(
+                "Notification audit insert failed for proposal %s", proposal.id
+            )
 
     async def _deliver_proposal_if_configured(self, proposal: WorkflowProposal) -> None:
         if self._delivery_service is None:

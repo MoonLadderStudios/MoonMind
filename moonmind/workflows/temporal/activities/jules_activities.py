@@ -250,17 +250,18 @@ async def jules_answer_question_activity(payload: dict) -> dict:
 
     # Dispatch to an LLM to generate the actual answer.
     answer = await _generate_llm_answer(clarification_prompt)
+    answer_text = str(answer or "")
 
     # Send the generated answer back to Jules
     scan = scan_outbound_text(
-        answer,
+        answer_text,
         location="jules.answer_question.answer",
         settings=settings,
     )
     if not scan.allowed:
         return {
             "answered": False,
-            "answer": redact_sensitive_text(answer),
+            "answer": redact_sensitive_text(answer_text),
             "error": _blocked_message_error(
                 "jules.answer_question.answer",
                 scan.sanitized_diagnostics,
@@ -272,10 +273,10 @@ async def jules_answer_question_activity(payload: dict) -> dict:
         await client.send_message(
             JulesSendMessageRequest(
                 session_id=session_id,
-                prompt=answer,
+                prompt=answer_text,
             )
         )
-        return {"answered": True, "answer": answer, "error": None}
+        return {"answered": True, "answer": answer_text, "error": None}
     except Exception as exc:
         logger.error(
             "Failed to send auto-answer to Jules session %s: %s",
@@ -284,7 +285,7 @@ async def jules_answer_question_activity(payload: dict) -> dict:
         )
         return {
             "answered": False,
-            "answer": redact_sensitive_text(answer),
+            "answer": redact_sensitive_text(answer_text),
             "error": redact_sensitive_text(str(exc)),
         }
     finally:
