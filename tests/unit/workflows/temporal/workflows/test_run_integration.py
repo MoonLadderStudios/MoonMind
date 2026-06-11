@@ -63,6 +63,14 @@ def test_run_execution_stage_preserves_conditional_registry_patch_marker() -> No
     assert source.index(call_string) < source.index("await load_registry_snapshot()")
 
 
+def test_blocked_external_handoff_skips_current_step_from_call_site() -> None:
+    source = inspect.getsource(MoonMindRunWorkflow._run_execution_stage)
+    block_start = source.index("if handoff_block_reason:")
+    block = source[block_start : source.index("original_node_inputs", block_start)]
+
+    assert "completed_index=index - 2" in block
+
+
 def test_run_workflow_child_task_queue_is_replay_patched(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2199,6 +2207,51 @@ def test_jira_orchestrate_external_handoff_requires_passing_moonspec_gate(
     assert (
         mock_run_workflow._jira_orchestrate_external_handoff_block_reason(
             handoff_node
+        )
+        is None
+    )
+
+
+def test_jira_orchestrate_external_handoff_uses_preserved_verify_gate_state(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._step_ledger_rows = [
+        {
+            "logicalStepId": "verify-final",
+            "status": "succeeded",
+            "terminalDisposition": "accepted",
+            "preservedFrom": {
+                "workflowId": "mm:source",
+                "runId": "run-source",
+                "logicalStepId": "verify-final",
+                "executionOrdinal": 1,
+            },
+        }
+    ]
+    mock_run_workflow._rebuild_step_ledger_index()
+
+    mock_run_workflow._record_preserved_step_terminal_state(
+        "verify-final",
+        {
+            "id": "verify-final",
+            "tool": {"name": "moonspec-verify"},
+            "inputs": {},
+        },
+    )
+
+    assert mock_run_workflow._step_terminal_dispositions["verify-final"] == "accepted"
+    assert mock_run_workflow._publish_context["moonSpecGate"] == {
+        "logicalStepId": "verify-final",
+        "verdict": "FULLY_IMPLEMENTED",
+    }
+    assert (
+        mock_run_workflow._jira_orchestrate_external_handoff_block_reason(
+            {
+                "id": "code-review",
+                "inputs": {
+                    "annotations": {"jiraOrchestrateRole": "code-review-handoff"},
+                },
+            }
         )
         is None
     )

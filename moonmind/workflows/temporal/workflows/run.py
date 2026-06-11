@@ -1876,6 +1876,38 @@ class MoonMindRunWorkflow:
             outputs["preservedFrom"] = dict(row.get("preservedFrom") or {})
         return outputs
 
+    def _record_preserved_step_terminal_state(
+        self,
+        logical_step_id: str,
+        node: Mapping[str, Any],
+    ) -> None:
+        row = self._step_ledger_row_for(logical_step_id)
+        if not isinstance(row, Mapping):
+            return
+        terminal_disposition = self._coerce_text(
+            row.get("terminalDisposition") or row.get("terminal_disposition"),
+            max_chars=100,
+        )
+        if terminal_disposition:
+            self._step_terminal_dispositions[logical_step_id] = terminal_disposition
+        tool = self._plan_node_tool_mapping(node)
+        tool = tool if isinstance(tool, Mapping) else {}
+        tool_name = str(tool.get("name") or tool.get("id") or "").strip()
+        if (
+            terminal_disposition == "accepted"
+            and self._is_moonspec_verify_step(
+                tool_name=tool_name,
+                node_inputs=self._node_inputs_mapping(node),
+            )
+            and self._normalize_moonspec_verify_verdict(self._moonspec_gate_verdict)
+            is None
+        ):
+            self._moonspec_gate_verdict = "FULLY_IMPLEMENTED"
+            self._publish_context["moonSpecGate"] = {
+                "logicalStepId": logical_step_id,
+                "verdict": "FULLY_IMPLEMENTED",
+            }
+
     def _merge_preserved_dependency_outputs(
         self,
         logical_step_id: str,
@@ -4494,6 +4526,7 @@ class MoonMindRunWorkflow:
             tool_version = str(tool.get("version") or "").strip()
             node_id = str(node.get("id") or "unknown")
             if self._is_preserved_step(node_id):
+                self._record_preserved_step_terminal_state(node_id, node)
                 preserved_outputs = self._preserved_step_outputs(node_id)
                 if preserved_outputs:
                     previous_step_outputs = preserved_outputs
@@ -4515,7 +4548,7 @@ class MoonMindRunWorkflow:
                 self._summary = handoff_block_reason
                 self._mark_remaining_plan_steps_skipped(
                     ordered_nodes=ordered_nodes,
-                    completed_index=index - 1,
+                    completed_index=index - 2,
                     summary=handoff_block_reason,
                 )
                 self._refresh_step_readiness(updated_at=workflow.now())
