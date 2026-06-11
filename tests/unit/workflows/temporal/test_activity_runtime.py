@@ -1631,9 +1631,9 @@ async def test_security_pentest_execute_materializes_input_files_without_secrets
     scope_snapshot = json.loads(scope_file.read_text(encoding="utf-8"))
     assert manifest["provider_snapshot_ref"] == f"file:{provider_file}"
     assert provider_snapshot["profile_id"] == "pentestgpt_anthropic_api_team"
-    assert provider_snapshot["secret_env_keys"] == ["[REDACTED]"]
-    assert provider_snapshot["secret_env_key_count"] == 1
-    assert provider_snapshot["missing_secret_env_key_count"] == 1
+    assert "secret_env_keys" not in provider_snapshot
+    assert provider_snapshot["credential_env_key_count"] == 1
+    assert provider_snapshot["missing_credential_env_key_count"] == 1
     assert scope_snapshot["scope_id"] == "scope-123"
     assert "hunter2" not in provider_file.read_text(encoding="utf-8")
     assert "hunter2" not in manifest_file.read_text(encoding="utf-8")

@@ -4574,7 +4574,19 @@ class TemporalAgentRuntimeActivities:
                 paths.approved_scope_file,
                 request.approved_scope.model_dump(mode="json"),
             )
-        provider_snapshot_artifact = redact_sensitive_payload(provider_snapshot)
+        provider_snapshot_artifact = {
+            "profile_id": str(provider_materialization.profile_id),
+            "provider_id": str(provider_materialization.provider_id),
+            "runtime_id": str(provider_materialization.runtime_id),
+            "force_non_interactive": bool(
+                provider_materialization.force_non_interactive
+            ),
+            "env_keys": sorted(provider_materialization.env),
+            "credential_env_key_count": len(provider_materialization.secret_env),
+            "missing_credential_env_key_count": len(missing_secret_env_keys),
+            "lease": dict(provider_lease),
+            "telemetry_enabled": settings.pentest.telemetry_enabled,
+        }
         provider_snapshot_file = Path(paths.provider_snapshot_file)
         provider_snapshot_file.parent.mkdir(parents=True, exist_ok=True)
         provider_snapshot_file.write_text(
