@@ -332,20 +332,35 @@ def test_execution_metrics_source_temporal_returns_operational_aggregates(
     assert 'mm_repo="MoonLadderStudios/MoonMind"' in mock_client.list_workflows.call_args.kwargs["query"]
 
 
-def test_list_executions_source_temporal_rejects_retired_broad_scopes(
+def test_list_executions_source_temporal_ignores_retired_scope_values(
     client,
 ) -> None:
     test_client, _service, _user, _mock_session = client
 
-    response = test_client.get(
-        "/api/executions",
-        params={"source": "temporal", "scope": "system"},
-    )
+    executions_module.get_temporal_client_adapter.cache_clear()
 
-    assert response.status_code == 422
-    detail = response.json()["detail"]
-    assert detail["code"] == "invalid_temporal_list_scope"
-    assert detail["message"] == "scope is no longer supported for workflow execution lists."
+    with patch(
+        "api_service.api.routers.executions.TemporalClientAdapter"
+    ) as mock_adapter_cls:
+        mock_adapter = mock_adapter_cls.return_value
+        mock_client = AsyncMock()
+        mock_adapter.get_client = AsyncMock(return_value=mock_client)
+
+        mock_iterator = AsyncMock()
+        mock_iterator.current_page = []
+        mock_iterator.next_page_token = None
+        mock_client.list_workflows = MagicMock(return_value=mock_iterator)
+        mock_client.count_workflows = AsyncMock(return_value=SimpleNamespace(count=0))
+
+        response = test_client.get(
+            "/api/executions",
+            params={"source": "temporal", "scope": "system"},
+        )
+
+    assert response.status_code == 200
+    query = mock_client.count_workflows.await_args.kwargs["query"]
+    assert 'WorkflowType="MoonMind.UserWorkflow"' in query
+    assert 'mm_entry="user_workflow"' in query
 
 
 def test_list_executions_source_temporal_ignores_workflow_kind_filters_for_workflow_list(
@@ -386,18 +401,33 @@ def test_list_executions_source_temporal_ignores_workflow_kind_filters_for_workf
         assert mock_client.list_workflows.call_args.kwargs["query"] == expected_query
 
 
-def test_list_executions_source_temporal_rejects_unknown_scope(client) -> None:
+def test_list_executions_source_temporal_ignores_unknown_scope(client) -> None:
     test_client, _service, _user, _mock_session = client
 
-    response = test_client.get(
-        "/api/executions",
-        params={"source": "temporal", "scope": "surprise"},
-    )
+    executions_module.get_temporal_client_adapter.cache_clear()
 
-    assert response.status_code == 422
-    detail = response.json()["detail"]
-    assert detail["code"] == "invalid_temporal_list_scope"
-    assert detail["message"] == "scope is no longer supported for workflow execution lists."
+    with patch(
+        "api_service.api.routers.executions.TemporalClientAdapter"
+    ) as mock_adapter_cls:
+        mock_adapter = mock_adapter_cls.return_value
+        mock_client = AsyncMock()
+        mock_adapter.get_client = AsyncMock(return_value=mock_client)
+
+        mock_iterator = AsyncMock()
+        mock_iterator.current_page = []
+        mock_iterator.next_page_token = None
+        mock_client.list_workflows = MagicMock(return_value=mock_iterator)
+        mock_client.count_workflows = AsyncMock(return_value=SimpleNamespace(count=0))
+
+        response = test_client.get(
+            "/api/executions",
+            params={"source": "temporal", "scope": "surprise"},
+        )
+
+    assert response.status_code == 200
+    query = mock_client.count_workflows.await_args.kwargs["query"]
+    assert 'WorkflowType="MoonMind.UserWorkflow"' in query
+    assert 'mm_entry="user_workflow"' in query
 
 
 def test_execution_router_exposes_recover_route_without_recovery_alias() -> None:
