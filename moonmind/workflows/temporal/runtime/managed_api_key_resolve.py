@@ -39,6 +39,19 @@ def _normalize_secret_ref_input(
     *,
     field_name: str = "MANAGED_API_KEY_REF",
 ) -> str:
+    if isinstance(ref, Mapping):
+        direct_ref = str(ref.get("secret_ref") or ref.get("secretRef") or "").strip()
+        if direct_ref:
+            return direct_ref
+        secret_id = str(ref.get("secret_id") or ref.get("secretId") or "").strip()
+        backend_type = str(
+            ref.get("backend_type") or ref.get("backendType") or ""
+        ).strip().lower()
+        if secret_id and backend_type in {"db", "db_encrypted"}:
+            return f"db://{secret_id}"
+        if secret_id and not backend_type:
+            return secret_id
+        raise ValueError(f"{field_name} must be a string secret reference")
     if not isinstance(ref, str):
         raise ValueError(
             f"{field_name} must be a string secret reference, got {type(ref).__name__}"
