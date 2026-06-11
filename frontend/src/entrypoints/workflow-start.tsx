@@ -646,6 +646,13 @@ interface AttachmentPolicy {
   allowedContentTypes: string[];
 }
 
+const RASTER_ATTACHMENT_PREVIEW_TYPES = new Set([
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
+
 interface StepAttachmentRef {
   artifactId: string;
   filename: string;
@@ -2284,8 +2291,9 @@ function AttachmentPreview({
   const [previewUrl, setPreviewUrl] = useState("");
 
   useEffect(() => {
+    const normalizedType = file.type.trim().toLowerCase();
     if (
-      !file.type.startsWith("image/") ||
+      !RASTER_ATTACHMENT_PREVIEW_TYPES.has(normalizedType) ||
       typeof URL === "undefined" ||
       typeof URL.createObjectURL !== "function"
     ) {
