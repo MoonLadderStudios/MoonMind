@@ -7,6 +7,7 @@ import json
 import httpx
 import pytest
 
+from moonmind.config.settings import settings
 from moonmind.schemas.jules_models import (
     JulesCreateTaskRequest,
     JulesGetTaskRequest,
@@ -395,6 +396,29 @@ async def test_send_message_success():
         JulesSendMessageRequest(sessionId="session-42", prompt="Continue with step 2.")
     )
     assert len(captured) == 1
+
+@pytest.mark.asyncio
+async def test_send_message_blocks_secret_before_http(monkeypatch):
+    """send_message() should not call Jules when high-security scan blocks."""
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, content=b"")
+
+    monkeypatch.setattr(settings.security, "high_security_mode", True)
+    client = _make_client(handler)
+    from moonmind.schemas.jules_models import JulesSendMessageRequest
+
+    with pytest.raises(JulesClientError, match="jules\\.client\\.send_message\\.prompt"):
+        await client.send_message(
+            JulesSendMessageRequest(
+                sessionId="session-42",
+                prompt="Use token=super-secret-value",
+            )
+        )
+
+    assert captured == []
 
 @pytest.mark.asyncio
 async def test_send_message_retries_on_503():
