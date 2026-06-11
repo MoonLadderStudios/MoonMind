@@ -153,7 +153,7 @@ async def test_create_execution_initializes_lifecycle_search_attributes(tmp_path
         owner_id = uuid4()
 
         record = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="My run",
             input_artifact_ref="artifact://input/1",
@@ -210,7 +210,7 @@ async def test_create_execution_routes_user_workflow_after_mm730_cutover(
         owner_id = uuid4()
 
         record = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Cutover run",
             input_artifact_ref=None,
@@ -248,7 +248,7 @@ async def test_create_execution_routes_pr_merge_automation_workflows_to_dedicate
         )
 
         await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title="Merge automation run",
             input_artifact_ref=None,
@@ -257,7 +257,7 @@ async def test_create_execution_routes_pr_merge_automation_workflows_to_dedicate
             failure_policy=None,
             initial_parameters={
                 "publishMode": "pr",
-                "task": {
+                "workflow": {
                     "publish": {
                         "mode": "pr",
                         "mergeAutomation": {"enabled": True},
@@ -283,7 +283,7 @@ async def test_create_execution_keeps_default_priority_without_merge_automation(
         )
 
         await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title="Plain run",
             input_artifact_ref=None,
@@ -292,7 +292,7 @@ async def test_create_execution_keeps_default_priority_without_merge_automation(
             failure_policy=None,
             initial_parameters={
                 "publishMode": "pr",
-                "task": {"publish": {"mode": "pr"}},
+                "workflow": {"publish": {"mode": "pr"}},
             },
             idempotency_key=None,
         )
@@ -316,7 +316,7 @@ async def test_create_execution_returns_repair_pending_fallback_when_projection_
         )
 
         record = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title="repair pending",
             input_artifact_ref=None,
@@ -345,7 +345,7 @@ async def test_create_execution_defaults_missing_owner_to_system(tmp_path):
         service = TemporalExecutionService(session)
 
         record = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=None,
             title=None,
             input_artifact_ref=None,
@@ -419,7 +419,7 @@ async def test_create_execution_rejects_pending_upload_temporal_input_artifact_r
             match="inputArtifactRef must reference a readable artifact",
         ):
             await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=uuid4(),
                 title=None,
                 input_artifact_ref="art_01TESTPENDINGINPUT0000000000",
@@ -440,7 +440,7 @@ async def test_create_execution_rejects_unsupported_failure_policy(tmp_path):
             match="Unsupported failurePolicy",
         ):
             await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=uuid4(),
                 title=None,
                 input_artifact_ref=None,
@@ -461,7 +461,7 @@ async def test_create_execution_rejects_empty_failure_policy(tmp_path):
             match="Unsupported failurePolicy",
         ):
             await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=uuid4(),
                 title=None,
                 input_artifact_ref=None,
@@ -482,7 +482,7 @@ async def test_create_execution_rejects_more_than_10_dependencies(tmp_path):
             match="dependsOn can have a maximum of 10 items",
         ):
             await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=uuid4(),
                 title=None,
                 input_artifact_ref=None,
@@ -490,7 +490,7 @@ async def test_create_execution_rejects_more_than_10_dependencies(tmp_path):
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={
-                    "task": {"dependsOn": [f"dep-{i}" for i in range(11)]}
+                "workflow": {"dependsOn": [f"dep-{i}" for i in range(11)]}
                 },
                 idempotency_key=None,
             )
@@ -505,14 +505,14 @@ async def test_create_execution_rejects_missing_dependency(tmp_path):
             match="Dependency not found: mm:non-existent",
         ):
             await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=uuid4(),
                 title=None,
                 input_artifact_ref=None,
                 plan_artifact_ref=None,
                 manifest_artifact_ref=None,
                 failure_policy=None,
-                initial_parameters={"task": {"dependsOn": ["mm:non-existent"]}},
+                initial_parameters={"workflow": {"dependsOn": ["mm:non-existent"]}},
                 idempotency_key=None,
             )
 
@@ -525,7 +525,7 @@ async def test_create_execution_rejects_dependency_run_id_identifier(
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
 
         existing = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Existing dependency",
             input_artifact_ref=None,
@@ -541,14 +541,14 @@ async def test_create_execution_rejects_dependency_run_id_identifier(
             match=f"Dependency {existing.run_id} must use workflowId, not runId.",
         ):
             await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=owner_id,
                 title=None,
                 input_artifact_ref=None,
                 plan_artifact_ref=None,
                 manifest_artifact_ref=None,
                 failure_policy=None,
-                initial_parameters={"task": {"dependsOn": [existing.run_id]}},
+                initial_parameters={"workflow": {"dependsOn": [existing.run_id]}},
                 idempotency_key=None,
             )
 
@@ -574,18 +574,18 @@ async def test_create_execution_rejects_non_run_dependency(tmp_path, mock_client
             TemporalExecutionValidationError,
             match=(
                 f"Dependency {manifest.workflow_id} is a MoonMind.ManifestIngest "
-                "workflow, not a MoonMind.Run workflow."
+                "workflow, not a MoonMind.UserWorkflow workflow."
             ),
         ):
             await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=owner_id,
                 title=None,
                 input_artifact_ref=None,
                 plan_artifact_ref=None,
                 manifest_artifact_ref=None,
                 failure_policy=None,
-                initial_parameters={"task": {"dependsOn": [manifest.workflow_id]}},
+                initial_parameters={"workflow": {"dependsOn": [manifest.workflow_id]}},
                 idempotency_key=None,
             )
 
@@ -597,7 +597,7 @@ async def test_create_execution_rejects_unauthorized_dependency(tmp_path, mock_c
         current_owner = uuid4()
 
         foreign = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=foreign_owner,
             title="Foreign dependency",
             input_artifact_ref=None,
@@ -613,14 +613,14 @@ async def test_create_execution_rejects_unauthorized_dependency(tmp_path, mock_c
             match=f"Dependency unauthorized: {foreign.workflow_id}",
         ):
             await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=current_owner,
                 title=None,
                 input_artifact_ref=None,
                 plan_artifact_ref=None,
                 manifest_artifact_ref=None,
                 failure_policy=None,
-                initial_parameters={"task": {"dependsOn": [foreign.workflow_id]}},
+                initial_parameters={"workflow": {"dependsOn": [foreign.workflow_id]}},
                 idempotency_key=None,
             )
 
@@ -633,7 +633,7 @@ async def test_create_execution_persists_dependency_edges_and_supports_lookups(
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
 
         dep1 = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Dependency 1",
             input_artifact_ref=None,
@@ -644,7 +644,7 @@ async def test_create_execution_persists_dependency_edges_and_supports_lookups(
             idempotency_key=None,
         )
         dep2 = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Dependency 2",
             input_artifact_ref=None,
@@ -656,7 +656,7 @@ async def test_create_execution_persists_dependency_edges_and_supports_lookups(
         )
 
         dependent = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Dependent",
             input_artifact_ref=None,
@@ -664,7 +664,7 @@ async def test_create_execution_persists_dependency_edges_and_supports_lookups(
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "task": {
+                "workflow": {
                     "dependsOn": [dep1.workflow_id, dep2.workflow_id, dep1.workflow_id]
                 }
             },
@@ -673,7 +673,7 @@ async def test_create_execution_persists_dependency_edges_and_supports_lookups(
 
         source = await session.get(TemporalExecutionCanonicalRecord, dependent.workflow_id)
         assert source is not None
-        assert source.parameters["task"]["dependsOn"] == [dep1.workflow_id, dep2.workflow_id]
+        assert source.parameters["workflow"]["dependsOn"] == [dep1.workflow_id, dep2.workflow_id]
 
         prerequisites = await service.list_prerequisites(dependent.workflow_id)
         assert [edge.prerequisite_workflow_id for edge in prerequisites] == [
@@ -689,7 +689,7 @@ async def test_create_execution_persists_dependency_edges_and_supports_lookups(
             [dep1.workflow_id, dep2.workflow_id]
         )
         assert snapshot[dep1.workflow_id].title == "Dependency 1"
-        assert snapshot[dep2.workflow_id].workflow_type == "MoonMind.Run"
+        assert snapshot[dep2.workflow_id].workflow_type == "MoonMind.UserWorkflow"
 
 @pytest.mark.asyncio
 async def test_create_execution_persists_remediation_link_and_supports_lookups(
@@ -704,7 +704,7 @@ async def test_create_execution_persists_remediation_link_and_supports_lookups(
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
 
         target = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Target",
             input_artifact_ref=None,
@@ -716,7 +716,7 @@ async def test_create_execution_persists_remediation_link_and_supports_lookups(
         )
 
         remediation = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Remediate target",
             input_artifact_ref=None,
@@ -724,7 +724,7 @@ async def test_create_execution_persists_remediation_link_and_supports_lookups(
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "task": {
+                "workflow": {
                     "instructions": "Investigate the target",
                     "remediation": {
                         "target": {"workflowId": target.workflow_id},
@@ -757,12 +757,12 @@ async def test_create_execution_persists_remediation_link_and_supports_lookups(
             TemporalExecutionCanonicalRecord, remediation.workflow_id
         )
         assert remediation_record is not None
-        assert remediation_record.parameters["task"]["remediation"]["target"] == {
+        assert remediation_record.parameters["workflow"]["remediation"]["target"] == {
             "workflowId": target.workflow_id,
             "runId": target.run_id,
         }
         start_kwargs = mock_client_adapter.start_workflow.await_args_list[1].kwargs
-        assert start_kwargs["input_args"]["initial_parameters"]["task"][
+        assert start_kwargs["input_args"]["initial_parameters"]["workflow"][
             "remediation"
         ]["target"] == {
             "workflowId": target.workflow_id,
@@ -792,7 +792,7 @@ async def test_record_remediation_approval_decision_appends_bounded_audit(
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
 
         target = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Target",
             input_artifact_ref=None,
@@ -803,7 +803,7 @@ async def test_record_remediation_approval_decision_appends_bounded_audit(
             idempotency_key=None,
         )
         remediation = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Remediate target",
             input_artifact_ref=None,
@@ -811,7 +811,7 @@ async def test_record_remediation_approval_decision_appends_bounded_audit(
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "task": {
+                "workflow": {
                     "remediation": {
                         "target": {"workflowId": target.workflow_id},
                         "mode": "snapshot",
@@ -859,7 +859,7 @@ async def test_record_remediation_approval_decision_rejects_non_pending_target(
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
 
         execution = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Ordinary execution",
             input_artifact_ref=None,
@@ -891,7 +891,7 @@ async def test_create_execution_persists_supplied_matching_remediation_run_id(
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
 
         target = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Target",
             input_artifact_ref=None,
@@ -903,7 +903,7 @@ async def test_create_execution_persists_supplied_matching_remediation_run_id(
         )
 
         remediation = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Remediate target",
             input_artifact_ref=None,
@@ -911,7 +911,7 @@ async def test_create_execution_persists_supplied_matching_remediation_run_id(
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "task": {
+                "workflow": {
                     "instructions": "Investigate the target",
                     "remediation": {
                         "target": {
@@ -941,17 +941,17 @@ async def test_create_execution_rejects_missing_remediation_target_workflow_id(
 
         with pytest.raises(
             TemporalExecutionValidationError,
-            match="task.remediation.target.workflowId is required",
+            match="workflow.remediation.target.workflowId is required",
         ):
             await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=uuid4(),
                 title="Remediate target",
                 input_artifact_ref=None,
                 plan_artifact_ref=None,
                 manifest_artifact_ref=None,
                 failure_policy=None,
-                initial_parameters={"task": {"remediation": {"target": {}}}},
+                initial_parameters={"workflow": {"remediation": {"target": {}}}},
                 idempotency_key=None,
             )
 
@@ -963,7 +963,7 @@ async def test_create_execution_rejects_remediation_run_id_identifier(
         owner_id = uuid4()
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
         target = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Target",
             input_artifact_ref=None,
@@ -979,7 +979,7 @@ async def test_create_execution_rejects_remediation_run_id_identifier(
             match="must use workflowId, not runId",
         ):
             await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=owner_id,
                 title="Remediate target",
                 input_artifact_ref=None,
@@ -987,7 +987,7 @@ async def test_create_execution_rejects_remediation_run_id_identifier(
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={
-                    "task": {"remediation": {"target": {"workflowId": target.run_id}}}
+                "workflow": {"remediation": {"target": {"workflowId": target.run_id}}}
                 },
                 idempotency_key=None,
             )
@@ -1004,7 +1004,7 @@ async def test_create_execution_rejects_missing_remediation_target(
             match="Remediation target not found",
         ):
             await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=uuid4(),
                 title="Remediate target",
                 input_artifact_ref=None,
@@ -1012,7 +1012,7 @@ async def test_create_execution_rejects_missing_remediation_target(
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={
-                    "task": {
+                "workflow": {
                         "remediation": {
                             "target": {"workflowId": "mm:missing-remediation-target"}
                         }
@@ -1042,10 +1042,10 @@ async def test_create_execution_rejects_non_run_remediation_target(
 
         with pytest.raises(
             TemporalExecutionValidationError,
-            match="not a MoonMind.Run workflow",
+            match="not a MoonMind.UserWorkflow workflow",
         ):
             await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=owner_id,
                 title="Remediate target",
                 input_artifact_ref=None,
@@ -1053,7 +1053,7 @@ async def test_create_execution_rejects_non_run_remediation_target(
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={
-                    "task": {
+                "workflow": {
                         "remediation": {
                             "target": {"workflowId": target.workflow_id}
                         }
@@ -1070,7 +1070,7 @@ async def test_create_execution_rejects_mismatched_remediation_target_run_id(
         owner_id = uuid4()
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
         target = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Target",
             input_artifact_ref=None,
@@ -1086,7 +1086,7 @@ async def test_create_execution_rejects_mismatched_remediation_target_run_id(
             match="target.runId must match",
         ):
             await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=owner_id,
                 title="Remediate target",
                 input_artifact_ref=None,
@@ -1094,7 +1094,7 @@ async def test_create_execution_rejects_mismatched_remediation_target_run_id(
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={
-                    "task": {
+                "workflow": {
                         "remediation": {
                             "target": {
                                 "workflowId": target.workflow_id,
@@ -1114,7 +1114,7 @@ async def test_create_execution_rejects_unsupported_remediation_authority_mode(
         owner_id = uuid4()
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
         target = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Target",
             input_artifact_ref=None,
@@ -1127,10 +1127,10 @@ async def test_create_execution_rejects_unsupported_remediation_authority_mode(
 
         with pytest.raises(
             TemporalExecutionValidationError,
-            match="Unsupported task.remediation.authorityMode",
+            match="Unsupported workflow.remediation.authorityMode",
         ):
             await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=owner_id,
                 title="Remediate target",
                 input_artifact_ref=None,
@@ -1138,7 +1138,7 @@ async def test_create_execution_rejects_unsupported_remediation_authority_mode(
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={
-                    "task": {
+                "workflow": {
                         "remediation": {
                             "target": {"workflowId": target.workflow_id},
                             "authorityMode": "root_shell",
@@ -1156,7 +1156,7 @@ async def test_create_execution_rejects_incompatible_remediation_action_policy(
         owner_id = uuid4()
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
         target = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Target",
             input_artifact_ref=None,
@@ -1169,10 +1169,10 @@ async def test_create_execution_rejects_incompatible_remediation_action_policy(
 
         with pytest.raises(
             TemporalExecutionValidationError,
-            match="Unsupported task.remediation.actionPolicyRef",
+            match="Unsupported workflow.remediation.actionPolicyRef",
         ):
             await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=owner_id,
                 title="Remediate target",
                 input_artifact_ref=None,
@@ -1180,7 +1180,7 @@ async def test_create_execution_rejects_incompatible_remediation_action_policy(
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={
-                    "task": {
+                "workflow": {
                         "remediation": {
                             "target": {"workflowId": target.workflow_id},
                             "actionPolicyRef": "unknown_policy",
@@ -1199,7 +1199,7 @@ async def test_create_execution_keeps_future_remediation_policy_inert(
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
 
         execution = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Policy-only task",
             input_artifact_ref=None,
@@ -1207,7 +1207,7 @@ async def test_create_execution_keeps_future_remediation_policy_inert(
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "task": {
+                "workflow": {
                     "instructions": "Normal task with future policy metadata.",
                     "remediationPolicy": {
                         "enabled": True,
@@ -1231,11 +1231,11 @@ async def test_create_execution_keeps_future_remediation_policy_inert(
         )
 
         assert record is not None
-        assert record.parameters["task"]["remediationPolicy"]["enabled"] is True
+        assert record.parameters["workflow"]["remediationPolicy"]["enabled"] is True
         assert link is None
         mock_client_adapter.start_workflow.assert_awaited_once()
         start_args = mock_client_adapter.start_workflow.await_args.kwargs["input_args"]
-        assert "remediation" not in start_args["initial_parameters"]["task"]
+        assert "remediation" not in start_args["initial_parameters"]["workflow"]
 
 @pytest.mark.asyncio
 async def test_create_execution_rejects_nested_remediation_target(
@@ -1245,7 +1245,7 @@ async def test_create_execution_rejects_nested_remediation_target(
         owner_id = uuid4()
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
         target = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Target",
             input_artifact_ref=None,
@@ -1256,7 +1256,7 @@ async def test_create_execution_rejects_nested_remediation_target(
             idempotency_key=None,
         )
         first_remediation = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="First remediation",
             input_artifact_ref=None,
@@ -1264,7 +1264,7 @@ async def test_create_execution_rejects_nested_remediation_target(
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "task": {"remediation": {"target": {"workflowId": target.workflow_id}}}
+                "workflow": {"remediation": {"target": {"workflowId": target.workflow_id}}}
             },
             idempotency_key=None,
         )
@@ -1274,7 +1274,7 @@ async def test_create_execution_rejects_nested_remediation_target(
             match="Nested remediation targets are not supported",
         ):
             await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=owner_id,
                 title="Nested remediation",
                 input_artifact_ref=None,
@@ -1282,7 +1282,7 @@ async def test_create_execution_rejects_nested_remediation_target(
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={
-                    "task": {
+                "workflow": {
                         "remediation": {
                             "target": {"workflowId": first_remediation.workflow_id}
                         }
@@ -1292,14 +1292,14 @@ async def test_create_execution_rejects_nested_remediation_target(
             )
 
 @pytest.mark.asyncio
-async def test_create_execution_rejects_malformed_remediation_task_run_ids(
+async def test_create_execution_rejects_malformed_remediation_agent_run_ids(
     tmp_path, mock_client_adapter
 ):
     async with temporal_db(tmp_path) as session:
         owner_id = uuid4()
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
         target = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Target",
             input_artifact_ref=None,
@@ -1312,10 +1312,10 @@ async def test_create_execution_rejects_malformed_remediation_task_run_ids(
 
         with pytest.raises(
             TemporalExecutionValidationError,
-            match="task.remediation.target.taskRunIds must be a list of strings",
+            match="workflow.remediation.target.agentRunIds must be a list of strings",
         ):
             await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=owner_id,
                 title="Remediate target",
                 input_artifact_ref=None,
@@ -1323,11 +1323,11 @@ async def test_create_execution_rejects_malformed_remediation_task_run_ids(
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={
-                    "task": {
+                "workflow": {
                         "remediation": {
                             "target": {
                                 "workflowId": target.workflow_id,
-                                "taskRunIds": ["tr_valid", ""],
+                                "agentRunIds": ["tr_valid", ""],
                             }
                         }
                     }
@@ -1336,14 +1336,14 @@ async def test_create_execution_rejects_malformed_remediation_task_run_ids(
             )
 
 @pytest.mark.asyncio
-async def test_create_execution_rejects_foreign_remediation_task_run_ids(
+async def test_create_execution_rejects_foreign_remediation_agent_run_ids(
     tmp_path, mock_client_adapter
 ):
     async with temporal_db(tmp_path) as session:
         owner_id = uuid4()
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
         target = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Target",
             input_artifact_ref=None,
@@ -1355,7 +1355,7 @@ async def test_create_execution_rejects_foreign_remediation_task_run_ids(
                     "steps": [
                         {
                             "logicalStepId": "run-tests",
-                            "refs": {"taskRunId": "target-task-run"},
+                            "refs": {"agentRunId": "target-agent-run"},
                         }
                     ]
                 }
@@ -1365,10 +1365,10 @@ async def test_create_execution_rejects_foreign_remediation_task_run_ids(
 
         with pytest.raises(
             TemporalExecutionValidationError,
-            match="task.remediation.target.taskRunIds must belong to the target execution",
+            match="workflow.remediation.target.agentRunIds must belong to the target execution",
         ):
             await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=owner_id,
                 title="Remediate target",
                 input_artifact_ref=None,
@@ -1376,11 +1376,11 @@ async def test_create_execution_rejects_foreign_remediation_task_run_ids(
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={
-                    "task": {
+                "workflow": {
                         "remediation": {
                             "target": {
                                 "workflowId": target.workflow_id,
-                                "taskRunIds": ["foreign-task-run"],
+                                "agentRunIds": ["foreign-agent-run"],
                             }
                         }
                     }
@@ -1389,14 +1389,14 @@ async def test_create_execution_rejects_foreign_remediation_task_run_ids(
             )
 
 @pytest.mark.asyncio
-async def test_create_execution_accepts_owned_remediation_task_run_ids(
+async def test_create_execution_accepts_owned_remediation_agent_run_ids(
     tmp_path, mock_client_adapter
 ):
     async with temporal_db(tmp_path) as session:
         owner_id = uuid4()
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
         target = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Target",
             input_artifact_ref=None,
@@ -1408,7 +1408,7 @@ async def test_create_execution_accepts_owned_remediation_task_run_ids(
                     "steps": [
                         {
                             "logicalStepId": "run-tests",
-                            "refs": {"taskRunId": "target-task-run"},
+                            "refs": {"agentRunId": "target-agent-run"},
                         }
                     ]
                 }
@@ -1417,7 +1417,7 @@ async def test_create_execution_accepts_owned_remediation_task_run_ids(
         )
 
         remediation = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Remediate target",
             input_artifact_ref=None,
@@ -1425,11 +1425,11 @@ async def test_create_execution_accepts_owned_remediation_task_run_ids(
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "task": {
+                "workflow": {
                     "remediation": {
                         "target": {
                             "workflowId": target.workflow_id,
-                            "taskRunIds": ["target-task-run"],
+                            "agentRunIds": ["target-agent-run"],
                         }
                     }
                 }
@@ -1453,7 +1453,7 @@ async def test_create_execution_normalizes_depends_on_before_limit_and_persisten
 
         dependencies = [
             await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=owner_id,
                 title=f"Dependency {index}",
                 input_artifact_ref=None,
@@ -1468,7 +1468,7 @@ async def test_create_execution_normalizes_depends_on_before_limit_and_persisten
         workflow_ids = [record.workflow_id for record in dependencies]
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Normalized dependent",
             input_artifact_ref=None,
@@ -1476,7 +1476,7 @@ async def test_create_execution_normalizes_depends_on_before_limit_and_persisten
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "task": {
+                "workflow": {
                     "dependsOn": workflow_ids + [workflow_ids[0], "   ", None],  # type: ignore[list-item]
                 }
             },
@@ -1487,7 +1487,7 @@ async def test_create_execution_normalizes_depends_on_before_limit_and_persisten
             TemporalExecutionCanonicalRecord, created.workflow_id
         )
         assert source is not None
-        assert source.parameters["task"]["dependsOn"] == workflow_ids
+        assert source.parameters["workflow"]["dependsOn"] == workflow_ids
 
 @pytest.mark.asyncio
 async def test_create_execution_removes_empty_normalized_depends_on_from_parameters(
@@ -1498,14 +1498,14 @@ async def test_create_execution_removes_empty_normalized_depends_on_from_paramet
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Blank dependencies",
             input_artifact_ref=None,
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={"task": {"dependsOn": [None, "   "]}},
+            initial_parameters={"workflow": {"dependsOn": [None, "   "]}},
             idempotency_key=None,
         )
 
@@ -1542,7 +1542,7 @@ async def test_mark_execution_succeeded_fans_out_dependency_resolution_signals(
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
 
         prerequisite = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Prerequisite",
             input_artifact_ref=None,
@@ -1553,25 +1553,25 @@ async def test_mark_execution_succeeded_fans_out_dependency_resolution_signals(
             idempotency_key=None,
         )
         dependent_one = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Dependent one",
             input_artifact_ref=None,
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={"task": {"dependsOn": [prerequisite.workflow_id]}},
+            initial_parameters={"workflow": {"dependsOn": [prerequisite.workflow_id]}},
             idempotency_key=None,
         )
         dependent_two = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Dependent two",
             input_artifact_ref=None,
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={"task": {"dependsOn": [prerequisite.workflow_id]}},
+            initial_parameters={"workflow": {"dependsOn": [prerequisite.workflow_id]}},
             idempotency_key=None,
         )
 
@@ -1601,7 +1601,7 @@ async def test_record_terminal_state_fans_out_dependency_resolution_signals(
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
 
         prerequisite = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Prerequisite",
             input_artifact_ref=None,
@@ -1612,14 +1612,14 @@ async def test_record_terminal_state_fans_out_dependency_resolution_signals(
             idempotency_key=None,
         )
         dependent = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Dependent",
             input_artifact_ref=None,
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={"task": {"dependsOn": [prerequisite.workflow_id]}},
+            initial_parameters={"workflow": {"dependsOn": [prerequisite.workflow_id]}},
             idempotency_key=None,
         )
 
@@ -1667,7 +1667,7 @@ async def test_record_terminal_state_preserves_existing_terminal_summary(
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title="Cancelable run",
             input_artifact_ref=None,
@@ -1707,7 +1707,7 @@ async def test_record_terminal_state_indexes_finish_summary(
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title="Finish summary run",
             input_artifact_ref=None,
@@ -1756,7 +1756,7 @@ async def test_record_terminal_state_derives_snake_case_finish_outcome_code(
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title="Snake finish summary run",
             input_artifact_ref=None,
@@ -1805,7 +1805,7 @@ async def test_dependency_status_snapshot_repairs_stale_terminal_prerequisite(
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
 
         prerequisite = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Prerequisite",
             input_artifact_ref=None,
@@ -1816,14 +1816,14 @@ async def test_dependency_status_snapshot_repairs_stale_terminal_prerequisite(
             idempotency_key=None,
         )
         dependent = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Dependent",
             input_artifact_ref=None,
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={"task": {"dependsOn": [prerequisite.workflow_id]}},
+            initial_parameters={"workflow": {"dependsOn": [prerequisite.workflow_id]}},
             idempotency_key=None,
         )
 
@@ -1832,7 +1832,7 @@ async def test_dependency_status_snapshot_repairs_stale_terminal_prerequisite(
         description.id = prerequisite.workflow_id
         description.run_id = prerequisite.run_id
         description.namespace = "default"
-        description.workflow_type = "MoonMind.Run"
+        description.workflow_type = "MoonMind.UserWorkflow"
         description.status = WorkflowExecutionStatus.COMPLETED
         description.start_time = prerequisite.created_at
         description.execution_time = prerequisite.created_at
@@ -1885,7 +1885,7 @@ async def test_dependency_status_snapshot_returns_stale_record_when_terminal_syn
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
 
         prerequisite = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Prerequisite",
             input_artifact_ref=None,
@@ -1921,7 +1921,7 @@ async def test_mark_execution_failed_fanout_is_best_effort(tmp_path, mock_client
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
 
         prerequisite = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Prerequisite",
             input_artifact_ref=None,
@@ -1932,25 +1932,25 @@ async def test_mark_execution_failed_fanout_is_best_effort(tmp_path, mock_client
             idempotency_key=None,
         )
         dependent_one = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Dependent one",
             input_artifact_ref=None,
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={"task": {"dependsOn": [prerequisite.workflow_id]}},
+            initial_parameters={"workflow": {"dependsOn": [prerequisite.workflow_id]}},
             idempotency_key=None,
         )
         dependent_two = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Dependent two",
             input_artifact_ref=None,
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={"task": {"dependsOn": [prerequisite.workflow_id]}},
+            initial_parameters={"workflow": {"dependsOn": [prerequisite.workflow_id]}},
             idempotency_key=None,
         )
 
@@ -2011,7 +2011,7 @@ async def test_create_execution_returns_existing_record_after_idempotency_race(
             ):
                 if idempotency_key == key:
                     await winner_service.create_execution(
-                        workflow_type="MoonMind.Run",
+                        workflow_type="MoonMind.UserWorkflow",
                         owner_id=owner_id,
                         title="winner",
                         input_artifact_ref=None,
@@ -2044,7 +2044,7 @@ async def test_create_execution_returns_existing_record_after_idempotency_race(
             monkeypatch.setattr(loser_session, "commit", race_commit)
 
             record = await loser_service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=owner_id,
                 title="loser",
                 input_artifact_ref=None,
@@ -2068,7 +2068,7 @@ async def test_create_execution_scopes_idempotency_by_owner_type(tmp_path):
         service = TemporalExecutionService(session)
 
         user_record = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id="shared-owner",
             owner_type="user",
             title="user owned",
@@ -2080,7 +2080,7 @@ async def test_create_execution_scopes_idempotency_by_owner_type(tmp_path):
             idempotency_key="shared-idempotency-key",
         )
         service_record = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id="shared-owner",
             owner_type="service",
             title="service owned",
@@ -2092,7 +2092,7 @@ async def test_create_execution_scopes_idempotency_by_owner_type(tmp_path):
             idempotency_key="shared-idempotency-key",
         )
         service_retry = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id="shared-owner",
             owner_type="service",
             title="service retry",
@@ -2116,7 +2116,7 @@ async def test_list_executions_syncs_page_in_single_projection_commit(
         service = TemporalExecutionService(session)
 
         await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title="first",
             input_artifact_ref=None,
@@ -2127,7 +2127,7 @@ async def test_list_executions_syncs_page_in_single_projection_commit(
             idempotency_key=None,
         )
         await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title="second",
             input_artifact_ref=None,
@@ -2170,7 +2170,7 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -2178,12 +2178,12 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "taskRunId": "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d",
+                "agentRunId": "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d",
                 "recoverySource": {"workflowId": "mm:source", "runId": "run-old"},
                 "recoveryCheckpointRef": "artifact://checkpoint/old",
                 "preservedSteps": [{"id": "step-1"}],
                 "completedSteps": [{"id": "step-0"}],
-                "task": {
+                "workflow": {
                     "instructions": "Original task",
                     "recovery": {
                         "kind": "recover_from_failed_step",
@@ -2202,7 +2202,7 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(
             },
             idempotency_key=None,
         )
-        created.memo["taskRunId"] = "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"
+        created.memo["agentRunId"] = "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"
         await session.commit()
 
         original_run_id = created.run_id
@@ -2234,13 +2234,13 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(
         assert refreshed.rerun_count == 1
         assert refreshed.memo["continue_as_new_cause"] == "manual_rerun"
         assert refreshed.memo["latest_temporal_run_id"] == refreshed.run_id
-        assert "taskRunId" not in refreshed.memo
-        assert "taskRunId" not in refreshed.parameters
+        assert "agentRunId" not in refreshed.memo
+        assert "agentRunId" not in refreshed.parameters
         assert "recoverySource" not in refreshed.parameters
         assert "recoveryCheckpointRef" not in refreshed.parameters
         assert "preservedSteps" not in refreshed.parameters
         assert "completedSteps" not in refreshed.parameters
-        assert refreshed.parameters["task"] == {
+        assert refreshed.parameters["workflow"] == {
             "instructions": "Original task",
             "recovery": {
                 "kind": "exact_full_rerun",
@@ -2259,7 +2259,7 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -2267,13 +2267,13 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "taskRunId": "old-task-run",
-                "task_run_id": "old-task-run-snake",
+                "agentRunId": "old-agent-run",
+                "agent_run_id": "old-agent-run-snake",
                 "recoverySource": {"workflowId": "mm:source", "runId": "run-old"},
                 "recoveryCheckpointRef": "artifact://checkpoint/old",
                 "preservedSteps": [{"id": "step-1"}],
                 "completedSteps": [{"id": "step-0"}],
-                "task": {
+                "workflow": {
                     "instructions": "Original task",
                     "recovery": {
                         "kind": "recover_from_failed_step",
@@ -2329,13 +2329,13 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
             "workflowId": source_workflow_id,
             "runId": source_run_id,
         }
-        assert "taskRunId" not in rerun.parameters
-        assert "task_run_id" not in rerun.parameters
+        assert "agentRunId" not in rerun.parameters
+        assert "agent_run_id" not in rerun.parameters
         assert "recoverySource" not in rerun.parameters
         assert "recoveryCheckpointRef" not in rerun.parameters
         assert "preservedSteps" not in rerun.parameters
         assert "completedSteps" not in rerun.parameters
-        assert rerun.parameters["task"] == {
+        assert rerun.parameters["workflow"] == {
             "instructions": "Original task",
             "recovery": {
                 "kind": "exact_full_rerun",
@@ -2355,14 +2355,14 @@ async def test_request_rerun_pins_patch_recovery_to_terminal_source_execution(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={"task": {"instructions": "Original task"}},
+            initial_parameters={"workflow": {"instructions": "Original task"}},
             idempotency_key=None,
         )
         await service.cancel_execution(
@@ -2379,8 +2379,7 @@ async def test_request_rerun_pins_patch_recovery_to_terminal_source_execution(
             update_name="RequestRerun",
             input_artifact_ref=None,
             plan_artifact_ref=None,
-            parameters_patch={
-                "task": {
+            parameters_patch={"workflow": {
                     "instructions": "Edited task",
                     "recovery": {"kind": "edited_full_retry"},
                 }
@@ -2394,7 +2393,7 @@ async def test_request_rerun_pins_patch_recovery_to_terminal_source_execution(
         )
         rerun = await service.describe_execution(response["workflow_id"])
 
-        assert rerun.parameters["task"]["recovery"] == {
+        assert rerun.parameters["workflow"]["recovery"] == {
             "kind": "edited_full_retry",
             "sourceWorkflowId": source_workflow_id,
             "sourceRunId": source_run_id,
@@ -2404,11 +2403,11 @@ async def test_request_rerun_pins_patch_recovery_to_terminal_source_execution(
 def test_full_retry_recovery_from_patch_rejects_non_string_source_ids():
     with pytest.raises(
         TemporalExecutionValidationError,
-        match="task.recovery.sourceWorkflowId must be a string",
+        match="workflow.recovery.sourceWorkflowId must be a string",
     ):
         TemporalExecutionService._full_retry_recovery_from_patch(
             {
-                "task": {
+                "workflow": {
                     "recovery": {
                         "kind": "edited_full_retry",
                         "sourceWorkflowId": 123,
@@ -2428,7 +2427,7 @@ def test_full_retry_recovery_from_patch_rejects_forged_source_ids():
     ):
         TemporalExecutionService._full_retry_recovery_from_patch(
             {
-                "task": {
+                "workflow": {
                     "recovery": {
                         "kind": "edited_full_retry",
                         "sourceWorkflowId": "mm:other",
@@ -2616,7 +2615,7 @@ async def test_failed_step_recovery_creates_linked_execution_with_source_identit
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title="recover source",
             input_artifact_ref="artifact://input/source",
@@ -2624,8 +2623,8 @@ async def test_failed_step_recovery_creates_linked_execution_with_source_identit
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "taskRunId": "old-task-run",
-                "task": {"title": "recovery source", "instructions": "Original"},
+                "agentRunId": "old-agent-run",
+                "workflow": {"title": "recovery source", "instructions": "Original"},
             },
             idempotency_key=None,
         )
@@ -2665,7 +2664,7 @@ async def test_failed_step_recovery_creates_linked_execution_with_source_identit
         assert resumed.parameters["recoverySource"]["preservedSteps"][0][
             "logicalStepId"
         ] == "plan"
-        task_payload = resumed.parameters["task"]
+        task_payload = resumed.parameters["workflow"]
         assert task_payload["recovery"] == {
             "kind": "recover_from_failed_step",
             "sourceWorkflowId": created.workflow_id,
@@ -2682,7 +2681,7 @@ async def test_failed_step_recovery_creates_linked_execution_with_source_identit
             "planRef": "artifact://plan/source",
             "planDigest": "sha256:plan",
         }
-        assert "taskRunId" not in resumed.parameters
+        assert "agentRunId" not in resumed.parameters
 
 
 @pytest.mark.asyncio
@@ -2694,7 +2693,7 @@ async def test_failed_step_recovery_accepts_legacy_checkpoint_memo_key(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title="recover source",
             input_artifact_ref="artifact://input/source",
@@ -2702,7 +2701,7 @@ async def test_failed_step_recovery_accepts_legacy_checkpoint_memo_key(
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "task": {"title": "recovery source", "instructions": "Original"},
+                "workflow": {"title": "recovery source", "instructions": "Original"},
             },
             idempotency_key=None,
         )
@@ -2729,7 +2728,7 @@ async def test_failed_step_recovery_accepts_legacy_checkpoint_memo_key(
         resumed = await service.describe_execution(result["execution"]["workflowId"])
         assert result["applied"] == "created_resumed_execution"
         assert (
-            resumed.parameters["task"]["resume"]["recoveryCheckpointRef"]
+            resumed.parameters["workflow"]["resume"]["recoveryCheckpointRef"]
             == "artifact://checkpoint/source"
         )
 
@@ -2743,7 +2742,7 @@ async def test_selected_step_recovery_starts_from_preserved_step(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title="recover source",
             input_artifact_ref="artifact://input/source",
@@ -2751,8 +2750,8 @@ async def test_selected_step_recovery_starts_from_preserved_step(
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "taskRunId": "old-task-run",
-                "task": {"title": "recovery source", "instructions": "Original"},
+                "agentRunId": "old-agent-run",
+                "workflow": {"title": "recovery source", "instructions": "Original"},
             },
             idempotency_key=None,
         )
@@ -2805,9 +2804,9 @@ async def test_selected_step_recovery_starts_from_preserved_step(
             step["logicalStepId"]
             for step in resumed.parameters["recoverySource"]["preservedSteps"]
         ] == ["plan"]
-        assert resumed.parameters["task"]["resume"]["failedStepId"] == "design"
-        assert resumed.parameters["task"]["resume"]["recoveryMode"] == "selected_step"
-        assert resumed.parameters["task"]["resume"]["selectedStartStepId"] == "design"
+        assert resumed.parameters["workflow"]["resume"]["failedStepId"] == "design"
+        assert resumed.parameters["workflow"]["resume"]["recoveryMode"] == "selected_step"
+        assert resumed.parameters["workflow"]["resume"]["selectedStartStepId"] == "design"
 
 
 @pytest.mark.asyncio
@@ -2819,7 +2818,7 @@ async def test_selected_step_recovery_rejects_step_without_checkpoint_evidence(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title="recover source",
             input_artifact_ref="artifact://input/source",
@@ -2864,7 +2863,7 @@ async def test_selected_step_recovery_rejects_step_after_failed_step(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title="recover source",
             input_artifact_ref="artifact://input/source",
@@ -2921,7 +2920,7 @@ async def test_failed_step_recovery_requires_hydrated_checkpoint_payload(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title="recover source",
             input_artifact_ref="artifact://input/source",
@@ -2958,7 +2957,7 @@ async def test_failed_step_recovery_invalid_evidence_does_not_create_execution(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title="recover source",
             input_artifact_ref="artifact://input/source",
@@ -3008,7 +3007,7 @@ async def test_failed_step_recovery_rejects_noncanonical_checkpoint_ref(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title="recover source",
             input_artifact_ref="artifact://input/source",
@@ -3051,7 +3050,7 @@ async def test_failed_step_recovery_rejects_checkpoint_run_mismatch(
         service = TemporalExecutionService(session)
         service._client_adapter = mock_client_adapter
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title="recover source",
             input_artifact_ref=None,
@@ -3091,7 +3090,7 @@ async def test_failed_step_recovery_rejects_checkpoint_plan_mismatch(
         service = TemporalExecutionService(session)
         service._client_adapter = mock_client_adapter
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title="recover source",
             input_artifact_ref=None,
@@ -3134,7 +3133,7 @@ async def test_failed_step_recovery_rejects_checkpoint_plan_digest_mismatch(
         service = TemporalExecutionService(session)
         service._client_adapter = mock_client_adapter
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title="recover source",
             input_artifact_ref=None,
@@ -3178,7 +3177,7 @@ async def test_request_rerun_bounds_fresh_execution_idempotency_key(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -3237,7 +3236,7 @@ async def test_request_rerun_creates_fresh_execution_when_temporal_reports_compl
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -3287,7 +3286,7 @@ async def test_manifest_only_updates_rejected_for_non_manifest_workflow(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -3324,7 +3323,7 @@ async def test_request_rerun_clears_pause_flags_when_continuing_as_new(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -3368,7 +3367,7 @@ async def test_update_execution_rejects_unknown_update_name(tmp_path):
         service = TemporalExecutionService(session)
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -3402,7 +3401,7 @@ async def test_update_execution_rejects_run_intervention_updates(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -3440,7 +3439,7 @@ async def test_signal_pause_recovery_and_external_event_transitions(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -3493,7 +3492,7 @@ async def test_signal_resume_forwards_payload_via_workflow_update(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -3534,7 +3533,7 @@ async def test_signal_send_message_records_intervention_audit_without_state_chan
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -3651,7 +3650,7 @@ async def test_signal_skip_dependency_wait_routes_update_and_records_audit(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -3697,7 +3696,7 @@ async def test_signal_send_message_rejects_noncanonical_payload(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -3728,14 +3727,14 @@ async def test_signal_bypass_dependencies_records_operator_audit(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={"task": {"dependsOn": []}},
+            initial_parameters={"workflow": {"dependsOn": []}},
             idempotency_key=None,
         )
         source = await service._require_source_execution(created.workflow_id)
@@ -3775,14 +3774,14 @@ async def test_signal_bypass_dependencies_outside_wait_does_not_mutate_projectio
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={"task": {"dependsOn": []}},
+            initial_parameters={"workflow": {"dependsOn": []}},
             idempotency_key=None,
         )
         source = await service._require_source_execution(created.workflow_id)
@@ -3812,7 +3811,7 @@ async def test_signal_execution_rejects_unknown_signal_name(tmp_path):
         service = TemporalExecutionService(session)
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -3872,7 +3871,7 @@ async def test_cancel_execution_records_reject_audit_action(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -3916,7 +3915,7 @@ async def test_cancel_execution_accepts_projection_only_child_workflow(
             workflow_id=workflow_id,
             run_id=str(uuid4()),
             namespace="default",
-            workflow_type=TemporalWorkflowType.RUN,
+            workflow_type=TemporalWorkflowType.USER_WORKFLOW,
             owner_id=owner_id,
             owner_type=TemporalExecutionOwnerType.USER,
             state=MoonMindWorkflowState.AWAITING_SLOT,
@@ -3977,7 +3976,7 @@ async def test_cancel_execution_rejects_orphaned_projection_only_workflow(
             workflow_id="resolver:mm:orphaned:pr:1634:head:abc:1",
             run_id=str(uuid4()),
             namespace="default",
-            workflow_type=TemporalWorkflowType.RUN,
+            workflow_type=TemporalWorkflowType.USER_WORKFLOW,
             owner_id=owner_id,
             owner_type=TemporalExecutionOwnerType.USER,
             state=MoonMindWorkflowState.AWAITING_SLOT,
@@ -4016,7 +4015,7 @@ async def test_cancel_execution_rejects_orphaned_projection_only_workflow(
         mock_client_adapter.cancel_workflow.assert_not_called()
 
 @pytest.mark.asyncio
-async def test_cancel_execution_best_effort_terminates_task_scoped_codex_session(
+async def test_cancel_execution_best_effort_terminates_workflow_scoped_codex_session(
     tmp_path, mock_client_adapter, monkeypatch
 ):
     async with temporal_db(tmp_path) as session:
@@ -4025,7 +4024,7 @@ async def test_cancel_execution_best_effort_terminates_task_scoped_codex_session
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -4041,7 +4040,7 @@ async def test_cancel_execution_best_effort_terminates_task_scoped_codex_session
             CodexManagedSessionRecord(
                 sessionId=f"sess:{created.workflow_id}:codex_cli",
                 sessionEpoch=1,
-                taskRunId=created.workflow_id,
+                agentRunId=created.workflow_id,
                 containerId="container-1",
                 threadId="thread-1",
                 runtimeId="codex_cli",
@@ -4083,7 +4082,7 @@ async def test_cancel_execution_prefers_direct_session_record_load_for_codex_tas
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -4099,7 +4098,7 @@ async def test_cancel_execution_prefers_direct_session_record_load_for_codex_tas
             CodexManagedSessionRecord(
                 sessionId=f"sess:{created.workflow_id}:codex_cli",
                 sessionEpoch=1,
-                taskRunId=created.workflow_id,
+                agentRunId=created.workflow_id,
                 containerId="container-1",
                 threadId="thread-1",
                 runtimeId="codex_cli",
@@ -4149,7 +4148,7 @@ async def test_cancel_execution_ignores_best_effort_session_terminate_failure(
         mock_client_adapter.update_workflow.side_effect = RuntimeError("session closed")
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -4165,7 +4164,7 @@ async def test_cancel_execution_ignores_best_effort_session_terminate_failure(
             CodexManagedSessionRecord(
                 sessionId=f"sess:{created.workflow_id}:codex_cli",
                 sessionEpoch=1,
-                taskRunId=created.workflow_id,
+                agentRunId=created.workflow_id,
                 containerId="container-1",
                 threadId="thread-1",
                 runtimeId="codex_cli",
@@ -4196,7 +4195,7 @@ async def test_forced_cancel_marks_failed_with_terminated_close_status(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -4226,7 +4225,7 @@ async def test_request_rerun_can_override_inputs_and_parameters(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref="artifact://input/original",
@@ -4267,7 +4266,7 @@ async def test_update_inputs_major_reconfiguration_records_distinct_continue_as_
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -4279,7 +4278,7 @@ async def test_update_inputs_major_reconfiguration_records_distinct_continue_as_
                 "recoveryCheckpointRef": "artifact://checkpoint/old",
                 "preservedSteps": [{"id": "step-1"}],
                 "completedSteps": [{"id": "step-0"}],
-                "task": {
+                "workflow": {
                     "instructions": "Original task",
                     "recovery": {
                         "kind": "recover_from_failed_step",
@@ -4325,7 +4324,7 @@ async def test_update_inputs_major_reconfiguration_records_distinct_continue_as_
         assert "recoveryCheckpointRef" not in refreshed.parameters
         assert "preservedSteps" not in refreshed.parameters
         assert "completedSteps" not in refreshed.parameters
-        assert refreshed.parameters["task"] == {"instructions": "Original task"}
+        assert refreshed.parameters["workflow"] == {"instructions": "Original task"}
 
 
 @pytest.mark.asyncio
@@ -4337,7 +4336,7 @@ async def test_update_inputs_continue_as_new_preserves_recovery_provenance_for_r
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -4349,7 +4348,7 @@ async def test_update_inputs_continue_as_new_preserves_recovery_provenance_for_r
                 "recoveryCheckpointRef": "artifact://checkpoint/old",
                 "preservedSteps": [{"id": "step-1"}],
                 "completedSteps": [{"id": "step-0"}],
-                "task": {
+                "workflow": {
                     "instructions": "Original task",
                     "recovery": {
                         "kind": "recover_from_failed_step",
@@ -4394,10 +4393,10 @@ async def test_update_inputs_continue_as_new_preserves_recovery_provenance_for_r
         assert refreshed.parameters["recoveryCheckpointRef"] == "artifact://checkpoint/old"
         assert refreshed.parameters["preservedSteps"] == [{"id": "step-1"}]
         assert refreshed.parameters["completedSteps"] == [{"id": "step-0"}]
-        assert refreshed.parameters["task"]["recovery"]["kind"] == (
+        assert refreshed.parameters["workflow"]["recovery"]["kind"] == (
             "recover_from_failed_step"
         )
-        assert refreshed.parameters["task"]["resume"]["recoveryCheckpointRef"] == (
+        assert refreshed.parameters["workflow"]["resume"]["recoveryCheckpointRef"] == (
             "artifact://checkpoint/old"
         )
 
@@ -4410,7 +4409,7 @@ async def test_record_progress_triggers_continue_as_new_for_run_threshold(tmp_pa
         )
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -4447,7 +4446,7 @@ async def test_signal_external_event_requires_source_and_event_type(tmp_path):
         service = TemporalExecutionService(session)
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -4474,7 +4473,7 @@ async def test_configure_integration_monitoring_persists_visibility_and_callback
         service = TemporalExecutionService(session)
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title="Run with integration",
             input_artifact_ref=None,
@@ -4520,7 +4519,7 @@ async def test_configure_integration_monitoring_rejects_blank_external_operation
         service = TemporalExecutionService(session)
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title="Run with invalid integration id",
             input_artifact_ref=None,
@@ -4559,7 +4558,7 @@ async def test_ingest_integration_callback_deduplicates_provider_event_ids(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -4623,7 +4622,7 @@ async def test_wait_cycle_continue_as_new_preserves_active_integration_monitorin
         )
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -4674,7 +4673,7 @@ async def test_mark_execution_failed_rejects_unknown_error_category(tmp_path):
         service = TemporalExecutionService(session)
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -4698,7 +4697,7 @@ async def test_projection_sync_markers_round_trip_between_stale_and_fresh(tmp_pa
         service = TemporalExecutionService(session)
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -4733,7 +4732,7 @@ async def test_update_execution_persists_repair_pending_when_projection_refresh_
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title="Before failure",
             input_artifact_ref=None,
@@ -4789,7 +4788,7 @@ async def test_orphaned_projection_rows_are_repaired_from_canonical_lists(tmp_pa
         owner_id = uuid4()
 
         visible = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="visible",
             input_artifact_ref=None,
@@ -4800,7 +4799,7 @@ async def test_orphaned_projection_rows_are_repaired_from_canonical_lists(tmp_pa
             idempotency_key="visible-row",
         )
         hidden = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="hidden",
             input_artifact_ref=None,
@@ -4818,7 +4817,7 @@ async def test_orphaned_projection_rows_are_repaired_from_canonical_lists(tmp_pa
         assert orphaned.sync_state is TemporalExecutionProjectionSyncState.ORPHANED
 
         listed = await service.list_executions(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_type="user",
             state=None,
             owner_id=owner_id,
@@ -4848,7 +4847,7 @@ async def test_orphaned_projection_rows_with_canonical_source_repair_on_read_and
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title="hidden",
             input_artifact_ref=None,
@@ -4892,7 +4891,7 @@ async def test_ghost_projection_rows_without_canonical_source_are_hidden(tmp_pat
             workflow_id="mm:ghost-row",
             run_id=str(uuid4()),
             namespace="moonmind",
-            workflow_type=TemporalWorkflowType.RUN,
+            workflow_type=TemporalWorkflowType.USER_WORKFLOW,
             owner_id=owner_id,
             owner_type=TemporalExecutionOwnerType.USER,
             state=MoonMindWorkflowState.EXECUTING,
@@ -4921,7 +4920,7 @@ async def test_ghost_projection_rows_without_canonical_source_are_hidden(tmp_pat
         await session.commit()
 
         listed = await service.list_executions(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_type="user",
             state=None,
             owner_id=owner_id,
@@ -4945,7 +4944,7 @@ async def test_mark_execution_succeeded_rejects_terminal_execution(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -4978,7 +4977,7 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
 
         for idx in range(3):
             await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=owner_a,
                 title=f"A-{idx}",
                 input_artifact_ref=None,
@@ -4989,7 +4988,7 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
                 idempotency_key=f"owner-a-{idx}",
             )
         await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_b,
             title="B-0",
             input_artifact_ref=None,
@@ -5012,7 +5011,7 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
         )
 
         first_page = await service.list_executions(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             state=None,
             entry="user_workflow",
             owner_type="user",
@@ -5027,7 +5026,7 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
         assert first_page.count == 3
 
         second_page = await service.list_executions(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             state=None,
             entry="user_workflow",
             owner_type="user",
@@ -5059,7 +5058,7 @@ async def test_list_executions_orders_by_updated_at_then_workflow_id(tmp_path):
         owner_id = uuid4()
 
         older = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="older",
             input_artifact_ref=None,
@@ -5070,7 +5069,7 @@ async def test_list_executions_orders_by_updated_at_then_workflow_id(tmp_path):
             idempotency_key="older-row",
         )
         newer = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="newer",
             input_artifact_ref=None,
@@ -5081,7 +5080,7 @@ async def test_list_executions_orders_by_updated_at_then_workflow_id(tmp_path):
             idempotency_key="newer-row",
         )
         tied_a = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="tied-a",
             input_artifact_ref=None,
@@ -5092,7 +5091,7 @@ async def test_list_executions_orders_by_updated_at_then_workflow_id(tmp_path):
             idempotency_key="tied-a-row",
         )
         tied_b = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="tied-b",
             input_artifact_ref=None,
@@ -5126,7 +5125,7 @@ async def test_list_executions_orders_by_updated_at_then_workflow_id(tmp_path):
         await session.commit()
 
         listed = await service.list_executions(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             state=None,
             entry="user_workflow",
             owner_type="user",
@@ -5154,7 +5153,7 @@ async def test_list_executions_orders_scheduled_rows_by_latest_scheduled_for(tmp
         owner_id = uuid4()
 
         late = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="late",
             input_artifact_ref=None,
@@ -5165,7 +5164,7 @@ async def test_list_executions_orders_scheduled_rows_by_latest_scheduled_for(tmp
             idempotency_key="late-scheduled-row",
         )
         early = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="early",
             input_artifact_ref=None,
@@ -5176,7 +5175,7 @@ async def test_list_executions_orders_scheduled_rows_by_latest_scheduled_for(tmp
             idempotency_key="early-scheduled-row",
         )
         running = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="running",
             input_artifact_ref=None,
@@ -5206,7 +5205,7 @@ async def test_list_executions_orders_scheduled_rows_by_latest_scheduled_for(tmp
         await session.commit()
 
         listed = await service.list_executions(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             state=None,
             entry="user_workflow",
             owner_type="user",
@@ -5231,7 +5230,7 @@ async def test_list_executions_filters_entry_repo_and_integration(tmp_path):
         owner_id = uuid4()
 
         matching = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Matching run",
             input_artifact_ref=None,
@@ -5244,7 +5243,7 @@ async def test_list_executions_filters_entry_repo_and_integration(tmp_path):
             integration="github",
         )
         await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=owner_id,
             title="Other repo",
             input_artifact_ref=None,
@@ -5296,7 +5295,7 @@ async def test_polling_backoff_resets_after_status_change_and_updates_visibility
         )
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title="Backoff test",
             input_artifact_ref=None,
@@ -5359,7 +5358,7 @@ async def test_late_non_terminal_callback_is_ignored_after_terminal_completion(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -5415,7 +5414,7 @@ async def test_failed_poll_marks_integration_error_summary(tmp_path):
         service = TemporalExecutionService(session)
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,

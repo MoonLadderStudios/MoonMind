@@ -8,7 +8,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from moonmind.workflows.tasks.manifest_contract import ManifestContractError
+from moonmind.workflows.executions.manifest_contract import ManifestContractError
 from api_service.api.routers.worker_auth import _require_worker_auth, _WorkerRequestAuth
 from api_service.api.schemas import (
     ManifestDetailModel,
@@ -30,7 +30,7 @@ from api_service.services.manifests_service import (
     ManifestsService,
 )
 from moonmind.config.settings import settings
-from moonmind.workflows.tasks.routing import TemporalSubmitDisabledError
+from moonmind.workflows.executions.routing import TemporalSubmitDisabledError
 from moonmind.workflows.temporal import (
     TemporalArtifactAuthorizationError,
     TemporalArtifactStateError,

@@ -240,7 +240,7 @@ def test_parent_run_scope_uses_managed_session_spool(
 ) -> None:
     module = _load_module()
     parent_run_scope = module["_parent_run_scope"]
-    for env_key in ("MOONMIND_TASK_RUN_ID", "MOONMIND_RUN_ID", "TASK_RUN_ID"):
+    for env_key in ("MOONMIND_AGENT_RUN_ID", "MOONMIND_RUN_ID", "AGENT_RUN_ID"):
         monkeypatch.delenv(env_key, raising=False)
 
     monkeypatch.setenv(
@@ -257,7 +257,7 @@ def test_parent_run_scope_hashes_nonstandard_session_spool_path(
     module = _load_module()
     parent_run_scope = module["_parent_run_scope"]
     stable_scope_from_path = module["_stable_scope_from_path"]
-    for env_key in ("MOONMIND_TASK_RUN_ID", "MOONMIND_RUN_ID", "TASK_RUN_ID"):
+    for env_key in ("MOONMIND_AGENT_RUN_ID", "MOONMIND_RUN_ID", "AGENT_RUN_ID"):
         monkeypatch.delenv(env_key, raising=False)
 
     spool = tmp_path / "custom-spool" / "output"
@@ -272,9 +272,9 @@ def test_parent_run_scope_reuses_task_context_artifacts_helper(
     module = _load_module()
     parent_run_scope = module["_parent_run_scope"]
     for env_key in (
-        "MOONMIND_TASK_RUN_ID",
+        "MOONMIND_AGENT_RUN_ID",
         "MOONMIND_RUN_ID",
-        "TASK_RUN_ID",
+        "AGENT_RUN_ID",
         "MOONMIND_SESSION_ARTIFACT_SPOOL_PATH",
     ):
         monkeypatch.delenv(env_key, raising=False)
@@ -412,7 +412,7 @@ def test_resolve_runtime_selection_uses_execution_profile_env(
     module = _load_module()
     resolve_runtime_selection = module["_resolve_runtime_selection"]
 
-    monkeypatch.delenv("MOONMIND_DEFAULT_TASK_RUNTIME", raising=False)
+    monkeypatch.delenv("MOONMIND_DEFAULT_RUNTIME", raising=False)
     monkeypatch.setenv("MOONMIND_EXECUTION_PROFILE_REF", "codex_default")
     monkeypatch.setenv("MOONMIND_EXECUTION_PROFILE_RUNTIME", "codex_cli")
 
@@ -439,9 +439,9 @@ def test_resolve_runtime_selection_prefers_execution_profile_over_default(
     resolve_runtime_selection = module["_resolve_runtime_selection"]
 
     # The caller runs under Claude Code (execution profile) while the system
-    # default task runtime is still codex_cli. The child must inherit the
+    # default agent runtime is still codex_cli. The child must inherit the
     # caller's Claude Code runtime/profile, not fall back to the codex default.
-    monkeypatch.setenv("MOONMIND_DEFAULT_TASK_RUNTIME", "codex_cli")
+    monkeypatch.setenv("MOONMIND_DEFAULT_RUNTIME", "codex_cli")
     monkeypatch.setenv("MOONMIND_EXECUTION_PROFILE_REF", "claude_anthropic")
     monkeypatch.setenv("MOONMIND_EXECUTION_PROFILE_RUNTIME", "claude_code")
 
@@ -517,7 +517,7 @@ def test_resolve_runtime_selection_defaults_to_none_without_inheritance(monkeypa
     module = _load_module()
     resolve_runtime_selection = module["_resolve_runtime_selection"]
 
-    monkeypatch.delenv("MOONMIND_DEFAULT_TASK_RUNTIME", raising=False)
+    monkeypatch.delenv("MOONMIND_DEFAULT_RUNTIME", raising=False)
     monkeypatch.delenv("MOONMIND_EXECUTION_PROFILE_REF", raising=False)
     monkeypatch.delenv("MOONMIND_EXECUTION_PROFILE_RUNTIME", raising=False)
 
@@ -543,7 +543,7 @@ def test_resolve_runtime_selection_uses_default_runtime_env(monkeypatch: Any):
     module = _load_module()
     resolve_runtime_selection = module["_resolve_runtime_selection"]
 
-    monkeypatch.setenv("MOONMIND_DEFAULT_TASK_RUNTIME", "claude")
+    monkeypatch.setenv("MOONMIND_DEFAULT_RUNTIME", "claude")
     monkeypatch.delenv("MOONMIND_EXECUTION_PROFILE_REF", raising=False)
     monkeypatch.delenv("MOONMIND_EXECUTION_PROFILE_RUNTIME", raising=False)
 
@@ -898,7 +898,7 @@ def test_write_run_artifacts_skips_no_op_when_executions_queued(tmp_path: Path) 
 
 
 def test_build_queue_request_omits_runtime_inheritance_by_default() -> None:
-    """Without a task-scoped credential, no inheritance flag is emitted."""
+    """Without a workflow-scoped credential, no inheritance flag is emitted."""
     module = _load_module()
     req = _build_request(module)
     assert "runtimeInheritance" not in req["payload"]
@@ -946,7 +946,7 @@ def test_submit_jobs_adds_task_workflow_header_when_in_managed_session(
     submit_jobs_via_http = module["_submit_jobs_via_http"]
 
     monkeypatch.setenv("MOONMIND_TASK_WORKFLOW_ID", "mm:parent-task")
-    monkeypatch.setenv("MOONMIND_TASK_RUN_ID", "task-run-9")
+    monkeypatch.setenv("MOONMIND_AGENT_RUN_ID", "agent-run-9")
 
     captured_headers: dict[str, dict[str, str]] = {}
     fake_response = MagicMock()
@@ -982,8 +982,8 @@ def test_submit_jobs_adds_task_workflow_header_when_in_managed_session(
 
     headers = captured_headers["seen"]
     assert headers.get("X-MoonMind-Task-Workflow-Id") == "mm:parent-task"
-    assert headers.get("X-MoonMind-Task-Run-Identifier") == "task-run-9"
-    assert "X-MoonMind-Task-Run-Id" not in headers
+    assert headers.get("X-MoonMind-Agent-Run-Identifier") == "agent-run-9"
+    assert "X-MoonMind-Agent-Run-Id" not in headers
 
 
 def test_submit_jobs_omits_task_headers_without_env(monkeypatch: Any) -> None:
@@ -994,9 +994,9 @@ def test_submit_jobs_omits_task_headers_without_env(monkeypatch: Any) -> None:
         "MOONMIND_TASK_WORKFLOW_ID",
         "MOONMIND_WORKFLOW_ID",
         "TEMPORAL_WORKFLOW_ID",
-        "MOONMIND_TASK_RUN_ID",
+        "MOONMIND_AGENT_RUN_ID",
         "MOONMIND_RUN_ID",
-        "TASK_RUN_ID",
+        "AGENT_RUN_ID",
     ):
         monkeypatch.delenv(env_key, raising=False)
 
@@ -1034,5 +1034,5 @@ def test_submit_jobs_omits_task_headers_without_env(monkeypatch: Any) -> None:
 
     headers = captured_headers["seen"]
     assert "X-MoonMind-Task-Workflow-Id" not in headers
-    assert "X-MoonMind-Task-Run-Id" not in headers
-    assert "X-MoonMind-Task-Run-Identifier" not in headers
+    assert "X-MoonMind-Agent-Run-Id" not in headers
+    assert "X-MoonMind-Agent-Run-Identifier" not in headers

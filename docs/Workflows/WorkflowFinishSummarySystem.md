@@ -3,7 +3,7 @@
 Status: Active  
 Owners: MoonMind Engineering  
 Last Updated: 2026-05-17  
-Related: `docs/Tasks/WorkflowArchitecture.md`, `docs/Tasks/WorkflowProposalSystem.md`,
+Related: `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/WorkflowProposalSystem.md`,
 `docs/Temporal/ErrorTaxonomy.md`, `docs/Temporal/StepLedgerAndProgressModel.md`
 
 ---
@@ -11,7 +11,7 @@ Related: `docs/Tasks/WorkflowArchitecture.md`, `docs/Tasks/WorkflowProposalSyste
 ## 1. Summary
 
 MoonMind requires a clear "what happened?" summary at the end of every
-`MoonMind.Run` execution so Mission Control operators can quickly distinguish:
+`MoonMind.UserWorkflow` execution so Mission Control operators can quickly distinguish:
 
 * **Published output** (PR/branch updated successfully) vs
 * **No changes** (publish skipped because the repository was already correct) vs
@@ -29,7 +29,7 @@ and syncable result payload for rapid UI indexing.
 
 ### 2.1 Outcome Codes
 
-At the conclusion of a `MoonMind.Run` Temporal Workflow, the system guarantees an outcome code of:
+At the conclusion of a `MoonMind.UserWorkflow` Temporal Workflow, the system guarantees an outcome code of:
 
 * `PUBLISHED_PR`
 * `PUBLISHED_BRANCH`
@@ -97,7 +97,7 @@ Failed runs SHOULD additionally include a structured `failure` object alongside
     "source": "child_workflow",
     "stepId": "apply-patch",
     "stepTitle": "Apply patch",
-    "childWorkflowId": "task-123:agent:apply-patch",
+    "childWorkflowId": "mm:123:agent:apply-patch",
     "message": "Provider authentication failed with HTTP 401 for profile codex-prod.",
     "rootCauseType": "ApplicationError",
     "diagnosticsRef": "artifact://..."
@@ -181,7 +181,7 @@ even when late preset steps do not run.
 
 ## 3. Worker Implementation (Temporal Workflow)
 
-Inside the Python Temporal workflow logic (`MoonMind.Run`):
+Inside the Python Temporal workflow logic (`MoonMind.UserWorkflow`):
 
 1. The Workflow coordinates stage timings across all child Activities.
 2. Even in failure or `CancelledError` paths, a `finally:` or `except:` block captures the execution state.

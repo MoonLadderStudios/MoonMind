@@ -33,7 +33,7 @@ def mock_run_workflow(monkeypatch: pytest.MonkeyPatch) -> MoonMindRunWorkflow:
     logger = type("Logger", (), {"info": lambda *a, **k: None, "warning": lambda *a, **k: None})
     monkeypatch.setattr(run_workflow_module.workflow, "logger", logger)
 
-    monkeypatch.setattr(run_workflow_module.settings.workflow, "enable_task_proposals", True)
+    monkeypatch.setattr(run_workflow_module.settings.workflow, "enable_proposals", True)
 
     return workflow
 
@@ -459,7 +459,7 @@ async def test_run_proposals_stage_skipped_when_globally_disabled(
 ) -> None:
     captured: list[tuple[str, Any]] = []
 
-    monkeypatch.setattr(run_workflow_module.settings.workflow, "enable_task_proposals", False)
+    monkeypatch.setattr(run_workflow_module.settings.workflow, "enable_proposals", False)
 
     async def fake_execute_activity(activity_type: str, *args: Any, **kwargs: Any) -> Any:
         captured.append((activity_type, args))

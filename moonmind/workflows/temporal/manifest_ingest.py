@@ -35,7 +35,7 @@ from moonmind.schemas.manifest_ingest_models import (
     RequestedByModel,
     manifest_node_counts_from_nodes,
 )
-from moonmind.workflows.tasks.manifest_contract import (
+from moonmind.workflows.executions.manifest_contract import (
     ManifestContractError,
     normalize_manifest_job_payload,
 )
@@ -900,7 +900,7 @@ class ManifestIngestWorkflow:
             node = self._nodes[node_id]
             node["state"] = "running"
             try:
-                # Execute MoonMind.Run as a child workflow
+                # Execute MoonMind.UserWorkflow as a child workflow
                 run_params = {
                     "manifestIngestWorkflowId": self._workflow_id,
                     "manifestIngestRunId": self._run_id,
@@ -909,7 +909,7 @@ class ManifestIngestWorkflow:
                     "requestedBy": self._requested_by,
                     "runtimeHints": {
                         "manifestNodeState": "running",
-                        "workflowType": "MoonMind.Run",
+                        "workflowType": "MoonMind.UserWorkflow",
                     },
                     "parentClosePolicy": "REQUEST_CANCEL",
                 }
@@ -918,10 +918,10 @@ class ManifestIngestWorkflow:
                 node["child_workflow_id"] = child_id
 
                 child_result = await workflow.execute_child_workflow(
-                    "MoonMind.Run",
+                    "MoonMind.UserWorkflow",
                     args=[
                         {
-                            "workflow_type": "MoonMind.Run",
+                            "workflow_type": "MoonMind.UserWorkflow",
                             "owner_id": (
                                 requested_by.id if requested_by.type == "user" else None
                             ),

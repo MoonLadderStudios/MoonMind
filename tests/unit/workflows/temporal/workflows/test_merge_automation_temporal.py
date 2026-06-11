@@ -198,7 +198,7 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
         payload: dict[str, Any],
         **kwargs: Any,
     ) -> dict[str, Any]:
-        assert workflow_type == "MoonMind.Run"
+        assert workflow_type == "MoonMind.UserWorkflow"
         child_payloads.append(payload)
         child_workflow_ids.append(str(kwargs["id"]))
         return child_results.pop(0)
@@ -250,7 +250,7 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
         f"{first_resolver_id}:1",
         f"{second_resolver_id}:2",
     ]
-    assert child_payloads[0]["workflow_type"] == "MoonMind.Run"
+    assert child_payloads[0]["workflow_type"] == "MoonMind.UserWorkflow"
     assert child_payloads[0]["initial_parameters"]["publishMode"] == "none"
     assert child_payloads[0]["initial_parameters"]["task"]["publish"]["mode"] == "none"
     assert child_payloads[0]["initial_parameters"]["task"]["skill"]["id"] == "pr-resolver"
@@ -314,7 +314,7 @@ async def test_merge_automation_tracks_current_head_when_checks_are_still_runnin
         payload: dict[str, Any],
         **kwargs: Any,
     ) -> dict[str, Any]:
-        assert workflow_type == "MoonMind.Run"
+        assert workflow_type == "MoonMind.UserWorkflow"
         child_payloads.append(payload)
         child_workflow_ids.append(str(kwargs["id"]))
         return {"status": "success", "mergeAutomationDisposition": "merged"}
@@ -399,7 +399,7 @@ async def test_merge_automation_resolver_child_uses_try_cancel(
         _payload: dict[str, Any],
         **kwargs: Any,
     ) -> dict[str, Any]:
-        assert workflow_type == "MoonMind.Run"
+        assert workflow_type == "MoonMind.UserWorkflow"
         child_kwargs.update(kwargs)
         return {"status": "success", "mergeAutomationDisposition": "merged"}
 
@@ -488,7 +488,7 @@ async def test_merge_automation_resolver_child_uses_legacy_id_before_patch_marke
         _payload: dict[str, Any],
         **kwargs: Any,
     ) -> dict[str, Any]:
-        assert workflow_type == "MoonMind.Run"
+        assert workflow_type == "MoonMind.UserWorkflow"
         child_workflow_ids.append(str(kwargs["id"]))
         return {"status": "success", "mergeAutomationDisposition": "merged"}
 
@@ -572,7 +572,7 @@ async def test_merge_automation_launches_resolver_when_checks_are_failing_but_co
         **_kwargs: Any,
     ) -> dict[str, Any]:
         nonlocal child_calls
-        assert workflow_type == "MoonMind.Run"
+        assert workflow_type == "MoonMind.UserWorkflow"
         child_calls += 1
         return {"status": "success", "mergeAutomationDisposition": "merged"}
 
@@ -642,7 +642,7 @@ async def test_merge_automation_launches_resolver_for_merge_conflicts(
         **_kwargs: Any,
     ) -> dict[str, Any]:
         nonlocal child_calls
-        assert workflow_type == "MoonMind.Run"
+        assert workflow_type == "MoonMind.UserWorkflow"
         assert payload["initial_parameters"]["task"]["tool"]["name"] == "pr-resolver"
         child_calls += 1
         return {"status": "success", "mergeAutomationDisposition": "merged"}
@@ -726,7 +726,7 @@ async def test_merge_automation_adopts_initial_waiting_head_sha_before_resolver(
         payload: dict[str, Any],
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        assert workflow_type == "MoonMind.Run"
+        assert workflow_type == "MoonMind.UserWorkflow"
         resolver_payloads.append(payload)
         return {"status": "success", "mergeAutomationDisposition": "merged"}
 
@@ -799,7 +799,7 @@ async def test_merge_automation_adopts_initial_ready_head_sha_before_resolver(
         payload: dict[str, Any],
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        assert workflow_type == "MoonMind.Run"
+        assert workflow_type == "MoonMind.UserWorkflow"
         resolver_payloads.append(payload)
         return {"status": "success", "mergeAutomationDisposition": "merged"}
 
@@ -1077,7 +1077,7 @@ async def test_merge_automation_cancellation_while_resolver_active_sets_canceled
         _payload: dict[str, Any],
         **kwargs: Any,
     ) -> dict[str, Any]:
-        assert workflow_type == "MoonMind.Run"
+        assert workflow_type == "MoonMind.UserWorkflow"
         assert kwargs["cancellation_type"] == ChildWorkflowCancellationType.TRY_CANCEL
         raise CancelledError("resolver child canceled")
 
@@ -1149,7 +1149,7 @@ async def test_merge_automation_success_dispositions_complete_successfully(
         _payload: dict[str, Any],
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        assert workflow_type == "MoonMind.Run"
+        assert workflow_type == "MoonMind.UserWorkflow"
         return {"status": "success", "mergeAutomationDisposition": disposition}
 
     monkeypatch.setattr(
@@ -1209,7 +1209,7 @@ async def test_merge_automation_writes_visibility_artifact_refs(
         _payload: dict[str, Any],
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        assert workflow_type == "MoonMind.Run"
+        assert workflow_type == "MoonMind.UserWorkflow"
         return {"status": "success", "mergeAutomationDisposition": "merged"}
 
     async def fake_execute_typed_activity(
@@ -1291,7 +1291,7 @@ async def test_merge_automation_non_success_dispositions_fail(
         _payload: dict[str, Any],
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        assert workflow_type == "MoonMind.Run"
+        assert workflow_type == "MoonMind.UserWorkflow"
         return {
             "status": "success",
             "mergeAutomationDisposition": disposition,
@@ -1363,7 +1363,7 @@ async def test_merge_automation_invalid_dispositions_fail_deterministically(
         _payload: dict[str, Any],
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        assert workflow_type == "MoonMind.Run"
+        assert workflow_type == "MoonMind.UserWorkflow"
         return resolver_result
 
     monkeypatch.setattr(
@@ -1444,7 +1444,7 @@ async def test_merge_automation_recovers_resolver_contract_issue_when_pr_is_merg
         _payload: dict[str, Any],
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        assert workflow_type == "MoonMind.Run"
+        assert workflow_type == "MoonMind.UserWorkflow"
         return resolver_result
 
     monkeypatch.setattr(

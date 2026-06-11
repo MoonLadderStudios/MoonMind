@@ -95,7 +95,7 @@ REMEDIATION_LOCK_RELEASE_STATUSES = frozenset(
     {"attempted", "released", "not_held", "failed"}
 )
 MAX_REMEDIATION_CONTEXT_TAIL_LINES = 2000
-MAX_REMEDIATION_CONTEXT_TASK_RUN_IDS = 20
+MAX_REMEDIATION_CONTEXT_AGENT_RUN_IDS = 20
 TARGET_EVIDENCE_CLASSES = (
     ("stdout", "stdoutRef"),
     ("stderr", "stderrRef"),
@@ -239,29 +239,29 @@ class RemediationContextBuilder:
         remediation = self._remediation_payload(remediation_record)
         target = remediation.get("target") if isinstance(remediation, Mapping) else {}
         target_mapping = target if isinstance(target, Mapping) else {}
-        task_run_ids = self._normalize_task_run_ids(target_mapping.get("taskRunIds"))
+        agent_run_ids = self._normalize_agent_run_ids(target_mapping.get("agentRunIds"))
         target_evidence = self._target_evidence_payload(target_record)
-        if not task_run_ids:
-            task_run_ids = self._task_run_ids_from_evidence(target_evidence)
+        if not agent_run_ids:
+            agent_run_ids = self._agent_run_ids_from_evidence(target_evidence)
         evidence_policy = self._normalize_evidence_policy(
             remediation.get("evidencePolicy")
             if isinstance(remediation, Mapping)
             else None
         )
-        task_runs = self._normalize_task_run_evidence(
-            task_run_ids=task_run_ids,
+        agent_runs = self._normalize_agent_run_evidence(
+            agent_run_ids=agent_run_ids,
             target_evidence=target_evidence,
         )
         live_follow = self._live_follow_payload(
             link=link,
             target_record=target_record,
-            task_run_ids=task_run_ids,
-            task_runs=task_runs,
+            agent_run_ids=agent_run_ids,
+            agent_runs=agent_runs,
             target_evidence=target_evidence,
             evidence_policy=evidence_policy,
         )
         availability = self._evidence_availability(
-            task_runs=task_runs,
+            agent_runs=agent_runs,
             live_follow=live_follow,
         )
         unavailable_classes = [
@@ -282,7 +282,7 @@ class RemediationContextBuilder:
             ),
             "evidence": {
                 "targetArtifactRefs": self._target_artifact_refs(target_record),
-                "taskRuns": task_runs,
+                "agentRuns": agent_runs,
                 "availability": availability,
                 "evidenceDegraded": bool(unavailable_classes),
                 "unavailableEvidenceClasses": unavailable_classes,
@@ -310,7 +310,7 @@ class RemediationContextBuilder:
             },
             "boundedness": {
                 "maxTailLines": MAX_REMEDIATION_CONTEXT_TAIL_LINES,
-                "maxTaskRunIds": MAX_REMEDIATION_CONTEXT_TASK_RUN_IDS,
+                "maxAgentRunIds": MAX_REMEDIATION_CONTEXT_AGENT_RUN_IDS,
                 "rawLogBodiesIncluded": False,
                 "artifactContentsIncluded": False,
             },
@@ -321,9 +321,11 @@ class RemediationContextBuilder:
         record: db_models.TemporalExecutionCanonicalRecord,
     ) -> Mapping[str, Any]:
         parameters = record.parameters if isinstance(record.parameters, Mapping) else {}
-        task = parameters.get("task") if isinstance(parameters, Mapping) else {}
-        task_mapping = task if isinstance(task, Mapping) else {}
-        remediation = task_mapping.get("remediation")
+        workflow_payload = (
+            parameters.get("workflow") if isinstance(parameters, Mapping) else {}
+        )
+        workflow_mapping = workflow_payload if isinstance(workflow_payload, Mapping) else {}
+        remediation = workflow_mapping.get("remediation")
         return remediation if isinstance(remediation, Mapping) else {}
 
     @staticmethod
@@ -366,7 +368,7 @@ class RemediationContextBuilder:
             return []
         evidence_steps = _mapping_list(target_evidence.get("selectedSteps"))
         selectors: list[dict[str, Any]] = []
-        for item in value[:MAX_REMEDIATION_CONTEXT_TASK_RUN_IDS]:
+        for item in value[:MAX_REMEDIATION_CONTEXT_AGENT_RUN_IDS]:
             if not isinstance(item, Mapping):
                 continue
             selector: dict[str, Any] = {}
@@ -378,9 +380,9 @@ class RemediationContextBuilder:
             attempt = _positive_int_or_none(item.get("attempt"))
             if attempt is not None:
                 selector["attempt"] = attempt
-            task_run_id = _string_or_none(item.get("taskRunId") or item.get("task_run_id"))
-            if task_run_id:
-                selector["taskRunId"] = task_run_id
+            agent_run_id = _string_or_none(item.get("agentRunId") or item.get("agent_run_id"))
+            if agent_run_id:
+                selector["agentRunId"] = agent_run_id
             evidence_step = _match_step_evidence(selector, evidence_steps)
             if evidence_step is not None:
                 if status := _safe_optional_string(evidence_step.get("status")):
@@ -395,50 +397,50 @@ class RemediationContextBuilder:
         return selectors
 
     @staticmethod
-    def _normalize_task_run_ids(value: Any) -> list[str]:
+    def _normalize_agent_run_ids(value: Any) -> list[str]:
         if not isinstance(value, list):
             return []
-        task_run_ids: list[str] = []
+        agent_run_ids: list[str] = []
         seen: set[str] = set()
         for item in value:
-            task_run_id = _string_or_none(item)
-            if not task_run_id or task_run_id in seen:
+            agent_run_id = _string_or_none(item)
+            if not agent_run_id or agent_run_id in seen:
                 continue
-            seen.add(task_run_id)
-            task_run_ids.append(task_run_id)
-            if len(task_run_ids) >= MAX_REMEDIATION_CONTEXT_TASK_RUN_IDS:
+            seen.add(agent_run_id)
+            agent_run_ids.append(agent_run_id)
+            if len(agent_run_ids) >= MAX_REMEDIATION_CONTEXT_AGENT_RUN_IDS:
                 break
-        return task_run_ids
+        return agent_run_ids
 
     @staticmethod
-    def _task_run_ids_from_evidence(target_evidence: Mapping[str, Any]) -> list[str]:
-        task_run_ids: list[str] = []
+    def _agent_run_ids_from_evidence(target_evidence: Mapping[str, Any]) -> list[str]:
+        agent_run_ids: list[str] = []
         seen: set[str] = set()
-        for item in _mapping_list(target_evidence.get("taskRuns")):
-            task_run_id = _string_or_none(item.get("taskRunId"))
-            if not task_run_id or task_run_id in seen:
+        for item in _mapping_list(target_evidence.get("agentRuns")):
+            agent_run_id = _string_or_none(item.get("agentRunId"))
+            if not agent_run_id or agent_run_id in seen:
                 continue
-            seen.add(task_run_id)
-            task_run_ids.append(task_run_id)
-            if len(task_run_ids) >= MAX_REMEDIATION_CONTEXT_TASK_RUN_IDS:
+            seen.add(agent_run_id)
+            agent_run_ids.append(agent_run_id)
+            if len(agent_run_ids) >= MAX_REMEDIATION_CONTEXT_AGENT_RUN_IDS:
                 break
-        return task_run_ids
+        return agent_run_ids
 
     @staticmethod
-    def _normalize_task_run_evidence(
+    def _normalize_agent_run_evidence(
         *,
-        task_run_ids: Sequence[str],
+        agent_run_ids: Sequence[str],
         target_evidence: Mapping[str, Any],
     ) -> list[dict[str, Any]]:
         source_by_id = {
-            task_run_id: item
-            for item in _mapping_list(target_evidence.get("taskRuns"))
-            if (task_run_id := _string_or_none(item.get("taskRunId")))
+            agent_run_id: item
+            for item in _mapping_list(target_evidence.get("agentRuns"))
+            if (agent_run_id := _string_or_none(item.get("agentRunId")))
         }
-        task_runs: list[dict[str, Any]] = []
-        for task_run_id in task_run_ids[:MAX_REMEDIATION_CONTEXT_TASK_RUN_IDS]:
-            entry: dict[str, Any] = {"taskRunId": task_run_id}
-            source = source_by_id.get(task_run_id, {})
+        agent_runs: list[dict[str, Any]] = []
+        for agent_run_id in agent_run_ids[:MAX_REMEDIATION_CONTEXT_AGENT_RUN_IDS]:
+            entry: dict[str, Any] = {"agentRunId": agent_run_id}
+            source = source_by_id.get(agent_run_id, {})
             for field in (
                 "observabilitySummaryRef",
                 "stdoutRef",
@@ -452,19 +454,19 @@ class RemediationContextBuilder:
             continuity_refs = _artifact_ref_list(source.get("continuityRefs"))
             if continuity_refs:
                 entry["continuityRefs"] = continuity_refs
-            task_runs.append(entry)
-        return task_runs
+            agent_runs.append(entry)
+        return agent_runs
 
     @staticmethod
     def _evidence_availability(
         *,
-        task_runs: Sequence[Mapping[str, Any]],
+        agent_runs: Sequence[Mapping[str, Any]],
         live_follow: Mapping[str, Any],
     ) -> list[dict[str, str]]:
-        has_merged = any(isinstance(item.get("mergedLogsRef"), Mapping) for item in task_runs)
+        has_merged = any(isinstance(item.get("mergedLogsRef"), Mapping) for item in agent_runs)
         availability: list[dict[str, str]] = []
         for class_name, field_name in TARGET_EVIDENCE_CLASSES:
-            available = any(_has_task_run_evidence(item, field_name) for item in task_runs)
+            available = any(_has_agent_run_evidence(item, field_name) for item in agent_runs)
             if available:
                 availability.append({"class": class_name, "status": "available"})
             else:
@@ -495,24 +497,24 @@ class RemediationContextBuilder:
         *,
         link: db_models.TemporalExecutionRemediationLink,
         target_record: db_models.TemporalExecutionCanonicalRecord,
-        task_run_ids: Sequence[str],
-        task_runs: Sequence[Mapping[str, Any]],
+        agent_run_ids: Sequence[str],
+        agent_runs: Sequence[Mapping[str, Any]],
         target_evidence: Mapping[str, Any],
         evidence_policy: Mapping[str, Any],
     ) -> dict[str, Any]:
         mode = link.mode
-        task_run_id = task_run_ids[0] if task_run_ids else None
+        agent_run_id = agent_run_ids[0] if agent_run_ids else None
         live_evidence = target_evidence.get("liveFollow")
         live_mapping = live_evidence if isinstance(live_evidence, Mapping) else {}
         resume_cursor = _safe_policy_mapping(live_mapping.get("resumeCursor"))
-        fallbacks = _durable_fallback_classes(task_runs)
+        fallbacks = _durable_fallback_classes(agent_runs)
 
         if _live_follow_denied_by_policy(evidence_policy):
             return {
                 "status": "policy_denied",
                 "mode": mode,
                 "supported": False,
-                "taskRunId": task_run_id,
+                "agentRunId": agent_run_id,
                 "resumeCursor": resume_cursor,
                 "reason": "policy denies live observation",
                 "fallbacks": fallbacks,
@@ -522,7 +524,7 @@ class RemediationContextBuilder:
                 "status": "unsupported",
                 "mode": mode,
                 "supported": False,
-                "taskRunId": task_run_id,
+                "agentRunId": agent_run_id,
                 "resumeCursor": resume_cursor,
                 "reason": "remediation mode does not request live observation",
                 "fallbacks": fallbacks,
@@ -537,29 +539,29 @@ class RemediationContextBuilder:
                 "status": "unavailable",
                 "mode": mode,
                 "supported": False,
-                "taskRunId": task_run_id,
+                "agentRunId": agent_run_id,
                 "resumeCursor": resume_cursor,
                 "reason": "target is terminal",
                 "fallbacks": fallbacks,
             }
-        if not _task_run_supports_live_follow(
-            task_run_id=task_run_id,
+        if not _agent_run_supports_live_follow(
+            agent_run_id=agent_run_id,
             target_evidence=target_evidence,
         ):
             return {
                 "status": "unsupported",
                 "mode": mode,
                 "supported": False,
-                "taskRunId": task_run_id,
+                "agentRunId": agent_run_id,
                 "resumeCursor": resume_cursor,
-                "reason": "task run does not support live follow",
+                "reason": "agent run does not support live follow",
                 "fallbacks": fallbacks,
             }
         return {
             "status": "active",
             "mode": mode,
             "supported": True,
-            "taskRunId": task_run_id,
+            "agentRunId": agent_run_id,
             "resumeCursor": resume_cursor,
             "fallbacks": fallbacks,
         }
@@ -1488,18 +1490,18 @@ def _match_step_evidence(
     selector: Mapping[str, Any],
     evidence_steps: Sequence[Mapping[str, Any]],
 ) -> Mapping[str, Any] | None:
-    selector_task_run_id = _string_or_none(selector.get("taskRunId"))
+    selector_agent_run_id = _string_or_none(selector.get("agentRunId"))
     selector_logical_step_id = _string_or_none(selector.get("logicalStepId"))
     selector_attempt = _positive_int_or_none(selector.get("attempt"))
     if (
-        not selector_task_run_id
+        not selector_agent_run_id
         and not selector_logical_step_id
         and selector_attempt is None
     ):
         return None
     for item in evidence_steps:
-        task_run_id = _string_or_none(item.get("taskRunId"))
-        if selector_task_run_id and task_run_id != selector_task_run_id:
+        agent_run_id = _string_or_none(item.get("agentRunId"))
+        if selector_agent_run_id and agent_run_id != selector_agent_run_id:
             continue
         logical_step_id = _string_or_none(item.get("logicalStepId"))
         if selector_logical_step_id and logical_step_id != selector_logical_step_id:
@@ -1510,7 +1512,7 @@ def _match_step_evidence(
         return item
     return None
 
-def _has_task_run_evidence(item: Mapping[str, Any], field_name: str) -> bool:
+def _has_agent_run_evidence(item: Mapping[str, Any], field_name: str) -> bool:
     value = item.get(field_name)
     if field_name == "continuityRefs":
         return isinstance(value, Sequence) and not isinstance(
@@ -1518,7 +1520,7 @@ def _has_task_run_evidence(item: Mapping[str, Any], field_name: str) -> bool:
         ) and any(isinstance(ref, Mapping) for ref in value)
     return isinstance(value, Mapping)
 
-def _durable_fallback_classes(task_runs: Sequence[Mapping[str, Any]]) -> list[str]:
+def _durable_fallback_classes(agent_runs: Sequence[Mapping[str, Any]]) -> list[str]:
     classes: list[str] = []
     for class_name, field_name in (
         ("merged_logs", "mergedLogsRef"),
@@ -1526,7 +1528,7 @@ def _durable_fallback_classes(task_runs: Sequence[Mapping[str, Any]]) -> list[st
         ("stderr", "stderrRef"),
         ("diagnostics", "diagnosticsRef"),
     ):
-        if any(_has_task_run_evidence(item, field_name) for item in task_runs):
+        if any(_has_agent_run_evidence(item, field_name) for item in agent_runs):
             classes.append(class_name)
     return classes
 
@@ -1536,18 +1538,18 @@ def _live_follow_denied_by_policy(evidence_policy: Mapping[str, Any]) -> bool:
             return True
     return False
 
-def _task_run_supports_live_follow(
+def _agent_run_supports_live_follow(
     *,
-    task_run_id: str | None,
+    agent_run_id: str | None,
     target_evidence: Mapping[str, Any],
 ) -> bool:
     live_follow = target_evidence.get("liveFollow")
     if isinstance(live_follow, Mapping) and live_follow.get("supported") is True:
         return True
-    if not task_run_id:
+    if not agent_run_id:
         return False
-    for item in _mapping_list(target_evidence.get("taskRuns")):
-        if _string_or_none(item.get("taskRunId")) == task_run_id:
+    for item in _mapping_list(target_evidence.get("agentRuns")):
+        if _string_or_none(item.get("agentRunId")) == agent_run_id:
             return bool(
                 item.get("liveFollowSupported") is True
                 or item.get("supportsLiveFollow") is True

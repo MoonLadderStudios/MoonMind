@@ -39,7 +39,7 @@ def _provider_intent(
     key: str = "workflow.default_provider_profile_ref",
     apply_mode: str = "next_launch",
     affected_systems: tuple[str, ...] = (
-        "task_creation",
+        "workflow_creation",
         "workflow_runtime",
         "provider_profiles",
     ),
@@ -361,11 +361,11 @@ async def test_register_default_subscribers_invokes_provider_hook_on_event(caplo
         apply_mode="next_launch",
         actor_user_id=uuid4(),
         changed_at=datetime.now(timezone.utc),
-        affected_systems=["task_creation", "workflow_runtime", "provider_profiles"],
+        affected_systems=["workflow_creation", "workflow_runtime", "provider_profiles"],
         refresh_targets=[
             "provider_profile_manager",
             "settings_catalog",
-            "task_creation_defaults",
+            "workflow_creation_defaults",
         ],
     )
 

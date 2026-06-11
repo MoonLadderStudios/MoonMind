@@ -1,0 +1,229 @@
+"""Persistence helpers for workflow proposal entities."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from uuid import UUID
+
+from sqlalchemy import Select, and_, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from moonmind.workflows.proposals import models
+
+class WorkflowProposalNotFoundError(RuntimeError):
+    """Raised when a proposal cannot be found for the requested id."""
+
+class WorkflowProposalRepository:
+    """Repository wrapper for creating and retrieving workflow proposals."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def create_proposal(
+        self,
+        *,
+        title: str,
+        summary: str,
+        category: str | None,
+        tags: list[str],
+        repository: str,
+        workflow_create_request: dict[str, object],
+        proposed_by_worker_id: str | None,
+        proposed_by_user_id: UUID | None,
+        origin_source: models.WorkflowProposalOriginSource,
+        origin_id: UUID | None,
+        origin_external_id: str | None = None,
+        origin_metadata: dict[str, object],
+        dedup_key: str,
+        dedup_hash: str,
+        review_priority: models.WorkflowProposalReviewPriority,
+        priority_override_reason: str | None,
+        provider: str = "github",
+        external_key: str | None = None,
+        external_url: str | None = None,
+        delivered_at: datetime | None = None,
+        last_synced_at: datetime | None = None,
+        workflow_snapshot_ref: str | None = None,
+        provider_metadata: dict[str, object] | None = None,
+        resolved_policy: dict[str, object] | None = None,
+    ) -> models.WorkflowProposal:
+        entity = models.WorkflowProposal(
+            title=title,
+            summary=summary,
+            category=category,
+            tags=tags,
+            repository=repository,
+            workflow_create_request=workflow_create_request,
+            proposed_by_worker_id=proposed_by_worker_id,
+            proposed_by_user_id=proposed_by_user_id,
+            origin_source=origin_source,
+            origin_id=origin_id,
+            origin_external_id=origin_external_id,
+            origin_metadata=origin_metadata,
+            dedup_key=dedup_key,
+            dedup_hash=dedup_hash,
+            review_priority=review_priority,
+            priority_override_reason=priority_override_reason,
+            provider=provider,
+            external_key=external_key,
+            external_url=external_url,
+            delivered_at=delivered_at,
+            last_synced_at=last_synced_at,
+            workflow_snapshot_ref=workflow_snapshot_ref,
+            provider_metadata=provider_metadata or {},
+            resolved_policy=resolved_policy or {},
+        )
+        self._session.add(entity)
+        await self._session.flush()
+        return entity
+
+
+    async def find_open_duplicate(
+        self,
+        *,
+        provider: str,
+        repository: str,
+        dedup_hash: str,
+    ) -> models.WorkflowProposal | None:
+        stmt: Select[tuple[models.WorkflowProposal]] = (
+            select(models.WorkflowProposal)
+            .where(
+                models.WorkflowProposal.provider == provider,
+                models.WorkflowProposal.repository == repository,
+                models.WorkflowProposal.dedup_hash == dedup_hash,
+                models.WorkflowProposal.status == models.WorkflowProposalStatus.OPEN,
+            )
+            .order_by(models.WorkflowProposal.created_at.desc(), models.WorkflowProposal.id.desc())
+            .limit(1)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def list_proposals(
+        self,
+        *,
+        status: models.WorkflowProposalStatus | None = None,
+        category: str | None = None,
+        repository: str | None = None,
+        origin_source: models.WorkflowProposalOriginSource | None = None,
+        origin_id: UUID | None = None,
+        cursor: tuple[datetime, UUID] | None = None,
+        limit: int = 50,
+    ) -> tuple[list[models.WorkflowProposal], bool]:
+        stmt: Select[tuple[models.WorkflowProposal]] = (
+            select(models.WorkflowProposal)
+            .order_by(
+                models.WorkflowProposal.created_at.desc(),
+                models.WorkflowProposal.id.desc(),
+            )
+            .limit(limit + 1)
+        )
+        if status is not None:
+            stmt = stmt.where(models.WorkflowProposal.status == status)
+        if category:
+            stmt = stmt.where(models.WorkflowProposal.category == category)
+        if repository:
+            stmt = stmt.where(models.WorkflowProposal.repository == repository)
+        if origin_source is not None:
+            stmt = stmt.where(models.WorkflowProposal.origin_source == origin_source)
+        if origin_id is not None:
+            stmt = stmt.where(models.WorkflowProposal.origin_id == origin_id)
+        if cursor is not None:
+            cursor_time, cursor_id = cursor
+            stmt = stmt.where(
+                or_(
+                    models.WorkflowProposal.created_at < cursor_time,
+                    and_(
+                        models.WorkflowProposal.created_at == cursor_time,
+                        models.WorkflowProposal.id < cursor_id,
+                    ),
+                )
+            )
+        result = await self._session.execute(stmt)
+        rows = result.scalars().all()
+        has_more = len(rows) > limit
+        return rows[:limit], has_more
+
+    async def get_proposal(self, proposal_id: UUID) -> models.WorkflowProposal | None:
+        return await self._session.get(models.WorkflowProposal, proposal_id)
+
+    async def get_proposal_for_update(self, proposal_id: UUID) -> models.WorkflowProposal:
+        stmt: Select[tuple[models.WorkflowProposal]] = (
+            select(models.WorkflowProposal)
+            .where(models.WorkflowProposal.id == proposal_id)
+            .with_for_update()
+        )
+        result = await self._session.execute(stmt)
+        proposal = result.scalar_one_or_none()
+        if proposal is None:
+            raise WorkflowProposalNotFoundError(str(proposal_id))
+        return proposal
+
+    async def list_similar(
+        self, *, proposal: models.WorkflowProposal, limit: int = 10
+    ) -> list[models.WorkflowProposal]:
+        stmt: Select[tuple[models.WorkflowProposal]] = (
+            select(models.WorkflowProposal)
+            .where(
+                models.WorkflowProposal.dedup_hash == proposal.dedup_hash,
+                models.WorkflowProposal.id != proposal.id,
+                models.WorkflowProposal.status == models.WorkflowProposalStatus.OPEN,
+            )
+            .order_by(models.WorkflowProposal.created_at.desc())
+            .limit(limit)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalars().all()
+
+    async def update_priority(
+        self,
+        *,
+        proposal: models.WorkflowProposal,
+        priority: models.WorkflowProposalReviewPriority,
+        user_id: UUID,
+    ) -> models.WorkflowProposal:
+        proposal.review_priority = priority
+        proposal.priority_override_reason = None
+        proposal.decided_by_user_id = user_id
+        await self._session.flush()
+        return proposal
+
+    async def log_notification(
+        self,
+        *,
+        proposal_id: UUID,
+        category: str,
+        target: str,
+        status: str,
+        error: str | None = None,
+    ) -> models.WorkflowProposalNotification:
+        record = models.WorkflowProposalNotification(
+            proposal_id=proposal_id,
+            category=category,
+            target=target,
+            status=status,
+            error=error,
+        )
+        self._session.add(record)
+        await self._session.flush()
+        return record
+
+    async def has_notification(self, *, proposal_id: UUID, target: str) -> bool:
+        stmt = select(models.WorkflowProposalNotification.id).where(
+            models.WorkflowProposalNotification.proposal_id == proposal_id,
+            models.WorkflowProposalNotification.target == target,
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none() is not None
+
+    async def commit(self) -> None:
+        await self._session.commit()
+
+    async def refresh(self, entity: models.WorkflowProposal) -> models.WorkflowProposal:
+        await self._session.refresh(entity)
+        return entity
+
+__all__ = [
+    "WorkflowProposalRepository",
+    "WorkflowProposalNotFoundError",
+]

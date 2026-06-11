@@ -9,8 +9,8 @@ MoonMind is an open-source platform for orchestrating leading AI coding agents a
 
 MoonMind currently has two concrete managed-runtime centers of gravity:
 
-1. **Codex CLI** — a working managed runtime path and first-class task-scoped managed-session runtime.
-2. **Claude Code** — a working managed runtime path backed by runtime strategies, provider-profile materialization, OAuth/API-key credential flows, context injection, GitHub auth handling, and managed-run supervision. Claude-specific session domain models exist, but Claude Code does not yet have a live task-scoped managed-session controller.
+1. **Codex CLI** — a working managed runtime path and first-class workflow-scoped managed-session runtime.
+2. **Claude Code** — a working managed runtime path backed by runtime strategies, provider-profile materialization, OAuth/API-key credential flows, context injection, GitHub auth handling, and managed-run supervision. Claude-specific session domain models exist, but Claude Code does not yet have a live workflow-scoped managed-session controller.
 
 `MoonMind.AgentRun` and the managed-runtime launcher support multiple managed CLI runtimes, including `codex_cli`, `claude_code`, and `gemini_cli`. The `claude` and `codex` aliases are normalized to canonical managed runtime IDs where needed. `MoonMind.AgentSession`, `managedSession` bindings, and the turn-level session-control catalog currently describe the live Codex CLI session path; future session-capable runtimes should add their own controller/adapter bindings before being admitted to that path.
 
@@ -18,7 +18,7 @@ This document describes the current architecture and target direction. It separa
 
 > **Core rule:** Temporal remains MoonMind's durable outer orchestrator. Workflows are deterministic and side-effect-free. Managed runtimes, external agents, OAuth runners, Docker workloads, database writes, artifact writes, network calls, CLI invocation, and process supervision happen in Activities or external integration boundaries, never directly inside workflow code.
 
-> **Artifact rule:** Artifacts remain execution-centric evidence. Task-, step-, run-, and session-oriented UI views are projections over execution-linked artifacts and compact metadata; they do not create a second durable source of truth.
+> **Artifact rule:** Artifacts remain execution-centric evidence. Workflow-, step-, run-, and session-oriented UI views are projections over execution-linked artifacts and compact metadata; they do not create a second durable source of truth.
 
 > **Repository-alignment note:** This revision is aligned with the current MoonMind repository shape: `MoonMind.AgentRun`, `MoonMind.AgentSession`, `MoonMind.ProviderProfileManager`, `MoonMind.OAuthSession`, `MoonMind.ManagedSessionReconcile`, `MoonMind.ManifestIngest`, and `MoonMind.MergeAutomation` are workflow types registered by the workflow fleet; managed runtime launch/supervision/session control run through activity fleets and runtime components under `moonmind/workflows/temporal/runtime/`.
 
@@ -44,9 +44,9 @@ flowchart LR
   end
 
   subgraph WorkflowPlane["Workflow Executions"]
-    RUN["MoonMind.Run<br/>root workflow implementation"]
+    RUN["MoonMind.UserWorkflow<br/>root workflow implementation"]
     AR["MoonMind.AgentRun<br/>true agent step workflow"]
-    AS["MoonMind.AgentSession<br/>task-scoped session entity"]
+    AS["MoonMind.AgentSession<br/>workflow-scoped session entity"]
     PPM["MoonMind.ProviderProfileManager<br/>per-runtime slot/cooldown entity"]
     OAUTH["MoonMind.OAuthSession<br/>auth-session orchestrator"]
     RECON["MoonMind.ManagedSessionReconcile<br/>bounded session reconciler"]
@@ -74,7 +74,7 @@ flowchart LR
   end
 
   subgraph ManagedSessionPlane["Managed Session Components<br/>(controlled by Agent Runtime activities)"]
-    CSESS["Task-scoped session container<br/>codex_cli / claude_code"]
+    CSESS["Workflow-scoped session container<br/>codex_cli / claude_code"]
     DSIDE["Per-session Docker sidecar<br/>private daemon for repo work"]
     CAPP["Session control transport"]
     TURN["Turn control<br/>send / steer / interrupt / clear"]
@@ -192,7 +192,7 @@ Diagram rules:
 
 | Runtime / integration | Current role | Current maturity | Architecture note |
 |---|---|---|---|
-| `codex_cli` | Managed CLI runtime and task-scoped managed-session runtime | Concrete working managed-run path and concrete `MoonMind.AgentSession` binding | Codex uses the shared session-plane contracts with Codex-specific transport details: session container, turn control, `session_epoch`, thread boundaries, clear/reset artifacts, and Codex App Server transport. |
+| `codex_cli` | Managed CLI runtime and workflow-scoped managed-session runtime | Concrete working managed-run path and concrete `MoonMind.AgentSession` binding | Codex uses the shared session-plane contracts with Codex-specific transport details: session container, turn control, `session_epoch`, thread boundaries, clear/reset artifacts, and Codex App Server transport. |
 | `claude_code` | Managed CLI runtime | Concrete working managed-run path; session design/domain models only | Claude Code uses provider-profile materialization, OAuth/API-key paths, MiniMax/Anthropic-compatible profile support, context injection, GitHub auth handling, and runtime-specific launch hardening. It is not yet admitted to the live `MoonMind.AgentSession` controller path. |
 | `gemini_cli` | Managed CLI runtime | Registered managed-runtime strategy and supported architecture target | Gemini participates in the same strategy/launcher/profile model, but this document's current focus is Codex CLI and Claude Code. |
 | Jules | External delegated agent | Concrete external-agent path | Delegated through integration adapters and canonical `AgentRun` contracts. |
@@ -206,13 +206,13 @@ Diagram rules:
 
 ### Control Plane
 
-The API service and Mission Control provide the operator boundary. They create tasks, resolve runtime intent, expose provider-profile and auth configuration, serve artifact and observability views, support intervention flows, and expose context/MCP-style surfaces to compatible runtimes.
+The API service and Mission Control provide the operator boundary. They create workflow executions, resolve runtime intent, expose provider-profile and auth configuration, serve artifact and observability views, support intervention flows, and expose context/MCP-style surfaces to compatible runtimes.
 
 Control-plane calls that change workflow-owned lifecycle state should use Temporal Start, Signal, Update, Query, or idempotent projection activities rather than mutating lifecycle tables as a competing source of truth.
 
 ### Temporal Plane
 
-Temporal is the durable orchestration backbone. Workflows own orchestration state; Activities perform side effects. Temporal remains authoritative for task lifecycle, retries, timers, cancellation, signals, updates, child-workflow relationships, schedules, workflow history, and workflow visibility.
+Temporal is the durable orchestration backbone. Workflows own orchestration state; Activities perform side effects. Temporal remains authoritative for workflow lifecycle, retries, timers, cancellation, signals, updates, child-workflow relationships, schedules, workflow history, and workflow visibility.
 
 The Temporal Service does not execute MoonMind application code. Workflow and Activity Workers poll task queues and execute the registered workflow/activity handlers.
 
@@ -221,7 +221,7 @@ The Temporal Service does not execute MoonMind application code. Workflow and Ac
 The Agent Orchestration Layer spans all true agent execution:
 
 - managed runtime runs launched and supervised by MoonMind
-- Codex CLI task-scoped managed sessions
+- Codex CLI workflow-scoped managed sessions
 - delegated external agents such as Jules and Codex Cloud
 
 The layer owns canonical contracts, provider-profile coordination, runtime dispatch, artifact publication, policy enforcement, failure classification, and operator-facing lifecycle semantics.
@@ -236,7 +236,7 @@ Claude Code and Codex CLI live here today as concrete managed runtimes.
 
 ### Shared Managed Session Plane
 
-The Managed Session Plane is a stateful, task-scoped path for session-capable runtimes. It uses `MoonMind.AgentSession` as a Temporal entity workflow for session orchestration and compact session metadata. The workflow does not hold a container or socket connection directly. It schedules Agent Runtime activities that launch/resume/control the runtime session container and publish session artifacts.
+The Managed Session Plane is a stateful, workflow-scoped path for session-capable runtimes. It uses `MoonMind.AgentSession` as a Temporal entity workflow for session orchestration and compact session metadata. The workflow does not hold a container or socket connection directly. It schedules Agent Runtime activities that launch/resume/control the runtime session container and publish session artifacts.
 
 Ordinary Docker work that originates from the session uses the per-session
 Docker sidecar described in `docs/ManagedAgents/DockerSidecarRuntime.md`. The
@@ -259,7 +259,7 @@ Provider Profiles remain a single execution-target abstraction in this architect
 
 External agents are delegated integrations. MoonMind does not own their runtime envelope but still owns orchestration, status normalization, artifacts, observability evidence, cancellation semantics where supported, and operator presentation.
 
-External agents may complete through polling activities, provider callbacks, or both. Callback handlers should route by stable workflow/task/run identifiers and signal or update the waiting `MoonMind.AgentRun`; polling remains a fallback for providers that do not support callbacks.
+External agents may complete through polling activities, provider callbacks, or both. Callback handlers should route by stable workflow/run identifiers and signal or update the waiting `MoonMind.AgentRun`; polling remains a fallback for providers that do not support callbacks.
 
 ### Docker Workload Plane
 
@@ -305,7 +305,7 @@ Managed runtimes do not replace Temporal orchestration. They run inside a Tempor
 
 Temporal owns:
 
-- task lifecycle
+- workflow lifecycle
 - workflow history
 - step ordering
 - retries and timers
@@ -320,7 +320,7 @@ Managed runtime processes, containers, external jobs, OAuth runners, and workloa
 
 A **managed run** is an asynchronously supervised CLI runtime execution. Claude Code and Codex CLI both work on this path today.
 
-A **managed session** is a longer-lived task-scoped runtime container with explicit session identity, turn control, continuity epochs, and clear/reset semantics. Codex CLI is the current concrete implementation of this path; Claude Code is a managed-run runtime with session-specific design models that are not yet wired into the live session controller.
+A **managed session** is a longer-lived workflow-scoped runtime container with explicit session identity, turn control, continuity epochs, and clear/reset semantics. Codex CLI is the current concrete implementation of this path; Claude Code is a managed-run runtime with session-specific design models that are not yet wired into the live session controller.
 
 The top-level architecture must not collapse these together.
 
@@ -328,7 +328,7 @@ The top-level architecture must not collapse these together.
 
 `MoonMind.AgentRun` is the durable child workflow for one true agent execution step, regardless of whether the runtime is managed, session-backed, or external.
 
-It exists as a child workflow not merely for code organization, but to isolate step-level lifecycle, status, cancellation, retries, provider-profile lease release, failure classification, result normalization, and event history from the root `MoonMind.Run` workflow.
+It exists as a child workflow not merely for code organization, but to isolate step-level lifecycle, status, cancellation, retries, provider-profile lease release, failure classification, result normalization, and event history from the root `MoonMind.UserWorkflow` workflow.
 
 `MoonMind.AgentRun` owns the canonical `AgentRunStatus` / `AgentRunResult` terminal contract for the step. It does not own runtime-specific launch details, container control, or provider-specific API calls. Those happen behind strategies, adapters, and activities.
 
@@ -369,7 +369,7 @@ MoonMind stores artifacts for:
 - session summaries and reset boundaries
 - observability events
 
-Task, step, run, and session views are projections over artifacts and compact metadata.
+Workflow, step, run, and session views are projections over artifacts and compact metadata.
 
 ### 8. Session containers are continuity caches, not durable truth
 
@@ -379,9 +379,9 @@ Any state required for recovery, audit, presentation, rerun, or operator underst
 
 ### 9. Step boundaries remain first-class
 
-A managed runtime may run across multiple plan steps or through a task-scoped session, but MoonMind must preserve step-level evidence. Each meaningful step should produce bounded status, logs, outputs, diagnostics, and artifact refs.
+A managed runtime may run across multiple plan steps or through a workflow-scoped session, but MoonMind must preserve step-level evidence. Each meaningful step should produce bounded status, logs, outputs, diagnostics, and artifact refs.
 
-Task-scoped sessions must not allow broad repository-level autonomy instructions to blur current step boundaries.
+Workflow-scoped sessions must not allow broad repository-level autonomy instructions to blur current step boundaries.
 
 ### 10. Observation and control are separate
 
@@ -406,9 +406,9 @@ Long-lived entity workflows such as `MoonMind.AgentSession` and `MoonMind.Provid
 
 | Workflow | Purpose |
 |---|---|
-| `MoonMind.Run` | Current live root workflow implementation for a user Workflow Execution. Owns the workflow envelope, planning, Step ordering, workflow cancellation, Step ledger, and final workflow summary. |
+| `MoonMind.UserWorkflow` | Current live root workflow implementation for a user Workflow Execution. Owns the workflow envelope, planning, Step ordering, workflow cancellation, Step ledger, and final workflow summary. |
 | `MoonMind.AgentRun` | Child workflow for one true agent execution step. Handles managed, session-backed, and external agents through canonical contracts. |
-| `MoonMind.AgentSession` | Task-scoped session entity workflow for the live Codex CLI session path. Owns compact session orchestration state, turn routing, session epochs, clear/reset metadata, reconciliation hooks, and teardown orchestration. It schedules activities for container and transport side effects. |
+| `MoonMind.AgentSession` | Workflow-scoped session entity workflow for the live Codex CLI session path. Owns compact session orchestration state, turn routing, session epochs, clear/reset metadata, reconciliation hooks, and teardown orchestration. It schedules activities for container and transport side effects. |
 | `MoonMind.ManagedSessionReconcile` | Bounded reconciliation workflow for managed-session records and container state. |
 | `MoonMind.ProviderProfileManager` | Per-runtime workflow that owns provider-profile slot acquisition, release, cooldown, assignment, lease safety nets, and queue draining. |
 | `MoonMind.OAuthSession` | Interactive auth-session workflow. Orchestrates volume provisioning, auth-runner lifecycle, finalize/cancel/fail signals, verification, profile registration, and cleanup. It does not hold PTY/WebSocket connections directly. |
@@ -419,8 +419,8 @@ Long-lived entity workflows such as `MoonMind.AgentSession` and `MoonMind.Provid
 
 For Claude Code, Codex CLI, Gemini CLI, and future managed CLI runtimes:
 
-1. `MoonMind.Run` reaches a plan step that targets a true managed agent runtime.
-2. `MoonMind.Run` starts `MoonMind.AgentRun` as a child workflow and passes compact execution intent, workspace intent, instruction/artifact refs, and provider-profile selector metadata.
+1. `MoonMind.UserWorkflow` reaches a plan step that targets a true managed agent runtime.
+2. `MoonMind.UserWorkflow` starts `MoonMind.AgentRun` as a child workflow and passes compact execution intent, workspace intent, instruction/artifact refs, and provider-profile selector metadata.
 3. `MoonMind.AgentRun` resolves the canonical runtime ID and synchronizes/queries compact Provider Profile metadata as needed.
 4. `MoonMind.AgentRun` requests provider-profile capacity from `MoonMind.ProviderProfileManager` for the runtime family.
 5. The Provider Profile Manager selects and leases exactly one compatible Provider Profile, then signals `slot_assigned` back to the `AgentRun` workflow. Current implementation uses Signals for this protocol; a future Update-based wrapper may be added for synchronous admission, but the signal protocol remains the compatibility path for in-flight histories.
@@ -436,17 +436,17 @@ This is the path where Codex CLI is concrete today. Claude Code is concrete on t
 
 ### Managed-session shape
 
-For Codex CLI task-scoped sessions:
+For Codex CLI workflow-scoped sessions:
 
-1. `MoonMind.Run` determines that a step should use the managed-session path.
-2. `MoonMind.Run` ensures the task-scoped `MoonMind.AgentSession` exists.
+1. `MoonMind.UserWorkflow` determines that a step should use the managed-session path.
+2. `MoonMind.UserWorkflow` ensures the workflow-scoped `MoonMind.AgentSession` exists.
 3. `MoonMind.AgentSession` launches or resumes a runtime session container through Agent Runtime activities.
 4. Runtime handles such as container ID, thread ID, active turn ID, and session epoch are attached to `MoonMind.AgentSession` through compact Signals or returned activity payloads.
 5. A true agent step is still represented through `MoonMind.AgentRun`. For session-backed execution, `AgentRun` delegates the turn to `MoonMind.AgentSession` and records the canonical step-level `AgentRunResult`.
 6. `MoonMind.AgentSession` accepts turn-control requests through Workflow Updates when the caller needs validation and a response. Updates call Agent Runtime activities to send, steer, interrupt, clear, terminate, fetch summaries, and publish session artifacts.
 7. Codex App Server handles runtime-native turn execution, steering, interruption, clear/reset, and session status inside the session container.
 8. Session continuity artifacts, reset boundaries, stdout/stderr, diagnostics, control-event artifacts, and result artifacts are published.
-9. Clear/reset creates a new MoonMind session epoch and thread boundary inside the same task-scoped session policy. The epoch is MoonMind domain state and is independent of Temporal `RunId`.
+9. Clear/reset creates a new MoonMind session epoch and thread boundary inside the same workflow-scoped session policy. The epoch is MoonMind domain state and is independent of Temporal `RunId`.
 
 For Codex session-backed `AgentRun` steps, turn instruction preparation is a
 separate Agent Runtime activity (`agent_runtime.prepare_turn_instructions`) from
@@ -495,7 +495,7 @@ Without one of these guarantees, a later `send_turn`, `interrupt_turn`, `clear_s
 
 For external agents:
 
-1. `MoonMind.Run` starts `MoonMind.AgentRun` for a delegated step.
+1. `MoonMind.UserWorkflow` starts `MoonMind.AgentRun` for a delegated step.
 2. `MoonMind.AgentRun` uses an external adapter activity to start remote work.
 3. The adapter normalizes provider state into canonical `AgentRunStatus` and `AgentRunResult` contracts.
 4. Completion can arrive by provider callback routed to the waiting workflow, by polling activities, or by both.
@@ -505,7 +505,7 @@ For external agents:
 
 For non-agent Docker workloads:
 
-1. A plan step invokes an executable workload tool outside the current `MoonMind.Run` `agent_runtime` dispatch path.
+1. A plan step invokes an executable workload tool outside the current `MoonMind.UserWorkflow` `agent_runtime` dispatch path.
 2. MoonMind resolves the tool and runner policy.
 3. A Docker-capable worker launches the approved workload container through the controlled Docker boundary.
 4. Outputs are captured as tool results and artifacts.
@@ -520,10 +520,10 @@ These workload containers do not own `session_id`, `session_epoch`, `thread_id`,
 
 All activity invocation should go through the canonical activity catalog. The route defines task queue, worker fleet, capability class, start-to-close timeout, schedule-to-close timeout, heartbeat timeout where required, retry policy, and non-retryable error types.
 
-Broad Workflow Retry Policies should not be the default for `MoonMind.Run`, `MoonMind.AgentRun`, or `MoonMind.AgentSession`, especially when a step may mutate a repository or external system. Retries should be explicit at the Activity or step-execution level and must be workspace-safe and idempotent.
+Broad Workflow Retry Policies should not be the default for `MoonMind.UserWorkflow`, `MoonMind.AgentRun`, or `MoonMind.AgentSession`, especially when a step may mutate a repository or external system. Retries should be explicit at the Activity or step-execution level and must be workspace-safe and idempotent.
 
 Automatic recovery from activity timeout is different from recovery from
-workflow-task nondeterminism. Activity failures may be retried according to the
+Workflow Task nondeterminism. Activity failures may be retried according to the
 activity catalog when the activity is idempotent or guarded by durable keys.
 Nondeterminism occurs during Temporal replay before workflow code can catch it;
 the recovery mechanism is replay-compatible workflow evolution, such as
@@ -550,11 +550,11 @@ Every side-effecting Activity must be idempotent or guarded by a durable idempot
 
 Cancellation must propagate in concrete hops:
 
-1. `MoonMind.Run` cancels or terminates the active child workflow or session workflow according to explicit parent/child lifecycle policy.
+1. `MoonMind.UserWorkflow` cancels or terminates the active child workflow or session workflow according to explicit parent/child lifecycle policy.
 2. `MoonMind.AgentRun` catches cancellation and requests managed runtime cancellation where a run was started.
 3. Agent Runtime activities terminate processes/containers, publish cancellation evidence, and update run/session stores.
 4. Provider-profile leases are released idempotently or expire through manager lease TTL/reconciliation.
-5. OAuth and session workflows stop auth/session runners on cancel, expiry, failure, or task completion.
+5. OAuth and session workflows stop auth/session runners on cancel, expiry, failure, or workflow completion.
 
 Cleanup activities must be safe to retry and should be run in a cancellation-aware cleanup section. Any intentionally abandoned child workflow or external process must have a separate reconciler or TTL cleanup path.
 
@@ -570,7 +570,7 @@ Long-lived workflows must monitor history length and server suggestions. Current
 
 - `MoonMind.AgentSession`, especially after many Updates, Signals, artifact publications, or turn-control actions;
 - `MoonMind.ProviderProfileManager`, especially after many slot requests, releases, cooldown updates, profile syncs, lease verifications, and timers;
-- long-running `MoonMind.Run` workflows with many steps, dependency waits, child workflows, or operator messages;
+- long-running `MoonMind.UserWorkflow` workflows with many steps, dependency waits, child workflows, or operator messages;
 - `MoonMind.OAuthSession` if future auth ceremonies become multi-stage or high-event.
 
 Continue-As-New inputs must carry only compact durable state: domain IDs, current epoch, active handles, artifact refs, bounded request-tracking entries, cooldown windows, pending request summaries, and lease metadata. They must not carry raw logs, large prompts, or secrets.
@@ -798,7 +798,7 @@ Artifacts should carry content type, retention class, ownership/lineage metadata
 
 ### Execution-centric linkage
 
-Artifacts remain linked to concrete executions and are projected into task, step, run, and session views.
+Artifacts remain linked to concrete executions and are projected into workflow, step, run, and session views.
 
 Workflow-oriented and session-oriented views are read models, not alternate artifact authorities.
 
@@ -834,7 +834,7 @@ The projection exists for operator understanding. The source of truth remains ex
 
 ### Structured telemetry
 
-Workers should emit structured logs and metrics containing stable non-sensitive identifiers such as workflow ID, activity ID, run ID, task run ID, runtime ID, profile ID, session ID, session epoch, turn ID, and artifact refs. Raw prompts, raw credentials, full logs, and generated file contents should not be emitted as ordinary structured log fields.
+Workers should emit structured logs and metrics containing stable non-sensitive identifiers such as workflow ID, activity ID, run ID, runtime ID, profile ID, session ID, session epoch, turn ID, and artifact refs. Raw prompts, raw credentials, full logs, and generated file contents should not be emitted as ordinary structured log fields.
 
 OpenTelemetry tracing and Temporal metrics should be used to correlate workflow, activity, process, artifact, and provider boundaries where deployed.
 
@@ -846,7 +846,7 @@ MoonMind workers are grouped by capability and security boundary, not by runtime
 
 | Fleet | Task queue | Role |
 |---|---|---|
-| Workflow | `mm.workflow` | Deterministic workflow orchestration only. No side effects. Registered workflow types include `MoonMind.Run`, `MoonMind.AgentRun`, `MoonMind.AgentSession`, `MoonMind.ProviderProfileManager`, `MoonMind.OAuthSession`, `MoonMind.ManagedSessionReconcile`, `MoonMind.ManifestIngest`, and `MoonMind.MergeAutomation`. |
+| Workflow | `mm.workflow` | Deterministic workflow orchestration only. No side effects. Registered workflow types include `MoonMind.UserWorkflow`, `MoonMind.AgentRun`, `MoonMind.AgentSession`, `MoonMind.ProviderProfileManager`, `MoonMind.OAuthSession`, `MoonMind.ManagedSessionReconcile`, `MoonMind.ManifestIngest`, and `MoonMind.MergeAutomation`. |
 | Artifacts | `mm.activity.artifacts` | Artifact create/read/write/finalize/list/retention lifecycle, provider-profile metadata activities, OAuth metadata updates, and read-model/projection activities. |
 | LLM | `mm.activity.llm` | Ordinary model calls used for planning, evaluation, summarization, and non-runtime inference. |
 | Sandbox | `mm.activity.sandbox` | Shell commands, repo preparation, ordinary tool execution, and non-runtime build/test work. |
@@ -865,7 +865,7 @@ MoonMind owns system-level context assembly and memory retrieval.
 
 Context can include:
 
-- task description
+- workflow description
 - plan and step state
 - repository metadata
 - retrieved documents
@@ -889,7 +889,7 @@ Claude Code and Codex currently share context-injection infrastructure for manag
 Postgres stores:
 
 - API state
-- task and execution metadata
+- workflow and execution metadata
 - provider profiles
 - managed secret metadata and refs
 - OAuth session records
@@ -903,7 +903,7 @@ Application code must not treat Temporal persistence tables as an application AP
 
 `ManagedRunStore` and `ManagedSessionStore` are runtime ledgers used by Agent Runtime activities to reconnect launch, supervision, status, cancellation, artifact collection, and reconciliation.
 
-They are not a second durable source of truth for task lifecycle. They are operational ledgers/read models for side-effecting runtime resources. In multi-worker deployments, they must be shared or co-located with the resources they describe, and the routing/affinity model must make that explicit.
+They are not a second durable source of truth for workflow lifecycle. They are operational ledgers/read models for side-effecting runtime resources. In multi-worker deployments, they must be shared or co-located with the resources they describe, and the routing/affinity model must make that explicit.
 
 ### MinIO
 
@@ -956,7 +956,7 @@ MoonMind's safety model depends on explicit boundaries.
 - generated secret-bearing files are temporary runtime materialization, not durable artifacts by default
 - environment variables are cleared to avoid provider bleed-through
 - runtime logs and failure messages are redacted
-- auth volumes are credential stores, not task workspaces
+- auth volumes are credential stores, not workflow workspaces
 - Docker access is mediated and policy-controlled
 - provider-profile slot policy is explicit
 - cancellation and cleanup use idempotent release, terminate, and reconcile paths to avoid orphaned processes, containers, and leases
@@ -1084,12 +1084,12 @@ MoonMind is:
 
 In the current architecture:
 
-- `MoonMind.Run` remains the current live root workflow implementation for user Workflow Executions.
+- `MoonMind.UserWorkflow` remains the current live root workflow implementation for user Workflow Executions.
 - `MoonMind.AgentRun` owns one true agent execution step for managed, session-backed, and external agents.
 - `ManagedRuntimeStrategy`, `ManagedRuntimeLauncher`, `ManagedAgentAdapter`, `ManagedRunSupervisor`, and `ManagedRunStore` are the concrete managed-run path for CLI runtimes such as Claude Code and Codex CLI.
-- `MoonMind.AgentSession` owns the current Codex CLI task-scoped managed-session orchestration path while side effects remain in Agent Runtime activities.
+- `MoonMind.AgentSession` owns the current Codex CLI workflow-scoped managed-session orchestration path while side effects remain in Agent Runtime activities.
 - Provider Profiles are the durable routing, credential-source, materialization, slot, and cooldown policy boundary.
-- Claude Code is a current working managed-run path for many workflows and a candidate for a future peer task-scoped managed-session runtime.
+- Claude Code is a current working managed-run path for many workflows and a candidate for a future peer workflow-scoped managed-session runtime.
 - Artifacts and observability APIs remain authoritative for execution evidence.
 - External agents and Docker workload containers remain separate execution classes with clear contracts.
 
@@ -1109,8 +1109,8 @@ This framing keeps the top-level architecture aligned with MoonMind's current du
 - `docs/ManagedAgents/DockerOutOfDocker.md`
 - `docs/Security/ProviderProfiles.md`
 - `docs/Security/SecretsSystem.md`
-- `docs/Tasks/SkillAndPlanContracts.md`
-- `docs/Tasks/AgentSkillSystem.md`
+- `docs/Workflows/SkillAndPlanContracts.md`
+- `docs/Steps/SkillSystem.md`
 - `docs/ExternalAgents/ExternalAgentIntegrationSystem.md`
 - `docs/Memory/MemoryArchitecture.md`
 - `docs/Temporal/TemporalArchitecture.md`

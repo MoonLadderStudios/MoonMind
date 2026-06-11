@@ -242,7 +242,7 @@ class DeploymentOperationsService:
             submission=submission,
         )
         execution = await execution_service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=submission.requested_by_user_id,
             owner_type="user",
             title=f"Update deployment stack {policy.stack}",

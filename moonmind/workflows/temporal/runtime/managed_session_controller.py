@@ -440,7 +440,7 @@ class DockerCodexManagedSessionController:
             "--label",
             f"moonmind.session_epoch={request.session_epoch}",
             "--label",
-            f"moonmind.task_run_id={request.task_run_id}",
+            f"moonmind.agent_run_id={request.agent_run_id}",
             "--label",
             "moonmind.workload_mode=docker-sidecar",
             "-e",
@@ -788,7 +788,7 @@ class DockerCodexManagedSessionController:
         record: CodexManagedSessionRecord,
     ) -> bool:
         return (
-            request.task_run_id == record.task_run_id
+            request.agent_run_id == record.agent_run_id
             and request.session_id == record.session_id
             and request.session_epoch == record.session_epoch
             and request.thread_id == record.thread_id
@@ -963,7 +963,7 @@ class DockerCodexManagedSessionController:
         return CodexManagedSessionRecord(
             sessionId=request.session_id,
             sessionEpoch=handle.session_state.session_epoch,
-            taskRunId=request.task_run_id,
+            agentRunId=request.agent_run_id,
             containerId=handle.session_state.container_id,
             threadId=handle.session_state.thread_id,
             activeTurnId=handle.session_state.active_turn_id,
@@ -2033,7 +2033,7 @@ class DockerCodexManagedSessionController:
                 "MOONMIND_TASK_WORKFLOW_ID",
                 request.workflow_id,
             )
-        session_environment.setdefault("MOONMIND_TASK_RUN_ID", request.task_run_id)
+        session_environment.setdefault("MOONMIND_AGENT_RUN_ID", request.agent_run_id)
         if self._moonmind_url:
             existing_moonmind_url = session_environment.get("MOONMIND_URL")
             if existing_moonmind_url is None or not str(existing_moonmind_url).strip():
@@ -2080,7 +2080,7 @@ class DockerCodexManagedSessionController:
             "--label",
             f"moonmind.session_epoch={request.session_epoch}",
             "--label",
-            f"moonmind.task_run_id={request.task_run_id}",
+            f"moonmind.agent_run_id={request.agent_run_id}",
             "--label",
             "moonmind.workload_mode="
             f"{'docker-sidecar' if docker_sidecar_enabled else 'no-docker'}",

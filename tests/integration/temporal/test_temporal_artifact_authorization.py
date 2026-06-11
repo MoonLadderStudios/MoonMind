@@ -239,7 +239,7 @@ class TestArtifactAuthorizationBoundaries:
                         namespace="moonmind",
                         workflow_id="wf-mm-628-auth",
                         run_id="run-mm-628-auth",
-                        workflow_type=TemporalWorkflowType.RUN,
+                        workflow_type=TemporalWorkflowType.USER_WORKFLOW,
                         owner_id=execution_owner,
                         owner_type=TemporalExecutionOwnerType.USER,
                         state=MoonMindWorkflowState.EXECUTING,

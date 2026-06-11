@@ -18,13 +18,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from moonmind.config.settings import WorkflowSettings, settings
 from moonmind.utils.build_info import resolve_moonmind_build_id
-from moonmind.workflows.tasks.runtime_defaults import (
+from moonmind.workflows.executions.runtime_defaults import (
     DEFAULT_REPOSITORY,
     normalize_runtime_id,
-    resolve_default_task_runtime,
+    resolve_default_workflow_runtime,
     resolve_runtime_defaults,
 )
-from moonmind.workflows.tasks.task_contract import build_runtime_command_preview_config
+from moonmind.workflows.executions.execution_contract import build_runtime_command_preview_config
 
 logger = logging.getLogger(__name__)
 
@@ -462,7 +462,7 @@ def status_maps() -> dict[str, dict[str, str]]:
 
     return deepcopy(_STATUS_MAPS)
 
-def _build_supported_task_runtimes() -> list[str]:
+def _build_supported_runtimes() -> list[str]:
     supported: list[str] = ["codex_cli", "gemini_cli", "claude_code", "codex_cloud"]
     if settings.jules_runtime_gate.enabled:
         supported.append("jules")
@@ -535,51 +535,51 @@ def _build_jira_runtime_config() -> dict[str, Any] | None:
 def build_runtime_config(
     initial_path: str,
     *,
-    default_task_runtime_override: str | None = None,
+    default_runtime_override: str | None = None,
     default_provider_profile_ref: str | None = None,
 ) -> dict[str, Any]:
     """Build runtime config consumed by dashboard JavaScript.
 
-    ``default_task_runtime_override`` and ``default_provider_profile_ref`` come
+    ``default_runtime_override`` and ``default_provider_profile_ref`` come
     from the per-request effective settings (user/workspace overrides resolved
     by ``SettingsCatalogService``). When omitted, behavior matches the legacy
     env+settings-only resolution.
     """
 
-    supported_task_runtimes = _build_supported_task_runtimes()
+    supported_runtimes = _build_supported_runtimes()
     temporal_dashboard = settings.temporal_dashboard
     runtime_override = (
-        normalize_runtime_id(default_task_runtime_override)
-        if isinstance(default_task_runtime_override, str)
-        and default_task_runtime_override.strip()
+        normalize_runtime_id(default_runtime_override)
+        if isinstance(default_runtime_override, str)
+        and default_runtime_override.strip()
         else ""
     )
     configured_runtime = normalize_runtime_id(
         str(os.environ.get("MOONMIND_WORKER_RUNTIME", "")).strip().lower() or None
     ) if os.environ.get("MOONMIND_WORKER_RUNTIME", "").strip() else ""
-    if runtime_override in supported_task_runtimes:
-        default_task_runtime = runtime_override
-    elif configured_runtime in supported_task_runtimes:
-        default_task_runtime = configured_runtime
+    if runtime_override in supported_runtimes:
+        default_runtime = runtime_override
+    elif configured_runtime in supported_runtimes:
+        default_runtime = configured_runtime
     else:
-        configured_default = resolve_default_task_runtime(settings.workflow)
-        if configured_default in supported_task_runtimes:
-            default_task_runtime = configured_default
+        configured_default = resolve_default_workflow_runtime(settings.workflow)
+        if configured_default in supported_runtimes:
+            default_runtime = configured_default
         else:
-            default_task_runtime = supported_task_runtimes[0]
-    default_task_model_by_runtime: dict[str, str] = {}
-    default_task_effort_by_runtime: dict[str, str] = {}
-    for runtime in supported_task_runtimes:
+            default_runtime = supported_runtimes[0]
+    default_model_by_runtime: dict[str, str] = {}
+    default_effort_by_runtime: dict[str, str] = {}
+    for runtime in supported_runtimes:
         default_model, default_effort = resolve_runtime_defaults(
             runtime,
             workflow_settings=settings.workflow,
         )
         if default_model:
-            default_task_model_by_runtime[runtime] = default_model
+            default_model_by_runtime[runtime] = default_model
         if default_effort:
-            default_task_effort_by_runtime[runtime] = default_effort
-    default_task_model = default_task_model_by_runtime.get(default_task_runtime, "")
-    default_task_effort = default_task_effort_by_runtime.get(default_task_runtime, "")
+            default_effort_by_runtime[runtime] = default_effort
+    default_model = default_model_by_runtime.get(default_runtime, "")
+    default_effort = default_effort_by_runtime.get(default_runtime, "")
     default_repository = (
         str(settings.workflow.github_repository or "").strip()
         or DEFAULT_REPOSITORY
@@ -619,12 +619,12 @@ def build_runtime_config(
                 "priority": "/api/proposals/{id}/priority",
             },
             "schedules": {
-                "list": "/api/recurring-tasks?scope=personal",
-                "create": "/api/recurring-tasks",
-                "detail": "/api/recurring-tasks/{id}",
-                "update": "/api/recurring-tasks/{id}",
-                "runNow": "/api/recurring-tasks/{id}/run",
-                "runs": "/api/recurring-tasks/{id}/runs?limit=200",
+                "list": "/api/recurring-workflows?scope=personal",
+                "create": "/api/recurring-workflows",
+                "detail": "/api/recurring-workflows/{id}",
+                "update": "/api/recurring-workflows/{id}",
+                "runNow": "/api/recurring-workflows/{id}/run",
+                "runs": "/api/recurring-workflows/{id}/runs?limit=200",
             },
             "temporal": {
                 "list": temporal_dashboard.list_endpoint,
@@ -666,8 +666,8 @@ def build_runtime_config(
                 "detailEnabled": bool(temporal_dashboard.detail_enabled),
                 "actionsEnabled": bool(temporal_dashboard.actions_enabled),
                 "submitEnabled": bool(temporal_dashboard.submit_enabled),
-                "temporalTaskEditing": bool(
-                    temporal_dashboard.temporal_task_editing_enabled
+                "temporalWorkflowEditing": bool(
+                    temporal_dashboard.temporal_workflow_editing_enabled
                 ),
                 "debugFieldsEnabled": bool(temporal_dashboard.debug_fields_enabled),
             },
@@ -677,28 +677,28 @@ def build_runtime_config(
             **system_metadata,
             "defaultRepository": default_repository,
             "repositoryOptions": repository_options,
-            "defaultTaskRuntime": default_task_runtime,
-            "defaultTaskModel": default_task_model,
-            "defaultTaskEffort": default_task_effort,
-            "defaultTaskModelByRuntime": default_task_model_by_runtime,
-            "defaultTaskEffortByRuntime": default_task_effort_by_runtime,
+            "defaultRuntime": default_runtime,
+            "defaultModel": default_model,
+            "defaultEffort": default_effort,
+            "defaultModelByRuntime": default_model_by_runtime,
+            "defaultEffortByRuntime": default_effort_by_runtime,
             "defaultPublishMode": default_publish_mode,
-            # Keep task proposals opt-in from the submit form so Temporal
+            # Keep workflow proposals opt-in from the submit form so Temporal
             # remains the default execution substrate for new runs.
-            "defaultProposeTasks": False,
+            "defaultProposeWorkflows": False,
             "workerRuntimeEnv": "MOONMIND_WORKER_RUNTIME",
-            "supportedTaskRuntimes": supported_task_runtimes,
+            "supportedRuntimes": supported_runtimes,
             "supportedWorkerRuntimes": list(_SUPPORTED_WORKER_RUNTIMES),
             "runtimeCommandPreview": build_runtime_command_preview_config(),
-            "taskTemplateCatalog": {
-                "enabled": bool(settings.feature_flags.task_template_catalog_enabled),
+            "presetCatalog": {
+                "enabled": bool(settings.feature_flags.preset_catalog_enabled),
                 "templateSaveEnabled": bool(
-                    settings.feature_flags.task_template_catalog_enabled
+                    settings.feature_flags.preset_catalog_enabled
                 ),
-                "list": "/api/task-step-templates",
-                "detail": "/api/task-step-templates/{slug}",
-                "expand": "/api/task-step-templates/{slug}:expand",
-                "saveFromTask": "/api/task-step-templates/save-from-task",
+                "list": "/api/presets",
+                "detail": "/api/presets/{slug}",
+                "expand": "/api/presets/{slug}:expand",
+                "saveFromWorkflow": "/api/presets/save-from-workflow",
             },
             "providerProfiles": {
                 "list": "/api/v1/provider-profiles",
@@ -755,7 +755,7 @@ async def resolve_dashboard_runtime_config(
     Falls back to the legacy ``build_runtime_config`` behavior when the session
     is unavailable or the settings catalog cannot be reached. Settings consumed:
 
-    - ``workflow.default_task_runtime`` (workspace scope)
+    - ``workflow.default_runtime`` (workspace scope)
     - ``workflow.default_provider_profile_ref`` (user scope, falls back to
       workspace and env). Refs are dropped when their diagnostics indicate the
       profile is missing or disabled, so the frontend can fall back to its
@@ -782,7 +782,7 @@ async def resolve_dashboard_runtime_config(
             user_id=user_id,
         )
         runtime_eff = await service.effective_value_async(
-            "workflow.default_task_runtime", scope="workspace"
+            "workflow.default_runtime", scope="workspace"
         )
         if isinstance(runtime_eff.value, str) and runtime_eff.value.strip():
             runtime_override = runtime_eff.value.strip()
@@ -812,7 +812,7 @@ async def resolve_dashboard_runtime_config(
 
     return build_runtime_config(
         initial_path,
-        default_task_runtime_override=runtime_override,
+        default_runtime_override=runtime_override,
         default_provider_profile_ref=profile_ref,
     )
 

@@ -1,9 +1,9 @@
 # Step Types
 
 Status: Desired-state architecture
-Owners: MoonMind Engineering (Task Platform + UI)
+Owners: MoonMind Engineering (Workflow Platform + UI)
 Last Updated: 2026-05-05
-Related: `docs/Tasks/WorkflowPresetsSystem.md`, `docs/UI/CreatePage.md`, `docs/Steps/SkillSystem.md`, `docs/Steps/JiraIntegration.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Tools/DockerComposeUpdateSystem.md`
+Related: `docs/Workflows/WorkflowPresetsSystem.md`, `docs/UI/CreatePage.md`, `docs/Steps/SkillSystem.md`, `docs/Steps/JiraIntegration.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Tools/DockerComposeUpdateSystem.md`
 
 ---
 
@@ -11,7 +11,7 @@ Related: `docs/Tasks/WorkflowPresetsSystem.md`, `docs/UI/CreatePage.md`, `docs/S
 
 Define the desired-state MoonMind **Step Type** model.
 
-A MoonMind task is composed from steps. Each step has exactly one user-facing Step Type that determines:
+A MoonMind workflow execution is composed from steps. Each step has exactly one user-facing Step Type that determines:
 
 1. what the step represents,
 2. which capability selector is shown,
@@ -20,7 +20,7 @@ A MoonMind task is composed from steps. Each step has exactly one user-facing St
 5. whether the step is executable as-authored or expands into executable steps,
 6. how the step maps into the runtime plan and Temporal execution model.
 
-The Create page uses Step Type as the main authoring discriminator. Users should not need to understand internal terms such as capability registries, Temporal activities, runtime adapter commands, plan nodes, or worker placement when authoring ordinary tasks.
+The Create page uses Step Type as the main authoring discriminator. Users should not need to understand internal terms such as capability registries, Temporal activities, runtime adapter commands, plan nodes, or worker placement when authoring ordinary workflows.
 
 ---
 
@@ -47,7 +47,7 @@ Preset -> choose a reusable step composition and configure its preset inputs
 
 A Tool step and a Skill step are executable step types.
 
-A Preset step is an authoring-time composition step. It may remain configured but unexpanded in the draft and even in the Create Task submission request. The backend submit path must validate and expand all unresolved Preset steps before creating the executable workflow. No runtime workflow should execute an unresolved Preset step by catalog lookup unless a future linked-preset execution mode is explicitly introduced.
+A Preset step is an authoring-time composition step. It may remain configured but unexpanded in the draft and even in the Create Workflow submission request. The backend submit path must validate and expand all unresolved Preset steps before creating the executable workflow. No runtime workflow should execute an unresolved Preset step by catalog lookup unless a future linked-preset execution mode is explicitly introduced.
 
 Product surfaces may expose friendly shortcuts such as **Instructions**, **Managed Agent**, or **External Agent**. Those shortcuts must normalize into the canonical model, usually as Skill steps with default capability/runtime selections. They are not separate canonical Step Types unless this document is explicitly revised.
 
@@ -57,8 +57,8 @@ Product surfaces may expose friendly shortcuts such as **Instructions**, **Manag
 
 | Term | Desired meaning |
 |------|-----------------|
-| **Task** | A top-level user request submitted to MoonMind. |
-| **Step** | A user-visible unit of work inside a task or draft plan. |
+| **Workflow Execution** | A top-level user request submitted to MoonMind. |
+| **Step** | A user-visible unit of work inside a workflow execution or draft plan. |
 | **Step Type** | The user-facing discriminator for how a step is configured and materialized. Canonical normalized values: `tool`, `skill`, `preset`. |
 | **Capability** | A selectable catalog item behind a step, such as a tool definition, skill definition, or preset definition. Capability is acceptable as an internal/catalog term, not as the primary user-facing Step Type label. |
 | **Tool** | A typed, schema-backed, policy-checked operation MoonMind can run directly. Examples: transition a Jira issue, create a pull request, update a deployment stack. |
@@ -68,7 +68,7 @@ Product surfaces may expose friendly shortcuts such as **Instructions**, **Manag
 | **UI Schema** | Optional presentation metadata used by the Create page schema-form renderer. |
 | **Expansion** | The deterministic backend-owned process of turning a preset plus validated inputs into concrete steps. |
 | **Provenance** | Metadata recording which preset or catalog item produced a step and which input snapshot influenced it. |
-| **Plan** | The runtime execution artifact derived from a task's executable steps. |
+| **Plan** | The runtime execution artifact derived from a workflow execution's executable steps. |
 | **Activity** | A Temporal implementation detail for side-effecting work. It is not a user-facing Step Type. |
 
 The term **Capability** should not be used as the umbrella product label in the step picker. The product-facing label is **Step Type**.
@@ -85,7 +85,7 @@ The term **Capability** should not be used as the umbrella product label in the 
 6. `tool` and `skill` steps are executable.
 7. `preset` steps are authoring-time composition steps that expand into executable steps before runtime execution.
 8. Drafts may contain unresolved Preset steps.
-9. The Create Task submit path may accept unresolved Preset steps only because it expands them before workflow creation.
+9. The Create Workflow submit path may accept unresolved Preset steps only because it expands them before workflow creation.
 10. Runtime workflows must not depend on live preset catalog lookup for unresolved preset execution by default.
 11. Preset expansion must be deterministic and validated before execution.
 12. Preset provenance is audit and reconstruction metadata, not hidden runtime work.
@@ -442,7 +442,7 @@ Reapply regenerates steps from the saved preset ID, preset version, and current 
 
 ### 8.3 Submit-time auto-expansion
 
-The user may submit a task while Preset steps remain unexpanded. The submit path must:
+The user may submit a workflow execution while Preset steps remain unexpanded. The submit path must:
 
 1. validate all non-preset fields,
 2. validate each Preset step's inputs against its schema,
@@ -459,15 +459,15 @@ If expansion fails, the Create page displays field-addressable errors and preser
 
 ### 9.1 Draft payload
 
-Draft task authoring may contain any canonical Step Type:
+Draft workflow authoring may contain any canonical Step Type:
 
 1. `type: "tool"`
 2. `type: "skill"`
 3. `type: "preset"`
 
-### 9.2 Create Task submission payload
+### 9.2 Create Workflow submission payload
 
-The Create Task submission endpoint may accept unresolved Preset steps, but only as an authoring convenience. The backend must expand them before workflow creation.
+The Create Workflow submission endpoint may accept unresolved Preset steps, but only as an authoring convenience. The backend must expand them before workflow creation.
 
 ### 9.3 Runtime payload
 
@@ -729,7 +729,7 @@ Preset management lives in the Presets section:
 1. catalog browsing,
 2. create/edit/version,
 3. governance and lifecycle,
-4. save-from-task,
+4. save-from-workflow,
 5. audit and usage inspection,
 6. expansion testing.
 
@@ -741,15 +741,15 @@ Preset use lives inside step authoring:
 4. configure schema-generated inputs,
 5. apply into executable steps or submit unexpanded for backend auto-expansion.
 
-There should not be a separate Presets section for choosing and applying a preset to the current task. The Presets section is management-only.
+There should not be a separate Presets section for choosing and applying a preset to the current workflow draft. The Presets section is management-only.
 
 ---
 
 ## 15. Proposal and Promotion Semantics
 
-Task proposals must preserve executable intent.
+Workflow proposals must preserve executable intent.
 
-When a proposal is created from preset-derived work, it may carry preset provenance, but the stored promotable task payload should be executable and flattened by default unless the proposal is explicitly still in draft-authoring form.
+When a proposal is created from preset-derived work, it may carry preset provenance, but the stored promotable workflow execution payload should be executable and flattened by default unless the proposal is explicitly still in draft-authoring form.
 
 Promotion must not silently re-expand a live preset catalog entry. If the user wants to refresh a proposal or draft to the latest preset version, that must be an explicit action with validation.
 
@@ -802,7 +802,7 @@ The implementation may migrate in phases.
 
 1. Compile executable steps into the canonical plan format.
 2. Pin tool and skill registry snapshots where required.
-3. Align proposal promotion, task editing, and execution reconstruction with the Step Type model.
+3. Align proposal promotion, workflow editing, and execution reconstruction with the Step Type model.
 
 ---
 

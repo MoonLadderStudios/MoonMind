@@ -17,7 +17,7 @@
 - [`docs/ManagedAgents/OAuthTerminal.md`](./OAuthTerminal.md)
 - [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)
 - [`docs/Security/SecretsSystem.md`](../Security/SecretsSystem.md)
-- [`docs/Tasks/AgentSkillSystem.md`](../Tasks/AgentSkillSystem.md)
+- [`docs/Steps/SkillSystem.md`](../Steps/SkillSystem.md)
 - [`docs/Memory/MemoryArchitecture.md`](../Memory/MemoryArchitecture.md)
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
 
@@ -32,7 +32,7 @@ The managed-session model is the only long-term direction for this subsystem. Le
 At the system level:
 
 - **Temporal** remains the durable outer orchestrator.
-- **Managed runtimes** run in **separate task-scoped containers** launched from runtime-specific images.
+- **Managed runtimes** run in **separate workflow-scoped containers** launched from runtime-specific images.
 - **Artifacts and bounded workflow metadata** remain durable truth.
 - **Session containers** are continuity and performance caches, not durable truth.
 - **Context** is assembled by MoonMind and delivered into the session through artifact refs, workspace materialization, and runtime-specific input delivery.
@@ -40,7 +40,7 @@ At the system level:
 - **Authentication** is owned by Provider Profiles plus OAuth and secret-resolution subsystems.
 - **Secrets** are provided through references and launch-time materialization, never as raw durable payloads.
 
-Current maturity is **Codex CLI first-class for managed sessions, with Claude Code first-class for managed runs**. Codex CLI is the live task-scoped managed-session runtime behind the shared `MoonMind.AgentSession` control plane. Claude Code has a live managed-run path and Claude-specific session design models, but it does not yet enter the live managed-session controller. Gemini CLI remains a managed-runtime strategy and can adopt the session plane by implementing the same shared contracts rather than inventing a new top-level managed-agent abstraction.
+Current maturity is **Codex CLI first-class for managed sessions, with Claude Code first-class for managed runs**. Codex CLI is the live workflow-scoped managed-session runtime behind the shared `MoonMind.AgentSession` control plane. Claude Code has a live managed-run path and Claude-specific session design models, but it does not yet enter the live managed-session controller. Gemini CLI remains a managed-runtime strategy and can adopt the session plane by implementing the same shared contracts rather than inventing a new top-level managed-agent abstraction.
 
 ---
 
@@ -52,7 +52,7 @@ This document defines the subsystem architecture for:
 
 - managed agents as declarative desired state,
 - runtime-specific managed session planes,
-- task-scoped managed session containers,
+- workflow-scoped managed session containers,
 - session lifecycle and reconciliation boundaries,
 - context assembly and runtime delivery,
 - session-aware observability and Live Logs,
@@ -154,8 +154,8 @@ Temporal remains the durable orchestrator.
 
 The intended workflow shape is:
 
-- `MoonMind.Run` owns the task envelope and step ordering,
-- `MoonMind.AgentSession` owns one task-scoped managed session container,
+- `MoonMind.UserWorkflow` owns the workflow execution envelope and step ordering,
+- `MoonMind.AgentSession` owns one workflow-scoped managed session container,
 - `MoonMind.AgentRun` owns one true agent execution step that attaches to or uses that session,
 - `MoonMind.ManagedSessionReconcile` performs bounded reconciliation work,
 - `MoonMind.ProviderProfileManager` coordinates provider-profile capacity and cooldown,
@@ -182,29 +182,29 @@ Managed sessions are therefore allowed to be long-lived and stateful, but they a
 
 Managed runtimes should run in **runtime-specific session containers** launched on demand by MoonMind.
 
-Each managed session container is a task-scoped environment that can hold:
+Each managed session container is a workflow-scoped environment that can hold:
 
 - the runtime's native session loop,
 - runtime-local configuration,
 - provider-specific auth state or mounted auth home,
 - workspace bindings,
 - runtime caches,
-- task session scratch/spool state,
+- workflow session scratch/spool state,
 - runtime-local session memory.
 
 MoonMind worker images should remain generic and lightweight. They should orchestrate managed runtimes, not embed every managed runtime binary.
 
-### 5.2 Task scope and reuse
+### 5.2 Workflow scope and reuse
 
-The default architectural unit is a **task-scoped managed session**.
+The default architectural unit is a **workflow-scoped managed session**.
 
-A task-scoped session may:
+A workflow-scoped session may:
 
 - serve one step,
-- serve multiple ordered steps in the same task,
+- serve multiple ordered steps in the same workflow execution,
 - be cleared or reset between steps,
 - be torn down and recreated if policy requires replacement,
-- coexist with other managed sessions in the same task when isolation demands it.
+- coexist with other managed sessions in the same workflow execution when isolation demands it.
 
 The session container may persist across multiple steps, but step boundaries remain first-class and must still produce step-scoped durable evidence.
 
@@ -230,7 +230,7 @@ A clear or reset operation starts a new continuity interval. In the Codex refere
 MoonMind should treat these as different container roles:
 
 1. **Managed session container**
-   - long-lived for the duration of the task/session policy,
+   - long-lived for the duration of the workflow/session policy,
    - owns runtime-native session continuity.
 
 2. **Specialized workload container**
@@ -242,7 +242,7 @@ MoonMind should treat these as different container roles:
    - short-lived,
    - used only for interactive runtime authentication flows,
    - writes credentials into an auth volume or equivalent profile backing store,
-   - not a task execution session.
+   - not a workflow execution session.
 
 These container classes should stay separate in both docs and code.
 
@@ -269,7 +269,7 @@ The security boundary between session continuity and generalized container launc
 
 A session container may cache local state for efficiency and continuity, but the authoritative system surfaces are:
 
-- task and step state in Temporal-backed execution records,
+- workflow and step state in Temporal-backed execution records,
 - artifacts and observability blobs,
 - continuity artifacts and bounded metadata,
 - provider-profile and policy records.
@@ -284,13 +284,13 @@ Any state needed for recovery, audit, rerun, operator understanding, or UI prese
 
 Managed sessions should **consume** context assembled by MoonMind rather than becoming the primary owner of execution context.
 
-For task and step execution, MoonMind may assemble a context pack from sources such as:
+For workflow and step execution, MoonMind may assemble a context pack from sources such as:
 
 - planning state,
-- prior task/run history,
+- prior workflow/run history,
 - long-term memory and conventions,
 - document retrieval and design docs,
-- task attachments and instruction bundles,
+- workflow attachments and instruction bundles,
 - resolved skill snapshots,
 - operator-supplied objective or steering input.
 
@@ -316,7 +316,7 @@ Agent skills are part of execution context, but they are their own subsystem.
 
 The canonical direction is:
 
-1. select skill intent at the task and step level,
+1. select skill intent at the workflow and step level,
 2. resolve an immutable `ResolvedSkillSet` before runtime launch,
 3. keep large skill bodies out of workflow history,
 4. pass compact refs into the agent-run path,
@@ -376,7 +376,7 @@ Context remains a controlled execution input, not a secret-storage channel.
 
 ### 7.1 Live Logs is not a terminal
 
-For ordinary managed task execution, **Live Logs** should be a MoonMind-native, session-aware observability surface rather than an embedded terminal.
+For ordinary managed workflow execution, **Live Logs** should be a MoonMind-native, session-aware observability surface rather than an embedded terminal.
 
 The primary model is:
 
@@ -549,7 +549,7 @@ That rule applies to:
 - provider profiles,
 - runtime launch requests,
 - workflow payloads,
-- task definitions,
+- workflow definitions,
 - logs,
 - artifacts,
 - run metadata.
@@ -668,7 +668,7 @@ This distinction is especially important as MoonMind evolves richer build/test/c
 
 Codex CLI is the current concrete managed-session implementation.
 
-The live task-scoped session plane is designed for shared workflow/activity contracts, but the current controller and transport are Codex-specific. Runtime-specific details such as Codex App Server protocol, thread/turn mappings, and session reset mechanics remain documented in runtime-specific docs. Claude Code policy/context/checkpoint semantics remain documented as design/domain model work until a Claude session controller is implemented.
+The live workflow-scoped session plane is designed for shared workflow/activity contracts, but the current controller and transport are Codex-specific. Runtime-specific details such as Codex App Server protocol, thread/turn mappings, and session reset mechanics remain documented in runtime-specific docs. Claude Code policy/context/checkpoint semantics remain documented as design/domain model work until a Claude session controller is implemented.
 
 ### 11.2 Additional runtimes should extend the same model
 

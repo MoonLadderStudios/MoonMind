@@ -5,7 +5,7 @@ Owners: MoonMind Engineering
 Last updated: 2026-05-04  
 Canonical for: Mission Control Workflows list route, execution-list controls, table sorting, column filters, filter URL state, and Google Sheets-like list filtering behavior
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs, or other local-only files. This document defines the product and UI contract for the page.
+**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs. This document defines the product and UI contract for the page.
 
 ---
 
@@ -27,17 +27,17 @@ Use related docs for system-level contracts:
 
 - `docs/Api/ExecutionsApiContract.md` — `/api/executions` list contract, execution lifecycle fields, filters, count, and pagination semantics.
 - `docs/Temporal/VisibilityAndUiQueryModel.md` — Temporal Visibility and UI query model.
-- `docs/UI/MissionControlArchitecture.md` — Mission Control shell and shared frontend architecture.
+- `docs/UI/WorkflowConsoleArchitecture.md` — workflow console shell and shared frontend architecture.
 - `docs/UI/MissionControlDesignSystem.md` — shared Mission Control visual language.
 - `docs/UI/CreatePage.md` — Workflow authoring surface that creates many rows shown on this page.
 
 Representative current implementation surfaces:
 
 ```text
-api_service/api/routers/task_dashboard.py
+api_service/api/routers/workflow_console.py
 api_service/api/routers/executions.py
-frontend/src/entrypoints/tasks-list.tsx
-frontend/src/entrypoints/tasks-list.test.tsx
+frontend/src/entrypoints/workflow-list.tsx
+frontend/src/entrypoints/workflow-list.test.tsx
 frontend/src/styles/mission-control.css
 ```
 
@@ -48,19 +48,18 @@ frontend/src/styles/mission-control.css
 The canonical Workflows List route is:
 
 ```text
-/tasks/list
+/workflows
 ```
 
 Rules:
 
-1. `/tasks/list` is the canonical Workflows List route.
-2. `/tasks` redirects to `/tasks/list`.
-3. `/tasks/tasks-list` is a legacy alias and redirects to `/tasks/list`.
-4. The page is server-hosted by FastAPI and rendered by the shared Mission Control React/Vite frontend.
-5. The server renders the `tasks-list` page key into the boot payload.
-6. The route uses a wide data-panel layout because the primary surface is a multi-column execution table.
-7. Runtime dashboard configuration is generated server-side and passed through the boot payload.
-8. The browser calls MoonMind APIs only. It must not call Temporal, GitHub, Jira, object storage, or runtime providers directly.
+1. `/workflows` is the canonical Workflows List route.
+2. Legacy `/tasks/*` list routes are removed from the route table without redirects (hard switch).
+3. The page is server-hosted by FastAPI and rendered by the shared Mission Control React/Vite frontend.
+4. The server renders the `workflow-list` page key into the boot payload.
+5. The route uses a wide data-panel layout because the primary surface is a multi-column execution table.
+6. Runtime dashboard configuration is generated server-side and passed through the boot payload.
+7. The browser calls MoonMind APIs only. It must not call Temporal, GitHub, Jira, object storage, or runtime providers directly.
 
 ---
 
@@ -121,7 +120,7 @@ Current workflow type groups:
 
 | Group | Workflow types |
 | --- | --- |
-| User workflows | `MoonMind.Run`, `MoonMind.ManifestIngest` |
+| User workflows | `MoonMind.UserWorkflow`, `MoonMind.ManifestIngest` |
 | System workflows | `MoonMind.ProviderProfileManager` |
 | All workflows | User workflows plus system workflows |
 
@@ -334,7 +333,7 @@ Rules:
 
 1. The normal Workflows List table does not include a `Kind` column.
 2. The normal table does not include `Workflow Type` or `Entry` columns by default.
-3. The default query is the Workflow-run list. In current API terms, this is equivalent to `scope=tasks`, which is `WorkflowType=MoonMind.Run` and `mm_entry=run`.
+3. The default query is the Workflow-run list. In current API terms, this is equivalent to `scope=tasks`, which is `WorkflowType=MoonMind.UserWorkflow` and `mm_entry=run`.
 4. System workflow rows must not appear in the normal Workflow table, even through column filters or old URL parameters.
 5. Manifest ingest rows should stay on the Manifests page unless a separate user-workflow diagnostics view is explicitly designed.
 6. The table may hide optional columns by default to preserve width, but optional columns must not reintroduce ordinary access to system workflow browsing.
@@ -347,11 +346,11 @@ System and all-workflow browsing is useful for debugging, but it is not part of 
 
 Rules:
 
-1. System workflows belong in an admin diagnostics surface such as Settings -> Operations -> Workflow Diagnostics, `/tasks/diagnostics`, or a similarly explicit route.
+1. System workflows belong in an admin diagnostics surface such as Settings -> Operations -> Workflow Diagnostics, `/workflows/diagnostics`, or a similarly explicit route.
 2. A diagnostics surface may expose workflow type, entry, owner, namespace, run ID, raw Temporal status, and system workflow filters because its purpose is platform debugging.
-3. Diagnostics access must be permission-gated. Ordinary users cannot widen `/tasks/list` into system workflow visibility by editing URL parameters.
+3. Diagnostics access must be permission-gated. Ordinary users cannot widen `/workflows` into system workflow visibility by editing URL parameters.
 4. If compatibility routes or query parameters such as `scope=system` are still accepted, the normal Workflows List page must either ignore them safely, redirect authorized admins to diagnostics, or show a recoverable message explaining that system workflows moved to diagnostics.
-5. The product contract for `/tasks/list` remains Workflow-oriented even if the underlying `/api/executions` endpoint can list broader workflow scopes.
+5. The product contract for `/workflows` remains Workflow-oriented even if the underlying `/api/executions` endpoint can list broader workflow scopes.
 
 ---
 
@@ -596,10 +595,10 @@ Existing URLs must continue to fail safe:
 | Existing parameter | Desired mapping |
 | --- | --- |
 | `scope=tasks` | Default Workflow-run view. No visible column filter is required. |
-| `scope=user` | Prefer the default Workflow-run view on `/tasks/list`; manifest ingest belongs on the Manifests page or diagnostics. |
+| `scope=user` | Prefer the default Workflow-run view on `/workflows`; manifest ingest belongs on the Manifests page or diagnostics. |
 | `scope=system` | Not honored by the normal Workflows List page. Authorized admins may be redirected to diagnostics; ordinary users stay in the default Workflow-run view or see a recoverable message. |
 | `scope=all` | Not honored by the normal Workflows List page. Authorized admins may be redirected to diagnostics; ordinary users stay in the default Workflow-run view or see a recoverable message. |
-| `workflowType=MoonMind.Run` | Default Workflow-run view when paired with `entry=run` or no entry. |
+| `workflowType=MoonMind.UserWorkflow` | Default Workflow-run view when paired with `entry=run` or no entry. |
 | `workflowType=MoonMind.ManifestIngest` | Redirect to the Manifests page or show a recoverable message; do not add a `Workflow Type` column to the Workflow table. |
 | `workflowType=<system value>` | Not honored by the normal Workflows List page; use admin diagnostics when authorized. |
 | `state=<value>` | Status column include filter for one value. |
@@ -622,7 +621,7 @@ The desired API and URL should support multi-value include and exclude filters.
 Recommended URL shape:
 
 ```text
-/tasks/list?stateNotIn=canceled&targetRuntimeIn=codex_cli,claude_code&limit=50&sort=scheduledFor&sortDir=desc
+/workflows?stateNotIn=canceled&targetRuntimeIn=codex_cli,claude_code&limit=50&sort=scheduledFor&sortDir=desc
 ```
 
 Recommended parameters:
@@ -794,7 +793,7 @@ Rules:
 6. Repository, title, skill, runtime, status, and integration labels are rendered as text, never trusted HTML.
 7. The API should bound text filter lengths and value-list sizes.
 8. Invalid filter values should return structured validation errors rather than raw query failures.
-9. System workflow visibility is a backend authorization decision and is not exposed by `/tasks/list` column filters.
+9. System workflow visibility is a backend authorization decision and is not exposed by `/workflows` column filters.
 
 ---
 
@@ -802,7 +801,7 @@ Rules:
 
 The implementation should add or preserve tests for the following behaviors:
 
-1. `/tasks/list` renders the Workflows List page with one control deck and one data slab.
+1. `/workflows` renders the Workflows List page with one control deck and one data slab.
 2. Existing `state` and `repo` URLs load into equivalent column filters.
 3. Existing `scope`, `workflowType`, and `entry` URLs fail safe: ordinary users are kept in the Workflow-run view, routed to the appropriate page, or shown a recoverable message without revealing system workflows.
 4. The top Scope, Workflow Type, Status, Entry, and Repository controls are absent once column filters are enabled.
@@ -855,7 +854,7 @@ Recommended order:
 3. Add column filter state, chips, and URL mapping while the old top filters still exist.
 4. Add API support for multi-value Workflow filters and facets.
 5. Move Status and Repository behavior into column filters.
-6. Remove ordinary Scope, Workflow Type, and Entry controls from `/tasks/list`; keep a compatibility parser that fails safe and sends system/all workflow browsing to admin diagnostics when authorized.
+6. Remove ordinary Scope, Workflow Type, and Entry controls from `/workflows`; keep a compatibility parser that fails safe and sends system/all workflow browsing to admin diagnostics when authorized.
 7. Add Runtime and Skill column filters.
 8. Remove the old top filter controls after parity tests pass.
 9. Keep old URL parameter parsing indefinitely or until a documented compatibility window ends.

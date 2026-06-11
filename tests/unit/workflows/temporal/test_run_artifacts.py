@@ -81,7 +81,7 @@ def test_initialize_from_payload_captures_input_and_plan_refs(
     _workflow_type, _parameters, input_ref, plan_ref, _scheduled_for = (
         workflow._initialize_from_payload(
             {
-                "workflowType": "MoonMind.Run",
+                "workflowType": "MoonMind.UserWorkflow",
                 "initialParameters": {"repo": "MoonLadderStudios/MoonMind"},
                 "inputArtifactRef": "art_input_1",
                 "planArtifactRef": "art_plan_1",
@@ -107,10 +107,10 @@ def test_initialize_from_payload_tracks_declared_dependencies(
 
     workflow._initialize_from_payload(
         {
-            "workflowType": "MoonMind.Run",
+            "workflowType": "MoonMind.UserWorkflow",
             "initialParameters": {
                 "repo": "MoonLadderStudios/MoonMind",
-                "task": {"dependsOn": ["mm:dep-1", "mm:dep-2"]},
+                "workflow": {"dependsOn": ["mm:dep-1", "mm:dep-2"]},
             },
         }
     )
@@ -675,7 +675,7 @@ async def test_run_execution_stage_stops_plan_after_structured_blocked_outcome(
             "output_refs": [],
         }
 
-    async def fake_bind_task_scoped_session(
+    async def fake_bind_workflow_scoped_session(
         self: MoonMindRunWorkflow,
         request: object,
     ) -> object:
@@ -739,8 +739,8 @@ async def test_run_execution_stage_stops_plan_after_structured_blocked_outcome(
     )
     monkeypatch.setattr(
         MoonMindRunWorkflow,
-        "_maybe_bind_task_scoped_session",
-        fake_bind_task_scoped_session,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
     )
 
     await workflow._run_execution_stage(
@@ -1758,7 +1758,7 @@ async def test_run_execution_stage_publish_mode_pr_uses_publish_overrides(
         parameters={
             "repo": "MoonLadderStudios/MoonMind",
             "publishMode": "pr",
-            "task": {
+            "workflow": {
                 "mergeAutomation": {"enabled": True},
                 "publish": {
                     "prTitle": "OAuth redirect cleanup",
@@ -1887,7 +1887,7 @@ async def test_run_execution_stage_publish_mode_pr_defaults_title_from_task_inte
         parameters={
             "repo": "MoonLadderStudios/MoonMind",
             "publishMode": "pr",
-            "task": {
+            "workflow": {
                 "title": "Refactor callback handling",
                 "instructions": "Update callback handler to support edge cases.",
             },
@@ -1910,7 +1910,7 @@ async def test_run_execution_stage_publish_mode_pr_prefers_pushed_branch_for_nat
     workflow._repo = "MoonLadderStudios/MoonMind"
     captured_create_payload: dict[str, Any] = {}
 
-    async def fake_bind_task_scoped_session(
+    async def fake_bind_workflow_scoped_session(
         self: MoonMindRunWorkflow,
         request: object,
     ) -> object:
@@ -2010,8 +2010,8 @@ async def test_run_execution_stage_publish_mode_pr_prefers_pushed_branch_for_nat
     monkeypatch.setattr(run_workflow_module.workflow, "execute_child_workflow", fake_execute_child_workflow)
     monkeypatch.setattr(
         MoonMindRunWorkflow,
-        "_maybe_bind_task_scoped_session",
-        fake_bind_task_scoped_session,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
     )
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
     monkeypatch.setattr(
@@ -2283,7 +2283,7 @@ async def test_run_execution_stage_fail_fast_raises_provider_failure_summary(
     async def fake_resolve_skillset_ref(_self: object, **_kwargs: object) -> str:
         return "art_skillset_1"
 
-    async def fake_bind_task_scoped_session(_self: object, request: object) -> object:
+    async def fake_bind_workflow_scoped_session(_self: object, request: object) -> object:
         return request
 
     async def fake_fetch_profile_snapshots(_self: object) -> None:
@@ -2321,8 +2321,8 @@ async def test_run_execution_stage_fail_fast_raises_provider_failure_summary(
     )
     monkeypatch.setattr(
         MoonMindRunWorkflow,
-        "_maybe_bind_task_scoped_session",
-        fake_bind_task_scoped_session,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
     )
     monkeypatch.setattr(
         MoonMindRunWorkflow,
@@ -2413,7 +2413,7 @@ async def test_run_execution_stage_fail_fast_raises_agent_runtime_failure_summar
             return {
                 "binding": {
                     "workflowId": "wf-1:session:codex_cli",
-                    "taskRunId": "wf-1",
+                    "agentRunId": "wf-1",
                     "sessionId": "sess:wf-1:codex_cli",
                     "sessionEpoch": 2,
                     "runtimeId": "codex_cli",
@@ -2482,7 +2482,7 @@ async def test_run_execution_stage_fail_fast_raises_agent_runtime_failure_summar
     async def fake_resolve_skillset_ref(_self: object, **_kwargs: object) -> str:
         return "art_skillset_1"
 
-    async def fake_bind_task_scoped_session(_self: object, request: object) -> object:
+    async def fake_bind_workflow_scoped_session(_self: object, request: object) -> object:
         return request
 
     async def fake_fetch_profile_snapshots(_self: object) -> None:
@@ -2520,8 +2520,8 @@ async def test_run_execution_stage_fail_fast_raises_agent_runtime_failure_summar
     )
     monkeypatch.setattr(
         MoonMindRunWorkflow,
-        "_maybe_bind_task_scoped_session",
-        fake_bind_task_scoped_session,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
     )
     monkeypatch.setattr(
         MoonMindRunWorkflow,
@@ -2627,7 +2627,7 @@ async def test_run_marks_blocked_outcome_as_failed_terminal_state(
         _self._owner_id = "owner-1"
         _self._entry = "run"
         return (
-            "MoonMind.Run",
+            "MoonMind.UserWorkflow",
             {"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
             None,
             "art_plan_1",
@@ -2748,7 +2748,7 @@ async def test_run_marks_blocked_outcome_as_failed_terminal_state(
     monkeypatch.setattr(MoonMindRunWorkflow, "_set_state", capture_set_state)
 
     with pytest.raises(run_workflow_module.exceptions.ApplicationError) as exc_info:
-        await workflow.run({"workflowType": "MoonMind.Run"})
+        await workflow.run({"workflowType": "MoonMind.UserWorkflow"})
 
     assert str(exc_info.value) == blocker_summary
     assert finalizing_calls == [{"status": "failed", "error": blocker_summary}]
@@ -2789,10 +2789,10 @@ def test_pr_publish_optional_for_task_requires_all_skills_pr_optional() -> None:
     workflow = MoonMindRunWorkflow()
 
     pure_task = {
-        "task": {"skills": {"include": [{"name": "jira-implement"}]}}
+        "workflow": {"skills": {"include": [{"name": "jira-implement"}]}}
     }
     mixed_task = {
-        "task": {
+        "workflow": {
             "skills": {
                 "include": [
                     {"name": "jira-implement"},
@@ -2801,7 +2801,7 @@ def test_pr_publish_optional_for_task_requires_all_skills_pr_optional() -> None:
             }
         }
     }
-    empty_task = {"task": {"skills": {"include": []}}}
+    empty_task = {"workflow": {"skills": {"include": []}}}
 
     assert workflow._pr_publish_optional_for_task(pure_task) is True
     assert workflow._pr_publish_optional_for_task(mixed_task) is False
@@ -2958,7 +2958,7 @@ async def test_run_execution_stage_jira_implement_not_required_skips_native_pr(
             "repo": "MoonLadderStudios/MoonMind",
             "publishMode": "pr",
             "mergeAutomation": {"enabled": True, "jiraIssueKey": "MM-697"},
-            "task": {
+            "workflow": {
                 "appliedStepTemplates": [
                     {
                         "slug": "jira-implement",
@@ -3087,7 +3087,7 @@ async def test_run_execution_stage_moonspec_verify_blocks_native_pr_creation(
             "output_refs": [],
         }
 
-    async def fake_bind_task_scoped_session(
+    async def fake_bind_workflow_scoped_session(
         self: MoonMindRunWorkflow,
         request: object,
     ) -> object:
@@ -3108,8 +3108,8 @@ async def test_run_execution_stage_moonspec_verify_blocks_native_pr_creation(
     )
     monkeypatch.setattr(
         MoonMindRunWorkflow,
-        "_maybe_bind_task_scoped_session",
-        fake_bind_task_scoped_session,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
     )
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
     monkeypatch.setattr(
@@ -3796,7 +3796,7 @@ async def test_run_proposals_stage_global_disable_halts_execution(
 ) -> None:
     from moonmind.config.settings import settings
     workflow = MoonMindRunWorkflow()
-    monkeypatch.setattr(settings.workflow, "enable_task_proposals", False)
+    monkeypatch.setattr(settings.workflow, "enable_proposals", False)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda x: True)
     
     # Enable proposing tasks in params, but global switch should stop it
@@ -3809,7 +3809,7 @@ async def test_run_proposals_stage_ignores_legacy_fallback_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from moonmind.config.settings import settings
-    monkeypatch.setattr(settings.workflow, "enable_task_proposals", True)
+    monkeypatch.setattr(settings.workflow, "enable_proposals", True)
 
     workflow = MoonMindRunWorkflow()
     workflow._owner_id = "owner-1"
@@ -3823,7 +3823,7 @@ async def test_run_proposals_stage_ignores_legacy_fallback_policy(
     async def mock_execute_activity(activity, payload, **kwargs):
         nonlocal captured_policy
         if activity == "proposal.generate":
-            return [{"title": "t1", "summary": "s1", "taskCreateRequest": {}}]
+            return [{"title": "t1", "summary": "s1", "workflowCreateRequest": {}}]
         if activity == "proposal.submit":
             captured_policy = payload["policy"]
             return {"submitted_count": 1, "errors": []}
@@ -3844,11 +3844,11 @@ async def test_run_proposals_stage_ignores_legacy_fallback_policy(
     assert captured_policy == {}
 
 @pytest.mark.asyncio
-async def test_run_proposals_stage_uses_task_proposal_policy(
+async def test_run_proposals_stage_uses_workflow_proposal_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from moonmind.config.settings import settings
-    monkeypatch.setattr(settings.workflow, "enable_task_proposals", True)
+    monkeypatch.setattr(settings.workflow, "enable_proposals", True)
 
     workflow = MoonMindRunWorkflow()
     workflow._owner_id = "owner-1"
@@ -3863,7 +3863,7 @@ async def test_run_proposals_stage_uses_task_proposal_policy(
     async def mock_execute_activity(activity, payload, **kwargs):
         nonlocal captured_policy, captured_origin
         if activity == "proposal.generate":
-            return [{"title": "t1", "summary": "s1", "taskCreateRequest": {}}]
+            return [{"title": "t1", "summary": "s1", "workflowCreateRequest": {}}]
         if activity == "proposal.submit":
             captured_policy = payload["policy"]
             captured_origin = payload["origin"]
@@ -3879,7 +3879,7 @@ async def test_run_proposals_stage_uses_task_proposal_policy(
             "proposalMaxItems": 8,
             "proposalTargets": "file",
             "proposalDefaultRuntime": "gemini",
-            "task": {
+            "workflow": {
                 "proposeTasks": True,
                 "proposalPolicy": {
                     "maxItems": {"project": 12},

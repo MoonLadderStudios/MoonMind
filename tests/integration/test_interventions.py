@@ -32,7 +32,7 @@ async def test_intervention_signal_without_logs(
     Verify that intervention actions (Phase 5) route through backend signals
     independently of any active live log session.
     """
-    task_run_id = str(uuid.uuid4())
+    agent_run_id = str(uuid.uuid4())
     payload = {"signalName": "Pause", "payload": {}}
     
     # We bypass auth by overriding current_user dependency if necessary, but
@@ -43,10 +43,10 @@ async def test_intervention_signal_without_logs(
     app.dependency_overrides[_get_service] = lambda: mock_execution_service
     class MockRecord:
         id = 1
-        workflow_id = task_run_id
+        workflow_id = agent_run_id
         run_id = "run_id_1"
         state = MagicMock(value="executing")
-        workflow_type = MagicMock(value="MoonMind.Run")
+        workflow_type = MagicMock(value="MoonMind.UserWorkflow")
         close_status = None
         owner_id = "system"
         namespace = "default"
@@ -70,7 +70,7 @@ async def test_intervention_signal_without_logs(
     # _get_owned_execution is called directly, not as a dependency
     with patch("api_service.api.routers.executions._get_owned_execution", new_callable=AsyncMock) as mock_get_owned:
         mock_get_owned.return_value = mock_record
-        response = await async_client.post(f"/api/executions/{task_run_id}/signal", json=payload)
+        response = await async_client.post(f"/api/executions/{agent_run_id}/signal", json=payload)
     app.dependency_overrides.clear()
 
     assert response.status_code == 202, response.text

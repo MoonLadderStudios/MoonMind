@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Backfill task template recents from recent task queue history."""
+"""Backfill preset recents from recent task queue history."""
 
 from __future__ import annotations
 
@@ -13,9 +13,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from api_service.db.base import get_async_session_context
 from api_service.db.models import (
-    TaskStepTemplate,
-    TaskStepTemplateRecent,
-    TaskStepTemplateVersion,
+    Preset,
+    PresetRecent,
+    PresetVersion,
 )
 
 _LOOKBACK_DAYS = 30
@@ -47,12 +47,12 @@ async def backfill_recents(*, lookback_days: int = _LOOKBACK_DAYS) -> int:
         version_rows = (
             await session.execute(
                 select(
-                    TaskStepTemplateVersion.id,
-                    TaskStepTemplateVersion.version,
-                    TaskStepTemplate.slug,
+                    PresetVersion.id,
+                    PresetVersion.version,
+                    Preset.slug,
                 ).join(
-                    TaskStepTemplate,
-                    TaskStepTemplate.id == TaskStepTemplateVersion.template_id,
+                    Preset,
+                    Preset.id == PresetVersion.template_id,
                 )
             )
         ).all()
@@ -96,7 +96,7 @@ async def backfill_recents(*, lookback_days: int = _LOOKBACK_DAYS) -> int:
                     except ValueError:
                         applied_at = created_at
                 result = await session.execute(
-                    pg_insert(TaskStepTemplateRecent)
+                    pg_insert(PresetRecent)
                     .values(
                         user_id=user_id,
                         template_version_id=version_id,

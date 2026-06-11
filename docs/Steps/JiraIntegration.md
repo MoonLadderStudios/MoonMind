@@ -4,7 +4,7 @@ Status: Desired-state architecture
 Owners: MoonMind Engineering
 Last Updated: 2026-05-05
 Canonical for: Jira issue context, Jira issue picker widget, Jira tool execution, Jira credential handling, schema-driven Jira inputs
-Related: `docs/UI/CreatePage.md`, `docs/Tasks/WorkflowPresetsSystem.md`, `docs/Steps/StepTypes.md`, `docs/Steps/SkillSystem.md`, `docs/Tasks/WorkflowPublishing.md`, `docs/Tasks/PrMergeAutomation.md`
+Related: `docs/UI/CreatePage.md`, `docs/Workflows/WorkflowPresetsSystem.md`, `docs/Steps/StepTypes.md`, `docs/Steps/SkillSystem.md`, `docs/Workflows/WorkflowPublishing.md`, `docs/Workflows/PrMergeAutomation.md`
 
 ---
 
@@ -19,7 +19,7 @@ It covers:
 3. how presets and skills request Jira issue context without Create page hard-coding,
 4. trusted MoonMind-side Jira tools,
 5. secure credential handling through SecretRefs and Provider Profiles,
-6. Jira issue creation, sub-task creation, edits, comments, searches, and workflow transitions,
+6. Jira issue creation, sub-workflow creation, edits, comments, searches, and workflow transitions,
 7. post-merge Jira completion,
 8. validation, error handling, redaction, and testing.
 
@@ -91,7 +91,7 @@ input_schema:
     jira_issue:
       type: object
       title: Jira issue
-      description: Issue that will seed the task instructions and orchestration context.
+      description: Issue that will seed the workflow instructions and orchestration context.
       required:
         - key
       properties:
@@ -173,7 +173,7 @@ Rules:
 2. Optional fields are cached/enriched context, not the source of truth.
 3. Backend validation and expansion should tolerate missing optional enrichment fields.
 4. The backend may fetch fresh issue details during validation or expansion when needed.
-5. Durable task records should store only safe issue identifiers and sanitized context.
+5. Durable workflow records should store only safe issue identifiers and sanitized context.
 6. Secrets, auth headers, account tokens, and raw Jira client responses must never be stored in the input value.
 
 ---
@@ -249,7 +249,7 @@ steps:
     tool_id: jira.add_comment
     inputs:
       issueKey: "{{ inputs.jira_issue.key }}"
-      body: "MoonMind task started."
+      body: "MoonMind workflow execution started."
 ```
 
 Rules:
@@ -820,7 +820,7 @@ Examples:
 - `issueKey` must be non-empty and match a simple Jira key pattern
 - `transitionId` must be a string or integer-like value
 - `summary` must be present for issue creation
-- `parentIssueKey` must be present for sub-task creation
+- `parentIssueKey` must be present for sub-workflow creation
 - reject unknown top-level keys if strict mode is enabled
 
 Schema-driven Jira inputs should also validate:

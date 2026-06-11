@@ -33,8 +33,8 @@ SESSION_SCOPE_FILTER_KEYS = frozenset(
         "job_id",
         "tenant",
         "tenant_id",
-        "task_run_id",
-        "taskRunId",
+        "agent_run_id",
+        "agentRunId",
     }
 )
 SESSION_SCOPE_FILTER_KEYS_MESSAGE = ", ".join(sorted(SESSION_SCOPE_FILTER_KEYS))

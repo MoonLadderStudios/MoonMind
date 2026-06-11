@@ -1,20 +1,20 @@
-# Runtime Slash Commands on Create Task
+# Runtime Slash Commands on the Create Page
 
 Status: Desired State
 Owners: MoonMind Engineering
 Last Updated: 2026-05-13
-Canonical for: Create Task runtime slash-command pass-through, command hint metadata, runtime command rendering boundaries
-Related: `docs/UI/CreatePage.md`, `docs/Tasks/WorkflowArchitecture.md`, `docs/Steps/SkillSystem.md`, `docs/ManagedAgents/CodexCliManagedSessions.md`, `docs/ManagedAgents/ClaudeCodeManagedSessions.md`
+Canonical for: Create page runtime slash-command pass-through, command hint metadata, runtime command rendering boundaries
+Related: `docs/UI/CreatePage.md`, `docs/Workflows/WorkflowArchitecture.md`, `docs/Steps/SkillSystem.md`, `docs/ManagedAgents/CodexCliManagedSessions.md`, `docs/ManagedAgents/ClaudeCodeManagedSessions.md`
 
 ---
 
 ## Purpose
 
-This document defines how MoonMind lets users pass runtime slash commands such as `/review`, `/simplify`, or newly introduced provider commands from the Create Task page as part of normal task instructions, while still allowing MoonMind to add any runtime-specific markup required for Codex CLI, Claude Code, or future managed runtimes to recognize the command as an actual command.
+This document defines how MoonMind lets users pass runtime slash commands such as `/review`, `/simplify`, or newly introduced provider commands from the Create page as part of normal workflow instructions, while still allowing MoonMind to add any runtime-specific markup required for Codex CLI, Claude Code, or future managed runtimes to recognize the command as an actual command.
 
-The system preserves the authored instructions through MoonMind's task input snapshot contract, derives a structured command invocation when the first character is `/`, and renders that invocation through a runtime-specific adapter at execution time.
+The system preserves the authored instructions through MoonMind's workflow input snapshot contract, derives a structured command invocation when the first character is `/`, and renders that invocation through a runtime-specific adapter at execution time.
 
-This design intentionally keeps command detection and rendering out of one-off Create page logic. The Create page remains a task composition surface, consistent with the existing Create page design principles that steps and capabilities should be schema/capability-driven rather than hard-coded per workflow or preset.
+This design intentionally keeps command detection and rendering out of one-off Create page logic. The Create page remains a workflow composition surface, consistent with the existing Create page design principles that steps and capabilities should be schema/capability-driven rather than hard-coded per workflow or preset.
 
 ## Problem
 
@@ -32,7 +32,7 @@ or:
 Refactor the implementation while preserving behavior.
 ```
 
-MoonMind currently passes task instructions into managed runtime launch paths. Codex CLI appends `request.instruction_ref` as the positional prompt to `codex exec`, while Claude Code appends `request.instruction_ref` after `-p --dangerously-skip-permissions`.
+MoonMind currently passes workflow instructions into managed runtime launch paths. Codex CLI appends `request.instruction_ref` as the positional prompt to `codex exec`, while Claude Code appends `request.instruction_ref` after `-p --dangerously-skip-permissions`.
 
 However, runtime command recognition may depend on the final input shape. If MoonMind prepends skill activation summaries, retrieval context, managed runtime notes, or other wrappers before the user’s `/command`, the runtime may no longer see `/` as the first character.
 
@@ -40,10 +40,10 @@ MoonMind therefore needs a declarative command system that:
 
 1. Detects a leading slash command from normal instructions.
 2. Preserves the raw user-authored text.
-3. Stores a structured command invocation in the task input snapshot.
+3. Stores a structured command invocation in the workflow input snapshot.
 4. Lets each runtime declare whether it supports opaque slash-command pass-through.
 5. Keeps final command rendering as late as possible, after MoonMind has prepared context.
-6. Supports edit, rerun, audit, and task details without losing exactness.
+6. Supports edit, rerun, audit, and workflow details without losing exactness.
 
 ## Design Principles
 
@@ -51,7 +51,7 @@ MoonMind therefore needs a declarative command system that:
 
 The text authored by the user is not rewritten by slash-command detection. Existing Create/API submission normalization may trim surrounding whitespace, but command parsing must not replace, alias, or reinterpret the user's command token.
 
-### Treat slash commands as structured task metadata
+### Treat slash commands as structured workflow metadata
 
 A leading slash command is not only prompt text. It is normalized into a structured `RuntimeCommandInvocation` so MoonMind can render it safely and correctly for different runtimes.
 
@@ -71,18 +71,18 @@ Runtime slash-command support and render modes should be defined in a runtime ca
 
 ### Preserve edit and rerun fidelity
 
-Task editing and rerun reconstruction already depend on trustworthy task instruction reconstruction. The slash command model must round-trip through the same authoritative task input snapshot path.
+Workflow editing and rerun reconstruction already depend on trustworthy workflow instruction reconstruction. The slash command model must round-trip through the same authoritative workflow input snapshot path.
 
 ## Goals
 
 MoonMind must support:
 
-1. Users typing `/review`, `/simplify`, or any provider/runtime slash command as the first characters of Create Task instructions.
-2. Automatic detection when `/` is the first character of a task or step instruction.
+1. Users typing `/review`, `/simplify`, or any provider/runtime slash command as the first characters of Create Workflow instructions.
+2. Automatic detection when `/` is the first character of a workflow or step instruction.
 3. Runtime-level validation of whether slash-command pass-through is available.
 4. Runtime-specific command rendering for Codex CLI, Claude Code, and future managed runtimes.
-5. Preservation of authored instructions through the task input snapshot contract.
-6. Exact reconstruction for edit, rerun, task details, and audit surfaces.
+5. Preservation of authored instructions through the workflow input snapshot contract.
+6. Exact reconstruction for edit, rerun, workflow details, and audit surfaces.
 7. Opaque pass-through for unknown commands when the selected runtime supports slash commands.
 8. An escape hatch for users who want literal text beginning with `/`.
 
@@ -102,7 +102,7 @@ This system does not:
 
 ### Raw instructions
 
-The authored instruction text as preserved by MoonMind's task input snapshot contract.
+The authored instruction text as preserved by MoonMind's workflow input snapshot contract.
 
 Example:
 
@@ -218,9 +218,9 @@ type RuntimeCommandRenderResult = {
 };
 ```
 
-## Task Input Shape
+## Workflow Input Shape
 
-The authoritative task input snapshot should include both authored instructions and derived runtime command metadata.
+The authoritative workflow input snapshot should include both authored instructions and derived runtime command metadata.
 
 ```json
 {
@@ -250,7 +250,7 @@ The authoritative task input snapshot should include both authored instructions 
 }
 ```
 
-For multi-step drafts, the command may appear at the task level or step level:
+For multi-step drafts, the command may appear at the workflow level or step level:
 
 ```json
 {
@@ -396,7 +396,7 @@ knownRuntimeCommandHints:
     label: Review
     aliases:
       - /review
-    description: Ask the selected runtime to review the current task or code state.
+    description: Ask the selected runtime to review the current workflow or code state.
     argumentPolicy:
       allowed: true
       required: false
@@ -500,7 +500,7 @@ The exact materialization format is runtime-owned. Materialization requires expl
 
 ### Default authoring behavior
 
-The task instruction field continues to accept ordinary text.
+The workflow instruction field continues to accept ordinary text.
 
 When the first character is `/`, the Create page parses the first line and checks the selected runtime's slash-command capability.
 
@@ -515,7 +515,7 @@ If the command also has a known-command hint, the Create page may show the hint:
 
 ```text
 /review
-Review the current code or task output.
+Review the current code or workflow output.
 ```
 
 If the command has no hint, do not warn merely because it is unknown to MoonMind:
@@ -539,10 +539,10 @@ The authored instructions do not change.
 
 ### Edit mode
 
-When loading an existing task in edit mode:
+When loading an existing workflow in edit mode:
 
-1. Authored instructions are restored from the task input snapshot.
-2. Runtime command metadata is restored from the task input snapshot when present.
+1. Authored instructions are restored from the workflow input snapshot.
+2. Runtime command metadata is restored from the workflow input snapshot when present.
 3. If metadata is absent, the Create page may re-detect the command for preview only.
 4. Re-detected metadata must not silently alter the historical raw instruction value.
 
@@ -550,26 +550,26 @@ When loading an existing task in edit mode:
 
 Rerun uses the original authored instructions and original command metadata.
 
-If the runtime capability catalog or known-command hints have changed since the original run, MoonMind may display a warning, but exact rerun should preserve the original task configuration unless the user chooses edit-for-rerun. Persisted command metadata should include the runtime capability version and hint catalog version used at submit time so audits can explain whether a rerun is using the same pass-through assumptions or merely the same authored text.
+If the runtime capability catalog or known-command hints have changed since the original run, MoonMind may display a warning, but exact rerun should preserve the original workflow configuration unless the user chooses edit-for-rerun. Persisted command metadata should include the runtime capability version and hint catalog version used at submit time so audits can explain whether a rerun is using the same pass-through assumptions or merely the same authored text.
 
 ## Backend Behavior
 
 ### Submit-time normalization
 
-On task submit, the backend validates and canonicalizes runtime command metadata.
+On workflow submit, the backend validates and canonicalizes runtime command metadata.
 
 The frontend may provide a parsed preview, but backend normalization is authoritative.
 
 Submit flow:
 
 ```text
-1. Receive task draft.
-2. Extract task-level and step-level instruction fields.
+1. Receive workflow draft.
+2. Extract workflow-level and step-level instruction fields.
 3. Detect leading slash commands.
 4. Validate runtime-level slash-command capability and command grammar.
-5. Store authored instructions according to the task input snapshot contract.
+5. Store authored instructions according to the workflow input snapshot contract.
 6. Store RuntimeCommandInvocation metadata.
-7. Build authoritative task input snapshot.
+7. Build authoritative workflow input snapshot.
 8. Submit workflow.
 ```
 
@@ -620,9 +620,9 @@ Runtime command rendering must happen after MoonMind has prepared the context, b
 Desired order:
 
 ```text
-raw task input
+raw workflow input
   -> parse runtime command
-  -> build task input snapshot
+  -> build workflow input snapshot
   -> workflow creates AgentExecutionRequest
   -> runtime strategy prepares workspace
   -> RAG/context injection mutates instruction body
@@ -755,7 +755,7 @@ For opaque unknown commands, observability should record pass-through rather tha
 }
 ```
 
-Task details should show both:
+Workflow details should show both:
 
 1. Original authored instructions.
 2. Runtime command interpretation.
@@ -835,7 +835,7 @@ Rendered as literal text unless strict policy rejects.
 
 ### Renderer failure
 
-If runtime-specific materialization fails, the task should fail before launching the agent with:
+If runtime-specific materialization fails, the workflow execution should fail before launching the agent with:
 
 ```json
 {
@@ -898,8 +898,8 @@ This must not happen. The renderer is responsible for producing final runtime in
 
 1. Backend detects command even if frontend metadata is missing.
 2. Backend rejects malformed frontend command metadata.
-3. Backend preserves authored instructions according to the task input snapshot contract.
-4. Backend stores command metadata in the authoritative task input snapshot.
+3. Backend preserves authored instructions according to the workflow input snapshot contract.
+4. Backend stores command metadata in the authoritative workflow input snapshot.
 5. Unknown valid commands pass through for slash-capable runtimes.
 6. Runtimes without slash pass-through follow configured policy.
 
@@ -916,26 +916,26 @@ This must not happen. The renderer is responsible for producing final runtime in
 
 ### Edit and rerun tests
 
-1. Edit mode restores authored instructions from the task input snapshot.
-2. Edit mode restores command metadata from the task input snapshot.
+1. Edit mode restores authored instructions from the workflow input snapshot.
+2. Edit mode restores command metadata from the workflow input snapshot.
 3. Rerun preserves original command metadata.
 4. Edit-for-rerun can recompute recognition warnings without altering the source run.
-5. Task details show authored instructions and rendered command metadata.
+5. Workflow details show authored instructions and rendered command metadata.
 
 ## Acceptance Criteria
 
 The system is correct when all of the following are true:
 
-1. A user can enter `/review` as the first characters of Create Task instructions.
+1. A user can enter `/review` as the first characters of Create Workflow instructions.
 2. MoonMind detects `/review` as a structured runtime command.
-3. MoonMind preserves authored instructions through the authoritative task input snapshot.
-4. MoonMind stores command metadata in the authoritative task input snapshot.
+3. MoonMind preserves authored instructions through the authoritative workflow input snapshot.
+4. MoonMind stores command metadata in the authoritative workflow input snapshot.
 5. The Create page displays whether the selected runtime supports slash-command pass-through.
 6. Unknown valid commands pass through for runtimes with slash-command pass-through.
 7. Users can escape slash-leading text with `\/`.
 8. Runtime-specific renderers decide how to make the command recognized by Codex CLI or Claude Code.
 9. MoonMind-added context never accidentally moves the command out of the runtime-required recognition position.
-10. Edit, rerun, task details, and audit surfaces can show both the original instructions and the interpreted runtime command.
+10. Edit, rerun, workflow details, and audit surfaces can show both the original instructions and the interpreted runtime command.
 11. No Codex-specific or Claude-specific command markup is hard-coded into the Create page.
 12. Future runtimes can add slash-command support by registering runtime capabilities and implementing a renderer.
 13. Future suggestion features can add known-command hints without blocking commands absent from the hint catalog.

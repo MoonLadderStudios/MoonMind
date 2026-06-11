@@ -43,7 +43,7 @@
     "section": "user-workspace",
     "type": "enum"
   },
-  "workflow.default_task_runtime": {
+  "workflow.default_runtime": {
     "scopes": [
       "workspace"
     ],

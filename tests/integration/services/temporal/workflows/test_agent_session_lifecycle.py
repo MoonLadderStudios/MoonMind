@@ -27,7 +27,7 @@ async def _register_session_search_attributes(env: WorkflowEnvironment) -> None:
         AddSearchAttributesRequest(
             namespace=env.client.namespace,
             search_attributes={
-                "TaskRunId": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+                "AgentRunId": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
                 "RuntimeId": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
                 "SessionId": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
                 "SessionEpoch": IndexedValueType.INDEXED_VALUE_TYPE_INT,
@@ -147,7 +147,7 @@ async def test_agent_session_lifecycle_updates_preserve_clear_cancel_and_termina
     RUNTIME_EVENTS.clear()
     session_input = CodexManagedSessionWorkflowInput.model_validate(
         {
-            "taskRunId": "task-run-session-lifecycle",
+            "agentRunId": "agent-run-session-lifecycle",
             "runtimeId": "codex_cli",
             "sessionId": "sess:integration:lifecycle",
             "sessionEpoch": 1,

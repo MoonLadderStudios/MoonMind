@@ -20,9 +20,6 @@ class _FakeQueueClient:
     def __init__(self, downloads: dict[str, bytes] | None = None) -> None:
         self.downloads = dict(downloads or {})
         self.events: list[dict[str, object]] = []
-        self.live_session_reports: list[dict[str, object]] = []
-        self.live_session_state: dict[str, object] | None = None
-        self.live_session_heartbeats: list[str] = []
 
     async def download_artifact(self, *, artifact_id: str) -> bytes:
         try:
@@ -40,17 +37,6 @@ class _FakeQueueClient:
                 "payload": payload or {},
             }
         )
-
-    async def report_live_session(self, **payload):
-        self.live_session_reports.append(dict(payload))
-        status = str(payload.get("status") or "").strip().lower()
-        if status:
-            self.live_session_state = {"session": {"status": status}}
-        return self.live_session_state or {}
-
-    async def heartbeat_live_session(self, *, job_id, worker_id):
-        self.live_session_heartbeats.append(str(job_id))
-        return self.live_session_state or {}
 
 class _FakeHandler:
     async def handle(

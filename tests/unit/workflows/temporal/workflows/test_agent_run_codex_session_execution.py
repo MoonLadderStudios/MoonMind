@@ -64,7 +64,7 @@ def _managed_session_request(
         instructionRef=instruction_ref,
         managedSession={
             "workflowId": "wf-task-1:session:codex_cli",
-            "taskRunId": "wf-task-1",
+            "agentRunId": "wf-task-1",
             "sessionId": "sess:wf-task-1:codex_cli",
             "sessionEpoch": 1,
             "runtimeId": "codex_cli",
@@ -223,7 +223,7 @@ async def test_managed_session_result_enrichment_omits_large_inline_instruction(
     assert result.metadata["instructionRefLengthChars"] == len(large_instruction.strip())
     assert len(result.metadata["instructionRefSha256"]) == 64
     assert "instructionRef" not in result.metadata
-    assert result.metadata["managedSession"]["taskRunId"] == "wf-task-1"
+    assert result.metadata["managedSession"]["agentRunId"] == "wf-task-1"
 
 async def test_managed_session_result_enrichment_carries_story_output_paths(
     monkeypatch: pytest.MonkeyPatch,
@@ -372,7 +372,7 @@ async def test_agent_run_uses_codex_session_adapter_for_managed_codex_session(
             return {
                 "binding": {
                     "workflowId": "wf-task-1:session:codex_cli",
-                    "taskRunId": "wf-task-1",
+                    "agentRunId": "wf-task-1",
                     "sessionId": "sess:wf-task-1:codex_cli",
                     "sessionEpoch": 1,
                     "runtimeId": "codex_cli",
@@ -415,7 +415,7 @@ async def test_agent_run_uses_codex_session_adapter_for_managed_codex_session(
         {
             "binding": {
                 "workflowId": "wf-task-1:session:codex_cli",
-                "taskRunId": "wf-task-1",
+                "agentRunId": "wf-task-1",
                 "sessionId": "sess:wf-task-1:codex_cli",
                 "sessionEpoch": 1,
                 "runtimeId": "codex_cli",
@@ -435,7 +435,7 @@ async def test_agent_run_uses_codex_session_adapter_for_managed_codex_session(
     assert result.metadata["resultSource"] == "agent-runtime-fetch-result"
     assert result.metadata["childWorkflowId"] == "wf-agent-run-1"
     assert result.metadata["childRunId"] == "run-1"
-    assert result.metadata["taskRunId"] == "wf-task-1"
+    assert result.metadata["agentRunId"] == "wf-task-1"
     assert result.metadata["managedSession"]["sessionId"] == "sess:wf-task-1:codex_cli"
     assert [name for name, _payload in routed_calls] == [
         "agent_runtime.load_session_snapshot",
@@ -444,7 +444,7 @@ async def test_agent_run_uses_codex_session_adapter_for_managed_codex_session(
         "agent_runtime.publish_artifacts",
     ]
     assert routed_calls[0][1]["workflowId"] == "wf-task-1:session:override"
-    assert routed_calls[0][1]["taskRunId"] == "wf-task-1"
+    assert routed_calls[0][1]["agentRunId"] == "wf-task-1"
     assert routed_calls[1][1]["workspacePath"] == "/work/task/repo"
     assert isinstance(routed_calls[2][1], AgentRuntimeFetchResultInput)
     assert routed_calls[2][1].run_id == "wf-task-1"
@@ -537,7 +537,7 @@ async def test_agent_run_keeps_managed_adapter_for_non_session_managed_request(
     assert len(managed_requests) == 1
     assert managed_requests[0].managed_session is None
     assert result.summary == "Managed adapter path"
-    assert result.metadata["taskRunId"] == "managed-run-1"
+    assert result.metadata["agentRunId"] == "managed-run-1"
     assert [name for name, _payload in routed_calls] == [
         "agent_runtime.fetch_result",
         "agent_runtime.publish_artifacts",
@@ -702,7 +702,7 @@ async def test_agent_run_starts_deferred_codex_session_only_after_slot_assignmen
                 "moonmind": {
                     "deferManagedSessionUntilSlot": {
                         "runtimeId": "codex_cli",
-                        "taskRunId": "wf-task-1",
+                        "agentRunId": "wf-task-1",
                     }
                 }
             },
@@ -721,7 +721,7 @@ async def test_agent_run_starts_deferred_codex_session_only_after_slot_assignmen
         kwargs["parent_close_policy"]
         == agent_run_module.workflow.ParentClosePolicy.ABANDON
     )
-    assert session_input.task_run_id == "wf-task-1"
+    assert session_input.agent_run_id == "wf-task-1"
     assert session_input.runtime_id == "codex_cli"
     assert session_adapter_requests[0].managed_session is not None
     assert session_adapter_requests[0].managed_session.session_id == (
@@ -989,7 +989,7 @@ async def test_agent_run_managed_session_start_runtime_error_returns_failed_resu
     assert "no rollout found for thread id" in result.summary
     assert result.metadata["childWorkflowId"] == "wf-agent-run-1"
     assert result.metadata["childRunId"] == "run-1"
-    assert result.metadata["taskRunId"] == "wf-task-1"
+    assert result.metadata["agentRunId"] == "wf-task-1"
     assert [name for name, _payload in routed_calls] == ["agent_runtime.publish_artifacts"]
     assert manager_signals[-1] == (
         "release_slot",

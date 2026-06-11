@@ -21,8 +21,8 @@ MoonMind does not replace your agent. It gives your agent an operational envelop
 6. In Settings:
     - Add a GitHub personal access token
     - Add an API key or click OAuth to authenticate a provider profile
-    - Configure any other secrets or settings you want to adjust for your first task
-7. Click Create and submit a task!
+    - Configure any other secrets or settings you want to adjust for your first workflow
+7. Click Create and submit a workflow!
 
 `.env` is optional for normal local startup. Use `.env-template` only when you want to override defaults or preconfigure advanced settings before launch.
 
@@ -63,11 +63,11 @@ Where this is headed: typed policy envelopes that declare per-run what an agent 
 
 Submit a refactoring job, close your laptop, and let MoonMind handle the rest. Every run is backed by [Temporal](https://temporal.io/), so workflows survive container crashes, worker restarts, and host reboots:
 
-- **Durable step ledger and checkpoints.** Long tasks are decomposed into steps whose state, attempts, and outputs are persisted as immutable artifacts. When a step fails, you resume from the last good checkpoint — completed work is never re-bought.
+- **Durable step ledger and checkpoints.** Long workflows are decomposed into steps whose state, attempts, and outputs are persisted as immutable artifacts. When a step fails, you resume from the last good checkpoint — completed work is never re-bought.
 - **Stuck detection and escalating intervention.** MoonMind detects looping or silently stalled agents and applies escalating responses — soft reset, hard reset, termination — before they burn through your API budget.
 - **Rate limits as a first-class citizen.** Runtime strategies recognize provider rate-limit signals in live output and respond with slot-based concurrency control and cooldowns instead of blind retry storms.
 - **Idempotent by design.** Externally visible side effects — starting runs, publishing results, posting to GitHub or Jira — are retry-safe, so a crash mid-operation never produces duplicates.
-- **Scheduled and recurring tasks.** Run heavy jobs overnight when tokens are cheaper, or put issue triage on a cron schedule and get alerted on failure.
+- **Scheduled and recurring workflows.** Run heavy jobs overnight when tokens are cheaper, or put issue triage on a cron schedule and get alerted on failure.
 
 Where this is headed: self-healing remediation workflows — already taking shape in the codebase — where a dedicated supervisor can target a failed run, read its durable evidence, and execute typed recovery actions (resume, retry, interrupt, clear) with privilege separation and a full audit trail. The aspiration is a system where a failed run at 3 a.m. is diagnosed, repaired, and resumed before you wake up.
 
@@ -86,7 +86,7 @@ Where this is headed: end-to-end OpenTelemetry tracing from API request through 
 
 Other platforms make you rebuild agents in their SDK. MoonMind operates at a higher level of abstraction, orchestrating state-of-the-art agents out of the box:
 
-- **Managed sessions and managed runs.** MoonMind runs owned CLI runtimes on your own infrastructure using your existing subscriptions or API keys. Codex CLI is the live first-class task-scoped managed-session runtime; Claude Code is a first-class managed-runtime target with Claude-specific session design models on the path to the same live session controller. Gemini CLI can adopt the same session pattern where its adapter supports it.
+- **Managed sessions and managed runs.** MoonMind runs owned CLI runtimes on your own infrastructure using your existing subscriptions or API keys. Codex CLI is the live first-class workflow-scoped managed-session runtime; Claude Code is a first-class managed-runtime target with Claude-specific session design models on the path to the same live session controller. Gemini CLI can adopt the same session pattern where its adapter supports it.
 - **External delegated agents.** Cloud-hosted agents like Jules and Codex Cloud are coordinated through external-agent adapters. MoonMind tracks status, injects context, and closes the feedback loop even when it doesn't own the provider's runtime envelope.
 - **Step-based context management.** Agents perform better on small, focused tasks. MoonMind injects the right context into each step and clears it between steps to prevent context-window pollution.
 - **Personal-use friendly defaults.** A fresh local install boots with `docker compose up -d`; enter a few secrets in Mission Control and go — no enterprise secret infrastructure required up front.
@@ -108,10 +108,10 @@ MoonMind runs as a set of decoupled containers from a single `docker-compose.yam
 | **API Service** | FastAPI control plane for Mission Control, `/api/executions`, artifacts, templates, proposals, and MCP/context surfaces. |
 | **Temporal Server** | Durable execution engine with PostgreSQL persistence. |
 | **Worker Fleet** | Specialized isolated workers for orchestration, sandbox execution, LLM calls, managed runtime supervision, and external integrations. |
-| **Managed Session Plane** | Task-scoped owned runtime sessions for Codex CLI. Ordinary managed-session Docker work uses a per-session sidecar daemon rather than the host socket. Claude Code and additional runtime adapters can adopt the same shared `ManagedSession*` pattern once they provide a runtime-specific session controller. |
+| **Managed Session Plane** | Workflow-scoped owned runtime sessions for Codex CLI. Ordinary managed-session Docker work uses a per-session sidecar daemon rather than the host socket. Claude Code and additional runtime adapters can adopt the same shared `ManagedSession*` pattern once they provide a runtime-specific session controller. |
 | **External Agent Adapters** | Provider adapters for delegated external agents such as Jules and Codex Cloud. |
 | **Docker Workload Plane** | Control-plane-launched specialized workload containers for MoonMind admin/update, helper, and deliberately gated exceptional workloads, kept separate from managed agent session identity. |
-| **Mission Control** | Operational dashboard for managing tasks, reviewing per-step progress, and inspecting logs, diagnostics, and artifacts. |
+| **Mission Control** | Operational dashboard for managing workflows, reviewing per-step progress, and inspecting logs, diagnostics, and artifacts. |
 | **Qdrant & MinIO** | Vector database for RAG/memory, and S3-compatible artifact storage. |
 | **Docker Proxy** | Restricted Docker socket access for control-plane workload workers; ordinary managed sessions use their private sidecar daemon instead of the host socket. |
 

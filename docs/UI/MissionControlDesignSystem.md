@@ -7,7 +7,7 @@ Last updated: 2026-04-20
 
 Define the desired-state design system for the MoonMind Mission Control UI: visual language, design tokens, surface hierarchy, layout rules, motion, component behavior, and page composition. This document is declarative. It describes what Mission Control should look and feel like when it is correct.
 
-For route ownership, runtime config, API boundaries, and task-oriented architecture, see `docs/UI/MissionControlArchitecture.md`.
+For route ownership, runtime config, API boundaries, and workflow console architecture, see `docs/UI/WorkflowConsoleArchitecture.md`.
 
 ---
 
@@ -38,8 +38,8 @@ Mission Control should not make every surface translucent. Dense reading and edi
 
 Each page should have a single primary spectacle or premium-effect surface. Examples:
 
-- `/tasks/list`: control deck or sticky table/header treatment
-- `/tasks/new`: floating launch rail at the bottom
+- `/workflows`: control deck or sticky table/header treatment
+- `/workflows/new`: floating launch rail at the bottom
 - detail pages: a single elevated observability or action shell
 
 The rest of the page should support that focal effect rather than compete with it.
@@ -76,7 +76,7 @@ Use matte slabs for:
 - long text entry
 - main form bodies
 - detail evidence panels
-- dense task metadata regions
+- dense workflow metadata regions
 
 These surfaces should privilege crispness over translucency.
 
@@ -110,7 +110,7 @@ Rules:
 
 Recommended liquidGL targets:
 
-- the Create Task floating launch rail
+- the Start Workflow floating launch rail
 - compact sticky utility rails
 - modals and drawers with bounded dimensions
 - selected high-value popovers or command surfaces
@@ -185,7 +185,7 @@ Mission Control uses:
 
 The following should prefer mono styling or tabular numerics:
 
-- task IDs
+- workflow IDs
 - timestamps
 - runtime names and versions
 - counts and durations
@@ -215,7 +215,7 @@ Best candidates for icons:
 Mission Control uses two desktop width modes:
 
 - **Constrained shell** for mastheads, forms, compact controls, and narrative content: roughly `1100-1280px`
-- **Data-wide shell** for task tables, evidence-heavy detail regions, and comparison views: roughly `1500-1800px` or fluid width with generous side gutters
+- **Data-wide shell** for workflow tables, evidence-heavy detail regions, and comparison views: roughly `1500-1800px` or fluid width with generous side gutters
 
 The page shell may transition between these two modes within the same route.
 
@@ -424,7 +424,7 @@ Rules:
 
 ### 10.5 Tables and dense list surfaces
 
-The task list and similar operational surfaces remain **table-first on desktop**.
+The workflow list and similar operational surfaces remain **table-first on desktop**.
 
 Rules:
 
@@ -513,9 +513,9 @@ Examples:
 
 ## 11. Page-specific composition rules
 
-### 11.1 `/tasks/list`
+### 11.1 `/workflows`
 
-The task list page should use a **control deck + data slab** structure.
+The workflow list page should use a **control deck + data slab** structure.
 
 Desired composition:
 
@@ -534,7 +534,7 @@ Specific guidance:
 - active filters should be visible as chips
 - the table header should remain sticky during scroll
 
-### 11.2 `/tasks/new`
+### 11.2 `/workflows/new`
 
 The create page should feel like a guided launch flow.
 
@@ -552,7 +552,7 @@ Specific guidance:
 - large textareas should remain matte and comfortable for sustained reading/editing
 - small utility buttons inside step cards should align with the same button language as the rest of the system
 
-### 11.3 Task detail and evidence-heavy pages
+### 11.3 Workflow detail and evidence-heavy pages
 
 Detail pages should keep evidence readable and structured.
 
@@ -655,7 +655,7 @@ The source of truth for Mission Control styling remains:
 
 - `frontend/src/styles/mission-control.css`
 
-Generated assets under `api_service/static/task_dashboard/dist/` are build artifacts and should not be hand-edited.
+Generated assets under `api_service/static/workflow_console/dist/` are build artifacts and should not be hand-edited.
 
 ### 13.5 liquidGL enhancement contract
 

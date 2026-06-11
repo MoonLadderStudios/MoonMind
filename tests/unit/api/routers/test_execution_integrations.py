@@ -112,7 +112,7 @@ async def _create_monitored_execution(
     create_response = await client.post(
         "/api/executions",
         json={
-            "workflowType": "MoonMind.Run",
+            "workflowType": "MoonMind.UserWorkflow",
             "title": "Integration callback test",
             "idempotencyKey": f"execution-integrations-create-{execution_suffix}",
         },

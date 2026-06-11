@@ -1,6 +1,6 @@
 # Visibility and UI Query Model
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
+**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 **Status:** Draft 
 **Owner:** MoonMind Platform 
@@ -20,14 +20,14 @@ This document turns the higher-level decisions in the architecture and lifecycle
 - **Memo** fields used by UI projections
 - default **sorting** and **recency** behavior
 - **pagination token** and **count** semantics
-- compatibility mapping from Temporal execution data into the current **task-oriented UI**
+- mapping from Temporal execution data into the **workflow console UI**
 - exact vs compatibility status presentation rules
 - waiting and attention metadata for blocked executions
 
 This document is intentionally the bridge between:
 
 - the target rule that **Temporal Visibility** is the source of truth for Temporal-managed list/query/count, and
-- the current implementation reality that MoonMind still has task-oriented `/tasks/*` surfaces and adapter-style `/api/executions` APIs during migration
+- the current implementation reality that MoonMind serves `/workflows/*` console surfaces and execution-oriented `/api/executions` APIs
 
 ---
 
@@ -37,7 +37,7 @@ This document is intentionally the bridge between:
 - `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
 - `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
 - `docs/Temporal/WorkflowArtifactSystemDesign.md`
-- `docs/UI/MissionControlArchitecture.md`
+- `docs/UI/WorkflowConsoleArchitecture.md`
 
 This document narrows several open items from those docs so frontend and backend work can proceed without inventing ad hoc query behavior.
 
@@ -51,8 +51,8 @@ This document narrows several open items from those docs so frontend and backend
 - Memo registry for list/detail presentation
 - canonical list/detail field model for Temporal-backed rows
 - allowed filters, sort order, recency rules, pagination, and counts
-- compatibility mapping into Mission Control task-oriented grouping semantics
-- migration rules for adapter APIs and unified task surfaces
+- mapping into Mission Control workflow grouping semantics
+- rules for adapter APIs and unified workflow surfaces
 
 ## 3.2 Out of scope
 
@@ -99,7 +99,7 @@ The app DB projection may continue to exist during migration, but it is an **ada
 Contractually:
 
 1. any adapter API for Temporal-backed list/detail data must preserve **Visibility semantics**
-2. unified `/tasks/*` surfaces may reshape Temporal rows into task-oriented payloads, but they must **not invent conflicting state, sort, or pagination rules**
+2. unified `/workflows/*` surfaces may reshape Temporal rows into workflow-product payloads, but they must **not invent conflicting state, sort, or pagination rules**
 3. if a projection disagrees with Temporal-backed canonical fields, **Temporal wins**
 4. provider-specific payloads and runtime-native details must not become ad hoc list/query semantics outside the canonical field model
 
@@ -111,13 +111,13 @@ Contractually:
 
 The primary durable query entity for Temporal-managed work is a **Workflow Execution**.
 
-MoonMind may still use the word **task** in compatibility APIs and UI surfaces, but those rows map to Workflow Executions when the runtime is Temporal-backed.
+Some legacy API fields still carry `task` naming (they rename in the hard switch), but those rows map to Workflow Executions when the runtime is Temporal-backed.
 
 ## 5.2 Canonical identifiers
 
 - `workflowId`: durable canonical identifier for Temporal-managed work
 - `runId`: current/latest Temporal run instance identifier; detail/debug oriented
-- `taskId`: compatibility alias for task-oriented APIs during migration
+- `taskId`: legacy alias still present on some payloads (renames in the hard switch)
 
 Rules:
 
@@ -127,14 +127,14 @@ Rules:
 
 ## 5.2.1 Compatibility identifier bridge
 
-For any Temporal-backed row exposed through a task-oriented compatibility surface:
+For any Temporal-backed row exposed through a workflow product surface:
 
 - `taskId` **must equal** `workflowId`
 - APIs may return both `taskId` and `workflowId` during migration
 - compatibility adapters must not mint a second opaque identifier for the same Temporal execution
-- `runId` must never be used as the route identifier for task-oriented detail pages
+- `runId` must never be used as the route identifier for workflow detail pages
 
-This keeps the task UI stable without introducing another alias table or migration dependency.
+This keeps the workflow UI stable without introducing another alias table or migration dependency.
 
 ## 5.3 Canonical list row fields
 
@@ -185,7 +185,7 @@ A Temporal-backed detail model may additionally include:
 - optional debug or reconciliation metadata
 - optional live query-derived fields such as active child state or current execution phase
 
-Detail views should show the exact Temporal-facing state (`state`, `temporalStatus`, `closeStatus`) even when list pages group them into broader task-style statuses.
+Detail views should show the exact Temporal-facing state (`state`, `temporalStatus`, `closeStatus`) even when list pages group them into broader workflow status groups.
 
 ---
 
@@ -373,7 +373,7 @@ Ownership is not just a filter; it is part of authorization.
 Rules:
 
 - standard users are implicitly scoped to their own executions
-- standard users must not see `system` or `service` executions on user-facing task pages unless the product explicitly supports that
+- standard users must not see `system` or `service` executions on user-facing workflow pages unless the product explicitly supports that
 - non-admin callers must not query another user’s executions
 - admin/operator callers may filter by `ownerType`, `ownerId`, or omit them
 
@@ -433,7 +433,7 @@ Implementation guidance:
 
 ## 10. Compatibility status mapping for Mission Control
 
-The current dashboard uses broad normalized task statuses such as:
+The current dashboard uses broad normalized workflow statuses such as:
 
 - `queued`
 - `running`
@@ -701,5 +701,5 @@ This document is operationally done when:
 1. Add `entry` and `ownerType` filters to public adapter APIs if not already present
 2. Add top-level `taskId`, `ownerType`, `waitingReason`, and `attentionRequired` fields wherever adapter payloads still lack them
 3. Decide when `mm_repo` and `mm_integration` become required for specific workflow families
-4. Decide whether `/api/executions` remains a migration adapter surface or evolves into a stable public API after task compatibility layers retire
+4. Decide whether `/api/executions` remains a migration adapter surface or evolves into a stable public API after the legacy task-named fields retire
 5. Decide whether any additional `mm_entry` values are needed beyond the current workflow catalog

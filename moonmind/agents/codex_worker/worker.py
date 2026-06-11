@@ -41,14 +41,14 @@ from moonmind.security.outbound_scan import (
     resolve_high_security_mode,
     scan_outbound_bundle,
 )
-from moonmind.workflows.tasks.job_types import CANONICAL_TASK_JOB_TYPE, LEGACY_TASK_JOB_TYPES
-from moonmind.workflows.tasks.task_contract import (
+from moonmind.workflows.executions.job_types import CANONICAL_WORKFLOW_JOB_TYPE, LEGACY_WORKFLOW_JOB_TYPES
+from moonmind.workflows.executions.execution_contract import (
     SUPPORTED_EXECUTION_RUNTIMES,
-    TaskContractError,
-    TaskProposalPolicy,
-    build_canonical_task_view,
+    WorkflowContractError,
+    WorkflowProposalPolicy,
+    build_canonical_workflow_view,
     build_effective_proposal_policy,
-    build_task_stage_plan,
+    build_workflow_stage_plan,
     is_self_managed_publish_skill,
 )
 from moonmind.agents.codex_worker.metrics import WorkerMetrics
@@ -102,7 +102,6 @@ _CONTAINER_RESERVED_ENV_KEYS = frozenset({"ARTIFACT_DIR", "JOB_ID", "REPOSITORY"
 _CONTAINER_VOLUME_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _CONTAINER_STOP_TIMEOUT_SECONDS = 30.0
 _FULL_UUID_PATTERN = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
-_UNHELPFUL_STEP_TITLE_PATTERN = re.compile(r"^\s*[\W_]*\d+(?:[\W_]+\d+)*[\W_]*\s*$")
 _SECRET_LIKE_METADATA_PATTERN = re.compile(
     r"""(?ix)
     (?:
@@ -225,6 +224,16 @@ def _canonical_execution_runtime(runtime_mode: str) -> str:
     """Map alias runtimes to their canonical executable form for dispatch."""
 
     return _RUNTIME_MODE_EXECUTION_ALIASES.get(runtime_mode, runtime_mode)
+
+def _canonical_workflow_node(canonical_payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    workflow_node = canonical_payload.get("workflow")
+    if isinstance(workflow_node, Mapping):
+        return workflow_node
+    task_node = canonical_payload.get("task")
+    if isinstance(task_node, Mapping):
+        return task_node
+    return {}
+
 _PROPOSAL_INSTRUCTIONS_PLACEHOLDER = "<OBJECTIVE>"
 _DEFAULT_PREPARE_GIT_USER_NAME = "MoonMind Worker"
 _DEFAULT_PREPARE_GIT_USER_EMAIL = "moonmind-worker@users.noreply.github.com"
@@ -428,17 +437,17 @@ def _ensure_task_request_repository(
     repository: str,
     proposals_path: Path,
 ) -> bool:
-    """Ensure taskCreateRequest exists and points to the repository."""
+    """Ensure workflowCreateRequest exists and points to the repository."""
 
-    request_node = payload.get("taskCreateRequest")
+    request_node = payload.get("workflowCreateRequest")
     if not isinstance(request_node, Mapping):
         logger.warning(
-            "Proposal entry in %s missing taskCreateRequest; skipping",
+            "Proposal entry in %s missing workflowCreateRequest; skipping",
             proposals_path,
         )
         return False
     request = copy.deepcopy(request_node)
-    payload["taskCreateRequest"] = request
+    payload["workflowCreateRequest"] = request
     request_payload = request.get("payload")
     payload_node = dict(request_payload) if isinstance(request_payload, Mapping) else {}
     payload_node["repository"] = repository
@@ -540,13 +549,7 @@ class CodexWorkerConfig:
     live_log_events_enabled: bool = True
     live_log_events_batch_bytes: int = 8192
     live_log_events_flush_interval_ms: int = 300
-    live_session_enabled_default: bool = True
-    live_session_provider: str = "none"
-    live_session_ttl_minutes: int = 60
-    live_session_rw_grant_ttl_minutes: int = 15
-    live_session_allow_web: bool = False
-    live_session_max_concurrent_per_worker: int = 4
-    enable_task_proposals: bool = False
+    enable_proposals: bool = False
     artifact_upload_incremental: bool = True
     step_log_max_bytes: int = _DEFAULT_STEP_LOG_MAX_BYTES
 
@@ -1012,99 +1015,17 @@ class CodexWorkerConfig:
         if live_log_events_flush_interval_ms < 10:
             raise ValueError("MOONMIND_LIVE_LOG_EVENTS_FLUSH_INTERVAL_MS must be >= 10")
 
-        live_session_enabled_raw = (
+        enable_proposals_raw = (
             str(
                 source.get(
-                    "MOONMIND_LIVE_SESSION_ENABLED_DEFAULT",
-                    str(settings.workflow.live_session_enabled_default),
+                    "MOONMIND_ENABLE_PROPOSALS",
+                    str(settings.workflow.enable_proposals),
                 )
             )
             .strip()
             .lower()
         )
-        live_session_enabled_default = live_session_enabled_raw not in {
-            "0",
-            "false",
-            "no",
-            "off",
-            "",
-        }
-        live_session_provider = (
-            str(
-                source.get(
-                    "MOONMIND_LIVE_SESSION_PROVIDER",
-                    settings.workflow.live_session_provider,
-                )
-            )
-            .strip()
-            .lower()
-            or "none"
-        )
-        if live_session_provider not in {"none"}:
-            raise ValueError("MOONMIND_LIVE_SESSION_PROVIDER must be one of: none")
-        live_session_ttl_minutes = int(
-            str(
-                source.get(
-                    "MOONMIND_LIVE_SESSION_TTL_MINUTES",
-                    str(settings.workflow.live_session_ttl_minutes),
-                )
-            ).strip()
-        )
-        if live_session_ttl_minutes < 1:
-            raise ValueError("MOONMIND_LIVE_SESSION_TTL_MINUTES must be >= 1")
-        live_session_rw_grant_ttl_minutes = int(
-            str(
-                source.get(
-                    "MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES",
-                    str(settings.workflow.live_session_rw_grant_ttl_minutes),
-                )
-            ).strip()
-        )
-        if live_session_rw_grant_ttl_minutes < 1:
-            raise ValueError("MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES must be >= 1")
-        live_session_allow_web_raw = (
-            str(
-                source.get(
-                    "MOONMIND_LIVE_SESSION_ALLOW_WEB",
-                    str(settings.workflow.live_session_allow_web),
-                )
-            )
-            .strip()
-            .lower()
-        )
-        live_session_allow_web = live_session_allow_web_raw not in {
-            "0",
-            "false",
-            "no",
-            "off",
-            "",
-        }
-        live_session_max_concurrent_per_worker = int(
-            str(
-                source.get(
-                    "MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER",
-                    str(settings.workflow.live_session_max_concurrent_per_worker),
-                )
-            ).strip()
-        )
-        if live_session_max_concurrent_per_worker < 1:
-            raise ValueError(
-                "MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER must be >= 1"
-            )
-        enable_task_proposals_raw = (
-            str(
-                source.get(
-                    "MOONMIND_ENABLE_TASK_PROPOSALS",
-                    source.get(
-                        "ENABLE_TASK_PROPOSALS",
-                        str(settings.workflow.enable_task_proposals),
-                    ),
-                )
-            )
-            .strip()
-            .lower()
-        )
-        enable_task_proposals = enable_task_proposals_raw not in {
+        enable_proposals = enable_proposals_raw not in {
             "0",
             "false",
             "no",
@@ -1196,13 +1117,7 @@ class CodexWorkerConfig:
             live_log_events_enabled=live_log_events_enabled,
             live_log_events_batch_bytes=live_log_events_batch_bytes,
             live_log_events_flush_interval_ms=live_log_events_flush_interval_ms,
-            live_session_enabled_default=live_session_enabled_default,
-            live_session_provider=live_session_provider,
-            live_session_ttl_minutes=live_session_ttl_minutes,
-            live_session_rw_grant_ttl_minutes=live_session_rw_grant_ttl_minutes,
-            live_session_allow_web=live_session_allow_web,
-            live_session_max_concurrent_per_worker=live_session_max_concurrent_per_worker,
-            enable_task_proposals=enable_task_proposals,
+            enable_proposals=enable_proposals,
             artifact_upload_incremental=artifact_upload_incremental,
             step_log_max_bytes=step_log_max_bytes,
         )
@@ -1346,17 +1261,6 @@ class JulesSoftwareRunState:
     jules_completed_at: str | None
     jules_error: str | None
     next_poll_monotonic: float
-
-@dataclass(frozen=True, slots=True)
-class LiveSessionHandle:
-    """Worker-owned live session context for active queue job execution."""
-
-    job_id: UUID
-    session_name: str
-    socket_path: Path
-    config_path: Path | None
-    log_path: Path
-    status: str
 
 @dataclass(frozen=True, slots=True)
 class TaskAuthContext:
@@ -1656,67 +1560,6 @@ class QueueApiClient:
             body["payload"] = payload
         await self._post_json(f"/api/queue/jobs/{job_id}/events", json=body)
 
-    async def report_live_session(
-        self,
-        *,
-        job_id: UUID,
-        worker_id: str,
-        status: str,
-        worker_hostname: str | None = None,
-        provider: str | None = None,
-        attach_ro: str | None = None,
-        attach_rw: str | None = None,
-        web_ro: str | None = None,
-        web_rw: str | None = None,
-        live_session_name: str | None = None,
-        live_session_socket_path: str | None = None,
-        expires_at: str | None = None,
-        error_message: str | None = None,
-    ) -> dict[str, Any]:
-        """Report live-session lifecycle updates for a task run."""
-
-        payload: dict[str, Any] = {
-            "workerId": worker_id,
-            "status": status,
-        }
-        if worker_hostname:
-            payload["workerHostname"] = worker_hostname
-        if provider:
-            payload["provider"] = provider
-        if attach_ro:
-            payload["attachRo"] = attach_ro
-        if attach_rw:
-            payload["attachRw"] = attach_rw
-        if web_ro:
-            payload["webRo"] = web_ro
-        if web_rw:
-            payload["webRw"] = web_rw
-        if live_session_name:
-            payload["liveSessionName"] = live_session_name
-        if live_session_socket_path:
-            payload["liveSessionSocketPath"] = live_session_socket_path
-        if expires_at:
-            payload["expiresAt"] = expires_at
-        if error_message:
-            payload["errorMessage"] = error_message
-        return await self._post_json(
-            f"/api/task-runs/{job_id}/live-session/report",
-            json=payload,
-        )
-
-    async def heartbeat_live_session(
-        self,
-        *,
-        job_id: UUID,
-        worker_id: str,
-    ) -> dict[str, Any]:
-        """Send live-session heartbeat updates."""
-
-        return await self._post_json(
-            f"/api/task-runs/{job_id}/live-session/heartbeat",
-            json={"workerId": worker_id},
-        )
-
     @staticmethod
     def _parse_system_metadata(node: Any) -> QueueSystemStatus:
         metadata = node if isinstance(node, Mapping) else {}
@@ -1769,19 +1612,6 @@ class QueueApiClient:
                 f"invalid queue field '{field_name}': expected positive int, got {raw_value!r}"
             )
         return parsed
-
-    async def get_live_session(self, *, job_id: UUID) -> dict[str, Any] | None:
-        """Fetch current live-session payload; return ``None`` when no session exists."""
-
-        try:
-            path = f"/api/task-runs/{job_id}/live-session/worker"
-            response = await self._client.get(path, headers=self._request_headers)
-            if response.status_code == 404:
-                return None
-            response.raise_for_status()
-            return dict(response.json()) if response.content else {}
-        except httpx.HTTPError as exc:
-            raise QueueClientError(f"queue API request failed: {path}: {exc}") from exc
 
     async def upload_artifact(
         self,
@@ -1843,8 +1673,8 @@ class QueueApiClient:
         except httpx.HTTPError as exc:
             raise QueueClientError(f"queue API request failed: {path}: {exc}") from exc
 
-    async def create_task_proposal(self, *, proposal: dict[str, Any]) -> dict[str, Any]:
-        """Submit a task proposal to the MoonMind API."""
+    async def create_workflow_proposal(self, *, proposal: dict[str, Any]) -> dict[str, Any]:
+        """Submit a workflow proposal to the MoonMind API."""
 
         return await self._post_json("/api/proposals", json=proposal)
 
@@ -1894,8 +1724,6 @@ class CodexWorker:
         self._dynamic_redaction_values: set[str] = set()
         self._active_cancel_event: asyncio.Event | None = None
         self._active_pause_event: asyncio.Event | None = None
-        self._active_live_session: LiveSessionHandle | None = None
-        self._live_session_start_lock = asyncio.Lock()
         self._jules_inflight_runs: dict[UUID, JulesSoftwareRunState] = {}
         self._vault_secret_resolver: VaultSecretResolver | None = None
         if self._config.vault_address and self._config.vault_token:
@@ -1945,7 +1773,7 @@ class CodexWorker:
     ) -> tuple[Mapping[str, Any], str] | None:
         """Validate and normalize one claimed task-like queue job."""
 
-        supported_types = {CANONICAL_TASK_JOB_TYPE, *LEGACY_TASK_JOB_TYPES}
+        supported_types = {CANONICAL_WORKFLOW_JOB_TYPE, *LEGACY_WORKFLOW_JOB_TYPES}
         if job.type not in supported_types:
             await self._emit_event(
                 job_id=job.id,
@@ -1962,7 +1790,7 @@ class CodexWorker:
             return None
         if (
             not self._config.legacy_job_types_enabled
-            and job.type in LEGACY_TASK_JOB_TYPES
+            and job.type in LEGACY_WORKFLOW_JOB_TYPES
         ):
             await self._emit_event(
                 job_id=job.id,
@@ -1979,11 +1807,11 @@ class CodexWorker:
             return None
 
         try:
-            canonical_payload = build_canonical_task_view(
+            canonical_payload = build_canonical_workflow_view(
                 job_type=job.type,
                 payload=job.payload,
             )
-        except TaskContractError as exc:
+        except WorkflowContractError as exc:
             await self._emit_event(
                 job_id=job.id,
                 level="error",
@@ -2005,7 +1833,7 @@ class CodexWorker:
             await self._emit_event(
                 job_id=job.id,
                 level="error",
-                message="Task runtime is not recognized by worker",
+                message="Agent runtime is not recognized by worker",
                 payload={
                     "jobType": job.type,
                     "targetRuntime": runtime_mode,
@@ -2014,7 +1842,7 @@ class CodexWorker:
             await self._queue_client.fail_job(
                 job_id=job.id,
                 worker_id=self._config.worker_id,
-                error_message=f"unsupported task runtime: {runtime_mode}",
+                error_message=f"unsupported agent runtime: {runtime_mode}",
                 retryable=False,
             )
             return None
@@ -2028,7 +1856,7 @@ class CodexWorker:
             await self._emit_event(
                 job_id=job.id,
                 level="error",
-                message="Task runtime is not executable by this worker runtime mode",
+                message="Agent runtime is not executable by this worker runtime mode",
                 payload={
                     "jobType": job.type,
                     "targetRuntime": runtime_mode,
@@ -2039,7 +1867,7 @@ class CodexWorker:
                 job_id=job.id,
                 worker_id=self._config.worker_id,
                 error_message=(
-                    "unsupported task runtime for worker "
+                    "unsupported agent runtime for worker "
                     f"({self._config.worker_runtime}): {runtime_mode}"
                 ),
                 retryable=False,
@@ -2090,9 +1918,9 @@ class CodexWorker:
 
         resolved_steps = self._resolve_task_steps(canonical_payload)
         skill_meta = self._execution_metadata(canonical_payload, resolved_steps)
-        task_proposals_requested = self._task_proposals_requested(canonical_payload)
+        workflow_proposals_requested = self._workflow_proposals_requested(canonical_payload)
         proposal_workflow_enabled = (
-            self._config.enable_task_proposals and task_proposals_requested
+            self._config.enable_proposals and workflow_proposals_requested
         )
         await self._emit_event(
             job_id=job.id,
@@ -2140,17 +1968,12 @@ class CodexWorker:
         pause_requested_event = asyncio.Event()
         self._active_cancel_event = cancel_requested_event
         self._active_pause_event = pause_requested_event
-        self._active_live_session = None
-        live_session_cwd = self._config.workdir / str(job.id)
-        live_session_log_path = live_session_cwd / "artifacts" / "logs" / "prepare.log"
         heartbeat_task = asyncio.create_task(
             self._heartbeat_loop(
                 job_id=job.id,
                 stop_event=heartbeat_stop,
                 cancel_event=cancel_requested_event,
                 pause_event=pause_requested_event,
-                live_session_bootstrap_cwd=live_session_cwd,
-                live_session_bootstrap_log_path=live_session_log_path,
             )
         )
 
@@ -2202,8 +2025,7 @@ class CodexWorker:
             submitted_count=0,
             errors=[],
         )
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         publish_node = task.get("publish")
         publish = publish_node if isinstance(publish_node, Mapping) else {}
         publish_mode = str(publish.get("mode") or "pr").strip().lower() or "pr"
@@ -2425,7 +2247,7 @@ class CodexWorker:
             )
 
         try:
-            stage_plan = build_task_stage_plan(canonical_payload)
+            stage_plan = build_workflow_stage_plan(canonical_payload)
             await self._emit_event(
                 job_id=job.id,
                 level="info",
@@ -2675,7 +2497,7 @@ class CodexWorker:
                     cancel_event=cancel_requested_event,
                 )
                 try:
-                    proposal_artifacts = await self._run_post_task_proposal_skills(
+                    proposal_artifacts = await self._run_post_workflow_proposal_skills(
                         job=job,
                         canonical_payload=canonical_payload,
                         source_payload=job.payload,
@@ -2689,7 +2511,7 @@ class CodexWorker:
                     raise
                 except Exception:
                     logger.exception(
-                        "Post-task proposal skill execution failed for job %s", job.id
+                        "Post-workflow proposal skill execution failed for job %s", job.id
                     )
                     proposal_errors.append("proposal skill execution failed")
                     proposal_artifacts = []
@@ -2700,7 +2522,7 @@ class CodexWorker:
                     cancel_event=cancel_requested_event
                 )
                 try:
-                    submission_report = await self._maybe_submit_task_proposals(
+                    submission_report = await self._maybe_submit_workflow_proposals(
                         job=job,
                         prepared=prepared,
                         requested=True,
@@ -2718,7 +2540,7 @@ class CodexWorker:
                     raise
                 except Exception:
                     logger.exception(
-                        "Failed submitting post-task proposals for job %s", job.id
+                        "Failed submitting post-workflow proposals for job %s", job.id
                     )
                     proposal_errors.append("proposal submission failed")
                     proposal_report = ProposalSubmissionReport(
@@ -2809,7 +2631,6 @@ class CodexWorker:
             heartbeat_task.cancel()
             with suppress(asyncio.CancelledError):
                 _ = await heartbeat_task
-            await self._teardown_live_session(job_id=job.id)
 
         return "claimed"
 
@@ -2848,8 +2669,7 @@ class CodexWorker:
                 step=resolved_steps[0],
                 total_steps=1,
             )
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         objective = str(task.get("instructions") or "").strip() or "(missing objective)"
         step_lines: list[str] = []
         for step in resolved_steps:
@@ -3180,7 +3000,7 @@ class CodexWorker:
             message="Worker claimed job",
             payload={"jobType": job.type, "targetRuntime": runtime_mode, **skill_meta},
         )
-        stage_plan = build_task_stage_plan(canonical_payload)
+        stage_plan = build_workflow_stage_plan(canonical_payload)
         await self._emit_event(
             job_id=job.id,
             level="info",
@@ -3188,8 +3008,7 @@ class CodexWorker:
             payload={"jobType": job.type, "stages": stage_plan, **skill_meta},
         )
 
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         publish_node = task.get("publish")
         publish = publish_node if isinstance(publish_node, Mapping) else {}
         publish_mode = str(publish.get("mode") or "none").strip().lower() or "none"
@@ -4032,8 +3851,7 @@ class CodexWorker:
     ) -> list[ResolvedTaskStep]:
         """Resolve canonical payload into ordered runtime step metadata."""
 
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         task_skill_node = task.get("skill")
         task_skill = task_skill_node if isinstance(task_skill_node, Mapping) else {}
         task_skill_id = str(task_skill.get("id") or "auto").strip() or "auto"
@@ -4169,10 +3987,8 @@ class CodexWorker:
     ) -> dict[str, Any]:
         """Return normalized skill execution metadata for job events."""
 
-        task_node = canonical_payload.get("task")
-        runtime_node = (
-            task_node.get("runtime") if isinstance(task_node, Mapping) else None
-        )
+        task = _canonical_workflow_node(canonical_payload)
+        runtime_node = task.get("runtime")
         if isinstance(runtime_node, Mapping):
             selected_model = str(runtime_node.get("model") or "").strip() or None
             selected_effort = str(runtime_node.get("effort") or "").strip() or None
@@ -4262,11 +4078,10 @@ class CodexWorker:
             return False
         return default
 
-    def _task_proposals_requested(self, canonical_payload: Mapping[str, Any]) -> bool:
+    def _workflow_proposals_requested(self, canonical_payload: Mapping[str, Any]) -> bool:
         """Return whether post-run proposal generation is requested for this task."""
 
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         requested_value = task.get("proposeTasks")
         return self._coerce_bool(requested_value, default=False)
 
@@ -4289,8 +4104,7 @@ class CodexWorker:
         workdir_mode_override: str | None = None,
         include_ref: bool = True,
     ) -> dict[str, Any]:
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         runtime_node = task.get("runtime")
         runtime = runtime_node if isinstance(runtime_node, Mapping) else {}
         git_node = task.get("git")
@@ -4385,11 +4199,6 @@ class CodexWorker:
             logs_dir.mkdir(parents=True, exist_ok=True)
             home_dir.mkdir(parents=True, exist_ok=True)
             skills_active_path.mkdir(parents=True, exist_ok=True)
-            await self._ensure_live_session_started(
-                job_id=job_id,
-                log_path=prepare_log_path,
-                cwd=job_root,
-            )
 
             deduped_selected_skills = tuple(
                 dict.fromkeys(
@@ -4430,8 +4239,7 @@ class CodexWorker:
                     )
 
             workdir_mode = self._safe_workdir_mode(source_payload)
-            task_node = canonical_payload.get("task")
-            task = task_node if isinstance(task_node, Mapping) else {}
+            task = _canonical_workflow_node(canonical_payload)
             runtime_node = task.get("runtime")
             runtime = runtime_node if isinstance(runtime_node, Mapping) else {}
             git_node = task.get("git")
@@ -4828,8 +4636,7 @@ class CodexWorker:
     def _collect_input_attachment_targets(
         cls, canonical_payload: Mapping[str, Any]
     ) -> list[InputAttachmentMaterializationTarget]:
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         targets: list[InputAttachmentMaterializationTarget] = []
         objective_refs = task.get("inputAttachments")
         if objective_refs is not None:
@@ -5144,8 +4951,7 @@ class CodexWorker:
     ) -> str | None:
         """Extract first non-empty instruction sentence/line."""
 
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         task_instructions = str(task.get("instructions") or "")
         for line in task_instructions.splitlines():
             line = line.strip()
@@ -5164,7 +4970,17 @@ class CodexWorker:
 
         if not candidate:
             return False
-        if _UNHELPFUL_STEP_TITLE_PATTERN.fullmatch(candidate):
+        stripped = candidate.strip()
+        if not stripped:
+            return False
+        has_digit = False
+        for char in stripped:
+            if char.isalnum():
+                if char.isdigit():
+                    has_digit = True
+                    continue
+                return True
+        if has_digit:
             return False
         return True
 
@@ -5185,8 +5001,7 @@ class CodexWorker:
     ) -> str | None:
         """Return the canonical Jira issue key attached to a task-shaped payload."""
 
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         candidates = (
             task.get("jiraIssueKey"),
             task.get("jira_issue_key"),
@@ -5211,8 +5026,7 @@ class CodexWorker:
     ) -> str | None:
         """Return the active MoonSpec path when task payload metadata provides it."""
 
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         for candidate in (
             task.get("moonSpecPath"),
             task.get("moonspecPath"),
@@ -5399,8 +5213,7 @@ class CodexWorker:
 
     @staticmethod
     def _resolve_publish_runtime_mode(canonical_payload: Mapping[str, Any]) -> str:
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         runtime_node = task.get("runtime")
         runtime = runtime_node if isinstance(runtime_node, Mapping) else {}
         runtime_mode = (
@@ -6069,8 +5882,7 @@ class CodexWorker:
     ) -> str | None:
         """Publish repository changes according to task publish policy."""
 
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         publish_node = task.get("publish")
         publish = publish_node if isinstance(publish_node, Mapping) else {}
         publish_mode = str(publish.get("mode") or "pr").strip().lower() or "pr"
@@ -7691,8 +7503,7 @@ class CodexWorker:
     ) -> StepGateResult:
         """Fail resolve-PR runs when final PR state remains unresolved."""
 
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         objective = str(task.get("instructions") or "").strip()
         is_pr_resolution_task = _is_resolve_pr_objective_text(objective) or any(
             step.effective_skill_id == _PR_RESOLVER_SKILL_ID for step in resolved_steps
@@ -8642,47 +8453,6 @@ class CodexWorker:
         cache_root.mkdir(parents=True, exist_ok=True)
         return cache_root
 
-    async def _ensure_live_session_started(
-        self,
-        *,
-        job_id: UUID,
-        log_path: Path,
-        cwd: Path,
-    ) -> None:
-        """External live-session transport was removed; ``none`` provider is a no-op."""
-
-        async with self._live_session_start_lock:
-            if self._active_live_session is not None:
-                return
-            if self._config.live_session_provider != "none":
-                return
-            if not await self._should_bootstrap_live_session(job_id=job_id):
-                return
-            return
-
-    async def _teardown_live_session(self, *, job_id: UUID) -> None:
-        """Clear worker live-session state."""
-
-        live = self._active_live_session
-        self._active_live_session = None
-        if live is None:
-            return
-        with suppress(Exception):
-            live.socket_path.unlink(missing_ok=True)
-        if live.config_path is not None:
-            with suppress(Exception):
-                live.config_path.unlink(missing_ok=True)
-        with suppress(Exception):
-            await self._queue_client.report_live_session(
-                job_id=job_id,
-                worker_id=self._config.worker_id,
-                worker_hostname=socket.gethostname(),
-                status="ended",
-                provider="none",
-                live_session_name=live.session_name,
-                live_session_socket_path=str(live.socket_path),
-            )
-
     @staticmethod
     def _extract_pr_url(stdout: str) -> str | None:
         for line in stdout.splitlines():
@@ -8705,8 +8475,7 @@ class CodexWorker:
         workdir_mode_override: str | None = None,
         include_ref: bool = True,
     ) -> dict[str, Any]:
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         runtime_node = task.get("runtime")
         runtime = runtime_node if isinstance(runtime_node, Mapping) else {}
         git_node = task.get("git")
@@ -8785,10 +8554,9 @@ class CodexWorker:
     def _build_proposal_task_request_template(
         self, canonical_payload: Mapping[str, Any]
     ) -> dict[str, Any]:
-        """Build a safe default taskCreateRequest template for proposal skills."""
+        """Build a safe default workflowCreateRequest template for proposal skills."""
 
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         runtime_node = task.get("runtime")
         runtime = runtime_node if isinstance(runtime_node, Mapping) else {}
         git_node = task.get("git")
@@ -8803,7 +8571,7 @@ class CodexWorker:
             "maxAttempts": 3,
             "payload": {
                 "repository": str(canonical_payload.get("repository") or "").strip(),
-                "task": {
+                "workflow": {
                     "instructions": _PROPOSAL_INSTRUCTIONS_PLACEHOLDER,
                     "skill": {"id": "auto", "args": {}},
                     "runtime": {
@@ -8823,7 +8591,7 @@ class CodexWorker:
             },
         }
 
-    def _compose_post_task_proposal_instruction(
+    def _compose_post_workflow_proposal_instruction(
         self,
         *,
         canonical_payload: Mapping[str, Any],
@@ -8835,8 +8603,7 @@ class CodexWorker:
     ) -> str:
         """Build runtime instruction for post-run proposal generation hooks."""
 
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         objective = str(task.get("instructions") or "").strip() or "(missing objective)"
         status_text = "completed" if task_result.succeeded else "failed"
         request_template = json.dumps(
@@ -8890,18 +8657,18 @@ class CodexWorker:
             f"- Write a JSON array to {proposal_output_path}.\n"
             "- If the file already exists, read and append; keep it valid JSON.\n"
             "- Keep total proposals concise (max 3).\n"
-            "- Each entry must include: title, summary, taskCreateRequest.\n"
+            "- Each entry must include: title, summary, workflowCreateRequest.\n"
             "- For MoonMind run-quality proposals, include category=run_quality, at least one tag from "
             "{retry, duplicate_output, missing_ref, conflicting_instructions, flaky_test, loop_detected, artifact_gap}, "
             "and signal.severity in {low, medium, high, critical}.\n"
             "- If no strong proposal is warranted, keep existing proposals unchanged.\n\n"
-            "taskCreateRequest template (copy this and edit values):\n"
+            "workflowCreateRequest template (copy this and edit values):\n"
             "```json\n"
             f"{request_template}\n"
             "```\n"
         )
 
-    def _ensure_post_task_proposal_skills_materialized(
+    def _ensure_post_workflow_proposal_skills_materialized(
         self,
         *,
         job_id: UUID,
@@ -8940,7 +8707,7 @@ class CodexWorker:
             return False
         return True
 
-    def _normalize_post_task_proposal_artifacts(
+    def _normalize_post_workflow_proposal_artifacts(
         self,
         *,
         prepared: PreparedTaskWorkspace,
@@ -9062,15 +8829,15 @@ class CodexWorker:
         request = self._build_proposal_task_request_template(canonical_payload)
         request_payload = request.get("payload")
         payload = request_payload if isinstance(request_payload, dict) else {}
-        task_node = payload.get("task")
-        task = task_node if isinstance(task_node, dict) else {}
-        task["instructions"] = instructions
-        publish_node = task.get("publish")
+        workflow_node = payload.get("workflow")
+        workflow_payload = workflow_node if isinstance(workflow_node, dict) else {}
+        workflow_payload["instructions"] = instructions
+        publish_node = workflow_payload.get("publish")
         publish = publish_node if isinstance(publish_node, dict) else {}
         publish["commitMessage"] = commit_message
         publish["prTitle"] = pr_title
-        task["publish"] = publish
-        payload["task"] = task
+        workflow_payload["publish"] = publish
+        payload["workflow"] = workflow_payload
         request["payload"] = payload
 
         return [
@@ -9090,12 +8857,12 @@ class CodexWorker:
                     "jobMaxAttempts": job.max_attempts,
                     "reasonCode": reason.get("code"),
                 },
-                "taskCreateRequest": request,
+                "workflowCreateRequest": request,
             }
         ]
 
     @staticmethod
-    def _write_task_proposal_seed(
+    def _write_workflow_proposal_seed(
         *,
         proposals_path: Path,
         candidates: Sequence[Mapping[str, Any]],
@@ -9117,21 +8884,21 @@ class CodexWorker:
 
         if not candidates:
             return []
-        proposal_output_path = prepared.artifacts_dir / "task_proposals.json"
-        self._write_task_proposal_seed(
+        proposal_output_path = prepared.artifacts_dir / "workflow_proposals.json"
+        self._write_workflow_proposal_seed(
             proposals_path=proposal_output_path,
             candidates=candidates,
         )
         return [
             ArtifactUpload(
                 path=proposal_output_path,
-                name="task_proposals.json",
+                name="workflow_proposals.json",
                 content_type="application/json",
                 required=False,
             )
         ]
 
-    async def _run_post_task_proposal_skills(
+    async def _run_post_workflow_proposal_skills(
         self,
         *,
         job: ClaimedJob,
@@ -9175,7 +8942,7 @@ class CodexWorker:
                 prepared=prepared,
                 candidates=deterministic_candidates,
             )
-        if not self._ensure_post_task_proposal_skills_materialized(
+        if not self._ensure_post_workflow_proposal_skills_materialized(
             job_id=job.id,
             prepared=prepared,
             selected_skills=selected_skills,
@@ -9192,15 +8959,15 @@ class CodexWorker:
                 candidates=deterministic_candidates,
             )
 
-        proposal_output_path = prepared.artifacts_dir / "task_proposals.json"
-        self._write_task_proposal_seed(
+        proposal_output_path = prepared.artifacts_dir / "workflow_proposals.json"
+        self._write_workflow_proposal_seed(
             proposals_path=proposal_output_path,
             candidates=deterministic_candidates,
         )
         proposal_output_path_for_skill = (
-            prepared.repo_dir / ".artifacts" / f"moonmind_task_proposals_{job.id}.json"
+            prepared.repo_dir / ".artifacts" / f"moonmind_workflow_proposals_{job.id}.json"
         )
-        self._write_task_proposal_seed(
+        self._write_workflow_proposal_seed(
             proposals_path=proposal_output_path_for_skill,
             candidates=deterministic_candidates,
         )
@@ -9243,7 +9010,7 @@ class CodexWorker:
                     step_id=skill_id,
                     step_index=skill_index,
                 )
-                instruction = self._compose_post_task_proposal_instruction(
+                instruction = self._compose_post_workflow_proposal_instruction(
                     canonical_payload=canonical_payload,
                     task_result=task_result,
                     skill_id=skill_id,
@@ -9333,14 +9100,14 @@ class CodexWorker:
                     payload={"skillId": skill_id},
                 )
                 logger.exception(
-                    "Post-task proposal skill failed for job %s skill=%s",
+                    "Post-workflow proposal skill failed for job %s skill=%s",
                     job.id,
                     skill_id,
                 )
                 continue
 
             collected.extend(
-                self._normalize_post_task_proposal_artifacts(
+                self._normalize_post_workflow_proposal_artifacts(
                     prepared=prepared,
                     skill_id=skill_id,
                 )
@@ -9413,7 +9180,7 @@ class CodexWorker:
             collected.append(
                 ArtifactUpload(
                     path=proposal_output_path,
-                    name="task_proposals.json",
+                    name="workflow_proposals.json",
                     content_type="application/json",
                     required=False,
                 )
@@ -9452,7 +9219,7 @@ class CodexWorker:
             "invalid",
             "required",
             "must be",
-            "unsupported task runtime",
+            "unsupported agent runtime",
             "payload",
         )
         deterministic_policy_markers = (
@@ -10308,8 +10075,7 @@ class CodexWorker:
     ) -> WorkerExecutionResult:
         """Execute resolved task steps via selected runtime adapter."""
 
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         explicit_steps = isinstance(task.get("steps"), list) and bool(task.get("steps"))
         container_spec = self._extract_container_task_spec(canonical_payload)
         if container_spec is not None:
@@ -10696,8 +10462,7 @@ class CodexWorker:
     def _extract_container_task_spec(
         self, canonical_payload: Mapping[str, Any]
     ) -> ContainerTaskSpec | None:
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         container_node = task.get("container")
         container = container_node if isinstance(container_node, Mapping) else {}
         if not bool(container.get("enabled")):
@@ -10893,7 +10658,7 @@ class CodexWorker:
             "--label",
             f"moonmind.repository={repository}",
             "--label",
-            "moonmind.runtime=container",
+            "MoonMind.UserWorkflowtime=container",
         ]
 
         if self._config.container_workspace_volume:
@@ -11343,8 +11108,7 @@ class CodexWorker:
         total_steps: int,
         prepared: PreparedTaskWorkspace | None = None,
     ) -> str:
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         publish_node = task.get("publish")
         publish = publish_node if isinstance(publish_node, Mapping) else {}
         publish_mode = str(publish.get("mode") or "pr").strip().lower() or "pr"
@@ -11862,8 +11626,7 @@ class CodexWorker:
         canonical_payload: Mapping[str, Any],
         runtime_mode: str,
     ) -> tuple[str | None, str | None]:
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         runtime_node = task.get("runtime")
         runtime = runtime_node if isinstance(runtime_node, Mapping) else {}
         model_override = str(runtime.get("model") or "").strip() or None
@@ -12107,8 +11870,6 @@ class CodexWorker:
         stop_event: asyncio.Event,
         cancel_event: asyncio.Event,
         pause_event: asyncio.Event | None = None,
-        live_session_bootstrap_cwd: Path | None = None,
-        live_session_bootstrap_log_path: Path | None = None,
     ) -> None:
         """Send lease renewals while a job is actively executing."""
 
@@ -12148,46 +11909,9 @@ class CodexWorker:
                     effective_pause_event.set()
                 else:
                     effective_pause_event.clear()
-                if (
-                    self._active_live_session is None
-                    and not self._config.live_session_enabled_default
-                    and live_session_bootstrap_cwd is not None
-                    and live_session_bootstrap_log_path is not None
-                ):
-                    with suppress(Exception):
-                        await self._ensure_live_session_started(
-                            job_id=job_id,
-                            cwd=live_session_bootstrap_cwd,
-                            log_path=live_session_bootstrap_log_path,
-                        )
-                if self._active_live_session is not None:
-                    with suppress(Exception):
-                        await self._queue_client.heartbeat_live_session(
-                            job_id=job_id,
-                            worker_id=self._config.worker_id,
-                        )
             except Exception:
                 # Heartbeat errors are tolerated so terminal transition can still run.
                 continue
-
-    async def _should_bootstrap_live_session(self, *, job_id: UUID) -> bool:
-        """Return whether this run should start a live session for current config/state."""
-
-        if self._config.live_session_enabled_default:
-            return True
-        payload = await self._queue_client.get_live_session(job_id=job_id)
-        if not isinstance(payload, Mapping):
-            return False
-        session_node = payload.get("session")
-        if not isinstance(session_node, Mapping):
-            return False
-        status = str(session_node.get("status") or "").strip().lower()
-        if status not in {"starting", "ready"}:
-            return False
-        worker_id = str(session_node.get("workerId") or "").strip()
-        if worker_id and worker_id != self._config.worker_id:
-            return False
-        return True
 
     async def _run_command_without_logging(
         self,
@@ -12256,7 +11980,7 @@ class CodexWorker:
                 )
         return optional_failures
 
-    async def _maybe_submit_task_proposals(
+    async def _maybe_submit_workflow_proposals(
         self,
         *,
         job: ClaimedJob,
@@ -12271,11 +11995,11 @@ class CodexWorker:
         errors: list[str] = []
         generated_count = 0
         task_context_path = prepared.task_context_path
-        proposals_paths = [task_context_path / "task_proposals.json"]
+        proposals_paths = [task_context_path / "workflow_proposals.json"]
         if task_context_path.suffix == ".json":
             proposals_paths.insert(
                 0,
-                task_context_path.with_name("task_proposals.json"),
+                task_context_path.with_name("workflow_proposals.json"),
             )
         proposals_path = next(
             (path for path in proposals_paths if path.exists()),
@@ -12283,7 +12007,7 @@ class CodexWorker:
         )
         if proposals_path is None:
             logger.debug(
-                "No task proposal artifact found for job %s; searched %s",
+                "No workflow proposal artifact found for job %s; searched %s",
                 job.id,
                 ", ".join(str(path) for path in proposals_paths),
             )
@@ -12299,10 +12023,10 @@ class CodexWorker:
             parsed = json.loads(raw_text)
         except Exception:
             logger.warning(
-                "Task proposal file %s is missing or invalid JSON; skipping",
+                "Workflow proposal file %s is missing or invalid JSON; skipping",
                 proposals_path,
             )
-            errors.append("task_proposals.json is invalid")
+            errors.append("workflow_proposals.json is invalid")
             return ProposalSubmissionReport(
                 requested=requested,
                 hook_skills=resolved_hook_skills,
@@ -12318,7 +12042,7 @@ class CodexWorker:
         project_repository = str(canonical_payload.get("repository") or "").strip()
         if not project_repository:
             logger.warning(
-                "Skipping task proposal submission for job %s: canonical repository missing",
+                "Skipping workflow proposal submission for job %s: canonical repository missing",
                 job.id,
             )
             errors.append("canonical repository missing")
@@ -12330,14 +12054,12 @@ class CodexWorker:
                 errors=errors,
             )
 
-        task_node = canonical_payload.get("task")
-        policy_node = (
-            task_node.get("proposalPolicy") if isinstance(task_node, Mapping) else None
-        )
-        task_policy: TaskProposalPolicy | None = None
+        task = _canonical_workflow_node(canonical_payload)
+        policy_node = task.get("proposalPolicy")
+        task_policy: WorkflowProposalPolicy | None = None
         if isinstance(policy_node, Mapping):
             try:
-                task_policy = TaskProposalPolicy.model_validate(dict(policy_node))
+                task_policy = WorkflowProposalPolicy.model_validate(dict(policy_node))
             except ValidationError:
                 logger.warning(
                     "Invalid proposalPolicy override for job %s; using defaults",
@@ -12351,7 +12073,7 @@ class CodexWorker:
             default_max_items_project=defaults.proposal_max_items_project,
             default_max_items_moonmind=defaults.proposal_max_items_moonmind,
             default_moonmind_severity_floor=defaults.proposal_moonmind_severity_floor,
-            severity_vocabulary=settings.task_proposals.severity_vocabulary,
+            severity_vocabulary=settings.workflow_proposals.severity_vocabulary,
         )
         approved_ci_tags = _MOONMIND_SIGNAL_TAGS
 
@@ -12401,12 +12123,12 @@ class CodexWorker:
                 errors.append("proposal missing title")
                 continue
 
-            if not isinstance(payload.get("taskCreateRequest"), Mapping):
+            if not isinstance(payload.get("workflowCreateRequest"), Mapping):
                 logger.warning(
-                    "Proposal entry in %s missing taskCreateRequest; skipping",
+                    "Proposal entry in %s missing workflowCreateRequest; skipping",
                     proposals_path,
                 )
-                errors.append("proposal missing taskCreateRequest")
+                errors.append("proposal missing workflowCreateRequest")
                 continue
 
             if effective_policy.has_project_capacity():
@@ -12417,7 +12139,7 @@ class CodexWorker:
                     proposals_path=proposals_path,
                 ):
                     try:
-                        response = await self._queue_client.create_task_proposal(
+                        response = await self._queue_client.create_workflow_proposal(
                             proposal=project_payload
                         )
                         outcome = self._proposal_submission_outcome(response)
@@ -12480,11 +12202,11 @@ class CodexWorker:
                 )
                 if _ensure_task_request_repository(
                     moonmind_payload,
-                    repository=settings.task_proposals.moonmind_ci_repository,
+                    repository=settings.workflow_proposals.moonmind_ci_repository,
                     proposals_path=proposals_path,
                 ):
                     try:
-                        response = await self._queue_client.create_task_proposal(
+                        response = await self._queue_client.create_workflow_proposal(
                             proposal=moonmind_payload
                         )
                         outcome = self._proposal_submission_outcome(response)
@@ -12515,7 +12237,7 @@ class CodexWorker:
                         )
         if submitted:
             logger.info(
-                "Submitted %s task proposal(s) for job %s from %s",
+                "Submitted %s workflow proposal(s) for job %s from %s",
                 submitted,
                 job.id,
                 proposals_path,

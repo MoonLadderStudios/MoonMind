@@ -10,7 +10,7 @@ This document defines the current MoonMind step-execution model at the Workflow 
 
 It is intentionally Workflow-oriented and high level. The detailed owned contracts live elsewhere:
 
-- `docs/Tasks/SkillAndPlanContracts.md` owns executable plan structure
+- `docs/Workflows/SkillAndPlanContracts.md` owns executable plan structure
 - `docs/Temporal/StepLedgerAndProgressModel.md` owns the operator-facing step ledger, status vocabulary, attempts, checks, and refs
 - `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` owns `MoonMind.AgentRun` lifecycle and observability boundaries
 
@@ -20,7 +20,7 @@ MoonMind no longer models steps as a raw `task.steps` loop inside an `AgentTaskW
 
 The current architecture is:
 
-- `MoonMind.Run` is the root Workflow Execution
+- `MoonMind.UserWorkflow` is the root Workflow Execution
 - the canonical planned step list comes from the resolved **plan artifact**
 - direct executable steps run as activities
 - true agent-runtime steps run as child `MoonMind.AgentRun` workflows
@@ -42,7 +42,7 @@ The plan artifact is the canonical source once planning completes.
 
 ### 3.2 Live step state
 
-`MoonMind.Run` maintains a compact live step ledger for the current/latest run.
+`MoonMind.UserWorkflow` maintains a compact live step ledger for the current/latest run.
 
 That ledger tracks:
 
@@ -66,7 +66,7 @@ Large per-step outputs stay outside workflow state:
 - large result bodies
 - detailed review payloads
 
-Those belong in artifacts and `/api/task-runs/*`.
+Those belong in artifacts and `/api/agent-runs/*`.
 
 ## 4. Retry and resilience
 
@@ -86,7 +86,7 @@ Instead:
 - Workflow detail shows a first-class **Steps** section
 - each step row shows exact status, summary, attempt count, blockers, and evidence links
 - expanded rows group **Summary**, **Checks**, **Logs & Diagnostics**, **Artifacts**, and **Metadata**
-- agent-runtime step rows deep-link or embed `/api/task-runs/*` when `taskRunId` is present
+- agent-runtime step rows deep-link or embed `/api/agent-runs/*` when `agentRunId` is present
 
 ## 6. What this document supersedes
 
@@ -98,7 +98,7 @@ The following older ideas are no longer canonical:
 
 The authoritative replacement is:
 
-- `MoonMind.Run` + `MoonMind.AgentRun`
+- `MoonMind.UserWorkflow` + `MoonMind.AgentRun`
 - plan artifact for planned structure
 - workflow-owned step ledger for live state
 - artifact-first and managed-run observability for durable evidence

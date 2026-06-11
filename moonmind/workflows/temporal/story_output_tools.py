@@ -884,8 +884,8 @@ def _workflow_marker_label(
             "run_id",
             "executionId",
             "execution_id",
-            "taskRunId",
-            "task_run_id",
+            "agentRunId",
+            "agent_run_id",
         ):
             value = _string(source.get(key))
             if value:
@@ -1171,7 +1171,7 @@ async def _create_jira_downstream_tasks_from_issue_mappings(
         )
         try:
             created = execution_creator(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=owner_id,
                 owner_type=owner_type,
                 title=title,
@@ -1180,11 +1180,11 @@ async def _create_jira_downstream_tasks_from_issue_mappings(
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={
-                    "requestType": "task",
+                    "requestType": "workflow",
                     "repository": repository or None,
                     "targetRuntime": _string(_mapping(task.get("runtime")).get("mode")) or None,
                     "publishMode": _string(_mapping(task.get("publish")).get("mode")) or None,
-                    "task": task,
+                    "workflow": task,
                     "traceability": {
                         "sourceIssueKey": source_issue_key,
                         "sourceBriefRef": source_brief_ref,
@@ -2630,7 +2630,7 @@ async def create_document_update_tasks_from_paths(
         )
         try:
             created = execution_creator(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=owner_id,
                 owner_type=owner_type,
                 title=title,
@@ -2639,11 +2639,11 @@ async def create_document_update_tasks_from_paths(
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={
-                    "requestType": "task",
+                    "requestType": "workflow",
                     "repository": repository or None,
                     "targetRuntime": _string(_mapping(task.get("runtime")).get("mode")) or None,
                     "publishMode": _string(_mapping(task.get("publish")).get("mode")) or None,
-                    "task": task,
+                    "workflow": task,
                     "traceability": {
                         "sourceDirectory": source_directory,
                     },

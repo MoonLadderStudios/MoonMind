@@ -1540,21 +1540,21 @@ async def test_create_jira_orchestrate_tasks_wires_ordered_dependencies_and_trac
     assert orchestration["tasks"][2]["dependsOn"] == ["mm:story-2"]
     assert orchestration["traceability"]["sourceIssueKey"] == "MM-404"
 
-    assert creator.requests[0]["initial_parameters"]["task"].get("dependsOn") is None
-    assert creator.requests[1]["initial_parameters"]["task"]["dependsOn"] == ["mm:story-1"]
-    assert creator.requests[2]["initial_parameters"]["task"]["dependsOn"] == ["mm:story-2"]
+    assert creator.requests[0]["initial_parameters"]["workflow"].get("dependsOn") is None
+    assert creator.requests[1]["initial_parameters"]["workflow"]["dependsOn"] == ["mm:story-1"]
+    assert creator.requests[2]["initial_parameters"]["workflow"]["dependsOn"] == ["mm:story-2"]
     assert creator.requests[0]["idempotency_key"] == (
         "jira-orchestrate:MM-404:STORY-001:MM-501"
     )
     assert "Run Jira Orchestrate for MM-501" in creator.requests[0]["title"]
     first_parameters = creator.requests[0]["initial_parameters"]
     assert first_parameters["publishMode"] == "pr"
-    assert first_parameters["task"]["publish"] == {
+    assert first_parameters["workflow"]["publish"] == {
         "mode": "pr",
         "mergeAutomation": {"enabled": True},
     }
-    assert "merge_automation" not in first_parameters["task"]["publish"]
-    assert "MM-404" in first_parameters["task"]["instructions"]
+    assert "merge_automation" not in first_parameters["workflow"]["publish"]
+    assert "MM-404" in first_parameters["workflow"]["instructions"]
 
 @pytest.mark.asyncio
 async def test_create_jira_orchestrate_tasks_omits_disabled_merge_automation():
@@ -1587,7 +1587,7 @@ async def test_create_jira_orchestrate_tasks_omits_disabled_merge_automation():
     assert result.status == "COMPLETED"
     first_parameters = creator.requests[0]["initial_parameters"]
     assert first_parameters["publishMode"] == "pr"
-    assert first_parameters["task"]["publish"] == {"mode": "pr"}
+    assert first_parameters["workflow"]["publish"] == {"mode": "pr"}
 
 @pytest.mark.asyncio
 async def test_create_jira_orchestrate_tasks_ignores_boolean_merge_automation():
@@ -1620,7 +1620,7 @@ async def test_create_jira_orchestrate_tasks_ignores_boolean_merge_automation():
     assert result.status == "COMPLETED"
     first_parameters = creator.requests[0]["initial_parameters"]
     assert first_parameters["publishMode"] == "pr"
-    assert first_parameters["task"]["publish"] == {"mode": "pr"}
+    assert first_parameters["workflow"]["publish"] == {"mode": "pr"}
 
 @pytest.mark.asyncio
 async def test_create_jira_orchestrate_tasks_uses_previous_step_mappings_and_owner_context():
@@ -1660,7 +1660,7 @@ async def test_create_jira_orchestrate_tasks_uses_previous_step_mappings_and_own
     assert result.outputs["jiraOrchestration"]["createdTaskCount"] == 1
     assert creator.requests[0]["owner_id"] == "user-123"
     assert creator.requests[0]["owner_type"] == "user"
-    task = creator.requests[0]["initial_parameters"]["task"]
+    task = creator.requests[0]["initial_parameters"]["workflow"]
     assert "orchestration_mode" not in task["inputs"]
     assert task["inputs"]["constraints"] == "Preserve source issue MM-404 traceability."
     assert "Source Jira issue: MM-404." in task["instructions"]
@@ -1700,7 +1700,7 @@ async def test_create_jira_orchestrate_tasks_uses_input_previous_outputs_mapping
     assert orchestration["storyCount"] == 1
     assert orchestration["createdTaskCount"] == 1
     assert orchestration["tasks"][0]["jiraIssueKey"] == "MM-810"
-    assert creator.requests[0]["initial_parameters"]["task"]["inputs"][
+    assert creator.requests[0]["initial_parameters"]["workflow"]["inputs"][
         "jira_issue_key"
     ] == "MM-810"
 
@@ -1829,7 +1829,7 @@ async def test_create_jira_implement_tasks_targets_jira_implement_preset():
         "jira-implement:MM-404:STORY-001:MM-501"
     )
     assert "Jira Implement task for MM-501" in first_request["summary"]
-    first_task = first_request["initial_parameters"]["task"]
+    first_task = first_request["initial_parameters"]["workflow"]
     assert first_task["taskTemplate"] == {
         "slug": "jira-implement",
         "version": "1.0.0",
@@ -2066,7 +2066,7 @@ async def test_create_document_update_tasks_from_inline_paths():
     assert second["documentPath"] == "/docs/architecture.tex"
     assert second["dependsOn"] == [first["workflowId"]]
 
-    first_task = creator.requests[0]["initial_parameters"]["task"]
+    first_task = creator.requests[0]["initial_parameters"]["workflow"]
     assert first_task["publish"]["mode"] == "pr"
     assert first_task["publish"]["mergeAutomation"]["enabled"] is True
     assert "taskTemplate" not in first_task
@@ -2105,7 +2105,7 @@ async def test_create_document_update_tasks_from_previous_outputs():
 
     assert result.status == "COMPLETED"
     assert result.outputs["documentUpdateOrchestration"]["createdTaskCount"] == 1
-    assert creator.requests[0]["initial_parameters"]["task"]["inputs"]["document_path"] == "/docs/guide.md"
+    assert creator.requests[0]["initial_parameters"]["workflow"]["inputs"]["document_path"] == "/docs/guide.md"
 
 
 @pytest.mark.asyncio

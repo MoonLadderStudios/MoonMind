@@ -1,6 +1,6 @@
 # Temporal Type Safety
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
+**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 **Status:** **Desired state / normative target** 
 **Last updated:** **2026-04-14** 
 **Scope:** Defines how MoonMind represents Temporal workflow, activity, signal, update, query, and Continue-As-New payloads so reliability comes from explicit contracts instead of ad hoc dictionaries.

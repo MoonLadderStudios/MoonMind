@@ -47,7 +47,7 @@ from moonmind.schemas.agent_runtime_models import (
     build_docker_sidecar_launch_plan,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
-from moonmind.workflows.tasks.runtime_defaults import resolve_runtime_defaults
+from moonmind.workflows.executions.runtime_defaults import resolve_runtime_defaults
 
 logger = logging.getLogger(__name__)
 

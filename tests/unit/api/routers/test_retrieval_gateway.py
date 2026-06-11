@@ -305,8 +305,8 @@ def test_context_forwards_planning_ref_to_service() -> None:
         {"job_id": "job-1"},
         {"tenant": "tenant-a"},
         {"tenant_id": "tenant-1"},
-        {"task_run_id": "task-run-1"},
-        {"taskRunId": "task-run-2"},
+        {"agent_run_id": "agent-run-1"},
+        {"agentRunId": "agent-run-2"},
         {
             "repo": "moonmind",
             "workspace_id": "workspace-1",
