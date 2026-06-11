@@ -150,7 +150,6 @@ from moonmind.workflows import get_temporal_artifact_service
 router = APIRouter(prefix="/api/executions", tags=["executions"])
 _TEMPORAL_SOURCE = "temporal"
 _ALLOWED_OWNER_TYPES = {"user", "system", "service"}
-_TEMPORAL_LIST_SCOPES = {"workflows", "user", "system", "all"}
 _SUPPORTED_TASK_RUNTIMES = frozenset({
     "codex_cli",
     "gemini_cli",
@@ -162,10 +161,7 @@ _SUPPORTED_TASK_RUNTIMES = frozenset({
     "claude",
 })
 _TEMPORAL_SCOPE_QUERIES = {
-    "workflows": 'WorkflowType="MoonMind.UserWorkflow" AND mm_entry="user_workflow"',
-    "user": '(WorkflowType="MoonMind.UserWorkflow" OR WorkflowType="MoonMind.ManifestIngest")',
-    "system": 'WorkflowType!="MoonMind.UserWorkflow" AND WorkflowType!="MoonMind.ManifestIngest"',
-    "all": "",
+    "default": 'WorkflowType="MoonMind.UserWorkflow" AND mm_entry="user_workflow"',
 }
 _DASHBOARD_STATUS_BY_STATE: dict[MoonMindWorkflowState, str] = {
     MoonMindWorkflowState.SCHEDULED: "queued",
@@ -453,28 +449,19 @@ def _normalize_temporal_list_scope(
     *,
     workflow_type: str | None,
     entry: str | None,
-) -> Literal["workflows", "user", "system", "all"]:
-    """Return the product-facing Temporal list scope.
-
-    The default workflow console view is intentionally not a raw Temporal
-    namespace browser. Recognized broad workflow scopes are accepted for old
-    URLs but fail safe to user-workflow visibility on this ordinary list boundary.
-    """
+) -> Literal["default"]:
+    """Return the product-facing Temporal list scope."""
 
     normalized = str(scope or "").strip().lower()
-    if normalized and normalized not in _TEMPORAL_LIST_SCOPES:
+    if normalized:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "code": "invalid_temporal_list_scope",
-                "message": (
-                    "scope must be one of: "
-                    + ", ".join(sorted(_TEMPORAL_LIST_SCOPES))
-                    + "."
-                ),
+                "message": "scope is no longer supported for workflow execution lists.",
             },
         )
-    return "workflows"
+    return "default"
 
 
 def _is_user_workflow_list_type(workflow_type: str | None) -> bool:

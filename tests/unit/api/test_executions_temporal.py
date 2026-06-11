@@ -152,7 +152,7 @@ def test_list_executions_source_temporal_bypasses_db_and_queries_temporal(
         _assert_no_banned_execution_keys(item)
 
 
-def test_list_executions_source_temporal_defaults_to_task_scope(client) -> None:
+def test_list_executions_source_temporal_defaults_to_workflow_scope(client) -> None:
     test_client, _service, _user, _mock_session = client
 
     executions_module.get_temporal_client_adapter.cache_clear()
@@ -210,7 +210,7 @@ def test_list_executions_source_temporal_default_scope_excludes_legacy_run_entry
         assert 'mm_entry="run"' not in query
 
 
-def test_list_executions_source_temporal_scope_all_fails_safe_to_task_query(
+def test_list_executions_source_temporal_default_scope_uses_workflow_query(
     client,
 ) -> None:
     test_client, _service, _user, _mock_session = client
@@ -232,7 +232,7 @@ def test_list_executions_source_temporal_scope_all_fails_safe_to_task_query(
 
         response = test_client.get(
             "/api/executions",
-            params={"source": "temporal", "scope": "all"},
+            params={"source": "temporal"},
         )
 
         assert response.status_code == 200
@@ -332,7 +332,23 @@ def test_execution_metrics_source_temporal_returns_operational_aggregates(
     assert 'mm_repo="MoonLadderStudios/MoonMind"' in mock_client.list_workflows.call_args.kwargs["query"]
 
 
-def test_list_executions_source_temporal_ignores_workflow_kind_filters_for_task_list(
+def test_list_executions_source_temporal_rejects_retired_broad_scopes(
+    client,
+) -> None:
+    test_client, _service, _user, _mock_session = client
+
+    response = test_client.get(
+        "/api/executions",
+        params={"source": "temporal", "scope": "system"},
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "invalid_temporal_list_scope"
+    assert detail["message"] == "scope is no longer supported for workflow execution lists."
+
+
+def test_list_executions_source_temporal_ignores_workflow_kind_filters_for_workflow_list(
     client,
 ) -> None:
     test_client, _service, _user, _mock_session = client
@@ -356,7 +372,6 @@ def test_list_executions_source_temporal_ignores_workflow_kind_filters_for_task_
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "system",
                 "workflowType": "MoonMind.ProviderProfileManager",
                 "entry": "manifest",
             },
@@ -380,7 +395,9 @@ def test_list_executions_source_temporal_rejects_unknown_scope(client) -> None:
     )
 
     assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "invalid_temporal_list_scope"
+    detail = response.json()["detail"]
+    assert detail["code"] == "invalid_temporal_list_scope"
+    assert detail["message"] == "scope is no longer supported for workflow execution lists."
 
 
 def test_execution_router_exposes_recover_route_without_recovery_alias() -> None:

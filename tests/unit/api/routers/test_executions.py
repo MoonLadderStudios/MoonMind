@@ -630,7 +630,6 @@ def test_list_executions_temporal_query_includes_target_runtime_filter() -> None
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "workflows",
                 "targetRuntime": "codex_cli",
             },
         )
@@ -671,7 +670,6 @@ def test_list_executions_temporal_query_includes_canonical_state_filters() -> No
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "workflows",
                 "stateIn": "completed,failed",
             },
         )
@@ -722,7 +720,6 @@ def test_list_executions_temporal_query_anchors_non_terminal_state_to_running_st
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "workflows",
                 "stateIn": "waiting_on_dependencies",
             },
         )
@@ -760,7 +757,6 @@ def test_list_executions_temporal_query_mixes_terminal_and_non_terminal_state_fi
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "workflows",
                 "stateIn": "waiting_on_dependencies,canceled",
             },
         )
@@ -797,7 +793,6 @@ def test_list_executions_temporal_query_supports_repeated_canonical_filters() ->
             "/api/executions",
             params=[
                 ("source", "temporal"),
-                ("scope", "workflows"),
                 ("targetRuntimeIn", "codex_cli"),
                 ("targetRuntimeIn", "claude_code"),
                 ("targetRuntimeIn", ""),
@@ -836,7 +831,6 @@ def test_list_executions_temporal_query_ignores_empty_canonical_state_for_legacy
             "/api/executions",
             params=[
                 ("source", "temporal"),
-                ("scope", "workflows"),
                 ("state", "completed"),
                 ("stateIn", ""),
             ],
@@ -865,7 +859,6 @@ def test_list_executions_temporal_query_rejects_contradictory_canonical_filters(
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "workflows",
                 "stateIn": "completed",
                 "stateNotIn": "canceled",
             },
@@ -903,7 +896,6 @@ def test_list_executions_temporal_query_includes_canonical_runtime_skill_and_rep
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "workflows",
                 "targetRuntimeIn": "codex_cli,claude_code",
                 "targetSkillIn": "moonspec-implement",
                 "repoIn": "Moon/Mind",
@@ -943,7 +935,6 @@ def test_list_executions_temporal_query_prefers_canonical_filters_over_legacy_ex
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "workflows",
                 "state": "executing",
                 "stateIn": "completed",
                 "repo": "legacy/repo",
@@ -990,7 +981,6 @@ def test_list_executions_temporal_query_includes_canonical_date_bounds() -> None
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "workflows",
                 "scheduledFrom": "2026-05-01",
                 "scheduledTo": "2026-05-05",
                 "createdFrom": "2026-05-02",
@@ -1038,7 +1028,6 @@ def test_list_executions_temporal_query_includes_blank_date_filter_semantics() -
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "workflows",
                 "scheduledFrom": "2026-05-01",
                 "scheduledBlank": "include",
                 "finishedBlank": "include",
@@ -1075,7 +1064,6 @@ def test_list_executions_temporal_query_supports_sort_and_text_filters() -> None
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "workflows",
                 "repoContains": "Moon",
                 "workflowIdContains": "wf-",
                 "titleContains": "release",
@@ -1119,7 +1107,6 @@ def test_list_executions_temporal_query_uses_workflow_id_text_filter() -> None:
             "/api/executions",
             params={
                 "source": "temporal",
-                "scope": "workflows",
                 "workflowIdContains": "wf-",
                 "sort": "workflowId",
             },
@@ -1177,7 +1164,7 @@ def test_list_executions_temporal_query_rejects_invalid_filter_bounds() -> None:
     assert "sort must be one of" in invalid_sort.json()["detail"]["message"]
     temporal_client.count_workflows.assert_not_called()
 
-def test_execution_facets_exclude_requested_facet_filter_and_keep_task_scope() -> None:
+def test_execution_facets_exclude_requested_facet_filter_and_keep_workflow_scope() -> None:
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
@@ -1337,7 +1324,7 @@ def test_execution_metrics_counts_workflows_concurrently() -> None:
     assert max_active_calls > 1
 
 
-def test_execution_status_facet_counts_static_status_values_with_task_scope() -> None:
+def test_execution_status_facet_counts_static_status_values_with_workflow_scope() -> None:
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
