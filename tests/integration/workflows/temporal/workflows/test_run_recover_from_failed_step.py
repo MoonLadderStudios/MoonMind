@@ -90,6 +90,7 @@ def test_failed_step_recovery_preserves_prior_steps_and_unblocks_failed_step() -
             {
                 "logicalStepId": "prepare",
                 "status": "succeeded",
+                "terminalDisposition": "accepted",
                 "sourceExecutionOrdinal": 1,
                 "artifacts": {"outputSummary": "artifact://prepare-summary"},
                 "stateCheckpointRef": "artifact://workspace/prepare",
@@ -101,6 +102,7 @@ def test_failed_step_recovery_preserves_prior_steps_and_unblocks_failed_step() -
 
     assert rows[0]["preservedFrom"]["workflowId"] == "mm:source"
     assert rows[0]["preservedFrom"]["logicalStepId"] == "prepare"
+    assert rows[0]["terminalDisposition"] == "accepted"
     assert rows[0]["artifacts"]["outputSummary"] == "artifact://prepare-summary"
     assert rows[0]["stateCheckpointRef"] == "artifact://workspace/prepare"
     assert rows[1]["status"] == "ready"

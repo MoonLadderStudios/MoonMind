@@ -493,6 +493,15 @@ def materialize_preserved_steps(
         except (TypeError, ValueError):
             source_execution_ordinal = 1
         row["status"] = str(preserved.get("status") or "succeeded")
+        terminal_disposition = str(
+            preserved.get("terminalDisposition")
+            or preserved.get("terminal_disposition")
+            or ""
+        ).strip()
+        if terminal_disposition:
+            row["terminalDisposition"] = terminal_disposition
+        else:
+            row.pop("terminalDisposition", None)
         row["attempt"] = 0
         row["executionOrdinal"] = 0
         row["summary"] = "Preserved from source run."

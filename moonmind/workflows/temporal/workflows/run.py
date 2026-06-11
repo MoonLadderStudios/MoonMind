@@ -633,6 +633,7 @@ class MoonMindRunWorkflow:
         self._previous_step_checkpoint_refs: dict[str, str] = {}
         self._step_execution_launch_blocks: set[str] = set()
         self._step_dependency_effects: dict[str, dict[str, Any]] = {}
+        self._step_terminal_dispositions: dict[str, str] = {}
         # Side-effect records observed per logical step across attempts, keyed by
         # logical step id. Used to detect already-occurred non-idempotent
         # external effects when a reattempt starts (Section 11, rules 3-4).
@@ -957,13 +958,14 @@ class MoonMindRunWorkflow:
                 (self._step_ledger_row_for(logical_step_id) or {}).get("checks")
                 or []
             ),
-            sideEffects={},
+            sideEffects=self._step_execution_side_effects(logical_step_id),
             dependencyEffects=self._step_dependency_effects.get(
                 logical_step_id,
                 {"invalidatedLogicalStepIds": []},
             ),
             budget=dict(budget or {}),
         )
+        self._step_terminal_dispositions[logical_step_id] = terminal_disposition
         return await self._write_step_execution_manifest(
             logical_step_id,
             attempt=attempt,
@@ -1627,6 +1629,13 @@ class MoonMindRunWorkflow:
                 outputs[target_key] = value.strip()
         return outputs
 
+    def _step_execution_side_effects(self, logical_step_id: str) -> dict[str, Any]:
+        records = [
+            dict(record)
+            for record in self._step_side_effect_records.get(logical_step_id, ())
+        ]
+        return {"records": records} if records else {}
+
     def _recovery_workspace_checkpoint_ref(
         self,
         workspace: Mapping[str, Any],
@@ -1867,6 +1876,38 @@ class MoonMindRunWorkflow:
             outputs["preservedFrom"] = dict(row.get("preservedFrom") or {})
         return outputs
 
+    def _record_preserved_step_terminal_state(
+        self,
+        logical_step_id: str,
+        node: Mapping[str, Any],
+    ) -> None:
+        row = self._step_ledger_row_for(logical_step_id)
+        if not isinstance(row, Mapping):
+            return
+        terminal_disposition = self._coerce_text(
+            row.get("terminalDisposition") or row.get("terminal_disposition"),
+            max_chars=100,
+        )
+        if terminal_disposition:
+            self._step_terminal_dispositions[logical_step_id] = terminal_disposition
+        tool = self._plan_node_tool_mapping(node)
+        tool = tool if isinstance(tool, Mapping) else {}
+        tool_name = str(tool.get("name") or tool.get("id") or "").strip()
+        if (
+            terminal_disposition == "accepted"
+            and self._is_moonspec_verify_step(
+                tool_name=tool_name,
+                node_inputs=self._node_inputs_mapping(node),
+            )
+            and self._normalize_moonspec_verify_verdict(self._moonspec_gate_verdict)
+            is None
+        ):
+            self._moonspec_gate_verdict = "FULLY_IMPLEMENTED"
+            self._publish_context["moonSpecGate"] = {
+                "logicalStepId": logical_step_id,
+                "verdict": "FULLY_IMPLEMENTED",
+            }
+
     def _merge_preserved_dependency_outputs(
         self,
         logical_step_id: str,
@@ -1988,7 +2029,7 @@ class MoonMindRunWorkflow:
         operation: str,
         target: str | None = None,
         idempotency_key: str | None = None,
-        workflow_state_accepted: bool = False,
+        workflow_state_accepted: bool | None = None,
         effect_kind: str = "normal",
         reason: str | None = None,
         approved_workspace_roots: Sequence[str] = (),
@@ -2000,18 +2041,66 @@ class MoonMindRunWorkflow:
         detected and compensated explicitly.
         """
 
+        accepted = (
+            self._step_terminal_dispositions.get(logical_step_id) == "accepted"
+            if workflow_state_accepted is None
+            else workflow_state_accepted
+        )
         record = side_effect_record(
             effect_class=effect_class,  # type: ignore[arg-type]
             operation=operation,
             target=target,
             idempotency_key=idempotency_key,
-            workflow_state_accepted=workflow_state_accepted,
+            workflow_state_accepted=accepted,
             effect_kind=effect_kind,  # type: ignore[arg-type]
             reason=reason,
             approved_workspace_roots=approved_workspace_roots,
         )
         self._step_side_effect_records.setdefault(logical_step_id, []).append(record)
         return record
+
+    def _is_jira_orchestrate_external_handoff_node(
+        self,
+        node: Mapping[str, Any],
+    ) -> bool:
+        node_inputs = self._node_inputs_mapping(node)
+        annotations = node_inputs.get("annotations") or node.get("annotations")
+        if not isinstance(annotations, Mapping):
+            return False
+        role = str(annotations.get("jiraOrchestrateRole") or "").strip().lower()
+        return role in {"pull-request-handoff", "code-review-handoff"}
+
+    def _jira_orchestrate_external_handoff_block_reason(
+        self,
+        node: Mapping[str, Any],
+    ) -> str | None:
+        if not self._is_jira_orchestrate_external_handoff_node(node):
+            return None
+        verdict = self._normalize_moonspec_verify_verdict(self._moonspec_gate_verdict)
+        if verdict in _MOONSPEC_GATE_PASSING_VERDICTS:
+            return None
+        gate_context = self._publish_context.get("moonSpecGate")
+        logical_step_id = None
+        if isinstance(gate_context, Mapping):
+            logical_step_id = self._coerce_text(
+                gate_context.get("logicalStepId"),
+                max_chars=200,
+            )
+        if verdict:
+            parts = [
+                "Jira Orchestrate external handoff requires an accepted MoonSpec "
+                f"verification terminal disposition; latest verdict was {verdict}"
+            ]
+            if logical_step_id:
+                terminal = self._step_terminal_dispositions.get(logical_step_id)
+                if terminal:
+                    parts.append(f"gate step terminal disposition was {terminal}")
+            return ". ".join(parts) + "."
+        return (
+            "Jira Orchestrate external handoff requires an accepted MoonSpec "
+            "verification terminal disposition; no controlling verification gate "
+            "has approved advancement."
+        )
 
     def _orchestrate_reattempt_compensation(
         self,
@@ -4437,6 +4526,7 @@ class MoonMindRunWorkflow:
             tool_version = str(tool.get("version") or "").strip()
             node_id = str(node.get("id") or "unknown")
             if self._is_preserved_step(node_id):
+                self._record_preserved_step_terminal_state(node_id, node)
                 preserved_outputs = self._preserved_step_outputs(node_id)
                 if preserved_outputs:
                     previous_step_outputs = preserved_outputs
@@ -4447,6 +4537,23 @@ class MoonMindRunWorkflow:
                 and current_step_row.get("status") == "pending"
             ):
                 continue
+            handoff_block_reason = (
+                self._jira_orchestrate_external_handoff_block_reason(node)
+            )
+            if handoff_block_reason:
+                self._plan_blocked_message = handoff_block_reason
+                self._publish_status = "not_required"
+                self._publish_reason = handoff_block_reason
+                self._publish_context["publicationBlockedBy"] = "moonspec_verify"
+                self._summary = handoff_block_reason
+                self._mark_remaining_plan_steps_skipped(
+                    ordered_nodes=ordered_nodes,
+                    completed_index=index - 2,
+                    summary=handoff_block_reason,
+                )
+                self._refresh_step_readiness(updated_at=workflow.now())
+                self._update_memo()
+                break
             original_node_inputs = dict(node.get("inputs", {}))
             if tool_type == "skill":
                 await load_registry_snapshot()
