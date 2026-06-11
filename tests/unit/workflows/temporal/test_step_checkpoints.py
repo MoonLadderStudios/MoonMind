@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 import pytest
@@ -18,6 +19,7 @@ from moonmind.workflows.temporal.step_checkpoints import (
     build_step_checkpoint_payload,
     checkpoint_kinds_for_workspace_policy,
     validate_step_checkpoint,
+    validate_step_checkpoint_payload,
 )
 
 
@@ -95,6 +97,110 @@ def test_checkpoint_model_rejects_inline_large_or_raw_content() -> None:
     }
     with pytest.raises(ValidationError, match="compact refs"):
         StepExecutionCheckpointModel.model_validate(payload)
+
+
+def test_checkpoint_boundary_accepts_previous_compact_payload_shape() -> None:
+    payload = build_step_checkpoint_payload(
+        identity=_identity(),
+        boundary="before_execution",
+        task_input_snapshot_ref="artifact-input",
+        plan_digest="sha256:plan",
+        workspace=_workspace_patch(),
+        created_at=datetime(2026, 5, 17, 12, 0, tzinfo=UTC),
+    )
+    payload.pop("contentType")
+    payload.pop("validation")
+
+    result = validate_step_checkpoint_payload(
+        payload,
+        expected_source=_identity(),
+        expected_task_input_snapshot_ref="artifact-input",
+        expected_plan_digest="sha256:plan",
+        workspace_policy="apply_previous_execution_diff_to_clean_baseline",
+        required_artifact_refs=["artifact-patch"],
+        checkpoint_ref="artifact-checkpoint",
+    )
+
+    assert result.valid is True
+    assert result.failure_code is None
+    assert result.checkpoint_ref == "artifact-checkpoint"
+
+
+@pytest.mark.parametrize("payload", [None, [], "not-json-object"])
+def test_checkpoint_boundary_rejects_non_mapping_payload_without_crashing(
+    payload: object,
+) -> None:
+    result = validate_step_checkpoint_payload(
+        payload,
+        expected_source=_identity(),
+        expected_task_input_snapshot_ref="artifact-input",
+        checkpoint_ref="artifact-checkpoint",
+    )
+
+    assert result.valid is False
+    assert result.failure_code == "invalid_checkpoint"
+    assert "payload must be a mapping" in result.message
+    assert result.checkpoint_id == "unknown-checkpoint"
+    assert result.checkpoint_ref == "artifact-checkpoint"
+
+
+@pytest.mark.parametrize(
+    ("mutator", "field_name"),
+    [
+        (
+            lambda payload: payload.__setitem__("boundary", "after_future_gate"),
+            "boundary",
+        ),
+        (lambda payload: payload.__setitem__("checkpointKind", ""), "checkpointKind"),
+        (
+            lambda payload: payload["workspace"].__setitem__(
+                "kind",
+                "future_workspace",
+            ),
+            "workspace.kind",
+        ),
+        (
+            lambda payload: payload.__setitem__(
+                "validation",
+                {
+                    "valid": False,
+                    "failureCode": "provider_paused",
+                    "message": "future worker value",
+                    "checkpointId": payload["checkpointId"],
+                },
+            ),
+            "validation.failureCode",
+        ),
+    ],
+)
+def test_checkpoint_boundary_reports_degraded_values_without_crashing(
+    mutator: Callable[[dict[str, object]], None],
+    field_name: str,
+) -> None:
+    payload = build_step_checkpoint_payload(
+        identity=_identity(),
+        boundary="before_execution",
+        task_input_snapshot_ref="artifact-input",
+        plan_digest="sha256:plan",
+        workspace=_workspace_patch(),
+        created_at=datetime(2026, 5, 17, 12, 0, tzinfo=UTC),
+    )
+    mutator(payload)
+
+    result = validate_step_checkpoint_payload(
+        payload,
+        expected_source=_identity(),
+        expected_task_input_snapshot_ref="artifact-input",
+        expected_plan_digest="sha256:plan",
+        workspace_policy="apply_previous_execution_diff_to_clean_baseline",
+        checkpoint_ref="artifact-checkpoint",
+    )
+
+    assert result.valid is False
+    assert result.failure_code == "invalid_checkpoint"
+    assert field_name in result.message
+    assert result.checkpoint_id == payload["checkpointId"]
+    assert result.checkpoint_ref == "artifact-checkpoint"
 
 
 def test_workspace_checkpoint_model_rejects_unexpected_fields() -> None:
