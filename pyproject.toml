@@ -91,6 +91,10 @@ extend-ignore = ["E402", "E722", "F841"]
 [tool.pytest.ini_options]
 faulthandler_timeout = 300
 markers = [
+    "unit_fast: cheap unit tests with no external process, network, docker, or Temporal server",
+    "component: in-process app/router/service tests using TestClient or dependency overrides",
+    "temporal_boundary: tests that start Temporal WorkflowEnvironment, Worker, or Replayer",
+    "slow: valid tests that are too expensive for the default PR fast path",
     "agentkit: Spec Kit workflow tests.",
     "asyncio: marks tests that require an asyncio event loop.",
     "integration: marks integration tests that exercise workflows.",

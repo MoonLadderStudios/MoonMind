@@ -12,13 +12,6 @@ from moonmind.workflows.temporal.client import (
     TemporalClientAdapter,
 )
 
-collect_ignore_glob = [
-    "api/routers/test_agent_runs.py",
-    "api/routers/test_mcp_tools.py",
-    "api/routers/test_agent_queue_artifacts.py",
-    "mcp/test_tool_registry.py",
-]
-
 
 @dataclass(frozen=True, slots=True)
 class _DummyWorkflowStartResult:
