@@ -152,71 +152,71 @@ class TestTemporalDashboardSettings:
         monkeypatch.delenv("TEMPORAL_DASHBOARD_SUBMIT_ENABLED", raising=False)
 
 class TestFeatureFlagsSettings:
-    def test_task_template_catalog_reads_prefixed_env(self, monkeypatch):
-        monkeypatch.setenv("FEATURE_FLAGS__TASK_TEMPLATE_CATALOG", "1")
-        monkeypatch.delenv("TASK_TEMPLATE_CATALOG", raising=False)
+    def test_preset_catalog_reads_prefixed_env(self, monkeypatch):
+        monkeypatch.setenv("FEATURE_FLAGS__PRESET_CATALOG", "1")
+        monkeypatch.delenv("PRESET_CATALOG", raising=False)
         monkeypatch.delenv(
-            "FEATURE_FLAGS__DISABLE_TASK_TEMPLATE_CATALOG", raising=False
+            "FEATURE_FLAGS__DISABLE_PRESET_CATALOG", raising=False
         )
-        monkeypatch.delenv("DISABLE_TASK_TEMPLATE_CATALOG", raising=False)
+        monkeypatch.delenv("DISABLE_PRESET_CATALOG", raising=False)
 
         settings = FeatureFlagsSettings(_env_file=None)
-        assert settings.task_template_catalog is True
-        assert settings.task_template_catalog_enabled is True
+        assert settings.preset_catalog is True
+        assert settings.preset_catalog_enabled is True
 
-        monkeypatch.delenv("FEATURE_FLAGS__TASK_TEMPLATE_CATALOG", raising=False)
+        monkeypatch.delenv("FEATURE_FLAGS__PRESET_CATALOG", raising=False)
 
-    def test_task_template_catalog_keeps_legacy_env_fallback(self, monkeypatch):
-        monkeypatch.setenv("TASK_TEMPLATE_CATALOG", "1")
-        monkeypatch.delenv("FEATURE_FLAGS__TASK_TEMPLATE_CATALOG", raising=False)
+    def test_preset_catalog_keeps_legacy_env_fallback(self, monkeypatch):
+        monkeypatch.setenv("PRESET_CATALOG", "1")
+        monkeypatch.delenv("FEATURE_FLAGS__PRESET_CATALOG", raising=False)
         monkeypatch.delenv(
-            "FEATURE_FLAGS__DISABLE_TASK_TEMPLATE_CATALOG", raising=False
+            "FEATURE_FLAGS__DISABLE_PRESET_CATALOG", raising=False
         )
-        monkeypatch.delenv("DISABLE_TASK_TEMPLATE_CATALOG", raising=False)
+        monkeypatch.delenv("DISABLE_PRESET_CATALOG", raising=False)
 
         settings = FeatureFlagsSettings(_env_file=None)
-        assert settings.task_template_catalog is True
-        assert settings.task_template_catalog_enabled is True
+        assert settings.preset_catalog is True
+        assert settings.preset_catalog_enabled is True
 
-        monkeypatch.delenv("TASK_TEMPLATE_CATALOG", raising=False)
+        monkeypatch.delenv("PRESET_CATALOG", raising=False)
 
-    def test_task_template_catalog_defaults_enabled_without_env(self, monkeypatch):
-        monkeypatch.delenv("FEATURE_FLAGS__TASK_TEMPLATE_CATALOG", raising=False)
-        monkeypatch.delenv("TASK_TEMPLATE_CATALOG", raising=False)
+    def test_preset_catalog_defaults_enabled_without_env(self, monkeypatch):
+        monkeypatch.delenv("FEATURE_FLAGS__PRESET_CATALOG", raising=False)
+        monkeypatch.delenv("PRESET_CATALOG", raising=False)
         monkeypatch.delenv(
-            "FEATURE_FLAGS__DISABLE_TASK_TEMPLATE_CATALOG", raising=False
+            "FEATURE_FLAGS__DISABLE_PRESET_CATALOG", raising=False
         )
-        monkeypatch.delenv("DISABLE_TASK_TEMPLATE_CATALOG", raising=False)
+        monkeypatch.delenv("DISABLE_PRESET_CATALOG", raising=False)
 
         settings = FeatureFlagsSettings(_env_file=None)
-        assert settings.task_template_catalog is True
-        assert settings.task_template_catalog_enabled is True
+        assert settings.preset_catalog is True
+        assert settings.preset_catalog_enabled is True
 
-    def test_task_template_catalog_can_be_disabled_with_prefixed_env(self, monkeypatch):
-        monkeypatch.delenv("FEATURE_FLAGS__TASK_TEMPLATE_CATALOG", raising=False)
-        monkeypatch.delenv("TASK_TEMPLATE_CATALOG", raising=False)
-        monkeypatch.setenv("FEATURE_FLAGS__DISABLE_TASK_TEMPLATE_CATALOG", "1")
-        monkeypatch.delenv("DISABLE_TASK_TEMPLATE_CATALOG", raising=False)
-
-        settings = FeatureFlagsSettings(_env_file=None)
-        assert settings.task_template_catalog_enabled is False
-
-        monkeypatch.delenv(
-            "FEATURE_FLAGS__DISABLE_TASK_TEMPLATE_CATALOG", raising=False
-        )
-
-    def test_task_template_catalog_can_be_disabled_with_legacy_env(self, monkeypatch):
-        monkeypatch.delenv("FEATURE_FLAGS__TASK_TEMPLATE_CATALOG", raising=False)
-        monkeypatch.delenv("TASK_TEMPLATE_CATALOG", raising=False)
-        monkeypatch.delenv(
-            "FEATURE_FLAGS__DISABLE_TASK_TEMPLATE_CATALOG", raising=False
-        )
-        monkeypatch.setenv("DISABLE_TASK_TEMPLATE_CATALOG", "1")
+    def test_preset_catalog_can_be_disabled_with_prefixed_env(self, monkeypatch):
+        monkeypatch.delenv("FEATURE_FLAGS__PRESET_CATALOG", raising=False)
+        monkeypatch.delenv("PRESET_CATALOG", raising=False)
+        monkeypatch.setenv("FEATURE_FLAGS__DISABLE_PRESET_CATALOG", "1")
+        monkeypatch.delenv("DISABLE_PRESET_CATALOG", raising=False)
 
         settings = FeatureFlagsSettings(_env_file=None)
-        assert settings.task_template_catalog_enabled is False
+        assert settings.preset_catalog_enabled is False
 
-        monkeypatch.delenv("DISABLE_TASK_TEMPLATE_CATALOG", raising=False)
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__DISABLE_PRESET_CATALOG", raising=False
+        )
+
+    def test_preset_catalog_can_be_disabled_with_legacy_env(self, monkeypatch):
+        monkeypatch.delenv("FEATURE_FLAGS__PRESET_CATALOG", raising=False)
+        monkeypatch.delenv("PRESET_CATALOG", raising=False)
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__DISABLE_PRESET_CATALOG", raising=False
+        )
+        monkeypatch.setenv("DISABLE_PRESET_CATALOG", "1")
+
+        settings = FeatureFlagsSettings(_env_file=None)
+        assert settings.preset_catalog_enabled is False
+
+        monkeypatch.delenv("DISABLE_PRESET_CATALOG", raising=False)
 
     def test_live_logs_session_timeline_rollout_defaults_off(self, monkeypatch):
         monkeypatch.delenv(
@@ -458,7 +458,7 @@ class TestWorkflowSettings:
         for key in (
             "MOONMIND_CODEX_MODEL",
             "MOONMIND_CODEX_EFFORT",
-            "MOONMIND_DEFAULT_TASK_RUNTIME",
+            "MOONMIND_DEFAULT_RUNTIME",
             "MOONMIND_DEFAULT_PUBLISH_MODE",
             "WORKFLOW_GITHUB_REPOSITORY",
             "WORKFLOW_GITHUB_REPOSITORY",
@@ -468,8 +468,6 @@ class TestWorkflowSettings:
             "WORKFLOW_SKILLS_WORKSPACE_ROOT",
             "WORKFLOW_REPO_ROOT",
             "WORKFLOW_REPO_ROOT",
-            "WORKFLOW_TASKS_ROOT",
-            "WORKFLOW_TASKS_ROOT",
         ):
             monkeypatch.delenv(key, raising=False)
 
@@ -578,7 +576,7 @@ class TestWorkflowSettings:
         settings = WorkflowSettings(_env_file=None)
         assert settings.codex_model == "gpt-5.5"
         assert settings.codex_effort == "high"
-        assert settings.default_task_runtime == "codex_cli"
+        assert settings.default_runtime == "codex_cli"
         assert settings.default_publish_mode == "pr"
         assert settings.claude_volume_name == "claude_auth_volume"
         assert settings.claude_volume_path == "/home/app/.claude"
@@ -590,7 +588,7 @@ class TestWorkflowSettings:
 
         monkeypatch.setenv("MOONMIND_CODEX_MODEL", "gpt-custom-codex")
         monkeypatch.setenv("MOONMIND_CODEX_EFFORT", "medium")
-        monkeypatch.setenv("MOONMIND_DEFAULT_TASK_RUNTIME", "claude")
+        monkeypatch.setenv("MOONMIND_DEFAULT_RUNTIME", "claude")
         monkeypatch.setenv("MOONMIND_DEFAULT_PUBLISH_MODE", "branch")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic")
         monkeypatch.setenv("CLAUDE_VOLUME_NAME", "claude_auth_custom")
@@ -604,7 +602,7 @@ class TestWorkflowSettings:
 
         assert settings.codex_model == "gpt-custom-codex"
         assert settings.codex_effort == "medium"
-        assert settings.default_task_runtime == "claude_code"
+        assert settings.default_runtime == "claude_code"
         assert settings.default_publish_mode == "branch"
         assert settings.claude_volume_name == "claude_auth_custom"
         assert settings.claude_volume_path == "/runtime/claude-auth"
@@ -615,7 +613,7 @@ class TestWorkflowSettings:
 
         monkeypatch.delenv("MOONMIND_CODEX_MODEL", raising=False)
         monkeypatch.delenv("MOONMIND_CODEX_EFFORT", raising=False)
-        monkeypatch.delenv("MOONMIND_DEFAULT_TASK_RUNTIME", raising=False)
+        monkeypatch.delenv("MOONMIND_DEFAULT_RUNTIME", raising=False)
         monkeypatch.delenv("MOONMIND_DEFAULT_PUBLISH_MODE", raising=False)
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.delenv("CLAUDE_VOLUME_NAME", raising=False)
@@ -664,15 +662,15 @@ class TestWorkflowSettings:
             WorkflowSettings(_env_file=None)
         monkeypatch.delenv("MOONMIND_DEFAULT_PUBLISH_MODE", raising=False)
 
-    def test_default_task_runtime_rejects_invalid_value(self, monkeypatch):
+    def test_default_runtime_rejects_invalid_value(self, monkeypatch):
         """Default runtime should reject values outside supported execution runtimes."""
 
-        monkeypatch.setenv("MOONMIND_DEFAULT_TASK_RUNTIME", "universal")
+        monkeypatch.setenv("MOONMIND_DEFAULT_RUNTIME", "universal")
         with pytest.raises(
-            ValidationError, match="default_task_runtime must be one of"
+            ValidationError, match="default_runtime must be one of"
         ):
             WorkflowSettings(_env_file=None)
-        monkeypatch.delenv("MOONMIND_DEFAULT_TASK_RUNTIME", raising=False)
+        monkeypatch.delenv("MOONMIND_DEFAULT_RUNTIME", raising=False)
 
     def test_git_user_accepts_legacy_spec_env_vars(self, monkeypatch):
         """Legacy WORKFLOW git user env vars should remain supported."""
@@ -881,27 +879,23 @@ class TestWorkflowSettings:
 
         monkeypatch.delenv("MOONMIND_WORKFLOW_DOCKER_MODE", raising=False)
 
-    def test_app_settings_accepts_task_proposals_env(
+    def test_app_settings_accepts_workflow_proposals_env(
         self, app_settings_defaults, monkeypatch
     ):
-        """Task proposal env flags should be parsed instead of treated as extra fields."""
+        """Workflow proposal env flags should be parsed instead of treated as extra fields."""
 
-        monkeypatch.setenv("MOONMIND_ENABLE_TASK_PROPOSALS", "true")
-        monkeypatch.delenv("ENABLE_TASK_PROPOSALS", raising=False)
+        monkeypatch.setenv("MOONMIND_ENABLE_PROPOSALS", "true")
         monkeypatch.setenv("MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS", "2400")
         settings = AppSettings(_env_file=None, **app_settings_defaults)
-        assert settings.workflow.enable_task_proposals is True
+        assert settings.workflow.enable_proposals is True
         assert settings.workflow.stage_command_timeout_seconds == 2400
 
-        monkeypatch.delenv("MOONMIND_ENABLE_TASK_PROPOSALS", raising=False)
+        monkeypatch.delenv("MOONMIND_ENABLE_PROPOSALS", raising=False)
         monkeypatch.delenv("MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS", raising=False)
-        monkeypatch.setenv("ENABLE_TASK_PROPOSALS", "true")
         monkeypatch.setenv("WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS", "1800")
         settings = AppSettings(_env_file=None, **app_settings_defaults)
-        assert settings.workflow.enable_task_proposals is True
         assert settings.workflow.stage_command_timeout_seconds == 1800
 
-        monkeypatch.delenv("ENABLE_TASK_PROPOSALS", raising=False)
         monkeypatch.delenv("WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS", raising=False)
 
     def test_app_settings_accepts_codex_worker_env(
@@ -1011,39 +1005,39 @@ class TestWorkflowSettings:
         assert settings.workflow.default_queue == "moonmind.jobs"
         assert settings.workflow.codex_queue == "moonmind.jobs"
 
-def test_task_proposal_policy_settings_defaults(app_settings_defaults):
-    """Task proposal defaults should expose policy knobs on both settings."""
+def test_workflow_proposal_policy_settings_defaults(app_settings_defaults):
+    """Workflow proposal defaults should expose policy knobs on both settings."""
 
     settings = AppSettings(_env_file=None, **app_settings_defaults)
-    assert settings.task_proposals.proposal_targets_default == "project"
+    assert settings.workflow_proposals.proposal_targets_default == "project"
     assert settings.workflow.proposal_targets_default == "project"
-    assert settings.task_proposals.max_items_project_default == 3
+    assert settings.workflow_proposals.max_items_project_default == 3
     assert settings.workflow.proposal_max_items_project == 3
-    assert settings.task_proposals.moonmind_severity_floor_default == "high"
+    assert settings.workflow_proposals.moonmind_severity_floor_default == "high"
     assert settings.workflow.proposal_moonmind_severity_floor == "high"
 
-def test_task_proposal_policy_env_overrides(app_settings_defaults, monkeypatch) -> None:
+def test_workflow_proposal_policy_env_overrides(app_settings_defaults, monkeypatch) -> None:
     """Environment variables should override policy defaults everywhere."""
 
     monkeypatch.setenv("MOONMIND_PROPOSAL_TARGETS", "both")
-    monkeypatch.setenv("TASK_PROPOSALS_MAX_ITEMS_PROJECT", "5")
-    monkeypatch.setenv("TASK_PROPOSALS_MAX_ITEMS_MOONMIND", "4")
+    monkeypatch.setenv("WORKFLOW_PROPOSALS_MAX_ITEMS_PROJECT", "5")
+    monkeypatch.setenv("WORKFLOW_PROPOSALS_MAX_ITEMS_MOONMIND", "4")
     monkeypatch.setenv("MOONMIND_MIN_SEVERITY_FOR_MOONMIND", "medium")
 
     settings = AppSettings(_env_file=None, **app_settings_defaults)
 
-    assert settings.task_proposals.proposal_targets_default == "both"
+    assert settings.workflow_proposals.proposal_targets_default == "both"
     assert settings.workflow.proposal_targets_default == "both"
-    assert settings.task_proposals.max_items_project_default == 5
+    assert settings.workflow_proposals.max_items_project_default == 5
     assert settings.workflow.proposal_max_items_project == 5
-    assert settings.task_proposals.max_items_moonmind_default == 4
+    assert settings.workflow_proposals.max_items_moonmind_default == 4
     assert settings.workflow.proposal_max_items_moonmind == 4
-    assert settings.task_proposals.moonmind_severity_floor_default == "medium"
+    assert settings.workflow_proposals.moonmind_severity_floor_default == "medium"
     assert settings.workflow.proposal_moonmind_severity_floor == "medium"
 
     monkeypatch.delenv("MOONMIND_PROPOSAL_TARGETS", raising=False)
-    monkeypatch.delenv("TASK_PROPOSALS_MAX_ITEMS_PROJECT", raising=False)
-    monkeypatch.delenv("TASK_PROPOSALS_MAX_ITEMS_MOONMIND", raising=False)
+    monkeypatch.delenv("WORKFLOW_PROPOSALS_MAX_ITEMS_PROJECT", raising=False)
+    monkeypatch.delenv("WORKFLOW_PROPOSALS_MAX_ITEMS_MOONMIND", raising=False)
     monkeypatch.delenv("MOONMIND_MIN_SEVERITY_FOR_MOONMIND", raising=False)
 
 def test_workflow_settings_accept_queue_aliases(monkeypatch) -> None:
@@ -1068,17 +1062,17 @@ class TestAppSettingsRuntimeValidation:
         self, app_settings_defaults, monkeypatch
     ):
         for key in (
-            "MOONMIND_DEFAULT_TASK_RUNTIME",
-            "WORKFLOW_DEFAULT_TASK_RUNTIME",
-            "WORKFLOW_DEFAULT_TASK_RUNTIME",
+            "MOONMIND_DEFAULT_RUNTIME",
+            "WORKFLOW_DEFAULT_RUNTIME",
+            "WORKFLOW_DEFAULT_RUNTIME",
         ):
             monkeypatch.delenv(key, raising=False)
         defaults = dict(app_settings_defaults)
-        defaults["workflow"] = {"default_task_runtime": "claude"}
+        defaults["workflow"] = {"default_runtime": "claude"}
         defaults["anthropic"] = {"anthropic_api_key": "test-key"}
 
         settings = AppSettings(**defaults)
-        assert settings.workflow.default_task_runtime == "claude_code"
+        assert settings.workflow.default_runtime == "claude_code"
 
     def test_app_settings_maps_claude_alias_to_anthropic_api_key(
         self, app_settings_defaults, monkeypatch
@@ -1094,38 +1088,38 @@ class TestAppSettingsRuntimeValidation:
         self, app_settings_defaults, monkeypatch
     ):
         for key in (
-            "MOONMIND_DEFAULT_TASK_RUNTIME",
-            "WORKFLOW_DEFAULT_TASK_RUNTIME",
-            "WORKFLOW_DEFAULT_TASK_RUNTIME",
+            "MOONMIND_DEFAULT_RUNTIME",
+            "WORKFLOW_DEFAULT_RUNTIME",
+            "WORKFLOW_DEFAULT_RUNTIME",
             "ANTHROPIC_API_KEY",
         ):
             monkeypatch.delenv(key, raising=False)
         monkeypatch.setenv("CLAUDE_API_KEY", "alias-key")
         defaults = dict(app_settings_defaults)
-        defaults["workflow"] = {"default_task_runtime": "claude"}
+        defaults["workflow"] = {"default_runtime": "claude"}
 
         settings = AppSettings(**defaults)
-        assert settings.workflow.default_task_runtime == "claude_code"
+        assert settings.workflow.default_runtime == "claude_code"
 
     def test_app_settings_rejects_jules_default_without_runtime_config(
         self, app_settings_defaults, monkeypatch
     ):
         for key in (
-            "MOONMIND_DEFAULT_TASK_RUNTIME",
-            "WORKFLOW_DEFAULT_TASK_RUNTIME",
-            "WORKFLOW_DEFAULT_TASK_RUNTIME",
+            "MOONMIND_DEFAULT_RUNTIME",
+            "WORKFLOW_DEFAULT_RUNTIME",
+            "WORKFLOW_DEFAULT_RUNTIME",
             "JULES_ENABLED",
             "JULES_API_URL",
             "JULES_API_KEY",
         ):
             monkeypatch.delenv(key, raising=False)
         defaults = dict(app_settings_defaults)
-        defaults["workflow"] = {"default_task_runtime": "jules"}
+        defaults["workflow"] = {"default_runtime": "jules"}
         defaults["jules"] = {"jules_api_key": None}
 
         with pytest.raises(
             ValueError,
-            match="default_task_runtime=jules requires JULES_API_KEY configured",
+            match="default_runtime=jules requires JULES_API_KEY configured",
         ):
             AppSettings(_env_file=None, **defaults)
 
@@ -1133,13 +1127,13 @@ class TestAppSettingsRuntimeValidation:
         self, app_settings_defaults, monkeypatch
     ):
         for key in (
-            "MOONMIND_DEFAULT_TASK_RUNTIME",
-            "WORKFLOW_DEFAULT_TASK_RUNTIME",
-            "WORKFLOW_DEFAULT_TASK_RUNTIME",
+            "MOONMIND_DEFAULT_RUNTIME",
+            "WORKFLOW_DEFAULT_RUNTIME",
+            "WORKFLOW_DEFAULT_RUNTIME",
         ):
             monkeypatch.delenv(key, raising=False)
         defaults = dict(app_settings_defaults)
-        defaults["workflow"] = {"default_task_runtime": "jules"}
+        defaults["workflow"] = {"default_runtime": "jules"}
         defaults["jules"] = {
             "jules_enabled": True,
             "jules_api_url": "https://jules.example.test",
@@ -1147,4 +1141,4 @@ class TestAppSettingsRuntimeValidation:
         }
 
         settings = AppSettings(_env_file=None, **defaults)
-        assert settings.workflow.default_task_runtime == "jules"
+        assert settings.workflow.default_runtime == "jules"

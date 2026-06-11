@@ -80,8 +80,8 @@ class TemporalSettings(BaseSettings):
         "mm.workflow.merge_automation",
         validation_alias="TEMPORAL_MERGE_AUTOMATION_WORKFLOW_TASK_QUEUE",
     )
-    user_workflow_contract_mode: Literal["legacy_run", "renamed_contract"] = Field(
-        "legacy_run",
+    user_workflow_contract_mode: Literal["renamed_contract"] = Field(
+        "renamed_contract",
         validation_alias="TEMPORAL_USER_WORKFLOW_CONTRACT_MODE",
     )
     user_workflow_v2_task_queue: str = Field(
@@ -89,11 +89,11 @@ class TemporalSettings(BaseSettings):
         validation_alias="TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE",
     )
     user_workflow_cutover_record_path: str | None = Field(
-        None,
+        "config/temporal/mm-730-hard-switch-cutover.example.json",
         validation_alias="TEMPORAL_USER_WORKFLOW_CUTOVER_RECORD_PATH",
     )
     user_workflow_release_notes_path: str | None = Field(
-        None,
+        "docs/ReleaseNotes/MM-730-hard-switch-cutover.md",
         validation_alias="TEMPORAL_USER_WORKFLOW_RELEASE_NOTES_PATH",
     )
     activity_artifacts_task_queue: str = Field(
@@ -240,10 +240,10 @@ class TemporalSettings(BaseSettings):
     @field_validator("user_workflow_contract_mode", mode="before")
     @classmethod
     def _normalize_user_workflow_contract_mode(cls, value: Any) -> str:
-        return str(value or "legacy_run").strip().lower()
+        return str(value or "renamed_contract").strip().lower()
 
 class TemporalDashboardSettings(BaseSettings):
-    """Task-dashboard Temporal source contract and rollout flags."""
+    """Workflow-console Temporal source contract and rollout flags."""
 
     enabled: bool = Field(
         True,
@@ -265,9 +265,9 @@ class TemporalDashboardSettings(BaseSettings):
         True,
         validation_alias=AliasChoices("TEMPORAL_DASHBOARD_SUBMIT_ENABLED"),
     )
-    temporal_task_editing_enabled: bool = Field(
+    temporal_workflow_editing_enabled: bool = Field(
         False,
-        validation_alias=AliasChoices("TEMPORAL_TASK_EDITING_ENABLED"),
+        validation_alias=AliasChoices("TEMPORAL_WORKFLOW_EDITING_ENABLED"),
     )
     debug_fields_enabled: bool = Field(
         False,
@@ -346,10 +346,6 @@ class WorkflowSettings(BaseSettings):
     repo_root: str = Field(
         ".",
         validation_alias=AliasChoices("WORKFLOW_REPO_ROOT"),
-    )
-    tasks_root: str = Field(
-        "specs",
-        validation_alias=AliasChoices("WORKFLOW_TASKS_ROOT", "WORKFLOW_TASKS_ROOT"),
     )
     recurring_dispatch_engine: str = Field(
         "app",
@@ -587,12 +583,12 @@ class WorkflowSettings(BaseSettings):
     default_queue: str = Field(
         "moonmind.jobs",
         validation_alias=AliasChoices("WORKFLOW_DEFAULT_QUEUE"),
-        description="Default queue name for workflow tasks.",
+        description="Default queue name for workflow jobs.",
     )
     default_exchange: str = Field(
         "moonmind.jobs",
         validation_alias=AliasChoices("WORKFLOW_DEFAULT_EXCHANGE"),
-        description="Default exchange for workflow tasks.",
+        description="Default exchange for workflow jobs.",
     )
     default_routing_key: str = Field(
         "moonmind.jobs",
@@ -683,26 +679,25 @@ class WorkflowSettings(BaseSettings):
         alias="CODEX_LOGIN_CHECK_IMAGE",
         description="Override container image for Codex login status checks.",
     )
-    default_task_runtime: str = Field(
+    default_runtime: str = Field(
         "codex",
         validation_alias=AliasChoices(
-            "WORKFLOW_DEFAULT_TASK_RUNTIME",
-            "MOONMIND_DEFAULT_TASK_RUNTIME",
-            "WORKFLOW_DEFAULT_TASK_RUNTIME",
+            "WORKFLOW_DEFAULT_RUNTIME",
+            "MOONMIND_DEFAULT_RUNTIME",
         ),
-        description="Fallback runtime for queue task payloads that omit runtime fields.",
+        description="Fallback runtime for workflow payloads that omit runtime fields.",
         json_schema_extra={
             "moonmind": {
                 "expose": True,
-                "key": "workflow.default_task_runtime",
+                "key": "workflow.default_runtime",
                 "section": "user-workspace",
                 "category": "Workflow",
                 "scopes": ["workspace"],
                 "ui": "select",
                 "type": "enum",
                 "requires_reload": False,
-                "apply_mode": "next_task",
-                "title": "Default Task Runtime",
+                "apply_mode": "next_workflow",
+                "title": "Default Runtime",
                 "options": [
                     ("codex", "Codex"),
                     ("codex_cli", "Codex CLI"),
@@ -710,7 +705,7 @@ class WorkflowSettings(BaseSettings):
                     ("gemini_cli", "Gemini CLI"),
                     ("jules", "Jules"),
                 ],
-                "applies_to": ["task_creation", "workflow_runtime"],
+                "applies_to": ["workflow_creation", "workflow_runtime"],
                 "order": 10,
             }
         },
@@ -722,7 +717,7 @@ class WorkflowSettings(BaseSettings):
             "MOONMIND_DEFAULT_PUBLISH_MODE",
             "WORKFLOW_DEFAULT_PUBLISH_MODE",
         ),
-        description="Fallback publish mode applied when queue task payloads omit publish.mode.",
+        description="Fallback publish mode applied when queued workflow payloads omit publish.mode.",
         json_schema_extra={
             "moonmind": {
                 "expose": True,
@@ -733,10 +728,10 @@ class WorkflowSettings(BaseSettings):
                 "ui": "select",
                 "type": "enum",
                 "requires_reload": False,
-                "apply_mode": "next_task",
+                "apply_mode": "next_workflow",
                 "title": "Default Publish Mode",
                 "options": [("none", "None"), ("branch", "Branch"), ("pr", "Pull Request")],
-                "applies_to": ["task_creation", "publishing"],
+                "applies_to": ["workflow_creation", "publishing"],
                 "order": 20,
             }
         },
@@ -831,7 +826,7 @@ class WorkflowSettings(BaseSettings):
                 "ui": "number",
                 "type": "integer",
                 "requires_reload": False,
-                "apply_mode": "next_task",
+                "apply_mode": "next_workflow",
                 "title": "Skills Canary Percent",
                 "applies_to": ["workflow_runtime", "skills"],
                 "order": 40,
@@ -951,7 +946,7 @@ class WorkflowSettings(BaseSettings):
     live_session_enabled_default: bool = Field(
         True,
         validation_alias=AliasChoices("MOONMIND_LIVE_SESSION_ENABLED_DEFAULT"),
-        description="Enable live task sessions by default for queue task runs.",
+        description="Enable live sessions by default for queued workflow runs.",
         json_schema_extra={
             "moonmind": {
                 "expose": True,
@@ -962,9 +957,9 @@ class WorkflowSettings(BaseSettings):
                 "ui": "toggle",
                 "type": "boolean",
                 "requires_reload": False,
-                "apply_mode": "next_task",
+                "apply_mode": "next_workflow",
                 "title": "Live Sessions Enabled By Default",
-                "applies_to": ["task_creation", "live_sessions"],
+                "applies_to": ["workflow_creation", "live_sessions"],
                 "order": 50,
             }
         },
@@ -1007,45 +1002,41 @@ class WorkflowSettings(BaseSettings):
         ge=1,
         le=64,
     )
-    enable_task_proposals: bool = Field(
+    enable_proposals: bool = Field(
         True,
-        validation_alias=AliasChoices(
-            "MOONMIND_ENABLE_TASK_PROPOSALS",
-            "ENABLE_TASK_PROPOSALS",
-        ),
-        description="Enable worker-side task proposal submission after successful runs.",
+        validation_alias=AliasChoices("MOONMIND_ENABLE_PROPOSALS"),
+        description="Enable worker-side workflow proposal submission after successful runs.",
     )
     proposal_targets_default: str = Field(
         "project",
         validation_alias=AliasChoices(
-            "MOONMIND_PROPOSAL_TARGETS", "TASK_PROPOSALS_TARGETS_DEFAULT"
+            "MOONMIND_PROPOSAL_TARGETS"
         ),
-        description="Default proposal targets when tasks omit proposalPolicy (project|moonmind|both).",
+        description="Default proposal targets when workflows omit proposalPolicy (project|moonmind|both).",
     )
     proposal_max_items_project: int = Field(
         3,
-        validation_alias=AliasChoices("TASK_PROPOSALS_MAX_ITEMS_PROJECT"),
-        description="Default per-run project proposal cap applied when task policy omits maxItems.project.",
+        validation_alias=AliasChoices("WORKFLOW_PROPOSALS_MAX_ITEMS_PROJECT"),
+        description="Default per-run project proposal cap applied when workflow policy omits maxItems.project.",
         ge=1,
     )
     proposal_max_items_moonmind: int = Field(
         2,
-        validation_alias=AliasChoices("TASK_PROPOSALS_MAX_ITEMS_MOONMIND"),
-        description="Default per-run MoonMind proposal cap applied when task policy omits maxItems.moonmind.",
+        validation_alias=AliasChoices("WORKFLOW_PROPOSALS_MAX_ITEMS_MOONMIND"),
+        description="Default per-run MoonMind proposal cap applied when workflow policy omits maxItems.moonmind.",
         ge=1,
     )
     proposal_moonmind_severity_floor: str = Field(
         "high",
         validation_alias=AliasChoices(
             "MOONMIND_MIN_SEVERITY_FOR_MOONMIND",
-            "TASK_PROPOSALS_MIN_SEVERITY_FOR_MOONMIND",
         ),
         description="Lowest accepted severity for MoonMind CI proposals when policy omits a floor.",
     )
     moonmind_ci_repository: str = Field(
         "MoonLadderStudios/MoonMind",
         validation_alias=AliasChoices(
-            "MOONMIND_CI_REPOSITORY", "TASK_PROPOSALS_MOONMIND_CI_REPOSITORY"
+            "MOONMIND_CI_REPOSITORY"
         ),
         description="Repository used for MoonMind CI/run-quality proposals.",
     )
@@ -1280,9 +1271,9 @@ class WorkflowSettings(BaseSettings):
             raise ValueError("skill_policy_mode must be one of: permissive, allowlist")
         return normalized
 
-    @field_validator("default_task_runtime", mode="before")
+    @field_validator("default_runtime", mode="before")
     @classmethod
-    def _normalize_default_task_runtime(cls, value: object) -> str:
+    def _normalize_default_runtime(cls, value: object) -> str:
         """Normalize queue runtime fallback and reject unknown values.
 
         Accepts both canonical IDs (codex_cli, claude_code) and legacy aliases
@@ -1296,7 +1287,7 @@ class WorkflowSettings(BaseSettings):
         allowed = {"codex_cli", "gemini_cli", "claude_code", "jules"}
         if normalized not in allowed:
             supported = ", ".join(sorted(allowed))
-            raise ValueError(f"default_task_runtime must be one of: {supported}")
+            raise ValueError(f"default_runtime must be one of: {supported}")
         return normalized
 
     @field_validator("default_publish_mode", mode="before")
@@ -1748,7 +1739,7 @@ class MemorySettings(BaseSettings):
     )
     history: Literal["off", "digest"] = Field(
         "off",
-        description="Task-history memory provider. Allowed values: off, digest.",
+        description="Run-history memory provider. Allowed values: off, digest.",
     )
     long_term: Literal["off", "mem0"] = Field(
         "off",
@@ -1757,7 +1748,7 @@ class MemorySettings(BaseSettings):
     fail_open: bool = Field(
         True,
         description=(
-            "Allow chat and task execution to continue when memory providers fail."
+            "Allow chat and workflow execution to continue when memory providers fail."
         ),
     )
     context_budget_tokens: int = Field(
@@ -1781,7 +1772,7 @@ class MemorySettings(BaseSettings):
 
     @property
     def history_enabled(self) -> bool:
-        """Return whether task-history memory retrieval/writeback should run."""
+        """Return whether run-history memory retrieval/writeback should run."""
 
         return self.enabled and self.history != "off"
 
@@ -1931,32 +1922,32 @@ class FeatureFlagsSettings(BaseSettings):
         ),
     )
 
-    task_template_catalog: bool = Field(
+    preset_catalog: bool = Field(
         True,
         validation_alias=AliasChoices(
-            "FEATURE_FLAGS__TASK_TEMPLATE_CATALOG",
-            "TASK_TEMPLATE_CATALOG",
+            "FEATURE_FLAGS__PRESET_CATALOG",
+            "PRESET_CATALOG",
         ),
         description=(
-            "Legacy enable toggle for task preset catalog endpoints + UI wiring. "
+            "Enable toggle for preset catalog endpoints + UI wiring. "
             "Defaults on."
         ),
     )
-    disable_task_template_catalog: bool = Field(
+    disable_preset_catalog: bool = Field(
         False,
         validation_alias=AliasChoices(
-            "FEATURE_FLAGS__DISABLE_TASK_TEMPLATE_CATALOG",
-            "DISABLE_TASK_TEMPLATE_CATALOG",
+            "FEATURE_FLAGS__DISABLE_PRESET_CATALOG",
+            "DISABLE_PRESET_CATALOG",
         ),
-        description="Disable task preset catalog endpoints + UI wiring.",
+        description="Disable preset catalog endpoints + UI wiring.",
     )
 
     @property
-    def task_template_catalog_enabled(self) -> bool:
-        """Return whether task presets should be exposed for this runtime."""
+    def preset_catalog_enabled(self) -> bool:
+        """Return whether presets should be exposed for this runtime."""
 
         return bool(
-            self.task_template_catalog and not self.disable_task_template_catalog
+            self.preset_catalog and not self.disable_preset_catalog
         )
 
     @property
@@ -1990,32 +1981,32 @@ class FeatureFlagsSettings(BaseSettings):
         extra="ignore",
     )
 
-class TaskProposalSettings(BaseSettings):
-    """Task proposal queue runtime knobs."""
+class WorkflowProposalSettings(BaseSettings):
+    """Workflow proposal queue runtime knobs."""
 
     proposal_targets_default: str = Field(
         "project",
         validation_alias=AliasChoices(
-            "MOONMIND_PROPOSAL_TARGETS", "TASK_PROPOSALS_TARGETS_DEFAULT"
+            "MOONMIND_PROPOSAL_TARGETS"
         ),
         description="Default proposal targets when policy overrides are absent (project|moonmind|both).",
     )
     moonmind_ci_repository: str = Field(
         "MoonLadderStudios/MoonMind",
         validation_alias=AliasChoices(
-            "MOONMIND_CI_REPOSITORY", "TASK_PROPOSALS_MOONMIND_CI_REPOSITORY"
+            "MOONMIND_CI_REPOSITORY"
         ),
         description="MoonMind CI repository used whenever proposals target run-quality improvements.",
     )
     max_items_project_default: int = Field(
         3,
-        validation_alias=AliasChoices("TASK_PROPOSALS_MAX_ITEMS_PROJECT"),
+        validation_alias=AliasChoices("WORKFLOW_PROPOSALS_MAX_ITEMS_PROJECT"),
         description="Default per-run cap for project-targeted proposals when unspecified.",
         ge=1,
     )
     max_items_moonmind_default: int = Field(
         2,
-        validation_alias=AliasChoices("TASK_PROPOSALS_MAX_ITEMS_MOONMIND"),
+        validation_alias=AliasChoices("WORKFLOW_PROPOSALS_MAX_ITEMS_MOONMIND"),
         description="Default per-run cap for MoonMind-targeted proposals when unspecified.",
         ge=1,
     )
@@ -2023,13 +2014,12 @@ class TaskProposalSettings(BaseSettings):
         "high",
         validation_alias=AliasChoices(
             "MOONMIND_MIN_SEVERITY_FOR_MOONMIND",
-            "TASK_PROPOSALS_MIN_SEVERITY_FOR_MOONMIND",
         ),
         description="Minimum severity that must be met before MoonMind CI proposals are emitted when policy omits a floor.",
     )
     proposal_delivery_provider_default: str = Field(
         "github",
-        validation_alias=AliasChoices("TASK_PROPOSALS_DELIVERY_PROVIDER"),
+        validation_alias=AliasChoices("WORKFLOW_PROPOSALS_DELIVERY_PROVIDER"),
         description=(
             "Default non-secret proposal delivery provider when policy omits "
             "delivery.provider (github|jira)."
@@ -2037,27 +2027,27 @@ class TaskProposalSettings(BaseSettings):
     )
     severity_vocabulary: tuple[str, ...] = Field(
         _ALLOWED_PROPOSAL_SEVERITIES,
-        validation_alias=AliasChoices("TASK_PROPOSALS_SEVERITY_VOCABULARY"),
+        validation_alias=AliasChoices("WORKFLOW_PROPOSALS_SEVERITY_VOCABULARY"),
         description="Allowed severity labels for proposal policy evaluation.",
     )
     notifications_enabled: bool = Field(
         False,
-        alias="TASK_PROPOSALS_NOTIFICATIONS_ENABLED",
+        alias="WORKFLOW_PROPOSALS_NOTIFICATIONS_ENABLED",
         description="Emit webhook notifications for high-signal proposal categories.",
     )
     notifications_webhook_url: Optional[str] = Field(
         None,
-        alias="TASK_PROPOSALS_NOTIFICATIONS_WEBHOOK_URL",
+        alias="WORKFLOW_PROPOSALS_NOTIFICATIONS_WEBHOOK_URL",
         description="Webhook endpoint for proposal alerts.",
     )
     notifications_authorization: Optional[str] = Field(
         None,
-        alias="TASK_PROPOSALS_NOTIFICATIONS_AUTHORIZATION",
+        alias="WORKFLOW_PROPOSALS_NOTIFICATIONS_AUTHORIZATION",
         description="Optional Authorization header for webhook calls.",
     )
     notifications_timeout_seconds: int = Field(
         5,
-        alias="TASK_PROPOSALS_NOTIFICATIONS_TIMEOUT_SECONDS",
+        alias="WORKFLOW_PROPOSALS_NOTIFICATIONS_TIMEOUT_SECONDS",
         description="Webhook timeout in seconds.",
         gt=0,
     )
@@ -2068,7 +2058,7 @@ class TaskProposalSettings(BaseSettings):
         normalized = str(value or "").strip().lower() or "github"
         if normalized not in {"github", "jira"}:
             raise ValueError(
-                "task_proposals.proposal_delivery_provider_default must be github or jira"
+                "workflow_proposals.proposal_delivery_provider_default must be github or jira"
             )
         return normalized
 
@@ -2081,7 +2071,7 @@ class TaskProposalSettings(BaseSettings):
         if text not in _ALLOWED_TARGET_DEFAULTS:
             allowed = ", ".join(_ALLOWED_TARGET_DEFAULTS)
             raise ValueError(
-                f"task_proposals.proposal_targets_default must be one of: {allowed}"
+                f"workflow_proposals.proposal_targets_default must be one of: {allowed}"
             )
         return text
 
@@ -2094,7 +2084,7 @@ class TaskProposalSettings(BaseSettings):
         if text not in _ALLOWED_PROPOSAL_SEVERITIES:
             allowed = ", ".join(_ALLOWED_PROPOSAL_SEVERITIES)
             raise ValueError(
-                "task_proposals.moonmind_severity_floor_default must be one of: "
+                "workflow_proposals.moonmind_severity_floor_default must be one of: "
                 f"{allowed}"
             )
         return text
@@ -2127,7 +2117,7 @@ class TaskProposalSettings(BaseSettings):
         if invalid:
             allowed = ", ".join(_ALLOWED_PROPOSAL_SEVERITIES)
             raise ValueError(
-                f"task_proposals.severity_vocabulary must be subset of: {allowed}"
+                f"workflow_proposals.severity_vocabulary must be subset of: {allowed}"
             )
         ordered = tuple(
             token for token in _ALLOWED_PROPOSAL_SEVERITIES if token in normalized
@@ -2305,7 +2295,7 @@ class AppSettings(BaseSettings):
     )
     workflow: AppWorkflowSettings = Field(default_factory=AppWorkflowSettings)
     feature_flags: FeatureFlagsSettings = Field(default_factory=FeatureFlagsSettings)
-    task_proposals: TaskProposalSettings = Field(default_factory=TaskProposalSettings)
+    workflow_proposals: WorkflowProposalSettings = Field(default_factory=WorkflowProposalSettings)
     execution_notifications: ExecutionNotificationSettings = Field(
         default_factory=ExecutionNotificationSettings
     )
@@ -2313,15 +2303,12 @@ class AppSettings(BaseSettings):
         default_factory=IntegrationCallbackSettings
     )
     jules: JulesSettings = Field(default_factory=JulesSettings)
-    worker_enable_task_proposals: Optional[bool] = Field(
+    worker_enable_proposals: Optional[bool] = Field(
         None,
-        validation_alias=AliasChoices(
-            "MOONMIND_ENABLE_TASK_PROPOSALS",
-            "ENABLE_TASK_PROPOSALS",
-        ),
+        validation_alias=AliasChoices("MOONMIND_ENABLE_PROPOSALS"),
         exclude=True,
         description=(
-            "Compatibility passthrough for worker task-proposal bootstrap env flags."
+            "Compatibility passthrough for worker workflow-proposal bootstrap env flags."
         ),
     )
     worker_stage_command_timeout_seconds: Optional[int] = Field(
@@ -2606,8 +2593,8 @@ class AppSettings(BaseSettings):
         super().model_post_init(__context)
         if not self.workflow.codex_queue:
             self.workflow.codex_queue = self.workflow.default_queue
-        if self.worker_enable_task_proposals is not None:
-            self.workflow.enable_task_proposals = self.worker_enable_task_proposals
+        if self.worker_enable_proposals is not None:
+            self.workflow.enable_proposals = self.worker_enable_proposals
         if self.worker_stage_command_timeout_seconds is not None:
             self.workflow.stage_command_timeout_seconds = (
                 self.worker_stage_command_timeout_seconds
@@ -2628,7 +2615,7 @@ class AppSettings(BaseSettings):
                     github_repository=repo,
                 )
         configured_default = (
-            str(self.workflow.default_task_runtime or "").strip().lower()
+            str(self.workflow.default_runtime or "").strip().lower()
         )
         if configured_default == "jules":
             default_runtime_gate = build_jules_runtime_gate_state(
@@ -2636,7 +2623,7 @@ class AppSettings(BaseSettings):
                 enabled=self.jules.jules_enabled,
                 api_url=self.jules.jules_api_url,
                 api_key=self.jules.jules_api_key,
-                error_message="default_task_runtime=jules requires JULES_API_KEY configured (set JULES_ENABLED=false to explicitly disable)",
+                error_message="default_runtime=jules requires JULES_API_KEY configured (set JULES_ENABLED=false to explicitly disable)",
             )
             if not default_runtime_gate.enabled:
                 raise ValueError(default_runtime_gate.error_message)

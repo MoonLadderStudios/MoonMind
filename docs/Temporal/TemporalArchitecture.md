@@ -1,6 +1,6 @@
 # Temporal Architecture
 
-**Implementation tracking:** Rollout, backlog, one-off implementation notes, migration checklists, and work sequencing live in MoonSpec artifacts (`specs/<feature>/`), issues, pull requests, gitignored handoffs, or local-only files. Canonical `docs/` files describe durable architecture and product contracts.
+**Implementation tracking:** Rollout, backlog, one-off implementation notes, migration checklists, and work sequencing live under `docs/tmp/`, issues, pull requests, gitignored handoffs, or local-only files. Canonical `docs/` files describe durable architecture and product contracts.
 
 **Status:** Normative architecture hub (Temporal-native; compatibility projections and hardening work remain repo-visible)
 **Owner:** MoonMind Platform
@@ -25,9 +25,9 @@ This document defines the top-level architecture for:
 - managed-runtime and external-agent integration
 - security, idempotency, versioning, observability, and operational guardrails
 
-MoonMind may still expose product vocabulary such as `task`, `taskId`, task detail routes, and Mission Control task-oriented views. Those are product/API terms. Inside the Temporal architecture, the canonical durable entity is a **Workflow Execution**.
+Some MoonMind payloads still carry legacy `task` / `taskId` field names (they rename in the hard switch) alongside workflow detail routes and Mission Control workflow views. Those are product/API terms. Inside the Temporal architecture, the canonical durable entity is a **Workflow Execution**.
 
-Compatibility tables, app DB projections, historical rows, dashboard adapters, and task-oriented APIs may exist, but they are not parallel orchestrators. For Temporal-managed work, workflow-owned state/history and workflow-managed metadata are authoritative. App DB projections are repairable read models.
+Compatibility tables, app DB projections, historical rows, dashboard adapters, and workflow product APIs may exist, but they are not parallel orchestrators. For Temporal-managed work, workflow-owned state/history and workflow-managed metadata are authoritative. App DB projections are repairable read models.
 
 ---
 
@@ -65,9 +65,9 @@ This document is the architecture hub. Detailed contracts live in:
 - `docs/Temporal/WorkflowArtifactSystemDesign.md`
 - `docs/Temporal/ArtifactPresentationContract.md`
 - `docs/Temporal/SourceOfTruthAndProjectionModel.md`
-- `docs/Temporal/TaskExecutionCompatibilityModel.md`
+- `docs/Temporal/WorkflowExecutionProductModel.md`
 - `docs/Temporal/TemporalTypeSafety.md`
-- `docs/Temporal/RunHistoryAndRerunSemantics.md`
+- `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`
 - `docs/Temporal/ErrorTaxonomy.md`
 - `docs/Temporal/WorkflowSchedulingGuide.md`
 - `docs/Security/ProviderProfiles.md`
@@ -76,7 +76,7 @@ This document is the architecture hub. Detailed contracts live in:
 - `docs/ManagedAgents/CodexCliManagedSessions.md`
 - `docs/ManagedAgents/LiveLogs.md`
 - `docs/ManagedAgents/DockerOutOfDocker.md`
-- `docs/Tasks/AgentSkillSystem.md`
+- `docs/Steps/SkillSystem.md`
 - `docs/MoonMindArchitecture.md`
 
 Avoid duplicating exact lifecycle state machines, complete activity catalogs, API schemas, or query syntax here. This hub defines architectural rules and points to the normative contract docs.
@@ -104,7 +104,7 @@ Temporal provides:
 
 MoonMind adds domain contracts above Temporal:
 
-- Task / Run product vocabulary
+- Workflow / Run product vocabulary
 - Plan and Step Ledger
 - Tool / Skill / Preset execution contracts
 - Artifact and report presentation contracts
@@ -129,7 +129,7 @@ The API:
 - authenticates and authorizes callers
 - starts workflows
 - sends Updates, Signals, Cancels, Terminations, and Schedule operations
-- exposes task-oriented and execution-oriented APIs
+- exposes workflow product and execution-oriented APIs
 - maintains projections and compatibility fields where useful
 - enforces ownership, idempotency, and public contract validation before invoking Temporal
 
@@ -193,7 +193,7 @@ The managed runtime plane:
 
 - supervises MoonMind-managed CLI/container runtimes
 - owns runtime launch, status, result collection, cleanup, and log capture through Activities and support workflows
-- uses `MoonMind.AgentRun` and, for task-scoped managed sessions, `MoonMind.AgentSession`
+- uses `MoonMind.AgentRun` and, for workflow-scoped managed sessions, `MoonMind.AgentSession`
 - keeps managed-run observability artifact-first and session-aware
 
 ### 5.8 External Integration Plane
@@ -243,7 +243,7 @@ Use child workflows when the child has its own durable lifecycle, cancellation s
 Current first-class examples:
 
 - `MoonMind.AgentRun` for one true agent execution
-- `MoonMind.AgentSession` for one task-scoped managed session
+- `MoonMind.AgentSession` for one workflow-scoped managed session
 - `MoonMind.MergeAutomation` for post-run PR readiness and resolver launch
 - `MoonMind.ProviderProfileManager` for long-lived provider-profile slot coordination
 - `MoonMind.OAuthSession` for OAuth / terminal-auth lifecycle support
@@ -255,7 +255,7 @@ Child workflow rules:
 
 - Every child workflow start must intentionally choose and document a Parent Close Policy.
 - The parent must await child-start acceptance before treating the child as durably owned.
-- `MoonMind.Run` cancellation should request cancellation of active `MoonMind.AgentRun` children and allow best-effort provider/runtime cleanup.
+- `MoonMind.UserWorkflow` cancellation should request cancellation of active `MoonMind.AgentRun` children and allow best-effort provider/runtime cleanup.
 - Fire-and-forget operational children may use abandon semantics only when their workflow IDs are durably recorded and a reconciliation owner exists.
 - Terminate-style parent close behavior should be reserved for tightly coupled subgraphs where independent cleanup would be wrong.
 - A parent must not Continue-As-New with active children unless it has explicitly recorded child Workflow IDs and selected a handoff strategy.
@@ -355,10 +355,10 @@ The live repo-aligned workflow catalog is:
 
 | Workflow Type | Role | Product visibility |
 | --- | --- | --- |
-| `MoonMind.Run` | Current live root workflow implementation for user/service Workflow Executions; plans work, owns Step ledger, starts child agent runs, integrates outputs | Primary Workflow Execution surface |
+| `MoonMind.UserWorkflow` | Current live root workflow implementation for user/service Workflow Executions; plans work, owns Step ledger, starts child agent runs, integrates outputs | Primary Workflow Execution surface |
 | `MoonMind.ManifestIngest` | Ingests, validates, compiles, and orchestrates manifest-backed work | User/system execution surface |
 | `MoonMind.AgentRun` | Durable lifecycle wrapper for one true managed or external agent execution | Child/internal, surfaced through parent details |
-| `MoonMind.AgentSession` | Task-scoped managed-session workflow; currently Codex-backed in the live session plane | Internal/operator/detail support |
+| `MoonMind.AgentSession` | Workflow-scoped managed-session workflow; currently Codex-backed in the live session plane | Internal/operator/detail support |
 | `MoonMind.ManagedSessionReconcile` | Bounded operational reconciliation for managed sessions | Operational |
 | `MoonMind.ProviderProfileManager` | Long-lived provider-profile slot, lease, cooldown, and reconciliation manager | Internal/operator |
 | `MoonMind.OAuthSession` | OAuth / terminal-auth lifecycle support for managed runtimes | Support workflow |
@@ -370,7 +370,7 @@ Rules:
 - Add new Workflow Types only when lifecycle behavior is materially distinct.
 - Do not model provider brands as root workflow types.
 - Do not model worker fleets or task queues as product taxonomies.
-- Product Workflow Execution vocabulary maps primarily to `MoonMind.UserWorkflow`; `MoonMind.Run` remains the current live implementation name where code and workflow registration still use it.
+- Product Workflow Execution vocabulary maps primarily to `MoonMind.UserWorkflow`; `MoonMind.UserWorkflow` remains the current live implementation name where code and workflow registration still use it.
 - If docs and code disagree about the live catalog, code registration and `WorkflowTypeCatalogAndLifecycle.md` must be reconciled immediately.
 
 ---
@@ -405,15 +405,15 @@ Rules:
 - detail views may expose it as debug metadata
 - do not assume it is stable across Continue-As-New, retry chains, reset chains, or schedule-triggered executions
 
-### 8.3 Task ID
+### 8.3 Legacy `taskId` fields
 
-`taskId` is product/API compatibility vocabulary.
+`taskId` is legacy product/API vocabulary that renames in the hard switch.
 
-For Temporal-backed task rows:
+For Temporal-backed workflow rows that still carry it:
 
 - `taskId` must equal `workflowId`
 - APIs may return both
-- compatibility aliases should converge toward Workflow ID
+- remaining legacy aliases must converge to Workflow ID
 - `taskId` must not be minted as a second durable identity for the same Temporal execution
 
 ### 8.4 Workflow ID reuse and conflict policy
@@ -429,7 +429,7 @@ Default rules:
 - Rerun of the same logical execution uses Continue-As-New only where the run-history/rerun contract permits it.
 - Failed-step recovery is a linked follow-up execution with its own Workflow ID unless a future in-place continuation model is explicitly designed.
 
-The exact per-type matrix belongs in `WorkflowTypeCatalogAndLifecycle.md` and `RunHistoryAndRerunSemantics.md`.
+The exact per-type matrix belongs in `WorkflowTypeCatalogAndLifecycle.md` and `WorkflowRunHistoryAndNewRunSemantics.md`.
 
 ---
 
@@ -466,7 +466,7 @@ A narrow helper-activity exception is allowed only when all of the following are
 - the helper exists to preserve deterministic workflow behavior
 - it is fast and bounded
 - it does not require broad secrets, Docker access, sandbox privileges, or provider-side mutation
-- it does not block workflow-task throughput under normal operation
+- it does not block Workflow Task throughput under normal operation
 - it is explicitly listed in the activity topology
 
 Current repo-aligned example:
@@ -576,7 +576,7 @@ Rules:
 - detail views may use Queries and artifacts for richer state
 - app DB projections must preserve Temporal-backed semantics
 - dashboard compatibility statuses must not redefine `mm_state`
-- ordinary task list views may scope to `MoonMind.Run` and `mm_entry = run`
+- ordinary workflow list views may scope to `MoonMind.UserWorkflow` and `mm_entry = run`
 - operator/admin views may expose broader workflow scopes
 - Search Attributes and Memo are visible to operators and must not contain secrets or sensitive prose
 
@@ -690,7 +690,7 @@ Degraded-mode reads must be truthful. If a route falls back to projection data b
 
 ## 13. Managed and external agent execution
 
-`MoonMind.Run` remains the task-level root workflow. When a plan step requires a true agent runtime, `MoonMind.Run` starts `MoonMind.AgentRun`.
+`MoonMind.UserWorkflow` remains the workflow-level root workflow. When a plan step requires a true agent runtime, `MoonMind.UserWorkflow` starts `MoonMind.AgentRun`.
 
 `MoonMind.AgentRun` owns exactly one true agent execution lifecycle.
 
@@ -710,7 +710,7 @@ Managed runtimes additionally use:
 - managed runtime launcher/supervisor/store components
 - artifact-first log capture
 - bounded status/result Activities
-- optional task-scoped `MoonMind.AgentSession` for interactive session continuity
+- optional workflow-scoped `MoonMind.AgentSession` for interactive session continuity
 
 External providers use provider adapters, but still return canonical runtime contracts before crossing into workflow code.
 
@@ -756,7 +756,7 @@ A true agent run:
 A managed session:
 
 - is owned by `MoonMind.AgentSession`
-- provides task-scoped runtime continuity, session epoch tracking, turn/control handling, and session continuity artifacts
+- provides workflow-scoped runtime continuity, session epoch tracking, turn/control handling, and session continuity artifacts
 - is currently Codex-backed in the live session plane
 - may later generalize to other runtimes through neutral managed-session contracts
 
@@ -784,7 +784,7 @@ Temporal Schedules are the authoritative mechanism for recurring workflow starts
 
 Current schedule-backed concerns include:
 
-- recurring task definitions
+- recurring workflow definitions
 - recurring manifest runs
 - managed-session reconciliation
 - artifact or projection sweepers where appropriate
@@ -821,7 +821,7 @@ Every schedule type must explicitly choose:
 
 Defaults should be conservative:
 
-- recurring user tasks: skip or buffer one, not unbounded overlap
+- recurring user workflows: skip or buffer one, not unbounded overlap
 - operational sweepers: skip if still active unless the sweeper is explicitly designed for overlap
 - reconciliation workflows: bounded overlap only when idempotent and partitioned
 
@@ -1144,7 +1144,7 @@ This document does not define:
 - provider-specific adapter internals
 - detailed artifact class registries
 - deployment upgrade runbooks
-- implementation task checklists
+- implementation checklists
 - full run-history product UX
 - exact numeric SLOs for every environment
 

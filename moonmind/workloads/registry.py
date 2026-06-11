@@ -156,13 +156,13 @@ class RunnerProfileRegistry:
             )
             if profile.kind == "bounded_service":
                 container_name = helper_container_name(
-                    task_run_id=parsed_request.task_run_id,
+                    agent_run_id=parsed_request.agent_run_id,
                     step_id=parsed_request.step_id,
                     attempt=parsed_request.attempt,
                 )
                 ownership = WorkloadOwnershipMetadata(
                     kind="bounded_service",
-                    taskRunId=parsed_request.task_run_id,
+                    agentRunId=parsed_request.agent_run_id,
                     stepId=parsed_request.step_id,
                     attempt=parsed_request.attempt,
                     toolName=parsed_request.tool_name,

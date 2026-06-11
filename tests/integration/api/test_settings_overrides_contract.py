@@ -237,8 +237,8 @@ async def test_mm656_settings_override_contract_rejects_invalid_references_and_p
         invalid_combo = await client.patch(
             "/api/v1/settings/workspace",
             json={
-                "changes": {"workflow.default_task_runtime": "unsupported-runtime"},
-                "expected_versions": {"workflow.default_task_runtime": 1},
+                "changes": {"workflow.default_runtime": "unsupported-runtime"},
+                "expected_versions": {"workflow.default_runtime": 1},
             },
         )
 

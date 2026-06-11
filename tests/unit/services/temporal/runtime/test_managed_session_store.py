@@ -13,7 +13,7 @@ def _record() -> CodexManagedSessionRecord:
     return CodexManagedSessionRecord(
         sessionId="sess-1",
         sessionEpoch=1,
-        taskRunId="task-1",
+        agentRunId="task-1",
         containerId="ctr-1",
         threadId="thread-1",
         runtimeId="codex_cli",
@@ -35,7 +35,7 @@ def test_store_round_trips_phase6_session_record(tmp_path) -> None:
 
     assert path.name == "sess-1.json"
     assert loaded == record
-    assert loaded.task_run_id == "task-1"
+    assert loaded.agent_run_id == "task-1"
     assert loaded.container_id == "ctr-1"
 
 @pytest.mark.asyncio

@@ -74,7 +74,7 @@ Never print raw environment variables. Use targeted checks such as `test -n "$MO
 3. Inspect implementation evidence.
    - In branch mode: read changed source, tests, docs, workflow/config, migrations, and generated artifacts within `<merge-base>..HEAD`.
    - In main/trunk mode: read the current state of files relevant to the Jira ledger AND, when available, the implementing merge commit(s) diffs identified above. The "current state on main" is acceptable evidence on its own when it clearly satisfies a requirement; the historical diff is supplementary.
-   - In both modes: search the repository with `rg -i` for Jira terms, feature names, acceptance criteria keywords, old behavior, and new behavior. In main/trunk mode, also `rg -i -w` the issue key itself (`MM-555`, etc.) across source, tests, specs, docs, changelog, and `specs/<feature>/` folders.
+   - In both modes: search the repository with `rg -i` for Jira terms, feature names, acceptance criteria keywords, old behavior, and new behavior. In main/trunk mode, also `rg -i -w` the issue key itself (`MM-555`, etc.) across source, tests, docs, changelog, `docs/tmp/`, and local handoff folders.
    - Identify deleted or superseded paths so the verdict accounts for removals as well as additions.
    - Run local tests when required by repo instructions, user request, or when the verdict depends on unproven behavior. If tests cannot run, record exactly why.
    - In main/trunk mode, if no implementing commits, no issue-key references, and no code matching the requirements can be found, then — and only then — record the verdict as `FAIL` (not implemented on main) or `BLOCKED` (requirements too ambiguous to tell), with a clear distinction between the two.

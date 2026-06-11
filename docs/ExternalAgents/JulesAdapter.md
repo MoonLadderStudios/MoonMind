@@ -1,6 +1,6 @@
 # Technical Design: Jules Provider Adapter
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
+**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 Status: **Implemented as reference poll-based provider**
 Last updated: 2026-03-30
@@ -100,7 +100,7 @@ This adapter implements the shared `AgentAdapter` contract and should be treated
 
 Current responsibilities include:
 
-- translate `AgentExecutionRequest` into Jules session/task creation payloads
+- translate `AgentExecutionRequest` into Jules session/workflow creation payloads
 - inject MoonMind correlation and idempotency metadata
 - normalize Jules statuses into canonical MoonMind runtime states
 - map Jules responses into `AgentRunHandle`, `AgentRunStatus`, and `AgentRunResult`
@@ -113,7 +113,7 @@ Jules execution is orchestrated by generic workflow code, not by provider-specif
 
 Primary pieces:
 
-- `MoonMind.Run`
+- `MoonMind.UserWorkflow`
 - `MoonMind.AgentRun`
 
 Those workflows should remain provider-neutral and select Jules only through adapter dispatch and capability metadata.
@@ -219,7 +219,7 @@ This layer should remain transport-oriented and should not accumulate workflow s
 - artifact publishing semantics
 - bundle orchestration semantics
 - parent/child workflow coordination
-- MoonMind task-state transitions
+- MoonMind workflow execution-state transitions
 
 ---
 

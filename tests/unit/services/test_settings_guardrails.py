@@ -168,7 +168,7 @@ def test_section4_7_apply_modes_acknowledge_non_hot_reloadable_settings():
     expressible = {
         "immediate",
         "next_request",
-        "next_task",
+        "next_workflow",
         "next_launch",
         "worker_reload",
         "process_restart",

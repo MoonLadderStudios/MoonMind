@@ -354,7 +354,7 @@ def test_mem0_adapter_filters_empty_metadata_and_normalizes_legacy_results():
     )
 
     added_metadata = client.added[0][1]
-    assert "task_run_id" not in added_metadata
+    assert "agent_run_id" not in added_metadata
     assert "artifact_refs" not in added_metadata
     assert "empty" not in added_metadata
     assert added_metadata["kept"] == "value"

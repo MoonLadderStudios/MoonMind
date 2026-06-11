@@ -180,7 +180,7 @@ async def test_publish_artifacts_captures_story_breakdown_handoff(tmp_path):
 
     class _RunStore:
         def load(self, run_id: str):
-            assert run_id == "task-run-1"
+            assert run_id == "agent-run-1"
             return SimpleNamespace(workspace_path=str(tmp_path))
 
     mock_service = MagicMock()
@@ -205,7 +205,7 @@ async def test_publish_artifacts_captures_story_breakdown_handoff(tmp_path):
     input_result = AgentRunResult(
         summary="Completed successfully",
         metadata={
-            "taskRunId": "task-run-1",
+            "agentRunId": "agent-run-1",
             "storyBreakdownPath": "artifacts/story-breakdowns/example/stories.json",
             "storyBreakdownMarkdownPath": (
                 "artifacts/story-breakdowns/example/stories.md"
@@ -281,7 +281,7 @@ async def test_publish_artifacts_captures_story_breakdown_from_job_artifact_root
 
     class _RunStore:
         def load(self, run_id: str):
-            assert run_id == "task-run-1"
+            assert run_id == "agent-run-1"
             return SimpleNamespace(workspace_path=str(repo_path))
 
     mock_service = MagicMock()
@@ -304,7 +304,7 @@ async def test_publish_artifacts_captures_story_breakdown_from_job_artifact_root
     input_result = AgentRunResult(
         summary="Completed successfully",
         metadata={
-            "taskRunId": "task-run-1",
+            "agentRunId": "agent-run-1",
             "storyBreakdownPath": "artifacts/story-breakdowns/example/stories.json",
             "storyBreakdownMarkdownPath": (
                 "artifacts/story-breakdowns/example/stories.md"
@@ -345,7 +345,7 @@ async def test_publish_artifacts_captures_story_breakdown_from_job_artifact_root
 async def test_publish_artifacts_skips_story_breakdown_handoff_when_run_missing():
     class _RunStore:
         def load(self, run_id: str):
-            assert run_id == "task-run-1"
+            assert run_id == "agent-run-1"
             return None
 
     mock_service = MagicMock()
@@ -358,7 +358,7 @@ async def test_publish_artifacts_skips_story_breakdown_handoff_when_run_missing(
     input_result = AgentRunResult(
         summary="Completed successfully",
         metadata={
-            "taskRunId": "task-run-1",
+            "agentRunId": "agent-run-1",
             "storyBreakdownPath": "artifacts/story-breakdowns/example/stories.json",
         },
     )
@@ -397,7 +397,7 @@ async def test_publish_artifacts_skips_story_breakdown_handoff_when_run_missing(
     assert "storyBreakdownArtifactRef" not in result.metadata
     assert mock_service.create.await_count == 0
     assert mock_service.write_complete.await_count == 0
-    assert captured_payloads[1]["metadata"]["taskRunId"] == "task-run-1"
+    assert captured_payloads[1]["metadata"]["agentRunId"] == "agent-run-1"
     assert "storyBreakdownArtifactRef" not in captured_payloads[1]["metadata"]
 
 @pytest.mark.asyncio

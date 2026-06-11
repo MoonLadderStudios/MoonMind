@@ -34,15 +34,22 @@ def test_runtime_check_rejects_attempt_route_and_legacy_ui_copy(tmp_path: Path) 
     )
     _write(
         tmp_path / "frontend/src/generated/openapi.ts",
-        'attempts?: components["schemas"]["StepExecutionProjectionModel"][];\n',
+        'attempts?: components["schemas"]["StepExecutionProjectionModel"][];\n'
+        + "task" + "CreateRequest?: unknown;\n"
+        + '"/api/task-' + 'step-templates": unknown;\n'
+        + "list_recurring_" + "tasks_api_recurring_" + "tasks_get: unknown;\n",
+    )
+    _write(
+        tmp_path / "moonmind/workflows/temporal/client.py",
+        'workflow_type = "MoonMind.' + 'Run"\n',
     )
     _write(
         tmp_path / "tests/unit/api/test_executions_temporal.py",
-        'BANNED_EXECUTION_RESPONSE_KEYS = {"taskId", "taskRunId", "taskStatus"}\n',
+        'BANNED_EXECUTION_RESPONSE_KEYS = {"taskId", "agentRunId", "taskStatus"}\n',
     )
     _write(
         tmp_path / "tests/contract/test_temporal_execution_api.py",
-        'BANNED_EXECUTION_SCHEMA_FIELDS = {"taskId", "taskRunId", "taskStatus"}\n',
+        'BANNED_EXECUTION_SCHEMA_FIELDS = {"taskId", "agentRunId", "taskStatus"}\n',
     )
 
     findings = verify_workflow_terminology.run("runtime", root=tmp_path)
@@ -50,6 +57,10 @@ def test_runtime_check_rejects_attempt_route_and_legacy_ui_copy(tmp_path: Path) 
     assert {finding.rule for finding in findings} == {
         "execution-attempt-route",
         "execution-attempt-schema-field",
+        "legacy-proposal-contract",
+        "legacy-preset-contract",
+        "legacy-recurring-workflow-contract",
+        "legacy-user-workflow-type",
         "legacy-ui-copy",
         "execution-response-legacy-fields",
     }
@@ -68,7 +79,7 @@ def test_required_guard_sets_validate_assigned_literals(tmp_path: Path) -> None:
         "    'attempts',\n"
         "    'stepAttemptId',\n"
         "    'taskId',\n"
-        "    'taskRunId',\n"
+        "    'task' + 'RunId',\n"
         "    'taskStatus',\n"
         "}\n",
     )

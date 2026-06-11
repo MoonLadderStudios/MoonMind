@@ -1,6 +1,6 @@
 # System Pause & Maintenance Mode
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
+**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 Status: **Implemented**
 Owners: **MoonMind Engineering**
@@ -10,7 +10,7 @@ Last Updated: **2026-03-14**
 
 ## 1. Problem Statement
 
-MoonMind needs a **single, operator-driven “pause all workflows” switch** so upgrades (image rebuilds, schema migrations, credential rotations, etc.) can be performed **without tasks entering weird intermediate states**, and with the **queue remaining intact** (workflows should stay queued or paused; no surprise retries or dead-lettering).
+MoonMind needs a **single, operator-driven “pause all workflows” switch** so upgrades (image rebuilds, schema migrations, credential rotations, etc.) can be performed **without workflow executions entering weird intermediate states**, and with the **queue remaining intact** (workflows should stay queued or paused; no surprise retries or dead-lettering).
 
 With the migration to Temporal, the legacy concept of REST API claim blocking (`POST /api/queue/jobs/claim`) is obsolete. We now rely on Temporal's robust execution guarantees and native signals to achieve maintenance states.
 
@@ -51,7 +51,7 @@ With the migration to Temporal, the legacy concept of REST API claim blocking (`
 
 1. **System Pause State (DB, singleton)**
  * Source of truth for whether the Mission Control UI accepts new workflow submissions via the `POST /api/workflows` boundary.
- * **Note**: This does not govern the Temporal workers themselves; it only prevents new tasks from being injected into the system from the frontend.
+ * **Note**: This does not govern the Temporal workers themselves; it only prevents new workflow submissions from being injected into the system from the frontend.
 
 2. **Mission Control API Guard**
  * `POST /api/workflows` returns “system paused” metadata and **does not** trigger new Temporal Workflows while the DB singleton is paused.
@@ -122,7 +122,7 @@ For external agents (e.g., Jules), the pause mechanism behaves differently. Exte
  * run migrations
  * restart services
 4. **Resume System**
- * Workers reconnect to Temporal and begin pulling Tasks. The `agent_runtime` workers securely resume tracking detached runtimes via the `ManagedRunStore` (backed by the persistent `agent_workspaces`/`/work/agent_jobs` volume). Note that cross-node upgrades require the replacement workers to mount the same persistent/shared store path.
+ * Workers reconnect to Temporal and begin pulling Temporal Tasks. The `agent_runtime` workers securely resume tracking detached runtimes via the `ManagedRunStore` (backed by the persistent `agent_workspaces`/`/work/agent_jobs` volume). Note that cross-node upgrades require the replacement workers to mount the same persistent/shared store path.
  * Dashboard allows new workflow submissions.
 
 ---
@@ -136,4 +136,4 @@ For external agents (e.g., Jules), the pause mechanism behaves differently. Exte
 
 ## 9. Follow-on enhancements
 
-**Steady-state today:** API-driven pause, worker drain, and Temporal-aligned operator messaging (see sections above). **Optional next steps** — banner wired purely to Temporal visibility (where not already), runbooks standardized on `worker.shutdown()` for drain, and a deeper “quiesce” mode using `workflow.wait_condition()` plus batch signals — are tracked in MoonSpec feature artifacts or local planning notes when needed.
+**Steady-state today:** API-driven pause, worker drain, and Temporal-aligned operator messaging (see sections above). **Optional next steps** — banner wired purely to Temporal visibility (where not already), runbooks standardized on `worker.shutdown()` for drain, and a deeper “quiesce” mode using `workflow.wait_condition()` plus batch signals — are tracked under `docs/tmp/` or in local-only planning notes when needed.

@@ -1,6 +1,6 @@
 # Memory Strategies for LLM Agents and Recommendations for MoonMind
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
+**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 Prioritized experiments, schema/API follow-ups, and effort estimates are listed in the tracker; this document stays **research and recommendations**, not a delivery backlog in prose.
 
@@ -48,7 +48,7 @@ The table below maps major MoonMind components (as reflected in code and configu
 |---|---|---|---|---|
 | Chat API router and model routing | User↔LLM chat, tool routing, RAG injection | Uses a vector retriever to fetch relevant nodes and inject context; model routing is provider-aware | Thread continuity across multi-day features; user preference memory; safe tool-use traces | Working + summary memory; long-term user/app memory store; episodic ledger |
 | Document ingestion (GitHub/Confluence/Drive indexers) | Build/update knowledge base | Ingests documents into embeddings and vector index | Mixed corpora retrieval for code, docs, design specs, tickets; provenance + freshness control | Hybrid retrieval and reranking; hierarchical indexes; doc metadata and ACLs |
-| Workflow automation (spec workflow, PR generation, system runs) | Agentic execution + artifacts | Persists run/task state and writes logs/patches as artifacts | Episodic memory of “what happened” (attempts, failures, fixes), reusable across runs | Event-sourced episodic store + embedding; run summarization into semantic memory |
+| Workflow automation (spec workflow, PR generation, system runs) | Agentic execution + artifacts | Persists run/workflow state and writes logs/patches as artifacts | Episodic memory of “what happened” (attempts, failures, fixes), reusable across runs | Event-sourced episodic store + embedding; run summarization into semantic memory |
 | DB models for users and profiles | User identity and secrets | Encrypted API keys; structured run records | Personalization without leaking secrets; policy enforcement by user/team | “Memory namespaces” with RBAC; secret redaction; audit trails |
 | MCP integration docs/config | Connect agents to tools/data | MCP is positioned as standardized tool/data connector | Safe tool execution, controlled “write” operations, reproducible runs | Tool/state management; governance layer around memory writes |
 
@@ -282,7 +282,7 @@ This shortlist is prioritized for MoonMind’s apparent architecture (FastAPI + 
 
 **What it is:** “Thread-level persistence” for long-running agent conversations and multi-step plans, plus long-term memory namespaces for user/team-specific facts. LangChain’s memory overview for LangGraph distinguishes short-term thread-scoped memory (persisted via a checkpointer) and long-term memory organized via namespaces and keys, supporting hierarchical organization and filtering. citeturn26search1turn25search6
 
-**Why it fits MoonMind:** MoonMind already uses DB-backed run/task states; formalizing this into a generalized “agent thread” concept allows consistent memory retrieval, better multi-agent coordination, and easier replay/audit.
+**Why it fits MoonMind:** MoonMind already uses DB-backed run/workflow states; formalizing this into a generalized “agent thread” concept allows consistent memory retrieval, better multi-agent coordination, and easier replay/audit.
 
 **Implementation notes:**
 - Introduce `thread_id` as a first-class field across chat + workflows.

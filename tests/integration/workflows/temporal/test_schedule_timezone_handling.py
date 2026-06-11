@@ -36,7 +36,7 @@ async def test_schedule_timezone_handling_dst_boundaries():
             id=schedule_id_spring,
             schedule=Schedule(
                 action=ScheduleActionStartWorkflow(
-                    "MoonMind.Run", args=[{"run_input": "dummy"}], id=f"mm:s:{{{{.ScheduleTime}}}}", task_queue="test-queue"
+                    "MoonMind.UserWorkflow", args=[{"run_input": "dummy"}], id=f"mm:s:{{{{.ScheduleTime}}}}", task_queue="test-queue"
                 ),
                 spec=ScheduleSpec(
                     cron_expressions=["30 2 * * *"],
@@ -60,7 +60,7 @@ async def test_schedule_timezone_handling_dst_boundaries():
             id=schedule_id_fall,
             schedule=Schedule(
                 action=ScheduleActionStartWorkflow(
-                    "MoonMind.Run", args=[{"run_input": "dummy"}], id=f"mm:f:{{{{.ScheduleTime}}}}", task_queue="test-queue"
+                    "MoonMind.UserWorkflow", args=[{"run_input": "dummy"}], id=f"mm:f:{{{{.ScheduleTime}}}}", task_queue="test-queue"
                 ),
                 spec=ScheduleSpec(
                     cron_expressions=["30 1 * * *"],

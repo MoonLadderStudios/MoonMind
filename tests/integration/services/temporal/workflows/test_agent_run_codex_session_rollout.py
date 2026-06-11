@@ -381,7 +381,7 @@ async def test_agent_run_managed_codex_session_recovers_terminal_rollout_without
         },
         managedSession={
             "workflowId": "test-codex-session-workflow",
-            "taskRunId": "task-run-codex-rollout",
+            "agentRunId": "agent-run-codex-rollout",
             "sessionId": "sess:test-codex-session-workflow",
             "sessionEpoch": 1,
             "runtimeId": "codex_cli",

@@ -19,7 +19,7 @@ After a successful run, propose the highest-value continuation task.
 - `inputs.taskError`
 - `inputs.taskContextPath` (usually `../artifacts/task_context.json`)
 - `inputs.artifactsPath` (usually `../artifacts`)
-- `inputs.proposalOutputPath` (usually `../artifacts/task_proposals.json`)
+- `inputs.proposalOutputPath` (usually `../artifacts/workflow_proposals.json`)
 
 ## Decision Rule
 

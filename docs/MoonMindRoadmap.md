@@ -28,23 +28,23 @@ The README was reframed (2026-06-09) around three headline value propositions �
 
 ## Milestone 1 — Managed Agent Runtimes 🔧
 
-**README claim:** *"MoonMind runs owned CLI runtimes on your own infrastructure using your existing subscriptions or API keys. Codex CLI is the live first-class task-scoped managed-session runtime; Claude Code is a first-class managed-runtime target … on the path to the same live session controller."*
+**README claim:** *"MoonMind runs owned CLI runtimes on your own infrastructure using your existing subscriptions or API keys. Codex CLI is the live first-class workflow-scoped managed-session runtime; Claude Code is a first-class managed-runtime target … on the path to the same live session controller."*
 
 ### What's shipped
 - Codex, Gemini, and Claude Temporal activity workers (`codex-worker`, `gemini-worker`, `claude-worker`)
 - Runtime adapter pattern (`moonmind/agents/`, `moonmind/workflows/temporal/runtime/`)
-- Codex CLI task-scoped managed sessions with per-session sidecar Docker daemon
+- Codex CLI workflow-scoped managed sessions with per-session sidecar Docker daemon
 - Auth profile management UI in Mission Control; auto-seeding of default auth profiles on startup
 - Worker health checks & readiness probes; per-worker shard health view (MM-775)
 - Graceful worker pause / unpause — API (`system_operations.py`) + Settings Operations surface
 - MoonMind-native xterm.js OAuth terminal for provider login (spec 306 `finalize-oauth-terminal`, `frontend/src/entrypoints/oauth-terminal.tsx`) — supersedes the earlier Tmate-based design
 - OAuth runner bootstrap over PTY with session guardrails (specs 192, 245)
 
-### Remaining tasks
+### Remaining work
 - [x] **1.1–1.6** Auth parity, profile UI, health checks, API key gate removal, auto-seeding — all shipped
 - [x] **1.7** Graceful worker pause / unpause — API + Settings Operations wiring
 - [x] **1.8** Universal OAuth sessions — Delivered as the native xterm.js OAuth terminal (spec 306); Tmate architecture retired
-- [ ] **1.9** Claude Code task-scoped managed-session parity — Claude-specific session design exists (`docs/ManagedAgents/ClaudeCodeManagedSessions.md`) but Claude does not yet enter the live `ManagedSession*` controller path that Codex uses. This is the top runtime-parity gap against the README headline. Split into acceptance-level sub-items so progress is visible:
+- [ ] **1.9** Claude Code workflow-scoped managed-session parity — Claude-specific session design exists (`docs/ManagedAgents/ClaudeCodeManagedSessions.md`) but Claude does not yet enter the live `ManagedSession*` controller path that Codex uses. This is the top runtime-parity gap against the README headline. Split into acceptance-level sub-items so progress is visible:
   - [ ] **1.9a** Claude session launch/transport adapter — runtime-specific controller entering the shared `ManagedSession*` path
   - [ ] **1.9b** Normalized turn lifecycle and session state — identity fields, epochs, clear/reset boundaries
   - [ ] **1.9c** Policy enforcement at Claude session launch — enforcement hook only; envelope contracts are 12.1
@@ -62,9 +62,9 @@ The README was reframed (2026-06-09) around three headline value propositions �
 - Jules end-to-end external event workflow — adapter, event wiring, multi-step `sendMessage` flow, status polling
 - Generic external-agent adapter pattern (MM-741) — shared contract, registry-based provider selection, polling and streaming-gateway execution styles
 - Generic integration callback receiver with correlation lookup and polling fallback (MM-779)
-- External runs integrated into the main task dashboard
+- External runs integrated into the main workflow console
 
-### Remaining tasks
+### Remaining work
 - [ ] **2.3** Codex Cloud integration adapter — Runtime gate/settings exist (`moonmind/codex_cloud/settings.py`); full adapter for the hosted Codex product not yet implemented
 
 ---
@@ -75,14 +75,14 @@ The README was reframed (2026-06-09) around three headline value propositions �
 
 ### What's shipped
 - Workflow presets, step templates, and step sequencing (`docs/Workflows/WorkflowPresetsSystem.md`, `WorkflowStepSystem.md`)
-- Manifest-based task submission; task proposal queue with `proposal_generate`
+- Manifest-based workflow submission; workflow proposal queue with `proposal_generate`
 - Tracker-native proposal delivery and review — GitHub/Jira delivery records and process-tracker decision handling (specs 312, 313, 357)
-- Context clearing between ordered Codex managed-session steps via the task-scoped AgentSession reset boundary (MM-745)
-- Target-aware prepared inputs per step — prepared-input manifests selected per step at the runtime prompt boundary (specs 325, 349; `moonmind/workflows/tasks/prepared_context.py`)
+- Context clearing between ordered Codex managed-session steps via the workflow-scoped AgentSession reset boundary (MM-745)
+- Target-aware prepared inputs per step — prepared-input manifests selected per step at the runtime prompt boundary (specs 325, 349; `moonmind/workflows/executions/prepared_context.py`)
 - Preset-driven scheduling — goal-only submissions deterministically mapped to seeded presets (MM-747)
 - Schema-driven capability inputs and Create-page authoring validation (specs 308, 340)
 
-### Remaining tasks
+### Remaining work
 - [x] **3.1** Tracker-native proposal delivery/review — specs 312/313 shipped; `/proposals` remains admin/recovery coverage
 - [ ] **3.2** Automatic RAG context injection per step — Target-aware *prepared file* context is wired (specs 325/349), but retrieval-backed context packs (`rag/context_pack.py`) are still not injected into step execution (tracked with 5.3)
 - [x] **3.3** Context clearing between steps — MM-745
@@ -97,12 +97,12 @@ The README was reframed (2026-06-09) around three headline value propositions �
 
 ### What's shipped
 - Temporal foundation, durable agent-run workflows, crash recovery via replay
-- Recurring task schedules; fast cancellation (`TRY_CANCEL`) and force-terminate path
+- Recurring workflow schedules; fast cancellation (`TRY_CANCEL`) and force-terminate path
 - Runtime-specific resiliency policies, generic no-progress detection, intervention escalation, completion webhooks (MM-749); hardened managed-runtime no-progress handling (#2389)
 - Provider rate-limit detection in live output with slot-based concurrency and cooldowns (`max_parallel_runs`, `cooldown_after_429_seconds`)
 - Idempotent side effects keyed by deterministic execution tuples `(workflow_id, step_id, attempt)`
 
-### Remaining tasks
+### Remaining work
 - [x] **4.1–4.6** All shipped. Deeper recovery work continues in **Milestone 13 — Self-Healing Remediation & Recovery**.
 
 ---
@@ -118,7 +118,7 @@ The README was reframed (2026-06-09) around three headline value propositions �
 - End-to-end manifest ingest integration test (`tests/integration/temporal/test_manifest_pipeline_e2e.py`, MM-754)
 - Retrieval transport separation and retrieval evidence guardrails (specs 256, 257)
 
-### Remaining tasks
+### Remaining work
 - [x] **5.1** End-to-end manifest ingest testing — MM-754
 - [ ] **5.3** Context pack assembly wired into agent runs — Primitives exist; not integrated into Temporal step execution (pairs with 3.2)
 - [ ] **5.5** Incremental re-indexing — Full reindex only; no delta path
@@ -138,14 +138,14 @@ All six items (run digests, fix patterns/error signatures, Mem0 long-term adapte
 **README claim:** *"Track run status in real time, inspect per-step progress, open step-scoped logs and diagnostics, browse generated artifacts, monitor intervention requests, and audit execution histories from a single UI."*
 
 ### What's shipped
-- Task dashboard with live SSE status, task editing/cancel/resubmit, runtime/model/effort selection
+- Workflow console with live SSE status, workflow editing/cancel/resubmit, runtime/model/effort selection
 - Execution history / audit view (`/workflows/{workflowId}/runs`, MM-772); workflow detail subroute tabs (MM-801)
 - Intervention request monitoring via `intervention_requested` state
 - Settings unified into Mission Control — sparse overrides, server-side validation, settings backup & migration services, MM-713 guardrail suite (specs 339, 341, 358, 359; `api_service/services/settings_backup.py`, `settings_migrations.py`)
 - Attachment upload/binding UX with recovery diagnostics by target (specs 321, 329); column filter popovers; mobile/accessibility stability (specs 301, 304)
 - Worker fleet health dashboard (MM-775)
 
-### Remaining tasks
+### Remaining work
 - [x] **7.1** Settings migrated to Mission Control — specs 339/341/358/359
 - [ ] **7.2** Artifact browsing UI — API exists (`temporal_artifacts.py`); dashboard browsing of files/logs/patches still partial
 - [ ] **7.5** Side-by-side comparison view — Comparison runs preserve lineage (MM-773), but no side-by-side UI
@@ -162,7 +162,7 @@ All six items (run digests, fix patterns/error signatures, Mem0 long-term adapte
 - `/mcp` Streamable HTTP endpoint (2025 spec, MM-777) with resource & tool discovery; JSON helper routes
 - Webhook/callback API for external agents (MM-779); OpenAI-compatible chat API
 
-### Remaining tasks
+### Remaining work
 - [ ] **8.4** OpenAI Responses API compatibility — Only Chat Completions format supported
 
 ---
@@ -179,7 +179,7 @@ All six items (run digests, fix patterns/error signatures, Mem0 long-term adapte
 - Workspace mount session-boundary isolation for workload containers (spec 251)
 - Credential sanitization — `redact_sensitive_text` / `SecretRedactor` applied across runtime, remediation, and publish paths
 
-### Remaining tasks
+### Remaining work
 - [x] **9.2** Credential sanitization from logs — runtime redaction shipped; outbound-boundary scanning continues in Milestone 12
 - [x] **9.3 / 9.4** Capability routing policy; sandbox egress — shipped
 
@@ -220,7 +220,7 @@ All items shipped: per-step runtime/model/effort selection (MM-786/787), cost tr
 - PR publishing gated on MoonSpec verification (#2386)
 - Deliberately gated exceptional workloads — approved-scope artifact loading and dedicated activity handling keep high-risk workloads behind explicit operator approval
 
-### Remaining tasks
+### Remaining work
 - [ ] **12.1** Typed per-run policy envelopes — Compact runtime contracts declaring what a run may touch (spec 185 `claude-policy-envelope`); contracts specified, not yet enforced in the launch path.
   *Done means:* envelopes compiled per run, enforced at launch/control boundaries, violations fail fast, adapter-boundary tests.
 - [ ] **12.2** Governance telemetry — Durable record of privileged agent actions with export sinks (spec 191 `claude-governance-telemetry`); spec-only.
@@ -246,7 +246,7 @@ All items shipped: per-step runtime/model/effort selection (MM-786/787), cost tr
 - Durable step ledger & checkpoints — step state, attempts, and evidence refs persisted as artifacts (`step_ledger.py`, `step_checkpoints.py`; specs 345, 716, `001-step-attempt-manifest`); latest-attempt evidence refs surfaced in the default ledger row (MM-815)
 - Resume foundations — distinct full-retry vs. recovery actions (spec 326), checkpoint-evidence gating for resume availability (spec 327), editable full retry (spec 343), resume-from-last-failed-step (spec 310)
 
-### Remaining tasks
+### Remaining work
 - [ ] **13.1** Resume-from-checkpoint as the default recovery path — checkpoint restore logic exists but is not yet the primary operator flow for failed runs.
   *Done means:* a failed run's default operator flow offers evidence-gated checkpoint resume (spec 327) with replay-safe cutover.
 - [ ] **13.2** Queryable remediation audit events — publish remediation lifecycle audit through the control-event mechanism (spec 323).
@@ -269,14 +269,14 @@ All items shipped: per-step runtime/model/effort selection (MM-786/787), cost tr
 - Token cost estimates and pricing-aware routing metadata (MM-788, `moonmind/billing/costs.py`)
 - Live logs desired-state contract — session-aware merged timeline, ANSI parsing, virtualized rendering, artifact-backed replay (`docs/Observability/LiveLogs.md`)
 
-### Remaining tasks
+### Remaining work
 - [ ] **14.1** OpenTelemetry instrumentation — FastAPI middleware, Temporal client/worker interceptors, activity-layer spans with provider/model/token attributes (`docs/Observability/OpenTelemetrySystem.md`); spec complete, no instrumentation code yet.
   *Done means:* API→workflow→activity→provider spans correlated end-to-end with bounded metric labels.
 - [ ] **14.2** Per-step token/cost attribution in Mission Control — cost primitives exist (MM-788) but are not attributed and displayed per step.
-  *Done means:* per-step cost visible in task detail and reconcilable with MM-788 estimates.
+  *Done means:* per-step cost visible in workflow detail and reconcilable with MM-788 estimates.
 - [ ] **14.3** Session-aware live-log timeline viewer — complete the LiveLogs.md rollout: merged stdout/stderr/system/session timeline, session epoch/reset markers, shared cross-process transport as the authoritative path.
   *Done means:* live timeline plus artifact-backed replay; live-stream failure never fails a run.
-- [ ] **14.4** Trace/log deep links from task detail — jump from a step in Mission Control to its correlated trace and log slice.
+- [ ] **14.4** Trace/log deep links from workflow detail — jump from a step in Mission Control to its correlated trace and log slice.
   *Done means:* every step row links to its trace and log slice via correlation IDs.
 
 ---
@@ -284,7 +284,7 @@ All items shipped: per-step runtime/model/effort selection (MM-786/787), cost tr
 ## Housekeeping — Codebase Cleanup 🔧
 
 - [x] **H.1–H.4** Legacy system removal, spec deduplication, legacy skill dispatch cleanup, legacy docs deletion — complete (MM-797 through MM-800)
-- [x] **H.5** Tasks→Workflows doc rename — `docs/Tasks/*` renamed to `docs/Workflows/*` with content updated (#2395)
+- [x] **H.5** Tasks→Workflows doc rename — legacy `Tasks/*` docs renamed to `docs/Workflows/*` with content updated (#2395)
 - [ ] **H.6** Release/docs metadata hygiene — `pyproject.toml` (version `0.1.0`, MIT, "RAG application…" description) and `package.json` (version `1.0.0`, ISC, legacy "chat, memory, and automation" description) disagree with each other and with the README positioning. Align versions, license declarations, and public descriptions under one release/versioning policy.
 
 ---

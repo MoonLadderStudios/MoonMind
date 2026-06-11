@@ -584,7 +584,7 @@ async def test_agent_run_managed_passes_commit_message_override_to_fetch_result(
     assert fetch_payload.commit_message == "Use producer commit text"
     assert fetch_payload.target_branch == "main"
 
-async def test_agent_run_managed_preserves_task_scoped_session_metadata(
+async def test_agent_run_managed_preserves_workflow_scoped_session_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run = MoonMindAgentRun()
@@ -638,7 +638,7 @@ async def test_agent_run_managed_preserves_task_scoped_session_metadata(
             return {
                 "binding": {
                     "workflowId": "wf-run-1:session:codex_cli",
-                    "taskRunId": "wf-run-1",
+                    "agentRunId": "wf-run-1",
                     "sessionId": "sess:wf-run-1:codex_cli",
                     "sessionEpoch": 1,
                     "runtimeId": "codex_cli",
@@ -720,7 +720,7 @@ async def test_agent_run_managed_preserves_task_scoped_session_metadata(
             executionProfileRef="codex-default",
             managedSession={
                 "workflowId": "wf-run-1:session:codex_cli",
-                "taskRunId": "wf-run-1",
+                "agentRunId": "wf-run-1",
                 "sessionId": "sess:wf-run-1:codex_cli",
                 "sessionEpoch": 1,
                 "runtimeId": "codex_cli",
@@ -736,7 +736,7 @@ async def test_agent_run_managed_preserves_task_scoped_session_metadata(
     assert fetch_payload.agent_id == "codex_cli"
     assert result.metadata["managedSession"] == {
         "workflowId": "wf-run-1:session:codex_cli",
-        "taskRunId": "wf-run-1",
+        "agentRunId": "wf-run-1",
         "sessionId": "sess:wf-run-1:codex_cli",
         "sessionEpoch": 1,
         "runtimeId": "codex_cli",

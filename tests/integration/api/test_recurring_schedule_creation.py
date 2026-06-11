@@ -18,7 +18,7 @@ from api_service.api.routers.executions import (
 )
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
-from api_service.services.recurring_tasks_service import RecurringTaskValidationError
+from api_service.services.recurring_workflows_service import RecurringWorkflowValidationError
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -68,7 +68,7 @@ def test_executions_recurring_schedule_success_contract() -> None:
     next_run_at = datetime.now(UTC) + timedelta(hours=1)
 
     with _client() as client, patch(
-        "api_service.services.recurring_tasks_service.RecurringTasksService"
+        "api_service.services.recurring_workflows_service.RecurringWorkflowsService"
     ) as service_cls:
         service = service_cls.return_value
         service.create_definition = AsyncMock(
@@ -84,13 +84,13 @@ def test_executions_recurring_schedule_success_contract() -> None:
         response = client.post(
             "/api/executions",
             json={
-                "type": "task",
+                "type": "workflow",
                 "payload": {
                     "schedule": {
                         "mode": "recurring",
                         "cron": "0 * * * *",
                     },
-                    "task": {"instructions": "Run this on a schedule"},
+                    "workflow": {"instructions": "Run this on a schedule"},
                 },
             },
         )
@@ -104,29 +104,29 @@ def test_executions_recurring_schedule_success_contract() -> None:
 
 def test_executions_recurring_schedule_validation_contract() -> None:
     with _client() as client, patch(
-        "api_service.services.recurring_tasks_service.RecurringTasksService"
+        "api_service.services.recurring_workflows_service.RecurringWorkflowsService"
     ) as service_cls:
         service = service_cls.return_value
         service.create_definition = AsyncMock(
-            side_effect=RecurringTaskValidationError("target.kind is required")
+            side_effect=RecurringWorkflowValidationError("target.kind is required")
         )
 
         response = client.post(
             "/api/executions",
             json={
-                "type": "task",
+                "type": "workflow",
                 "payload": {
                     "schedule": {
                         "mode": "recurring",
                         "cron": "0 * * * *",
                     },
-                    "task": {"instructions": "Run this on a schedule"},
+                    "workflow": {"instructions": "Run this on a schedule"},
                 },
             },
         )
 
     assert response.status_code == 422
     assert response.json()["detail"] == {
-        "code": "invalid_recurring_task",
+        "code": "invalid_recurring_workflow",
         "message": "target.kind is required",
     }

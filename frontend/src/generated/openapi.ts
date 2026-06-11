@@ -1918,43 +1918,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/recurring-tasks": {
+    "/api/recurring-workflows": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** List Recurring Tasks */
-        get: operations["list_recurring_tasks_api_recurring_tasks_get"];
+        /** List Recurring Workflows */
+        get: operations["list_recurring_workflows_api_recurring_workflows_get"];
         put?: never;
-        /** Create Recurring Task */
-        post: operations["create_recurring_task_api_recurring_tasks_post"];
+        /** Create Recurring Workflow */
+        post: operations["create_recurring_workflow_api_recurring_workflows_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/recurring-tasks/{definition_id}": {
+    "/api/recurring-workflows/{definition_id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get Recurring Task */
-        get: operations["get_recurring_task_api_recurring_tasks__definition_id__get"];
+        /** Get Recurring Workflow */
+        get: operations["get_recurring_workflow_api_recurring_workflows__definition_id__get"];
         put?: never;
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
-        /** Update Recurring Task */
-        patch: operations["update_recurring_task_api_recurring_tasks__definition_id__patch"];
+        /** Update Recurring Workflow */
+        patch: operations["update_recurring_workflow_api_recurring_workflows__definition_id__patch"];
         trace?: never;
     };
-    "/api/recurring-tasks/{definition_id}/run": {
+    "/api/recurring-workflows/{definition_id}/run": {
         parameters: {
             query?: never;
             header?: never;
@@ -1963,23 +1963,23 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Run Recurring Task Now */
-        post: operations["run_recurring_task_now_api_recurring_tasks__definition_id__run_post"];
+        /** Run Recurring Workflow Now */
+        post: operations["run_recurring_workflow_now_api_recurring_workflows__definition_id__run_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/recurring-tasks/{definition_id}/runs": {
+    "/api/recurring-workflows/{definition_id}/runs": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** List Recurring Task Runs */
-        get: operations["list_recurring_task_runs_api_recurring_tasks__definition_id__runs_get"];
+        /** List Recurring Workflow Runs */
+        get: operations["list_recurring_workflow_runs_api_recurring_workflows__definition_id__runs_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1997,7 +1997,7 @@ export interface paths {
         };
         /**
          * Get Observability Summary
-         * @description Fetch the observability summary for a task run from the shared agent jobs volume.
+         * @description Fetch the observability summary for a agent run from the shared agent jobs volume.
          */
         get: operations["get_observability_summary_api_agent_runs__id__observability_summary_get"];
         put?: never;
@@ -2008,15 +2008,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/agent-runs/{task_run_id}/artifact-sessions/{session_id}": {
+    "/api/agent-runs/{agent_run_id}/artifact-sessions/{session_id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get Task Run Artifact Session */
-        get: operations["get_task_run_artifact_session_api_agent_runs__task_run_id__artifact_sessions__session_id__get"];
+        /** Get Agent Run Artifact Session */
+        get: operations["get_agent_run_artifact_session_api_agent_runs__agent_run_id__artifact_sessions__session_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2025,7 +2025,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/agent-runs/{task_run_id}/artifact-sessions/{session_id}/control": {
+    "/api/agent-runs/{agent_run_id}/artifact-sessions/{session_id}/control": {
         parameters: {
             query?: never;
             header?: never;
@@ -2034,8 +2034,8 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Control Task Run Artifact Session */
-        post: operations["control_task_run_artifact_session_api_agent_runs__task_run_id__artifact_sessions__session_id__control_post"];
+        /** Control Agent Run Artifact Session */
+        post: operations["control_agent_run_artifact_session_api_agent_runs__agent_run_id__artifact_sessions__session_id__control_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2050,10 +2050,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Task Run Observability Events
-         * @description Return structured observability history for one task run.
+         * Get Agent Run Observability Events
+         * @description Return structured observability history for one agent run.
          */
-        get: operations["get_task_run_observability_events_api_agent_runs__id__observability_events_get"];
+        get: operations["get_agent_run_observability_events_api_agent_runs__id__observability_events_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2070,10 +2070,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Stream Task Run Live Logs
+         * Stream Agent Run Live Logs
          * @description Serve SSE real-time stream for active runs.
          */
-        get: operations["stream_task_run_live_logs_api_agent_runs__id__logs_stream_get"];
+        get: operations["stream_agent_run_live_logs_api_agent_runs__id__logs_stream_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2090,10 +2090,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Stream Task Run Log
+         * Stream Agent Run Log
          * @description Serve stdout, stderr, or merged logs directly from the shared volume.
          */
-        get: operations["stream_task_run_log_api_agent_runs__id__logs__stream_name__get"];
+        get: operations["stream_agent_run_log_api_agent_runs__id__logs__stream_name__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2110,10 +2110,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Task Run Diagnostics
-         * @description Return the diagnostics.json payload for a task run.
+         * Get Agent Run Diagnostics
+         * @description Return the diagnostics.json payload for a agent run.
          */
-        get: operations["get_task_run_diagnostics_api_agent_runs__id__diagnostics_get"];
+        get: operations["get_agent_run_diagnostics_api_agent_runs__id__diagnostics_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2130,10 +2130,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Task Secrets Route
+         * Secrets Route
          * @description Redirect the legacy secrets page into unified settings.
          */
-        get: operations["task_secrets_route_secrets_get"];
+        get: operations["secrets_route_secrets_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2170,10 +2170,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Task Proposals Route
+         * Workflow Proposals Route
          * @description Serve the React-powered proposals page.
          */
-        get: operations["task_proposals_route_proposals_get"];
+        get: operations["workflow_proposals_route_proposals_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2190,10 +2190,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Task Proposal Detail Route
+         * Workflow Proposal Detail Route
          * @description Serve the proposals shell for proposal deep links.
          */
-        get: operations["task_proposal_detail_route_proposals__proposal_id__get"];
+        get: operations["workflow_proposal_detail_route_proposals__proposal_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2210,10 +2210,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Task Schedules Route
+         * Schedules Route
          * @description Serve the React-powered schedules page.
          */
-        get: operations["task_schedules_route_schedules_get"];
+        get: operations["schedules_route_schedules_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2230,10 +2230,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Task Schedule Detail Route
+         * Schedule Detail Route
          * @description Serve the schedules shell for schedule deep links.
          */
-        get: operations["task_schedule_detail_route_schedules__schedule_id__get"];
+        get: operations["schedule_detail_route_schedules__schedule_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2250,10 +2250,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Task Manifests Route
+         * Manifests Route
          * @description Serve the React-powered manifests page.
          */
-        get: operations["task_manifests_route_manifests_get"];
+        get: operations["manifests_route_manifests_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2410,10 +2410,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Task Skills Route
+         * Skills Route
          * @description Serve the React-powered skills page.
          */
-        get: operations["task_skills_route_skills_get"];
+        get: operations["skills_route_skills_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2526,7 +2526,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/task-step-templates": {
+    "/api/presets": {
         parameters: {
             query?: never;
             header?: never;
@@ -2534,17 +2534,17 @@ export interface paths {
             cookie?: never;
         };
         /** List Templates */
-        get: operations["list_templates_api_task_step_templates_get"];
+        get: operations["list_templates_api_presets_get"];
         put?: never;
         /** Create Template */
-        post: operations["create_template_api_task_step_templates_post"];
+        post: operations["create_template_api_presets_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/task-step-templates/save-from-task": {
+    "/api/presets/save-from-workflow": {
         parameters: {
             query?: never;
             header?: never;
@@ -2553,15 +2553,15 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Save From Task */
-        post: operations["save_from_task_api_task_step_templates_save_from_task_post"];
+        /** Save From Workflow */
+        post: operations["save_from_workflow_api_presets_save_from_workflow_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/task-step-templates/{slug}:expand": {
+    "/api/presets/{slug}:expand": {
         parameters: {
             query?: never;
             header?: never;
@@ -2571,14 +2571,14 @@ export interface paths {
         get?: never;
         put?: never;
         /** Expand Template */
-        post: operations["expand_template_api_task_step_templates__slug__expand_post"];
+        post: operations["expand_template_api_presets__slug__expand_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/task-step-templates/{slug}": {
+    "/api/presets/{slug}": {
         parameters: {
             query?: never;
             header?: never;
@@ -2586,17 +2586,17 @@ export interface paths {
             cookie?: never;
         };
         /** Get Template */
-        get: operations["get_template_api_task_step_templates__slug__get"];
+        get: operations["get_template_api_presets__slug__get"];
         put?: never;
         post?: never;
         /** Delete Template */
-        delete: operations["delete_template_api_task_step_templates__slug__delete"];
+        delete: operations["delete_template_api_presets__slug__delete"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/task-step-templates/{slug}/versions/{version}": {
+    "/api/presets/{slug}/versions/{version}": {
         parameters: {
             query?: never;
             header?: never;
@@ -2604,9 +2604,9 @@ export interface paths {
             cookie?: never;
         };
         /** Get Template Version */
-        get: operations["get_template_version_api_task_step_templates__slug__versions__version__get"];
+        get: operations["get_template_version_api_presets__slug__versions__version__get"];
         /** Review Template Version */
-        put: operations["review_template_version_api_task_step_templates__slug__versions__version__put"];
+        put: operations["review_template_version_api_presets__slug__versions__version__put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -2614,7 +2614,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/task-step-templates/{slug}:favorite": {
+    "/api/presets/{slug}:favorite": {
         parameters: {
             query?: never;
             header?: never;
@@ -2624,9 +2624,9 @@ export interface paths {
         get?: never;
         put?: never;
         /** Favorite Template */
-        post: operations["favorite_template_api_task_step_templates__slug__favorite_post"];
+        post: operations["favorite_template_api_presets__slug__favorite_post"];
         /** Unfavorite Template */
-        delete: operations["unfavorite_template_api_task_step_templates__slug__favorite_delete"];
+        delete: operations["unfavorite_template_api_presets__slug__favorite_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -3097,7 +3097,7 @@ export interface components {
         };
         /**
          * ArtifactSessionControlRequest
-         * @description Operator control request for one task-scoped artifact session.
+         * @description Operator control request for one workflow-scoped artifact session.
          */
         ArtifactSessionControlRequest: {
             /**
@@ -3124,7 +3124,7 @@ export interface components {
         };
         /**
          * ArtifactSessionGroupModel
-         * @description Server-defined grouping of task-scoped session artifacts.
+         * @description Server-defined grouping of workflow-scoped session artifacts.
          */
         ArtifactSessionGroupModel: {
             /** Group Key */
@@ -3136,11 +3136,11 @@ export interface components {
         };
         /**
          * ArtifactSessionProjectionModel
-         * @description Minimal task-scoped session continuity projection.
+         * @description Minimal workflow-scoped session continuity projection.
          */
         ArtifactSessionProjectionModel: {
-            /** Task Run Id */
-            task_run_id: string;
+            /** Agent Run Id */
+            agent_run_id: string;
             /** Session Id */
             session_id: string;
             /** Session Epoch */
@@ -3792,10 +3792,10 @@ export interface components {
             rate_limit_policy: components["schemas"]["ManagedAgentRateLimitPolicy"];
         };
         /**
-         * CreateRecurringTaskRequest
+         * CreateRecurringWorkflowRequest
          * @description Request payload for creating recurring schedules.
          */
-        CreateRecurringTaskRequest: {
+        CreateRecurringWorkflowRequest: {
             /** Name */
             name: string;
             /** Description */
@@ -4393,6 +4393,8 @@ export interface components {
         ExecutionMergeAutomationResolverChildModel: {
             /** Workflowid */
             workflowId: string;
+            /** Agentrunid */
+            agentRunId?: string | null;
             /** Status */
             status?: string | null;
             /** Detailhref */
@@ -4570,7 +4572,7 @@ export interface components {
             };
             /** Inputartifactref */
             inputArtifactRef?: string | null;
-            taskInputSnapshot?: components["schemas"]["TaskInputSnapshotDescriptorModel"];
+            taskInputSnapshot?: components["schemas"]["WorkflowInputSnapshotDescriptorModel"];
             /** Targetruntime */
             targetRuntime?: string | null;
             /** Targetskill */
@@ -5607,7 +5609,7 @@ export interface components {
             title?: string | null;
             /**
              * Workflowtype
-             * @default MoonMind.Run
+             * @default MoonMind.UserWorkflow
              */
             workflowType: string;
             /** Childworkflowid */
@@ -5968,6 +5970,392 @@ export interface components {
             executionOrdinal: number;
         };
         /**
+         * PresetAppliedMetadataSchema
+         * @description Audit metadata describing one template application.
+         */
+        PresetAppliedMetadataSchema: {
+            /** Slug */
+            slug: string;
+            /** Version */
+            version: string;
+            /** Inputs */
+            inputs?: {
+                [key: string]: unknown;
+            };
+            /** Stepids */
+            stepIds?: string[];
+            /** Appliedat */
+            appliedAt?: string | null;
+        };
+        /**
+         * PresetCreateRequestSchema
+         * @description Request model for creating templates.
+         */
+        PresetCreateRequestSchema: {
+            /** Slug */
+            slug?: string | null;
+            /** Title */
+            title: string;
+            /** Description */
+            description: string;
+            /**
+             * Scope
+             * @default personal
+             * @enum {string}
+             */
+            scope: "personal" | "global";
+            /** Scoperef */
+            scopeRef?: string | null;
+            /** Tags */
+            tags?: string[];
+            /** Inputs */
+            inputs?: components["schemas"]["PresetInputSchema"][];
+            /** Steps */
+            steps?: components["schemas"]["PresetStepBlueprintSchema"][];
+            /** Annotations */
+            annotations?: {
+                [key: string]: unknown;
+            };
+            /** Requiredcapabilities */
+            requiredCapabilities?: string[];
+        };
+        /**
+         * PresetExpandOptionsSchema
+         * @description Optional expansion flags.
+         */
+        PresetExpandOptionsSchema: {
+            /**
+             * Enforcesteplimit
+             * @default true
+             */
+            enforceStepLimit: boolean;
+        };
+        /**
+         * PresetExpandRequestSchema
+         * @description Request model for template expansion.
+         */
+        PresetExpandRequestSchema: {
+            /** Version */
+            version: string;
+            /** Inputs */
+            inputs?: {
+                [key: string]: unknown;
+            };
+            /** Context */
+            context?: {
+                [key: string]: unknown;
+            };
+            options?: components["schemas"]["PresetExpandOptionsSchema"];
+        };
+        /**
+         * PresetExpandResponseSchema
+         * @description Response model for expanded template step payloads.
+         */
+        PresetExpandResponseSchema: {
+            /** Steps */
+            steps?: {
+                [key: string]: unknown;
+            }[];
+            /** Composition */
+            composition?: {
+                [key: string]: unknown;
+            };
+            appliedTemplate: components["schemas"]["PresetAppliedMetadataSchema"];
+            /** Capabilities */
+            capabilities?: string[];
+            /** Warnings */
+            warnings?: string[];
+        };
+        /**
+         * PresetFavoriteRequestSchema
+         * @description Favorite toggle payload.
+         */
+        PresetFavoriteRequestSchema: {
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "global" | "personal";
+            /** Scoperef */
+            scopeRef?: string | null;
+        };
+        /**
+         * PresetInputSchema
+         * @description Input definition used by preset versions.
+         */
+        PresetInputSchema: {
+            /** Name */
+            name: string;
+            /** Label */
+            label: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "text" | "textarea" | "markdown" | "enum" | "boolean" | "user" | "team" | "repo_path" | "jira_board";
+            /**
+             * Required
+             * @default false
+             */
+            required: boolean;
+            /** Default */
+            default?: unknown;
+            /** Options */
+            options?: string[];
+            /** Placeholder */
+            placeholder?: string | null;
+        };
+        /**
+         * PresetListResponseSchema
+         * @description Envelope for template list responses.
+         */
+        PresetListResponseSchema: {
+            /** Items */
+            items?: components["schemas"]["PresetSummarySchema"][];
+        };
+        /**
+         * PresetResponseSchema
+         * @description Detail response model for one template version.
+         */
+        PresetResponseSchema: {
+            /** Slug */
+            slug: string;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "global" | "personal";
+            /** Scoperef */
+            scopeRef?: string | null;
+            /** Title */
+            title: string;
+            /** Description */
+            description: string;
+            /** Latestversion */
+            latestVersion: string;
+            /** Version */
+            version: string;
+            /** Tags */
+            tags?: string[];
+            /**
+             * Isfavorite
+             * @default false
+             */
+            isFavorite: boolean;
+            /** Recentappliedat */
+            recentAppliedAt?: string | null;
+            /** Requiredcapabilities */
+            requiredCapabilities?: string[];
+            /**
+             * Releasestatus
+             * @default draft
+             */
+            releaseStatus: string;
+            /** Inputs */
+            inputs?: components["schemas"]["PresetInputSchema"][];
+            /** Inputschema */
+            inputSchema?: {
+                [key: string]: unknown;
+            };
+            /** Uischema */
+            uiSchema?: {
+                [key: string]: unknown;
+            };
+            /** Defaults */
+            defaults?: {
+                [key: string]: unknown;
+            };
+            /** Steps */
+            steps?: components["schemas"]["PresetStepBlueprintSchema"][];
+            /** Annotations */
+            annotations?: {
+                [key: string]: unknown;
+            };
+            /** Reviewedby */
+            reviewedBy?: string | null;
+            /** Reviewedat */
+            reviewedAt?: string | null;
+        };
+        /**
+         * PresetReviewRequestSchema
+         * @description Review workflow request for release status transitions.
+         */
+        PresetReviewRequestSchema: {
+            /**
+             * Releasestatus
+             * @enum {string}
+             */
+            releaseStatus: "draft" | "active" | "inactive";
+        };
+        /**
+         * PresetSaveFromWorkflowRequestSchema
+         * @description Request model for creating presets from draft workflow steps.
+         */
+        PresetSaveFromWorkflowRequestSchema: {
+            /**
+             * Scope
+             * @default personal
+             * @constant
+             */
+            scope: "personal";
+            /** Scoperef */
+            scopeRef?: string | null;
+            /** Slug */
+            slug?: string | null;
+            /** Title */
+            title: string;
+            /** Description */
+            description: string;
+            /** Selectedstepids */
+            selectedStepIds?: string[];
+            /** Steps */
+            steps?: components["schemas"]["PresetStepBlueprintSchema"][];
+            /** Suggestedinputs */
+            suggestedInputs?: components["schemas"]["PresetInputSchema"][];
+            /** Tags */
+            tags?: string[];
+        };
+        /**
+         * PresetStepBlueprintSchema
+         * @description Template step blueprint definition.
+         */
+        PresetStepBlueprintSchema: {
+            /** Kind */
+            kind?: ("step" | "include") | null;
+            /** Type */
+            type?: ("tool" | "skill") | null;
+            /** Slug */
+            slug?: string | null;
+            /** Title */
+            title?: string | null;
+            /** Instructions */
+            instructions?: string | null;
+            /** Version */
+            version?: string | null;
+            /** Alias */
+            alias?: string | null;
+            /** Scope */
+            scope?: ("personal" | "global") | null;
+            /** Inputmapping */
+            inputMapping?: {
+                [key: string]: unknown;
+            };
+            tool?: components["schemas"]["PresetStepToolSchema"] | null;
+            skill?: components["schemas"]["PresetStepSkillSchema"] | null;
+            /** Annotations */
+            annotations?: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * PresetStepSkillSchema
+         * @description Skill payload attached to a template step.
+         */
+        PresetStepSkillSchema: {
+            /**
+             * Id
+             * @default auto
+             */
+            id: string;
+            /** Args */
+            args?: {
+                [key: string]: unknown;
+            };
+            /** Requiredcapabilities */
+            requiredCapabilities?: string[];
+            /** Context */
+            context?: {
+                [key: string]: unknown;
+            };
+            /** Permissions */
+            permissions?: {
+                [key: string]: unknown;
+            };
+            /** Autonomy */
+            autonomy?: {
+                [key: string]: unknown;
+            };
+            /** Runtime */
+            runtime?: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * PresetStepToolSchema
+         * @description Tool payload attached to a template step.
+         */
+        PresetStepToolSchema: {
+            /** Id */
+            id?: string | null;
+            /** Name */
+            name?: string | null;
+            /** Version */
+            version?: string | null;
+            /** Inputs */
+            inputs?: {
+                [key: string]: unknown;
+            };
+            /** Args */
+            args?: {
+                [key: string]: unknown;
+            };
+            /** Requiredauthorization */
+            requiredAuthorization?: unknown;
+            /** Requiredcapabilities */
+            requiredCapabilities?: string[];
+            /** Sideeffectpolicy */
+            sideEffectPolicy?: unknown;
+            /** Retrypolicy */
+            retryPolicy?: unknown;
+            /** Execution */
+            execution?: {
+                [key: string]: unknown;
+            };
+            /** Validation */
+            validation?: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * PresetSummarySchema
+         * @description List response model for presets.
+         */
+        PresetSummarySchema: {
+            /** Slug */
+            slug: string;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "global" | "personal";
+            /** Scoperef */
+            scopeRef?: string | null;
+            /** Title */
+            title: string;
+            /** Description */
+            description: string;
+            /** Latestversion */
+            latestVersion: string;
+            /** Version */
+            version: string;
+            /** Tags */
+            tags?: string[];
+            /**
+             * Isfavorite
+             * @default false
+             */
+            isFavorite: boolean;
+            /** Recentappliedat */
+            recentAppliedAt?: string | null;
+            /** Requiredcapabilities */
+            requiredCapabilities?: string[];
+            /**
+             * Releasestatus
+             * @default draft
+             */
+            releaseStatus: string;
+        };
+        /**
          * PresignDownloadResponse
          * @description Presigned-download response payload.
          */
@@ -6324,18 +6712,18 @@ export interface components {
             recoveryCheckpointRef: string;
         };
         /**
-         * RecurringTaskDefinitionListResponse
+         * RecurringWorkflowDefinitionListResponse
          * @description List response for recurring definitions.
          */
-        RecurringTaskDefinitionListResponse: {
+        RecurringWorkflowDefinitionListResponse: {
             /** Items */
-            items?: components["schemas"]["RecurringTaskDefinitionModel"][];
+            items?: components["schemas"]["RecurringWorkflowDefinitionModel"][];
         };
         /**
-         * RecurringTaskDefinitionModel
+         * RecurringWorkflowDefinitionModel
          * @description Serialized recurring schedule definition.
          */
-        RecurringTaskDefinitionModel: {
+        RecurringWorkflowDefinitionModel: {
             /**
              * Id
              * Format: uuid
@@ -6389,18 +6777,18 @@ export interface components {
             updatedAt: string;
         };
         /**
-         * RecurringTaskRunListResponse
+         * RecurringWorkflowRunListResponse
          * @description List response for recurring run history.
          */
-        RecurringTaskRunListResponse: {
+        RecurringWorkflowRunListResponse: {
             /** Items */
-            items?: components["schemas"]["RecurringTaskRunModel"][];
+            items?: components["schemas"]["RecurringWorkflowRunModel"][];
         };
         /**
-         * RecurringTaskRunModel
+         * RecurringWorkflowRunModel
          * @description Serialized recurring run history record.
          */
-        RecurringTaskRunModel: {
+        RecurringWorkflowRunModel: {
             /**
              * Id
              * Format: uuid
@@ -7213,13 +7601,15 @@ export interface components {
         };
         /**
          * StepLedgerRefsModel
-         * @description Stable ref slots for child workflow and task-run linkage.
+         * @description Stable ref slots for child workflow and managed agent-run linkage.
          */
         StepLedgerRefsModel: {
             /** Childworkflowid */
             childWorkflowId?: string | null;
             /** Childrunid */
             childRunId?: string | null;
+            /** Agentrunid */
+            agentRunId?: string | null;
             /** Lateststepexecutionmanifestref */
             latestStepExecutionManifestRef?: string | null;
             /** Stepexecutionmanifestrefs */
@@ -7324,6 +7714,8 @@ export interface components {
          * @description Bounded Docker-backed workload metadata linked to a producing step.
          */
         StepLedgerWorkloadModel: {
+            /** Agentrunid */
+            agentRunId?: string | null;
             /** Stepid */
             stepId?: string | null;
             /** Executionordinal */
@@ -7393,763 +7785,6 @@ export interface components {
          * @enum {string}
          */
         SummaryType: "readme";
-        /**
-         * TaskInputSnapshotDescriptorModel
-         * @description Compact pointer to the authoritative original task input snapshot.
-         */
-        TaskInputSnapshotDescriptorModel: {
-            /**
-             * Available
-             * @default false
-             */
-            available: boolean;
-            /** Artifactref */
-            artifactRef?: string | null;
-            /** Snapshotversion */
-            snapshotVersion?: number | null;
-            /**
-             * Sourcekind
-             * @default unknown
-             * @enum {string}
-             */
-            sourceKind: "create" | "edit" | "rerun" | "unknown";
-            /**
-             * Reconstructionmode
-             * @default unavailable
-             * @enum {string}
-             */
-            reconstructionMode: "authoritative" | "degraded_read_only" | "unavailable";
-            /** Disabledreasons */
-            disabledReasons?: {
-                [key: string]: string;
-            };
-            /** Fallbackevidencerefs */
-            fallbackEvidenceRefs?: string[];
-        };
-        /**
-         * TaskProposalCreateRequest
-         * @description Request payload for creating a task proposal.
-         */
-        TaskProposalCreateRequest: {
-            /** Title */
-            title: string;
-            /** Summary */
-            summary: string;
-            /** Category */
-            category?: string | null;
-            /** Tags */
-            tags?: string[] | null;
-            origin: components["schemas"]["TaskProposalOriginModel"];
-            /** Taskcreaterequest */
-            taskCreateRequest: {
-                [key: string]: unknown;
-            };
-            /** Reviewpriority */
-            reviewPriority?: string | null;
-            /** Provider */
-            provider?: string | null;
-            /** Providermetadata */
-            providerMetadata?: {
-                [key: string]: unknown;
-            } | null;
-            /** Resolvedpolicy */
-            resolvedPolicy?: {
-                [key: string]: unknown;
-            } | null;
-        };
-        /**
-         * TaskProposalDismissRequest
-         * @description Dismissal note payload.
-         */
-        TaskProposalDismissRequest: {
-            /** Note */
-            note?: string | null;
-        };
-        /**
-         * TaskProposalListResponse
-         * @description Response payload for listing proposals.
-         */
-        TaskProposalListResponse: {
-            /** Items */
-            items?: components["schemas"]["TaskProposalModel"][];
-            /** Nextcursor */
-            nextCursor?: string | null;
-        };
-        /**
-         * TaskProposalModel
-         * @description Serialized proposal model.
-         */
-        TaskProposalModel: {
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            status: components["schemas"]["TaskProposalStatus"];
-            /** Title */
-            title: string;
-            /** Summary */
-            summary: string;
-            /** Category */
-            category?: string | null;
-            /** Tags */
-            tags?: string[];
-            /** Repository */
-            repository: string;
-            /** Dedupkey */
-            dedupKey: string;
-            /** Deduphash */
-            dedupHash: string;
-            /**
-             * Provider
-             * @default github
-             */
-            provider: string;
-            /** Externalkey */
-            externalKey?: string | null;
-            /** Externalurl */
-            externalUrl?: string | null;
-            /** Deliveredat */
-            deliveredAt?: string | null;
-            /** Lastsyncedat */
-            lastSyncedAt?: string | null;
-            /** Tasksnapshotref */
-            taskSnapshotRef?: string | null;
-            /** Providermetadata */
-            providerMetadata?: {
-                [key: string]: unknown;
-            };
-            /** Resolvedpolicy */
-            resolvedPolicy?: {
-                [key: string]: unknown;
-            };
-            /** Reviewdelivery */
-            reviewDelivery?: {
-                [key: string]: unknown;
-            };
-            /** @default normal */
-            reviewPriority: components["schemas"]["TaskProposalReviewPriority"];
-            /** Priorityoverridereason */
-            priorityOverrideReason?: string | null;
-            /** Proposedbyworkerid */
-            proposedByWorkerId?: string | null;
-            /** Proposedbyuserid */
-            proposedByUserId?: string | null;
-            /** Promotedat */
-            promotedAt?: string | null;
-            /** Promotedbyuserid */
-            promotedByUserId?: string | null;
-            /** Decidedbyuserid */
-            decidedByUserId?: string | null;
-            /** Decisionnote */
-            decisionNote?: string | null;
-            /**
-             * Createdat
-             * Format: date-time
-             */
-            createdAt: string;
-            /**
-             * Updatedat
-             * Format: date-time
-             */
-            updatedAt: string;
-            origin: components["schemas"]["TaskProposalOriginModel"];
-            /** Taskcreaterequest */
-            taskCreateRequest: {
-                [key: string]: unknown;
-            };
-            taskPreview?: components["schemas"]["TaskProposalTaskPreview"] | null;
-            /** Promotionresult */
-            promotionResult?: {
-                [key: string]: unknown;
-            } | null;
-            /** Similar */
-            similar?: components["schemas"]["TaskProposalSimilarModel"][];
-        };
-        /**
-         * TaskProposalOriginModel
-         * @description Origin metadata for a proposal.
-         */
-        TaskProposalOriginModel: {
-            source: components["schemas"]["TaskProposalOriginSource"];
-            /** Id */
-            id?: string | null;
-            /** Metadata */
-            metadata?: {
-                [key: string]: unknown;
-            } | null;
-        };
-        /**
-         * TaskProposalOriginSource
-         * @description Accepted proposal origin sources for auditing.
-         * @enum {string}
-         */
-        TaskProposalOriginSource: "queue" | "workflow" | "manual";
-        /**
-         * TaskProposalPriorityRequest
-         * @description Reviewer priority update request.
-         */
-        TaskProposalPriorityRequest: {
-            /** Priority */
-            priority: string;
-        };
-        /**
-         * TaskProposalPromoteRequest
-         * @description Optional overrides supplied during promotion.
-         */
-        TaskProposalPromoteRequest: {
-            /** Priority */
-            priority?: number | null;
-            /** Maxattempts */
-            maxAttempts?: number | null;
-            /** Note */
-            note?: string | null;
-            /**
-             * Runtimemode
-             * @description Shortcut to override only the agent runtime mode (e.g. gemini_cli, jules, codex) while preserving the reviewed proposal payload.
-             */
-            runtimeMode?: string | null;
-        };
-        /**
-         * TaskProposalPromoteResponse
-         * @description Promotion response containing proposal + queue job.
-         */
-        TaskProposalPromoteResponse: {
-            proposal: components["schemas"]["TaskProposalModel"];
-            /** PromotedExecutionId */
-            promotedExecutionId: string;
-        };
-        /**
-         * TaskProposalProviderAuthenticityModel
-         * @description Provider authenticity verification summary for decision ingress.
-         */
-        TaskProposalProviderAuthenticityModel: {
-            /**
-             * Verified
-             * @default false
-             */
-            verified: boolean;
-            /** Method */
-            method?: string | null;
-        };
-        /**
-         * TaskProposalProviderDecisionRequest
-         * @description Trusted provider decision ingress payload.
-         */
-        TaskProposalProviderDecisionRequest: {
-            /** Provider */
-            provider: string;
-            /** Externalkey */
-            externalKey: string;
-            /** Providereventid */
-            providerEventId: string;
-            /** Actor */
-            actor: string;
-            /** Action */
-            action?: string | null;
-            /**
-             * Body
-             * @default
-             */
-            body: string;
-            /** Note */
-            note?: string | null;
-            /** Observedat */
-            observedAt?: string | null;
-            authenticity?: components["schemas"]["TaskProposalProviderAuthenticityModel"];
-            /** Runtimemode */
-            runtimeMode?: string | null;
-            /** Externalstate */
-            externalState?: string | null;
-        };
-        /**
-         * TaskProposalProviderDecisionResponse
-         * @description Sanitized provider decision ingestion response.
-         */
-        TaskProposalProviderDecisionResponse: {
-            /** Accepted */
-            accepted: boolean;
-            /** Decision */
-            decision?: string | null;
-            /** Reason */
-            reason?: string | null;
-            /** Actor */
-            actor: string;
-            /** Providereventid */
-            providerEventId: string;
-            /** Note */
-            note?: string | null;
-            /** Priority */
-            priority?: string | null;
-            /** Deferuntil */
-            deferUntil?: string | null;
-            /** Runtimemode */
-            runtimeMode?: string | null;
-            /** Resultingexternalstate */
-            resultingExternalState?: string | null;
-            /** Promotedexecutionid */
-            promotedExecutionId?: string | null;
-            proposal: components["schemas"]["TaskProposalModel"];
-        };
-        /**
-         * TaskProposalReviewPriority
-         * @description Reviewer-defined triage priority.
-         * @enum {string}
-         */
-        TaskProposalReviewPriority: "low" | "normal" | "high" | "urgent";
-        /**
-         * TaskProposalSimilarModel
-         * @description Slim representation of similar proposals.
-         */
-        TaskProposalSimilarModel: {
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /** Title */
-            title: string;
-            /** Category */
-            category?: string | null;
-            /** Repository */
-            repository: string;
-            /**
-             * Createdat
-             * Format: date-time
-             */
-            createdAt: string;
-        };
-        /**
-         * TaskProposalStatus
-         * @description Lifecycle states for task proposals.
-         * @enum {string}
-         */
-        TaskProposalStatus: "open" | "promoted" | "dismissed" | "accepted" | "rejected";
-        /**
-         * TaskProposalTaskPreview
-         * @description Derived summary of the canonical task payload.
-         */
-        TaskProposalTaskPreview: {
-            /** Repository */
-            repository: string;
-            /** Runtimemode */
-            runtimeMode?: string | null;
-            /** Skillid */
-            skillId?: string | null;
-            /** Taskskills */
-            taskSkills?: string[] | null;
-            /** Publishmode */
-            publishMode?: string | null;
-            /** Priority */
-            priority?: number | null;
-            /** Maxattempts */
-            maxAttempts?: number | null;
-            /** Startingbranch */
-            startingBranch?: string | null;
-            /** Targetbranch */
-            targetBranch?: string | null;
-            /** Instructions */
-            instructions?: string | null;
-            /** Presetprovenance */
-            presetProvenance?: string | null;
-            /**
-             * Authoredpresetcount
-             * @default 0
-             */
-            authoredPresetCount: number;
-            /** Stepsourcekinds */
-            stepSourceKinds?: string[];
-            /** Presetsourcemetadata */
-            presetSourceMetadata?: {
-                [key: string]: unknown;
-            }[];
-        };
-        /**
-         * TaskTemplateAppliedMetadataSchema
-         * @description Audit metadata describing one template application.
-         */
-        TaskTemplateAppliedMetadataSchema: {
-            /** Slug */
-            slug: string;
-            /** Version */
-            version: string;
-            /** Inputs */
-            inputs?: {
-                [key: string]: unknown;
-            };
-            /** Stepids */
-            stepIds?: string[];
-            /** Appliedat */
-            appliedAt?: string | null;
-        };
-        /**
-         * TaskTemplateCreateRequestSchema
-         * @description Request model for creating templates.
-         */
-        TaskTemplateCreateRequestSchema: {
-            /** Slug */
-            slug?: string | null;
-            /** Title */
-            title: string;
-            /** Description */
-            description: string;
-            /**
-             * Scope
-             * @default personal
-             * @enum {string}
-             */
-            scope: "personal" | "global";
-            /** Scoperef */
-            scopeRef?: string | null;
-            /** Tags */
-            tags?: string[];
-            /** Inputs */
-            inputs?: components["schemas"]["TaskTemplateInputSchema"][];
-            /** Steps */
-            steps?: components["schemas"]["TaskTemplateStepBlueprintSchema"][];
-            /** Annotations */
-            annotations?: {
-                [key: string]: unknown;
-            };
-            /** Requiredcapabilities */
-            requiredCapabilities?: string[];
-        };
-        /**
-         * TaskTemplateExpandOptionsSchema
-         * @description Optional expansion flags.
-         */
-        TaskTemplateExpandOptionsSchema: {
-            /**
-             * Enforcesteplimit
-             * @default true
-             */
-            enforceStepLimit: boolean;
-        };
-        /**
-         * TaskTemplateExpandRequestSchema
-         * @description Request model for template expansion.
-         */
-        TaskTemplateExpandRequestSchema: {
-            /** Version */
-            version: string;
-            /** Inputs */
-            inputs?: {
-                [key: string]: unknown;
-            };
-            /** Context */
-            context?: {
-                [key: string]: unknown;
-            };
-            options?: components["schemas"]["TaskTemplateExpandOptionsSchema"];
-        };
-        /**
-         * TaskTemplateExpandResponseSchema
-         * @description Response model for expanded template step payloads.
-         */
-        TaskTemplateExpandResponseSchema: {
-            /** Steps */
-            steps?: {
-                [key: string]: unknown;
-            }[];
-            /** Composition */
-            composition?: {
-                [key: string]: unknown;
-            };
-            appliedTemplate: components["schemas"]["TaskTemplateAppliedMetadataSchema"];
-            /** Capabilities */
-            capabilities?: string[];
-            /** Warnings */
-            warnings?: string[];
-        };
-        /**
-         * TaskTemplateFavoriteRequestSchema
-         * @description Favorite toggle payload.
-         */
-        TaskTemplateFavoriteRequestSchema: {
-            /**
-             * Scope
-             * @enum {string}
-             */
-            scope: "global" | "personal";
-            /** Scoperef */
-            scopeRef?: string | null;
-        };
-        /**
-         * TaskTemplateInputSchema
-         * @description Input definition used by task template versions.
-         */
-        TaskTemplateInputSchema: {
-            /** Name */
-            name: string;
-            /** Label */
-            label: string;
-            /**
-             * Type
-             * @enum {string}
-             */
-            type: "text" | "textarea" | "markdown" | "enum" | "boolean" | "user" | "team" | "repo_path" | "jira_board";
-            /**
-             * Required
-             * @default false
-             */
-            required: boolean;
-            /** Default */
-            default?: unknown;
-            /** Options */
-            options?: string[];
-            /** Placeholder */
-            placeholder?: string | null;
-        };
-        /**
-         * TaskTemplateListResponseSchema
-         * @description Envelope for template list responses.
-         */
-        TaskTemplateListResponseSchema: {
-            /** Items */
-            items?: components["schemas"]["TaskTemplateSummarySchema"][];
-        };
-        /**
-         * TaskTemplateResponseSchema
-         * @description Detail response model for one template version.
-         */
-        TaskTemplateResponseSchema: {
-            /** Slug */
-            slug: string;
-            /**
-             * Scope
-             * @enum {string}
-             */
-            scope: "global" | "personal";
-            /** Scoperef */
-            scopeRef?: string | null;
-            /** Title */
-            title: string;
-            /** Description */
-            description: string;
-            /** Latestversion */
-            latestVersion: string;
-            /** Version */
-            version: string;
-            /** Tags */
-            tags?: string[];
-            /**
-             * Isfavorite
-             * @default false
-             */
-            isFavorite: boolean;
-            /** Recentappliedat */
-            recentAppliedAt?: string | null;
-            /** Requiredcapabilities */
-            requiredCapabilities?: string[];
-            /**
-             * Releasestatus
-             * @default draft
-             */
-            releaseStatus: string;
-            /** Inputs */
-            inputs?: components["schemas"]["TaskTemplateInputSchema"][];
-            /** Inputschema */
-            inputSchema?: {
-                [key: string]: unknown;
-            };
-            /** Uischema */
-            uiSchema?: {
-                [key: string]: unknown;
-            };
-            /** Defaults */
-            defaults?: {
-                [key: string]: unknown;
-            };
-            /** Steps */
-            steps?: components["schemas"]["TaskTemplateStepBlueprintSchema"][];
-            /** Annotations */
-            annotations?: {
-                [key: string]: unknown;
-            };
-            /** Reviewedby */
-            reviewedBy?: string | null;
-            /** Reviewedat */
-            reviewedAt?: string | null;
-        };
-        /**
-         * TaskTemplateReviewRequestSchema
-         * @description Review workflow request for release status transitions.
-         */
-        TaskTemplateReviewRequestSchema: {
-            /**
-             * Releasestatus
-             * @enum {string}
-             */
-            releaseStatus: "draft" | "active" | "inactive";
-        };
-        /**
-         * TaskTemplateSaveFromTaskRequestSchema
-         * @description Request model for creating templates from draft task steps.
-         */
-        TaskTemplateSaveFromTaskRequestSchema: {
-            /**
-             * Scope
-             * @default personal
-             * @constant
-             */
-            scope: "personal";
-            /** Scoperef */
-            scopeRef?: string | null;
-            /** Slug */
-            slug?: string | null;
-            /** Title */
-            title: string;
-            /** Description */
-            description: string;
-            /** Selectedstepids */
-            selectedStepIds?: string[];
-            /** Steps */
-            steps?: components["schemas"]["TaskTemplateStepBlueprintSchema"][];
-            /** Suggestedinputs */
-            suggestedInputs?: components["schemas"]["TaskTemplateInputSchema"][];
-            /** Tags */
-            tags?: string[];
-        };
-        /**
-         * TaskTemplateStepBlueprintSchema
-         * @description Template step blueprint definition.
-         */
-        TaskTemplateStepBlueprintSchema: {
-            /** Kind */
-            kind?: ("step" | "include") | null;
-            /** Type */
-            type?: ("tool" | "skill") | null;
-            /** Slug */
-            slug?: string | null;
-            /** Title */
-            title?: string | null;
-            /** Instructions */
-            instructions?: string | null;
-            /** Version */
-            version?: string | null;
-            /** Alias */
-            alias?: string | null;
-            /** Scope */
-            scope?: ("personal" | "global") | null;
-            /** Inputmapping */
-            inputMapping?: {
-                [key: string]: unknown;
-            };
-            tool?: components["schemas"]["TaskTemplateStepToolSchema"] | null;
-            skill?: components["schemas"]["TaskTemplateStepSkillSchema"] | null;
-            /** Annotations */
-            annotations?: {
-                [key: string]: unknown;
-            };
-        };
-        /**
-         * TaskTemplateStepSkillSchema
-         * @description Skill payload attached to a template step.
-         */
-        TaskTemplateStepSkillSchema: {
-            /**
-             * Id
-             * @default auto
-             */
-            id: string;
-            /** Args */
-            args?: {
-                [key: string]: unknown;
-            };
-            /** Requiredcapabilities */
-            requiredCapabilities?: string[];
-            /** Context */
-            context?: {
-                [key: string]: unknown;
-            };
-            /** Permissions */
-            permissions?: {
-                [key: string]: unknown;
-            };
-            /** Autonomy */
-            autonomy?: {
-                [key: string]: unknown;
-            };
-            /** Runtime */
-            runtime?: {
-                [key: string]: unknown;
-            };
-        };
-        /**
-         * TaskTemplateStepToolSchema
-         * @description Tool payload attached to a template step.
-         */
-        TaskTemplateStepToolSchema: {
-            /** Id */
-            id?: string | null;
-            /** Name */
-            name?: string | null;
-            /** Version */
-            version?: string | null;
-            /** Inputs */
-            inputs?: {
-                [key: string]: unknown;
-            };
-            /** Args */
-            args?: {
-                [key: string]: unknown;
-            };
-            /** Requiredauthorization */
-            requiredAuthorization?: unknown;
-            /** Requiredcapabilities */
-            requiredCapabilities?: string[];
-            /** Sideeffectpolicy */
-            sideEffectPolicy?: unknown;
-            /** Retrypolicy */
-            retryPolicy?: unknown;
-            /** Execution */
-            execution?: {
-                [key: string]: unknown;
-            };
-            /** Validation */
-            validation?: {
-                [key: string]: unknown;
-            };
-        };
-        /**
-         * TaskTemplateSummarySchema
-         * @description List response model for task templates.
-         */
-        TaskTemplateSummarySchema: {
-            /** Slug */
-            slug: string;
-            /**
-             * Scope
-             * @enum {string}
-             */
-            scope: "global" | "personal";
-            /** Scoperef */
-            scopeRef?: string | null;
-            /** Title */
-            title: string;
-            /** Description */
-            description: string;
-            /** Latestversion */
-            latestVersion: string;
-            /** Version */
-            version: string;
-            /** Tags */
-            tags?: string[];
-            /**
-             * Isfavorite
-             * @default false
-             */
-            isFavorite: boolean;
-            /** Recentappliedat */
-            recentAppliedAt?: string | null;
-            /** Requiredcapabilities */
-            requiredCapabilities?: string[];
-            /**
-             * Releasestatus
-             * @default draft
-             */
-            releaseStatus: string;
-        };
         /**
          * TemporalArtifactEncryption
          * @description Encryption mode metadata recorded for each artifact.
@@ -8274,10 +7909,10 @@ export interface components {
             refresh?: components["schemas"]["ExecutionRefreshEnvelope"] | null;
         };
         /**
-         * UpdateRecurringTaskRequest
+         * UpdateRecurringWorkflowRequest
          * @description Request payload for updating recurring schedules.
          */
-        UpdateRecurringTaskRequest: {
+        UpdateRecurringWorkflowRequest: {
             /** Name */
             name?: string | null;
             /** Description */
@@ -8576,6 +8211,377 @@ export interface components {
             /** Notes */
             notes?: string | null;
         };
+        /**
+         * WorkflowInputSnapshotDescriptorModel
+         * @description Compact pointer to the authoritative original task input snapshot.
+         */
+        WorkflowInputSnapshotDescriptorModel: {
+            /**
+             * Available
+             * @default false
+             */
+            available: boolean;
+            /** Artifactref */
+            artifactRef?: string | null;
+            /** Snapshotversion */
+            snapshotVersion?: number | null;
+            /**
+             * Sourcekind
+             * @default unknown
+             * @enum {string}
+             */
+            sourceKind: "create" | "edit" | "rerun" | "unknown";
+            /**
+             * Reconstructionmode
+             * @default unavailable
+             * @enum {string}
+             */
+            reconstructionMode: "authoritative" | "degraded_read_only" | "unavailable";
+            /** Disabledreasons */
+            disabledReasons?: {
+                [key: string]: string;
+            };
+            /** Fallbackevidencerefs */
+            fallbackEvidenceRefs?: string[];
+        };
+        /**
+         * WorkflowProposalCreateRequest
+         * @description Request payload for creating a workflow proposal.
+         */
+        WorkflowProposalCreateRequest: {
+            /** Title */
+            title: string;
+            /** Summary */
+            summary: string;
+            /** Category */
+            category?: string | null;
+            /** Tags */
+            tags?: string[] | null;
+            origin: components["schemas"]["WorkflowProposalOriginModel"];
+            /** Workflowcreaterequest */
+            workflowCreateRequest: {
+                [key: string]: unknown;
+            };
+            /** Reviewpriority */
+            reviewPriority?: string | null;
+            /** Provider */
+            provider?: string | null;
+            /** Providermetadata */
+            providerMetadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Resolvedpolicy */
+            resolvedPolicy?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /**
+         * WorkflowProposalDismissRequest
+         * @description Dismissal note payload.
+         */
+        WorkflowProposalDismissRequest: {
+            /** Note */
+            note?: string | null;
+        };
+        /**
+         * WorkflowProposalListResponse
+         * @description Response payload for listing proposals.
+         */
+        WorkflowProposalListResponse: {
+            /** Items */
+            items?: components["schemas"]["WorkflowProposalModel"][];
+            /** Nextcursor */
+            nextCursor?: string | null;
+        };
+        /**
+         * WorkflowProposalModel
+         * @description Serialized proposal model.
+         */
+        WorkflowProposalModel: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            status: components["schemas"]["WorkflowProposalStatus"];
+            /** Title */
+            title: string;
+            /** Summary */
+            summary: string;
+            /** Category */
+            category?: string | null;
+            /** Tags */
+            tags?: string[];
+            /** Repository */
+            repository: string;
+            /** Dedupkey */
+            dedupKey: string;
+            /** Deduphash */
+            dedupHash: string;
+            /**
+             * Provider
+             * @default github
+             */
+            provider: string;
+            /** Externalkey */
+            externalKey?: string | null;
+            /** Externalurl */
+            externalUrl?: string | null;
+            /** Deliveredat */
+            deliveredAt?: string | null;
+            /** Lastsyncedat */
+            lastSyncedAt?: string | null;
+            /** Workflowsnapshotref */
+            workflowSnapshotRef?: string | null;
+            /** Providermetadata */
+            providerMetadata?: {
+                [key: string]: unknown;
+            };
+            /** Resolvedpolicy */
+            resolvedPolicy?: {
+                [key: string]: unknown;
+            };
+            /** Reviewdelivery */
+            reviewDelivery?: {
+                [key: string]: unknown;
+            };
+            /** @default normal */
+            reviewPriority: components["schemas"]["WorkflowProposalReviewPriority"];
+            /** Priorityoverridereason */
+            priorityOverrideReason?: string | null;
+            /** Proposedbyworkerid */
+            proposedByWorkerId?: string | null;
+            /** Proposedbyuserid */
+            proposedByUserId?: string | null;
+            /** Promotedat */
+            promotedAt?: string | null;
+            /** Promotedbyuserid */
+            promotedByUserId?: string | null;
+            /** Decidedbyuserid */
+            decidedByUserId?: string | null;
+            /** Decisionnote */
+            decisionNote?: string | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+            origin: components["schemas"]["WorkflowProposalOriginModel"];
+            /** Workflowcreaterequest */
+            workflowCreateRequest: {
+                [key: string]: unknown;
+            };
+            taskPreview?: components["schemas"]["WorkflowProposalPreview"] | null;
+            /** Promotionresult */
+            promotionResult?: {
+                [key: string]: unknown;
+            } | null;
+            /** Similar */
+            similar?: components["schemas"]["WorkflowProposalSimilarModel"][];
+        };
+        /**
+         * WorkflowProposalOriginModel
+         * @description Origin metadata for a proposal.
+         */
+        WorkflowProposalOriginModel: {
+            source: components["schemas"]["WorkflowProposalOriginSource"];
+            /** Id */
+            id?: string | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /**
+         * WorkflowProposalOriginSource
+         * @description Accepted proposal origin sources for auditing.
+         * @enum {string}
+         */
+        WorkflowProposalOriginSource: "queue" | "workflow" | "manual";
+        /**
+         * WorkflowProposalPreview
+         * @description Derived summary of the canonical task payload.
+         */
+        WorkflowProposalPreview: {
+            /** Repository */
+            repository: string;
+            /** Runtimemode */
+            runtimeMode?: string | null;
+            /** Skillid */
+            skillId?: string | null;
+            /** Taskskills */
+            taskSkills?: string[] | null;
+            /** Publishmode */
+            publishMode?: string | null;
+            /** Priority */
+            priority?: number | null;
+            /** Maxattempts */
+            maxAttempts?: number | null;
+            /** Startingbranch */
+            startingBranch?: string | null;
+            /** Targetbranch */
+            targetBranch?: string | null;
+            /** Instructions */
+            instructions?: string | null;
+            /** Presetprovenance */
+            presetProvenance?: string | null;
+            /**
+             * Authoredpresetcount
+             * @default 0
+             */
+            authoredPresetCount: number;
+            /** Stepsourcekinds */
+            stepSourceKinds?: string[];
+            /** Presetsourcemetadata */
+            presetSourceMetadata?: {
+                [key: string]: unknown;
+            }[];
+        };
+        /**
+         * WorkflowProposalPriorityRequest
+         * @description Reviewer priority update request.
+         */
+        WorkflowProposalPriorityRequest: {
+            /** Priority */
+            priority: string;
+        };
+        /**
+         * WorkflowProposalPromoteRequest
+         * @description Optional overrides supplied during promotion.
+         */
+        WorkflowProposalPromoteRequest: {
+            /** Priority */
+            priority?: number | null;
+            /** Maxattempts */
+            maxAttempts?: number | null;
+            /** Note */
+            note?: string | null;
+            /**
+             * Runtimemode
+             * @description Shortcut to override only the agent runtime mode (e.g. gemini_cli, jules, codex) while preserving the reviewed proposal payload.
+             */
+            runtimeMode?: string | null;
+        };
+        /**
+         * WorkflowProposalPromoteResponse
+         * @description Promotion response containing proposal + queue job.
+         */
+        WorkflowProposalPromoteResponse: {
+            proposal: components["schemas"]["WorkflowProposalModel"];
+            /** PromotedExecutionId */
+            promotedExecutionId: string;
+        };
+        /**
+         * WorkflowProposalProviderAuthenticityModel
+         * @description Provider authenticity verification summary for decision ingress.
+         */
+        WorkflowProposalProviderAuthenticityModel: {
+            /**
+             * Verified
+             * @default false
+             */
+            verified: boolean;
+            /** Method */
+            method?: string | null;
+        };
+        /**
+         * WorkflowProposalProviderDecisionRequest
+         * @description Trusted provider decision ingress payload.
+         */
+        WorkflowProposalProviderDecisionRequest: {
+            /** Provider */
+            provider: string;
+            /** Externalkey */
+            externalKey: string;
+            /** Providereventid */
+            providerEventId: string;
+            /** Actor */
+            actor: string;
+            /** Action */
+            action?: string | null;
+            /**
+             * Body
+             * @default
+             */
+            body: string;
+            /** Note */
+            note?: string | null;
+            /** Observedat */
+            observedAt?: string | null;
+            authenticity?: components["schemas"]["WorkflowProposalProviderAuthenticityModel"];
+            /** Runtimemode */
+            runtimeMode?: string | null;
+            /** Externalstate */
+            externalState?: string | null;
+        };
+        /**
+         * WorkflowProposalProviderDecisionResponse
+         * @description Sanitized provider decision ingestion response.
+         */
+        WorkflowProposalProviderDecisionResponse: {
+            /** Accepted */
+            accepted: boolean;
+            /** Decision */
+            decision?: string | null;
+            /** Reason */
+            reason?: string | null;
+            /** Actor */
+            actor: string;
+            /** Providereventid */
+            providerEventId: string;
+            /** Note */
+            note?: string | null;
+            /** Priority */
+            priority?: string | null;
+            /** Deferuntil */
+            deferUntil?: string | null;
+            /** Runtimemode */
+            runtimeMode?: string | null;
+            /** Resultingexternalstate */
+            resultingExternalState?: string | null;
+            /** Promotedexecutionid */
+            promotedExecutionId?: string | null;
+            proposal: components["schemas"]["WorkflowProposalModel"];
+        };
+        /**
+         * WorkflowProposalReviewPriority
+         * @description Reviewer-defined triage priority.
+         * @enum {string}
+         */
+        WorkflowProposalReviewPriority: "low" | "normal" | "high" | "urgent";
+        /**
+         * WorkflowProposalSimilarModel
+         * @description Slim representation of similar proposals.
+         */
+        WorkflowProposalSimilarModel: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Title */
+            title: string;
+            /** Category */
+            category?: string | null;
+            /** Repository */
+            repository: string;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+        };
+        /**
+         * WorkflowProposalStatus
+         * @description Lifecycle states for workflow proposals.
+         * @enum {string}
+         */
+        WorkflowProposalStatus: "open" | "promoted" | "dismissed" | "accepted" | "rejected";
         /**
          * WorkflowRunCollectionResponse
          * @description Envelope returned when listing workflow runs.
@@ -11368,8 +11374,8 @@ export interface operations {
             query?: never;
             header?: {
                 "X-MoonMind-Task-Workflow-Id"?: string | null;
-                "X-MoonMind-Task-Run-Id"?: string | null;
-                "X-MoonMind-Task-Run-Identifier"?: string | null;
+                "X-MoonMind-Agent-Run-Id"?: string | null;
+                "X-MoonMind-Agent-Run-Identifier"?: string | null;
             };
             path: {
                 workflow_id: string;
@@ -11539,8 +11545,8 @@ export interface operations {
             query?: never;
             header?: {
                 "X-MoonMind-Task-Workflow-Id"?: string | null;
-                "X-MoonMind-Task-Run-Id"?: string | null;
-                "X-MoonMind-Task-Run-Identifier"?: string | null;
+                "X-MoonMind-Agent-Run-Id"?: string | null;
+                "X-MoonMind-Agent-Run-Identifier"?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -12348,7 +12354,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskProposalListResponse"];
+                    "application/json": components["schemas"]["WorkflowProposalListResponse"];
                 };
             };
             /** @description Validation Error */
@@ -12371,7 +12377,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TaskProposalCreateRequest"];
+                "application/json": components["schemas"]["WorkflowProposalCreateRequest"];
             };
         };
         responses: {
@@ -12381,7 +12387,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskProposalModel"];
+                    "application/json": components["schemas"]["WorkflowProposalModel"];
                 };
             };
             /** @description Validation Error */
@@ -12414,7 +12420,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskProposalModel"];
+                    "application/json": components["schemas"]["WorkflowProposalModel"];
                 };
             };
             /** @description Validation Error */
@@ -12439,7 +12445,7 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": components["schemas"]["TaskProposalPromoteRequest"];
+                "application/json": components["schemas"]["WorkflowProposalPromoteRequest"];
             };
         };
         responses: {
@@ -12449,7 +12455,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskProposalPromoteResponse"];
+                    "application/json": components["schemas"]["WorkflowProposalPromoteResponse"];
                 };
             };
             /** @description Validation Error */
@@ -12474,7 +12480,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TaskProposalProviderDecisionRequest"];
+                "application/json": components["schemas"]["WorkflowProposalProviderDecisionRequest"];
             };
         };
         responses: {
@@ -12484,7 +12490,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskProposalProviderDecisionResponse"];
+                    "application/json": components["schemas"]["WorkflowProposalProviderDecisionResponse"];
                 };
             };
             /** @description Validation Error */
@@ -12515,7 +12521,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskProposalModel"];
+                    "application/json": components["schemas"]["WorkflowProposalModel"];
                 };
             };
             /** @description Validation Error */
@@ -12546,7 +12552,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskProposalModel"];
+                    "application/json": components["schemas"]["WorkflowProposalModel"];
                 };
             };
             /** @description Validation Error */
@@ -12577,7 +12583,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskProposalModel"];
+                    "application/json": components["schemas"]["WorkflowProposalModel"];
                 };
             };
             /** @description Validation Error */
@@ -12602,7 +12608,7 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": components["schemas"]["TaskProposalDismissRequest"];
+                "application/json": components["schemas"]["WorkflowProposalDismissRequest"];
             };
         };
         responses: {
@@ -12612,7 +12618,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskProposalModel"];
+                    "application/json": components["schemas"]["WorkflowProposalModel"];
                 };
             };
             /** @description Validation Error */
@@ -12637,7 +12643,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TaskProposalPriorityRequest"];
+                "application/json": components["schemas"]["WorkflowProposalPriorityRequest"];
             };
         };
         responses: {
@@ -12647,7 +12653,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskProposalModel"];
+                    "application/json": components["schemas"]["WorkflowProposalModel"];
                 };
             };
             /** @description Validation Error */
@@ -12661,7 +12667,7 @@ export interface operations {
             };
         };
     };
-    list_recurring_tasks_api_recurring_tasks_get: {
+    list_recurring_workflows_api_recurring_workflows_get: {
         parameters: {
             query?: {
                 scope?: "personal" | "global";
@@ -12679,7 +12685,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RecurringTaskDefinitionListResponse"];
+                    "application/json": components["schemas"]["RecurringWorkflowDefinitionListResponse"];
                 };
             };
             /** @description Validation Error */
@@ -12693,7 +12699,7 @@ export interface operations {
             };
         };
     };
-    create_recurring_task_api_recurring_tasks_post: {
+    create_recurring_workflow_api_recurring_workflows_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -12702,7 +12708,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["CreateRecurringTaskRequest"];
+                "application/json": components["schemas"]["CreateRecurringWorkflowRequest"];
             };
         };
         responses: {
@@ -12712,7 +12718,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RecurringTaskDefinitionModel"];
+                    "application/json": components["schemas"]["RecurringWorkflowDefinitionModel"];
                 };
             };
             /** @description Validation Error */
@@ -12726,7 +12732,7 @@ export interface operations {
             };
         };
     };
-    get_recurring_task_api_recurring_tasks__definition_id__get: {
+    get_recurring_workflow_api_recurring_workflows__definition_id__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -12743,7 +12749,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RecurringTaskDefinitionModel"];
+                    "application/json": components["schemas"]["RecurringWorkflowDefinitionModel"];
                 };
             };
             /** @description Validation Error */
@@ -12757,7 +12763,7 @@ export interface operations {
             };
         };
     };
-    update_recurring_task_api_recurring_tasks__definition_id__patch: {
+    update_recurring_workflow_api_recurring_workflows__definition_id__patch: {
         parameters: {
             query?: never;
             header?: never;
@@ -12768,7 +12774,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["UpdateRecurringTaskRequest"];
+                "application/json": components["schemas"]["UpdateRecurringWorkflowRequest"];
             };
         };
         responses: {
@@ -12778,7 +12784,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RecurringTaskDefinitionModel"];
+                    "application/json": components["schemas"]["RecurringWorkflowDefinitionModel"];
                 };
             };
             /** @description Validation Error */
@@ -12792,7 +12798,7 @@ export interface operations {
             };
         };
     };
-    run_recurring_task_now_api_recurring_tasks__definition_id__run_post: {
+    run_recurring_workflow_now_api_recurring_workflows__definition_id__run_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -12809,7 +12815,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RecurringTaskRunModel"];
+                    "application/json": components["schemas"]["RecurringWorkflowRunModel"];
                 };
             };
             /** @description Validation Error */
@@ -12823,7 +12829,7 @@ export interface operations {
             };
         };
     };
-    list_recurring_task_runs_api_recurring_tasks__definition_id__runs_get: {
+    list_recurring_workflow_runs_api_recurring_workflows__definition_id__runs_get: {
         parameters: {
             query?: {
                 limit?: number;
@@ -12842,7 +12848,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RecurringTaskRunListResponse"];
+                    "application/json": components["schemas"]["RecurringWorkflowRunListResponse"];
                 };
             };
             /** @description Validation Error */
@@ -12878,7 +12884,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description Observability record not found for this task run */
+            /** @description Observability record not found for this agent run */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -12896,12 +12902,12 @@ export interface operations {
             };
         };
     };
-    get_task_run_artifact_session_api_agent_runs__task_run_id__artifact_sessions__session_id__get: {
+    get_agent_run_artifact_session_api_agent_runs__agent_run_id__artifact_sessions__session_id__get: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                task_run_id: string;
+                agent_run_id: string;
                 session_id: string;
             };
             cookie?: never;
@@ -12917,14 +12923,14 @@ export interface operations {
                     "application/json": components["schemas"]["ArtifactSessionProjectionModel"];
                 };
             };
-            /** @description You do not have permission to access this task run */
+            /** @description You do not have permission to access this agent run */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Session projection not found for this task run */
+            /** @description Session projection not found for this agent run */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -12942,12 +12948,12 @@ export interface operations {
             };
         };
     };
-    control_task_run_artifact_session_api_agent_runs__task_run_id__artifact_sessions__session_id__control_post: {
+    control_agent_run_artifact_session_api_agent_runs__agent_run_id__artifact_sessions__session_id__control_post: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                task_run_id: string;
+                agent_run_id: string;
                 session_id: string;
             };
             cookie?: never;
@@ -12967,14 +12973,14 @@ export interface operations {
                     "application/json": components["schemas"]["ArtifactSessionControlResponse"];
                 };
             };
-            /** @description You do not have permission to access this task run */
+            /** @description You do not have permission to access this agent run */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Session projection not found for this task run */
+            /** @description Session projection not found for this agent run */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -12999,7 +13005,7 @@ export interface operations {
             };
         };
     };
-    get_task_run_observability_events_api_agent_runs__id__observability_events_get: {
+    get_agent_run_observability_events_api_agent_runs__id__observability_events_get: {
         parameters: {
             query?: {
                 since?: number | null;
@@ -13028,7 +13034,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description Observability record not found for this task run */
+            /** @description Observability record not found for this agent run */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -13046,7 +13052,7 @@ export interface operations {
             };
         };
     };
-    stream_task_run_live_logs_api_agent_runs__id__logs_stream_get: {
+    stream_agent_run_live_logs_api_agent_runs__id__logs_stream_get: {
         parameters: {
             query?: {
                 /** @description Resume from sequence number */
@@ -13076,7 +13082,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Observability record not found for this task run */
+            /** @description Observability record not found for this agent run */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -13101,7 +13107,7 @@ export interface operations {
             };
         };
     };
-    stream_task_run_log_api_agent_runs__id__logs__stream_name__get: {
+    stream_agent_run_log_api_agent_runs__id__logs__stream_name__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -13147,7 +13153,7 @@ export interface operations {
             };
         };
     };
-    get_task_run_diagnostics_api_agent_runs__id__diagnostics_get: {
+    get_agent_run_diagnostics_api_agent_runs__id__diagnostics_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -13185,7 +13191,7 @@ export interface operations {
             };
         };
     };
-    task_secrets_route_secrets_get: {
+    secrets_route_secrets_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -13225,7 +13231,7 @@ export interface operations {
             };
         };
     };
-    task_proposals_route_proposals_get: {
+    workflow_proposals_route_proposals_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -13245,7 +13251,7 @@ export interface operations {
             };
         };
     };
-    task_proposal_detail_route_proposals__proposal_id__get: {
+    workflow_proposal_detail_route_proposals__proposal_id__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -13276,7 +13282,7 @@ export interface operations {
             };
         };
     };
-    task_schedules_route_schedules_get: {
+    schedules_route_schedules_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -13296,7 +13302,7 @@ export interface operations {
             };
         };
     };
-    task_schedule_detail_route_schedules__schedule_id__get: {
+    schedule_detail_route_schedules__schedule_id__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -13327,7 +13333,7 @@ export interface operations {
             };
         };
     };
-    task_manifests_route_manifests_get: {
+    manifests_route_manifests_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -13507,7 +13513,7 @@ export interface operations {
             };
         };
     };
-    task_skills_route_skills_get: {
+    skills_route_skills_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -13723,7 +13729,7 @@ export interface operations {
             };
         };
     };
-    list_templates_api_task_step_templates_get: {
+    list_templates_api_presets_get: {
         parameters: {
             query?: {
                 scope?: string | null;
@@ -13745,7 +13751,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskTemplateListResponseSchema"];
+                    "application/json": components["schemas"]["PresetListResponseSchema"];
                 };
             };
             /** @description Validation Error */
@@ -13759,7 +13765,7 @@ export interface operations {
             };
         };
     };
-    create_template_api_task_step_templates_post: {
+    create_template_api_presets_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -13768,7 +13774,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TaskTemplateCreateRequestSchema"];
+                "application/json": components["schemas"]["PresetCreateRequestSchema"];
             };
         };
         responses: {
@@ -13778,7 +13784,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskTemplateResponseSchema"];
+                    "application/json": components["schemas"]["PresetResponseSchema"];
                 };
             };
             /** @description Validation Error */
@@ -13792,7 +13798,7 @@ export interface operations {
             };
         };
     };
-    save_from_task_api_task_step_templates_save_from_task_post: {
+    save_from_workflow_api_presets_save_from_workflow_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -13801,7 +13807,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TaskTemplateSaveFromTaskRequestSchema"];
+                "application/json": components["schemas"]["PresetSaveFromWorkflowRequestSchema"];
             };
         };
         responses: {
@@ -13811,7 +13817,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskTemplateResponseSchema"];
+                    "application/json": components["schemas"]["PresetResponseSchema"];
                 };
             };
             /** @description Validation Error */
@@ -13825,7 +13831,7 @@ export interface operations {
             };
         };
     };
-    expand_template_api_task_step_templates__slug__expand_post: {
+    expand_template_api_presets__slug__expand_post: {
         parameters: {
             query: {
                 scope: string;
@@ -13839,7 +13845,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TaskTemplateExpandRequestSchema"];
+                "application/json": components["schemas"]["PresetExpandRequestSchema"];
             };
         };
         responses: {
@@ -13849,7 +13855,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskTemplateExpandResponseSchema"];
+                    "application/json": components["schemas"]["PresetExpandResponseSchema"];
                 };
             };
             /** @description Validation Error */
@@ -13863,7 +13869,7 @@ export interface operations {
             };
         };
     };
-    get_template_api_task_step_templates__slug__get: {
+    get_template_api_presets__slug__get: {
         parameters: {
             query: {
                 scope: string;
@@ -13883,7 +13889,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskTemplateResponseSchema"];
+                    "application/json": components["schemas"]["PresetResponseSchema"];
                 };
             };
             /** @description Validation Error */
@@ -13897,7 +13903,7 @@ export interface operations {
             };
         };
     };
-    delete_template_api_task_step_templates__slug__delete: {
+    delete_template_api_presets__slug__delete: {
         parameters: {
             query: {
                 scope: string;
@@ -13929,7 +13935,7 @@ export interface operations {
             };
         };
     };
-    get_template_version_api_task_step_templates__slug__versions__version__get: {
+    get_template_version_api_presets__slug__versions__version__get: {
         parameters: {
             query: {
                 scope: string;
@@ -13950,7 +13956,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskTemplateResponseSchema"];
+                    "application/json": components["schemas"]["PresetResponseSchema"];
                 };
             };
             /** @description Validation Error */
@@ -13964,7 +13970,7 @@ export interface operations {
             };
         };
     };
-    review_template_version_api_task_step_templates__slug__versions__version__put: {
+    review_template_version_api_presets__slug__versions__version__put: {
         parameters: {
             query: {
                 scope: string;
@@ -13979,7 +13985,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TaskTemplateReviewRequestSchema"];
+                "application/json": components["schemas"]["PresetReviewRequestSchema"];
             };
         };
         responses: {
@@ -13989,7 +13995,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskTemplateResponseSchema"];
+                    "application/json": components["schemas"]["PresetResponseSchema"];
                 };
             };
             /** @description Validation Error */
@@ -14003,7 +14009,7 @@ export interface operations {
             };
         };
     };
-    favorite_template_api_task_step_templates__slug__favorite_post: {
+    favorite_template_api_presets__slug__favorite_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -14014,7 +14020,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TaskTemplateFavoriteRequestSchema"];
+                "application/json": components["schemas"]["PresetFavoriteRequestSchema"];
             };
         };
         responses: {
@@ -14036,7 +14042,7 @@ export interface operations {
             };
         };
     };
-    unfavorite_template_api_task_step_templates__slug__favorite_delete: {
+    unfavorite_template_api_presets__slug__favorite_delete: {
         parameters: {
             query?: never;
             header?: never;
@@ -14047,7 +14053,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TaskTemplateFavoriteRequestSchema"];
+                "application/json": components["schemas"]["PresetFavoriteRequestSchema"];
             };
         };
         responses: {

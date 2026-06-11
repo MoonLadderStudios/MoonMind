@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from api_service.api.routers import manifests as manifests_router
 from api_service.api.routers.worker_auth import _WorkerRequestAuth
-from moonmind.workflows.tasks.manifest_contract import ManifestContractError
+from moonmind.workflows.executions.manifest_contract import ManifestContractError
 from api_service.services.manifests_service import ManifestRegistryNotFoundError
 
 def _record(**overrides):

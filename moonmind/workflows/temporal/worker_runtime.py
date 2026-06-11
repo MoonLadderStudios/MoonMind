@@ -4,14 +4,14 @@ import uuid
 
 def _build_proposal_service_factory():
     from api_service.db.base import get_async_session_context
-    from moonmind.workflows.task_proposals.repositories import TaskProposalRepository
-    from moonmind.workflows.task_proposals.service import TaskProposalService
+    from moonmind.workflows.proposals.repositories import WorkflowProposalRepository
+    from moonmind.workflows.proposals.service import WorkflowProposalService
 
     @contextlib.asynccontextmanager
     async def factory():
         async with get_async_session_context() as db_session:
-            yield TaskProposalService(
-                TaskProposalRepository(db_session),
+            yield WorkflowProposalService(
+                WorkflowProposalRepository(db_session),
             )
     return factory
 
@@ -82,13 +82,13 @@ from moonmind.workflows.temporal.workers import (
     describe_configured_worker,
     list_registered_workflow_types,
 )
-from moonmind.workflows.tasks.task_contract import (
-    build_authoritative_task_input_snapshot,
+from moonmind.workflows.executions.execution_contract import (
+    build_authoritative_workflow_input_snapshot,
 )
-from moonmind.workflows.tasks.preset_goal_scheduler import (
+from moonmind.workflows.executions.preset_goal_scheduler import (
     goal_from_payloads,
     schedule_preset_from_goal,
-    task_is_already_authored,
+    workflow_is_already_authored,
 )
 from moonmind.workflows.temporal.workflows.provider_profile_manager import MoonMindProviderProfileManagerWorkflow as MoonMindProviderProfileManager
 from moonmind.workflows.temporal.workflows.manifest_ingest import (
@@ -96,14 +96,8 @@ from moonmind.workflows.temporal.workflows.manifest_ingest import (
 )
 from moonmind.workflows.temporal.jules_bundle import JULES_AGENT_IDS
 from moonmind.workflows.temporal.jira_agent_skills import JIRA_AGENT_SKILLS
-from moonmind.workflows.temporal.hard_switch_cutover import (
-    RENAMED_USER_WORKFLOW_TYPE,
-    registered_user_workflow_type,
-)
-from moonmind.workflows.temporal.workflows.run import (
-    MoonMindRunWorkflow as MoonMindRun,
-    MoonMindUserWorkflow as MoonMindUserWorkflow,
-)
+from moonmind.workflows.temporal.hard_switch_cutover import registered_user_workflow_type
+from moonmind.workflows.temporal.workflows.run import MoonMindUserWorkflow
 from moonmind.workflows.temporal.worker_healthcheck import start_healthcheck_server
 from moonmind.workflows.temporal.workflows.agent_session import (
     MoonMindAgentSessionWorkflow as MoonMindAgentSession,
@@ -150,13 +144,13 @@ from moonmind.workloads.tool_bridge import register_workload_tool_handlers
 logger = logging.getLogger(__name__)
 
 _TASK_INPUT_SNAPSHOT_CONTENT_TYPE = (
-    "application/vnd.moonmind.task-input-snapshot+json;version=1"
+    "application/vnd.moonmind.workflow-input-snapshot+json;version=1"
 )
 _TASK_INPUT_SNAPSHOT_LINK_TYPE = "input.original_snapshot"
-_TASK_INPUT_SNAPSHOT_VERSION = 1
+_WORKFLOW_INPUT_SNAPSHOT_VERSION = 1
 
 _MANAGED_SESSION_LOG_FIELD_MAP: tuple[tuple[str, str], ...] = (
-    ("taskRunId", "managed_session_task_run_id"),
+    ("agentRunId", "managed_session_agent_run_id"),
     ("runtimeId", "managed_session_runtime_id"),
     ("sessionId", "managed_session_id"),
     ("sessionEpoch", "managed_session_epoch"),
@@ -176,7 +170,7 @@ _OPENTELEMETRY_LOG_FORMAT = (
     "[workflow_id=%(temporal_workflow_id)s run_id=%(temporal_run_id)s "
     "activity_id=%(temporal_activity_id)s] "
     "[managed_session_id=%(managed_session_id)s "
-    "task_run_id=%(managed_session_task_run_id)s "
+    "agent_run_id=%(managed_session_agent_run_id)s "
     "runtime_id=%(managed_session_runtime_id)s "
     "epoch=%(managed_session_epoch)s "
     "status=%(managed_session_status)s "
@@ -188,10 +182,10 @@ _OPENTELEMETRY_LOG_FORMAT = (
     "turn_id=%(managed_session_turn_id)s] %(message)s"
 )
 
-def _task_template_seed_dir() -> Path:
+def _preset_seed_dir() -> Path:
     import api_service
 
-    return Path(api_service.__file__).resolve().parent / "data" / "task_step_templates"
+    return Path(api_service.__file__).resolve().parent / "data" / "presets"
 
 def _template_slug_from_task(task_payload: Mapping[str, Any]) -> str:
     template_payload = _coerce_mapping(
@@ -204,16 +198,16 @@ def _template_slug_from_task(task_payload: Mapping[str, Any]) -> str:
         or ""
     ).strip()
 
-async def _expand_task_template_for_child_run(
+async def _expand_preset_for_child_run(
     *,
     session: Any,
     initial_parameters: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    """Expand stored task-template provenance into executable child-run steps.
+    """Expand stored preset provenance into executable child-run steps.
 
     Internal story-output tools create child executions directly, bypassing the
     API/UI submit path that normally expands presets. The stored run contract
-    must still contain the flattened steps before ``MoonMind.Run`` plans it.
+    must still contain the flattened steps before ``MoonMind.UserWorkflow`` plans it.
     """
 
     parameters = dict(initial_parameters or {})
@@ -235,7 +229,7 @@ async def _expand_task_template_for_child_run(
         )
         schedule = (
             None
-            if task_is_already_authored(task_payload)
+            if workflow_is_already_authored(task_payload)
             else schedule_preset_from_goal(goal)
         )
         if schedule is None:
@@ -259,10 +253,10 @@ async def _expand_task_template_for_child_run(
             "jiraIssueKey": schedule.issue_key,
         }
 
-    from api_service.services.task_templates.catalog import (
+    from api_service.services.presets.catalog import (
         ExpandOptions,
-        TaskTemplateCatalogService,
-        TaskTemplateNotFoundError,
+        PresetCatalogService,
+        PresetNotFoundError,
     )
 
     template_version = str(template_payload.get("version") or "1.0.0").strip()
@@ -285,7 +279,7 @@ async def _expand_task_template_for_child_run(
     target_runtime = parameters.get("targetRuntime")
     if isinstance(target_runtime, str) and target_runtime.strip():
         template_context["targetRuntime"] = target_runtime.strip()
-    catalog = TaskTemplateCatalogService(session)
+    catalog = PresetCatalogService(session)
     expand_kwargs = {
         "slug": template_slug,
         "scope": template_scope,
@@ -297,14 +291,14 @@ async def _expand_task_template_for_child_run(
     }
     try:
         expanded = await catalog.expand_template(**expand_kwargs)
-    except TaskTemplateNotFoundError:
-        await catalog.sync_seed_templates(seed_dir=_task_template_seed_dir())
+    except PresetNotFoundError:
+        await catalog.sync_seed_templates(seed_dir=_preset_seed_dir())
         expanded = await catalog.expand_template(**expand_kwargs)
 
     expanded_steps = expanded.get("steps") if isinstance(expanded, Mapping) else None
     if not isinstance(expanded_steps, list) or not expanded_steps:
         raise RuntimeError(
-            f"Task template '{template_slug}' expansion produced no executable steps."
+            f"Preset '{template_slug}' expansion produced no executable steps."
         )
 
     applied_template = _coerce_mapping(expanded.get("appliedTemplate"))
@@ -383,15 +377,15 @@ def _build_child_run_task_input_snapshot_payload(
     task_payload: Mapping[str, Any],
 ) -> dict[str, Any]:
     return {
-        "snapshotVersion": _TASK_INPUT_SNAPSHOT_VERSION,
+        "snapshotVersion": _WORKFLOW_INPUT_SNAPSHOT_VERSION,
         "source": {"kind": "create"},
         "draft": {
-            "taskShape": _child_task_snapshot_shape(task_payload),
+            "workflowShape": _child_task_snapshot_shape(task_payload),
             "repository": parameters.get("repository"),
             "targetRuntime": parameters.get("targetRuntime"),
             "requiredCapabilities": list(parameters.get("requiredCapabilities") or []),
-            "task": dict(task_payload),
-            "authoredTaskInput": build_authoritative_task_input_snapshot(
+            "workflow": dict(task_payload),
+            "authoredWorkflowInput": build_authoritative_workflow_input_snapshot(
                 task_payload=task_payload,
                 repository=parameters.get("repository"),
                 target_runtime=parameters.get("targetRuntime"),
@@ -406,7 +400,7 @@ def _build_child_run_task_input_snapshot_payload(
         "excluded": {
             "schedule": (
                 "Schedule controls are creation-only and are not editable through "
-                "task edit/rerun."
+                "workflow edit/rerun."
             )
         },
     }
@@ -432,15 +426,15 @@ async def _create_child_run_task_input_snapshot_artifact(
             "workflow_id": canonical.workflow_id,
             "run_id": canonical.run_id,
             "link_type": _TASK_INPUT_SNAPSHOT_LINK_TYPE,
-            "label": "Original task input snapshot",
+            "label": "Original workflow input snapshot",
         },
         metadata_json={
             "artifact_class": _TASK_INPUT_SNAPSHOT_LINK_TYPE,
-            "snapshot_version": _TASK_INPUT_SNAPSHOT_VERSION,
-            "workflow_type": "MoonMind.Run",
+            "snapshot_version": _WORKFLOW_INPUT_SNAPSHOT_VERSION,
+            "workflow_type": "MoonMind.UserWorkflow",
             "source_kind": "create",
-            "draft_shape": snapshot_payload["draft"]["taskShape"],
-            "schema_name": "OriginalTaskInputSnapshot",
+            "draft_shape": snapshot_payload["draft"]["workflowShape"],
+            "schema_name": "OriginalWorkflowInputSnapshot",
             "created_by": principal,
             "attachment_refs": [],
         },
@@ -462,7 +456,7 @@ def _apply_child_snapshot_ref_to_records(
     for target_record in records:
         memo = dict(target_record.memo or {})
         memo["task_input_snapshot_ref"] = artifact_id
-        memo["task_input_snapshot_version"] = _TASK_INPUT_SNAPSHOT_VERSION
+        memo["task_input_snapshot_version"] = _WORKFLOW_INPUT_SNAPSHOT_VERSION
         memo["task_input_snapshot_source_kind"] = "create"
         target_record.memo = memo
         artifact_refs = list(target_record.artifact_refs or [])
@@ -478,7 +472,7 @@ async def _persist_child_run_task_input_snapshot(
     parameters: Mapping[str, Any],
     artifact_service: TemporalArtifactService | None = None,
 ) -> str:
-    """Persist the original task payload for worker-created child runs.
+    """Persist the original workflow payload for worker-created child runs.
 
     Jira Orchestrate creates child executions from a worker activity, bypassing
     the API route that normally stores the authoritative edit/rerun snapshot.
@@ -487,10 +481,12 @@ async def _persist_child_run_task_input_snapshot(
     parameters alone.
     """
 
-    if _enum_value(getattr(record, "workflow_type", None)) != "MoonMind.Run":
+    if _enum_value(getattr(record, "workflow_type", None)) != "MoonMind.UserWorkflow":
         return ""
-    task_payload = _coerce_mapping(parameters.get("task"))
-    if not task_payload:
+    workflow_payload = _coerce_mapping(
+        parameters.get("workflow") or parameters.get("task")
+    )
+    if not workflow_payload:
         return ""
 
     workflow_id = str(getattr(record, "workflow_id", "") or "").strip()
@@ -511,7 +507,7 @@ async def _persist_child_run_task_input_snapshot(
     principal = _owner_principal_for_child_snapshot(canonical)
     snapshot_payload = _build_child_run_task_input_snapshot_payload(
         parameters=parameters,
-        task_payload=task_payload,
+        task_payload=workflow_payload,
     )
     artifact_id = await _create_child_run_task_input_snapshot_artifact(
         service=service,
@@ -539,7 +535,7 @@ async def _persist_child_run_task_input_snapshot(
 def _build_jira_orchestrate_execution_creator():
     async def _create_execution(**kwargs):
         async with get_async_session_context() as session:
-            kwargs["initial_parameters"] = await _expand_task_template_for_child_run(
+            kwargs["initial_parameters"] = await _expand_preset_for_child_run(
                 session=session,
                 initial_parameters=kwargs.get("initial_parameters"),
             )
@@ -904,7 +900,7 @@ def _derive_pr_resolver_title(
 def _normalize_runtime_mode(raw_mode: Any) -> str:
     normalized = str(raw_mode or "").strip().lower()
     if not normalized:
-        return str(settings.workflow.default_task_runtime or "gemini_cli").strip().lower()
+        return str(settings.workflow.default_runtime or "gemini_cli").strip().lower()
     return normalized
 
 _JIRA_AGENT_SKILLS = JIRA_AGENT_SKILLS
@@ -1163,9 +1159,13 @@ def _build_runtime_planner():
 
         parameter_payload = dict(parameters or {})
         input_payload = _coerce_mapping(inputs)
-        task_payload = _coerce_mapping(input_payload.get("task"))
+        task_payload = _coerce_mapping(
+            input_payload.get("workflow") or input_payload.get("task")
+        )
         if not task_payload:
-            task_payload = _coerce_mapping(parameter_payload.get("task"))
+            task_payload = _coerce_mapping(
+                parameter_payload.get("workflow") or parameter_payload.get("task")
+            )
         git_payload = _coerce_mapping(task_payload.get("git"))
         selected_skill_payload = _coerce_mapping(task_payload.get("tool")) or _coerce_mapping(
             task_payload.get("skill")
@@ -1206,7 +1206,7 @@ def _build_runtime_planner():
             else:
                 raise RuntimeError(
                     "agent_runtime plan requires non-empty instructions in "
-                    "task.instructions, inputs.instructions, or parameters.instructions"
+                    "workflow.instructions, inputs.instructions, or parameters.instructions"
                 )
 
         if (
@@ -1225,8 +1225,8 @@ def _build_runtime_planner():
             ).strip()
             if not pr_selector and not branch_selector:
                 raise RuntimeError(
-                    "pr-resolver task requires task.tool.inputs.pr or task.git.startingBranch "
-                    "when task.instructions is not explicitly provided"
+                    "pr-resolver workflow requires workflow.tool.inputs.pr or "
+                    "workflow.git.startingBranch when workflow.instructions is not explicitly provided"
                 )
             # Ensure the auto-generated instruction includes the PR/branch
             # selector so the agent knows which PR to target.  The selector
@@ -2310,14 +2310,9 @@ async def main_async() -> None:
     runtime_resources: AsyncExitStack | None = None
 
     if topology.fleet == WORKFLOW_FLEET:
-        user_workflow_type = registered_user_workflow_type(settings.temporal)
-        user_workflow_class = (
-            MoonMindUserWorkflow
-            if user_workflow_type == RENAMED_USER_WORKFLOW_TYPE
-            else MoonMindRun
-        )
+        registered_user_workflow_type(settings.temporal)
         workflows = [
-            user_workflow_class,
+            MoonMindUserWorkflow,
             MoonMindManifestIngest,
             MoonMindProviderProfileManager,
             MoonMindAgentSession,

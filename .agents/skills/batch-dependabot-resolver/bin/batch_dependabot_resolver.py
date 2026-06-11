@@ -26,8 +26,8 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from moonmind.workflows.tasks.runtime_defaults import normalize_runtime_id
-from moonmind.workflows.tasks.task_contract import resolve_publish_mode_for_skill
+from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
+from moonmind.workflows.executions.execution_contract import resolve_publish_mode_for_skill
 
 logger = logging.getLogger(__name__)
 
@@ -453,7 +453,7 @@ def _load_parent_runtime_selection(
 def _resolve_runtime_selection(args: argparse.Namespace) -> RuntimeSelection:
     inherited = _load_parent_runtime_selection(args.task_context_path)
     configured_default_mode = _normalize_runtime_mode(
-        os.getenv("MOONMIND_DEFAULT_TASK_RUNTIME")
+        os.getenv("MOONMIND_DEFAULT_RUNTIME")
     )
     runtime_execution_profile_ref = _runtime_text(
         os.getenv("MOONMIND_EXECUTION_PROFILE_REF")
@@ -512,8 +512,8 @@ def _task_workflow_id_from_env() -> str | None:
     return None
 
 
-def _task_run_id_from_env() -> str | None:
-    for env_key in ("MOONMIND_TASK_RUN_ID", "MOONMIND_RUN_ID", "TASK_RUN_ID"):
+def _agent_run_id_from_env() -> str | None:
+    for env_key in ("MOONMIND_AGENT_RUN_ID", "MOONMIND_RUN_ID", "AGENT_RUN_ID"):
         value = _runtime_text(os.getenv(env_key))
         if value:
             return value
@@ -748,9 +748,9 @@ async def _submit_jobs_via_http(
     task_workflow_id = _task_workflow_id_from_env()
     if task_workflow_id:
         headers["X-MoonMind-Task-Workflow-Id"] = task_workflow_id
-    task_run_id = _task_run_id_from_env()
-    if task_run_id:
-        headers["X-MoonMind-Task-Run-Identifier"] = task_run_id
+    agent_run_id = _agent_run_id_from_env()
+    if agent_run_id:
+        headers["X-MoonMind-Agent-Run-Identifier"] = agent_run_id
     base = moonmind_url.rstrip("/")
     async with httpx.AsyncClient(
         base_url=base, timeout=30.0, headers=headers

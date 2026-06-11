@@ -20,7 +20,7 @@ def _profile_payload() -> dict[str, object]:
         "id": "local-python",
         "kind": "one_shot",
         "image": "python:3.12-slim",
-        "workdir_template": "/work/agent_jobs/${task_run_id}/repo",
+        "workdir_template": "/work/agent_jobs/${agent_run_id}/repo",
         "required_mounts": [
             {
                 "type": "volume",
@@ -39,7 +39,7 @@ def _helper_profile_payload() -> dict[str, object]:
         "id": "redis-helper",
         "kind": "bounded_service",
         "image": "redis:7.2-alpine",
-        "workdir_template": "/work/agent_jobs/${task_run_id}/repo",
+        "workdir_template": "/work/agent_jobs/${agent_run_id}/repo",
         "required_mounts": [
             {
                 "type": "volume",
@@ -69,7 +69,7 @@ def _helper_profile_payload() -> dict[str, object]:
 def _request_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "profileId": "local-python",
-        "taskRunId": "task-1",
+        "agentRunId": "task-1",
         "stepId": "step-test",
         "attempt": 1,
         "toolName": "container.run_workload",
@@ -108,7 +108,7 @@ class _FakeLauncher:
             metadata={
                 "containerName": validated.container_name,
                 "workload": {
-                    "taskRunId": validated.request.task_run_id,
+                    "agentRunId": validated.request.agent_run_id,
                     "stepId": validated.request.step_id,
                     "attempt": validated.request.attempt,
                     "toolName": validated.request.tool_name,
@@ -320,7 +320,7 @@ async def test_workload_run_activity_denies_unrestricted_tool_when_mode_is_profi
         await activities.workload_run(
             {
                 "request": {
-                    "taskRunId": "task-1",
+                    "agentRunId": "task-1",
                     "stepId": "step-test",
                     "attempt": 1,
                     "toolName": "container.run_docker",

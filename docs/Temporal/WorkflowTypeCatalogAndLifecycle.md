@@ -1,6 +1,6 @@
 # Workflow Type Catalog and Lifecycle
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
+**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 MoonMind’s **Temporal-native** lifecycle contract for Temporal-managed Workflow Executions. MoonMind does not define a separate product entity named Task; this document governs workflow types and execution semantics inside Temporal.
 
@@ -31,13 +31,13 @@ This document defines the **Temporal-side contract**. Product-facing APIs and UI
  Temporal-backed list/detail views should come from Temporal Visibility. Product-facing docs and APIs should center Workflow Execution identity.
 
 2. **Workflow Types are the root orchestration categories.** 
- We do not introduce parallel top-level taxonomies for provider brand, runtime brand, or task-queue brand.
+ We do not introduce parallel top-level taxonomies for provider brand, runtime brand, or Task Queue brand.
 
 3. **Workflows orchestrate; Activities do side effects.** 
  All nondeterminism lives in Activities.
 
 4. **True agent execution is a child-workflow concern.** 
- `MoonMind.AgentRun` is the durable lifecycle wrapper for one true agent execution. Task-scoped managed sessions are represented separately by `MoonMind.AgentSession` when a runtime uses the managed-session plane.
+ `MoonMind.AgentRun` is the durable lifecycle wrapper for one true agent execution. Workflow-scoped managed sessions are represented separately by `MoonMind.AgentSession` when a runtime uses the managed-session plane.
 
 5. **Edits are modeled as Updates.** 
  Signals are used for asynchronous events such as approvals, webhooks, and external notifications.
@@ -61,7 +61,7 @@ Namespace: `MoonMind.*`
 
 Current core workflow types:
 
-- `MoonMind.Run`
+- `MoonMind.UserWorkflow`
 - `MoonMind.UserWorkflow`
 - `MoonMind.ManifestIngest`
 - `MoonMind.ProviderProfileManager`
@@ -112,12 +112,12 @@ Rules:
 | Workflow Type | Primary responsibility | Typical inputs | Typical outputs | Expected duration |
 | --- | --- | --- | --- | --- |
 | `MoonMind.UserWorkflow` | User-submitted, Step-ledger-owning Workflow Execution: plan work, own Step state/progress, orchestrate child agent runs, integrate results, produce artifacts | input refs, optional plan ref, parameters | output artifacts, summary, progress, Step refs | seconds → hours |
-| `MoonMind.Run` | Current live implementation name for the user Workflow Execution path while the product model uses `MoonMind.UserWorkflow` terminology | input refs, optional plan ref, parameters | output artifacts, summary, progress, Step refs | seconds → hours |
+| `MoonMind.UserWorkflow` | Current live implementation name for the user Workflow Execution path while the product model uses `MoonMind.UserWorkflow` terminology | input refs, optional plan ref, parameters | output artifacts, summary, progress, Step refs | seconds → hours |
 | `MoonMind.ManifestIngest` | Ingest a manifest artifact, validate, compile to a plan/graph, orchestrate execution, aggregate results | manifest artifact ref, policy params | aggregated outputs, per-node results | seconds → hours |
 | `MoonMind.ProviderProfileManager` | Coordinate provider-profile slot assignment, release, cooldowns, and reconciliation for managed runtimes | runtime/profile coordination inputs | slot assignment, lease state transitions | minutes → long-lived |
 | `MoonMind.AgentRun` | Own the durable lifecycle of one true managed or external agent execution | `AgentExecutionRequest`, refs, runtime metadata | canonical agent result, artifacts, lifecycle outcome | seconds → hours |
-| `MoonMind.AgentSession` | Own one task-scoped managed runtime session container, including launch, turn routing, clear/reset epoch changes, status, summary refs, and teardown | `ManagedSessionWorkflowInput` for the live session-capable runtime (`codex_cli`) | session handle/state, continuity refs, control/reset refs | minutes → hours |
-| `MoonMind.ManagedSessionReconcile` | Periodically reconcile managed-session supervision records and container state outside any one task step | reconciliation policy and runtime scope | reconciliation summary and cleanup actions | seconds → minutes per run |
+| `MoonMind.AgentSession` | Own one workflow-scoped managed runtime session container, including launch, turn routing, clear/reset epoch changes, status, summary refs, and teardown | `ManagedSessionWorkflowInput` for the live session-capable runtime (`codex_cli`) | session handle/state, continuity refs, control/reset refs | minutes → hours |
+| `MoonMind.ManagedSessionReconcile` | Periodically reconcile managed-session supervision records and container state outside any one workflow step | reconciliation policy and runtime scope | reconciliation summary and cleanup actions | seconds → minutes per run |
 | `MoonMind.OAuthSession` | Manage browser-initiated OAuth or terminal-auth session lifecycle for managed runtimes | session config, runtime/provider context | auth/session status, profile registration side effects | minutes |
 | `MoonMind.MergeAutomation` | Wait for external pull request readiness after a published implementation run, then launch one resolver follow-up run when policy allows | parent run ref, compact pull request ref, optional Jira issue key, merge readiness policy | blocker summary, resolver run ref, terminal gate status | minutes → hours |
 
@@ -374,7 +374,7 @@ Behavior:
 
 Important child behavior:
 
-- canceling `MoonMind.Run` should propagate to in-flight `MoonMind.AgentRun` child workflows
+- canceling `MoonMind.UserWorkflow` should propagate to in-flight `MoonMind.AgentRun` child workflows
 - `MoonMind.AgentRun` must still attempt best-effort provider/runtime cleanup inside a non-cancellable cleanup region when appropriate
 - provider-side cancel success must be reported truthfully; MoonMind workflow cancellation and provider cancellation are related but not identical concepts
 
@@ -468,7 +468,7 @@ For true agent-runtime work, contract-shape failures such as unsupported provide
 
 ## 11. Per-workflow lifecycle details
 
-## 11.1 `MoonMind.Run` lifecycle
+## 11.1 `MoonMind.UserWorkflow` lifecycle
 
 ```mermaid
 stateDiagram-v2
@@ -507,7 +507,7 @@ stateDiagram-v2
 Key notes:
 
 * planning is an Activity-driven concern, not a separate orchestration substrate
-* the plan artifact owns planned step structure; `MoonMind.Run` owns the live step ledger and operator-facing progress
+* the plan artifact owns planned step structure; `MoonMind.UserWorkflow` owns the live step ledger and operator-facing progress
 * execution may mix direct activities and child workflows
 * true agent steps dispatch to `MoonMind.AgentRun`, while the parent tracks only bounded step status, refs, and summaries
 * `child_state_changed`-style coordination may bubble child state to the parent domain state
@@ -530,7 +530,7 @@ stateDiagram-v2
 Key notes:
 
 * parse/validate/compile belong in Activities
-* orchestration may be inline or may spawn child `MoonMind.Run` executions
+* orchestration may be inline or may spawn child `MoonMind.UserWorkflow` executions
 * aggregation should produce artifact-backed results
 
 ## 11.3 `MoonMind.AgentRun` lifecycle
@@ -584,7 +584,7 @@ stateDiagram-v2
 
 Key notes:
 
-* this workflow owns one task-scoped managed runtime session for `codex_cli`
+* this workflow owns one workflow-scoped managed runtime session for `codex_cli`
 * the workflow carries bounded session identity and refs, not large transcripts or logs
 * turn execution and session controls call `agent_runtime.*` activities on `mm.activity.agent_runtime`
 * clear/reset creates a new `session_epoch` and publishes explicit continuity artifacts
@@ -601,7 +601,7 @@ Representative lifecycle concerns:
 * trigger bounded cleanup or status repair through activity-owned side effects
 * finish quickly and rely on schedule/API triggering for future reconciliation passes
 
-It is not a task workflow and should not appear as a normal user task.
+It is not a user workflow and should not appear as a normal user workflow execution.
 
 ## 11.6 `MoonMind.ProviderProfileManager` lifecycle
 
@@ -629,7 +629,7 @@ Representative lifecycle:
 * register resulting provider/runtime profile if successful
 * fail/cleanup if not
 
-This is a support workflow, not a general task workflow.
+This is a support workflow, not a general user workflow.
 
 ---
 

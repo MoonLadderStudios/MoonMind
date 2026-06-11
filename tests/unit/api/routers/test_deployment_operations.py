@@ -192,7 +192,7 @@ def test_admin_can_submit_policy_valid_deployment_update(
     assert payload["status"] == "QUEUED"
     assert len(execution_service.requests) == 1
     request = execution_service.requests[0]
-    assert request["workflow_type"] == "MoonMind.Run"
+    assert request["workflow_type"] == "MoonMind.UserWorkflow"
     assert request["owner_type"] == "user"
     assert request["integration"] == DEPLOYMENT_UPDATE_TOOL_NAME
     parameters = request["initial_parameters"]

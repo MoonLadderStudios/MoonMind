@@ -33,12 +33,12 @@ def test_inventory_workflow_message_names_match_known_constants() -> None:
     signal_names = {
         contract.name
         for contract in iter_temporal_boundary_contracts()
-        if contract.kind == "signal" and contract.owner == "MoonMind.Run"
+        if contract.kind == "signal" and contract.owner == "MoonMind.UserWorkflow"
     }
     update_names = {
         contract.name
         for contract in iter_temporal_boundary_contracts()
-        if contract.kind == "update" and contract.owner == "MoonMind.Run"
+        if contract.kind == "update" and contract.owner == "MoonMind.UserWorkflow"
     }
 
     assert signal_names <= set(SUPPORTED_SIGNAL_NAMES)
@@ -52,4 +52,4 @@ def test_inventory_preserves_existing_temporal_names() -> None:
     assert ("activity", "artifact", "artifact.read") in names
     assert ("query", "MoonMind.AgentSession", "get_status") in names
     assert ("update", "MoonMind.AgentSession", "SendFollowUp") in names
-    assert ("signal", "MoonMind.Run", "DependencyResolved") in names
+    assert ("signal", "MoonMind.UserWorkflow", "DependencyResolved") in names

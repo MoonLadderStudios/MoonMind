@@ -257,7 +257,7 @@ async def test_backup_export_against_real_registry_redacts_audit_payloads(
     )
     _seed_override(
         settings_backup_session,
-        key="workflow.default_task_runtime",
+        key="workflow.default_runtime",
         value="codex_cli",
     )
 
@@ -296,7 +296,7 @@ async def test_backup_export_against_real_registry_redacts_audit_payloads(
 
     keys = sorted(record.key for record in bundle.overrides)
     assert "integrations.github.token_ref" in keys
-    assert "workflow.default_task_runtime" in keys
+    assert "workflow.default_runtime" in keys
 
     token_record = next(
         record
@@ -340,7 +340,7 @@ async def test_partial_restore_broken_references_surface_for_operator(
     )
     _seed_override(
         settings_backup_session,
-        key="workflow.default_task_runtime",
+        key="workflow.default_runtime",
         value="codex_cli",
     )
     await settings_backup_session.commit()
@@ -355,7 +355,7 @@ async def test_partial_restore_broken_references_surface_for_operator(
     assert ("integrations.github.token_ref", "unresolved_secret_ref") in codes
     assert ("workflow.default_provider_profile_ref", "provider_profile_not_found") in codes
     # The unrelated, non-reference override does NOT appear in the scan.
-    assert all(item.key != "workflow.default_task_runtime" for item in broken)
+    assert all(item.key != "workflow.default_runtime" for item in broken)
 
 
 async def test_partial_restore_clears_diagnostics_once_dependencies_return(

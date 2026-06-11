@@ -120,7 +120,7 @@ async def test_controller_launches_container_and_returns_typed_handle(
     session_supervisor = AsyncMock()
     session_supervisor.emit_session_event = Mock()
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-1",
+        agentRunId="task-1",
         workflowId="wf-task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
@@ -195,12 +195,12 @@ async def test_controller_launches_container_and_returns_typed_handle(
         "MOONMIND_SESSION_TURN_COMPLETION_TIMEOUT_SECONDS=1800" in run_command
     )
     assert "MOONMIND_TASK_WORKFLOW_ID=wf-task-1" in run_command
-    assert "MOONMIND_TASK_RUN_ID=task-1" in run_command
+    assert "MOONMIND_AGENT_RUN_ID=task-1" in run_command
     assert "python3" in run_command
     assert "moonmind.workflows.temporal.runtime.codex_session_runtime" in run_command
     stored = session_store.load("sess-1")
     assert stored is not None
-    assert stored.task_run_id == "task-1"
+    assert stored.agent_run_id == "task-1"
     assert stored.container_id == "ctr-1"
     assert stored.runtime_id == "codex_cli"
     session_supervisor.start.assert_awaited_once()
@@ -262,7 +262,7 @@ async def test_controller_checks_out_target_branch_for_existing_git_workspace_wi
         capture_output=True,
     )
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-1",
+        agentRunId="task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath=str(workspace_path),
@@ -300,7 +300,7 @@ async def test_controller_launches_private_docker_sidecar_for_docker_enabled_ses
     monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
     workspace_root = tmp_path / "agent_jobs"
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-1",
+        agentRunId="task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath=str(workspace_root / "task-1" / "repo"),
@@ -393,7 +393,7 @@ async def test_controller_launches_private_docker_sidecar_for_docker_enabled_ses
     assert "/var/run/docker.sock" not in " ".join(sidecar_run)
     assert "moonmind.session_id=sess-1" in sidecar_run
     assert "moonmind.session_epoch=1" in sidecar_run
-    assert "moonmind.task_run_id=task-1" in sidecar_run
+    assert "moonmind.agent_run_id=task-1" in sidecar_run
     assert "moonmind.workload_mode=docker-sidecar" in sidecar_run
     assert "--group=1000" in sidecar_run
     assert "--data-root=/var/lib/docker" in sidecar_run
@@ -416,7 +416,7 @@ async def test_controller_launches_private_docker_sidecar_for_docker_enabled_ses
     assert "--privileged" not in agent_run
     assert "moonmind.session_id=sess-1" in agent_run
     assert "moonmind.session_epoch=1" in agent_run
-    assert "moonmind.task_run_id=task-1" in agent_run
+    assert "moonmind.agent_run_id=task-1" in agent_run
     assert "moonmind.workload_mode=docker-sidecar" in agent_run
     assert (
         "DOCKER_HOST=unix:///var/run/moonmind-docker/docker.sock" in agent_run
@@ -433,7 +433,7 @@ async def test_controller_removes_named_container_when_docker_run_returns_blank(
 ) -> None:
     workspace_root = tmp_path / "agent_jobs"
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-1",
+        agentRunId="task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath=str(workspace_root / "task-1" / "repo"),
@@ -510,7 +510,7 @@ async def test_mm693_zero_interval_docker_capability_probe_yields(
     tmp_path: Path,
 ) -> None:
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-1",
+        agentRunId="task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath=str(tmp_path / "repo"),
@@ -576,7 +576,7 @@ async def test_controller_rejects_unmaterialized_rootless_sidecar_mode(
 ) -> None:
     workspace_root = tmp_path / "agent_jobs"
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-1",
+        agentRunId="task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath=str(workspace_root / "task-1" / "repo"),
@@ -604,7 +604,7 @@ async def test_controller_rejects_unknown_managed_session_docker_mode(
 ) -> None:
     workspace_root = tmp_path / "agent_jobs"
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-1",
+        agentRunId="task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath=str(workspace_root / "task-1" / "repo"),
@@ -641,7 +641,7 @@ async def test_controller_record_keeps_auth_and_runtime_homes_out_of_artifact_re
     session_supervisor = AsyncMock()
     session_supervisor.emit_session_event = Mock()
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-auth-evidence",
+        agentRunId="task-auth-evidence",
         sessionId="sess-auth-evidence",
         threadId="logical-thread-1",
         workspacePath=str(workspace_root / "task-auth-evidence" / "repo"),
@@ -714,7 +714,7 @@ async def test_controller_uses_request_moonmind_url_for_docker_network(
     monkeypatch.delenv("MOONMIND_URL", raising=False)
     workspace_root = tmp_path / "agent_jobs"
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-1",
+        agentRunId="task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath=str(workspace_root / "task-1" / "repo"),
@@ -780,7 +780,7 @@ async def test_mm784_no_docker_session_rejects_unrestricted_docker_proxy(
     monkeypatch.setenv("MOONMIND_DOCKER_PROXY_NETWORK", "docker-proxy-test")
     workspace_root = tmp_path / "agent_jobs"
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-1",
+        agentRunId="task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath=str(workspace_root / "task-1" / "repo"),
@@ -850,7 +850,7 @@ async def test_mm784_request_unrestricted_mode_uses_sidecar_policy(
     monkeypatch.setenv("MOONMIND_DOCKER_PROXY_NETWORK", "docker-proxy-test")
     workspace_root = tmp_path / "agent_jobs"
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-1",
+        agentRunId="task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath=str(workspace_root / "task-1" / "repo"),
@@ -938,7 +938,7 @@ async def test_mm784_env_unrestricted_mode_uses_sidecar_policy(
     monkeypatch.setenv("MOONMIND_DOCKER_PROXY_NETWORK", "docker-proxy-test")
     workspace_root = tmp_path / "agent_jobs"
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-1",
+        agentRunId="task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath=str(workspace_root / "task-1" / "repo"),
@@ -1017,7 +1017,7 @@ async def test_controller_replaces_blank_request_moonmind_url(
 ) -> None:
     workspace_root = tmp_path / "agent_jobs"
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-1",
+        agentRunId="task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath=str(workspace_root / "task-1" / "repo"),
@@ -1080,7 +1080,7 @@ async def test_controller_launch_normalizes_created_paths_for_container_user(
 ) -> None:
     workspace_root = tmp_path / "agent_jobs"
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-1",
+        agentRunId="task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath=str(workspace_root / "task-1" / "repo"),
@@ -1172,7 +1172,7 @@ async def test_controller_launch_clones_workspace_before_starting_container(
     monkeypatch.delenv("WORKFLOW_GITHUB_TOKEN", raising=False)
     workspace_root = tmp_path / "agent_jobs"
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="mm:task-1",
+        agentRunId="mm:task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath=str(workspace_root / "mm:task-1" / "repo"),
@@ -1327,7 +1327,7 @@ async def test_controller_clone_uses_launch_scoped_github_token_for_git_auth(
     workspace_root = tmp_path / "agent_jobs"
     token = "launch-secret-token-12345678901234567890"
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="mm:task-1",
+        agentRunId="mm:task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath=str(workspace_root / "mm:task-1" / "repo"),
@@ -1405,7 +1405,7 @@ async def test_controller_clone_resolves_descriptor_for_git_without_container_to
     workspace_root = tmp_path / "agent_jobs"
     token = "launch-secret-token-12345678901234567890"
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="mm:task-1",
+        agentRunId="mm:task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath=str(workspace_root / "mm:task-1" / "repo"),
@@ -1610,7 +1610,7 @@ async def test_controller_reuses_resolved_git_environment_for_target_branch(
     workspace_path = workspace_root / "mm:task-1" / "repo"
     workspace_path.mkdir(parents=True)
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="mm:task-1",
+        agentRunId="mm:task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath=str(workspace_path),
@@ -1696,7 +1696,7 @@ async def test_controller_required_github_descriptor_fails_before_clone(
 ) -> None:
     workspace_root = tmp_path / "agent_jobs"
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="mm:task-1",
+        agentRunId="mm:task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath=str(workspace_root / "mm:task-1" / "repo"),
@@ -1741,7 +1741,7 @@ async def test_controller_launch_redacts_github_token_from_command_failures(
 ) -> None:
     workspace_root = tmp_path / "agent_jobs"
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-1",
+        agentRunId="task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath=str(workspace_root / "task-1" / "repo"),
@@ -1802,7 +1802,7 @@ async def test_controller_launch_creates_target_branch_when_remote_branch_missin
 ) -> None:
     workspace_root = tmp_path / "agent_jobs"
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="mm:task-1",
+        agentRunId="mm:task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath=str(workspace_root / "mm:task-1" / "repo"),
@@ -1904,7 +1904,7 @@ async def test_controller_launch_reuses_existing_workspace_and_checks_out_target
     existing_git_ref.parent.mkdir(parents=True, exist_ok=True)
     existing_git_ref.write_text("abc123\n", encoding="utf-8")
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="mm:task-1",
+        agentRunId="mm:task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath=str(workspace_path),
@@ -2032,7 +2032,7 @@ async def test_controller_launch_normalizes_support_paths_before_git_failures(
     session_path.mkdir()
     artifacts_path.mkdir()
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="mm:task-1",
+        agentRunId="mm:task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath=str(workspace_path),
@@ -2124,7 +2124,7 @@ async def test_controller_launch_reclones_invalid_workspace_before_target_checko
     stale_file = workspace_path / "stale.txt"
     stale_file.write_text("stale")
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="mm:task-1",
+        agentRunId="mm:task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath=str(workspace_path),
@@ -2214,7 +2214,7 @@ async def test_controller_launch_trusts_workspace_git_commands_for_container_own
     workspace_path = workspace_root / "mm:task-1" / "repo"
     workspace_path.mkdir(parents=True, exist_ok=True)
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="mm:task-1",
+        agentRunId="mm:task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath=str(workspace_path),
@@ -2509,7 +2509,7 @@ async def test_controller_send_turn_recovers_from_blank_output_using_runtime_sta
         CodexManagedSessionRecord(
             sessionId="sess-1",
             sessionEpoch=1,
-            taskRunId="task-1",
+            agentRunId="task-1",
             containerId="ctr-1",
             threadId="logical-thread-1",
             runtimeId="codex_cli",
@@ -2601,7 +2601,7 @@ async def test_controller_send_turn_does_not_recover_stale_completed_turn_state(
         CodexManagedSessionRecord(
             sessionId="sess-1",
             sessionEpoch=1,
-            taskRunId="task-1",
+            agentRunId="task-1",
             containerId="ctr-1",
             threadId="logical-thread-1",
             runtimeId="codex_cli",
@@ -2747,7 +2747,10 @@ async def test_controller_send_turn_times_out_when_session_never_reaches_termina
             "invalid\njson",
             "stderr\nline",
             "returned invalid JSON",
-            [f"stdout={json.dumps('invalid\njson')}", f"stderr: {json.dumps('stderr\nline')}"],
+            [
+                "stdout=" + json.dumps("invalid\njson"),
+                "stderr: " + json.dumps("stderr\nline"),
+            ],
             ["invalid\njson", "stderr\nline"],
         ),
         (
@@ -2755,8 +2758,8 @@ async def test_controller_send_turn_times_out_when_session_never_reaches_termina
             "stderr\nline",
             "returned a list payload instead of a JSON object",
             [
-                f"stdout={json.dumps('[1, 2, 3]')}",
-                f"stderr: {json.dumps('stderr\nline')}",
+                "stdout=" + json.dumps("[1, 2, 3]"),
+                "stderr: " + json.dumps("stderr\nline"),
             ],
             ["stderr\nline"],
         ),
@@ -2815,7 +2818,7 @@ async def test_controller_send_turn_emits_follow_up_reason_in_session_events(
         CodexManagedSessionRecord(
             sessionId="sess-1",
             sessionEpoch=1,
-            taskRunId="task-1",
+            agentRunId="task-1",
             containerId="ctr-1",
             threadId="thread-1",
             runtimeId="codex_cli",
@@ -2900,7 +2903,7 @@ async def test_controller_session_status_emits_session_resumed_event(
         CodexManagedSessionRecord(
             sessionId="sess-1",
             sessionEpoch=1,
-            taskRunId="task-1",
+            agentRunId="task-1",
             containerId="ctr-1",
             threadId="thread-1",
             runtimeId="codex_cli",
@@ -2974,7 +2977,7 @@ async def test_controller_steer_turn_emits_normalized_session_annotation(
         CodexManagedSessionRecord(
             sessionId="sess-1",
             sessionEpoch=1,
-            taskRunId="task-1",
+            agentRunId="task-1",
             containerId="ctr-1",
             threadId="thread-1",
             runtimeId="codex_cli",
@@ -3050,7 +3053,7 @@ async def test_controller_clear_and_terminate_preserve_container_boundary(
         CodexManagedSessionRecord(
             sessionId="sess-1",
             sessionEpoch=1,
-            taskRunId="task-1",
+            agentRunId="task-1",
             containerId="ctr-1",
             threadId="logical-thread-1",
             runtimeId="codex_cli",
@@ -3170,7 +3173,7 @@ async def test_controller_duplicate_terminate_retries_container_cleanup(
         CodexManagedSessionRecord(
             sessionId="sess-1",
             sessionEpoch=1,
-            taskRunId="task-1",
+            agentRunId="task-1",
             containerId="ctr-1",
             threadId="logical-thread-1",
             runtimeId="codex_cli",
@@ -3227,7 +3230,7 @@ async def test_controller_terminate_removes_session_docker_sidecar_resources(
         CodexManagedSessionRecord(
             sessionId="sess-1",
             sessionEpoch=1,
-            taskRunId="task-1",
+            agentRunId="task-1",
             containerId="moonmind-session-sess-1-agent-id",
             threadId="thread-1",
             runtimeId="codex_cli",
@@ -3355,7 +3358,7 @@ async def test_controller_duplicate_terminate_rejects_stale_locator(
         CodexManagedSessionRecord(
             sessionId="sess-1",
             sessionEpoch=2,
-            taskRunId="task-1",
+            agentRunId="task-1",
             containerId="ctr-1",
             threadId="logical-thread-2",
             runtimeId="codex_cli",
@@ -3399,7 +3402,7 @@ async def test_controller_duplicate_launch_reuses_existing_live_record(
 ) -> None:
     store = ManagedSessionStore(tmp_path / "session-store")
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-1",
+        agentRunId="task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath="/tmp/agent_jobs/task-1/repo",
@@ -3412,7 +3415,7 @@ async def test_controller_duplicate_launch_reuses_existing_live_record(
         CodexManagedSessionRecord(
             sessionId="sess-1",
             sessionEpoch=1,
-            taskRunId="task-1",
+            agentRunId="task-1",
             containerId="ctr-1",
             threadId="logical-thread-1",
             runtimeId="codex_cli",
@@ -3457,7 +3460,7 @@ def test_controller_launch_duplicate_match_requires_epoch_and_thread(
     tmp_path: Path,
 ) -> None:
     base_request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-1",
+        agentRunId="task-1",
         sessionId="sess-1",
         sessionEpoch=1,
         threadId="logical-thread-1",
@@ -3470,7 +3473,7 @@ def test_controller_launch_duplicate_match_requires_epoch_and_thread(
     record = CodexManagedSessionRecord(
         sessionId="sess-1",
         sessionEpoch=1,
-        taskRunId="task-1",
+        agentRunId="task-1",
         containerId="ctr-1",
         threadId="logical-thread-1",
         runtimeId="codex_cli",
@@ -3505,7 +3508,7 @@ async def test_controller_duplicate_clear_returns_existing_advanced_epoch(
         CodexManagedSessionRecord(
             sessionId="sess-1",
             sessionEpoch=2,
-            taskRunId="task-1",
+            agentRunId="task-1",
             containerId="ctr-1",
             threadId="logical-thread-2",
             runtimeId="codex_cli",
@@ -3567,7 +3570,7 @@ async def test_controller_clear_session_publishes_durable_reset_artifacts(
         CodexManagedSessionRecord(
             sessionId="sess-1",
             sessionEpoch=1,
-            taskRunId="task-1",
+            agentRunId="task-1",
             containerId="ctr-1",
             threadId="logical-thread-1",
             runtimeId="codex_cli",
@@ -3650,7 +3653,7 @@ async def test_controller_clear_session_publishes_durable_reset_artifacts(
             sessionEpoch=2,
             containerId="ctr-1",
             threadId="logical-thread-2",
-            taskRunId="task-1",
+            agentRunId="task-1",
         )
     )
 
@@ -3668,7 +3671,7 @@ async def test_controller_send_turn_tolerates_event_publication_failure(
         CodexManagedSessionRecord(
             sessionId="sess-1",
             sessionEpoch=1,
-            taskRunId="task-1",
+            agentRunId="task-1",
             containerId="ctr-1",
             threadId="thread-1",
             runtimeId="codex_cli",
@@ -3745,7 +3748,7 @@ async def test_controller_clear_session_preserves_retrieval_metadata_in_durable_
         CodexManagedSessionRecord(
             sessionId="sess-1",
             sessionEpoch=1,
-            taskRunId="task-1",
+            agentRunId="task-1",
             containerId="ctr-1",
             threadId="logical-thread-1",
             runtimeId="codex_cli",
@@ -3826,7 +3829,7 @@ async def test_controller_clear_session_preserves_retrieval_metadata_in_durable_
             sessionEpoch=2,
             containerId="ctr-1",
             threadId="logical-thread-2",
-            taskRunId="task-1",
+            agentRunId="task-1",
         )
     )
 
@@ -3848,7 +3851,7 @@ async def test_controller_clear_session_rejects_stale_durable_locator(
         CodexManagedSessionRecord(
             sessionId="sess-1",
             sessionEpoch=2,
-            taskRunId="task-1",
+            agentRunId="task-1",
             containerId="ctr-1",
             threadId="logical-thread-2",
             runtimeId="codex_cli",
@@ -3896,7 +3899,7 @@ async def test_controller_summary_and_publication_read_from_durable_record(
         CodexManagedSessionRecord(
             sessionId="sess-1",
             sessionEpoch=2,
-            taskRunId="task-1",
+            agentRunId="task-1",
             containerId="ctr-1",
             threadId="thread-2",
             runtimeId="codex_cli",
@@ -3940,7 +3943,7 @@ async def test_controller_summary_and_publication_read_from_durable_record(
             sessionEpoch=2,
             containerId="ctr-1",
             threadId="thread-2",
-            taskRunId="task-1",
+            agentRunId="task-1",
         )
     )
 
@@ -3974,7 +3977,7 @@ async def test_controller_publication_uses_snapshot_without_stopping_supervision
         CodexManagedSessionRecord(
             sessionId="sess-1",
             sessionEpoch=2,
-            taskRunId="task-1",
+            agentRunId="task-1",
             containerId="ctr-1",
             threadId="thread-2",
             runtimeId="codex_cli",
@@ -3991,7 +3994,7 @@ async def test_controller_publication_uses_snapshot_without_stopping_supervision
     published_record = CodexManagedSessionRecord(
         sessionId="sess-1",
         sessionEpoch=2,
-        taskRunId="task-1",
+        agentRunId="task-1",
         containerId="ctr-1",
         threadId="thread-2",
         runtimeId="codex_cli",
@@ -4025,7 +4028,7 @@ async def test_controller_publication_uses_snapshot_without_stopping_supervision
             sessionEpoch=2,
             containerId="ctr-1",
             threadId="thread-2",
-            taskRunId="task-1",
+            agentRunId="task-1",
         )
     )
 
@@ -4050,7 +4053,7 @@ async def test_controller_reconcile_reattaches_or_degrades_active_sessions(
         CodexManagedSessionRecord(
             sessionId="sess-ok",
             sessionEpoch=1,
-            taskRunId="task-1",
+            agentRunId="task-1",
             containerId="ctr-ok",
             threadId="thread-1",
             runtimeId="codex_cli",
@@ -4067,7 +4070,7 @@ async def test_controller_reconcile_reattaches_or_degrades_active_sessions(
         CodexManagedSessionRecord(
             sessionId="sess-missing",
             sessionEpoch=1,
-            taskRunId="task-2",
+            agentRunId="task-2",
             containerId="ctr-missing",
             threadId="thread-2",
             runtimeId="codex_cli",
@@ -4123,7 +4126,7 @@ async def test_controller_reconcile_degrades_when_container_inspect_fails(
         CodexManagedSessionRecord(
             sessionId="sess-ok",
             sessionEpoch=1,
-            taskRunId="task-1",
+            agentRunId="task-1",
             containerId="ctr-ok",
             threadId="thread-1",
             runtimeId="codex_cli",
@@ -4176,7 +4179,7 @@ async def test_controller_session_status_persists_returned_session_identity(
         CodexManagedSessionRecord(
             sessionId="sess-1",
             sessionEpoch=1,
-            taskRunId="task-1",
+            agentRunId="task-1",
             containerId="ctr-1",
             threadId="thread-1",
             runtimeId="codex_cli",
@@ -4286,7 +4289,7 @@ async def test_controller_send_turn_persists_failed_turn_status(tmp_path: Path) 
         CodexManagedSessionRecord(
             sessionId="sess-1",
             sessionEpoch=1,
-            taskRunId="task-1",
+            agentRunId="task-1",
             containerId="ctr-1",
             threadId="thread-1",
             runtimeId="codex_cli",
@@ -4355,7 +4358,7 @@ async def test_controller_send_turn_bounds_persisted_last_assistant_text(
         CodexManagedSessionRecord(
             sessionId="sess-1",
             sessionEpoch=1,
-            taskRunId="task-1",
+            agentRunId="task-1",
             containerId="ctr-1",
             threadId="thread-1",
             runtimeId="codex_cli",
@@ -4425,7 +4428,7 @@ async def test_controller_interrupt_turn_preserves_failed_runtime_result(
         CodexManagedSessionRecord(
             sessionId="sess-1",
             sessionEpoch=1,
-            taskRunId="task-1",
+            agentRunId="task-1",
             containerId="ctr-1",
             threadId="thread-1",
             runtimeId="codex_cli",
@@ -4488,7 +4491,7 @@ async def test_controller_interrupt_turn_preserves_failed_runtime_result(
 @pytest.mark.asyncio
 async def test_controller_launch_retries_ready_probe_errors(tmp_path: Path) -> None:
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-1",
+        agentRunId="task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath="/tmp/agent_jobs/task-1/repo",
@@ -4559,7 +4562,7 @@ async def test_controller_launch_reports_terminal_container_logs_during_ready_pr
 ) -> None:
     workspace_root = tmp_path / "agent_jobs"
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-1",
+        agentRunId="task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath=str(workspace_root / "task-1" / "repo"),
@@ -4616,7 +4619,7 @@ async def test_controller_launch_uses_mount_syntax_for_colon_scoped_paths(
 ) -> None:
     workspace_root = tmp_path / "agent_jobs"
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="mm:c8a52a0a-66ec-4796-91a4-76568c17159a",
+        agentRunId="mm:c8a52a0a-66ec-4796-91a4-76568c17159a",
         sessionId="sess-mm-c8a52a0a-66ec-4796-91a4-76568c17159a-codex_cli",
         threadId="logical-thread-1",
         workspacePath=str(workspace_root / "mm:c8a52a0a-66ec-4796-91a4-76568c17159a" / "repo"),
@@ -4680,7 +4683,7 @@ async def test_controller_launch_uses_mount_syntax_for_colon_scoped_paths(
 async def test_controller_launch_mounts_auth_volume_at_separate_managed_auth_path() -> None:
     workspace_root = Path("/tmp/agent_jobs")
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-1",
+        agentRunId="task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath=str(workspace_root / "task-1" / "repo"),
@@ -4770,7 +4773,7 @@ async def test_controller_launch_normalizes_materialized_codex_home_for_containe
     config_path = codex_home_path / "config.toml"
     config_path.write_text("model = 'qwen/qwen3.6-plus'\n", encoding="utf-8")
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-1",
+        agentRunId="task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath=str(workspace_root / "task-1" / "repo"),
@@ -4847,7 +4850,7 @@ async def test_controller_launch_normalizes_materialized_codex_home_for_containe
 @pytest.mark.asyncio
 async def test_controller_launch_cleans_up_container_when_handshake_fails() -> None:
     request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-1",
+        agentRunId="task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath="/tmp/agent_jobs/task-1/repo",
@@ -4891,7 +4894,7 @@ async def test_controller_launch_cleans_up_container_when_handshake_fails() -> N
 @pytest.mark.asyncio
 async def test_controller_launch_rejects_reserved_session_environment() -> None:
     request = LaunchCodexManagedSessionRequest.model_construct(
-        task_run_id="task-1",
+        agent_run_id="task-1",
         workflow_id=None,
         session_id="sess-1",
         session_epoch=1,

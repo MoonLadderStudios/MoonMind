@@ -4,11 +4,11 @@ Status: Draft
 Owners: MoonMind Platform 
 Last updated: 2026-04-04
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
+**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 ## Related docs
 
-- `docs/Tasks/AgentSkillSystem.md`
+- `docs/Steps/SkillSystem.md`
 - `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
 - `docs/Temporal/ActivityCatalogAndWorkerTopology.md`
 - `docs/Temporal/TemporalArchitecture.md`
@@ -23,7 +23,7 @@ MoonMind is built around **Temporal** as the durable orchestration substrate.
 - **Activities** perform all side effects.
 - Temporal history and payloads must remain **small**, **bounded**, and **safe**.
 
-Public MoonMind surfaces may still describe these executions as `tasks` during migration. This document defines the artifact contract at the Temporal/runtime layer.
+Some public MoonMind surfaces still carry legacy task-named fields (they rename in the hard switch). This document defines the artifact contract at the Temporal/runtime layer.
 
 Therefore, workflows and activities must pass **artifact references** rather than large payloads. This ensures large immutable inputs and outputs such as:
 

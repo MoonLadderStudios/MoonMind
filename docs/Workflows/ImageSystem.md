@@ -1,4 +1,4 @@
-# Task Image Input System
+# Workflow Image Input System
 
 Status: Proposed
 Owners: MoonMind Engineering
@@ -6,17 +6,17 @@ Last updated: 2026-04-16
 
 ## 1. Purpose
 
-This document defines the canonical desired-state contract for image inputs in MoonMind task executions.
+This document defines the canonical desired-state contract for image inputs in MoonMind workflow executions.
 
 The system exists to let users:
 
-- attach images to the task objective target or to individual steps from the Create page
+- attach images to the workflow objective target or to individual steps from the Create page
 - store uploaded bytes securely in the Artifact Store
-- submit lightweight artifact references into `MoonMind.Run`
+- submit lightweight artifact references into `MoonMind.UserWorkflow`
 - preserve attachment targeting through create, edit, and rerun flows
 - generate deterministic image-derived context for text-first runtimes
 - materialize raw image bytes into the workspace when a runtime or step requires direct file access
-- preview and download task images through MoonMind-owned APIs
+- preview and download workflow images through MoonMind-owned APIs
 
 This document is declarative. It defines the target system contract. It is not a rollout log.
 
@@ -25,7 +25,7 @@ This document is declarative. It defines the target system contract. It is not a
 ## 2. Related docs
 
 - `docs/UI/CreatePage.md`
-- `docs/Tasks/WorkflowArchitecture.md`
+- `docs/Workflows/WorkflowArchitecture.md`
 - `docs/Temporal/TemporalArchitecture.md`
 - `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
 - `docs/Temporal/ArtifactPresentationContract.md`
@@ -41,7 +41,7 @@ MoonMind is artifact-first.
 Rules:
 
 - uploaded image bytes must not be embedded in Temporal histories
-- uploaded image bytes must not be embedded directly in task instruction text
+- uploaded image bytes must not be embedded directly in workflow instruction text
 - the control plane submits structured attachment references, not raw binaries
 - derived image summaries are secondary artifacts; they do not replace the source image refs
 - attachment targeting is explicit and durable
@@ -60,7 +60,7 @@ Canonical target kinds:
 Canonical reference shape:
 
 ```ts
-interface TaskInputAttachmentRef {
+interface WorkflowInputAttachmentRef {
   artifactId: string;
   filename: string;
   contentType: string;
@@ -101,7 +101,7 @@ sequenceDiagram
     participant C as Create Page
     participant A as Artifact API
     participant E as Executions API
-    participant W as MoonMind.Run
+    participant W as MoonMind.UserWorkflow
     participant P as Prepare / Artifact Activities
     participant V as Vision Activity
     participant R as Runtime Step Executor
@@ -110,9 +110,9 @@ sequenceDiagram
     C->>A: Create artifact upload(s)
     C->>A: Upload image bytes
     C->>A: Complete upload(s)
-    C->>E: Submit task-shaped request with inputAttachments refs
-    E->>E: Validate policy + persist task input snapshot
-    E->>W: Start or update MoonMind.Run with refs
+    C->>E: Submit task-typed request with inputAttachments refs
+    E->>E: Validate policy + persist workflow input snapshot
+    E->>W: Start or update MoonMind.UserWorkflow with refs
     W->>P: Download and materialize image inputs
     P->>P: Write attachments manifest
     W->>V: Generate target-aware image context
@@ -133,17 +133,17 @@ Rules:
 
 ### 5.1 Canonical submission path
 
-The canonical submit path is task-shaped execution submission through `/api/executions`.
+The canonical submit path is execution submission through `/api/executions` using the `task`-typed payload envelope (the envelope key renames in the hard switch).
 
 Rules:
 
-- image inputs are submitted through the task-shaped Temporal execution API
+- image inputs are submitted through the `task`-typed Temporal execution API payload
 - legacy queue-specific attachment submission routes are not the desired-state contract
 - all browser upload and download flows remain behind MoonMind-owned API endpoints
 
-### 5.2 Canonical task contract
+### 5.2 Canonical execution payload
 
-Representative task-shaped payload:
+Representative `task`-typed payload:
 
 ```json
 {
@@ -151,7 +151,7 @@ Representative task-shaped payload:
   "payload": {
     "repository": "owner/repo",
     "task": {
-      "instructions": "Resolved task objective text.",
+      "instructions": "Resolved workflow objective text.",
       "inputAttachments": [
         {
           "artifactId": "art_objective_123",
@@ -188,7 +188,7 @@ Rules:
 
 ### 5.3 Authoritative snapshot contract
 
-The original task input snapshot is the source of truth for edit and rerun reconstruction.
+The original workflow input snapshot is the source of truth for edit and rerun reconstruction.
 
 Rules:
 
@@ -223,7 +223,7 @@ Canonical properties:
 
 Recommended artifact metadata keys:
 
-- `source: "task-create"`
+- `source: "workflow-create"`
 - `attachmentKind: "input"`
 - `targetKind: "objective" | "step"`
 - `stepRef`
@@ -233,7 +233,7 @@ Recommended artifact metadata keys:
 Rules:
 
 - metadata is helpful for observability but not the source of truth for binding
-- target binding must still be derivable from the task snapshot even if metadata is incomplete
+- target binding must still be derivable from the workflow input snapshot even if metadata is incomplete
 
 ---
 
@@ -350,11 +350,11 @@ Rules:
   - the current step’s attachment context
 - non-current step attachment context is not injected into a step unless the runtime or planner explicitly requests cross-step access
 
-### 10.2 Planning and task-level reasoning
+### 10.2 Planning and workflow-level reasoning
 
 Rules:
 
-- task-level planning receives objective-scoped attachment context
+- workflow-level planning receives objective-scoped attachment context
 - planning may also receive a compact inventory of step-scoped attachments so the planner understands later-step inputs without flattening them into the current step context
 - planning does not need full raw bytes for attachments that belong to later steps unless a planner-specific runtime explicitly requires them
 
@@ -371,7 +371,7 @@ Rules:
 
 ## 11. UI preview and detail contract
 
-Task detail, edit, and rerun surfaces may preview and download image inputs.
+Workflow detail, edit, and rerun surfaces may preview and download image inputs.
 
 Rules:
 
@@ -394,7 +394,7 @@ Rules:
 - end-user preview and download are governed by execution ownership and view permissions
 - the browser receives short-lived presigned download URLs or MoonMind proxy responses; it does not receive long-lived object-store credentials
 - worker-side access uses service credentials and execution authorization, not browser credentials
-- the system must not trust text extracted from images as executable instructions unless the authored task explicitly chooses to use it
+- the system must not trust text extracted from images as executable instructions unless the authored workflow explicitly chooses to use it
 - images remain untrusted user input
 
 Rules:
@@ -437,8 +437,8 @@ Recommended event classes:
 
 Rules:
 
-- attachment manifest path and generated context paths should be discoverable from task diagnostics
-- task detail and debugging surfaces should expose target-aware attachment metadata
+- attachment manifest path and generated context paths should be discoverable from workflow diagnostics
+- workflow detail and debugging surfaces should expose target-aware attachment metadata
 - step-level failures must identify the affected step target
 
 ---
@@ -462,7 +462,7 @@ The desired-state image system is simple in principle:
 
 1. the Create page binds images to an explicit target
 2. MoonMind stores those images as artifacts
-3. the execution API preserves the binding in the task contract and authoritative snapshot
+3. the execution API preserves the binding in the execution payload and authoritative snapshot
 4. workflow prepare materializes the files and generates target-aware image context
 5. runtimes consume only the context that belongs to the objective or step they are executing
 

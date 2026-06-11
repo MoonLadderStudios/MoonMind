@@ -3,13 +3,13 @@
 Status: **Design Draft**
 Owners: MoonMind Engineering
 Last Updated: 2026-03-18
-Related: `docs/Tasks/SkillAndPlanContracts.md`, `docs/Tasks/WorkflowStepSystem.md`, `docs/Tasks/WorkflowArchitecture.md`
+Related: `docs/Workflows/SkillAndPlanContracts.md`, `docs/Workflows/WorkflowStepSystem.md`, `docs/Workflows/WorkflowArchitecture.md`
 
 ---
 
 ## 1. Summary
 
-An optional **approval policy** that, when enabled, injects an automated validation step after every plan-node execution in `MoonMind.Run`. An LLM-powered reviewer agent evaluates whether the step's output satisfies the aims described in its inputs. If the review fails, the step is retried with structured feedback about what went wrong.
+An optional **approval policy** that, when enabled, injects an automated validation step after every plan-node execution in `MoonMind.UserWorkflow`. An LLM-powered reviewer agent evaluates whether the step's output satisfies the aims described in its inputs. If the review fails, the step is retried with structured feedback about what went wrong.
 
 The feature is designed as a **toggle** — when enabled, the system automatically wraps every eligible step in a review-retry loop without requiring any changes to the plan itself. Non-idempotent tools (e.g., publish steps that create PRs) are exempt by default to prevent duplicate side effects.
 
@@ -38,7 +38,7 @@ The feature is designed as a **toggle** — when enabled, the system automatical
 
 ```mermaid
 flowchart TD
-    subgraph MoonMind.Run Execution Loop
+    subgraph MoonMind.UserWorkflow Execution Loop
         A[Plan Node N] -->|execute| B[Activity / AgentRun]
         B --> C{Approval Policy Enabled?}
         C -->|No| D[Record Result & Continue]
@@ -169,7 +169,7 @@ Verdict values: `PASS`, `FAIL`, `INCONCLUSIVE`.
 
 ### 5.1 Modified Execution Loop (in `_run_execution_stage`)
 
-The existing node-iteration loop in `MoonMind.Run._run_execution_stage()` wraps each node in a review-retry cycle when the gate is enabled.
+The existing node-iteration loop in `MoonMind.UserWorkflow._run_execution_stage()` wraps each node in a review-retry cycle when the gate is enabled.
 
 **Pseudocode:**
 
@@ -336,7 +336,7 @@ The `policy.approval_policy` block in the plan JSON. This is the most precise co
 
 ### 7.2 Workflow-Level (API Parameter)
 
-The `initialParameters` payload when starting a `MoonMind.Run` can include a approval policy override:
+The `initialParameters` payload when starting a `MoonMind.UserWorkflow` can include a approval policy override:
 
 ```json
 {
@@ -364,7 +364,7 @@ The `initialParameters` payload when starting a `MoonMind.Run` can include a app
 
 ### 7.4 Mission Control UI Toggle
 
-The task creation form gains a toggle:
+The workflow creation form gains a toggle:
 
 - **"Enable Step Approval Policy"** checkbox (off by default)
 - Expanding section with optional overrides (max attempts, reviewer model)
@@ -512,7 +512,7 @@ Each review adds one activity result to the workflow history. With a default of 
 | File | Change |
 |---|---|
 | `api_service/api/routers/executions.py` | Accept `approvalPolicy` in create-run payload, merge into `initialParameters` |
-| `frontend/src/entrypoints/task-create.tsx` | Add approval policy toggle to task creation form |
+| `frontend/src/entrypoints/workflow-start.tsx` | Add approval policy toggle to workflow creation form |
 
 ### Layer 5: Observability
 

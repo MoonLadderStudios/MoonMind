@@ -42,7 +42,7 @@ def _record(tmp_path: Path) -> CodexManagedSessionRecord:
     return CodexManagedSessionRecord(
         sessionId="sess-1",
         sessionEpoch=1,
-        taskRunId="task-1",
+        agentRunId="task-1",
         containerId="ctr-1",
         threadId="thread-1",
         runtimeId="codex_cli",
@@ -469,7 +469,7 @@ async def test_publish_snapshot_persists_run_keyed_session_events(tmp_path: Path
     assert '"stream":"session"' in journal_text
     assert '"kind":"summary_published"' in journal_text
     assert '"kind":"checkpoint_published"' in journal_text
-    assert log_streamer.consume_observability_events(record.task_run_id) == []
+    assert log_streamer.consume_observability_events(record.agent_run_id) == []
 
 @pytest.mark.asyncio
 async def test_publish_reset_artifacts_writes_epoch_specific_control_and_boundary_refs(

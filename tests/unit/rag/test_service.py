@@ -613,7 +613,7 @@ def test_add_or_update_long_term_memory_writes_with_provenance() -> None:
         text="Use approved memory only.",
         repo="MoonLadderStudios/MoonMind",
         review_state="draft",
-        provenance={"workflowId": "wf-1", "taskRunId": "run-1"},
+        provenance={"workflowId": "wf-1", "agentRunId": "run-1"},
     )
 
     assert result == {"id": "memory-1"}
@@ -623,7 +623,7 @@ def test_add_or_update_long_term_memory_writes_with_provenance() -> None:
             "repo": "MoonLadderStudios/MoonMind",
             "scope": "project",
             "review_state": "draft",
-            "provenance": {"workflowId": "wf-1", "taskRunId": "run-1"},
+            "provenance": {"workflowId": "wf-1", "agentRunId": "run-1"},
             "memory_id": None,
         }
     ]

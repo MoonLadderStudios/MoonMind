@@ -44,7 +44,7 @@ async def test_describe_execution_syncs_from_temporal(
     record = TemporalExecutionCanonicalRecord(
         workflow_id="mm:123",
         run_id="run-1",
-        workflow_type=TemporalWorkflowType.RUN,
+        workflow_type=TemporalWorkflowType.USER_WORKFLOW,
         owner_type=TemporalExecutionOwnerType.USER,
         state=MoonMindWorkflowState.INITIALIZING,
         entry="run",
@@ -72,7 +72,7 @@ async def test_list_executions_sourced_from_temporal(
     record = TemporalExecutionCanonicalRecord(
         workflow_id="mm:123",
         run_id="run-1",
-        workflow_type=TemporalWorkflowType.RUN,
+        workflow_type=TemporalWorkflowType.USER_WORKFLOW,
         owner_type=TemporalExecutionOwnerType.USER,
         state=MoonMindWorkflowState.INITIALIZING,
         entry="run",
@@ -102,7 +102,7 @@ async def test_cancel_action_routes_to_temporal(
     record = TemporalExecutionCanonicalRecord(
         workflow_id="mm:123",
         run_id="run-1",
-        workflow_type=TemporalWorkflowType.RUN,
+        workflow_type=TemporalWorkflowType.USER_WORKFLOW,
         owner_type=TemporalExecutionOwnerType.USER,
         state=MoonMindWorkflowState.EXECUTING,
         entry="run",
@@ -124,7 +124,7 @@ async def test_force_terminate_routes_to_temporal_terminate(
     record = TemporalExecutionCanonicalRecord(
         workflow_id="mm:123",
         run_id="run-1",
-        workflow_type=TemporalWorkflowType.RUN,
+        workflow_type=TemporalWorkflowType.USER_WORKFLOW,
         owner_type=TemporalExecutionOwnerType.USER,
         state=MoonMindWorkflowState.EXECUTING,
         entry="run",
@@ -150,7 +150,7 @@ async def test_action_validation_relies_on_temporal(
     record = TemporalExecutionCanonicalRecord(
         workflow_id="mm:123",
         run_id="run-1",
-        workflow_type=TemporalWorkflowType.RUN,
+        workflow_type=TemporalWorkflowType.USER_WORKFLOW,
         owner_type=TemporalExecutionOwnerType.USER,
         state=MoonMindWorkflowState.EXECUTING,
         entry="run",

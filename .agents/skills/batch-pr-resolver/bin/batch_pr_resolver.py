@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from moonmind.workflows.tasks.task_contract import resolve_publish_mode_for_skill
-from moonmind.workflows.tasks.runtime_defaults import normalize_runtime_id
+from moonmind.workflows.executions.execution_contract import resolve_publish_mode_for_skill
+from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
 
 logger = logging.getLogger(__name__)
 
@@ -396,7 +396,7 @@ def _load_parent_runtime_selection(
 def _resolve_runtime_selection(args: argparse.Namespace) -> RuntimeSelection:
     inherited = _load_parent_runtime_selection(args.task_context_path)
     configured_default_mode = _normalize_runtime_mode(
-        os.getenv("MOONMIND_DEFAULT_TASK_RUNTIME")
+        os.getenv("MOONMIND_DEFAULT_RUNTIME")
     )
     runtime_execution_profile_ref = _runtime_text(
         os.getenv("MOONMIND_EXECUTION_PROFILE_REF")
@@ -408,7 +408,7 @@ def _resolve_runtime_selection(args: argparse.Namespace) -> RuntimeSelection:
     # runtime copied from task_context.json, the caller's own execution
     # profile (the runtime this skill is currently executing under), and
     # finally the generic system default. The execution profile must beat
-    # MOONMIND_DEFAULT_TASK_RUNTIME: when batch-pr-resolver runs under Claude
+    # MOONMIND_DEFAULT_RUNTIME: when batch-pr-resolver runs under Claude
     # Code the default is still codex_cli, so preferring it would queue the
     # children on Codex instead of inheriting the caller's Claude Code runtime.
     execution_profile_mode = (
@@ -450,7 +450,7 @@ def _task_workflow_id_from_env() -> str | None:
     """Return the parent task workflow id when the skill is running inside one.
 
     Presence of ``MOONMIND_TASK_WORKFLOW_ID`` indicates the managed-session
-    runtime exposed a task-scoped credential.  Callers use it to opt into
+    runtime exposed a workflow-scoped credential.  Callers use it to opt into
     the server-side ``runtimeInheritance="caller"`` contract.
     """
 
@@ -465,8 +465,8 @@ def _task_workflow_id_from_env() -> str | None:
     return None
 
 
-def _task_run_id_from_env() -> str | None:
-    for env_key in ("MOONMIND_TASK_RUN_ID", "MOONMIND_RUN_ID", "TASK_RUN_ID"):
+def _agent_run_id_from_env() -> str | None:
+    for env_key in ("MOONMIND_AGENT_RUN_ID", "MOONMIND_RUN_ID", "AGENT_RUN_ID"):
         value = _runtime_text(os.getenv(env_key))
         if value:
             return value
@@ -531,8 +531,8 @@ def _build_queue_request(
     if idempotency_key:
         payload_dict["idempotencyKey"] = idempotency_key
 
-    # Server-side inheritance contract: when running inside a task with a
-    # task-scoped credential, opt into runtimeInheritance="caller" so the
+    # Server-side inheritance contract: when running inside a workflow with a
+    # workflow-scoped credential, opt into runtimeInheritance="caller" so the
     # API copies the parent's effective runtime/provider profile.  The
     # explicit targetRuntime/task.runtime fallback below is preserved for
     # deployments that do not yet honour the inheritance contract.
@@ -654,9 +654,9 @@ async def _submit_jobs_via_http(
     task_workflow_id = _task_workflow_id_from_env()
     if task_workflow_id:
         headers["X-MoonMind-Task-Workflow-Id"] = task_workflow_id
-    task_run_id = _task_run_id_from_env()
-    if task_run_id:
-        headers["X-MoonMind-Task-Run-Identifier"] = task_run_id
+    agent_run_id = _agent_run_id_from_env()
+    if agent_run_id:
+        headers["X-MoonMind-Agent-Run-Identifier"] = agent_run_id
     base = moonmind_url.rstrip("/")
     async with httpx.AsyncClient(
         base_url=base, timeout=30.0, headers=headers

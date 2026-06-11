@@ -484,7 +484,7 @@ class ManagedRuntimeLauncher:
     ) -> str:
         """Return the stable workspace key for repository-backed launches.
 
-        A MoonMind.Run can execute several managed-agent child runs in sequence.
+        A MoonMind.UserWorkflow can execute several managed-agent child runs in sequence.
         Those child runs have distinct run IDs, but they must see the same
         repository checkout so files produced by one step are available to the
         next step.  The parent workflow correlation ID is stable across those

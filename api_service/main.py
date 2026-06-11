@@ -47,17 +47,17 @@ from api_service.api.routers.models import router as models_router
 from api_service.api.routers.oauth_sessions import router as oauth_sessions_router
 from api_service.api.routers.planning import router as planning_router
 from api_service.api.routers.profile import router as profile_router
-from api_service.api.routers.recurring_tasks import router as recurring_tasks_router
+from api_service.api.routers.recurring_workflows import router as recurring_workflows_router
 from api_service.api.routers.automation import router as automation_router
 _ENABLE_TEST_UI_ROUTE = os.environ.get("MOONMIND_ENABLE_TEST_UI_ROUTE", "").lower() in ("1", "true", "yes")
 if _ENABLE_TEST_UI_ROUTE:
     from api_service.test_ui_route import router as test_ui_router
 
 from api_service.api.routers.workflow_console import router as workflow_console_router
-from api_service.api.routers.task_runs import router as task_runs_router
-from api_service.api.routers.task_proposals import router as task_proposals_router
-from api_service.api.routers.task_step_templates import (
-    router as task_step_templates_router,
+from api_service.api.routers.agent_runs import router as agent_runs_router
+from api_service.api.routers.workflow_proposals import router as workflow_proposals_router
+from api_service.api.routers.presets import (
+    router as presets_router,
 )
 from api_service.api.routers.temporal_artifacts import (
     router as temporal_artifacts_router,
@@ -72,7 +72,7 @@ from api_service.api.routers.proxy import router as proxy_router
 from api_service.api.websockets import router as websockets_router
 from api_service.api.schemas import UserProfileUpdate
 from api_service.db.base import get_async_session_context
-from api_service.services.task_templates.catalog import TaskTemplateCatalogService
+from api_service.services.presets.catalog import PresetCatalogService
 from api_service.ui_assets import resolve_mission_control_dist_root
 
 # Auth imports
@@ -96,10 +96,10 @@ from moonmind.utils.logging import SecretRedactor
 
 logger.info("Starting FastAPI...")
 
-_TASK_TEMPLATE_SEED_DIR = (
-    Path(__file__).resolve().parent / "data" / "task_step_templates"
+_PRESET_SEED_DIR = (
+    Path(__file__).resolve().parent / "data" / "presets"
 )
-_LEGACY_TASK_TEMPLATE_SLUGS_TO_DEACTIVATE = ("speckit-orchestrate",)
+_LEGACY_PRESET_SLUGS_TO_DEACTIVATE = ("speckit-orchestrate",)
 
 def _initialize_embedding_model(app_state, app_settings):
     """Initializes the embedding model and records its dimensionality on app_state."""
@@ -454,11 +454,11 @@ app.include_router(executions_router)
 app.include_router(execution_integrations_router)
 app.include_router(automation_router)
 
-app.include_router(task_proposals_router)
-app.include_router(recurring_tasks_router)
-app.include_router(task_runs_router, prefix="/api")
+app.include_router(workflow_proposals_router)
+app.include_router(recurring_workflows_router)
+app.include_router(agent_runs_router, prefix="/api")
 app.include_router(workflow_console_router)
-app.include_router(task_step_templates_router)
+app.include_router(presets_router)
 app.include_router(temporal_artifacts_router)
 app.include_router(websockets_router, prefix="/ws/v1", tags=["WebSockets"])
 if _ENABLE_TEST_UI_ROUTE:
@@ -1099,7 +1099,7 @@ async def startup_event():
             "Retrieval service startup initialization skipped: %s",
             exc,
         )
-    await _sync_task_template_seed_catalog()
+    await _sync_preset_seed_catalog()
     await _sync_env_managed_secrets()
 
     # Ensure default user and profile exist if auth is disabled
@@ -1189,41 +1189,41 @@ def teardown_providers():
     """
     pass
 
-async def _sync_task_template_seed_catalog() -> None:
+async def _sync_preset_seed_catalog() -> None:
     """Ensure YAML-backed default task presets exist in the catalog."""
 
-    if not settings.feature_flags.task_template_catalog_enabled:
+    if not settings.feature_flags.preset_catalog_enabled:
         return
-    if not _TASK_TEMPLATE_SEED_DIR.exists():
+    if not _PRESET_SEED_DIR.exists():
         logger.info(
-            "Task template seed sync skipped: seed directory missing at %s",
-            _TASK_TEMPLATE_SEED_DIR,
+            "Preset seed sync skipped: seed directory missing at %s",
+            _PRESET_SEED_DIR,
         )
         return
 
     try:
         async with get_async_session_context() as session:
-            service = TaskTemplateCatalogService(session)
-            result = await service.sync_seed_templates(seed_dir=_TASK_TEMPLATE_SEED_DIR)
+            service = PresetCatalogService(session)
+            result = await service.sync_seed_templates(seed_dir=_PRESET_SEED_DIR)
             deactivated = await service.deactivate_templates(
-                slugs=_LEGACY_TASK_TEMPLATE_SLUGS_TO_DEACTIVATE,
+                slugs=_LEGACY_PRESET_SLUGS_TO_DEACTIVATE,
                 scope="global",
                 scope_ref=None,
             )
     except (OperationalError, ProgrammingError) as exc:
         logger.warning(
-            "Task template seed sync skipped because preset tables are unavailable: %s",
+            "Preset seed sync skipped because preset tables are unavailable: %s",
             exc,
         )
         return
     except Exception as exc:
-        logger.warning("Task template seed sync failed: %s", exc, exc_info=True)
+        logger.warning("Preset seed sync failed: %s", exc, exc_info=True)
         return
 
     if result.created or result.updated or deactivated:
         logger.info(
-            "Task template seeds synchronized from %s (created=%s updated=%s deactivated=%s).",
-            _TASK_TEMPLATE_SEED_DIR,
+            "Preset seeds synchronized from %s (created=%s updated=%s deactivated=%s).",
+            _PRESET_SEED_DIR,
             result.created,
             result.updated,
             deactivated,

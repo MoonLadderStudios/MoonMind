@@ -319,7 +319,7 @@ It includes:
 
 - user preferences,
 - personal runtime defaults,
-- workspace task defaults,
+- workspace workflow defaults,
 - workspace routing defaults,
 - workspace feature flags,
 - non-secret integration defaults,
@@ -356,7 +356,7 @@ A setting key is a stable dotted identifier.
 Examples:
 
 ```text
-workflow.default_task_runtime
+workflow.default_runtime
 workflow.default_publish_mode
 skills.policy_mode
 skills.canary_percent
@@ -509,8 +509,8 @@ SettingDescriptor:
 Example:
 
 ```yaml
-key: workflow.default_task_runtime
-title: Default Task Runtime
+key: workflow.default_runtime
+title: Default Runtime
 description: Runtime used when a task does not explicitly request one.
 category: Workflow
 section: user-workspace
@@ -869,11 +869,11 @@ Example payload:
 ```json
 {
   "changes": {
-    "workflow.default_task_runtime": "codex_cli",
+    "workflow.default_runtime": "codex_cli",
     "skills.canary_percent": 25
   },
   "expected_versions": {
-    "workflow.default_task_runtime": 3,
+    "workflow.default_runtime": 3,
     "skills.canary_percent": 1
   },
   "reason": "Update default workflow behavior for current workspace."
@@ -905,7 +905,7 @@ Preview returns effective-value changes, dependency warnings, and reload require
 ### 12.6 Audit APIs
 
 ```http
-GET /api/v1/settings/audit?key=workflow.default_task_runtime
+GET /api/v1/settings/audit?key=workflow.default_runtime
 GET /api/v1/settings/audit?scope=workspace
 ```
 
@@ -1086,7 +1086,7 @@ The Settings UI should show where a secret is referenced, including:
 - setting overrides,
 - tool bindings,
 - integrations,
-- scheduled task definitions, and
+- scheduled workflow definitions, and
 - runtime materialization templates.
 
 Usage views must show references and object names, not plaintext.
@@ -1170,7 +1170,7 @@ Examples:
 - notification preferences,
 - personal Git author defaults,
 - personal integration SecretRef bindings, and
-- personal task creation defaults.
+- personal workflow creation defaults.
 
 User settings must not override workspace safety policies unless the specific setting explicitly allows it.
 
@@ -1180,13 +1180,13 @@ Workspace settings describe shared behavior for a workspace.
 
 Examples:
 
-- default task runtime,
+- default agent runtime,
 - default publish mode,
 - workspace provider routing defaults,
 - skill policy mode,
 - allowed skill list,
 - canary percentages,
-- task proposal defaults,
+- workflow proposal defaults,
 - live session defaults,
 - workspace Git defaults,
 - integration defaults, and
@@ -1334,7 +1334,7 @@ Example:
 ```json
 {
   "event_type": "setting_changed",
-  "key": "workflow.default_task_runtime",
+  "key": "workflow.default_runtime",
   "scope": "workspace",
   "source": "workspace_override",
   "apply_mode": "next_task",
@@ -1350,7 +1350,7 @@ Consumers may subscribe to settings change events where appropriate.
 Examples:
 
 - Mission Control refreshes catalog state.
-- Task creation uses updated defaults.
+- Workflow creation uses updated defaults.
 - Provider profile manager syncs profile-related changes.
 - Workers reload non-disruptive settings.
 - Operational controls update runtime status.
@@ -1486,7 +1486,7 @@ Settings overrides are ordinary application configuration data and should be inc
 
 A standard database backup that covers the Settings System tables (`settings_overrides`, `settings_audit_events`) may contain:
 
-- setting keys (for example `workflow.default_task_runtime`),
+- setting keys (for example `workflow.default_runtime`),
 - non-sensitive override values (booleans, enums, lists, strings, integers, structured non-secret JSON),
 - SecretRef values (for example `db://my-token`, `env:MOONMIND_GH_TOKEN`) — these are references, not plaintext,
 - resource references (for example provider-profile IDs in `workflow.default_provider_profile_ref`),
@@ -1698,7 +1698,7 @@ OperationsPanel
 
 1. User opens Settings → User / Workspace → Workspace.
 2. UI fetches catalog.
-3. UI renders `workflow.default_task_runtime` as a select.
+3. UI renders `workflow.default_runtime` as a select.
 4. User selects `codex_cli`.
 5. UI previews change.
 6. Backend validates scope, permission, enum value, and policy.
@@ -1706,7 +1706,7 @@ OperationsPanel
 8. Backend writes audit event.
 9. Backend emits change event.
 10. UI refreshes descriptor showing source `workspace_override`.
-11. Future task creation uses the new effective default.
+11. Future workflow creation uses the new effective default.
 
 ### 27.2 Add GitHub Token
 

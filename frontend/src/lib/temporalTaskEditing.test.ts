@@ -23,7 +23,7 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
     const draft = buildTemporalSubmissionDraftFromExecution(
       {
         workflowId: "mm:slash-preview",
-        workflowType: "MoonMind.Run",
+        workflowType: "MoonMind.UserWorkflow",
         targetRuntime: "codex_cli",
         inputParameters: {
           task: {
@@ -78,7 +78,7 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
     const draft = buildTemporalSubmissionDraftFromExecution(
       {
         workflowId: "mm:slash-top-level",
-        workflowType: "MoonMind.Run",
+        workflowType: "MoonMind.UserWorkflow",
         targetRuntime: "codex_cli",
         inputParameters: {
           task: {
@@ -133,7 +133,7 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
     const draft = buildTemporalSubmissionDraftFromExecution(
       {
         workflowId: "mm:slash-legacy",
-        workflowType: "MoonMind.Run",
+        workflowType: "MoonMind.UserWorkflow",
         targetRuntime: "codex_cli",
         inputParameters: {
           task: {
@@ -161,7 +161,7 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
   it("combines task and step instructions when both are present", () => {
     const draft = buildTemporalSubmissionDraftFromExecution({
       workflowId: "mm:combined-instructions",
-      workflowType: "MoonMind.Run",
+      workflowType: "MoonMind.UserWorkflow",
       targetRuntime: "codex_cli",
       inputParameters: {
         task: {
@@ -184,7 +184,7 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
   it("preserves MM-786 per-step runtime model and effort metadata", () => {
     const draft = buildTemporalSubmissionDraftFromExecution({
       workflowId: "mm:step-runtime",
-      workflowType: "MoonMind.Run",
+      workflowType: "MoonMind.UserWorkflow",
       targetRuntime: "codex_cli",
       inputParameters: {
         task: {

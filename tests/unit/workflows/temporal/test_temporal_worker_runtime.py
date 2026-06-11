@@ -23,13 +23,13 @@ from api_service.db.models import (
 from moonmind.workflows.temporal.worker_runtime import (
     MoonMindAgentRun,
     MoonMindManifestIngest,
-    MoonMindRun,
+    MoonMindUserWorkflow,
     OpenTelemetryLoggingFilter,
     _OPENTELEMETRY_LOG_FORMAT,
     _build_agent_runtime_deps,
     _build_deployment_update_executor,
     _enforce_codex_config_for_managed_fleet,
-    _expand_task_template_for_child_run,
+    _expand_preset_for_child_run,
     _persist_child_run_task_input_snapshot,
     _build_runtime_planner,
     _build_runtime_activities,
@@ -49,7 +49,7 @@ from moonmind.workflows.temporal.workers import (
 
 @asynccontextmanager
 async def _template_db(tmp_path):
-    db_url = f"sqlite+aiosqlite:///{tmp_path}/child_task_templates.db"
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/child_presets.db"
     engine = create_async_engine(db_url, future=True)
     async_session_maker = sessionmaker(
         engine, class_=AsyncSession, expire_on_commit=False
@@ -93,7 +93,7 @@ def test_opentelemetry_logging_filter_injects_bounded_managed_session_fields(
         exc_info=None,
     )
     record.managed_session = {
-        "taskRunId": "wf-run-1",
+        "agentRunId": "wf-run-1",
         "runtimeId": "codex_cli",
         "sessionId": "sess:wf-run-1:codex_cli",
         "sessionEpoch": 1,
@@ -115,7 +115,7 @@ def test_opentelemetry_logging_filter_injects_bounded_managed_session_fields(
     assert record.component == "agent_runtime"
     assert record.worker_fleet == "agent_runtime"
     assert record.worker_id == "worker-otel-1"
-    assert record.managed_session_task_run_id == "wf-run-1"
+    assert record.managed_session_agent_run_id == "wf-run-1"
     assert record.managed_session_runtime_id == "codex_cli"
     assert record.managed_session_id == "sess:wf-run-1:codex_cli"
     assert record.managed_session_epoch == "1"
@@ -127,7 +127,7 @@ def test_opentelemetry_logging_filter_injects_bounded_managed_session_fields(
     assert record.managed_session_thread_id == "thread-1"
     assert record.managed_session_turn_id == "turn-1"
     assert record.managed_session == {
-        "taskRunId": "wf-run-1",
+        "agentRunId": "wf-run-1",
         "runtimeId": "codex_cli",
         "sessionId": "sess:wf-run-1:codex_cli",
         "sessionEpoch": "1",
@@ -296,7 +296,7 @@ def test_runtime_planner_promotes_profile_id_to_runtime_node():
 async def test_child_run_auto_sequences_jira_goal_through_implement_preset(tmp_path):
     async with _template_db(tmp_path) as session_maker:
         async with session_maker() as session:
-            expanded_parameters = await _expand_task_template_for_child_run(
+            expanded_parameters = await _expand_preset_for_child_run(
                 session=session,
                 initial_parameters={
                     "requestType": "task",
@@ -337,7 +337,7 @@ async def test_child_run_auto_sequences_jira_goal_through_implement_preset(tmp_p
 async def test_child_run_goal_scheduled_breakdown_preserves_target_runtime(tmp_path):
     async with _template_db(tmp_path) as session_maker:
         async with session_maker() as session:
-            expanded_parameters = await _expand_task_template_for_child_run(
+            expanded_parameters = await _expand_preset_for_child_run(
                 session=session,
                 initial_parameters={
                     "requestType": "task",
@@ -1077,7 +1077,7 @@ def test_runtime_planner_routes_jira_issue_creator_as_agent_skill_step():
         inputs={
             "task": {
                 "title": "Break down proposal workflow",
-                "instructions": "Break down docs/Tasks/WorkflowProposalSystem.md.",
+                "instructions": "Break down docs/Workflows/WorkflowProposalSystem.md.",
                 "runtime": {"mode": "codex_cli"},
                 "publish": {"mode": "pr"},
                 "storyOutput": {
@@ -1761,7 +1761,7 @@ def test_runtime_planner_rejects_conflicting_duplicate_step_ids():
 async def test_child_jira_orchestrate_run_expands_seeded_template_steps(tmp_path):
     async with _template_db(tmp_path) as session_maker:
         async with session_maker() as session:
-            expanded_parameters = await _expand_task_template_for_child_run(
+            expanded_parameters = await _expand_preset_for_child_run(
                 session=session,
                 initial_parameters={
                     "requestType": "task",
@@ -1785,21 +1785,21 @@ async def test_child_jira_orchestrate_run_expands_seeded_template_steps(tmp_path
             )
 
     task = expanded_parameters["task"]
-    assert expanded_parameters["stepCount"] == 15
-    assert len(task["steps"]) == 15
+    assert expanded_parameters["stepCount"] == 25
+    assert len(task["steps"]) == 25
     assert task["steps"][0]["title"] == "Move Jira issue to In Progress"
     assert task["steps"][0]["skill"]["id"] == "jira-issue-updater"
     assert "MM-501" in task["steps"][0]["instructions"]
     assert task["steps"][7]["skill"]["id"] == "moonspec-tasks"
     assert task["steps"][9]["skill"]["id"] == "moonspec-implement"
-    assert task["steps"][11]["title"] == "Remediate verification gaps"
+    assert task["steps"][11]["title"] == "Remediate verification gaps 1 of 6"
     assert task["steps"][11]["skill"]["id"] == "moonspec-implement"
-    assert task["steps"][12]["title"] == "Verify remediation"
-    assert task["steps"][12]["skill"]["id"] == "moonspec-verify"
-    assert task["steps"][13]["title"] == "Create pull request"
-    assert task["steps"][14]["title"] == "Move Jira issue to Code Review"
+    assert task["steps"][22]["title"] == "Verify remediation 6 of 6"
+    assert task["steps"][22]["skill"]["id"] == "moonspec-verify"
+    assert task["steps"][23]["title"] == "Create pull request"
+    assert task["steps"][24]["title"] == "Move Jira issue to Code Review"
     assert task["appliedStepTemplates"][0]["slug"] == "jira-orchestrate"
-    assert len(task["appliedStepTemplates"][0]["stepIds"]) == 15
+    assert len(task["appliedStepTemplates"][0]["stepIds"]) == 25
     assert task["authoredPresets"][0]["presetSlug"] == "jira-orchestrate"
     assert task["authoredPresets"][0]["presetVersion"] == "1.0.0"
     assert "authoredPresets" not in task["appliedStepTemplates"][0]
@@ -1866,7 +1866,7 @@ async def test_child_jira_orchestrate_run_persists_original_task_input_snapshot(
                 workflow_id="mm:child-run",
                 run_id="run-child",
                 namespace="default",
-                workflow_type=TemporalWorkflowType.RUN,
+                workflow_type=TemporalWorkflowType.USER_WORKFLOW,
                 owner_id="owner-1",
                 owner_type=TemporalExecutionOwnerType.USER,
                 state=MoonMindWorkflowState.INITIALIZING,
@@ -1969,17 +1969,17 @@ async def test_child_jira_orchestrate_run_persists_original_task_input_snapshot(
         "workflow_id": "mm:child-run",
         "run_id": "run-child",
         "link_type": "input.original_snapshot",
-        "label": "Original task input snapshot",
+        "label": "Original workflow input snapshot",
     }
     snapshot_payload = json.loads(artifact_service.write_calls[0]["payload"])
-    assert snapshot_payload["draft"]["taskShape"] == "multi_step"
+    assert snapshot_payload["draft"]["workflowShape"] == "multi_step"
     assert snapshot_payload["draft"]["repository"] == "MoonLadderStudios/MoonMind"
     assert snapshot_payload["draft"]["targetRuntime"] == "codex_cli"
     assert (
-        snapshot_payload["draft"]["task"]["title"]
+        snapshot_payload["draft"]["workflow"]["title"]
         == "Run Jira Orchestrate for MM-501"
     )
-    authored = snapshot_payload["draft"]["authoredTaskInput"]
+    authored = snapshot_payload["draft"]["authoredWorkflowInput"]
     assert authored["runtime"] == {"mode": "codex_cli", "model": "gpt-5.4"}
     assert authored["publish"] == {"mode": "pr"}
     assert authored["repository"] == "MoonLadderStudios/MoonMind"
@@ -2348,8 +2348,8 @@ def test_runtime_planner_requires_selector_for_pr_resolver_without_instructions(
     with pytest.raises(
         RuntimeError,
         match=(
-            "pr-resolver task requires task.tool.inputs.pr or "
-            "task.git.startingBranch"
+            "pr-resolver workflow requires workflow.tool.inputs.pr or "
+            "workflow.git.startingBranch"
         ),
     ):
         planner(
@@ -3195,7 +3195,7 @@ async def test_main_async_workflow_fleet(
         MoonMindManagedSessionReconcileWorkflow,
     )
     assert kwargs["workflows"] == [
-        MoonMindRun,
+        MoonMindUserWorkflow,
         MoonMindManifestIngest,
         MoonMindProviderProfileManagerWorkflow,
         MoonMindAgentSessionWorkflow,

@@ -4,7 +4,7 @@ Status: Desired State
 Owners: MoonMind Engineering
 Last Updated: 2026-05-16
 Canonical for: semantic step reattempts, checkpointed side-effect policy, gated iteration, failed-step recovery primitive, autonomous story loops
-Related: `docs/Steps/StepTypes.md`, `docs/Tasks/WorkflowArchitecture.md`, `docs/Tasks/WorkflowRemediation.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Temporal/RunHistoryAndRerunSemantics.md`, `docs/Temporal/ActivityCatalogAndWorkerTopology.md`, `docs/Artifacts/ArtifactPresentationContract.md`
+Related: `docs/Steps/StepTypes.md`, `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/WorkflowRemediation.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`, `docs/Temporal/ActivityCatalogAndWorkerTopology.md`, `docs/Artifacts/ArtifactPresentationContract.md`
 
 ---
 
@@ -12,7 +12,7 @@ Related: `docs/Steps/StepTypes.md`, `docs/Tasks/WorkflowArchitecture.md`, `docs/
 
 This document defines the desired-state MoonMind model for repeating work safely.
 
-MoonMind tasks often need more than one pass. An implementation step may fail tests, a verifier may report `ADDITIONAL_WORK_NEEDED`, a pull request resolver may need another repair attempt, an autonomous story loop may need a fresh agent context, or an operator may resume a failed task from the last failed step.
+MoonMind workflow executions often need more than one pass. An implementation step may fail tests, a verifier may report `ADDITIONAL_WORK_NEEDED`, a pull request resolver may need another repair attempt, an autonomous story loop may need a fresh agent context, or an operator may resume a failed workflow execution from the last failed step.
 
 All of those cases depend on the same primitive:
 
@@ -37,7 +37,7 @@ This document does **not** redefine:
 5. provider-specific runtime launch internals;
 6. full run-history product UI.
 
-Use `docs/Steps/StepTypes.md` for the user-facing step taxonomy. Step Executions are execution-plane records, not authoring steps and not Step Types. Use `docs/Temporal/StepLedgerAndProgressModel.md` for the operator-facing step ledger shape. Use `docs/Tasks/WorkflowArchitecture.md` and `docs/Temporal/RunHistoryAndRerunSemantics.md` for task create, rerun, and failed-step recovery semantics.
+Use `docs/Steps/StepTypes.md` for the user-facing step taxonomy. Step Executions are execution-plane records, not authoring steps and not Step Types. Use `docs/Temporal/StepLedgerAndProgressModel.md` for the operator-facing step ledger shape. Use `docs/Workflows/WorkflowArchitecture.md` and `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md` for workflow start, new-run, and failed-step recovery semantics.
 
 ---
 
@@ -194,7 +194,7 @@ checkpointId      = {workflowId}:{runId}:{logicalStepId}:execution:{executionOrd
 artifactLinkScope = step:{logicalStepId}:execution:{executionOrdinal}
 ```
 
-If these identifiers are exposed to external systems, sanitize or hash fields as needed to avoid leaking sensitive task details.
+If these identifiers are exposed to external systems, sanitize or hash fields as needed to avoid leaking sensitive workflow details.
 
 ### 6.2 Cross-run lineage
 
@@ -265,14 +265,14 @@ Representative shape:
 ```json
 {
   "schemaVersion": "v1",
-  "stepExecutionId": "mm:task:run-1:implement-story-S004:execution:3",
-  "workflowId": "mm:task",
+  "stepExecutionId": "mm:wf:run-1:implement-story-S004:execution:3",
+  "workflowId": "mm:wf",
   "runId": "temporal-run-id",
   "logicalStepId": "implement-story-S004",
   "executionOrdinal": 3,
   "executionScope": "run",
   "lineage": {
-    "sourceWorkflowId": "mm:task",
+    "sourceWorkflowId": "mm:wf",
     "sourceRunId": "temporal-run-id",
     "sourceLogicalStepId": "implement-story-S004",
     "sourceExecutionOrdinal": 2,
@@ -308,7 +308,7 @@ Representative shape:
   },
   "execution": {
     "kind": "agent_run",
-    "childWorkflowId": "mm:task:agent:implement-story-S004:execution-3",
+    "childWorkflowId": "mm:wf:agent:implement-story-S004:execution-3",
     "childRunId": "child-run-id",
     "runtimeId": "codex_cli",
     "runtimeContextPolicy": "fresh_agent_run"
@@ -406,7 +406,7 @@ Representative context bundle fields:
 ```json
 {
   "schemaVersion": "v1",
-  "workflowId": "mm:task",
+  "workflowId": "mm:wf",
   "runId": "temporal-run-id",
   "logicalStepId": "implement-story-S004",
   "executionOrdinal": 3,
@@ -487,7 +487,7 @@ Representative memory proposal:
   "textRef": "art_memory_proposal_text",
   "status": "proposed",
   "sourceExecutionOrdinal": {
-    "workflowId": "mm:task",
+    "workflowId": "mm:wf",
     "runId": "temporal-run-id",
     "logicalStepId": "implement-story-S004",
     "executionOrdinal": 2
@@ -508,11 +508,11 @@ Representative checkpoint:
 ```json
 {
   "schemaVersion": "v1",
-  "checkpointId": "mm:task:run-1:implement-story-S004:execution:2:after_gate",
+  "checkpointId": "mm:wf:run-1:implement-story-S004:execution:2:after_gate",
   "checkpointKind": "step_boundary",
   "boundary": "after_gate",
   "source": {
-    "workflowId": "mm:task",
+    "workflowId": "mm:wf",
     "runId": "temporal-run-id",
     "logicalStepId": "implement-story-S004",
     "executionOrdinal": 2
@@ -594,7 +594,7 @@ If the required checkpoint evidence is unavailable, the workflow must reject the
 Before a checkpoint can be used to start a new attempt or Resume execution, MoonMind must validate:
 
 1. source `workflowId` and `runId`;
-2. task input snapshot identity;
+2. workflow input snapshot identity;
 3. plan identity and digest;
 4. logical step identity;
 5. attempt provenance;
@@ -708,7 +708,7 @@ Representative side effect:
 {
   "class": "external_idempotent",
   "operation": "jira.add_comment",
-  "idempotencyKey": "mm:task:run-1:verify:attempt:1:jira-comment",
+  "idempotencyKey": "mm:wf:run-1:verify:attempt:1:jira-comment",
   "target": "MM-123",
   "disposition": "accepted"
 }
@@ -725,7 +725,7 @@ Rules:
 
 ## 12. Activity Surface and Worker Boundaries
 
-`MoonMind.Run` owns orchestration. Activities own side effects. Runtime adapters execute attempts but do not own attempt semantics.
+`MoonMind.UserWorkflow` owns orchestration. Activities own side effects. Runtime adapters execute attempts but do not own attempt semantics.
 
 Suggested Activity families for implementation:
 
@@ -775,7 +775,7 @@ else:
   stop with remaining work and evidence
 ```
 
-The loop belongs to `MoonMind.Run`, not only to agent instructions.
+The loop belongs to `MoonMind.UserWorkflow`, not only to agent instructions.
 
 Agent instructions may say what to do inside an attempt, but the parent workflow must own:
 
@@ -859,6 +859,12 @@ count, remaining count, and exhausted state.
 
 When a budget is exhausted, MoonMind must stop with a deterministic terminal disposition such as `needs_human`, `blocked`, or `failed_with_remaining_work`. It must publish the latest evidence and recommended next action.
 
+For Jira Orchestrate, the MoonSpec remediation loop is represented as bounded plan steps instead of an open-ended agent instruction. The default preset creates one initial implementation/verification pair, followed by six remediation attempts, each paired with a MoonSpec verification gate.
+
+Remediation steps carry `annotations.jiraOrchestrateRole = "moonspec-remediation"` plus attempt and maximum-attempt metadata. Verification steps carry `annotations.jiraOrchestrateRole = "moonspec-verification-gate"` and mark only the final remediation verification as `moonSpecFinalRemediationGate`.
+
+`ADDITIONAL_WORK_NEEDED` is retryable only while a later MoonSpec remediation step remains in the plan. When no later remediation step remains, or when the gate reports a non-retryable blocking verdict such as `NO_DETERMINATION`, `BLOCKED`, or `FAILED_UNRECOVERABLE`, the parent workflow stops before publication and skips downstream handoff steps.
+
 ---
 
 ## 14. Dependency Invalidation and Preserved Output Reuse
@@ -915,7 +921,7 @@ Resume attempt properties:
 
 Resume must not:
 
-1. allow silent task input edits in the failed-step recovery path;
+1. allow silent workflow input edits in the failed-step recovery path;
 2. silently fall back to full rerun;
 3. re-execute preserved prior steps unless a future explicit mode requests it;
 4. ignore missing, corrupted, unauthorized, or inconsistent checkpoint evidence;
@@ -935,7 +941,7 @@ Step 3: Run tests — resumed attempt 2, local attempt 1 running now
 
 Managed runtimes execute attempts; MoonMind owns attempt semantics.
 
-For a managed agent runtime attempt, `MoonMind.Run` should:
+For a managed agent runtime attempt, `MoonMind.UserWorkflow` should:
 
 1. create the Step Execution record;
 2. prepare and record the immutable context bundle;
@@ -970,7 +976,7 @@ Suggested values:
 | Policy | Meaning |
 | --- | --- |
 | `fresh_agent_run` | Start a new `MoonMind.AgentRun` child workflow for the attempt. |
-| `reuse_session_new_epoch` | Reuse a task-scoped managed session container but clear/reset to a new epoch before the attempt. |
+| `reuse_session_new_epoch` | Reuse a workflow-scoped managed session container but clear/reset to a new epoch before the attempt. |
 | `reuse_session_same_epoch` | Keep session continuity across attempts; should be rare and explicit. |
 | `external_provider_continuation` | Delegate to provider-specific continuation semantics when MoonMind cannot control runtime state directly. |
 
@@ -980,7 +986,7 @@ For managed sessions, Ralph-style clean context should usually mean `fresh_agent
 
 ## 17. Operator and API Surfaces
 
-The default task detail view should stay simple:
+The default workflow detail view should stay simple:
 
 1. each logical step shows the latest/current attempt;
 2. attempt count is visible;
@@ -1016,7 +1022,7 @@ Representative attempt list response:
 
 ```json
 {
-  "workflowId": "mm:task",
+  "workflowId": "mm:wf",
   "runId": "temporal-run-id",
   "logicalStepId": "implement-story-S004",
   "latestStepExecution": 3,
@@ -1097,7 +1103,7 @@ Rules:
 Desired behavior:
 
 ```text
-1. implement task breakdown
+1. implement story breakdown
 2. verify completion -> ADDITIONAL_WORK_NEEDED
 3. remediate attempt 1
 4. verify remediation attempt 1 -> ADDITIONAL_WORK_NEEDED
@@ -1107,7 +1113,9 @@ Desired behavior:
 8. move Jira to Code Review
 ```
 
-If the post-remediation gate remains `ADDITIONAL_WORK_NEEDED` after budget exhaustion, `MoonMind.Run` stops before pull request creation and Jira movement. The final state includes the latest verification report, remaining work, attempted remediation evidence, side-effect dispositions, and a recommended next action.
+The default Jira Orchestrate budget allows up to six remediation/verification pairs after the initial verification gate. The loop may exit earlier when any MoonSpec verification returns `FULLY_IMPLEMENTED`.
+
+If the post-remediation gate remains `ADDITIONAL_WORK_NEEDED` after budget exhaustion, `MoonMind.UserWorkflow` stops before pull request creation and Jira movement. The final state includes the latest verification report, remaining work, attempted remediation evidence, side-effect dispositions, and a recommended next action.
 
 ### 20.2 Failed-step recovery
 
@@ -1177,7 +1185,7 @@ This design does not require:
 5. automatically replaying every possible external side effect;
 6. committing memory proposals from failed attempts directly to the repo;
 7. making failed-step recovery and autonomous loops separate recovery systems;
-8. exposing full immutable attempt history in the default task detail view;
+8. exposing full immutable attempt history in the default workflow detail view;
 9. forcing every Step Type to use autonomous reattempt semantics.
 
 ---

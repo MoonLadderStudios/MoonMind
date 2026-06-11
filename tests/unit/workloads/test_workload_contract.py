@@ -26,7 +26,7 @@ def _profile_payload(**overrides: object) -> dict[str, object]:
         "kind": "one_shot",
         "image": "python:3.12-slim",
         "entrypoint": ["/bin/bash", "-lc"],
-        "workdir_template": "/work/agent_jobs/${task_run_id}/repo",
+        "workdir_template": "/work/agent_jobs/${agent_run_id}/repo",
         "required_mounts": [
             {
                 "type": "volume",
@@ -76,7 +76,7 @@ def _registry(tmp_path: Path, *profiles: dict[str, object]) -> RunnerProfileRegi
 def _request(**overrides: object) -> WorkloadRequest:
     payload: dict[str, object] = {
         "profileId": "local-python",
-        "taskRunId": "task-1",
+        "agentRunId": "task-1",
         "stepId": "step-test",
         "attempt": 1,
         "toolName": "container.run_workload",
@@ -101,7 +101,7 @@ def test_registry_validates_request_and_derives_required_labels(tmp_path: Path) 
     assert validated.profile.id == "local-python"
     assert validated.ownership.labels == {
         "moonmind.kind": "workload",
-        "moonmind.task_run_id": "task-1",
+        "moonmind.agent_run_id": "task-1",
         "moonmind.step_id": "step-test",
         "moonmind.attempt": "1",
         "moonmind.tool_name": "container.run_workload",
@@ -124,7 +124,7 @@ profiles:
     entrypoint:
       - /bin/bash
       - -lc
-    workdir_template: /work/agent_jobs/${task_run_id}/repo
+    workdir_template: /work/agent_jobs/${agent_run_id}/repo
     required_mounts:
       - type: volume
         source: agent_workspaces
@@ -555,7 +555,7 @@ def test_workload_result_serializes_bounded_metadata() -> None:
             "status": "failed",
             "labels": {
                 "moonmind.kind": "workload",
-                "moonmind.task_run_id": "task-1",
+                "moonmind.agent_run_id": "task-1",
             },
             "exitCode": 2,
             "durationSeconds": 12.5,
@@ -728,7 +728,7 @@ def test_registry_rejects_bounded_helper_ttl_above_profile_limit(
 def test_unrestricted_container_request_accepts_runtime_container_shape() -> None:
     request = UnrestrictedContainerRequest.model_validate(
         {
-            "taskRunId": "task-1",
+            "agentRunId": "task-1",
             "stepId": "step-test",
             "attempt": 1,
             "toolName": "container.run_container",
@@ -761,7 +761,7 @@ def test_unrestricted_docker_request_requires_docker_cli_prefix() -> None:
     with pytest.raises(ValidationError, match="docker"):
         UnrestrictedDockerRequest.model_validate(
             {
-                "taskRunId": "task-1",
+                "agentRunId": "task-1",
                 "stepId": "step-test",
                 "attempt": 1,
                 "toolName": "container.run_docker",
@@ -776,7 +776,7 @@ def test_registry_accepts_unrestricted_requests_without_runner_profile(tmp_path:
 
     validated = registry.validate_request(
         {
-            "taskRunId": "task-1",
+            "agentRunId": "task-1",
             "stepId": "step-test",
             "attempt": 1,
             "toolName": "container.run_container",
@@ -799,7 +799,7 @@ def test_registry_accepts_workflow_docker_mode_for_unrestricted_requests(tmp_pat
 
     validated = registry.validate_request(
         {
-            "taskRunId": "task-1",
+            "agentRunId": "task-1",
             "stepId": "step-test",
             "attempt": 1,
             "toolName": "container.run_container",
@@ -822,7 +822,7 @@ def test_registry_rejects_unrestricted_request_outside_workspace_root(tmp_path: 
     with pytest.raises(WorkloadPolicyError, match="workspace root") as exc_info:
         registry.validate_request(
             {
-                "taskRunId": "task-1",
+                "agentRunId": "task-1",
                 "stepId": "step-test",
                 "attempt": 1,
                 "toolName": "container.run_docker",

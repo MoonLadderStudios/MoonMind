@@ -15,7 +15,6 @@ from collections.abc import Callable
 from html import escape
 from pathlib import Path, PurePosixPath
 from typing import Literal
-from uuid import UUID
 
 import yaml
 from fastapi import (
@@ -142,22 +141,6 @@ class SkillImportResponse(BaseModel):
     description: str
     warnings: list[dict[str, str]] = Field(default_factory=list)
 
-class DashboardTaskSourceResponse(BaseModel):
-    """Canonical source metadata for a unified dashboard task id."""
-
-    task_id: str = Field(..., alias="taskId")
-    source: str = Field(..., alias="source")
-    source_label: str = Field(..., alias="sourceLabel")
-    detail_path: str = Field(..., alias="detailPath")
-
-class TaskSourceResolutionResponse(BaseModel):
-    """Canonical source lookup for unified `/workflows/{workflowId}` resolution."""
-
-    task_id: str = Field(..., alias="taskId")
-    source: Literal["temporal"] = Field(..., alias="source")
-    entry: str | None = Field(None, alias="entry")
-    workflow_id: str | None = Field(None, alias="workflowId")
-
 def _is_safe_detail_segment(segment: str) -> bool:
     text = segment.strip()
     if not text:
@@ -165,9 +148,6 @@ def _is_safe_detail_segment(segment: str) -> bool:
     if text in {".", ".."}:
         return False
     return _SAFE_DETAIL_SEGMENT.fullmatch(text) is not None
-
-def _is_temporal_task_id(path: str) -> bool:
-    return path.startswith("mm:") and _is_safe_detail_segment(path)
 
 def _normalize_workflow_detail_path(workflow_path: str) -> str | None:
     normalized = workflow_path.strip("/")
@@ -190,12 +170,6 @@ def _normalize_workflow_detail_path(workflow_path: str) -> str | None:
     ):
         return f"{parts[0]}/{parts[1]}"
     return None
-
-def _parse_task_uuid(task_id: str) -> UUID | None:
-    try:
-        return UUID(str(task_id))
-    except (TypeError, ValueError):
-        return None
 
 def _is_execution_admin(user: User | None) -> bool:
     return bool(user and getattr(user, "is_superuser", False))
@@ -596,7 +570,7 @@ async def _import_skill_zip(
     return _build_skill_import_response(payload, validated)
 
 @router.get("/secrets")
-async def task_secrets_route(
+async def secrets_route(
     request: Request,
     _user: User = Depends(get_current_user()),
 ) -> RedirectResponse:
@@ -625,7 +599,7 @@ async def workflow_console_root(
     )
 
 @router.get("/proposals", response_class=HTMLResponse)
-async def task_proposals_route(
+async def workflow_proposals_route(
     request: Request,
     session: AsyncSession = Depends(get_async_session),
     _user: User = Depends(get_current_user()),
@@ -641,7 +615,7 @@ async def task_proposals_route(
     )
 
 @router.get("/proposals/{proposal_id}", response_class=HTMLResponse)
-async def task_proposal_detail_route(
+async def workflow_proposal_detail_route(
     request: Request,
     proposal_id: str,
     session: AsyncSession = Depends(get_async_session),
@@ -660,7 +634,7 @@ async def task_proposal_detail_route(
     )
 
 @router.get("/schedules", response_class=HTMLResponse)
-async def task_schedules_route(
+async def schedules_route(
     request: Request,
     session: AsyncSession = Depends(get_async_session),
     _user: User = Depends(get_current_user()),
@@ -671,7 +645,7 @@ async def task_schedules_route(
     )
 
 @router.get("/schedules/{schedule_id}", response_class=HTMLResponse)
-async def task_schedule_detail_route(
+async def schedule_detail_route(
     request: Request,
     schedule_id: str,
     session: AsyncSession = Depends(get_async_session),
@@ -689,7 +663,7 @@ async def task_schedule_detail_route(
     )
 
 @router.get("/manifests", response_class=HTMLResponse)
-async def task_manifests_route(
+async def manifests_route(
     request: Request,
     session: AsyncSession = Depends(get_async_session),
     _user: User = Depends(get_current_user()),
@@ -817,7 +791,7 @@ async def task_create_route(
     )
 
 @router.get("/skills", response_class=HTMLResponse)
-async def task_skills_route(
+async def skills_route(
     request: Request,
     session: AsyncSession = Depends(get_async_session),
     _user: User = Depends(get_current_user()),

@@ -359,7 +359,7 @@ def build_resolver_run_request(
     if required_capabilities:
         initial_parameters["requiredCapabilities"] = required_capabilities
     return {
-        "workflow_type": "MoonMind.Run",
+        "workflow_type": "MoonMind.UserWorkflow",
         "title": title,
         "initial_parameters": initial_parameters,
     }

@@ -87,7 +87,7 @@ from moonmind.workflows.temporal.manifest_ingest import (
 )
 from moonmind.workflows.temporal.remediation_context import (
     MAX_REMEDIATION_CONTEXT_TAIL_LINES,
-    MAX_REMEDIATION_CONTEXT_TASK_RUN_IDS,
+    MAX_REMEDIATION_CONTEXT_AGENT_RUN_IDS,
     REMEDIATION_CONTEXT_ARTIFACT_NAME,
     REMEDIATION_CONTEXT_LINK_TYPE,
     REMEDIATION_CONTEXT_SCHEMA_VERSION,
@@ -154,7 +154,7 @@ __all__ = [
     "LocalTemporalArtifactStore",
     "ManifestChildWorkflowStart",
     "MAX_REMEDIATION_CONTEXT_TAIL_LINES",
-    "MAX_REMEDIATION_CONTEXT_TASK_RUN_IDS",
+    "MAX_REMEDIATION_CONTEXT_AGENT_RUN_IDS",
     "ManifestCompileActivityResult",
     "MANIFEST_CHILD_PARENT_CLOSE_POLICY",
     "LLM_FLEET",

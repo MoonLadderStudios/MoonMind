@@ -157,7 +157,7 @@ MANAGED_SESSION_START_AFTER_SLOT_PATCH_ID = (
 )
 
 # Module-level activity catalog — deterministic, safe for Temporal replay.
-# Mirrors the pattern used by MoonMind.Run (run.py:50).
+# Mirrors the pattern used by MoonMind.UserWorkflow (run.py:50).
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 
 # How long to wait for a slot_assigned signal before assuming the manager is
@@ -769,9 +769,9 @@ class MoonMindAgentRun:
             metadata=metadata,
         )
 
-        task_run_id = ""
+        agent_run_id = ""
         if request.managed_session is not None:
-            task_run_id = str(request.managed_session.task_run_id or "").strip()
+            agent_run_id = str(request.managed_session.agent_run_id or "").strip()
             metadata["managedSession"] = request.managed_session.model_dump(
                 mode="json",
                 by_alias=True,
@@ -789,10 +789,10 @@ class MoonMindAgentRun:
                     request.resolved_skillset_ref,
                 )
         elif request.agent_kind == "managed":
-            task_run_id = str(self.run_id or "").strip()
+            agent_run_id = str(self.run_id or "").strip()
 
-        if task_run_id:
-            metadata.setdefault("taskRunId", task_run_id)
+        if agent_run_id:
+            metadata.setdefault("agentRunId", agent_run_id)
 
         request_params = (
             request.parameters if isinstance(request.parameters, Mapping) else {}
@@ -1097,7 +1097,7 @@ class MoonMindAgentRun:
         return canonical_managed_session_runtime_id(request.agent_id)
 
     @staticmethod
-    def _task_scoped_session_workflow_id(
+    def _workflow_scoped_session_workflow_id(
         *,
         task_workflow_id: str,
         runtime_id: str,
@@ -1105,12 +1105,12 @@ class MoonMindAgentRun:
         return f"{task_workflow_id}:session:{runtime_id}"
 
     @staticmethod
-    def _task_scoped_session_visibility(
+    def _workflow_scoped_session_visibility(
         *,
         binding: CodexManagedSessionBinding,
     ) -> dict[str, Any]:
         return {
-            "TaskRunId": [binding.task_run_id],
+            "AgentRunId": [binding.agent_run_id],
             "RuntimeId": [binding.runtime_id],
             "SessionId": [binding.session_id],
             "SessionEpoch": [binding.session_epoch],
@@ -1119,19 +1119,19 @@ class MoonMindAgentRun:
         }
 
     @staticmethod
-    def _task_scoped_session_static_details(
+    def _workflow_scoped_session_static_details(
         *,
         binding: CodexManagedSessionBinding,
     ) -> str:
         return (
-            "Task-scoped managed runtime session | "
-            f"taskRunId={binding.task_run_id} | "
+            "Workflow-scoped managed runtime session | "
+            f"agentRunId={binding.agent_run_id} | "
             f"runtime={binding.runtime_id} | "
             f"session={binding.session_id} | "
             f"epoch={binding.session_epoch}"
         )
 
-    async def _bind_deferred_task_scoped_session_after_slot(
+    async def _bind_deferred_workflow_scoped_session_after_slot(
         self,
         *,
         request: AgentExecutionRequest,
@@ -1155,18 +1155,18 @@ class MoonMindAgentRun:
                 non_retryable=True,
             )
 
-        task_workflow_id = str(intent.get("taskRunId") or "").strip()
+        task_workflow_id = str(intent.get("agentRunId") or "").strip()
         if not task_workflow_id and parent_info is not None:
             task_workflow_id = str(parent_info.workflow_id or "").strip()
         if not task_workflow_id:
             task_workflow_id = workflow.info().workflow_id
 
         session_input = CodexManagedSessionWorkflowInput(
-            taskRunId=task_workflow_id,
+            agentRunId=task_workflow_id,
             runtimeId=session_runtime_id,
             executionProfileRef=request.execution_profile_ref,
         )
-        session_workflow_id = self._task_scoped_session_workflow_id(
+        session_workflow_id = self._workflow_scoped_session_workflow_id(
             task_workflow_id=task_workflow_id,
             runtime_id=session_runtime_id,
         )
@@ -1180,9 +1180,9 @@ class MoonMindAgentRun:
             id=session_workflow_id,
             task_queue=WORKFLOW_TASK_QUEUE,
             parent_close_policy=workflow.ParentClosePolicy.ABANDON,
-            search_attributes=self._task_scoped_session_visibility(binding=binding),
-            static_summary="Task-scoped managed runtime session",
-            static_details=self._task_scoped_session_static_details(binding=binding),
+            search_attributes=self._workflow_scoped_session_visibility(binding=binding),
+            static_summary="Workflow-scoped managed runtime session",
+            static_details=self._workflow_scoped_session_static_details(binding=binding),
         )
 
         if parent_info is not None:
@@ -1245,7 +1245,7 @@ class MoonMindAgentRun:
 
         run_id = str(self.run_id or "").strip()
         if request.managed_session is not None:
-            run_id = str(request.managed_session.task_run_id).strip()
+            run_id = str(request.managed_session.agent_run_id).strip()
 
         activity_input: dict[str, Any] = {
             "runId": run_id,
@@ -2416,7 +2416,7 @@ class MoonMindAgentRun:
                                 },
                             )
 
-                    request = await self._bind_deferred_task_scoped_session_after_slot(
+                    request = await self._bind_deferred_workflow_scoped_session_after_slot(
                         request=request,
                         runtime_id=runtime_id,
                         parent_info=parent_info,

@@ -1,0 +1,36 @@
+{
+  "jiraIssueKey": "MM-730",
+  "releaseMode": "coordinated_branch_release",
+  "legacyWorkflowType": "MoonMind.Run",
+  "newWorkflowType": "MoonMind.UserWorkflow",
+  "releaseNotesPath": "docs/ReleaseNotes/MM-730-hard-switch-cutover.md",
+  "environments": [
+    {
+      "name": "ci",
+      "decision": "drain",
+      "recordedAt": "2026-05-24T00:00:00Z"
+    }
+  ],
+  "affectedContracts": [
+    {
+      "kind": "workflow",
+      "owner": "MoonMind.UserWorkflow",
+      "strategy": "Use the renamed workflow type after cutover."
+    },
+    {
+      "kind": "activity",
+      "owner": "MoonMind.UserWorkflow activities",
+      "strategy": "Use renamed activity payloads after cutover."
+    },
+    {
+      "kind": "signal",
+      "owner": "MoonMind.UserWorkflow signals",
+      "strategy": "Use renamed signal shapes after cutover."
+    },
+    {
+      "kind": "update",
+      "owner": "MoonMind.UserWorkflow updates",
+      "strategy": "Use renamed update shapes after cutover."
+    }
+  ]
+}

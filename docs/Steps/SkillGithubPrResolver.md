@@ -248,4 +248,4 @@ You are the Master orchestrator for finishing Pull Requests. You diagnose the PR
 ## 13. Verification
 
 - Skill assets live under `.agents/skills/pr-resolver/`; snapshot logic is exercised by `tests/unit/test_pr_resolver_tools.py` (loads `pr_resolve_snapshot.py` from the skill tree).
-- Mission Control submit flows reference `pr-resolver` in the React task-create surface and its focused entrypoint tests.
+- Mission Control submit flows reference `pr-resolver` in the React workflow-start surface and its focused entrypoint tests.
