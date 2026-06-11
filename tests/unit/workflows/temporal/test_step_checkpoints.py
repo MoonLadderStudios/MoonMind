@@ -126,6 +126,24 @@ def test_checkpoint_boundary_accepts_previous_compact_payload_shape() -> None:
     assert result.checkpoint_ref == "artifact-checkpoint"
 
 
+@pytest.mark.parametrize("payload", [None, [], "not-json-object"])
+def test_checkpoint_boundary_rejects_non_mapping_payload_without_crashing(
+    payload: object,
+) -> None:
+    result = validate_step_checkpoint_payload(
+        payload,
+        expected_source=_identity(),
+        expected_task_input_snapshot_ref="artifact-input",
+        checkpoint_ref="artifact-checkpoint",
+    )
+
+    assert result.valid is False
+    assert result.failure_code == "invalid_checkpoint"
+    assert "payload must be a mapping" in result.message
+    assert result.checkpoint_id == "unknown-checkpoint"
+    assert result.checkpoint_ref == "artifact-checkpoint"
+
+
 @pytest.mark.parametrize(
     ("mutator", "field_name"),
     [

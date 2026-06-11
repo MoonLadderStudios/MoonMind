@@ -187,7 +187,7 @@ def validate_step_checkpoint(
 
 
 def validate_step_checkpoint_payload(
-    checkpoint_payload: Mapping[str, Any],
+    checkpoint_payload: Any,
     *,
     expected_source: StepExecutionIdentityModel,
     expected_task_input_snapshot_ref: str,
@@ -206,6 +206,18 @@ def validate_step_checkpoint_payload(
     This helper is for replay, Resume, and other workflow boundaries that may read
     persisted payloads created before a deployment completed.
     """
+
+    if not isinstance(checkpoint_payload, Mapping):
+        return StepCheckpointValidationResultModel(
+            valid=False,
+            failureCode="invalid_checkpoint",
+            message=(
+                "checkpoint payload rejected at workflow boundary: "
+                "payload must be a mapping"
+            ),
+            checkpointId="unknown-checkpoint",
+            checkpointRef=checkpoint_ref,
+        )
 
     try:
         checkpoint = StepExecutionCheckpointModel.model_validate(checkpoint_payload)

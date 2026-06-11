@@ -152,6 +152,85 @@ def test_step_execution_manifest_boundary_accepts_previous_compact_payload_shape
     }
 
 
+def test_step_execution_manifest_boundary_accepts_timestamp_optional_v1_payload() -> (
+    None
+):
+    payload = {
+        **_identity(),
+        "schemaVersion": "v1",
+        "stepExecutionId": "workflow-1:run-1:implement-story:execution:2",
+        "executionScope": "run",
+        "reason": "quality_gate_failed",
+        "status": "failed",
+        "terminalDisposition": "retryable",
+        "manifestArtifactRef": "artifact-from-payload",
+        "input": {"taskInputSnapshotRef": "artifact-input"},
+        "context": {"contextBundleRef": "artifact-context"},
+        "workspace": {"policy": "continue_from_previous_execution"},
+        "execution": {"kind": "agent_run"},
+        "outputs": {"summaryRef": "artifact-summary"},
+        "checks": [],
+        "sideEffects": {"external": []},
+        "dependencyEffects": {"invalidatedLogicalStepIds": []},
+        "budget": {"attemptLimit": 3},
+    }
+
+    result = validate_step_execution_manifest_payload(payload)
+
+    assert result["valid"] is True
+    assert result["failureCode"] is None
+    assert result["manifestArtifactRef"] == "artifact-from-payload"
+    assert result["stepExecutionId"] == (
+        "workflow-1:run-1:implement-story:execution:2"
+    )
+    assert result["logicalStepId"] == "implement-story"
+    assert result["executionOrdinal"] == 2
+
+
+@pytest.mark.parametrize("payload", [None, [], "not-json-object"])
+def test_step_execution_manifest_boundary_rejects_non_mapping_payload_without_crashing(
+    payload: object,
+) -> None:
+    result = validate_step_execution_manifest_payload(
+        payload,
+        manifest_artifact_ref="artifact-step-execution-2",
+    )
+
+    assert result == {
+        "valid": False,
+        "failureCode": "invalid_step_execution_manifest",
+        "message": (
+            "step execution manifest rejected at workflow boundary: "
+            "payload must be a mapping"
+        ),
+        "manifestArtifactRef": "artifact-step-execution-2",
+        "stepExecutionId": None,
+        "logicalStepId": None,
+        "executionOrdinal": None,
+    }
+
+
+def test_step_execution_manifest_boundary_uses_payload_artifact_ref_on_success() -> (
+    None
+):
+    payload = {
+        **_identity(),
+        "schemaVersion": "v1",
+        "executionScope": "run",
+        "reason": "quality_gate_failed",
+        "status": "failed",
+        "terminalDisposition": "retryable",
+        "startedAt": "2026-05-17T12:00:00Z",
+        "updatedAt": "2026-05-17T12:03:00Z",
+        "artifactRef": "artifact-from-legacy-field",
+    }
+
+    result = validate_step_execution_manifest_payload(payload)
+
+    assert result["valid"] is True
+    assert result["manifestArtifactRef"] == "artifact-from-legacy-field"
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

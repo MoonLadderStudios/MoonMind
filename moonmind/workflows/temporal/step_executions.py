@@ -16,7 +16,10 @@ from moonmind.schemas.step_execution_models import (
     StepExecutionIdentityModel,
     StepExecutionManifestModel,
 )
-from moonmind.schemas.temporal_models import WorkspacePolicy
+from moonmind.schemas.temporal_models import (
+    StepExecutionManifestModel as BoundaryStepExecutionManifestModel,
+    WorkspacePolicy,
+)
 from moonmind.workflows.temporal.step_checkpoints import (
     checkpoint_kinds_for_workspace_policy,
 )
@@ -526,7 +529,7 @@ def build_step_execution_manifest_payload(
 
 
 def validate_step_execution_manifest_payload(
-    manifest_payload: Mapping[str, Any],
+    manifest_payload: Any,
     *,
     manifest_artifact_ref: str | None = None,
 ) -> dict[str, Any]:
@@ -538,8 +541,42 @@ def validate_step_execution_manifest_payload(
     enum values during a rolling deployment.
     """
 
+    if not isinstance(manifest_payload, Mapping):
+        return {
+            "valid": False,
+            "failureCode": "invalid_step_execution_manifest",
+            "message": (
+                "step execution manifest rejected at workflow boundary: "
+                "payload must be a mapping"
+            ),
+            "manifestArtifactRef": _non_blank_text(manifest_artifact_ref),
+            "stepExecutionId": None,
+            "logicalStepId": None,
+            "executionOrdinal": None,
+        }
+
+    validation_payload = dict(manifest_payload)
+    validation_payload.pop("manifestArtifactRef", None)
+    validation_payload.pop("artifactRef", None)
+    if "stepExecutionId" not in validation_payload:
+        workflow_id = _non_blank_text(validation_payload.get("workflowId"))
+        run_id = _non_blank_text(validation_payload.get("runId"))
+        logical_step_id = _non_blank_text(validation_payload.get("logicalStepId"))
+        execution_ordinal = _positive_int_or_none(
+            validation_payload.get("executionOrdinal")
+        )
+        if workflow_id and run_id and logical_step_id and execution_ordinal is not None:
+            validation_payload["stepExecutionId"] = step_execution_id(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                logical_step_id=logical_step_id,
+                execution_ordinal=execution_ordinal,
+            )
+
     try:
-        manifest = StepExecutionManifestModel.model_validate(manifest_payload)
+        manifest = BoundaryStepExecutionManifestModel.model_validate(
+            validation_payload
+        )
     except ValidationError as exc:
         return {
             "valid": False,
@@ -565,7 +602,11 @@ def validate_step_execution_manifest_payload(
         "valid": True,
         "failureCode": None,
         "message": "step execution manifest validation passed",
-        "manifestArtifactRef": _non_blank_text(manifest_artifact_ref),
+        "manifestArtifactRef": _non_blank_text(
+            manifest_artifact_ref
+            or manifest_payload.get("manifestArtifactRef")
+            or manifest_payload.get("artifactRef")
+        ),
         "stepExecutionId": manifest.step_execution_id,
         "logicalStepId": manifest.logical_step_id,
         "executionOrdinal": manifest.execution_ordinal,
