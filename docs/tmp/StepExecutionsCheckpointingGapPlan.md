@@ -153,3 +153,15 @@ parallel after WP2.
   matching `step_execution_operation_idempotency_key`.
 - API vocabulary: `step-executions` keyed by `execution_ordinal`; "attempts"
   removed from API surface language.
+
+## 5. Story execution handoff
+
+`STORY-006` ("Complete remaining behavior for Make Resume checkpoint-backed by
+default") is tracked through Jira issue `MM-825` and should be implemented by a
+downstream Jira Orchestrate execution, not by the original breakdown step. The
+source design remains `docs/Steps/StepExecutionsAndCheckpointing.md`.
+
+As of 2026-06-11, the handoff execution has been submitted with the
+`jira-orchestrate` preset and is waiting on its Jira blocker preflight. The
+expected implementation output for `MM-825` is a later Jira Orchestrate branch
+that closes the WP3 checkpoint-backed Resume gap above.
