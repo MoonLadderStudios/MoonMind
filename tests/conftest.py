@@ -22,8 +22,6 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 _SLOW_TEST_MODULES = {
     Path("tests/unit/api/routers/test_agent_runs.py"),
-    Path("tests/unit/api/routers/test_mcp_tools.py"),
-    Path("tests/unit/mcp/test_tool_registry.py"),
 }
 
 _COMPONENT_PATTERNS = (
@@ -34,10 +32,8 @@ _COMPONENT_PATTERNS = (
 _TEMPORAL_BOUNDARY_PATTERNS = (
     "WorkflowEnvironment",
     "Replayer",
-    "from temporalio.worker import Worker",
-    "from temporalio.worker import UnsandboxedWorkflowRunner, Worker",
-    "from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker",
-    "from temporalio.worker import Worker, UnsandboxedWorkflowRunner",
+    "temporalio.testing",
+    "temporalio.worker",
 )
 
 

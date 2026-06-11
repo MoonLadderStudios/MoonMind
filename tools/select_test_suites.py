@@ -49,6 +49,7 @@ API_COMPONENT_EXACT = {
 API_COMPONENT_PREFIXES = (
     "api_service/api/",
     "api_service/db/",
+    "api_service/services/",
     "tests/unit/api/",
     "tests/unit/api_service/",
     "tests/component/api/",
@@ -86,6 +87,7 @@ INTEGRATION_CI_EXACT = {
 INTEGRATION_CI_PREFIXES = (
     "tests/integration/",
     "api_service/db/",
+    "api_service/migrations/",
     "migrations/",
     "alembic/",
 )
@@ -264,6 +266,14 @@ def emit_outputs(selection: SuiteSelection) -> None:
 
 
 def main() -> int:
+    if sys.stdin.isatty():
+        print(
+            "Error: This script expects a list of changed files via stdin.\n"
+            "Usage example: git diff --name-only | python tools/select_test_suites.py",
+            file=sys.stderr,
+        )
+        return 1
+
     selection = select_suites(
         sys.stdin,
         event_name=os.environ.get("GITHUB_EVENT_NAME"),
