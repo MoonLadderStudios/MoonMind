@@ -391,7 +391,7 @@ async def test_send_message_forwards_operator_message_without_resuming(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_send_message_blocks_secret_before_active_child_signal(monkeypatch):
+async def test_send_message_does_not_scan_inside_workflow_replay_path(monkeypatch):
     workflow_instance = MoonMindRunWorkflow()
     workflow_instance._active_agent_child_workflow_id = "wf:child"
     workflow_instance._active_agent_id = "jules"
@@ -410,15 +410,13 @@ async def test_send_message_blocks_secret_before_active_child_signal(monkeypatch
         True,
     )
 
-    with pytest.raises(ValueError) as exc_info:
-        await workflow_instance.send_message(
-            {"message": "Please use token=blocked-secret-value"}
-        )
+    await workflow_instance.send_message(
+        {"message": "Please use token=blocked-secret-value"}
+    )
 
-    forward_mock.assert_not_awaited()
-    message = str(exc_info.value)
-    assert "execution.send_message.message" in message
-    assert "blocked-secret-value" not in message
+    forward_mock.assert_awaited_once_with(
+        {"message": "Please use token=blocked-secret-value"}
+    )
 
 
 @pytest.mark.asyncio

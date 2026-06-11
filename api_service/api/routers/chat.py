@@ -71,7 +71,7 @@ def _scan_chat_messages_before_send(messages: List, *, surface: str) -> None:
             diagnostics,
         )
         raise HTTPException(
-            status_code=422,
+            status_code=400,
             detail=f"Outbound message blocked by high security scan: {diagnostics}",
         )
 
@@ -873,6 +873,7 @@ async def handle_anthropic_request(
         )
 
     logger.info(f"Routing to Anthropic for model: {model_to_use}")
+    _scan_chat_messages_before_send(messages, surface="chat.anthropic")
 
     # The AnthropicFactory.create_anthropic_model currently uses global settings.
     # We need to pass the api_key to it.
@@ -902,9 +903,6 @@ async def handle_anthropic_request(
             status_code=400,
             detail="No user or assistant messages provided for Anthropic.",
         )
-
-    _scan_chat_messages_before_send(messages, surface="chat.anthropic")
-
     try:
         # Note: Anthropic's SDK might use `messages` and `system` parameters differently
         # depending on the specific SDK version and method used.

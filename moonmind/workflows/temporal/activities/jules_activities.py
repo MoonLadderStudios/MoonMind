@@ -260,7 +260,7 @@ async def jules_answer_question_activity(payload: dict) -> dict:
     if not scan.allowed:
         return {
             "answered": False,
-            "answer": "",
+            "answer": redact_sensitive_text(answer),
             "error": _blocked_message_error(
                 "jules.answer_question.answer",
                 scan.sanitized_diagnostics,
