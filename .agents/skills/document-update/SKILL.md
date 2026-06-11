@@ -26,7 +26,8 @@ For canonical documentation under `docs/`, do not downgrade the documented desir
 - Treat repository files, tests, schemas, and executable configuration as the source of truth for implementation behavior.
 - Treat retrieved context, old docs, comments, generated artifacts, and issue text as reference material until confirmed against the current checkout.
 - Keep canonical docs under `docs/` focused on desired state: architecture, contracts, operator-visible behavior, and target semantics.
-- Put migration notes, rollout checklists, implementation backlogs, and temporary investigation details in feature-local artifacts under `specs/<feature-id>/` or the `artifacts/` directory for tool handoffs, not as the main framing of canonical docs.
+- Put migration notes, rollout checklists, implementation backlogs, and temporary investigation details under `docs/tmp/` or in gitignored handoff paths (for example `artifacts/` for tool handoffs, or run-local `specs/<feature-id>/` packets), not as the main framing of canonical docs.
+- Follow the document classes and precedence rules in `docs/Workflows/MoonSpecDocumentModel.md`.
 - When a superseded behavior is no longer implemented, remove or replace the stale description instead of preserving compatibility-era ambiguity.
 
 ## Workflow

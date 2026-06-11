@@ -63,6 +63,9 @@ steps:
       {{ inputs.feature_request }}
 
       If the input is a readable repo path, use that file as the original declarative document and preserve its path in every story's sourceReference.
+      The canonical declarative document is the primary source of truth; the breakdown output is a temporary derived view (see docs/Workflows/MoonSpecDocumentModel.md).
+      Classify the input before extracting stories. If it is primarily an imperative checklist, status tracker, or migration plan and no explicit imperative override was given, fail fast with the moonspec-breakdown imperative-input error instead of decomposing it.
+      Record sourceDocumentClass in the breakdown output.
       Write the coverage-checked story breakdown to the runtime-provided story breakdown paths.
     skill:
       id: moonspec-breakdown
@@ -116,6 +119,7 @@ steps:
       Create one Jira Orchestrate task for each Jira issue created from the trusted Jira story output.
 
       Use the ordered issue mappings returned by story.create_jira_issues. Preserve the generated story order when creating downstream tasks.
+      Each downstream task must carry the story's sourceReference.path as its source_design_path input so the downstream Jira Orchestrate doc-reconciliation step knows the canonical source document.
       Do not create downstream tasks for skipped fully implemented stories or manual-review stories that did not produce Jira issue mappings.
       Each downstream task must run Jira Orchestrate on its corresponding Jira story issue and must not run implementation inline inside this breakdown run.
       Create task dependencies with dependsOn so each later generated task waits for the immediately earlier generated task workflow ID.

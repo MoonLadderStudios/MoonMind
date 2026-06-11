@@ -17,6 +17,7 @@ Orchestrate downstream Moon Spec skills instead of reimplementing their detailed
 - `moonspec-align`: analyze and remediate artifact drift before implementation.
 - `moonspec-implement`: implement the task breakdown with TDD.
 - `moonspec-verify`: perform final read-only verification.
+- `moonspec-doc-reconcile`: update the canonical source document when verified discoveries definitely require it.
 
 Do not use older `speckit-*` skill names in orchestration instructions. Slash commands such as `/speckit.plan` may still appear only when referring to the user-facing command names.
 
@@ -37,7 +38,7 @@ Default intent is `runtime`: production code plus tests must be delivered. Use `
 - Single-story requests go through `moonspec-specify`.
 - TDD is the default strategy.
 - Unit tests and integration tests are both expected.
-- The original request or source design preserved in `spec.md` `**Input**` is the final alignment source.
+- The original request or source design preserved in `spec.md` `**Input**` is the final alignment source, interpreted against the canonical source document per `docs/Workflows/MoonSpecDocumentModel.md`. When a derived artifact conflicts with its canonical source document, the canonical document wins unless verified evidence shows the document itself is wrong — then the conflict goes to doc reconciliation, never silent override.
 - `moonspec-align` replaces the old multi-step analyze remediation sequence.
 - Do not synthesize user approvals, scripted user responses, or pretend an analyze report exists.
 - Resume from existing artifacts when they pass gates; do not regenerate by default.
@@ -96,6 +97,9 @@ Use these gates before advancing:
   - `moonspec-verify` produced a concrete report for the active `spec.md`.
   - Verdict is not `NO_DETERMINATION`.
   - Completion is claimed only when verdict is `FULLY_IMPLEMENTED`.
+- Doc Reconcile gate:
+  - `moonspec-doc-reconcile` has run after a `FULLY_IMPLEMENTED` verdict when `spec.md` records a canonical source document.
+  - Its result is exactly one of `UPDATED`, `NO_UPDATE_REQUIRED`, or `ESCALATED`, with rationale.
 
 If a gate fails, stop or run the appropriate upstream skill. Do not continue on a claimed success without artifacts or evidence.
 
@@ -151,6 +155,15 @@ This replaces the old manual analyze remediation flow. Do not provide scripted "
 4. Run at most two verification-remediation cycles unless the user explicitly asks to keep going.
 5. If verdict is `NO_DETERMINATION`, stop and report the exact missing evidence, commands, or context.
 
+### 7. Reconcile Declarative Docs
+
+Run only when the final verdict is `FULLY_IMPLEMENTED` and `spec.md` records a canonical source document under `docs/`:
+
+1. Run `moonspec-doc-reconcile` with the canonical document path(s), the latest verification report (including its Source Document Drift section), and `artifacts/doc-discoveries/<feature>.json` when present.
+2. Accept exactly one outcome: `UPDATED` (canonical doc edited), `NO_UPDATE_REQUIRED` (gate not met), or `ESCALATED` (Jira issue created for a misaligned update).
+3. `ESCALATED` does not retroactively fail verification; report the issue key alongside the outcome.
+4. Skip this stage with outcome `NO_UPDATE_REQUIRED` when no canonical source document exists.
+
 ## Multi-Spec Designs
 
 Multi-spec orchestration is out of scope for this skill. A higher-level workflow must split, order, and select stories before invoking MoonSpec Orchestrate for each individual story.
@@ -178,6 +191,7 @@ Stages:
 - Align: PASS/FAIL/SKIPPED
 - Implement: PASS/FAIL/SKIPPED
 - Verify: FULLY_IMPLEMENTED/ADDITIONAL_WORK_NEEDED/NO_DETERMINATION/SKIPPED
+- Doc Reconcile: UPDATED/NO_UPDATE_REQUIRED/ESCALATED/SKIPPED
 
 Changed files:
 - [paths]
@@ -203,3 +217,4 @@ Mention source design coverage and `DOC-REQ-*`/`DESIGN-REQ-*` status when presen
 - Enforce one story per spec.
 - Keep TDD, unit tests, integration tests, and `/speckit.verify` in the pipeline.
 - Treat verification as the final authority for completion.
+- Run doc reconciliation after a `FULLY_IMPLEMENTED` verdict when a canonical source document exists; never let derived artifacts silently override canonical docs.

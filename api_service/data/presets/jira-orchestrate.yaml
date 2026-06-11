@@ -430,6 +430,26 @@ steps:
     skill:
       id: moonspec-verify
       args: {}
+  - title: Reconcile declarative docs
+    annotations:
+      jiraOrchestrateRole: doc-reconciliation
+    instructions: |-
+      /clear
+
+      Run moonspec-doc-reconcile for {{ inputs.jira_issue_key }} only when the controlling post-remediation verdict is FULLY_IMPLEMENTED. If the latest verdict is not FULLY_IMPLEMENTED, make no changes and report that doc reconciliation is skipped because publication is already blocked.
+
+      Use the canonical source document recorded in spec.md (Source Document){% if inputs.source_design_path %} or the provided source design path {{ inputs.source_design_path }}{% endif %}. If no canonical source document under docs/ exists, write the structured no_update_required outcome and continue.
+
+      Consume the latest moonspec-verify report, including its Source Document Drift section, plus artifacts/doc-discoveries/<feature>.json when present. Apply the moonspec-doc-reconcile update gate strictly: edit canonical docs only for definite, evidence-backed discoveries showing the document is functionally wrong, internally inconsistent, or correctly diverged from for verified best-practice reasons. Otherwise report no_update_required; a no-op outcome is a correct result.
+
+      If a required update conflicts with the constitution, README, or architecture direction, do not edit the document; create the Jira escalation issue per the skill and continue. Escalation does not block pull request creation.
+
+      Write the structured outcome to artifacts/jira-orchestrate-doc-reconcile.json with keys action, docPaths, gateRationale, evidence, and jiraIssue when escalated. Do not commit, push, or create a pull request from this step; any canonical doc edits remain in the working tree so the pull request step publishes them together with the implementation.
+    skill:
+      id: moonspec-doc-reconcile
+      args: {}
+      requiredCapabilities:
+        - git
   - title: Create pull request
     annotations:
       jiraOrchestrateRole: pull-request-handoff
@@ -452,6 +472,9 @@ steps:
       - verification verdict
       - tests run
       - remaining risks
+      - the doc reconciliation outcome from artifacts/jira-orchestrate-doc-reconcile.json when present: updated canonical doc paths, the no-update rationale, or the escalation Jira issue key
+
+      Canonical doc edits produced by the doc reconciliation step are intentional changes for this issue and must be committed in the same pull request.
 
       After creation and non-draft verification, record the confirmed pull request URL in the step result and in a local handoff artifact at artifacts/jira-orchestrate-pr.json with keys jira_issue_key and pull_request_url. Do not continue unless the pull_request_url is a GitHub pull request URL for the current work branch and the pull request is confirmed non-draft.
     skill:

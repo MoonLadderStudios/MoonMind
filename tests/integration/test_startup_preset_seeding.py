@@ -55,6 +55,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             "moonspec-align",
             "moonspec-implement",
             "moonspec-verify",
+            "moonspec-doc-reconcile",
         ]
         seeded_step_titles = [step["title"] for step in template.latest_version.steps]
         assert "Classify request and resume point" not in seeded_step_titles
@@ -124,9 +125,10 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "moonspec-implement" in jira_orchestrate_steps
         assert "moonspec-verify" in jira_orchestrate_steps
         assert jira_orchestrate_steps[-1] == "jira-issue-updater"
-        assert len(jira_orchestrate_steps) == 25
+        assert len(jira_orchestrate_steps) == 26
         assert jira_orchestrate_steps.count("moonspec-implement") == 7
         assert jira_orchestrate_steps.count("moonspec-verify") == 7
+        assert jira_orchestrate_steps.count("moonspec-doc-reconcile") == 1
         blocker_step = jira_orchestrate_template.latest_version.steps[1]
         assert blocker_step["title"] == "Check Jira blockers before implementation"
         assert blocker_step["type"] == "tool"
@@ -157,12 +159,33 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         )
         assert remediation_verify_step["skill"]["id"] == "moonspec-verify"
         assert "controlling verification gate" in remediation_verify_step["instructions"]
+        doc_reconcile_step = next(
+            step
+            for step in jira_orchestrate_template.latest_version.steps
+            if step["title"] == "Reconcile declarative docs"
+        )
+        assert doc_reconcile_step["skill"]["id"] == "moonspec-doc-reconcile"
+        assert doc_reconcile_step["annotations"] == {
+            "jiraOrchestrateRole": "doc-reconciliation"
+        }
+        assert "FULLY_IMPLEMENTED" in doc_reconcile_step["instructions"]
+        assert "artifacts/jira-orchestrate-doc-reconcile.json" in doc_reconcile_step[
+            "instructions"
+        ]
+        doc_reconcile_index = jira_orchestrate_template.latest_version.steps.index(
+            doc_reconcile_step
+        )
         pr_step = next(
             step
             for step in jira_orchestrate_template.latest_version.steps
             if step["title"] == "Create pull request"
         )
+        assert (
+            jira_orchestrate_template.latest_version.steps.index(pr_step)
+            == doc_reconcile_index + 1
+        )
         assert "pull request" in pr_step["instructions"]
+        assert "doc reconciliation outcome" in pr_step["instructions"]
         assert "post-remediation moonspec-verify" in pr_step["instructions"]
         assert "parent workflow must use the pull request URL" in pr_step["instructions"]
         assert "explicit PR-publication step" in pr_step["instructions"]
