@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from moonmind.config.settings import settings
 from moonmind.integrations.pentest.models import PENTEST_TOOL_NAME, PENTEST_TOOL_VERSION
 from moonmind.mcp.tool_registry import ToolMetadata
 
@@ -75,6 +76,42 @@ _PENTEST_RUN_INPUT_SCHEMA: dict[str, Any] = {
 }
 
 
+def _pentest_run_input_schema() -> dict[str, Any]:
+    pentest_settings = settings.pentest
+    runner_profiles = list(pentest_settings.allowed_runner_profiles)
+    if (
+        pentest_settings.allow_vpn_lab_profile
+        and pentest_settings.vpn_lab_profile_id not in runner_profiles
+    ):
+        runner_profiles.append(pentest_settings.vpn_lab_profile_id)
+    operation_modes = list(pentest_settings.allowed_operation_modes)
+    evidence_levels = list(pentest_settings.allowed_evidence_levels)
+    schema = dict(_PENTEST_RUN_INPUT_SCHEMA)
+    properties = dict(schema["properties"])
+    properties["operation_mode"] = {
+        **properties["operation_mode"],
+        "enum": operation_modes,
+        "default": pentest_settings.default_operation_mode,
+    }
+    properties["runner_profile_id"] = {
+        **properties["runner_profile_id"],
+        "enum": runner_profiles,
+        "default": pentest_settings.default_runner_profile,
+    }
+    properties["time_budget_minutes"] = {
+        **properties["time_budget_minutes"],
+        "maximum": pentest_settings.max_time_budget_minutes,
+        "default": pentest_settings.default_time_budget_minutes,
+    }
+    properties["evidence_level"] = {
+        **properties["evidence_level"],
+        "enum": evidence_levels,
+        "default": pentest_settings.default_evidence_level,
+    }
+    schema["properties"] = properties
+    return schema
+
+
 class ExecutableToolDiscoveryRegistry:
     """Read-only catalog for task-submission executable tools.
 
@@ -82,9 +119,11 @@ class ExecutableToolDiscoveryRegistry:
     submit path. They are intentionally not immediate `/mcp/tools/call` tools.
     """
 
-    def __init__(self) -> None:
-        self._tools = {
-            PENTEST_TOOL_NAME: ToolMetadata(
+    def __init__(self, *, pentest_enabled: bool | None = None) -> None:
+        enabled = settings.pentest.enabled if pentest_enabled is None else pentest_enabled
+        self._tools = {}
+        if enabled:
+            self._tools[PENTEST_TOOL_NAME] = ToolMetadata(
                 name=PENTEST_TOOL_NAME,
                 description=(
                     "Run an authorized PentestGPT workload against an approved "
@@ -92,12 +131,11 @@ class ExecutableToolDiscoveryRegistry:
                     "artifacts."
                 ),
                 input_schema={
-                    **_PENTEST_RUN_INPUT_SCHEMA,
+                    **_pentest_run_input_schema(),
                     "x-moonmind-tool-version": PENTEST_TOOL_VERSION,
                     "x-moonmind-invocation": "temporal_task_submission",
                 },
             )
-        }
 
     def list_tools(self) -> list[ToolMetadata]:
         """Return discoverable Temporal executable tools."""

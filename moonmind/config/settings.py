@@ -20,6 +20,12 @@ from moonmind.workflow_docker_mode import normalize_workflow_docker_mode
 
 _ALLOWED_TARGET_DEFAULTS = ("project", "moonmind", "both")
 _ALLOWED_PROPOSAL_SEVERITIES = ("low", "medium", "high", "critical")
+_PENTEST_ALLOWED_OPERATION_MODES = (
+    "recon_only",
+    "validate_hypothesis",
+    "full_authorized",
+)
+_PENTEST_ALLOWED_EVIDENCE_LEVELS = ("minimal", "standard", "full")
 _OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _JIRA_PROJECT_KEY_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9]+$")
 _JIRA_ALLOWED_ACTIONS = frozenset(
@@ -1417,6 +1423,231 @@ class SecuritySettings(BaseSettings):
 
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
+class PentestSettings(BaseSettings):
+    """Policy and deployment settings for the curated PentestGPT tool."""
+
+    enabled: bool = Field(
+        False,
+        validation_alias=AliasChoices("MOONMIND_PENTEST_ENABLED"),
+        description="Enable discovery and execution of security.pentest.run.",
+        json_schema_extra={
+            "moonmind": {
+                "expose": True,
+                "key": "pentest.enabled",
+                "section": "operations",
+                "category": "Pentest",
+                "scopes": ["deployment"],
+                "ui": "toggle",
+                "type": "boolean",
+                "requires_reload": True,
+                "apply_mode": "worker_reload",
+                "title": "Enable PentestGPT",
+                "applies_to": ["tool_discovery", "workflow_runtime"],
+                "order": 10,
+            }
+        },
+    )
+    runner_image: str = Field(
+        "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0",
+        validation_alias=AliasChoices("MOONMIND_PENTEST_RUNNER_IMAGE"),
+        description="Curated PentestGPT runner image tag or digest.",
+    )
+    safe_profile_id: str = Field(
+        "pentestgpt-safe",
+        validation_alias=AliasChoices("MOONMIND_PENTEST_SAFE_PROFILE_ID"),
+    )
+    vpn_lab_profile_id: str = Field(
+        "pentestgpt-vpn-lab",
+        validation_alias=AliasChoices("MOONMIND_PENTEST_VPN_LAB_PROFILE_ID"),
+    )
+    allowed_runner_profiles: Annotated[tuple[str, ...], NoDecode] = Field(
+        ("pentestgpt-safe",),
+        validation_alias=AliasChoices("MOONMIND_PENTEST_ALLOWED_RUNNER_PROFILES"),
+        description="Comma-delimited allowlist of Pentest runner profile ids.",
+    )
+    default_runner_profile: str = Field(
+        "pentestgpt-safe",
+        validation_alias=AliasChoices("MOONMIND_PENTEST_DEFAULT_RUNNER_PROFILE"),
+    )
+    allow_vpn_lab_profile: bool = Field(
+        False,
+        validation_alias=AliasChoices("MOONMIND_PENTEST_ALLOW_VPN_LAB_PROFILE"),
+    )
+    vpn_state_volume: str = Field(
+        "pentest_vpn_state",
+        validation_alias=AliasChoices("MOONMIND_PENTEST_VPN_STATE_VOLUME"),
+    )
+    network_attachment_required_for_vpn: bool = Field(
+        True,
+        validation_alias=AliasChoices(
+            "MOONMIND_PENTEST_NETWORK_ATTACHMENT_REQUIRED_FOR_VPN"
+        ),
+    )
+    default_provider_profile: str | None = Field(
+        None,
+        validation_alias=AliasChoices("MOONMIND_PENTEST_DEFAULT_PROVIDER_PROFILE"),
+        description="Optional default PentestGPT provider profile id.",
+    )
+    provider_profiles_file: str | None = Field(
+        None,
+        validation_alias=AliasChoices("MOONMIND_PENTEST_PROVIDER_PROFILES_FILE"),
+    )
+    enabled_provider_profiles: Annotated[tuple[str, ...], NoDecode] = Field(
+        (),
+        validation_alias=AliasChoices("MOONMIND_PENTEST_ENABLED_PROVIDER_PROFILES"),
+        description="Comma-delimited allowlist of PentestGPT provider profile ids.",
+    )
+    provider_slot_wait_seconds: int = Field(
+        300,
+        ge=1,
+        validation_alias=AliasChoices("MOONMIND_PENTEST_PROVIDER_SLOT_WAIT_SECONDS"),
+    )
+    provider_lease_seconds: int | None = Field(
+        None,
+        ge=60,
+        validation_alias=AliasChoices("MOONMIND_PENTEST_PROVIDER_LEASE_SECONDS"),
+    )
+    anthropic_secret_id: str | None = Field(
+        None,
+        validation_alias=AliasChoices("PENTESTGPT_ANTHROPIC_SECRET_ID"),
+    )
+    openrouter_secret_id: str | None = Field(
+        None,
+        validation_alias=AliasChoices("PENTESTGPT_OPENROUTER_SECRET_ID"),
+    )
+    default_operation_mode: str = Field(
+        "recon_only",
+        validation_alias=AliasChoices("MOONMIND_PENTEST_DEFAULT_OPERATION_MODE"),
+    )
+    allowed_operation_modes: Annotated[tuple[str, ...], NoDecode] = Field(
+        ("recon_only", "validate_hypothesis"),
+        validation_alias=AliasChoices("MOONMIND_PENTEST_ALLOWED_OPERATION_MODES"),
+        description="Comma-delimited allowlist of Pentest operation modes.",
+    )
+    default_evidence_level: str = Field(
+        "standard",
+        validation_alias=AliasChoices("MOONMIND_PENTEST_DEFAULT_EVIDENCE_LEVEL"),
+    )
+    allowed_evidence_levels: Annotated[tuple[str, ...], NoDecode] = Field(
+        ("minimal", "standard", "full"),
+        validation_alias=AliasChoices("MOONMIND_PENTEST_ALLOWED_EVIDENCE_LEVELS"),
+    )
+    default_time_budget_minutes: int = Field(
+        60,
+        ge=1,
+        validation_alias=AliasChoices("MOONMIND_PENTEST_DEFAULT_TIME_BUDGET_MINUTES"),
+    )
+    max_time_budget_minutes: int = Field(
+        480,
+        ge=1,
+        validation_alias=AliasChoices("MOONMIND_PENTEST_MAX_TIME_BUDGET_MINUTES"),
+    )
+    require_approved_scope: bool = Field(
+        True,
+        validation_alias=AliasChoices("MOONMIND_PENTEST_REQUIRE_APPROVED_SCOPE"),
+    )
+    require_manual_approval_for_external: bool = Field(
+        True,
+        validation_alias=AliasChoices(
+            "MOONMIND_PENTEST_REQUIRE_MANUAL_APPROVAL_FOR_EXTERNAL"
+        ),
+    )
+    require_manual_approval_for_full_authorized: bool = Field(
+        True,
+        validation_alias=AliasChoices(
+            "MOONMIND_PENTEST_REQUIRE_MANUAL_APPROVAL_FOR_FULL_AUTHORIZED"
+        ),
+    )
+    allow_external_targets: bool = Field(
+        False,
+        validation_alias=AliasChoices("MOONMIND_PENTEST_ALLOW_EXTERNAL_TARGETS"),
+    )
+    telemetry_enabled: bool = Field(
+        False,
+        validation_alias=AliasChoices("MOONMIND_PENTEST_TELEMETRY_ENABLED"),
+    )
+
+    model_config = SettingsConfigDict(
+        populate_by_name=True,
+        env_prefix="",
+        env_file=str(ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    @field_validator(
+        "allowed_runner_profiles",
+        "enabled_provider_profiles",
+        "allowed_operation_modes",
+        "allowed_evidence_levels",
+        mode="before",
+    )
+    @classmethod
+    def _split_csv(cls, value: object) -> tuple[str, ...]:
+        if value is None:
+            return ()
+        if isinstance(value, str):
+            raw_items: Sequence[object] = value.split(",")
+        elif isinstance(value, Sequence) and not isinstance(
+            value, (bytes, bytearray, str)
+        ):
+            raw_items = value
+        else:
+            raw_items = (value,)
+        return tuple(
+            dict.fromkeys(str(item).strip() for item in raw_items if str(item).strip())
+        )
+
+    @field_validator(
+        "default_provider_profile",
+        "provider_profiles_file",
+        "anthropic_secret_id",
+        "openrouter_secret_id",
+        mode="before",
+    )
+    @classmethod
+    def _blank_to_none(cls, value: object) -> str | None:
+        if value in (None, ""):
+            return None
+        normalized = str(value).strip()
+        return normalized or None
+
+    @field_validator("default_operation_mode", mode="before")
+    @classmethod
+    def _normalize_default_operation_mode(cls, value: object) -> str:
+        normalized = str(value or "recon_only").strip()
+        if normalized not in _PENTEST_ALLOWED_OPERATION_MODES:
+            allowed = ", ".join(_PENTEST_ALLOWED_OPERATION_MODES)
+            raise ValueError(f"default pentest operation mode must be one of: {allowed}")
+        return normalized
+
+    @field_validator("allowed_operation_modes")
+    @classmethod
+    def _validate_allowed_operation_modes(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        invalid = set(value) - set(_PENTEST_ALLOWED_OPERATION_MODES)
+        if invalid:
+            allowed = ", ".join(_PENTEST_ALLOWED_OPERATION_MODES)
+            raise ValueError(f"allowed pentest operation modes must be one of: {allowed}")
+        return value or ("recon_only",)
+
+    @field_validator("default_evidence_level", mode="before")
+    @classmethod
+    def _normalize_default_evidence_level(cls, value: object) -> str:
+        normalized = str(value or "standard").strip()
+        if normalized not in _PENTEST_ALLOWED_EVIDENCE_LEVELS:
+            allowed = ", ".join(_PENTEST_ALLOWED_EVIDENCE_LEVELS)
+            raise ValueError(f"default pentest evidence level must be one of: {allowed}")
+        return normalized
+
+    @field_validator("allowed_evidence_levels")
+    @classmethod
+    def _validate_allowed_evidence_levels(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        invalid = set(value) - set(_PENTEST_ALLOWED_EVIDENCE_LEVELS)
+        if invalid:
+            allowed = ", ".join(_PENTEST_ALLOWED_EVIDENCE_LEVELS)
+            raise ValueError(f"allowed pentest evidence levels must be one of: {allowed}")
+        return value or ("minimal", "standard", "full")
+
 DEFAULT_GOOGLE_EMBEDDING_DIMENSIONS: int = 3072
 
 class GoogleSettings(BaseSettings):
@@ -2277,6 +2508,7 @@ class AppSettings(BaseSettings):
     # Sub-settings
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
+    pentest: PentestSettings = Field(default_factory=PentestSettings)
     google: GoogleSettings = Field(default_factory=GoogleSettings)
     openai: OpenAISettings = Field(default_factory=OpenAISettings)
     anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
