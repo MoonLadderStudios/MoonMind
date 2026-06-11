@@ -27,7 +27,6 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.billing.costs import pricing_from_profile_metadata
 
 WORKFLOW_NAME = "MoonMind.ProviderProfileManager"
-WORKFLOW_TASK_QUEUE = "mm.workflow"
 ACTIVITY_TASK_QUEUE = "mm.activity.artifacts"
 WORKFLOW_ID_PREFIX = "provider-profile-manager"
 

@@ -24,7 +24,6 @@ with workflow.unsafe.imports_passed_through():
     from temporalio.common import RetryPolicy
 
 WORKFLOW_NAME = "MoonMind.OAuthSession"
-WORKFLOW_TASK_QUEUE = "mm.workflow"
 ACTIVITY_TASK_QUEUE = "mm.activity.artifacts"
 RUNNER_ACTIVITY_TASK_QUEUE = "mm.activity.agent_runtime"
 

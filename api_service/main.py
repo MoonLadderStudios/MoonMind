@@ -968,6 +968,7 @@ async def ensure_provider_profile_managers_started():
     from sqlalchemy import select
     from api_service.db.models import ManagedAgentProviderProfile
     from moonmind.workflows.temporal.client import TemporalClientAdapter
+    from moonmind.workflows.temporal.activity_catalog import get_workflow_task_queue
     from moonmind.workflows.temporal.workflows.provider_profile_manager import (
         WORKFLOW_NAME,
         ProviderProfileManagerInput,
@@ -999,7 +1000,7 @@ async def ensure_provider_profile_managers_started():
                     WORKFLOW_NAME,
                     ProviderProfileManagerInput(runtime_id=runtime_id),
                     id=workflow_id,
-                    task_queue="mm.workflow",
+                    task_queue=get_workflow_task_queue(),
                 )
                 logger.info(f"Started ProviderProfileManager for runtime: {runtime_id}")
             except WorkflowAlreadyStartedError:
