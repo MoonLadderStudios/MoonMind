@@ -4457,26 +4457,21 @@ class TemporalAgentRuntimeActivities:
             )
 
     @staticmethod
-    def _write_pentest_text(path: str, payload: str, *, redact: bool = True) -> None:
+    def _write_pentest_text(path: str, text: str) -> None:
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        safe_payload = redact_sensitive_text(payload) if redact else payload
-        target.write_text(safe_payload, encoding="utf-8")
+        redacted_text = redact_sensitive_text(str(text))
+        target.write_bytes(redacted_text.encode("utf-8"))
 
     @staticmethod
     def _write_pentest_json(
         path: str,
         payload: Mapping[str, Any],
-        *,
-        redact: bool = True,
     ) -> None:
-        safe_payload = (
-            redact_sensitive_payload(dict(payload)) if redact else dict(payload)
-        )
+        redacted_payload = redact_sensitive_payload(dict(payload))
         TemporalAgentRuntimeActivities._write_pentest_text(
             path,
-            json.dumps(safe_payload, sort_keys=True, indent=2) + "\n",
-            redact=False,
+            json.dumps(redacted_payload, sort_keys=True, indent=2) + "\n",
         )
 
     async def _resolve_pentest_secret_env(
@@ -4513,8 +4508,7 @@ class TemporalAgentRuntimeActivities:
                     )
                 except Exception:
                     logger.warning(
-                        "Failed to resolve PentestGPT secret ref for %s",
-                        env_key,
+                        "Failed to resolve PentestGPT configured secret reference",
                     )
                     continue
                 if str(resolved_value or "").strip():
@@ -4579,10 +4573,14 @@ class TemporalAgentRuntimeActivities:
                 paths.approved_scope_file,
                 request.approved_scope.model_dump(mode="json"),
             )
-        self._write_pentest_json(
+        provider_snapshot_artifact = redact_sensitive_payload(provider_snapshot)
+        if isinstance(provider_snapshot_artifact, dict):
+            provider_snapshot_artifact["secret_env_keys"] = sorted(
+                provider_materialization.secret_env
+            )
+        self._write_pentest_text(
             paths.provider_snapshot_file,
-            provider_snapshot,
-            redact=False,
+            json.dumps(provider_snapshot_artifact, sort_keys=True, indent=2) + "\n",
         )
         return {
             "input_manifest_ref": f"file:{paths.input_manifest_file}",
