@@ -3568,6 +3568,80 @@ async def test_signal_send_message_records_intervention_audit_without_state_chan
             == "Please use Provider Profiles."
         )
 
+
+@pytest.mark.asyncio
+async def test_signal_send_message_blocks_secret_before_temporal_update(
+    tmp_path, mock_client_adapter, monkeypatch
+):
+    monkeypatch.setattr(settings.security, "high_security_mode", True)
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        with pytest.raises(TemporalExecutionValidationError) as exc_info:
+            await service.signal_execution(
+                workflow_id=created.workflow_id,
+                signal_name="SendMessage",
+                payload={"message": "Please use token=blocked-secret-value"},
+                payload_artifact_ref=None,
+            )
+
+        mock_client_adapter.update_workflow.assert_not_awaited()
+        message = str(exc_info.value)
+        assert "execution.send_message.message" in message
+        assert "blocked-secret-value" not in message
+
+
+@pytest.mark.asyncio
+async def test_signal_send_message_forwards_clean_message_unchanged_with_scan(
+    tmp_path, mock_client_adapter, monkeypatch
+):
+    monkeypatch.setattr(settings.security, "high_security_mode", True)
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        message = "Please keep this operator message unchanged."
+        await service.signal_execution(
+            workflow_id=created.workflow_id,
+            signal_name="SendMessage",
+            payload={"message": message},
+            payload_artifact_ref=None,
+        )
+
+        mock_client_adapter.update_workflow.assert_awaited_once_with(
+            created.workflow_id,
+            "SendMessage",
+            {"message": message},
+        )
+        refreshed = await service.describe_execution(created.workflow_id)
+        assert refreshed.memo["intervention_audit"][-1]["detail"] == message
+
+
 @pytest.mark.asyncio
 async def test_signal_skip_dependency_wait_routes_update_and_records_audit(
     tmp_path, mock_client_adapter

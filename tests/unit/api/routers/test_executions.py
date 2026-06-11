@@ -5680,6 +5680,69 @@ def test_signal_execution_routes_send_message_and_serializes_audit(
     assert body["interventionAudit"][0]["action"] == "send_message"
     assert body["interventionAudit"][0]["detail"] == "Continue with provider profiles."
 
+
+def test_signal_execution_rejects_blocked_send_message_without_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    record = _build_execution_record(state=MoonMindWorkflowState.AWAITING_EXTERNAL)
+    mock_service.describe_execution.return_value = record
+    mock_service.signal_execution.side_effect = TemporalExecutionValidationError(
+        "Blocked outbound content: credential at execution.send_message.message"
+    )
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/signal",
+            json={
+                "signalName": "SendMessage",
+                "payload": {"message": "Please use token=blocked-secret-value"},
+            },
+        )
+
+    assert response.status_code == 409
+    body = response.json()
+    assert body["detail"]["code"] == "signal_rejected"
+    dumped = json.dumps(body)
+    assert "execution.send_message.message" in dumped
+    assert "blocked-secret-value" not in dumped
+    called = mock_service.signal_execution.await_args.kwargs
+    assert called["signal_name"] == "SendMessage"
+
+
+def test_signal_execution_routes_clean_send_message_body_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    record = _build_execution_record(state=MoonMindWorkflowState.AWAITING_EXTERNAL)
+    mock_service.describe_execution.return_value = record
+    mock_service.signal_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+
+    message = "Continue with Provider Profiles exactly as written."
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/signal",
+            json={"signalName": "SendMessage", "payload": {"message": message}},
+        )
+
+    assert response.status_code == 202
+    called = mock_service.signal_execution.await_args.kwargs
+    assert called["signal_name"] == "SendMessage"
+    assert called["payload"] == {"message": message}
+
+
 def test_signal_execution_routes_skip_dependency_wait(monkeypatch: pytest.MonkeyPatch) -> None:
     app = FastAPI()
     app.include_router(router)

@@ -53,6 +53,7 @@ from moonmind.schemas.temporal_models import (
     RecoveryCheckpointModel,
     RecoverySourceModel,
 )
+from moonmind.security.outbound_scan import scan_outbound_text
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.hard_switch_cutover import (
     resolve_user_workflow_start_contract,
@@ -76,6 +77,7 @@ TERMINAL_STATES: set[MoonMindWorkflowState] = {
     MoonMindWorkflowState.FAILED,
     MoonMindWorkflowState.CANCELED,
 }
+SEND_MESSAGE_SCAN_LOCATION = "execution.send_message.message"
 CREATE_IDEMPOTENCY_KEY_MAX_LENGTH = 128
 FULL_RERUN_RECOVERY_CARRYOVER_PARAM_KEYS = frozenset(
     {
@@ -103,6 +105,12 @@ def _truthy_enabled(value: object) -> bool:
     if isinstance(value, (int, float)):
         return value != 0
     return False
+
+
+def _blocked_send_message_reason(diagnostics: list[str]) -> str:
+    if diagnostics:
+        return "; ".join(diagnostics)
+    return f"Blocked outbound content at {SEND_MESSAGE_SCAN_LOCATION}"
 
 
 def _merge_automation_publish_selected(parameters: Mapping[str, Any]) -> bool:
@@ -1618,6 +1626,14 @@ class TemporalExecutionService:
                 if operator_message is None:
                     raise TemporalExecutionValidationError(
                         "message is required when signal_name is SendMessage"
+                    )
+                scan_result = scan_outbound_text(
+                    operator_message,
+                    location=SEND_MESSAGE_SCAN_LOCATION,
+                )
+                if not scan_result.allowed:
+                    raise TemporalExecutionValidationError(
+                        _blocked_send_message_reason(scan_result.sanitized_diagnostics)
                     )
                 update_arg = {"message": operator_message}
             elif operator_message is not None:
