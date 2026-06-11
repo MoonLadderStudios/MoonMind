@@ -65,6 +65,7 @@ services:
       - ./model_data:/app/model_data
       - ./api_service:/app/api_service
       - ./moonmind:/app/moonmind:ro
+      - ./docs/ReleaseNotes:/app/docs/ReleaseNotes:ro
       - ./.agents:/app/.agents:ro
       - ./deploy/state:/workspace/deployment_state:ro
       - ./keycloak:/app/keycloak:ro # Mount keycloak configs if needed by api, or remove if only for keycloak service
@@ -295,6 +296,7 @@ services:
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
+      - ./docs/ReleaseNotes:/app/docs/ReleaseNotes:ro
       - ./services:/app/services:ro
       - moonmind_secrets:/app/var/secrets
       - agent_workspaces:/work/agent_jobs
@@ -350,6 +352,7 @@ services:
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
+      - ./docs/ReleaseNotes:/app/docs/ReleaseNotes:ro
       - ./services:/app/services:ro
       - moonmind_secrets:/app/var/secrets
       - agent_workspaces:/work/agent_jobs
@@ -404,6 +407,7 @@ services:
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
+      - ./docs/ReleaseNotes:/app/docs/ReleaseNotes:ro
       - ./services:/app/services:ro
       - moonmind_secrets:/app/var/secrets
     entrypoint:
@@ -463,6 +467,7 @@ services:
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
+      - ./docs/ReleaseNotes:/app/docs/ReleaseNotes:ro
       - ./services:/app/services:ro
       - moonmind_secrets:/app/var/secrets
     entrypoint:
@@ -541,6 +546,7 @@ services:
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
+      - ./docs/ReleaseNotes:/app/docs/ReleaseNotes:ro
       - ./services:/app/services:ro
       - ./.agents:/app/.agents:ro
       - moonmind_secrets:/app/var/secrets
@@ -642,6 +648,7 @@ services:
       - ./deploy/state:/workspace/deployment_state:rw
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
+      - ./docs/ReleaseNotes:/app/docs/ReleaseNotes:ro
       - ./services:/app/services:ro
       - ./.agents:/app/.agents:ro
       - moonmind_secrets:/app/var/secrets
@@ -723,6 +730,7 @@ services:
       - ./deploy/state:/workspace/deployment_state:rw
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
+      - ./docs/ReleaseNotes:/app/docs/ReleaseNotes:ro
       - ./services:/app/services:ro
       - ./.agents:/app/.agents:ro
       - moonmind_secrets:/app/var/secrets
@@ -783,6 +791,7 @@ services:
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
+      - ./docs/ReleaseNotes:/app/docs/ReleaseNotes:ro
       - ./services:/app/services:ro
       - moonmind_secrets:/app/var/secrets
     entrypoint:
@@ -835,6 +844,7 @@ services:
       - ./moonmind:/app/moonmind:ro
       - ./tools:/app/tools:ro
       - ./api_service:/app/api_service:ro
+      - ./docs/ReleaseNotes:/app/docs/ReleaseNotes:ro
       - ./model_data:/app/model_data:ro
       - ./api_service:/app/api_service:ro
       - moonmind_secrets:/app/var/secrets
