@@ -4,7 +4,7 @@
 
 Status: **Design Draft**
 Owners: MoonMind Engineering
-Last Updated: 2026-03-27
+Last Updated: 2026-06-11
 
 > [!NOTE]
 > This document defines the desired-state MoonMind Secrets System.
@@ -61,6 +61,8 @@ Effective high-security mode uses deterministic precedence:
 When high-security mode is enabled, MoonMind-owned outbound callers should scan text payloads and commit-like payload bundles before send, post, or push side effects. A scan returns a structured allow/block result. Any secret-like or credential-like finding returns a blocked result, and diagnostics identify only the finding category and caller-provided location. Diagnostics, errors, artifacts, logs, and user-visible summaries must not echo the raw detected value.
 
 The managed workspace publish path scans git pushes before invoking `git push`. It resolves the outbound range from the recorded remote branch SHA when available, otherwise from the publish base ref, and builds the scan bundle from commit metadata plus per-file diffs with bounded item sizes. A blocked scan returns file/commit locations such as `git.push.diff:<path>` without printing the detected value.
+
+MoonMind-owned send-message boundaries scan message content before provider or notification sends. This includes chat provider calls, provider-specific follow-up message clients, and notification payloads. A blocked scan prevents the downstream send and emits redacted diagnostics that identify the message surface, such as `chat.openai.messages[0].content` or `jules.client.send_message.prompt`.
 
 When high-security mode is disabled, the scan contract returns an allow result and does not silently mutate caller-supplied outbound content.
 

@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 
+from moonmind.config.settings import settings
 from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.proposals.models import (
     WorkflowProposalOriginSource,
@@ -102,6 +103,49 @@ async def test_create_proposal_defers_runtime_defaults_until_promotion() -> None
     assert kwargs["workflow_create_request"]["payload"].get("targetRuntime") is None
     service._emit_notification.assert_awaited_once()
     assert proposal is record
+
+@pytest.mark.asyncio
+async def test_emit_notification_blocks_secret_payload_before_webhook(
+    monkeypatch,
+) -> None:
+    repo = AsyncMock()
+    repo.has_notification.return_value = False
+    service = WorkflowProposalService(repo, redactor=SecretRedactor([], "***"))
+    service._notifications_enabled = True
+    service._notification_webhook = "https://hooks.example.test/proposals"
+    service._notification_authorization = None
+    service._notification_timeout = 5
+    raw_secret = "unit-test-proposal-notification-secret"
+    proposal = SimpleNamespace(
+        id=uuid4(),
+        category="tests",
+        repository="Moon/Repo",
+        title="Add tests",
+        summary=f"Please notify password={raw_secret}",
+        review_priority=WorkflowProposalReviewPriority.NORMAL,
+        origin_id=None,
+        workflow_create_request={},
+    )
+
+    class _FailingClient:
+        def __init__(self, *args, **kwargs) -> None:
+            raise AssertionError("webhook sender must not be called")
+
+    monkeypatch.setattr(settings.security, "high_security_mode", True)
+    monkeypatch.setattr(
+        "moonmind.workflows.proposals.service.httpx.AsyncClient",
+        _FailingClient,
+    )
+
+    await service._emit_notification(proposal)
+
+    repo.log_notification.assert_awaited_once()
+    _, kwargs = repo.log_notification.await_args
+    assert kwargs["status"] == "blocked"
+    assert kwargs["target"] == "https://hooks.example.test/proposals"
+    assert "workflow_proposal.notification.payload" in kwargs["error"]
+    assert raw_secret not in kwargs["error"]
+    repo.commit.assert_awaited_once()
 
 @pytest.mark.asyncio
 async def test_create_proposal_accepts_enum_origin_source() -> None:

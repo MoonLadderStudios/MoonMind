@@ -33,6 +33,7 @@ from moonmind.security.outbound_scan import (
     OutboundBundleItem,
     resolve_high_security_mode,
     scan_outbound_bundle,
+    scan_outbound_text,
 )
 from moonmind.integrations.pentest.models import (
     PENTEST_HEARTBEAT_PHASES,
@@ -1548,7 +1549,11 @@ def _redacted_email_target(recipients: Sequence[str]) -> str:
     return f"email:{count} recipients"
 
 
-def _build_execution_notification_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+def _build_execution_notification_payload(
+    payload: Mapping[str, Any],
+    *,
+    redact: bool = True,
+) -> dict[str, Any]:
     result_payload = payload.get("result")
     if isinstance(result_payload, BaseModel):
         result_payload = result_payload.model_dump(mode="json", by_alias=True)
@@ -1578,7 +1583,9 @@ def _build_execution_notification_payload(payload: Mapping[str, Any]) -> dict[st
         value = metadata.get(key)
         if value is not None:
             event[key] = value
-    return redact_sensitive_payload(event)
+    if redact:
+        return redact_sensitive_payload(event)
+    return event
 
 
 def _build_execution_notification_email(
@@ -1599,6 +1606,28 @@ def _build_execution_notification_email(
         + "\n"
     )
     return message
+
+
+def _scan_execution_notification_before_send(
+    event: Mapping[str, Any],
+    *,
+    surface: str,
+) -> str | None:
+    result = scan_outbound_text(
+        json.dumps(dict(event), sort_keys=True, default=str),
+        location=surface,
+    )
+    if result.allowed:
+        return None
+    diagnostics = "; ".join(result.sanitized_diagnostics) or (
+        f"Blocked outbound content at {surface}"
+    )
+    logger.warning(
+        "Blocked execution notification send at %s: %s",
+        surface,
+        diagnostics,
+    )
+    return diagnostics
 
 
 def _send_execution_notification_email(
@@ -4365,7 +4394,8 @@ class TemporalAgentRuntimeActivities:
         if not webhook_url and not email_configured:
             return {"status": "skipped", "reason": "no_channels"}
 
-        event = _build_execution_notification_payload(payload)
+        scan_event = _build_execution_notification_payload(payload, redact=False)
+        event = _build_execution_notification_payload(payload, redact=True)
         results: list[dict[str, str]] = []
         errors: list[dict[str, str]] = []
         timeout_seconds = max(1, int(notification_settings.timeout_seconds or 5))
@@ -4374,62 +4404,99 @@ class TemporalAgentRuntimeActivities:
             authorization = str(notification_settings.authorization or "").strip()
             if authorization:
                 headers["Authorization"] = authorization
-            try:
-                async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-                    response = await client.post(
-                        webhook_url,
-                        json=event,
-                        headers=headers,
+            blocked_reason = _scan_execution_notification_before_send(
+                scan_event,
+                surface="execution.notification.webhook.payload",
+            )
+            if blocked_reason is not None:
+                errors.append(
+                    {
+                        "channel": "webhook",
+                        "reason": blocked_reason,
+                        "target": _redacted_webhook_target(webhook_url),
+                    }
+                )
+            else:
+                try:
+                    async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+                        response = await client.post(
+                            webhook_url,
+                            json=event,
+                            headers=headers,
+                        )
+                        response.raise_for_status()
+                except Exception as exc:  # pragma: no cover - best effort telemetry
+                    logger.warning("Execution completion webhook failed: %s", exc)
+                    errors.append(
+                        {
+                            "channel": "webhook",
+                            "reason": redact_sensitive_text(str(exc)),
+                            "target": _redacted_webhook_target(webhook_url),
+                        }
                     )
-                    response.raise_for_status()
-            except Exception as exc:  # pragma: no cover - best effort telemetry
-                logger.warning("Execution completion webhook failed: %s", exc)
-                errors.append(
-                    {
-                        "channel": "webhook",
-                        "reason": redact_sensitive_text(str(exc)),
-                        "target": _redacted_webhook_target(webhook_url),
-                    }
-                )
-            else:
-                results.append(
-                    {
-                        "channel": "webhook",
-                        "target": _redacted_webhook_target(webhook_url),
-                    }
-                )
+                else:
+                    results.append(
+                        {
+                            "channel": "webhook",
+                            "target": _redacted_webhook_target(webhook_url),
+                        }
+                    )
         if email_configured:
-            try:
-                await asyncio.to_thread(
-                    _send_execution_notification_email,
-                    event,
-                    sender=email_sender,
-                    recipients=email_recipients,
-                    smtp_host=smtp_host,
-                    smtp_port=int(notification_settings.smtp_port),
-                    smtp_username=notification_settings.smtp_username,
-                    smtp_password=notification_settings.smtp_password,
-                    smtp_use_tls=bool(notification_settings.smtp_use_tls),
-                    smtp_use_ssl=bool(notification_settings.smtp_use_ssl),
-                    timeout_seconds=timeout_seconds,
-                )
-            except Exception as exc:  # pragma: no cover - best effort telemetry
-                logger.warning("Execution completion email failed: %s", exc)
+            blocked_reason = _scan_execution_notification_before_send(
+                scan_event,
+                surface="execution.notification.email.payload",
+            )
+            if blocked_reason is not None:
                 errors.append(
                     {
                         "channel": "email",
-                        "reason": redact_sensitive_text(str(exc)),
+                        "reason": blocked_reason,
                         "target": _redacted_email_target(email_recipients),
                     }
                 )
             else:
-                results.append(
-                    {
-                        "channel": "email",
-                        "target": _redacted_email_target(email_recipients),
-                    }
-                )
+                try:
+                    await asyncio.to_thread(
+                        _send_execution_notification_email,
+                        event,
+                        sender=email_sender,
+                        recipients=email_recipients,
+                        smtp_host=smtp_host,
+                        smtp_port=int(notification_settings.smtp_port),
+                        smtp_username=notification_settings.smtp_username,
+                        smtp_password=notification_settings.smtp_password,
+                        smtp_use_tls=bool(notification_settings.smtp_use_tls),
+                        smtp_use_ssl=bool(notification_settings.smtp_use_ssl),
+                        timeout_seconds=timeout_seconds,
+                    )
+                except Exception as exc:  # pragma: no cover - best effort telemetry
+                    logger.warning("Execution completion email failed: %s", exc)
+                    errors.append(
+                        {
+                            "channel": "email",
+                            "reason": redact_sensitive_text(str(exc)),
+                            "target": _redacted_email_target(email_recipients),
+                        }
+                    )
+                else:
+                    results.append(
+                        {
+                            "channel": "email",
+                            "target": _redacted_email_target(email_recipients),
+                        }
+                    )
         if errors and not results:
+            if all(
+                error["reason"].startswith("Blocked outbound content")
+                for error in errors
+            ):
+                if len(errors) == 1:
+                    return {
+                        "status": "blocked",
+                        "reason": errors[0]["reason"],
+                        "target": errors[0]["target"],
+                    }
+                return {"status": "blocked", "errors": errors}
             if len(errors) == 1:
                 return {
                     "status": "failed",

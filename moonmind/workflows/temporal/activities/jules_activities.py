@@ -21,6 +21,8 @@ from moonmind.schemas.agent_runtime_models import (
 from moonmind.schemas.jules_models import (
     JulesSendMessageRequest,
 )
+from moonmind.security import scan_outbound_text
+from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
 from moonmind.workflows.adapters.jules_client import JulesClient
 
@@ -60,6 +62,27 @@ def _build_adapter() -> JulesAgentAdapter:
     jules_key = os.environ.get("JULES_API_KEY", "").strip()
     client = JulesClient(base_url=jules_url, api_key=jules_key)
     return JulesAgentAdapter(client_factory=lambda: client)
+
+
+def _scan_jules_message_before_send(prompt: str, *, surface: str) -> None:
+    result = scan_outbound_text(
+        prompt,
+        location=surface,
+    )
+    if result.allowed:
+        return
+    diagnostics = "; ".join(result.sanitized_diagnostics) or (
+        f"Blocked outbound content at {surface}"
+    )
+    logger.warning(
+        "Blocked Jules send-message attempt at %s: %s",
+        surface,
+        diagnostics,
+    )
+    raise RuntimeError(
+        f"Outbound message blocked by high security scan: {diagnostics}"
+    )
+
 
 async def _generate_llm_answer(prompt: str) -> str:
     """Dispatch a prompt to an LLM and return the generated answer.
@@ -156,6 +179,10 @@ async def jules_send_message_activity(payload: dict) -> AgentRunStatus:
         ) from exc
 
     adapter = _build_adapter()
+    _scan_jules_message_before_send(
+        validated.prompt,
+        surface="jules.send_message.prompt",
+    )
     return await adapter.send_message(
         run_id=validated.session_id,
         prompt=validated.prompt,
@@ -220,6 +247,10 @@ async def jules_answer_question_activity(payload: dict) -> dict:
     # Send the generated answer back to Jules
     client = _build_client()
     try:
+        _scan_jules_message_before_send(
+            answer,
+            surface="jules.answer_question.answer",
+        )
         await client.send_message(
             JulesSendMessageRequest(
                 session_id=session_id,
@@ -233,7 +264,11 @@ async def jules_answer_question_activity(payload: dict) -> dict:
             session_id, exc,
             exc_info=True,
         )
-        return {"answered": False, "answer": answer, "error": str(exc)}
+        return {
+            "answered": False,
+            "answer": redact_sensitive_text(answer),
+            "error": redact_sensitive_text(str(exc)),
+        }
     finally:
         await client.aclose()
 
@@ -371,4 +406,3 @@ __all__ = [
     "jules_start_activity",
     "jules_status_activity",
 ]
-
