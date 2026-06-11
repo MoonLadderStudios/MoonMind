@@ -333,7 +333,7 @@ class ManagedRuntimeStrategy(ABC):
             return profile_default
 
         # Runtime-default fallback so launch adapters never silently drop the model.
-        from moonmind.workflows.tasks.runtime_defaults import resolve_runtime_defaults
+        from moonmind.workflows.executions.runtime_defaults import resolve_runtime_defaults
         runtime_model, _ = resolve_runtime_defaults(self.runtime_id)
         return runtime_model
 

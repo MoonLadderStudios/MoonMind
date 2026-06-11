@@ -19,7 +19,7 @@ def _base_execution_payload() -> dict[str, object]:
         "workflowId": "mm:wf-1",
         "runId": "run-1",
         "temporalRunId": "run-1",
-        "workflowType": "MoonMind.Run",
+        "workflowType": "MoonMind.UserWorkflow",
         "entry": "user_workflow",
         "ownerType": "user",
         "ownerId": "user-1",

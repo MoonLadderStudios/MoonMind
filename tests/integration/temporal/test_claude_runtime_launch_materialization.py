@@ -34,7 +34,7 @@ async def test_claude_launch_session_shapes_oauth_home_environment(tmp_path: Pat
     await activities.agent_runtime_launch_session(
         {
             "request": {
-                "taskRunId": "task-1",
+                "agentRunId": "task-1",
                 "sessionId": "sess-claude-1",
                 "threadId": "thread-claude-1",
                 "workspacePath": str(tmp_path / "task-1" / "repo"),
@@ -90,7 +90,7 @@ async def test_claude_launch_session_redacts_auth_path_failures(tmp_path: Path) 
         await activities.agent_runtime_launch_session(
             {
                 "request": {
-                    "taskRunId": "task-1",
+                    "agentRunId": "task-1",
                     "sessionId": "sess-claude-1",
                     "threadId": "thread-claude-1",
                     "workspacePath": str(tmp_path / "task-1" / "repo"),

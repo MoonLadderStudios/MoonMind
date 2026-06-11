@@ -405,7 +405,7 @@ def launch_request(tmp_path: Path) -> LaunchCodexManagedSessionRequest:
     artifact_spool_path.mkdir()
     codex_home_path.mkdir()
     return LaunchCodexManagedSessionRequest(
-        taskRunId="task-1",
+        agentRunId="task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
         workspacePath=str(workspace_path),

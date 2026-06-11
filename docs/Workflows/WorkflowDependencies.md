@@ -1,6 +1,6 @@
 # Workflow Dependencies
 
-Related: `docs/Api/ExecutionsApiContract.md`, `docs/Tasks/WorkflowArchitecture.md`, `docs/Tasks/WorkflowCancellation.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/UI/MissionControlArchitecture.md`
+Related: `docs/Api/ExecutionsApiContract.md`, `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/WorkflowCancellation.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/UI/WorkflowConsoleArchitecture.md`
 
 ---
 
@@ -8,15 +8,15 @@ Related: `docs/Api/ExecutionsApiContract.md`, `docs/Tasks/WorkflowArchitecture.m
 
 This document defines the desired-state contract for **Workflow Dependencies** in MoonMind.
 
-Workflow dependencies allow one `MoonMind.Run` execution to wait on one or more other `MoonMind.Run` executions before entering its own active work. This supports multi-stage orchestration across separate runs while keeping each execution independently durable, observable, cancelable, rerunnable, and separately inspectable.
+Workflow dependencies allow one `MoonMind.UserWorkflow` execution to wait on one or more other `MoonMind.UserWorkflow` executions before entering its own active work. This supports multi-stage orchestration across separate runs while keeping each execution independently durable, observable, cancelable, rerunnable, and separately inspectable.
 
 ---
 
 ## 2. Contract Summary
 
 - A Workflow-Execution create request may declare prerequisite execution IDs in `payload.task.dependsOn`.
-- The executions API normalizes this into `initialParameters.task.dependsOn` for `MoonMind.Run`.
-- Each `dependsOn` value is a `workflowId` for an existing `MoonMind.Run` execution.
+- The executions API normalizes this into `initialParameters.task.dependsOn` for `MoonMind.UserWorkflow`.
+- Each `dependsOn` value is a `workflowId` for an existing `MoonMind.UserWorkflow` execution.
 - For Temporal-backed Workflow Execution surfaces, `taskId == workflowId`.
 - `runId` is diagnostic only and is never a valid dependency target.
 - A prerequisite is satisfied only when it reaches terminal MoonMind state `completed`.
@@ -28,7 +28,7 @@ Workflow dependencies allow one `MoonMind.Run` execution to wait on one or more 
 The current contract is intentionally narrow:
 
 - create-time dependency declaration only,
-- `MoonMind.Run` → `MoonMind.Run` dependencies only,
+- `MoonMind.UserWorkflow` → `MoonMind.UserWorkflow` dependencies only,
 - maximum of **10** direct dependency IDs,
 - no dependency editing after create,
 - no cross-workflow-type dependencies,
@@ -58,7 +58,7 @@ The user-facing request remains Workflow-Execution-shaped:
 }
 ````
 
-The router normalizes this into `initialParameters.task.dependsOn` for `MoonMind.Run`.
+The router normalizes this into `initialParameters.task.dependsOn` for `MoonMind.UserWorkflow`.
 
 ### 3.1 Normalization and validation
 
@@ -69,7 +69,7 @@ At create time, the API must:
 3. trim whitespace, remove blank entries, and deduplicate while preserving order,
 4. enforce the 10-item maximum after normalization,
 5. require each ID to resolve to an existing execution the caller is authorized to reference,
-6. require each target execution to be `MoonMind.Run`,
+6. require each target execution to be `MoonMind.UserWorkflow`,
 7. reject `runId` values or other non-`workflowId` identifiers,
 8. reject malformed self-reference if encountered,
 9. persist the normalized dependency IDs durably with the dependent execution.
@@ -94,7 +94,7 @@ The platform must persist dependency edge data in a form that supports:
 
 ## 4. Workflow Execution Behavior
 
-`MoonMind.Run` enforces dependencies before it proceeds into its normal post-initialization work.
+`MoonMind.UserWorkflow` enforces dependencies before it proceeds into its normal post-initialization work.
 
 ### 4.1 Lifecycle
 
@@ -103,7 +103,7 @@ For dependency-aware runs, the relevant lifecycle is:
 1. `scheduled` *(when delayed start is used)*
 2. `initializing`
 3. `waiting_on_dependencies`
-4. normal post-initialization path (`planning`, `executing`, or other standard `MoonMind.Run` flow)
+4. normal post-initialization path (`planning`, `executing`, or other standard `MoonMind.UserWorkflow` flow)
 5. terminal state
 
 If `initialParameters.task.dependsOn` is absent or empty, the workflow skips `waiting_on_dependencies` and proceeds directly into its normal path.
@@ -248,7 +248,7 @@ Execution serialization and list/detail read models must expose, at minimum:
 
 ### 5.3 Terminal summary
 
-Typed run results and `reports/run_summary.json` must include a stable `dependencies` block for every `MoonMind.Run`, including runs with no declared dependencies.
+Typed run results and `reports/run_summary.json` must include a stable `dependencies` block for every `MoonMind.UserWorkflow`, including runs with no declared dependencies.
 
 At minimum, the `dependencies` block must include:
 
@@ -368,11 +368,11 @@ While the workflow is active and a prerequisite is currently failed, the per-dep
 
 ### 6.1 Create flow
 
-Mission Control should expose dependency configuration on `/tasks/new`.
+Mission Control should expose dependency configuration on `/workflows/new`.
 
 The create UX should provide:
 
-* a dependency picker for existing `MoonMind.Run` executions,
+* a dependency picker for existing `MoonMind.UserWorkflow` executions,
 * client-side enforcement of the 10-item limit,
 * duplicate prevention,
 * clear validation messaging for invalid targets,
@@ -390,7 +390,7 @@ The create UX should provide:
 
 ## 7. Boundary With Other Ordering Mechanisms
 
-Workflow dependencies are **inter-workflow** dependencies between separate top-level `MoonMind.Run` executions.
+Workflow dependencies are **inter-workflow** dependencies between separate top-level `MoonMind.UserWorkflow` executions.
 
 Use Workflow dependencies when the involved runs must remain:
 

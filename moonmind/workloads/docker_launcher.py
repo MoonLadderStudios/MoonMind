@@ -273,7 +273,7 @@ def _workload_metadata(
     profile_id = request.profile.id if request.profile is not None else None
     workload_access = request.ownership.workload_access
     return {
-        "taskRunId": request.request.task_run_id,
+        "agentRunId": request.request.agent_run_id,
         "stepId": request.request.step_id,
         "attempt": request.request.attempt,
         "toolName": request.request.tool_name,
@@ -309,7 +309,7 @@ def _helper_metadata(
     ttl_seconds = request.request.ttl_seconds or request.profile.helper_ttl_seconds
     workload_access = request.ownership.workload_access
     return {
-        "taskRunId": request.request.task_run_id,
+        "agentRunId": request.request.agent_run_id,
         "stepId": request.request.step_id,
         "attempt": request.request.attempt,
         "toolName": request.request.tool_name,

@@ -191,7 +191,7 @@ _CONTRACTS: tuple[TemporalBoundaryContract, ...] = (
     TemporalBoundaryContract(
         kind="signal",
         name="DependencyResolved",
-        owner="MoonMind.Run",
+        owner="MoonMind.UserWorkflow",
         requestModel=_model(
             module=_TEMPORAL_MODELS,
             name="DependencyResolvedSignalPayload",
@@ -205,7 +205,7 @@ _CONTRACTS: tuple[TemporalBoundaryContract, ...] = (
     TemporalBoundaryContract(
         kind="update",
         name="UpdateInputs",
-        owner="MoonMind.Run",
+        owner="MoonMind.UserWorkflow",
         requestModel=_model(
             module=_TEMPORAL_MODELS,
             name="UpdateExecutionRequest",

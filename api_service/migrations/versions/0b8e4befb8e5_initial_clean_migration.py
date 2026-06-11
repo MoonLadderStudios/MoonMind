@@ -158,11 +158,11 @@ def upgrade() -> None:
     )
     op.create_index('ix_provider_slot_leases_runtime', 'provider_profile_slot_leases', ['runtime_id'], unique=False)
     op.create_index('ix_provider_slot_leases_workflow', 'provider_profile_slot_leases', ['workflow_id'], unique=False)
-    op.create_table('task_run_live_sessions',
+    op.create_table('agent_run_live_sessions',
     sa.Column('id', sa.Uuid(), nullable=False),
-    sa.Column('task_run_id', sa.Uuid(), nullable=False),
-    sa.Column('provider', sa.Enum('none', name='agentjoblivesessionprovider'), nullable=False),
-    sa.Column('status', sa.Enum('disabled', 'starting', 'ready', 'revoked', 'ended', 'error', name='agentjoblivesessionstatus'), nullable=False),
+    sa.Column('agent_run_id', sa.Uuid(), nullable=False),
+    sa.Column('provider', sa.Enum('none', name='agentrunlivesessionprovider'), nullable=False),
+    sa.Column('status', sa.Enum('disabled', 'starting', 'ready', 'revoked', 'ended', 'error', name='agentrunlivesessionstatus'), nullable=False),
     sa.Column('ready_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('ended_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('expires_at', sa.DateTime(timezone=True), nullable=True),
@@ -181,10 +181,10 @@ def upgrade() -> None:
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index(op.f('ix_task_run_live_sessions_last_heartbeat_at'), 'task_run_live_sessions', ['last_heartbeat_at'], unique=False)
-    op.create_index('ix_task_run_live_sessions_status_expires_at', 'task_run_live_sessions', ['status', 'expires_at'], unique=False)
-    op.create_index(op.f('ix_task_run_live_sessions_task_run_id'), 'task_run_live_sessions', ['task_run_id'], unique=True)
-    op.create_index(op.f('ix_task_run_live_sessions_worker_id'), 'task_run_live_sessions', ['worker_id'], unique=False)
+    op.create_index(op.f('ix_agent_run_live_sessions_last_heartbeat_at'), 'agent_run_live_sessions', ['last_heartbeat_at'], unique=False)
+    op.create_index('ix_agent_run_live_sessions_status_expires_at', 'agent_run_live_sessions', ['status', 'expires_at'], unique=False)
+    op.create_index(op.f('ix_agent_run_live_sessions_agent_run_id'), 'agent_run_live_sessions', ['agent_run_id'], unique=True)
+    op.create_index(op.f('ix_agent_run_live_sessions_worker_id'), 'agent_run_live_sessions', ['worker_id'], unique=False)
     op.create_table('task_source_mappings',
     sa.Column('task_id', sa.String(length=128), nullable=False),
     sa.Column('source', sa.String(length=32), nullable=False),
@@ -233,7 +233,7 @@ def upgrade() -> None:
     sa.Column('workflow_id', sa.String(length=64), nullable=False),
     sa.Column('run_id', sa.String(length=64), nullable=False),
     sa.Column('namespace', sa.String(length=128), nullable=False),
-    sa.Column('workflow_type', sa.Enum('MoonMind.Run', 'MoonMind.ManifestIngest', 'MoonMind.ProviderProfileManager', name='temporalworkflowtype'), nullable=False),
+    sa.Column('workflow_type', sa.Enum('MoonMind.UserWorkflow', 'MoonMind.ManifestIngest', 'MoonMind.ProviderProfileManager', name='temporalworkflowtype'), nullable=False),
     sa.Column('owner_id', sa.String(length=64), nullable=True),
     sa.Column('owner_type', sa.Enum('user', 'system', 'service', name='temporalexecutionownertype'), server_default='user', nullable=False),
     sa.Column('state', sa.Enum('scheduled', 'initializing', 'waiting_on_dependencies', 'planning', 'awaiting_slot', 'executing', 'proposals', 'awaiting_external', 'finalizing', 'completed', 'failed', 'canceled', name='moonmindworkflowstate'), server_default='initializing', nullable=False),
@@ -272,7 +272,7 @@ def upgrade() -> None:
     sa.Column('workflow_id', sa.String(length=64), nullable=False),
     sa.Column('run_id', sa.String(length=64), nullable=False),
     sa.Column('namespace', sa.String(length=128), nullable=False),
-    sa.Column('workflow_type', sa.Enum('MoonMind.Run', 'MoonMind.ManifestIngest', 'MoonMind.ProviderProfileManager', name='temporalworkflowtype'), nullable=False),
+    sa.Column('workflow_type', sa.Enum('MoonMind.UserWorkflow', 'MoonMind.ManifestIngest', 'MoonMind.ProviderProfileManager', name='temporalworkflowtype'), nullable=False),
     sa.Column('owner_id', sa.String(length=64), nullable=True),
     sa.Column('owner_type', sa.Enum('user', 'system', 'service', name='temporalexecutionownertype'), server_default='user', nullable=False),
     sa.Column('state', sa.Enum('scheduled', 'initializing', 'waiting_on_dependencies', 'planning', 'awaiting_slot', 'executing', 'proposals', 'awaiting_external', 'finalizing', 'completed', 'failed', 'canceled', name='moonmindworkflowstate'), server_default='initializing', nullable=False),
@@ -370,12 +370,12 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('queue_name'),
     sa.UniqueConstraint('volume_name', name='uq_codex_worker_shards_volume_name')
     )
-    op.create_table('recurring_task_definitions',
+    op.create_table('recurring_workflow_definitions',
     sa.Column('id', sa.Uuid(), nullable=False),
     sa.Column('name', sa.String(length=255), nullable=False),
     sa.Column('description', sa.Text(), nullable=True),
     sa.Column('enabled', sa.Boolean(), nullable=False),
-    sa.Column('schedule_type', sa.Enum('cron', name='recurringtaskscheduletype'), nullable=False),
+    sa.Column('schedule_type', sa.Enum('cron', name='recurringworkflowscheduletype'), nullable=False),
     sa.Column('cron', sa.String(length=128), nullable=False),
     sa.Column('timezone', sa.String(length=128), nullable=False),
     sa.Column('next_run_at', sa.DateTime(timezone=True), nullable=True),
@@ -384,7 +384,7 @@ def upgrade() -> None:
     sa.Column('last_dispatch_error', sa.Text(), nullable=True),
     sa.Column('temporal_schedule_id', sa.String(length=255), nullable=True),
     sa.Column('owner_user_id', sa.Uuid(), nullable=True),
-    sa.Column('scope_type', sa.Enum('personal', 'global', name='recurringtaskscopetype'), nullable=False),
+    sa.Column('scope_type', sa.Enum('personal', 'global', name='recurringworkflowscopetype'), nullable=False),
     sa.Column('scope_ref', sa.String(length=255), nullable=True),
     sa.Column('target', sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), 'postgresql'), nullable=False),
     sa.Column('policy', sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), 'postgresql'), nullable=False),
@@ -394,11 +394,11 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['owner_user_id'], ['user.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index('ix_recurring_task_definitions_enabled_next_run_at', 'recurring_task_definitions', ['enabled', 'next_run_at'], unique=False)
-    op.create_index('ix_recurring_task_definitions_owner_enabled', 'recurring_task_definitions', ['owner_user_id', 'enabled'], unique=False)
-    op.create_table('task_proposals',
+    op.create_index('ix_recurring_workflow_definitions_enabled_next_run_at', 'recurring_workflow_definitions', ['enabled', 'next_run_at'], unique=False)
+    op.create_index('ix_recurring_workflow_definitions_owner_enabled', 'recurring_workflow_definitions', ['owner_user_id', 'enabled'], unique=False)
+    op.create_table('workflow_proposals',
     sa.Column('id', sa.Uuid(), nullable=False),
-    sa.Column('status', sa.Enum('open', 'promoted', 'dismissed', 'accepted', 'rejected', name='taskproposalstatus'), nullable=False),
+    sa.Column('status', sa.Enum('open', 'promoted', 'dismissed', 'accepted', 'rejected', name='workflowproposalstatus'), nullable=False),
     sa.Column('title', sa.String(length=256), nullable=False),
     sa.Column('summary', sa.Text(), nullable=False),
     sa.Column('category', sa.String(length=64), nullable=True),
@@ -406,12 +406,12 @@ def upgrade() -> None:
     sa.Column('repository', sa.String(length=255), nullable=False),
     sa.Column('dedup_key', sa.String(length=512), nullable=False),
     sa.Column('dedup_hash', sa.String(length=64), nullable=False),
-    sa.Column('review_priority', sa.Enum('low', 'normal', 'high', 'urgent', name='taskproposalpriority'), nullable=False),
+    sa.Column('review_priority', sa.Enum('low', 'normal', 'high', 'urgent', name='workflowproposalpriority'), nullable=False),
     sa.Column('priority_override_reason', sa.Text(), nullable=True),
-    sa.Column('task_create_request', sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), 'postgresql'), nullable=False),
+    sa.Column('workflow_create_request', sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), 'postgresql'), nullable=False),
     sa.Column('proposed_by_worker_id', sa.String(length=255), nullable=True),
     sa.Column('proposed_by_user_id', sa.Uuid(), nullable=True),
-    sa.Column('origin_source', sa.Enum('queue', 'workflow', 'manual', name='taskproposaloriginsource'), nullable=False),
+    sa.Column('origin_source', sa.Enum('queue', 'workflow', 'manual', name='workflowproposaloriginsource'), nullable=False),
     sa.Column('origin_id', sa.Uuid(), nullable=True),
     sa.Column('origin_metadata', sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), 'postgresql'), nullable=False),
     sa.Column('promoted_at', sa.DateTime(timezone=True), nullable=True),
@@ -425,15 +425,15 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['proposed_by_user_id'], ['user.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index('ix_task_proposals_dedup_hash_status', 'task_proposals', ['dedup_hash', 'status'], unique=False)
-    op.create_index('ix_task_proposals_origin', 'task_proposals', ['origin_source', 'origin_id'], unique=False)
-    op.create_index('ix_task_proposals_priority_created', 'task_proposals', ['review_priority', 'created_at'], unique=False)
-    op.create_index('ix_task_proposals_repository', 'task_proposals', ['repository'], unique=False)
-    op.create_index('ix_task_proposals_status_created', 'task_proposals', ['status', 'created_at'], unique=False)
-    op.create_table('task_step_templates',
+    op.create_index('ix_workflow_proposals_dedup_hash_status', 'workflow_proposals', ['dedup_hash', 'status'], unique=False)
+    op.create_index('ix_workflow_proposals_origin', 'workflow_proposals', ['origin_source', 'origin_id'], unique=False)
+    op.create_index('ix_workflow_proposals_priority_created', 'workflow_proposals', ['review_priority', 'created_at'], unique=False)
+    op.create_index('ix_workflow_proposals_repository', 'workflow_proposals', ['repository'], unique=False)
+    op.create_index('ix_workflow_proposals_status_created', 'workflow_proposals', ['status', 'created_at'], unique=False)
+    op.create_table('presets',
     sa.Column('id', sa.Uuid(), nullable=False),
     sa.Column('slug', sa.String(length=128), nullable=False),
-    sa.Column('scope_type', sa.Enum('global', 'personal', name='tasktemplatescopetype'), nullable=False),
+    sa.Column('scope_type', sa.Enum('global', 'personal', name='presetscopetype'), nullable=False),
     sa.Column('scope_ref', sa.String(length=64), nullable=True),
     sa.Column('title', sa.String(length=255), nullable=False),
     sa.Column('description', sa.Text(), nullable=False),
@@ -445,13 +445,13 @@ def upgrade() -> None:
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['created_by'], ['user.id'], ondelete='SET NULL'),
-    sa.ForeignKeyConstraint(['latest_version_id'], ['task_step_template_versions.id'], name='fk_task_template_latest_version', ondelete='SET NULL', use_alter=True),
+    sa.ForeignKeyConstraint(['latest_version_id'], ['preset_versions.id'], name='fk_preset_latest_version', ondelete='SET NULL', use_alter=True),
     sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('slug', 'scope_type', 'scope_ref', name='uq_task_step_template_slug_scope')
+    sa.UniqueConstraint('slug', 'scope_type', 'scope_ref', name='uq_preset_slug_scope')
     )
-    op.create_index('ix_task_step_templates_active', 'task_step_templates', ['is_active'], unique=False)
-    op.create_index('ix_task_step_templates_scope', 'task_step_templates', ['scope_type', 'scope_ref'], unique=False)
-    op.create_index('ix_task_step_templates_slug', 'task_step_templates', ['slug'], unique=False)
+    op.create_index('ix_presets_active', 'presets', ['is_active'], unique=False)
+    op.create_index('ix_presets_scope', 'presets', ['scope_type', 'scope_ref'], unique=False)
+    op.create_index('ix_presets_slug', 'presets', ['slug'], unique=False)
     op.create_table('temporal_artifact_links',
     sa.Column('id', sa.Uuid(), nullable=False),
     sa.Column('artifact_id', sa.String(length=64), nullable=False),
@@ -526,12 +526,12 @@ def upgrade() -> None:
     sa.UniqueConstraint('run_id', 'artifact_type', 'storage_path', name='uq_automation_artifact_path')
     )
     op.create_index('ix_automation_artifacts_run_id', 'automation_artifacts', ['run_id'], unique=False)
-    op.create_table('recurring_task_runs',
+    op.create_table('recurring_workflow_runs',
     sa.Column('id', sa.Uuid(), nullable=False),
     sa.Column('definition_id', sa.Uuid(), nullable=False),
     sa.Column('scheduled_for', sa.DateTime(timezone=True), nullable=False),
-    sa.Column('trigger', sa.Enum('schedule', 'manual', name='recurringtaskruntrigger'), nullable=False),
-    sa.Column('outcome', sa.Enum('pending_dispatch', 'enqueued', 'skipped', 'dispatch_error', name='recurringtaskrunoutcome'), nullable=False),
+    sa.Column('trigger', sa.Enum('schedule', 'manual', name='recurringworkflowruntrigger'), nullable=False),
+    sa.Column('outcome', sa.Enum('pending_dispatch', 'enqueued', 'skipped', 'dispatch_error', name='recurringworkflowrunoutcome'), nullable=False),
     sa.Column('dispatch_attempts', sa.Integer(), server_default=sa.text('0'), nullable=False),
     sa.Column('dispatch_after', sa.DateTime(timezone=True), nullable=True),
     sa.Column('temporal_workflow_id', sa.String(length=128), nullable=True),
@@ -539,13 +539,13 @@ def upgrade() -> None:
     sa.Column('message', sa.Text(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-    sa.ForeignKeyConstraint(['definition_id'], ['recurring_task_definitions.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['definition_id'], ['recurring_workflow_definitions.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('definition_id', 'scheduled_for', name='uq_recurring_task_runs_definition_scheduled_for')
+    sa.UniqueConstraint('definition_id', 'scheduled_for', name='uq_recurring_workflow_runs_definition_scheduled_for')
     )
-    op.create_index('ix_recurring_task_runs_definition_created_at', 'recurring_task_runs', ['definition_id', 'created_at'], unique=False)
-    op.create_index('ix_recurring_task_runs_outcome_dispatch_after', 'recurring_task_runs', ['outcome', 'dispatch_after'], unique=False)
-    op.create_table('task_proposal_notifications',
+    op.create_index('ix_recurring_workflow_runs_definition_created_at', 'recurring_workflow_runs', ['definition_id', 'created_at'], unique=False)
+    op.create_index('ix_recurring_workflow_runs_outcome_dispatch_after', 'recurring_workflow_runs', ['outcome', 'dispatch_after'], unique=False)
+    op.create_table('workflow_proposal_notifications',
     sa.Column('id', sa.Uuid(), nullable=False),
     sa.Column('proposal_id', sa.Uuid(), nullable=False),
     sa.Column('category', sa.String(length=64), nullable=False),
@@ -553,22 +553,22 @@ def upgrade() -> None:
     sa.Column('status', sa.String(length=32), nullable=False),
     sa.Column('error', sa.Text(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-    sa.ForeignKeyConstraint(['proposal_id'], ['task_proposals.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['proposal_id'], ['workflow_proposals.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('proposal_id', 'target', name='uq_task_proposal_notifications_proposal_target')
+    sa.UniqueConstraint('proposal_id', 'target', name='uq_workflow_proposal_notifications_proposal_target')
     )
-    op.create_table('task_step_template_favorites',
+    op.create_table('preset_favorites',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('user_id', sa.Uuid(), nullable=False),
     sa.Column('template_id', sa.Uuid(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-    sa.ForeignKeyConstraint(['template_id'], ['task_step_templates.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['template_id'], ['presets.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['user_id'], ['user.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('user_id', 'template_id', name='uq_task_template_favorite')
+    sa.UniqueConstraint('user_id', 'template_id', name='uq_preset_favorite')
     )
-    op.create_index('ix_task_step_template_favorites_user', 'task_step_template_favorites', ['user_id'], unique=False)
-    op.create_table('task_step_template_versions',
+    op.create_index('ix_preset_favorites_user', 'preset_favorites', ['user_id'], unique=False)
+    op.create_table('preset_versions',
     sa.Column('id', sa.Uuid(), nullable=False),
     sa.Column('template_id', sa.Uuid(), nullable=False),
     sa.Column('version', sa.String(length=32), nullable=False),
@@ -577,7 +577,7 @@ def upgrade() -> None:
     sa.Column('annotations', sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), 'postgresql'), nullable=True),
     sa.Column('required_capabilities', sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), 'postgresql'), nullable=False),
     sa.Column('max_step_count', sa.Integer(), nullable=False),
-    sa.Column('release_status', sa.Enum('draft', 'active', 'inactive', name='tasktemplatereleasestatus'), nullable=False),
+    sa.Column('release_status', sa.Enum('draft', 'active', 'inactive', name='presetreleasestatus'), nullable=False),
     sa.Column('reviewed_by', sa.Uuid(), nullable=True),
     sa.Column('reviewed_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('notes', sa.Text(), nullable=True),
@@ -585,11 +585,11 @@ def upgrade() -> None:
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['reviewed_by'], ['user.id'], ondelete='SET NULL'),
-    sa.ForeignKeyConstraint(['template_id'], ['task_step_templates.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['template_id'], ['presets.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('template_id', 'version', name='uq_task_step_template_version_label')
+    sa.UniqueConstraint('template_id', 'version', name='uq_preset_version_label')
     )
-    op.create_index('ix_task_step_template_versions_template', 'task_step_template_versions', ['template_id'], unique=False)
+    op.create_index('ix_preset_versions_template', 'preset_versions', ['template_id'], unique=False)
     op.create_table('workflow_runs',
     sa.Column('id', sa.Uuid(), nullable=False),
     sa.Column('feature_key', sa.String(length=255), nullable=False),
@@ -625,17 +625,17 @@ def upgrade() -> None:
     op.create_index('ix_workflow_runs_feature_key', 'workflow_runs', ['feature_key'], unique=False)
     op.create_index('ix_workflow_runs_requested_by', 'workflow_runs', ['requested_by_user_id'], unique=False)
     op.create_index('ix_workflow_runs_status', 'workflow_runs', ['status'], unique=False)
-    op.create_table('task_step_template_recents',
+    op.create_table('preset_recents',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('user_id', sa.Uuid(), nullable=False),
     sa.Column('template_version_id', sa.Uuid(), nullable=False),
     sa.Column('applied_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-    sa.ForeignKeyConstraint(['template_version_id'], ['task_step_template_versions.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['template_version_id'], ['preset_versions.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['user_id'], ['user.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('user_id', 'template_version_id', name='uq_task_template_recent_user_version')
+    sa.UniqueConstraint('user_id', 'template_version_id', name='uq_preset_recent_user_version')
     )
-    op.create_index('ix_task_step_template_recents_user', 'task_step_template_recents', ['user_id'], unique=False)
+    op.create_index('ix_preset_recents_user', 'preset_recents', ['user_id'], unique=False)
     op.create_table('workflow_artifacts',
     sa.Column('id', sa.Uuid(), nullable=False),
     sa.Column('workflow_run_id', sa.Uuid(), nullable=False),
@@ -701,21 +701,21 @@ def downgrade() -> None:
     op.drop_table('workflow_credential_audits')
     op.drop_index('ix_workflow_artifacts_run_id', table_name='workflow_artifacts')
     op.drop_table('workflow_artifacts')
-    op.drop_index('ix_task_step_template_recents_user', table_name='task_step_template_recents')
-    op.drop_table('task_step_template_recents')
+    op.drop_index('ix_preset_recents_user', table_name='preset_recents')
+    op.drop_table('preset_recents')
     op.drop_index('ix_workflow_runs_status', table_name='workflow_runs')
     op.drop_index('ix_workflow_runs_requested_by', table_name='workflow_runs')
     op.drop_index('ix_workflow_runs_feature_key', table_name='workflow_runs')
     op.drop_index('ix_workflow_runs_created_by', table_name='workflow_runs')
     op.drop_table('workflow_runs')
-    op.drop_index('ix_task_step_template_versions_template', table_name='task_step_template_versions')
-    op.drop_table('task_step_template_versions')
-    op.drop_index('ix_task_step_template_favorites_user', table_name='task_step_template_favorites')
-    op.drop_table('task_step_template_favorites')
-    op.drop_table('task_proposal_notifications')
-    op.drop_index('ix_recurring_task_runs_outcome_dispatch_after', table_name='recurring_task_runs')
-    op.drop_index('ix_recurring_task_runs_definition_created_at', table_name='recurring_task_runs')
-    op.drop_table('recurring_task_runs')
+    op.drop_index('ix_preset_versions_template', table_name='preset_versions')
+    op.drop_table('preset_versions')
+    op.drop_index('ix_preset_favorites_user', table_name='preset_favorites')
+    op.drop_table('preset_favorites')
+    op.drop_table('workflow_proposal_notifications')
+    op.drop_index('ix_recurring_workflow_runs_outcome_dispatch_after', table_name='recurring_workflow_runs')
+    op.drop_index('ix_recurring_workflow_runs_definition_created_at', table_name='recurring_workflow_runs')
+    op.drop_table('recurring_workflow_runs')
     op.drop_index('ix_automation_artifacts_run_id', table_name='automation_artifacts')
     op.drop_table('automation_artifacts')
     op.drop_index(op.f('ix_user_profile_id'), table_name='user_profile')
@@ -726,19 +726,19 @@ def downgrade() -> None:
     op.drop_index('ix_temporal_artifact_links_execution', table_name='temporal_artifact_links')
     op.drop_index('ix_temporal_artifact_links_artifact_id', table_name='temporal_artifact_links')
     op.drop_table('temporal_artifact_links')
-    op.drop_index('ix_task_step_templates_slug', table_name='task_step_templates')
-    op.drop_index('ix_task_step_templates_scope', table_name='task_step_templates')
-    op.drop_index('ix_task_step_templates_active', table_name='task_step_templates')
-    op.drop_table('task_step_templates')
-    op.drop_index('ix_task_proposals_status_created', table_name='task_proposals')
-    op.drop_index('ix_task_proposals_repository', table_name='task_proposals')
-    op.drop_index('ix_task_proposals_priority_created', table_name='task_proposals')
-    op.drop_index('ix_task_proposals_origin', table_name='task_proposals')
-    op.drop_index('ix_task_proposals_dedup_hash_status', table_name='task_proposals')
-    op.drop_table('task_proposals')
-    op.drop_index('ix_recurring_task_definitions_owner_enabled', table_name='recurring_task_definitions')
-    op.drop_index('ix_recurring_task_definitions_enabled_next_run_at', table_name='recurring_task_definitions')
-    op.drop_table('recurring_task_definitions')
+    op.drop_index('ix_presets_slug', table_name='presets')
+    op.drop_index('ix_presets_scope', table_name='presets')
+    op.drop_index('ix_presets_active', table_name='presets')
+    op.drop_table('presets')
+    op.drop_index('ix_workflow_proposals_status_created', table_name='workflow_proposals')
+    op.drop_index('ix_workflow_proposals_repository', table_name='workflow_proposals')
+    op.drop_index('ix_workflow_proposals_priority_created', table_name='workflow_proposals')
+    op.drop_index('ix_workflow_proposals_origin', table_name='workflow_proposals')
+    op.drop_index('ix_workflow_proposals_dedup_hash_status', table_name='workflow_proposals')
+    op.drop_table('workflow_proposals')
+    op.drop_index('ix_recurring_workflow_definitions_owner_enabled', table_name='recurring_workflow_definitions')
+    op.drop_index('ix_recurring_workflow_definitions_enabled_next_run_at', table_name='recurring_workflow_definitions')
+    op.drop_table('recurring_workflow_definitions')
     op.drop_table('codex_worker_shards')
     op.drop_index('ix_automation_task_states_run_id', table_name='automation_task_states')
     op.drop_table('automation_task_states')
@@ -764,11 +764,11 @@ def downgrade() -> None:
     op.drop_index('ix_task_source_mappings_source_record_id', table_name='task_source_mappings')
     op.drop_index('ix_task_source_mappings_source_entry', table_name='task_source_mappings')
     op.drop_table('task_source_mappings')
-    op.drop_index(op.f('ix_task_run_live_sessions_worker_id'), table_name='task_run_live_sessions')
-    op.drop_index(op.f('ix_task_run_live_sessions_task_run_id'), table_name='task_run_live_sessions')
-    op.drop_index('ix_task_run_live_sessions_status_expires_at', table_name='task_run_live_sessions')
-    op.drop_index(op.f('ix_task_run_live_sessions_last_heartbeat_at'), table_name='task_run_live_sessions')
-    op.drop_table('task_run_live_sessions')
+    op.drop_index(op.f('ix_agent_run_live_sessions_worker_id'), table_name='agent_run_live_sessions')
+    op.drop_index(op.f('ix_agent_run_live_sessions_agent_run_id'), table_name='agent_run_live_sessions')
+    op.drop_index('ix_agent_run_live_sessions_status_expires_at', table_name='agent_run_live_sessions')
+    op.drop_index(op.f('ix_agent_run_live_sessions_last_heartbeat_at'), table_name='agent_run_live_sessions')
+    op.drop_table('agent_run_live_sessions')
     op.drop_index('ix_provider_slot_leases_workflow', table_name='provider_profile_slot_leases')
     op.drop_index('ix_provider_slot_leases_runtime', table_name='provider_profile_slot_leases')
     op.drop_table('provider_profile_slot_leases')

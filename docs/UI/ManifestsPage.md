@@ -2,7 +2,7 @@
 
 ## Summary
 
-Replace the separate **Manifests** and **Manifest Submit** tabs with one canonical page at **`/tasks/manifests`**.
+Replace the separate **Manifests** and **Manifest Submit** tabs with one canonical page at **`/manifests`**.
 
 The new page keeps the two parts of the same workflow together:
 
@@ -53,10 +53,10 @@ A unified page is simpler: submit from the top, verify the new run immediately b
 
 ## Canonical route and navigation
 
-- **Canonical page:** `/tasks/manifests`
+- **Canonical page:** `/manifests`
 - **Navigation label:** `Manifests`
 - **Remove:** separate `Manifest Submit` tab/nav item
-- **Legacy submit route(s):** redirect to `/tasks/manifests` and optionally open/scroll to the run form
+- **Legacy submit route(s):** redirect to `/manifests` and optionally open/scroll to the run form
 
 This should be the only manifest destination in the main dashboard navigation.
 
@@ -199,7 +199,7 @@ Optional:
 
 On successful submit:
 
-- stay on **`/tasks/manifests`**
+- stay on **`/manifests`**
 - show a success toast
 - insert the new run at the top of **Recent Runs**
 - optionally highlight or auto-scroll to the newly created row
@@ -395,11 +395,11 @@ This UI merge should primarily be a routing and composition change:
 
 ### Canonical route
 
-- `/tasks/manifests`
+- `/manifests`
 
 ### Redirects
 
-- old manifest submit route(s) should redirect to `/tasks/manifests`
+- old manifest submit route(s) should redirect to `/manifests`
 - if helpful, redirect with an anchor or query to focus the run form
 
 ### Navigation cleanup
@@ -409,7 +409,7 @@ This UI merge should primarily be a routing and composition change:
 
 ### Success path cleanup
 
-If there are any legacy redirects to older task/queue pages after submit, this merge is a good point to remove them and keep the user anchored in the manifest experience.
+If there are any legacy redirects to older workflow/queue pages after submit, this merge is a good point to remove them and keep the user anchored in the manifest experience.
 
 ---
 
@@ -443,7 +443,7 @@ A drawer is still acceptable as a secondary implementation choice, but it should
 
 ### Phase 1
 
-- Build unified **Manifests** page at `/tasks/manifests`
+- Build unified **Manifests** page at `/manifests`
 - Move existing submit form into top card
 - Keep existing recent runs table below
 - Remove extra nav tab

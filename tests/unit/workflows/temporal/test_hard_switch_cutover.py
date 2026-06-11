@@ -102,7 +102,7 @@ def _renamed_contract_settings(tmp_path: Path):
     )
 
 
-def test_legacy_contract_keeps_moonmind_run_on_legacy_queue() -> None:
+def test_current_build_rejects_legacy_run_contract_mode() -> None:
     temporal_settings = settings.temporal.model_copy(
         update={
             "user_workflow_contract_mode": "legacy_run",
@@ -110,11 +110,8 @@ def test_legacy_contract_keeps_moonmind_run_on_legacy_queue() -> None:
         }
     )
 
-    contract = resolve_user_workflow_start_contract(temporal_settings)
-
-    assert contract.workflow_type == LEGACY_USER_WORKFLOW_TYPE
-    assert contract.task_queue == "mm.workflow"
-    assert contract.contract_mode == "legacy_run"
+    with pytest.raises(HardSwitchCutoverError, match="renamed_contract"):
+        resolve_user_workflow_start_contract(temporal_settings)
 
 
 def test_renamed_contract_requires_cutover_record() -> None:
@@ -167,16 +164,10 @@ def test_renamed_contract_resolution_caches_cutover_file_validation(
 
 
 def test_worker_registration_serves_only_one_user_workflow_type(tmp_path: Path) -> None:
-    legacy_settings = settings.temporal.model_copy(
-        update={"user_workflow_contract_mode": "legacy_run"}
-    )
     renamed_settings = _renamed_contract_settings(tmp_path)
 
-    legacy_types = list_registered_workflow_types_for_settings(legacy_settings)
     renamed_types = list_registered_workflow_types_for_settings(renamed_settings)
 
-    assert LEGACY_USER_WORKFLOW_TYPE in legacy_types
-    assert RENAMED_USER_WORKFLOW_TYPE not in legacy_types
     assert RENAMED_USER_WORKFLOW_TYPE in renamed_types
     assert LEGACY_USER_WORKFLOW_TYPE not in renamed_types
 
@@ -209,8 +200,8 @@ def test_client_routes_renamed_user_workflow_to_v2_queue(tmp_path: Path, monkeyp
 
 def test_renamed_user_workflow_accepts_legacy_dependency_snapshots() -> None:
     assert MoonMindRunWorkflow()._supported_dependency_workflow_types() == frozenset(
-        {LEGACY_USER_WORKFLOW_TYPE}
+        {RENAMED_USER_WORKFLOW_TYPE}
     )
     assert MoonMindUserWorkflow()._supported_dependency_workflow_types() == frozenset(
-        {LEGACY_USER_WORKFLOW_TYPE, RENAMED_USER_WORKFLOW_TYPE}
+        {RENAMED_USER_WORKFLOW_TYPE}
     )

@@ -204,7 +204,7 @@ def test_parent_owned_checkpoint_evidence_survives_child_runtime_projection() ->
     assert rows[0]["refs"] == {
         "childWorkflowId": "wf-child",
         "childRunId": "run-child",
-        "taskRunId": None,
+        "agentRunId": None,
         "latestStepExecutionManifestRef": None,
         "stepExecutionManifestRefs": [],
     }

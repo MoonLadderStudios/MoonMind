@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import ManifestRecord, MoonMindWorkflowState
 from moonmind.schemas.manifest_ingest_models import manifest_node_counts_from_nodes
-from moonmind.workflows.tasks.manifest_contract import normalize_manifest_job_payload
+from moonmind.workflows.executions.manifest_contract import normalize_manifest_job_payload
 from moonmind.workflows.temporal import (
     ManifestIngestValidationError,
     TemporalArtifactService,

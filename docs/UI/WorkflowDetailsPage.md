@@ -11,7 +11,7 @@ The page is declarative and state-driven. Every visible control is derived from 
 The page is available from Workflows lists, Workflow notifications, remediation links, and run history links.
 
 ```text
-/tasks/:taskExecutionId
+/workflows/{workflowId}
 ```
 
 The page accepts a Workflow Execution identifier and loads a single Workflow Execution detail record.
@@ -36,24 +36,24 @@ The UI does not infer unavailable actions from status alone. The UI displays act
 Required page data:
 
 ```ts
-type TaskDetailsPageData = {
-  execution: TaskExecutionDetail;
-  submissionDraft: TaskSubmissionDraft | null;
-  capabilities: TaskExecutionCapabilities;
-  progress: TaskProgress | null;
-  outputs: TaskOutput[];
-  artifacts: TaskArtifact[];
-  failure: TaskFailure | null;
-  remediation: TaskRemediationSummary | null;
-  relatedRuns: RelatedTaskRun[];
-  auditEvents: TaskAuditEvent[];
+type WorkflowDetailsPageData = {
+  execution: WorkflowExecutionDetail;
+  submissionDraft: WorkflowSubmissionDraft | null;
+  capabilities: WorkflowExecutionCapabilities;
+  progress: WorkflowProgress | null;
+  outputs: WorkflowOutput[];
+  artifacts: WorkflowArtifact[];
+  failure: WorkflowFailure | null;
+  remediation: WorkflowRemediationSummary | null;
+  relatedRuns: RelatedWorkflowRun[];
+  auditEvents: WorkflowAuditEvent[];
 };
 ```
 
 Required capability fields:
 
 ```ts
-type TaskExecutionCapabilities = {
+type WorkflowExecutionCapabilities = {
   canRemediate: boolean;
   canRerun: boolean;
   canEditForRerun: boolean;
@@ -64,7 +64,7 @@ type TaskExecutionCapabilities = {
   canResume: boolean;
   canViewLogs: boolean;
   canViewArtifacts: boolean;
-  canCopyTaskLink: boolean;
+  canCopyWorkflowLink: boolean;
 };
 ```
 
@@ -101,7 +101,7 @@ The header contains:
 Example desired layout:
 
 ```text
-Tasks / Customer Renewal Research
+Workflows / Customer Renewal Research
 
 Customer Renewal Research                     [Failed]
 Research customer renewal risks and summarize next steps.
@@ -114,7 +114,7 @@ Research customer renewal risks and summarize next steps.
 The title displays the user-provided Workflow name when present. If no explicit Workflow name exists, the title displays a generated summary of the Workflow objective. If neither is available, the title displays:
 
 ```text
-Untitled task
+Untitled workflow
 ```
 
 ### Status badge
@@ -178,7 +178,7 @@ The button opens the remediation experience for the failed Workflow.
 Desired destination:
 
 ```text
-/tasks/:taskExecutionId/remediate
+/workflows/{workflowId}/remediate
 ```
 
 The button is usually the primary action for failed Workflows when remediation is available.
@@ -209,7 +209,7 @@ For failed Workflows, **Edit Workflow** opens the Create page in edit-for-rerun 
 Failed-Workflow edit destination:
 
 ```text
-/tasks/new?rerunExecutionId=:taskExecutionId&mode=edit
+/workflows/new?rerunExecutionId={workflowId}&mode=edit
 ```
 
 Failed-Workflow edit behavior:
@@ -219,12 +219,12 @@ Failed-Workflow edit behavior:
 - The original failed execution remains unchanged.
 - The user can modify the loaded Workflow configuration.
 - Submitting the form creates a new Workflow run using the edited configuration.
-- The submit button label is `Run edited task`.
+- The submit button label is `Run edited workflow`.
 
 Required banner copy:
 
 ```text
-You are editing a failed task. Your changes will create a new run. The original failed run will remain unchanged.
+You are editing a failed workflow. Your changes will create a new run. The original failed run will remain unchanged.
 ```
 
 For non-terminal Workflows that support live input updates, **Edit Workflow** opens the Create page in update-inputs mode.
@@ -232,7 +232,7 @@ For non-terminal Workflows that support live input updates, **Edit Workflow** op
 Running-Workflow edit destination:
 
 ```text
-/tasks/new?editExecutionId=:taskExecutionId
+/workflows/new?editExecutionId={workflowId}
 ```
 
 Running-Workflow edit behavior:
@@ -269,11 +269,11 @@ Rerun behavior:
 Optional confirmation copy:
 
 ```text
-Rerun task?
+Rerun workflow?
 
-This will run the task again with the exact same steps, choices, and settings.
+This will run the workflow again with the exact same steps, choices, and settings.
 
-[Cancel] [Rerun task]
+[Cancel] [Rerun workflow]
 ```
 
 After a successful rerun request, the user is taken to the new Workflow Execution details page or shown a success toast with a link to the new run.
@@ -358,16 +358,16 @@ The overflow menu contains secondary utility actions that are valid for the Work
 
 Possible menu items:
 
-- Copy task link
-- Copy task ID
+- Copy workflow link
 - Copy workflow ID
+- Copy run ID
 - View raw input
 - View raw output
 - Download logs
 - Download artifacts
 - Open related run
-- Archive task, if supported
-- Delete task, if supported
+- Archive workflow, if supported
+- Delete workflow, if supported
 
 Destructive actions are visually separated and require confirmation.
 
@@ -556,7 +556,7 @@ Example:
 
 ```text
 Failure
-The task failed while generating the final customer summary.
+The workflow failed while generating the final customer summary.
 
 Failed step
 Draft customer-facing summary
@@ -565,9 +565,9 @@ Error
 The selected source artifact was unavailable.
 
 Suggested actions
-- Remediate the failed task to diagnose and resolve the issue.
-- Edit the task to change inputs or choices and run it again.
-- Rerun the task exactly as originally configured.
+- Remediate the failed workflow to diagnose and resolve the issue.
+- Edit the workflow to change inputs or choices and run it again.
+- Rerun the workflow exactly as originally configured.
 - Resume from the failed step to reuse completed prior work, if available.
 ```
 
@@ -594,7 +594,7 @@ Remediate
 Panel button destination:
 
 ```text
-/tasks/:taskExecutionId/remediate
+/workflows/{workflowId}/remediate
 ```
 
 The remediation panel never replaces the header action buttons.
@@ -617,7 +617,7 @@ For failed Workflows, partial outputs remain visible if they were produced befor
 If no outputs exist, the section displays an empty state:
 
 ```text
-No outputs were produced for this task.
+No outputs were produced for this workflow.
 ```
 
 ## Artifacts section
@@ -770,15 +770,15 @@ The page does not display incomplete action buttons before capabilities are load
 When the Workflow Execution does not exist or the user does not have access, the page displays:
 
 ```text
-Task not found
+Workflow not found
 
-This task may have been deleted, moved, or you may not have permission to view it.
+This workflow may have been deleted, moved, or you may not have permission to view it.
 ```
 
 Primary action:
 
 ```text
-Back to tasks
+Back to workflows
 ```
 
 ### Data unavailable state
@@ -788,9 +788,9 @@ When the Workflow exists but some details cannot be loaded, the page displays th
 Example:
 
 ```text
-Task configuration unavailable
+Workflow configuration unavailable
 
-The original task configuration could not be loaded. You can still view status and logs.
+The original workflow configuration could not be loaded. You can still view status and logs.
 ```
 
 If the Workflow configuration is unavailable, the **Edit Workflow** and **Rerun** actions are hidden unless the backend confirms that a valid submission draft or reconstructable workflow input is available.
@@ -813,14 +813,14 @@ Required accessibility behavior:
 Button accessible names:
 
 ```text
-Remediate task
+Remediate workflow
 Edit Workflow
-Rerun task
-Cancel task
-Pause task
-Resume task
+Rerun workflow
+Cancel workflow
+Pause workflow
+Resume workflow
 Resume from failed step
-Copy task link
+Copy workflow link
 ```
 
 ## Responsive behavior
@@ -858,28 +858,28 @@ Resume
 ### Failed Workflow edit banner
 
 ```text
-You are editing a failed task. Your changes will create a new run. The original failed run will remain unchanged.
+You are editing a failed workflow. Your changes will create a new run. The original failed run will remain unchanged.
 ```
 
 ### Rerun confirmation
 
 ```text
-Rerun task?
+Rerun workflow?
 
-This will run the task again with the exact same steps, choices, and settings.
+This will run the workflow again with the exact same steps, choices, and settings.
 ```
 
 Confirmation actions:
 
 ```text
 Cancel
-Rerun task
+Rerun workflow
 ```
 
 ### Rerun success toast
 
 ```text
-Task rerun started.
+Workflow rerun started.
 ```
 
 Toast action:
@@ -906,7 +906,7 @@ Resume
 ### Resume success toast
 
 ```text
-Task resumed from failed step.
+Workflow resumed from failed step.
 ```
 
 Toast action:
@@ -918,7 +918,7 @@ View resumed run
 ### Edited rerun success toast
 
 ```text
-Edited task run started.
+Edited workflow run started.
 ```
 
 Toast action:
@@ -930,25 +930,25 @@ View new run
 ### Remediation unavailable message
 
 ```text
-Remediation is not available for this task.
+Remediation is not available for this workflow.
 ```
 
 ### Edit unavailable message
 
 ```text
-This task cannot be edited because its original configuration is unavailable.
+This workflow cannot be edited because its original configuration is unavailable.
 ```
 
 ### Rerun unavailable message
 
 ```text
-This task cannot be rerun because its original configuration is unavailable.
+This workflow cannot be rerun because its original configuration is unavailable.
 ```
 
 ### Resume unavailable message
 
 ```text
-This task cannot be resumed because the completed work before the failed step is not recoverable.
+This workflow cannot be resumed because the completed work before the failed step is not recoverable.
 ```
 
 ## State-specific desired page examples
@@ -983,7 +983,7 @@ Desired failed-Workflow action model:
   canResume: false,
   canViewLogs: true,
   canViewArtifacts: true,
-  canCopyTaskLink: true
+  canCopyWorkflowLink: true
 }
 ```
 
@@ -1088,7 +1088,7 @@ The page is considered correct when all of the following are true:
 
 1. A failed Workflow displays **Remediate**, **Edit Workflow**, **Rerun**, and **Resume** when the backend capabilities allow them.
 2. **Remediate** opens the remediation flow.
-3. **Edit Workflow** on a failed Workflow opens `/tasks/new?rerunExecutionId=:taskExecutionId&mode=edit`.
+3. **Edit Workflow** on a failed Workflow opens `/workflows/new?rerunExecutionId={workflowId}&mode=edit`.
 4. The edit-for-rerun Create page loads every original step and selected choice exactly.
 5. Submitting an edited failed Workflow creates a new run and does not mutate the failed execution.
 6. **Rerun** creates a new run using the exact original Workflow configuration.

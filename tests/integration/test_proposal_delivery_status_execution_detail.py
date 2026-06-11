@@ -17,7 +17,7 @@ def _proposal_execution_record() -> SimpleNamespace:
         namespace="moonmind",
         workflow_id="mm:proposal-contract",
         run_id="run-proposal-contract",
-        workflow_type=TemporalWorkflowType.RUN,
+        workflow_type=TemporalWorkflowType.USER_WORKFLOW,
         state=MoonMindWorkflowState.PROPOSALS,
         close_status=None,
         search_attributes={

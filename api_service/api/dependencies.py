@@ -67,16 +67,16 @@ def get_vector_index(request: Request) -> Optional[VectorStoreIndex]:
         )
         return None
 
-def ensure_task_template_catalog_enabled() -> None:
-    """Raise a 404 when the task template catalog is disabled."""
+def ensure_preset_catalog_enabled() -> None:
+    """Raise a 404 when the preset catalog is disabled."""
 
-    if settings.feature_flags.task_template_catalog_enabled:
+    if settings.feature_flags.preset_catalog_enabled:
         return
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
         detail={
-            "code": "task_template_catalog_disabled",
-            "message": "Task template catalog is disabled in this environment.",
+            "code": "preset_catalog_disabled",
+            "message": "Preset catalog is disabled in this environment.",
         },
     )
 

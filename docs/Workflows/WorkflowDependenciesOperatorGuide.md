@@ -6,7 +6,7 @@ This document describes operational behavior, limits, diagnostics, and remediati
 
 ## 1. What Are Workflow Dependencies?
 
-A `MoonMind.Run` execution can declare up to **10 prerequisite `workflowId` values** at create time via `payload.task.dependsOn`. The dependent run:
+A `MoonMind.UserWorkflow` execution can declare up to **10 prerequisite `workflowId` values** at create time via `payload.task.dependsOn`. The dependent run:
 
 1. Initializes normally.
 2. Enters `waiting_on_dependencies` state.
@@ -24,7 +24,7 @@ Each dependent run is a **top-level, independently visible, cancelable, and reru
 | Constraint | Value |
 |---|---|
 | Maximum direct dependencies per run | **10** |
-| Cross-workflow-type dependencies | **Not supported** — prerequisites must also be `MoonMind.Run` |
+| Cross-workflow-type dependencies | **Not supported** — prerequisites must also be `MoonMind.UserWorkflow` |
 | Editing dependencies after create | **Not supported** |
 | Transitive dependency expansion | **Not supported** — C depends on B depends on A means C waits on B only |
 | Auto-canceling prerequisite runs | **Not supported** |

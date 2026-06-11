@@ -6,7 +6,7 @@ Related:
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](./ManagedAndExternalAgentExecutionModel.md)
 - [`docs/Temporal/ActivityCatalogAndWorkerTopology.md`](./ActivityCatalogAndWorkerTopology.md)
 - [`docs/Temporal/StepLedgerAndProgressModel.md`](./StepLedgerAndProgressModel.md)
-- [`docs/Tasks/WorkflowFinishSummarySystem.md`](../Tasks/WorkflowFinishSummarySystem.md)
+- [`docs/Workflows/WorkflowFinishSummarySystem.md`](../Workflows/WorkflowFinishSummarySystem.md)
 - [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)
 
 ---
@@ -464,7 +464,7 @@ Workflows decide what to do with activity failures:
 - trigger cooldown logic
 - reschedule work
 - continue-as-new
-- mark task status and update visibility
+- mark workflow status and update visibility
 
 ## 10.3 Workflows should not repair malformed contracts
 
@@ -477,7 +477,7 @@ turning the resulting exception chain into the bounded, redacted failure
 reason that operators see in `reports/run_summary.json` and in the terminal
 execution state.
 
-`MoonMind.Run` captures a structured **failure diagnostic** at the first
+`MoonMind.UserWorkflow` captures a structured **failure diagnostic** at the first
 failure boundary that surfaces a non-generic root cause — typically the
 `except Exception` blocks around a `MoonMind.AgentRun` child workflow
 execution, a plan-step activity execution, the merge-automation child
@@ -489,7 +489,7 @@ this taxonomy, the failing `stepId`/`childWorkflowId`, and an optional
 The canonical contract for the diagnostic — including its JSON shape, the
 secret-handling rules, and how it feeds `finishOutcome.reason`, `lastStep`,
 and the terminal-state `errorCategory` — lives in
-[`docs/Tasks/WorkflowFinishSummarySystem.md`](../Tasks/WorkflowFinishSummarySystem.md).
+[`docs/Workflows/WorkflowFinishSummarySystem.md`](../Workflows/WorkflowFinishSummarySystem.md).
 The `category` values used there (`user_error`, `integration_error`,
 `execution_error`, `system_error`) are how this taxonomy's
 `ApplicationError.type` values such as `INVALID_INPUT`, `UnsupportedStatus`,

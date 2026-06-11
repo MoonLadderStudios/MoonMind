@@ -4,7 +4,7 @@ Status: Desired State
 Owners: MoonMind Engineering
 Last Updated: 2026-05-06
 Canonical for: managed-agent requests for additional agent skills during execution
-Related: `docs/Steps/SkillSystem.md`, `docs/Steps/StepTypes.md`, `docs/Tasks/SkillAndPlanContracts.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
+Related: `docs/Steps/SkillSystem.md`, `docs/Steps/StepTypes.md`, `docs/Workflows/SkillAndPlanContracts.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
 
 ---
 
@@ -14,7 +14,7 @@ This document defines the desired-state **Skills On Demand** extension to the Mo
 
 The normal skill flow remains:
 
-1. task and step intent selects the Skills MoonMind already knows are needed;
+1. workflow and step intent selects the Skills MoonMind already knows are needed;
 2. MoonMind resolves that intent into an immutable `ResolvedSkillSet` before runtime launch;
 3. workflows and runtime requests carry compact refs to the resolved snapshot;
 4. managed runtimes receive a compact activation summary and an active read-only projection at `.agents/skills`.
@@ -30,7 +30,7 @@ Examples:
 - a code implementation agent discovers the repo uses an unfamiliar framework and asks for a framework-specific review Skill;
 - a docs-writing Skill asks whether a deployment-managed API-writing Skill exists;
 - a PR fixer asks for an available CI-failure-triage Skill after reading failing test logs;
-- a repo migration task asks for a repository-specific migration convention Skill that was not selected up front.
+- a repo migration workflow asks for a repository-specific migration convention Skill that was not selected up front.
 
 ---
 
@@ -335,7 +335,7 @@ Rules:
 
 Before runtime launch, MoonMind follows normal Skill resolution:
 
-1. collect task-level and step-level Skill selectors;
+1. collect workflow-level and step-level Skill selectors;
 2. resolve the initial `ResolvedSkillSet`;
 3. persist the manifest and Skill body artifacts;
 4. materialize the active bundle;

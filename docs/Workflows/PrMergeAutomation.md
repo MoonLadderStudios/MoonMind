@@ -3,31 +3,31 @@
 **Status:** Proposed  
 **Owner:** MoonMind Platform  
 **Audience:** backend, workflow authors, API, Mission Control  
-**Related:** `docs/Tasks/WorkflowDependencies.md`, `docs/Tasks/WorkflowPublishing.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Temporal/TemporalAgentExecution.md`, `docs/ManagedAgents/SkillGithubPrResolver.md`
+**Related:** `docs/Workflows/WorkflowDependencies.md`, `docs/Workflows/WorkflowPublishing.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Temporal/TemporalAgentExecution.md`, `docs/ManagedAgents/SkillGithubPrResolver.md`
 
 ---
 
 ## 1. Purpose
 
-Define how MoonMind should implement **PR merge automation** for PR-publishing tasks using a **child workflow strategy**.
+Define how MoonMind should implement **PR merge automation** for PR-publishing workflow executions using a **child workflow strategy**.
 
-This design covers the case where a task:
+This design covers the case where a workflow execution:
 
 1. performs implementation work,
 2. publishes a PR,
 3. waits for external merge-readiness signals such as GitHub review/check completion and optional Jira state,
 4. invokes `pr-resolver`,
-5. does not allow the parent task to complete until merge automation reaches its terminal outcome.
+5. does not allow the parent workflow to complete until merge automation reaches its terminal outcome.
 
-The goal is to let downstream task dependencies wait on the **original parent task workflow** rather than forcing operators to depend on a second top-level workflow created later.
+The goal is to let downstream workflow dependencies wait on the **original parent Workflow Execution** rather than forcing operators to depend on a second top-level workflow created later.
 
 ---
 
 ## 2. Design Decision
 
-MoonMind MUST implement PR merge automation as **parent-owned subordinate orchestration** inside the original `MoonMind.Run`, using **child workflows**, not a separate top-level dependency target.
+MoonMind MUST implement PR merge automation as **parent-owned subordinate orchestration** inside the original `MoonMind.UserWorkflow`, using **child workflows**, not a separate top-level dependency target.
 
-This aligns with the current MoonMind dependency contract: task dependencies are for **separate top-level `MoonMind.Run` executions**, while direct parent-owned subordinate work that should be awaited inside one orchestration history should use **child workflows**.
+This aligns with the current MoonMind dependency contract: workflow dependencies are for **separate top-level `MoonMind.UserWorkflow` executions**, while direct parent-owned subordinate work that should be awaited inside one orchestration history should use **child workflows**.
 
 This also aligns with the Temporal-side lifecycle model: workflows orchestrate, activities do side effects, and MoonMind already treats child workflows as the right durability boundary for subordinate execution concerns.
 
@@ -35,8 +35,8 @@ This also aligns with the Temporal-side lifecycle model: workflows orchestrate, 
 
 ## 3. Goals
 
-- Keep the original task's `workflowId` as the only dependency target needed by downstream tasks.
-- Ensure merge automation is durably awaited before the parent task reaches terminal success.
+- Keep the original workflow's `workflowId` as the only dependency target needed by downstream workflow executions.
+- Ensure merge automation is durably awaited before the parent workflow reaches terminal success.
 - Avoid a fixed-delay merge strategy; use a **state-based gate** instead.
 - Reuse MoonMind's existing execution substrate for `pr-resolver` rather than duplicating skill-execution plumbing.
 - Preserve observability, cancellation, artifact output, and replay safety.
@@ -45,7 +45,7 @@ This also aligns with the Temporal-side lifecycle model: workflows orchestrate, 
 
 ## 4. Non-Goals
 
-- Introduce merge automation as a separate top-level task dependency model.
+- Introduce merge automation as a separate top-level workflow dependency model.
 - Replace `pr-resolver` with a brand-new merge engine.
 - Make merge automation editable mid-flight in v1.
 - Generalize this document to non-PR publish modes.
@@ -54,37 +54,37 @@ This also aligns with the Temporal-side lifecycle model: workflows orchestrate, 
 
 ## 5. Summary of the Strategy
 
-When PR publishing is enabled (`publishMode = "pr"` in `MoonMind.Run` parameters) and merge automation is enabled:
+When PR publishing is enabled (`publishMode = "pr"` in `MoonMind.UserWorkflow` parameters) and merge automation is enabled:
 
-1. The original `MoonMind.Run` performs its normal implementation work.
+1. The original `MoonMind.UserWorkflow` performs its normal implementation work.
 2. The publish step creates or updates the PR and emits a durable `PublishContext`.
-3. The parent `MoonMind.Run` starts a child workflow named **`MoonMind.MergeAutomation`**.
+3. The parent `MoonMind.UserWorkflow` starts a child workflow named **`MoonMind.MergeAutomation`**.
 4. The parent workflow does **not** complete while that child workflow is still running.
 5. `MoonMind.MergeAutomation` waits on a **merge automation gate**:
    - GitHub external review/check signal completion
    - optional Jira status requirements
-6. When the gate opens, `MoonMind.MergeAutomation` starts a **child `MoonMind.Run`** dedicated to `pr-resolver`.
+6. When the gate opens, `MoonMind.MergeAutomation` starts a **child `MoonMind.UserWorkflow`** dedicated to `pr-resolver`.
 7. The resolver child run attempts to remediate and merge.
 8. If resolver pushes a new commit and external review/check signal must be re-established, control returns to the gate.
 9. If the run is Jira-backed and post-merge Jira completion is enabled, `MoonMind.MergeAutomation` completes the selected Jira issue through the trusted Jira activity path after `merged` or `already_merged`.
-10. The parent task reaches terminal success only when merge automation returns `merged` or `already_merged` after any required post-merge Jira completion succeeds or no-ops.
-11. Terminal `blocked`, `failed`, or `expired` outcomes fail the parent task; terminal `canceled` cancels the parent task so operator-initiated cancellation is not reported as failure.
+10. The parent workflow reaches terminal success only when merge automation returns `merged` or `already_merged` after any required post-merge Jira completion succeeds or no-ops.
+11. Terminal `blocked`, `failed`, or `expired` outcomes fail the parent workflow; terminal `canceled` cancels the parent workflow so operator-initiated cancellation is not reported as failure.
 
 ---
 
 ## 6. Why This Uses Child Workflows
 
-### 6.1 Why not a separate top-level follow-up task
+### 6.1 Why not a separate top-level follow-up workflow
 
-A separate top-level follow-up task would make the dependency story worse:
+A separate top-level follow-up workflow would make the dependency story worse:
 
-- downstream tasks would need to know about a later-created second workflow,
-- parent-task success would no longer mean "implementation + publish + merge automation completed,"
-- the relationship would look like task dependency when it is actually parent-owned subordinate work.
+- downstream workflow executions would need to know about a later-created second workflow,
+- parent-workflow success would no longer mean "implementation + publish + merge automation completed,"
+- the relationship would look like a workflow dependency when it is actually parent-owned subordinate work.
 
-MoonMind's dependency contract reserves task dependencies for separate top-level runs and treats parent-owned directly awaited subordinate work as child workflow orchestration.
+MoonMind's dependency contract reserves workflow dependencies for separate top-level runs and treats parent-owned directly awaited subordinate work as child workflow orchestration.
 
-### 6.2 Why not all inside one giant `MoonMind.Run`
+### 6.2 Why not all inside one giant `MoonMind.UserWorkflow`
 
 A single giant workflow would work technically, but it would mix three distinct responsibilities:
 
@@ -92,13 +92,13 @@ A single giant workflow would work technically, but it would mix three distinct 
 - long-lived external gating,
 - repeated resolver execution cycles.
 
-MoonMind's lifecycle model already expects `MoonMind.Run` to mix direct activities and child workflows and to move through `awaiting_external` / `awaiting_slot` style waits when subordinate work is in progress. A child workflow boundary keeps the parent readable and keeps the gating logic isolated.
+MoonMind's lifecycle model already expects `MoonMind.UserWorkflow` to mix direct activities and child workflows and to move through `awaiting_external` / `awaiting_slot` style waits when subordinate work is in progress. A child workflow boundary keeps the parent readable and keeps the gating logic isolated.
 
-### 6.3 Why the resolver itself is a child `MoonMind.Run`
+### 6.3 Why the resolver itself is a child `MoonMind.UserWorkflow`
 
 The current MoonMind execution model dispatches plan execution through `agent_runtime` child workflows. `pr-resolver` is an agent skill selected for the resolver run, not a standalone workflow type, and it owns git/PR mutations and requires `publishMode = "none"`.
 
-Because of that, `MoonMind.MergeAutomation` SHOULD start a child **`MoonMind.Run`** for the resolver, rather than trying to execute the resolver skill directly inside the gate workflow. This reuses:
+Because of that, `MoonMind.MergeAutomation` SHOULD start a child **`MoonMind.UserWorkflow`** for the resolver, rather than trying to execute the resolver skill directly inside the gate workflow. This reuses:
 
 - existing workspace/runtime setup,
 - artifact publishing,
@@ -111,13 +111,13 @@ Because of that, `MoonMind.MergeAutomation` SHOULD start a child **`MoonMind.Run
 ## 7. Workflow Topology
 
 ```text
-MoonMind.Run (root parent task)
+MoonMind.UserWorkflow (root parent workflow)
   |- implementation / testing / publish
   |- child: MoonMind.MergeAutomation
   |    |- gate wait / external events / Jira checks
-  |    |- child: MoonMind.Run (resolver attempt 1)
+  |    |- child: MoonMind.UserWorkflow (resolver attempt 1)
   |    |     `- executes tool=skill(pr-resolver), publishMode=none
-  |    `- child: MoonMind.Run (resolver attempt 2, if needed)
+  |    `- child: MoonMind.UserWorkflow (resolver attempt 2, if needed)
   |          `- executes tool=skill(pr-resolver), publishMode=none
   `- terminal completion only after MergeAutomation returns success
 ```
@@ -136,7 +136,7 @@ This type is justified because the behavior is distinct:
 - it is long-lived,
 - it is callback/poll driven,
 - it may execute repeated resolver cycles,
-- it is not a normal user task surface.
+- it is not a normal user workflow surface.
 
 Workflow types should remain few and stable, but new types are appropriate when the behavior is truly distinct.
 
@@ -146,7 +146,7 @@ Workflow types should remain few and stable, but new types are appropriate when 
 
 ### 9.1 Parent input contract
 
-Merge automation is configured in the normalized `MoonMind.Run` parameters. API or template surfaces may collect this under a nested `task.publish` object, but worker-bound `MoonMind.Run` input MUST preserve the current top-level `publishMode` contract:
+Merge automation is configured in the normalized `MoonMind.UserWorkflow` parameters. API or template surfaces may collect this under a nested `task.publish` object, but worker-bound `MoonMind.UserWorkflow` input MUST preserve the current top-level `publishMode` contract:
 
 ```json
 {
@@ -193,14 +193,14 @@ The publish step MUST emit a durable `PublishContext` containing at minimum:
 - optional `jiraIssueKey`
 
 This may be stored as an artifact ref plus compact memo-safe summary fields.
-The current `MoonMind.Run` publish state tracks a smaller PR summary, so this
+The current `MoonMind.UserWorkflow` publish state tracks a smaller PR summary, so this
 feature requires extending that state tracking to include the PR number, current
 head SHA, publication timestamp, and artifact ref before `MoonMind.MergeAutomation`
 can rely on those fields.
 
 ### 9.3 Parent state behavior
 
-After PR publish succeeds and merge automation is enabled, the parent `MoonMind.Run`:
+After PR publish succeeds and merge automation is enabled, the parent `MoonMind.UserWorkflow`:
 
 1. starts `MoonMind.MergeAutomation`,
 2. records the child workflow id in compact metadata,
@@ -211,7 +211,7 @@ The parent SHOULD use existing state vocabulary rather than inventing a new root
 
 - parent `mm_state`: `awaiting_external`
 
-This fits the current lifecycle model, which already includes `awaiting_external` for durable external waiting. If Mission Control later needs a dedicated `merge_automation` stage marker, the implementation MUST add it through the standard `MoonMind.Run` search-attribute update path rather than assuming `mm_stage` already carries that value.
+This fits the current lifecycle model, which already includes `awaiting_external` for durable external waiting. If Mission Control later needs a dedicated `merge_automation` stage marker, the implementation MUST add it through the standard `MoonMind.UserWorkflow` search-attribute update path rather than assuming `mm_stage` already carries that value.
 
 ---
 
@@ -220,8 +220,8 @@ This fits the current lifecycle model, which already includes `awaiting_external
 ### 10.1 Input
 
 Jira-backed merge automation may include a `postMergeJira` block under
-`mergeAutomationConfig`. When `MoonMind.Run` starts merge automation from a
-PR-publishing task with a canonical Jira issue key, it enables this block by
+`mergeAutomationConfig`. When `MoonMind.UserWorkflow` starts merge automation from a
+PR-publishing workflow execution with a canonical Jira issue key, it enables this block by
 default so the issue is completed after verified merge success.
 
 ```json
@@ -257,7 +257,7 @@ Target issue resolution is strict:
 
 - explicit `postMergeJira.issueKey` wins when provided;
 - otherwise the workflow uses the normalized merge automation `jiraIssueKey`;
-- captured task origin or publish context keys may be used when present;
+- captured workflow origin or publish context keys may be used when present;
 - PR metadata issue keys are only a strict exact-key fallback;
 - fuzzy Jira summary search and multi-issue completion are not part of this
   behavior.
@@ -281,13 +281,13 @@ operator-visible reason text.
 For Jira-oriented PR-publishing runs where PR output is optional, the run may
 finish with no repository changes because the Jira issue is already implemented.
 When the agent or structured publish output explicitly confirms that already
-implemented outcome, `MoonMind.Run` invokes the same trusted Jira completion
+implemented outcome, `MoonMind.UserWorkflow` invokes the same trusted Jira completion
 activity directly and requires the selected issue to reach a done-category
 status before the run can finish successfully.
 
 This path is intentionally not driven by fuzzy text search over arbitrary issue
-keys. The run uses the canonical Jira issue key from task metadata or a single
-validated Jira key from the Jira-backed task text. If the no-change result is
+keys. The run uses the canonical Jira issue key from workflow metadata or a single
+validated Jira key from the Jira-backed instruction text. If the no-change result is
 ambiguous, for example it only says there was no diff but does not confirm the
 issue was already implemented, MoonMind does not mutate Jira and the run summary
 must state that no confirmation was available.
@@ -397,7 +397,7 @@ No new `mm_state` is required for v1.
    - wait for signal or fallback timer
    - continue
 4. if gate open:
-   - start resolver child `MoonMind.Run`
+   - start resolver child `MoonMind.UserWorkflow`
    - await resolver result
 5. inspect resolver result:
    - merged / already_merged -> success
@@ -471,7 +471,7 @@ A gate evaluation returns:
 
 ### 13.1 Resolver child type
 
-When the gate opens, `MoonMind.MergeAutomation` starts a child **`MoonMind.Run`** with a single-purpose payload for `pr-resolver`.
+When the gate opens, `MoonMind.MergeAutomation` starts a child **`MoonMind.UserWorkflow`** with a single-purpose payload for `pr-resolver`.
 
 That child run MUST set:
 
@@ -484,7 +484,7 @@ This is required because `pr-resolver` itself owns git push and merge behavior.
 
 ```json
 {
-  "workflowType": "MoonMind.Run",
+  "workflowType": "MoonMind.UserWorkflow",
   "initialParameters": {
     "repository": "owner/repo",
     "targetRuntime": "codex",
@@ -579,13 +579,13 @@ head.
 
 ## 16. Dependency Semantics
 
-For tasks with merge automation enabled:
+For workflow executions with merge automation enabled:
 
 - the root parent `workflowId` remains the only dependency target,
 - downstream `dependsOn` relationships stay unchanged,
-- the parent task does not complete successfully until merge automation succeeds.
+- the parent workflow does not complete successfully until merge automation succeeds.
 
-This gives the operator the desired behavior: another task can depend on the original task and naturally wait for PR publish + gate + resolver completion without discovering a later-created top-level workflow.
+This gives the operator the desired behavior: another workflow execution can depend on the original workflow and naturally wait for PR publish + gate + resolver completion without discovering a later-created top-level workflow.
 
 ---
 
@@ -593,14 +593,14 @@ This gives the operator the desired behavior: another task can depend on the ori
 
 ### 17.1 Parent success
 
-The parent `MoonMind.Run` succeeds only when `MoonMind.MergeAutomation` returns:
+The parent `MoonMind.UserWorkflow` succeeds only when `MoonMind.MergeAutomation` returns:
 
 - `merged`
 - `already_merged`
 
 ### 17.2 Parent failure
 
-The parent `MoonMind.Run` fails when `MoonMind.MergeAutomation` returns:
+The parent `MoonMind.UserWorkflow` fails when `MoonMind.MergeAutomation` returns:
 
 - `blocked`
 - `failed`
@@ -621,7 +621,7 @@ That is out of scope for v1 of this design.
 
 ## 18. Cancellation Semantics
 
-- Canceling the parent task cancels `MoonMind.MergeAutomation`.
+- Canceling the parent workflow cancels `MoonMind.MergeAutomation`.
 - Canceling `MoonMind.MergeAutomation` cancels any in-flight resolver child run.
 - Child cleanup remains best-effort and truthful.
 
@@ -652,9 +652,9 @@ This matches MoonMind's general Continue-As-New posture for long-lived workflows
 
 ## 20. Visibility and Artifacts
 
-### 20.1 Parent task detail
+### 20.1 Parent workflow detail
 
-The parent task detail should show a **Merge Automation** panel with:
+The parent workflow detail should show a **Merge Automation** panel with:
 
 - status
 - PR link
@@ -708,17 +708,17 @@ This feature should not appear as a separate dependency or scheduling surface.
 
 ## 22. Rejected Alternatives
 
-### 22.1 Fixed-delay follow-up task
+### 22.1 Fixed-delay follow-up workflow
 
 Rejected because it is weaker than state-based gating and duplicates waiting logic already better expressed through durable workflow wait + external signals.
 
-### 22.2 Separate top-level resolver task
+### 22.2 Separate top-level resolver workflow
 
 Rejected because it creates a second dependency target and treats parent-owned subordinate work like an independent workflow relationship.
 
 ### 22.3 Directly execute resolver skill inside `MoonMind.MergeAutomation`
 
-Rejected for v1 because it would duplicate existing `MoonMind.Run` skill-execution substrate and bypass standard run-level artifacts, logs, and execution plumbing.
+Rejected for v1 because it would duplicate existing `MoonMind.UserWorkflow` skill-execution substrate and bypass standard run-level artifacts, logs, and execution plumbing.
 
 ---
 
@@ -726,13 +726,13 @@ Rejected for v1 because it would duplicate existing `MoonMind.Run` skill-executi
 
 This design is complete when:
 
-1. a PR-publishing parent task can enable merge automation,
+1. a PR-publishing parent workflow can enable merge automation,
 2. the parent starts `MoonMind.MergeAutomation` as a child workflow after PR publish,
 3. the parent does not complete until the merge-automation child completes,
 4. `MoonMind.MergeAutomation` waits on external signal completion rather than a fixed delay,
-5. `MoonMind.MergeAutomation` launches a child `MoonMind.Run` for `pr-resolver`,
+5. `MoonMind.MergeAutomation` launches a child `MoonMind.UserWorkflow` for `pr-resolver`,
 6. resolver child runs use `publishMode = "none"`,
 7. a resolver-generated push can return control to the gate,
-8. downstream tasks depending on the parent task naturally wait for merge automation completion,
-9. non-success merge-automation terminal outcomes fail the parent task except `canceled`, which cancels the parent task,
-10. root and child artifacts expose enough state for Mission Control to explain why a task is waiting or failed.
+8. downstream workflow executions depending on the parent workflow naturally wait for merge automation completion,
+9. non-success merge-automation terminal outcomes fail the parent workflow except `canceled`, which cancels the parent workflow,
+10. root and child artifacts expose enough state for Mission Control to explain why a workflow execution is waiting or failed.

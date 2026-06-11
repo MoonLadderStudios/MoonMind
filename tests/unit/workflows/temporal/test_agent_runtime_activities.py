@@ -174,7 +174,7 @@ async def test_execution_notify_completion_posts_sanitized_payload(monkeypatch) 
             "result": {
                 "summary": "token=secret",
                 "failureClass": None,
-                "metadata": {"taskRunId": "task-1"},
+                "metadata": {"agentRunId": "task-1"},
             },
         }
     )
@@ -186,7 +186,7 @@ async def test_execution_notify_completion_posts_sanitized_payload(monkeypatch) 
     assert calls[0]["headers"]["Authorization"] == "Bearer secret"
     assert calls[0]["json"]["event"] == "moonmind.execution.completed"
     assert calls[0]["json"]["summary"] == "token=[REDACTED]"
-    assert calls[0]["json"]["taskRunId"] == "task-1"
+    assert calls[0]["json"]["agentRunId"] == "task-1"
 
 
 async def test_execution_notify_completion_blocks_secret_before_webhook(
@@ -246,7 +246,7 @@ async def test_execution_notify_completion_blocks_secret_before_webhook(
             "result": {
                 "summary": f"Investigate password={raw_secret}",
                 "failureClass": "permanent",
-                "metadata": {"taskRunId": "task-1"},
+                "metadata": {"agentRunId": "agent-run-1"},
             },
         }
     )
@@ -327,7 +327,7 @@ async def test_execution_notify_completion_scans_unredacted_webhook_payload(
             "result": {
                 "summary": f"Investigate password={raw_secret}",
                 "failureClass": "permanent",
-                "metadata": {"taskRunId": "task-1"},
+                "metadata": {"agentRunId": "agent-run-1"},
             },
         }
     )
@@ -554,7 +554,7 @@ async def test_execution_notify_completion_sends_email_channel(monkeypatch) -> N
             "result": {
                 "summary": "password=secret",
                 "failureClass": "permanent",
-                "metadata": {"taskRunId": "task-email"},
+                "metadata": {"agentRunId": "task-email"},
             },
         }
     )
@@ -835,7 +835,7 @@ async def test_publish_artifacts_notifies_terminal_result(monkeypatch) -> None:
                 "agentId": "codex_cli",
                 "agentKind": "managed",
                 "status": "completed",
-                "taskRunId": "task-1",
+                "agentRunId": "task-1",
             },
         )
     )
@@ -880,7 +880,7 @@ def _session_record(session_id: str, *, status: str) -> dict[str, Any]:
     return CodexManagedSessionRecord(
         sessionId=session_id,
         sessionEpoch=1,
-        taskRunId="wf-run-1",
+        agentRunId="wf-run-1",
         containerId=f"container-{session_id}",
         threadId=f"thread-{session_id}",
         runtimeId="codex_cli",
@@ -1170,7 +1170,7 @@ async def test_fetch_result_exposes_task_run_and_runtime_artifact_metadata(
     )
 
     assert isinstance(result, AgentRunResult)
-    assert result.metadata["taskRunId"] == "550e8400-e29b-41d4-a716-446655440000"
+    assert result.metadata["agentRunId"] == "550e8400-e29b-41d4-a716-446655440000"
     assert result.metadata["stdoutArtifactRef"] == "art_stdout_1"
     assert result.metadata["stderrArtifactRef"] == "art_stderr_1"
     assert result.metadata["mergedLogArtifactRef"] == "art_merged_1"
@@ -1189,7 +1189,7 @@ async def test_launch_session_requires_session_controller() -> None:
     ):
         await activities.agent_runtime_launch_session(
             {
-                "taskRunId": "task-1",
+                "agentRunId": "task-1",
                 "sessionId": "sess-1",
                 "threadId": "thread-1",
                 "workspacePath": "/work/task/repo",
@@ -1218,7 +1218,7 @@ async def test_launch_session_delegates_to_remote_session_controller() -> None:
 
     result = await activities.agent_runtime_launch_session(
         {
-            "taskRunId": "task-1",
+            "agentRunId": "task-1",
             "sessionId": "sess-1",
             "threadId": "thread-1",
             "workspacePath": "/work/task/repo",
@@ -1269,7 +1269,7 @@ async def test_launch_session_heartbeats_while_waiting_for_remote_session_contro
 
     result = await activities.agent_runtime_launch_session(
         {
-            "taskRunId": "task-1",
+            "agentRunId": "task-1",
             "sessionId": "sess-1",
             "threadId": "thread-1",
             "workspacePath": "/work/task/repo",
@@ -1286,7 +1286,7 @@ async def test_launch_session_heartbeats_while_waiting_for_remote_session_contro
     assert all(
         heartbeat == {
             "activityType": "agent_runtime.launch_session",
-            "taskRunId": "task-1",
+            "agentRunId": "task-1",
             "runtimeFamily": "codex",
             "sessionId": "sess-1",
             "threadId": "thread-1",
@@ -1315,7 +1315,7 @@ async def test_launch_session_uses_github_descriptor_from_activity_environment(
 
     await activities.agent_runtime_launch_session(
         {
-            "taskRunId": "task-1",
+            "agentRunId": "task-1",
             "sessionId": "sess-1",
             "threadId": "thread-1",
             "workspacePath": "/work/task/repo",
@@ -1355,7 +1355,7 @@ async def test_launch_session_preserves_request_scoped_github_token_for_controll
 
     await activities.agent_runtime_launch_session(
         {
-            "taskRunId": "task-1",
+            "agentRunId": "task-1",
             "sessionId": "sess-1",
             "threadId": "thread-1",
             "workspacePath": "/work/task/repo",
@@ -1396,7 +1396,7 @@ async def test_launch_session_injects_moonmind_url_from_activity_environment(
 
     await activities.agent_runtime_launch_session(
         {
-            "taskRunId": "task-1",
+            "agentRunId": "task-1",
             "sessionId": "sess-1",
             "threadId": "thread-1",
             "workspacePath": "/work/task/repo",
@@ -1436,7 +1436,7 @@ async def test_launch_session_uses_github_descriptor_for_managed_secret_store(
 
     await activities.agent_runtime_launch_session(
         {
-            "taskRunId": "task-1",
+            "agentRunId": "task-1",
             "sessionId": "sess-1",
             "threadId": "thread-1",
             "workspacePath": "/work/task/repo",
@@ -1483,7 +1483,7 @@ async def test_launch_session_preserves_explicit_github_secret_ref_descriptor(
 
     await activities.agent_runtime_launch_session(
         {
-            "taskRunId": "task-1",
+            "agentRunId": "task-1",
             "sessionId": "sess-1",
             "threadId": "thread-1",
             "workspacePath": "/work/task/repo",
@@ -1519,7 +1519,7 @@ async def test_launch_session_redacts_github_token_in_failure_details() -> None:
     ) as exc_info:
         await activities.agent_runtime_launch_session(
             {
-                "taskRunId": "task-1",
+                "agentRunId": "task-1",
                 "sessionId": "sess-1",
                 "threadId": "thread-1",
                 "workspacePath": "/work/task/repo",
@@ -1559,7 +1559,7 @@ async def test_launch_session_materializes_profile_into_request_environment(
     await activities.agent_runtime_launch_session(
         {
             "request": {
-                "taskRunId": "task-1",
+                "agentRunId": "task-1",
                 "sessionId": "sess-1",
                 "threadId": "thread-1",
                 "workspacePath": str(tmp_path / "task-1" / "repo"),
@@ -1630,7 +1630,7 @@ async def test_launch_session_returns_safe_auth_diagnostics_metadata(
     result = await activities.agent_runtime_launch_session(
         {
             "request": {
-                "taskRunId": "task-1",
+                "agentRunId": "task-1",
                 "sessionId": "sess-1",
                 "threadId": "thread-1",
                 "workspacePath": str(tmp_path / "task-1" / "repo"),
@@ -1692,7 +1692,7 @@ async def test_launch_session_accepts_mapping_response_before_auth_diagnostics(
     result = await activities.agent_runtime_launch_session(
         {
             "request": {
-                "taskRunId": "task-1",
+                "agentRunId": "task-1",
                 "sessionId": "sess-1",
                 "threadId": "thread-1",
                 "workspacePath": str(tmp_path / "task-1" / "repo"),
@@ -1736,7 +1736,7 @@ async def test_launch_session_failure_reports_sanitized_auth_diagnostics(
         await activities.agent_runtime_launch_session(
             {
                 "request": {
-                    "taskRunId": "task-1",
+                    "agentRunId": "task-1",
                     "sessionId": "sess-1",
                     "threadId": "thread-1",
                     "workspacePath": str(tmp_path / "task-1" / "repo"),
@@ -1780,7 +1780,7 @@ async def test_launch_session_rejects_structured_secret_ref_values(
         await activities.agent_runtime_launch_session(
             {
                 "request": {
-                    "taskRunId": "task-1",
+                    "agentRunId": "task-1",
                     "sessionId": "sess-1",
                     "threadId": "thread-1",
                     "workspacePath": str(tmp_path / "task-1" / "repo"),
@@ -1817,7 +1817,7 @@ async def test_load_session_snapshot_queries_session_workflow_via_client_boundar
         return_value=CodexManagedSessionSnapshot(
             binding=CodexManagedSessionBinding(
                 workflowId="wf-task-1:session:codex_cli",
-                taskRunId="wf-task-1",
+                agentRunId="wf-task-1",
                 sessionId="sess:wf-task-1:codex_cli",
                 sessionEpoch=1,
                 runtimeId="codex_cli",
@@ -1850,7 +1850,7 @@ async def test_load_session_snapshot_queries_session_workflow_via_client_boundar
     result = await activities.agent_runtime_load_session_snapshot(
         {
             "workflowId": "wf-task-1:session:codex_cli",
-            "taskRunId": "wf-task-1",
+            "agentRunId": "wf-task-1",
             "sessionId": "sess:wf-task-1:codex_cli",
             "sessionEpoch": 1,
             "runtimeId": "codex_cli",
@@ -1872,7 +1872,7 @@ async def test_load_session_snapshot_reuses_client_adapter_across_calls(
         return_value=CodexManagedSessionSnapshot(
             binding=CodexManagedSessionBinding(
                 workflowId="wf-task-1:session:codex_cli",
-                taskRunId="wf-task-1",
+                agentRunId="wf-task-1",
                 sessionId="sess:wf-task-1:codex_cli",
                 sessionEpoch=1,
                 runtimeId="codex_cli",
@@ -1904,7 +1904,7 @@ async def test_load_session_snapshot_reuses_client_adapter_across_calls(
     activities = TemporalAgentRuntimeActivities()
     payload = {
         "workflowId": "wf-task-1:session:codex_cli",
-        "taskRunId": "wf-task-1",
+        "agentRunId": "wf-task-1",
         "sessionId": "sess:wf-task-1:codex_cli",
         "sessionEpoch": 1,
         "runtimeId": "codex_cli",
@@ -3247,7 +3247,7 @@ async def test_agent_runtime_launch_session_temporal_boundary(
             result = await env.client.execute_workflow(
                 AgentRuntimeLaunchSessionBoundaryTest.run,
                 {
-                    "taskRunId": "task-1",
+                    "agentRunId": "task-1",
                     "sessionId": "sess-boundary",
                     "threadId": "thread-1",
                     "workspacePath": "/work/task/repo",
@@ -4815,7 +4815,7 @@ async def test_launch_session_materializes_claude_oauth_home_environment(
     result = await activities.agent_runtime_launch_session(
         {
             "request": {
-                "taskRunId": "task-1",
+                "agentRunId": "task-1",
                 "sessionId": "sess-claude-1",
                 "threadId": "thread-claude-1",
                 "workspacePath": str(tmp_path / "task-1" / "repo"),
@@ -4878,7 +4878,7 @@ async def test_launch_session_failure_redacts_claude_auth_paths(
         await activities.agent_runtime_launch_session(
             {
                 "request": {
-                    "taskRunId": "task-1",
+                    "agentRunId": "task-1",
                     "sessionId": "sess-claude-1",
                     "threadId": "thread-claude-1",
                     "workspacePath": str(tmp_path / "task-1" / "repo"),
@@ -4931,7 +4931,7 @@ async def test_launch_session_claude_auth_diagnostics_do_not_alias_workspace_or_
     result = await activities.agent_runtime_launch_session(
         {
             "request": {
-                "taskRunId": "task-2",
+                "agentRunId": "task-2",
                 "sessionId": "sess-claude-2",
                 "threadId": "thread-claude-2",
                 "workspacePath": workspace_path,

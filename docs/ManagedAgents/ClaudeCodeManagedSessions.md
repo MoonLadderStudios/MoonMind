@@ -1,6 +1,6 @@
 # Claude Code Managed Sessions
 
-**Status:** Desired-state contract and domain model notes; not yet a live task-scoped managed-session runtime
+**Status:** Desired-state contract and domain model notes; not yet a live workflow-scoped managed-session runtime
 **Audience:** Managed Agents platform, runtime integration, client surfaces, security, and enterprise administration
 **Related:** `docs/ManagedAgents/CodexCliManagedSessions.md`
 
@@ -30,7 +30,7 @@ The live MoonMind session-control plane currently admits Codex CLI only. Claude 
 
 Current live boundaries:
 
-- `MoonMind.Run` starts `MoonMind.AgentSession` for `codex_cli` managed task steps.
+- `MoonMind.UserWorkflow` starts `MoonMind.AgentSession` for `codex_cli` managed workflow steps.
 - `MoonMind.AgentSession` stores compact Codex session binding, epoch, runtime handles, request tracking, and continuity refs.
 - `MoonMind.AgentRun` uses the Codex session adapter when `request.managed_session` is present and the managed-session runtime canonicalizes to `codex_cli`.
 - `agent_runtime.launch_session`, `send_turn`, `steer_turn`, `interrupt_turn`, `clear_session`, `terminate_session`, `fetch_session_summary`, and `publish_session_artifacts` use the live Codex session activity surface.
@@ -39,7 +39,7 @@ Current live boundaries:
 Known implementation gaps versus Codex:
 
 - Claude Code does not yet use the live remote-session activity transport. Claude-native checkpoint, policy-dialog, Remote Control, and subagent/team semantics are represented by domain models and documentation but are not yet exposed as live session workflow updates.
-- Codex App Server-specific implementation class names remain in private adapter/controller modules because the only live task-scoped managed-session transport is Codex-specific. Shared workflow/activity contracts should use `ManagedSession*` names when a second live runtime is added.
+- Codex App Server-specific implementation class names remain in private adapter/controller modules because the only live workflow-scoped managed-session transport is Codex-specific. Shared workflow/activity contracts should use `ManagedSession*` names when a second live runtime is added.
 
 ---
 

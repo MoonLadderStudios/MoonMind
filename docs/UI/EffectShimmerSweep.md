@@ -21,7 +21,7 @@ It defines:
 It does not define:
 
 - the full status color system for every workflow state
-- task row, task card, or task detail layout
+- workflow row, workflow card, or workflow detail layout
 - polling, live-update, or workflow execution behavior
 - unrelated shimmer effects such as segmented-control thumb shimmer or masked conic border beams
 
@@ -594,7 +594,7 @@ verification:
 
   render_tests:
     assert:
-      - active task-list and task-detail pills preserve text content
+      - active workflow-list and workflow-detail pills preserve text content
       - active pills expose aria-label once
       - active visual glyphs are aria-hidden
       - non-active pills render without glyph-wave markup

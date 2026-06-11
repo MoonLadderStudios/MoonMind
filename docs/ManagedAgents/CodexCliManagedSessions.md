@@ -8,7 +8,7 @@ Related:
 - [`docs/Temporal/ArtifactPresentationContract.md`](../Temporal/ArtifactPresentationContract.md)
 - [`docs/ManagedAgents/DockerSidecarRuntime.md`](./DockerSidecarRuntime.md)
 - [`docs/ManagedAgents/DockerOutOfDocker.md`](./DockerOutOfDocker.md)
-- [`docs/Tasks/AgentSkillSystem.md`](../Tasks/AgentSkillSystem.md)
+- [`docs/Steps/SkillSystem.md`](../Steps/SkillSystem.md)
 
 ## 1. Purpose
 
@@ -18,9 +18,9 @@ It freezes the smallest supported session-plane shape before broader implementat
 
 - Codex binding only
 - Docker only
-- one task-scoped session container per task
+- one workflow-scoped session container per workflow
 - optional per-session Docker sidecar for ordinary repo Docker commands
-- no cross-task session reuse
+- no cross-workflow session reuse
 - artifact-first logs and continuity
 - no Kubernetes orchestration
 - no Claude Code or Gemini binding details
@@ -57,12 +57,12 @@ operator-facing source of truth.
 
 ### 2.2 Managed Session Plane
 
-The managed session plane is the task-scoped Codex runtime environment:
+The managed session plane is the workflow-scoped Codex runtime environment:
 
-- one Docker container per task
+- one Docker container per workflow execution
 - Codex App Server running inside that container
 - one active Codex thread per session epoch
-- continuity reused across steps within the same task only
+- continuity reused across steps within the same workflow execution only
 
 The session plane is a continuity and performance cache. It is not durable truth.
 
@@ -78,11 +78,11 @@ Control-plane Docker workload tools from
 available for MoonMind admin/update, helper, and deliberately gated exceptional
 workloads. Those workload containers remain outside session identity: they do
 not become `session_id`, `session_epoch`, `container_id`, `thread_id`, or
-`active_turn_id`, and they do not replace the task-scoped session container.
+`active_turn_id`, and they do not replace the workflow-scoped session container.
 
-Codex session containers that need to create additional MoonMind tasks must be
+Codex session containers that need to create additional MoonMind workflow executions must be
 launched on the configured MoonMind Docker network and receive `MOONMIND_URL`
-pointing at the internal API endpoint. This keeps task creation on the
+pointing at the internal API endpoint. This keeps workflow creation on the
 Temporal-aware API path instead of relying on removed queue/DB shortcuts.
 
 ## 3. Protocol
@@ -123,7 +123,7 @@ The preferred command order for new histories is:
 
 1. perform a metadata-only preparation preflight when launch metadata may need
    retrieval refs or skill context;
-2. launch or resume the task-scoped session;
+2. launch or resume the workflow-scoped session;
 3. prepare the final turn instructions against the launched workspace/session
    boundary;
 4. submit the turn through `agent_runtime.send_turn`.
@@ -148,9 +148,9 @@ The canonical bounded session identity is:
 
 Rules:
 
-1. `session_id` identifies the MoonMind task-scoped managed session.
+1. `session_id` identifies the MoonMind workflow-scoped managed session.
 2. `session_epoch` identifies one logical continuity interval within that session.
-3. `container_id` identifies the active Docker container for the task-scoped session.
+3. `container_id` identifies the active Docker container for the workflow-scoped session.
 4. `thread_id` identifies the active Codex App Server thread for the current epoch.
 5. `active_turn_id` identifies the in-flight Codex turn when one exists.
 
@@ -260,7 +260,7 @@ runtimes.
 This contract does not define:
 
 - Kubernetes launch semantics
-- cross-task session reuse
+- cross-workflow session reuse
 - session UIs beyond continuity-aware artifact presentation
 - generalized multi-runtime certification
 - Claude Code/Gemini binding behavior

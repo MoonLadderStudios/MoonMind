@@ -17,7 +17,7 @@ Last Updated: 2026-05-08
 
 The Mission Control **Settings** page is the human-facing configuration plane for user, workspace, provider, secret, and operational configuration.
 
-Settings keeps the main product surface focused on tasks, task details, proposals, schedules, runs, and other task-adjacent workflows. Configuration that shapes those workflows belongs under one coherent Settings page rather than being split across unrelated top-level destinations.
+Settings keeps the main product surface focused on workflow executions, workflow details, proposals, schedules, runs, and other workflow-adjacent surfaces. Configuration that shapes those workflows belongs under one coherent Settings page rather than being split across unrelated top-level destinations.
 
 The Settings page replaces the older split where **Settings**, **Secrets**, and **Workers** could behave like separate product areas.
 
@@ -87,7 +87,7 @@ The frontend renders descriptors and submits user intent. It must not decide tha
 
 The User / Workspace section must render ordinary settings from catalog descriptors. A setting key is an identity, not a frontend branching mechanism.
 
-The frontend may switch on descriptor shape such as `type`, `ui`, `constraints`, `options`, `read_only`, and `sensitive`. It should not switch on specific keys such as `workflow.default_task_runtime` except for intentionally documented transitional exceptions.
+The frontend may switch on descriptor shape such as `type`, `ui`, `constraints`, `options`, `read_only`, and `sensitive`. It should not switch on specific keys such as `workflow.default_runtime` except for intentionally documented transitional exceptions.
 
 ### 3.3 Explicit specialist surfaces
 
@@ -109,7 +109,7 @@ Every visible effective value should be understandable from the UI. Users should
 - whether it is locked;
 - what scope controls it;
 - what systems it affects;
-- whether a reload, restart, next task, or next launch is required; and
+- whether a reload, restart, next workflow execution, or next launch is required; and
 - how to reset it to the inherited value when permitted.
 
 ### 3.6 Safe degradation
@@ -123,7 +123,7 @@ Unknown descriptor fields must not break the Settings page. Unsupported editable
 The desired top-level Mission Control navigation model is:
 
 ```text
-Tasks and task-adjacent product surfaces
+Workflows and workflow-adjacent product surfaces
 Settings
 ```
 
@@ -159,9 +159,9 @@ This section contains schema-driven settings for user and workspace behavior.
 It includes:
 
 - user preferences;
-- personal task creation defaults;
+- personal workflow creation defaults;
 - personal runtime and provider profile defaults;
-- workspace task defaults;
+- workspace workflow defaults;
 - workspace routing defaults;
 - workspace feature flags;
 - non-secret integration defaults;
@@ -193,15 +193,15 @@ Operations controls are not ordinary preferences. They are explicit commands or 
 Canonical route:
 
 ```text
-/tasks/settings
+/settings
 ```
 
 Supported section query model:
 
 ```text
-/tasks/settings?section=providers-secrets
-/tasks/settings?section=user-workspace
-/tasks/settings?section=operations
+/settings?section=providers-secrets
+/settings?section=user-workspace
+/settings?section=operations
 ```
 
 The default section should be `providers-secrets` unless product analytics or onboarding requirements justify a different default.
@@ -210,9 +210,9 @@ Legacy routes should redirect into the corresponding Settings section:
 
 | Legacy route | Target |
 |---|---|
-| `/tasks/secrets` | `/tasks/settings?section=providers-secrets` |
-| `/tasks/workers` | `/tasks/settings?section=operations` |
-| older Settings tab aliases | `/tasks/settings` |
+| `/secrets` | `/settings?section=providers-secrets` |
+| `/workers` | `/settings?section=operations` |
+| older Settings tab aliases | `/settings` |
 
 Redirects should preserve relevant query parameters where safe.
 
@@ -300,7 +300,7 @@ GET /api/v1/settings/catalog?section=user-workspace&scope=user
 GET /api/v1/settings/effective?scope=workspace
 GET /api/v1/settings/effective?scope=user
 GET /api/v1/settings/diagnostics?scope=workspace
-GET /api/v1/settings/audit?key=workflow.default_task_runtime
+GET /api/v1/settings/audit?key=workflow.default_runtime
 ```
 
 The catalog response should contain enough information for the UI to render controls, source explanations, read-only state, diagnostics, and reset affordances without hard-coded per-setting knowledge.
@@ -720,7 +720,7 @@ Settings may apply at different boundaries. The UI should display backend-provid
 
 - applies immediately;
 - applies on next request;
-- applies on next task;
+- applies on next workflow execution;
 - applies on next launch;
 - requires worker reload;
 - requires process restart; or
@@ -986,7 +986,7 @@ Audit and diagnostics should be loaded on demand when they are not needed for in
 The Settings page design is satisfied when all of the following are true:
 
 1. The canonical UI document is `docs/UI/SettingsPage.md`; the old `SettingsTab.md` path is removed or replaced by a short redirect note.
-2. The page uses `/tasks/settings` with `section` query selection for Providers & Secrets, User / Workspace, and Operations.
+2. The page uses `/settings` with `section` query selection for Providers & Secrets, User / Workspace, and Operations.
 3. The User / Workspace section renders ordinary settings from backend catalog descriptors.
 4. Adding a new supported setting descriptor does not require a new hard-coded row in the frontend.
 5. The frontend chooses generic controls from descriptor metadata such as `type`, `ui`, `options`, and `constraints`.

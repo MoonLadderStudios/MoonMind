@@ -1,4 +1,4 @@
-"""Integration tests for agent_runtime dispatch in MoonMind.Run.
+"""Integration tests for agent_runtime dispatch in MoonMind.UserWorkflow.
 
 These tests spawn a real Temporal test server via
 ``WorkflowEnvironment.start_time_skipping()`` and exercise the full
@@ -273,7 +273,7 @@ class TestAgentRuntimeDispatch(unittest.IsolatedAsyncioTestCase):
                 ),
             ):
                 request = {
-                    "workflowType": "MoonMind.Run",
+                    "workflowType": "MoonMind.UserWorkflow",
                     "title": "Agent Dispatch Test",
                     "initialParameters": {
                         "repo": "moonladder/moonmind",
@@ -347,7 +347,7 @@ class TestAgentRuntimeDispatch(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(client.WorkflowFailureError) as exc_info:
                     await env.client.execute_workflow(
                         MoonMindRunWorkflow.run,
-                        {"workflowType": "MoonMind.Run"},
+                        {"workflowType": "MoonMind.UserWorkflow"},
                         id="test-unsupported-tool-type",
                         task_queue="test-task-queue",
                         search_attributes=_trusted_search_attributes(),
@@ -358,7 +358,7 @@ class TestAgentRuntimeDispatch(unittest.IsolatedAsyncioTestCase):
                 )
 
     async def test_legacy_skill_tool_type_is_rejected(self) -> None:
-        """Legacy tool.type='skill' plan nodes are no longer dispatched by MoonMind.Run."""
+        """Legacy tool.type='skill' plan nodes are no longer dispatched by MoonMind.UserWorkflow."""
 
         @activity.defn(name="artifact.read")
         async def legacy_skill_plan_reader(args: Dict[str, Any]) -> bytes:
@@ -420,7 +420,7 @@ class TestAgentRuntimeDispatch(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(client.WorkflowFailureError) as exc_info:
                     await env.client.execute_workflow(
                         MoonMindRunWorkflow.run,
-                        {"workflowType": "MoonMind.Run"},
+                        {"workflowType": "MoonMind.UserWorkflow"},
                         id="test-legacy-skill-tool-type-rejected",
                         task_queue="test-task-queue",
                         search_attributes=_trusted_search_attributes(),
@@ -473,7 +473,7 @@ class TestAgentRuntimeDispatch(unittest.IsolatedAsyncioTestCase):
                     await env.client.execute_workflow(
                         MoonMindRunWorkflow.run,
                         {
-                            "workflowType": "MoonMind.Run",
+                            "workflowType": "MoonMind.UserWorkflow",
                             "title": "Jules missing PR failure",
                             "initialParameters": {
                                 "repo": "moonladder/moonmind",
@@ -493,7 +493,7 @@ class TestAgentRuntimeDispatch(unittest.IsolatedAsyncioTestCase):
 # ── Legacy registry workflow-boundary tests ──
 
 class TestSnapshotPinningOnRetry(unittest.IsolatedAsyncioTestCase):
-    """Verify MoonMind.Run dispatch does not read legacy skill registries."""
+    """Verify MoonMind.UserWorkflow dispatch does not read legacy skill registries."""
 
     def setUp(self) -> None:
         PLAN_GENERATE_CALLS.clear()
@@ -570,7 +570,7 @@ class TestSnapshotPinningOnRetry(unittest.IsolatedAsyncioTestCase):
             ):
                 handle = await env.client.start_workflow(
                     MoonMindRunWorkflow.run,
-                    {"workflowType": "MoonMind.Run", "title": "Retry Test"},
+                    {"workflowType": "MoonMind.UserWorkflow", "title": "Retry Test"},
                     id="test-retry-skillset-ref",
                     task_queue="test-task-queue",
                     search_attributes=_trusted_search_attributes(),
@@ -671,7 +671,7 @@ class TestSnapshotPinningOnRetry(unittest.IsolatedAsyncioTestCase):
                 # First run
                 handle1 = await env.client.start_workflow(
                     MoonMindRunWorkflow.run,
-                    {"workflowType": "MoonMind.Run", "title": "Rerun Run 1"},
+                    {"workflowType": "MoonMind.UserWorkflow", "title": "Rerun Run 1"},
                     id="test-rerun-run-1",
                     task_queue="test-task-queue",
                     search_attributes=_trusted_search_attributes(),
@@ -684,7 +684,7 @@ class TestSnapshotPinningOnRetry(unittest.IsolatedAsyncioTestCase):
                 # Second run (simulating a rerun)
                 handle2 = await env.client.start_workflow(
                     MoonMindRunWorkflow.run,
-                    {"workflowType": "MoonMind.Run", "title": "Rerun Run 2"},
+                    {"workflowType": "MoonMind.UserWorkflow", "title": "Rerun Run 2"},
                     id="test-rerun-run-2",
                     task_queue="test-task-queue",
                     search_attributes=_trusted_search_attributes(),
@@ -779,7 +779,7 @@ class TestSnapshotPinningOnRetry(unittest.IsolatedAsyncioTestCase):
             ):
                 handle = await env.client.start_workflow(
                     MoonMindRunWorkflow.run,
-                    {"workflowType": "MoonMind.Run", "title": "Child Ref Test"},
+                    {"workflowType": "MoonMind.UserWorkflow", "title": "Child Ref Test"},
                     id="test-child-ref",
                     task_queue="test-task-queue",
                     search_attributes=_trusted_search_attributes(),

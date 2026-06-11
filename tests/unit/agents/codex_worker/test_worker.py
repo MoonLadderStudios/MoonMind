@@ -133,9 +133,6 @@ class FakeQueueClient:
         self.claim_calls: list[dict[str, object]] = []
         self.heartbeats: list[str] = []
         self.heartbeat_payloads: list[dict[str, object]] = []
-        self.live_session_reports: list[dict[str, object]] = []
-        self.live_session_heartbeats: list[str] = []
-        self.live_session_state: dict[str, object] | None = None
         self.completed: list[tuple[str, str | None]] = []
         self.completed_finish_payloads: list[dict[str, object]] = []
         self.failed: list[str] = []
@@ -260,27 +257,6 @@ class FakeQueueClient:
             }
         )
 
-    async def report_live_session(self, **payload):
-        self.live_session_reports.append(dict(payload))
-        status = str(payload.get("status") or "").strip().lower()
-        worker_id = str(payload.get("worker_id") or "").strip() or None
-        if status:
-            self.live_session_state = {
-                "session": {
-                    "status": status,
-                    "workerId": worker_id,
-                }
-            }
-        return self.live_session_state or {}
-
-    async def heartbeat_live_session(self, *, job_id, worker_id):
-        self.live_session_heartbeats.append(str(job_id))
-        return self.live_session_state or {}
-
-    async def get_live_session(self, *, job_id):
-        _ = job_id
-        return self.live_session_state
-
     async def upload_artifact(self, *, job_id, worker_id, artifact):
         self.uploaded.append(artifact.name)
 
@@ -294,7 +270,7 @@ class FakeQueueClient:
             }
         )
 
-    async def create_task_proposal(self, *, proposal):
+    async def create_workflow_proposal(self, *, proposal):
         self.submitted_proposals.append(dict(proposal))
         return {"id": str(uuid4())}
 
@@ -493,11 +469,11 @@ class ProposalEvidenceAwareHandler(FakeHandler):
                                 "severity": "high",
                                 "evidence": "nested codex exec block duplication",
                             },
-                            "taskCreateRequest": {
+                            "workflowCreateRequest": {
                                 "type": "task",
                                 "payload": {
                                     "repository": "MoonLadderStudios/MoonMind",
-                                    "task": {"instructions": "Add regression coverage"},
+                                    "workflow": {"instructions": "Add regression coverage"},
                                 },
                             },
                         }
@@ -513,7 +489,7 @@ def _build_execute_stage_payloads() -> tuple[dict[str, object], dict[str, object
     canonical_payload: dict[str, object] = {
         "repository": "MoonLadderStudios/MoonMind",
         "targetRuntime": "codex",
-        "task": {
+        "workflow": {
             "instructions": "run",
             "skill": {"id": "auto", "args": {}},
             "runtime": {"mode": "codex"},
@@ -894,7 +870,7 @@ async def test_run_once_reports_rag_unavailable_when_embedding_provider_unexecut
         payload={
             "repository": "a/b",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "runtime": {"mode": "codex"},
                 "git": {"startingBranch": "main", "targetBranch": None},
@@ -950,7 +926,7 @@ async def test_run_once_writes_runtime_config_into_task_context(tmp_path: Path) 
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "runtime": {
                     "mode": "codex",
@@ -1000,7 +976,7 @@ async def test_run_once_strips_task_git_target_branch_for_in_flight_payload(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "runtime": {"mode": "codex"},
                 "git": {"targetBranch": "legacy-target"},
@@ -1041,7 +1017,7 @@ async def test_run_once_passes_runtime_inheritance_args_to_batch_pr_resolver_ski
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "Queue PR resolver jobs.",
                 "skill": {"id": "auto"},
                 "steps": [
@@ -1146,7 +1122,7 @@ async def test_run_once_optional_artifact_upload_failures_are_non_fatal(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -1194,7 +1170,7 @@ async def test_run_once_optional_artifact_upload_failures_are_non_fatal(
     assert queue.completed[0][1] is not None
     assert "optional artifact upload(s) failed" in queue.completed[0][1]
 
-async def test_worker_submits_task_proposals(tmp_path: Path) -> None:
+async def test_worker_submits_workflow_proposals(tmp_path: Path) -> None:
     """Workers should submit proposals when the feature flag is enabled."""
 
     config = CodexWorkerConfig(
@@ -1204,7 +1180,7 @@ async def test_worker_submits_task_proposals(tmp_path: Path) -> None:
         poll_interval_ms=1500,
         lease_seconds=120,
         workdir=tmp_path,
-        enable_task_proposals=True,
+        enable_proposals=True,
     )
     queue = FakeQueueClient()
     handler = FakeHandler(
@@ -1215,20 +1191,20 @@ async def test_worker_submits_task_proposals(tmp_path: Path) -> None:
     job = ClaimedJob(id=uuid4(), type="task", payload={"repository": "moon/org"})
     context_dir = tmp_path / "context"
     context_dir.mkdir(parents=True, exist_ok=True)
-    proposals_path = context_dir / "task_proposals.json"
+    proposals_path = context_dir / "workflow_proposals.json"
     proposals_path.write_text(
         json.dumps(
             [
                 {
                     "title": "Add regression tests",
                     "summary": "Cover auth flow edge cases",
-                    "taskCreateRequest": {
+                    "workflowCreateRequest": {
                         "type": "task",
                         "priority": 0,
                         "maxAttempts": 3,
                         "payload": {
                             "repository": "MoonLadderStudios/MoonMind",
-                            "task": {"instructions": "Add tests"},
+                            "workflow": {"instructions": "Add tests"},
                         },
                     },
                 }
@@ -1254,7 +1230,7 @@ async def test_worker_submits_task_proposals(tmp_path: Path) -> None:
         publish_command_env=None,
     )
 
-    await worker._maybe_submit_task_proposals(job=job, prepared=prepared)
+    await worker._maybe_submit_workflow_proposals(job=job, prepared=prepared)
 
     assert queue.submitted_proposals
     first = queue.submitted_proposals[0]
@@ -1268,7 +1244,7 @@ async def test_worker_submission_report_aggregates_delivery_outcomes(
     tmp_path: Path,
 ) -> None:
     class OutcomeQueue(FakeQueueClient):
-        async def create_task_proposal(self, *, proposal):
+        async def create_workflow_proposal(self, *, proposal):
             self.submitted_proposals.append(dict(proposal))
             return {
                 "id": str(uuid4()),
@@ -1289,7 +1265,7 @@ async def test_worker_submission_report_aggregates_delivery_outcomes(
         poll_interval_ms=1500,
         lease_seconds=120,
         workdir=tmp_path,
-        enable_task_proposals=True,
+        enable_proposals=True,
     )
     queue = OutcomeQueue()
     worker = CodexWorker(
@@ -1303,19 +1279,19 @@ async def test_worker_submission_report_aggregates_delivery_outcomes(
     job = ClaimedJob(id=uuid4(), type="task", payload={"repository": "moon/org"})
     context_dir = tmp_path / "context"
     context_dir.mkdir(parents=True, exist_ok=True)
-    (context_dir / "task_proposals.json").write_text(
+    (context_dir / "workflow_proposals.json").write_text(
         json.dumps(
             [
                 {
                     "title": "Add regression tests",
                     "summary": "Cover auth flow edge cases",
-                    "taskCreateRequest": {
+                    "workflowCreateRequest": {
                         "type": "task",
                         "priority": 0,
                         "maxAttempts": 3,
                         "payload": {
                             "repository": "MoonLadderStudios/MoonMind",
-                            "task": {"instructions": "Add tests"},
+                            "workflow": {"instructions": "Add tests"},
                         },
                     },
                 }
@@ -1341,7 +1317,7 @@ async def test_worker_submission_report_aggregates_delivery_outcomes(
         publish_command_env=None,
     )
 
-    report = await worker._maybe_submit_task_proposals(job=job, prepared=prepared)
+    report = await worker._maybe_submit_workflow_proposals(job=job, prepared=prepared)
 
     assert report.submitted_count == 1
     assert report.delivered_count == 1
@@ -1371,7 +1347,7 @@ async def test_worker_builds_deterministic_retry_loop_signal_proposal(
         poll_interval_ms=1500,
         lease_seconds=120,
         workdir=tmp_path,
-        enable_task_proposals=True,
+        enable_proposals=True,
     )
     worker = CodexWorker(
         config=config,
@@ -1391,7 +1367,7 @@ async def test_worker_builds_deterministic_retry_loop_signal_proposal(
         ),
         canonical_payload={
             "repository": "MoonLadderStudios/MoonMind",
-            "task": {"git": {"startingBranch": "main"}},
+            "workflow": {"git": {"startingBranch": "main"}},
         },
         task_result=WorkerExecutionResult(
             succeeded=False,
@@ -1413,7 +1389,7 @@ async def test_worker_builds_deterministic_retry_loop_signal_proposal(
     assert "retry" in proposal["tags"]
     assert "loop_detected" in proposal["tags"]
     assert proposal["signal"]["severity"] == "high"
-    instructions = proposal["taskCreateRequest"]["payload"]["task"]["instructions"]
+    instructions = proposal["workflowCreateRequest"]["payload"]["workflow"]["instructions"]
     assert "MM-793" in instructions
 
 
@@ -1427,7 +1403,7 @@ async def test_worker_builds_project_safe_run_quality_signal_proposal(
         poll_interval_ms=1500,
         lease_seconds=120,
         workdir=tmp_path,
-        enable_task_proposals=True,
+        enable_proposals=True,
     )
     worker = CodexWorker(
         config=config,
@@ -1441,7 +1417,7 @@ async def test_worker_builds_project_safe_run_quality_signal_proposal(
         job=ClaimedJob(id=uuid4(), type="task", attempt=2, max_attempts=3, payload={}),
         canonical_payload={
             "repository": "ExampleOrg/ProjectRepo",
-            "task": {"git": {"startingBranch": "main"}},
+            "workflow": {"git": {"startingBranch": "main"}},
         },
         task_result=WorkerExecutionResult(
             succeeded=False,
@@ -1455,10 +1431,10 @@ async def test_worker_builds_project_safe_run_quality_signal_proposal(
     serialized = json.dumps(proposal)
     assert "MM-793" not in serialized
     assert "MoonMind improvement-signal" not in serialized
-    assert proposal["taskCreateRequest"]["payload"]["repository"] == (
+    assert proposal["workflowCreateRequest"]["payload"]["repository"] == (
         "ExampleOrg/ProjectRepo"
     )
-    task = proposal["taskCreateRequest"]["payload"]["task"]
+    task = proposal["workflowCreateRequest"]["payload"]["workflow"]
     assert "this project's run-quality handling" in task["instructions"]
     assert task["publish"]["commitMessage"].startswith("Capture run-quality signals")
 
@@ -1473,7 +1449,7 @@ async def test_worker_builds_deterministic_flaky_test_signal_proposal(
         poll_interval_ms=1500,
         lease_seconds=120,
         workdir=tmp_path,
-        enable_task_proposals=True,
+        enable_proposals=True,
     )
     worker = CodexWorker(
         config=config,
@@ -1485,7 +1461,7 @@ async def test_worker_builds_deterministic_flaky_test_signal_proposal(
 
     proposals = worker._build_improvement_signal_proposals(
         job=ClaimedJob(id=uuid4(), type="task", attempt=1, max_attempts=3, payload={}),
-        canonical_payload={"repository": "MoonLadderStudios/MoonMind", "task": {}},
+        canonical_payload={"repository": "MoonLadderStudios/MoonMind", "workflow": {}},
         task_result=WorkerExecutionResult(
             succeeded=False,
             summary="pytest failed, then passed on retry; likely flaky test",
@@ -1500,7 +1476,7 @@ async def test_worker_builds_deterministic_flaky_test_signal_proposal(
     assert "flaky test behavior" in proposal["title"]
 
 
-async def test_post_task_proposal_skills_seed_deterministic_signal_artifact(
+async def test_post_workflow_proposal_skills_seed_deterministic_signal_artifact(
     tmp_path: Path,
 ) -> None:
     config = CodexWorkerConfig(
@@ -1510,7 +1486,7 @@ async def test_post_task_proposal_skills_seed_deterministic_signal_artifact(
         poll_interval_ms=1500,
         lease_seconds=120,
         workdir=tmp_path,
-        enable_task_proposals=True,
+        enable_proposals=True,
     )
     handler = FakeHandler(
         WorkerExecutionResult(
@@ -1545,9 +1521,9 @@ async def test_post_task_proposal_skills_seed_deterministic_signal_artifact(
     prepared.repo_dir.mkdir(parents=True)
     prepared.artifacts_dir.mkdir(parents=True)
 
-    artifacts = await worker._run_post_task_proposal_skills(
+    artifacts = await worker._run_post_workflow_proposal_skills(
         job=ClaimedJob(id=uuid4(), type="task", attempt=2, max_attempts=3, payload={}),
-        canonical_payload={"repository": "MoonLadderStudios/MoonMind", "task": {}},
+        canonical_payload={"repository": "MoonLadderStudios/MoonMind", "workflow": {}},
         source_payload={},
         runtime_mode="codex",
         prepared=prepared,
@@ -1560,15 +1536,15 @@ async def test_post_task_proposal_skills_seed_deterministic_signal_artifact(
     )
 
     assert "codex_skill:fix-proposal:True" in handler.calls
-    assert any(artifact.name == "task_proposals.json" for artifact in artifacts)
+    assert any(artifact.name == "workflow_proposals.json" for artifact in artifacts)
     proposals = json.loads(
-        (prepared.artifacts_dir / "task_proposals.json").read_text(encoding="utf-8")
+        (prepared.artifacts_dir / "workflow_proposals.json").read_text(encoding="utf-8")
     )
     assert proposals[0]["tags"] == ["retry", "loop_detected"]
     assert proposals[0]["signal"]["source"] == "codex_worker"
 
 
-async def test_post_task_proposal_skills_preserve_seed_on_invalid_hook_output(
+async def test_post_workflow_proposal_skills_preserve_seed_on_invalid_hook_output(
     tmp_path: Path,
 ) -> None:
     class CorruptingHandler(FakeHandler):
@@ -1585,7 +1561,7 @@ async def test_post_task_proposal_skills_preserve_seed_on_invalid_hook_output(
         poll_interval_ms=1500,
         lease_seconds=120,
         workdir=tmp_path,
-        enable_task_proposals=True,
+        enable_proposals=True,
     )
     handler = CorruptingHandler(
         WorkerExecutionResult(
@@ -1620,9 +1596,9 @@ async def test_post_task_proposal_skills_preserve_seed_on_invalid_hook_output(
     prepared.repo_dir.mkdir(parents=True)
     prepared.artifacts_dir.mkdir(parents=True)
 
-    artifacts = await worker._run_post_task_proposal_skills(
+    artifacts = await worker._run_post_workflow_proposal_skills(
         job=ClaimedJob(id=uuid4(), type="task", attempt=2, max_attempts=3, payload={}),
-        canonical_payload={"repository": "MoonLadderStudios/MoonMind", "task": {}},
+        canonical_payload={"repository": "MoonLadderStudios/MoonMind", "workflow": {}},
         source_payload={},
         runtime_mode="codex",
         prepared=prepared,
@@ -1635,14 +1611,14 @@ async def test_post_task_proposal_skills_preserve_seed_on_invalid_hook_output(
     )
 
     assert "codex_skill:fix-proposal:True" in handler.calls
-    assert any(artifact.name == "task_proposals.json" for artifact in artifacts)
+    assert any(artifact.name == "workflow_proposals.json" for artifact in artifacts)
     proposals = json.loads(
-        (prepared.artifacts_dir / "task_proposals.json").read_text(encoding="utf-8")
+        (prepared.artifacts_dir / "workflow_proposals.json").read_text(encoding="utf-8")
     )
     assert proposals[0]["tags"] == ["retry", "loop_detected"]
     assert proposals[0]["signal"]["source"] == "codex_worker"
     skill_output_path = next(
-        (prepared.repo_dir / ".artifacts").glob("moonmind_task_proposals_*.json")
+        (prepared.repo_dir / ".artifacts").glob("moonmind_workflow_proposals_*.json")
     )
     assert skill_output_path.read_text(encoding="utf-8") == "{invalid json"
 
@@ -1675,7 +1651,7 @@ async def test_worker_submission_outcome_preserves_delivery_failure_details() ->
     ]
 
 
-async def test_task_proposal_request_uses_task_flag_with_config_gate(
+async def test_workflow_proposal_request_uses_task_flag_with_config_gate(
     tmp_path: Path,
 ) -> None:
     """Task-level proposeTasks should be interpreted, but still gated by config."""
@@ -1688,7 +1664,7 @@ async def test_task_proposal_request_uses_task_flag_with_config_gate(
             poll_interval_ms=1500,
             lease_seconds=120,
             workdir=tmp_path,
-            enable_task_proposals=False,
+            enable_proposals=False,
         ),
         queue_client=FakeQueueClient(),
         codex_exec_handler=FakeHandler(
@@ -1696,21 +1672,21 @@ async def test_task_proposal_request_uses_task_flag_with_config_gate(
         ),
     )
 
-    assert worker._task_proposals_requested(
-        canonical_payload={"repository": "moon/org", "task": {"proposeTasks": True}}
+    assert worker._workflow_proposals_requested(
+        canonical_payload={"repository": "moon/org", "workflow": {"proposeTasks": True}}
     )
     assert (
-        worker._task_proposals_requested(
+        worker._workflow_proposals_requested(
             canonical_payload={
                 "repository": "moon/org",
-                "task": {"proposeTasks": False},
+                "workflow": {"proposeTasks": False},
             }
         )
         is False
     )
     assert (
-        worker._task_proposals_requested(
-            canonical_payload={"repository": "moon/org", "task": {}}
+        worker._workflow_proposals_requested(
+            canonical_payload={"repository": "moon/org", "workflow": {}}
         )
         is False
     )
@@ -1723,7 +1699,7 @@ async def test_task_proposal_request_uses_task_flag_with_config_gate(
             poll_interval_ms=1500,
             lease_seconds=120,
             workdir=tmp_path,
-            enable_task_proposals=True,
+            enable_proposals=True,
         ),
         queue_client=FakeQueueClient(),
         codex_exec_handler=FakeHandler(
@@ -1732,8 +1708,8 @@ async def test_task_proposal_request_uses_task_flag_with_config_gate(
     )
 
     assert (
-        enabled_worker._task_proposals_requested(
-            canonical_payload={"repository": "moon/org", "task": {}}
+        enabled_worker._workflow_proposals_requested(
+            canonical_payload={"repository": "moon/org", "workflow": {}}
         )
         is False
     )
@@ -1781,7 +1757,7 @@ async def test_run_once_redacts_task_context_payload(
         payload={
             "repository": "a/b",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "speckit", "args": {"api_token": secret_value}},
                 "runtime": {"mode": "codex"},
@@ -1886,7 +1862,7 @@ async def test_run_once_task_routes_through_direct_exec_path(tmp_path: Path) -> 
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -1944,7 +1920,7 @@ async def test_run_once_task_skill_routes_through_skill_path(tmp_path: Path) -> 
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {
                     "id": "speckit",
@@ -2013,7 +1989,7 @@ async def test_run_once_task_steps_execute_in_order_with_step_events(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -2108,7 +2084,7 @@ async def test_run_once_self_heal_soft_resets_retryable_step_and_recovers(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -2190,7 +2166,7 @@ async def test_run_once_self_heal_exhaustion_marks_retryable_failure(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -2260,7 +2236,7 @@ async def test_run_once_self_heal_deterministic_failure_does_not_retry(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -2316,7 +2292,7 @@ async def test_run_once_task_steps_step_log_excludes_previous_session_headers(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -2375,7 +2351,7 @@ async def test_run_once_task_step_log_without_truncation_skips_companion_artifac
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -2452,7 +2428,7 @@ async def test_run_once_task_step_transcript_truncated_mid_command_fails_with_re
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -2521,7 +2497,7 @@ async def test_run_once_task_step_transcript_with_completion_marker_succeeds(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -2596,7 +2572,7 @@ async def test_run_once_task_step_transcript_with_multiple_codex_exec_cycles_suc
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -2661,7 +2637,7 @@ async def test_run_once_task_step_transcript_with_missing_multi_cycle_completion
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -2735,7 +2711,7 @@ async def test_run_once_task_step_transcript_ignores_stale_unmatched_starts_befo
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -2802,7 +2778,7 @@ async def test_run_once_task_step_transcript_ignores_stale_cross_step_start_mark
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -2869,7 +2845,7 @@ async def test_run_once_task_step_transcript_unmatched_start_after_last_complete
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -2934,7 +2910,7 @@ async def test_run_once_task_step_transcript_ignores_stale_legacy_unmatched_star
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -2993,7 +2969,7 @@ async def test_run_once_task_step_transcript_ignores_untrusted_completion_marker
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -3053,7 +3029,7 @@ async def test_run_once_task_step_transcript_with_correlated_marker_ids_succeeds
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -3113,7 +3089,7 @@ async def test_run_once_task_step_transcript_reconciles_legacy_multiline_start_m
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -3173,7 +3149,7 @@ async def test_run_once_task_step_transcript_with_mismatched_marker_ids_fails(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -3227,7 +3203,7 @@ async def test_run_once_retryable_run_quality_retry_skips_proposal_submission(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "proposeTasks": True,
                 "skill": {"id": "auto", "args": {}},
@@ -3259,7 +3235,7 @@ async def test_run_once_retryable_run_quality_retry_skips_proposal_submission(
         poll_interval_ms=1500,
         lease_seconds=120,
         workdir=tmp_path,
-        enable_task_proposals=True,
+        enable_proposals=True,
     )
     worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
 
@@ -3270,9 +3246,9 @@ async def test_run_once_retryable_run_quality_retry_skips_proposal_submission(
         raise AssertionError("proposal submission should be skipped")
 
     monkeypatch.setattr(
-        worker, "_run_post_task_proposal_skills", _unexpected_post_skill
+        worker, "_run_post_workflow_proposal_skills", _unexpected_post_skill
     )
-    monkeypatch.setattr(worker, "_maybe_submit_task_proposals", _unexpected_submit)
+    monkeypatch.setattr(worker, "_maybe_submit_workflow_proposals", _unexpected_submit)
 
     processed = await worker.run_once()
 
@@ -3313,7 +3289,7 @@ async def test_run_once_task_step_transcript_uses_full_companion_when_preview_tr
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -3372,7 +3348,7 @@ async def test_run_once_task_step_transcript_ignores_unscoped_marker_like_output
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -3426,7 +3402,7 @@ async def test_run_once_task_step_log_truncation_writes_full_companion_artifact(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -3522,7 +3498,7 @@ async def test_run_once_task_steps_bounds_log_size_and_keeps_failure_tail(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -3578,7 +3554,7 @@ async def test_run_once_task_steps_step_log_growth_is_bounded_per_step(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -3636,7 +3612,7 @@ async def test_run_once_task_step_log_truncation_preserves_utf8(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -3759,7 +3735,7 @@ async def test_run_once_task_steps_write_incremental_step_logs_without_duplicati
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -4002,7 +3978,7 @@ async def test_run_once_task_step_logs_dedupe_replay_blocks_and_keep_distinct_tu
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -4080,7 +4056,7 @@ async def test_run_once_task_step_completion_identity_dedupes_exact_duplicate_re
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -4156,7 +4132,7 @@ async def test_run_once_task_step_completion_identity_dedupes_near_duplicate_res
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -4215,7 +4191,7 @@ async def test_run_once_task_step_completion_identity_preserves_repeated_text_ac
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -4288,7 +4264,7 @@ async def test_run_once_task_step_and_exec_logs_dedupe_mixed_prefix_final_replay
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -4440,7 +4416,7 @@ async def test_run_once_skill_gate_step_fails_when_gate_reports_failure(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "Run skill gate",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -4548,7 +4524,7 @@ async def test_run_once_skill_gate_step_succeeds_when_gate_reports_pass(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "Run skill gate",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -4657,7 +4633,7 @@ async def test_run_once_skill_gate_step_fails_when_gate_path_is_outside_allowed_
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "Run skill gate",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -4724,7 +4700,7 @@ async def test_run_once_skill_gate_step_treats_missing_status_as_invalid(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "Run skill gate",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -4831,7 +4807,7 @@ async def test_compose_step_instruction_dedupes_objective_text(
 
     instruction = worker._compose_step_instruction_for_runtime(
         canonical_payload={
-            "task": {
+            "workflow": {
                 "instructions": "Implement direct worker to Qdrant retrieval path."
             }
         },
@@ -4900,7 +4876,7 @@ async def test_compose_final_pr_step_requests_agent_metadata_artifact(
 
     instruction = worker._compose_step_instruction_for_runtime(
         canonical_payload={
-            "task": {
+            "workflow": {
                 "instructions": "Implement MM-674.",
                 "publish": {"mode": "pr"},
             }
@@ -4945,7 +4921,7 @@ async def test_compose_step_instruction_keeps_distinct_step_text(
     step_text = "Run speckit-specify and preserve user constraints."
     instruction = worker._compose_step_instruction_for_runtime(
         canonical_payload={
-            "task": {
+            "workflow": {
                 "instructions": "Implement direct worker to Qdrant retrieval path."
             }
         },
@@ -4993,7 +4969,7 @@ async def test_compose_step_instruction_allows_pr_resolver_self_publish_when_pub
 
     instruction = worker._compose_step_instruction_for_runtime(
         canonical_payload={
-            "task": {
+            "workflow": {
                 "instructions": "Resolve PR #999",
                 "publish": {"mode": "none"},
             }
@@ -5041,7 +5017,7 @@ async def test_compose_step_instruction_keeps_skill_workspace_lines_under_worksp
 
     instruction = worker._compose_step_instruction_for_runtime(
         canonical_payload={
-            "task": {
+            "workflow": {
                 "instructions": "Apply the selected workflow.",
             }
         },
@@ -5099,7 +5075,7 @@ async def test_compose_step_instruction_injects_current_attachment_context_befor
     _write_prepared_attachment_context(prepared)
 
     instruction = worker._compose_step_instruction_for_runtime(
-        canonical_payload={"task": {"instructions": "Inspect the images."}},
+        canonical_payload={"workflow": {"instructions": "Inspect the images."}},
         runtime_mode="codex",
         step=ResolvedTaskStep(
             step_index=0,
@@ -5152,7 +5128,7 @@ async def test_compose_step_instruction_omits_non_current_step_attachment_contex
     _write_prepared_attachment_context(prepared)
 
     instruction = worker._compose_step_instruction_for_runtime(
-        canonical_payload={"task": {"instructions": "Inspect the current step."}},
+        canonical_payload={"workflow": {"instructions": "Inspect the current step."}},
         runtime_mode="codex",
         step=ResolvedTaskStep(
             step_index=0,
@@ -5230,7 +5206,7 @@ async def test_attachment_context_is_absent_without_manifest_and_rejects_data_ur
     prepared = _build_execute_stage_workspace(tmp_path=tmp_path, job_id=uuid4())
 
     no_manifest = worker._compose_step_instruction_for_runtime(
-        canonical_payload={"task": {"instructions": "No attachments."}},
+        canonical_payload={"workflow": {"instructions": "No attachments."}},
         runtime_mode="codex",
         step=ResolvedTaskStep(
             step_index=0,
@@ -5253,7 +5229,7 @@ async def test_attachment_context_is_absent_without_manifest_and_rejects_data_ur
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     instruction = worker._compose_step_instruction_for_runtime(
-        canonical_payload={"task": {"instructions": "Ignore unsafe path."}},
+        canonical_payload={"workflow": {"instructions": "Ignore unsafe path."}},
         runtime_mode="codex",
         step=ResolvedTaskStep(
             step_index=0,
@@ -5295,7 +5271,7 @@ async def test_attachment_context_ignores_non_object_manifest_payloads(
     manifest_path.write_text("[]", encoding="utf-8")
 
     instruction = worker._compose_step_instruction_for_runtime(
-        canonical_payload={"task": {"instructions": "No valid manifest."}},
+        canonical_payload={"workflow": {"instructions": "No valid manifest."}},
         runtime_mode="codex",
         step=ResolvedTaskStep(
             step_index=0,
@@ -5337,7 +5313,7 @@ async def test_attachment_context_ignores_non_object_vision_index_payloads(
     vision_index.write_text("null", encoding="utf-8")
 
     instruction = worker._compose_step_instruction_for_runtime(
-        canonical_payload={"task": {"instructions": "Use raw attachments."}},
+        canonical_payload={"workflow": {"instructions": "Use raw attachments."}},
         runtime_mode="codex",
         step=ResolvedTaskStep(
             step_index=0,
@@ -5382,7 +5358,7 @@ async def test_attachment_context_preserves_zero_values_and_single_lines_metadat
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     instruction = worker._compose_step_instruction_for_runtime(
-        canonical_payload={"task": {"instructions": "Use safe metadata."}},
+        canonical_payload={"workflow": {"instructions": "Use safe metadata."}},
         runtime_mode="codex",
         step=ResolvedTaskStep(
             step_index=0,
@@ -5434,7 +5410,7 @@ async def test_attachment_context_matches_normalized_step_ref(
     vision_index.write_text(json.dumps(vision), encoding="utf-8")
 
     instruction = worker._compose_step_instruction_for_runtime(
-        canonical_payload={"task": {"instructions": "Use current step."}},
+        canonical_payload={"workflow": {"instructions": "Use current step."}},
         runtime_mode="codex",
         step=ResolvedTaskStep(
             step_index=0,
@@ -5469,7 +5445,7 @@ async def test_run_once_task_steps_fail_fast_on_first_failed_step(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -5585,7 +5561,7 @@ async def test_run_once_task_steps_materialize_union_of_selected_skills(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "speckit", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -5644,7 +5620,7 @@ async def test_run_once_rejects_runtime_not_supported_by_worker_mode(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -5674,7 +5650,7 @@ async def test_run_once_rejects_runtime_not_supported_by_worker_mode(
     assert processed is True
     assert queue.completed == []
     assert len(queue.failed) == 1
-    assert "unsupported task runtime" in queue.failed[0]
+    assert "unsupported agent runtime" in queue.failed[0]
 
 async def test_run_once_rejects_when_required_capabilities_missing(
     tmp_path: Path,
@@ -5688,7 +5664,7 @@ async def test_run_once_rejects_when_required_capabilities_missing(
             "repository": "MoonLadderStudios/MoonMind",
             "requiredCapabilities": ["codex", "git", "qdrant"],
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -5730,7 +5706,7 @@ async def test_run_once_rejects_resolve_pr_publish_none_without_pr_resolver(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "Resolve PR #777",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -5778,7 +5754,7 @@ async def test_run_once_fails_resolve_pr_when_final_state_unresolved(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "Resolve PR #321",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -5887,7 +5863,7 @@ async def test_run_once_allows_resolve_pr_when_final_state_is_resolved(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "Resolve PR #654",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -5990,7 +5966,7 @@ async def test_run_once_fails_resolve_pr_when_ci_is_running_or_failing(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "Resolve PR #777",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -6106,7 +6082,7 @@ async def test_run_once_universal_worker_executes_gemini_task(tmp_path: Path) ->
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "gemini_cli",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "gemini_cli"},
@@ -6149,7 +6125,7 @@ async def test_run_once_task_container_executes_generic_docker_path(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -6211,7 +6187,7 @@ async def test_run_once_task_container_supports_distinct_images(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "runtime": {"mode": "codex"},
                 "git": {"startingBranch": None, "targetBranch": None},
@@ -6230,7 +6206,7 @@ async def test_run_once_task_container_supports_distinct_images(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "runtime": {"mode": "codex"},
                 "git": {"startingBranch": None, "targetBranch": None},
@@ -6287,7 +6263,7 @@ async def test_run_once_task_container_with_steps_fails_contract_validation(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "runtime": {"mode": "codex"},
                 "git": {"startingBranch": None, "targetBranch": None},
@@ -6322,7 +6298,7 @@ async def test_run_once_task_container_with_steps_fails_contract_validation(
     assert queue.completed == []
     assert len(queue.failed) == 1
     assert "invalid job payload" in queue.failed[0]
-    assert "task.steps is not supported" in queue.failed[0]
+    assert "workflow.steps is not supported" in queue.failed[0]
 
 async def test_run_once_task_container_timeout_attempts_stop_and_fails(
     tmp_path: Path, monkeypatch
@@ -6335,7 +6311,7 @@ async def test_run_once_task_container_timeout_attempts_stop_and_fails(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -6407,7 +6383,7 @@ async def test_run_once_task_container_precreates_artifact_subdir(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "runtime": {"mode": "codex"},
                 "git": {"startingBranch": None, "targetBranch": None},
@@ -6666,107 +6642,6 @@ async def test_heartbeat_loop_sets_pause_event_for_quiesce(
 
     assert pause_event.is_set()
 
-async def test_should_bootstrap_live_session_respects_default_enable(
-    tmp_path: Path,
-) -> None:
-    """Default-enabled live sessions should always bootstrap."""
-
-    queue = FakeQueueClient(jobs=[])
-    handler = FakeHandler(
-        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
-    )
-    config = CodexWorkerConfig(
-        moonmind_url="http://localhost:8000",
-        worker_id="worker-1",
-        worker_token=None,
-        poll_interval_ms=1500,
-        lease_seconds=120,
-        workdir=tmp_path,
-        live_session_enabled_default=True,
-    )
-    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
-
-    assert await worker._should_bootstrap_live_session(job_id=uuid4()) is True
-
-async def test_ensure_live_session_started_skips_opt_in_without_request(
-    tmp_path: Path,
-) -> None:
-    """Opt-in mode should not start live sessions when no explicit request exists."""
-
-    queue = FakeQueueClient(jobs=[])
-    handler = FakeHandler(
-        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
-    )
-    config = CodexWorkerConfig(
-        moonmind_url="http://localhost:8000",
-        worker_id="worker-1",
-        worker_token=None,
-        poll_interval_ms=1500,
-        lease_seconds=120,
-        workdir=tmp_path,
-        live_session_enabled_default=False,
-    )
-    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
-    stage_commands: list[tuple[str, ...]] = []
-
-    async def _capture_stage_command(
-        command,
-        *,
-        cwd,
-        log_path,
-        check=True,
-        env=None,
-        redaction_values=(),
-        cancel_event=None,
-        timeout_seconds=None,
-    ):
-        _ = (cwd, log_path, check, env, redaction_values, cancel_event, timeout_seconds)
-        stage_commands.append(tuple(command))
-        return CommandResult(tuple(command), 0, "", "")
-
-    worker._run_stage_command = _capture_stage_command  # type: ignore[method-assign]
-
-    await worker._ensure_live_session_started(
-        job_id=uuid4(),
-        log_path=tmp_path / "prepare.log",
-        cwd=tmp_path / "job",
-    )
-
-    assert queue.live_session_reports == []
-    assert stage_commands == []
-    assert worker._active_live_session is None
-
-async def test_ensure_live_session_started_is_no_op_with_none_provider(
-    tmp_path: Path,
-) -> None:
-    """Explicit live-session request cannot provision when provider is ``none``."""
-
-    queue = FakeQueueClient(jobs=[])
-    queue.live_session_state = {"session": {"status": "starting"}}
-    handler = FakeHandler(
-        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
-    )
-    config = CodexWorkerConfig(
-        moonmind_url="http://localhost:8000",
-        worker_id="worker-1",
-        worker_token=None,
-        poll_interval_ms=1500,
-        lease_seconds=120,
-        workdir=tmp_path,
-        live_session_enabled_default=False,
-        live_session_provider="none",
-    )
-    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
-
-    await worker._ensure_live_session_started(
-        job_id=uuid4(),
-        log_path=tmp_path / "prepare.log",
-        cwd=tmp_path / "job",
-    )
-
-    assert worker._active_live_session is None
-    assert queue.live_session_reports == []
-
 async def test_run_once_acks_cancellation_requested_via_heartbeat(
     tmp_path: Path,
 ) -> None:
@@ -6786,7 +6661,7 @@ async def test_run_once_acks_cancellation_requested_via_heartbeat(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "codex",
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},
@@ -7089,37 +6964,17 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     assert config.artifact_upload_incremental is True
     assert config.step_log_max_bytes == 1024 * 1024
 
-async def test_config_from_env_enables_task_proposals(monkeypatch) -> None:
+async def test_config_from_env_enables_workflow_proposals(monkeypatch) -> None:
     """Flag should toggle worker proposal submission behavior."""
 
     monkeypatch.setenv("MOONMIND_URL", "http://localhost:8000")
-    monkeypatch.setenv("MOONMIND_ENABLE_TASK_PROPOSALS", "true")
+    monkeypatch.setenv("MOONMIND_ENABLE_PROPOSALS", "true")
     config = CodexWorkerConfig.from_env()
-    assert config.enable_task_proposals is True
+    assert config.enable_proposals is True
 
-    monkeypatch.setenv("MOONMIND_ENABLE_TASK_PROPOSALS", "false")
+    monkeypatch.setenv("MOONMIND_ENABLE_PROPOSALS", "false")
     config = CodexWorkerConfig.from_env()
-    assert config.enable_task_proposals is False
-
-async def test_config_from_env_parses_live_session_settings(monkeypatch) -> None:
-    """Live session config should parse from MOONMIND_LIVE_SESSION_* variables."""
-
-    monkeypatch.setenv("MOONMIND_URL", "http://localhost:8000")
-    monkeypatch.setenv("MOONMIND_LIVE_SESSION_ENABLED_DEFAULT", "false")
-    monkeypatch.setenv("MOONMIND_LIVE_SESSION_PROVIDER", "none")
-    monkeypatch.setenv("MOONMIND_LIVE_SESSION_TTL_MINUTES", "120")
-    monkeypatch.setenv("MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES", "30")
-    monkeypatch.setenv("MOONMIND_LIVE_SESSION_ALLOW_WEB", "true")
-    monkeypatch.setenv("MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER", "5")
-
-    config = CodexWorkerConfig.from_env()
-
-    assert config.live_session_enabled_default is False
-    assert config.live_session_provider == "none"
-    assert config.live_session_ttl_minutes == 120
-    assert config.live_session_rw_grant_ttl_minutes == 30
-    assert config.live_session_allow_web is True
-    assert config.live_session_max_concurrent_per_worker == 5
+    assert config.enable_proposals is False
 
 async def test_config_from_env_rejects_invalid_skill_policy_mode(monkeypatch) -> None:
     """Invalid policy mode should fail fast during worker startup."""
@@ -7280,7 +7135,7 @@ async def test_runtime_override_precedence_prefers_task_then_worker_defaults(
 
     model, effort = worker._resolve_runtime_overrides(
         canonical_payload={
-            "task": {
+            "workflow": {
                 "runtime": {
                     "mode": "gemini_cli",
                     "model": None,
@@ -7295,7 +7150,7 @@ async def test_runtime_override_precedence_prefers_task_then_worker_defaults(
 
     model_override, effort_override = worker._resolve_runtime_overrides(
         canonical_payload={
-            "task": {
+            "workflow": {
                 "runtime": {
                     "mode": "gemini_cli",
                     "model": "gemini-2.5-pro",
@@ -7310,7 +7165,7 @@ async def test_runtime_override_precedence_prefers_task_then_worker_defaults(
 
     jules_model, jules_effort = worker._resolve_runtime_overrides(
         canonical_payload={
-            "task": {
+            "workflow": {
                 "runtime": {
                     "mode": "jules",
                     "model": None,
@@ -7343,11 +7198,11 @@ async def test_build_proposal_task_request_template_defers_runtime_defaults(
     worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
 
     template = worker._build_proposal_task_request_template(
-        {"repository": "Moon/Repo", "task": {}}
+        {"repository": "Moon/Repo", "workflow": {}}
     )
 
     assert "targetRuntime" not in template["payload"]
-    assert template["payload"]["task"]["runtime"] == {
+    assert template["payload"]["workflow"]["runtime"] == {
         "mode": None,
         "model": None,
         "effort": None,
@@ -7754,7 +7609,7 @@ async def test_jules_worker_multiplexes_inflight_jobs_without_llm_execution(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "jules",
-            "task": {
+            "workflow": {
                 "instructions": "Do first thing",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "jules"},
@@ -7769,7 +7624,7 @@ async def test_jules_worker_multiplexes_inflight_jobs_without_llm_execution(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "jules",
-            "task": {
+            "workflow": {
                 "instructions": "Do second thing",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "jules"},
@@ -7876,7 +7731,7 @@ async def test_jules_worker_heartbeat_only_tick_returns_inflight(
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "jules",
-            "task": {
+            "workflow": {
                 "instructions": "Long running task",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "jules"},
@@ -7986,7 +7841,7 @@ async def test_jules_worker_resumes_checkpoint_without_resubmitting_task(
                 "statusHistory": ["pending", "running"],
                 "providerStatusHistory": ["pending", "running"],
             },
-            "task": {
+            "workflow": {
                 "instructions": "Resume existing Jules task",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "jules"},
@@ -8090,7 +7945,7 @@ async def test_jules_worker_cancellation_stays_truthful_when_provider_cancel_mis
         payload={
             "repository": "MoonLadderStudios/MoonMind",
             "targetRuntime": "jules",
-            "task": {
+            "workflow": {
                 "instructions": "Cancel this Jules task",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "jules"},
@@ -8213,7 +8068,7 @@ async def test_jules_worker_recovery_preserves_canceled_checkpoint_status(
                     "MoonMind canceled without remote cancel"
                 ),
             },
-            "task": {
+            "workflow": {
                 "instructions": "Resume canceled Jules task",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "jules"},
@@ -8307,7 +8162,7 @@ async def test_derive_default_pr_title_prefers_first_non_empty_step_title(
 
     worker, _, _ = codex_worker_components
     payload = {
-        "task": {
+        "workflow": {
             "instructions": "Fallback instructions",
             "steps": [
                 {"id": "one", "title": " "},
@@ -8333,7 +8188,7 @@ async def test_derive_default_pr_title_uses_short_correlation_fallback_without_s
     worker, _, _ = codex_worker_components
     job_id = uuid4()
     payload = {
-        "task": {
+        "workflow": {
             "instructions": "Fix publish behavior for 123e4567-e89b-12d3-a456-426614174000.",
             "steps": [{"id": "step-1", "title": " "}],
         }
@@ -8357,7 +8212,7 @@ async def test_derive_default_pr_title_uses_task_instructions_when_step_title_is
     worker, _, _ = codex_worker_components
     job_id = uuid4()
     payload = {
-        "task": {
+        "workflow": {
             "instructions": "Fix publish behavior without adding step titles.",
             "steps": [{"id": "step-1", "title": "1"}],
         }
@@ -8382,7 +8237,7 @@ async def test_derive_default_pr_title_sanitizes_embedded_uuid_tokens(
     worker, _, _ = codex_worker_components
     full_uuid = "123e4567-e89b-12d3-a456-426614174000"
     payload = {
-        "task": {
+        "workflow": {
             "instructions": " ",
             "steps": [
                 {
@@ -8410,7 +8265,7 @@ async def test_derive_default_pr_title_uses_short_correlation_fallback(
     worker, _, _ = codex_worker_components
     job_id = uuid4()
     payload = {
-        "task": {
+        "workflow": {
             "instructions": " ",
             "steps": [{"id": "step-1", "title": " "}],
         }
@@ -8482,14 +8337,14 @@ async def test_validate_pr_metadata_rejects_control_plane_text() -> None:
                 "Use the trusted Jira issue updater workflow and Jira transition "
                 "tools before implementation starts."
             ),
-            canonical_payload={"task": {"jiraIssueKey": "MM-707"}},
+            canonical_payload={"workflow": {"jiraIssueKey": "MM-707"}},
         )
 
     with pytest.raises(ValueError, match="prBody"):
         CodexWorker._validate_pull_request_metadata(
             title="MM-707 Validate semantic pull request metadata",
             body="   ",
-            canonical_payload={"task": {"jiraIssueKey": "MM-707"}},
+            canonical_payload={"workflow": {"jiraIssueKey": "MM-707"}},
         )
 
 async def test_validate_pr_metadata_rejects_secret_like_text() -> None:
@@ -8506,7 +8361,7 @@ async def test_validate_pr_metadata_rejects_secret_like_text() -> None:
                 "Tests: unit\n"
                 "Remaining risks: None."
             ),
-            canonical_payload={"task": {"jiraIssueKey": "MM-707"}},
+            canonical_payload={"workflow": {"jiraIssueKey": "MM-707"}},
         )
 
 async def test_read_agent_pr_metadata_rejects_secret_like_text(tmp_path: Path) -> None:
@@ -8549,7 +8404,7 @@ async def test_validate_pr_metadata_accepts_jira_backed_review_metadata() -> Non
             "Remaining risks: None."
         ),
         canonical_payload={
-            "task": {
+            "workflow": {
                 "jiraIssueKey": "MM-707",
                 "moonSpecPath": "specs/707-pr-metadata-validation",
             }
@@ -8571,7 +8426,7 @@ async def test_validate_pr_metadata_requires_jira_body_labels() -> None:
                 "The verdict is that tests passed and the risk is low.\n"
                 "MM-707 is implemented."
             ),
-            canonical_payload={"task": {"jiraIssueKey": "MM-707"}},
+            canonical_payload={"workflow": {"jiraIssueKey": "MM-707"}},
         )
 
 
@@ -8618,7 +8473,7 @@ async def test_validate_pr_metadata_rejects_invalid_jira_metadata(
         CodexWorker._validate_pull_request_metadata(
             title=title,
             body=body,
-            canonical_payload={"task": {"jiraIssueKey": "MM-707"}},
+            canonical_payload={"workflow": {"jiraIssueKey": "MM-707"}},
         )
 
 async def test_derive_default_jira_pr_metadata_contains_required_review_fields() -> None:
@@ -8626,7 +8481,7 @@ async def test_derive_default_jira_pr_metadata_contains_required_review_fields()
 
     job_id = uuid4()
     canonical_payload = {
-        "task": {
+        "workflow": {
             "jiraIssueKey": "MM-707",
             "moonSpecPath": "specs/707-pr-metadata-validation",
         }
@@ -8967,7 +8822,7 @@ async def test_run_publish_stage_uses_verbatim_overrides_and_redacts_command_log
     pr_title_override = "  PR title with preserved spaces  "
     pr_body_override = "  PR body first line\nsecond line preserved  "
     canonical_payload = {
-        "task": {
+        "workflow": {
             "instructions": "unused",
             "runtime": {"mode": "gemini_cli"},
             "publish": {
@@ -9081,7 +8936,7 @@ async def test_run_publish_stage_rejects_invalid_pr_metadata_before_pr_creation(
         await worker._run_publish_stage(
             job_id=job_id,
             canonical_payload={
-                "task": {
+                "workflow": {
                     "jiraIssueKey": "MM-707",
                     "publish": {
                         "mode": "pr",
@@ -9190,7 +9045,7 @@ async def test_run_publish_stage_records_validated_pr_metadata(
     publish_note = await worker._run_publish_stage(
         job_id=job_id,
         canonical_payload={
-            "task": {
+            "workflow": {
                 "jiraIssueKey": "MM-707",
                 "moonSpecPath": "specs/707-pr-metadata-validation",
                 "publish": {
@@ -9313,7 +9168,7 @@ async def test_run_publish_stage_prefers_agent_pr_metadata_artifact(
     await worker._run_publish_stage(
         job_id=job_id,
         canonical_payload={
-            "task": {
+            "workflow": {
                 "jiraIssueKey": "MM-674",
                 "moonSpecPath": "specs/674-pr-metadata",
                 "publish": {
@@ -9425,7 +9280,7 @@ async def test_run_publish_stage_defaults_jira_pr_metadata(
     await worker._run_publish_stage(
         job_id=job_id,
         canonical_payload={
-            "task": {
+            "workflow": {
                 "jiraIssueKey": "MM-707",
                 "moonSpecPath": "specs/707-pr-metadata-validation",
                 "steps": [
@@ -9523,7 +9378,7 @@ async def test_run_publish_stage_fails_without_verification_evidence_for_source_
     with pytest.raises(RuntimeError, match="publish preflight failed"):
         await worker._run_publish_stage(
             job_id=job_id,
-            canonical_payload={"task": {"publish": {"mode": "branch"}}},
+            canonical_payload={"workflow": {"publish": {"mode": "branch"}}},
             prepared=prepared,
             skill_meta={},
             job_type="task",
@@ -9636,7 +9491,7 @@ async def test_run_publish_stage_auto_runs_default_test_script_when_evidence_mis
     staged_artifacts: list[ArtifactUpload] = []
     publish_note = await worker._run_publish_stage(
         job_id=job_id,
-        canonical_payload={"task": {"publish": {"mode": "branch"}}},
+        canonical_payload={"workflow": {"publish": {"mode": "branch"}}},
         prepared=prepared,
         skill_meta={},
         job_type="task",
@@ -9719,7 +9574,7 @@ async def test_run_publish_stage_no_local_changes_does_not_reference_preflight_a
     staged_artifacts: list[ArtifactUpload] = []
     publish_note = await worker._run_publish_stage(
         job_id=job_id,
-        canonical_payload={"task": {"publish": {"mode": "branch"}}},
+        canonical_payload={"workflow": {"publish": {"mode": "branch"}}},
         prepared=prepared,
         skill_meta={},
         job_type="task",
@@ -9804,7 +9659,7 @@ async def test_run_publish_stage_fails_for_renamed_source_change_without_evidenc
     with pytest.raises(RuntimeError, match="publish preflight failed"):
         await worker._run_publish_stage(
             job_id=job_id,
-            canonical_payload={"task": {"publish": {"mode": "branch"}}},
+            canonical_payload={"workflow": {"publish": {"mode": "branch"}}},
             prepared=prepared,
             skill_meta={},
             job_type="task",
@@ -9892,7 +9747,7 @@ async def test_run_publish_stage_allows_structured_verification_skip_reason(
     publish_note = await worker._run_publish_stage(
         job_id=job_id,
         canonical_payload={
-            "task": {
+            "workflow": {
                 "runtime": {"mode": "codex"},
                 "publish": {
                     "mode": "pr",
@@ -10013,7 +9868,7 @@ async def test_run_publish_stage_pr_mode_resolves_missing_pr_base_branch_with_wa
 
     await worker._run_publish_stage(
         job_id=job_id,
-        canonical_payload={"task": {"publish": {"mode": "pr"}}},
+        canonical_payload={"workflow": {"publish": {"mode": "pr"}}},
         prepared=prepared,
         skill_meta={},
         job_type="task",
@@ -10072,7 +9927,7 @@ async def test_run_publish_stage_pr_mode_fails_when_explicit_base_equals_head(
         await worker._run_publish_stage(
             job_id=job_id,
             canonical_payload={
-                "task": {
+                "workflow": {
                     "publish": {"mode": "pr", "prBaseBranch": "feature/branch"},
                 }
             },
@@ -10123,7 +9978,7 @@ async def test_run_publish_stage_pr_mode_fails_fast_when_no_valid_base_branch(
         await worker._run_publish_stage(
             job_id=job_id,
             canonical_payload={
-                "task": {
+                "workflow": {
                     "publish": {"mode": "pr"},
                 }
             },
@@ -10454,7 +10309,7 @@ async def test_resolve_runtime_overrides_applies_codex_defaults_for_alias(
     worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
 
     model, effort = worker._resolve_runtime_overrides(
-        canonical_payload={"task": {"runtime": {}}},
+        canonical_payload={"workflow": {"runtime": {}}},
         runtime_mode="codex_cli",
     )
 
@@ -10755,7 +10610,7 @@ async def test_run_once_fails_auth_ref_when_vault_not_configured(
                 "repoAuthRef": "vault://kv/moonmind/repos/MoonLadderStudios/MoonMind#github_token",
                 "publishAuthRef": None,
             },
-            "task": {
+            "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": "codex"},

@@ -1,6 +1,6 @@
 # Manifest Ingest Design & Implementation
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
+**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 **Status:** Draft (2026-03-20)
 **Scope:** How MoonMind ingests a “manifest” artifact and reliably turns it into one or more **Temporal Workflow Executions**, with strong observability, editability, and scalability. Includes architecture, design decisions, and implementation-level detail.
@@ -15,7 +15,7 @@ A **manifest ingest** is implemented as a dedicated **Temporal Workflow Type** (
 1. Reads a manifest from the **Artifact System** (by reference, not by embedding the file in workflow inputs).
 2. Parses + validates it.
 3. Compiles it into an executable “plan” (a DAG / dependency graph / run list).
-4. Starts one or more **Child Workflow Executions** (e.g., `MoonMind.Run`) to execute the plan.
+4. Starts one or more **Child Workflow Executions** (e.g., `MoonMind.UserWorkflow`) to execute the plan.
 5. Tracks progress and produces stable, queryable metadata via **Search Attributes** + optional Memo.
 6. Supports user edits via **Workflow Updates** (not custom DB mutation).
 
@@ -96,13 +96,13 @@ Migration note:
 
 ### 5.2 Each executable unit in a manifest becomes a Child Workflow Execution
 
-**Decision:** Each “node” in the compiled plan is executed as a **Child Workflow Execution** of type `MoonMind.Run` (or other small set of execution workflow types, if needed).
+**Decision:** Each “node” in the compiled plan is executed as a **Child Workflow Execution** of type `MoonMind.UserWorkflow` (or other small set of execution workflow types, if needed).
 
 Rationale:
 
 * Child workflows are a native scaling primitive and give strong lineage from ingest → runs. ([Temporal Docs][1])
 * It keeps the ingest workflow mostly orchestration logic and avoids huge event histories from doing everything as Activities.
-* It supports heterogeneous execution strategies (LLM vs non-LLM) inside `MoonMind.Run` via Activities (see §8).
+* It supports heterogeneous execution strategies (LLM vs non-LLM) inside `MoonMind.UserWorkflow` via Activities (see §8).
 
 ---
 
@@ -154,7 +154,7 @@ Minimal (references only):
 
 ---
 
-### 6.2 Child Workflow Type: `MoonMind.Run`
+### 6.2 Child Workflow Type: `MoonMind.UserWorkflow`
 
 Not fully specified here; the key contract for ingest is:
 
@@ -196,7 +196,7 @@ Proposed Updates:
 
 6. `RetryNodes(node_ids: list<string>) -> RetryResult`
 
- * Only for nodes in terminal failed states; restarts via new child workflow run IDs or by a retry mechanism in `MoonMind.Run`.
+ * Only for nodes in terminal failed states; restarts via new child workflow run IDs or by a retry mechanism in `MoonMind.UserWorkflow`.
 
 ---
 
@@ -255,7 +255,7 @@ Client/API
  -> Activity: Parse + validate
  -> Activity: Compile to plan DAG
  -> Activity: Persist plan (Artifact System)
- -> Start child workflows: MoonMind.Run(node_i) with concurrency limit
+ -> Start child workflows: MoonMind.UserWorkflow(node_i) with concurrency limit
  -> Await children, update progress
  -> Activity: Write summary + run index artifacts
  -> Complete
@@ -274,7 +274,7 @@ Workflow code must remain deterministic and should avoid external I/O. Activitie
 Reason:
 
 * Task Queues are a routing mechanism: workers poll task queues for tasks. ([Temporal Docs][1])
-* `MoonMind.Run` can schedule:
+* `MoonMind.UserWorkflow` can schedule:
 
  * LLM/model-facing Activities on `mm.activity.llm`
  * repo/command/sandbox Activities on `mm.activity.sandbox`
@@ -291,7 +291,7 @@ This avoids forcing a single runtime choice at the Workflow level and supports m
 
 * Workflow task queue:
 
- * `mm.workflow` (hosts `MoonMind.ManifestIngest`, `MoonMind.Run`)
+ * `mm.workflow` (hosts `MoonMind.ManifestIngest`, `MoonMind.UserWorkflow`)
 * Activity task queues:
 
  * `mm.activity.artifacts` (artifact read/write)
@@ -424,7 +424,7 @@ Temporal glossary: **Parent Close Policy** determines what happens to a Child Wo
 
 **Default choice:**
 
-* `ParentClosePolicy = REQUEST_CANCEL` for `MoonMind.Run` children:
+* `ParentClosePolicy = REQUEST_CANCEL` for `MoonMind.UserWorkflow` children:
 
  * If user cancels the ingest, children receive cancellation requests.
  * If ingest completes normally, children should already be done; if not, treat as an invariant violation.
@@ -590,7 +590,7 @@ The workflow executes the following stages:
  - `manifest_compile` Activity — validates YAML via `normalize_manifest_job_payload`, derives required capabilities, computes manifest hash, produces a `CompiledManifestPlanModel` with stable node IDs and dependency edges.
 3. **Materialize nodes**: Convert compiled plan nodes to runtime `ManifestNodeModel` entries with initial state `ready`.
 4. **Execute (fan-out)**: For each ready node (respecting dependency ordering and concurrency limits):
- - Spawn a child `MoonMind.Run` workflow with the node's parameters, linked to the parent via `manifestIngestWorkflowId` and `nodeId`.
+ - Spawn a child `MoonMind.UserWorkflow` workflow with the node's parameters, linked to the parent via `manifestIngestWorkflowId` and `nodeId`.
  - Track child state transitions (`running` → `succeeded`/`failed`).
  - Apply failure policy: `fail_fast` cancels remaining nodes on first failure; `continue` proceeds.
 5. **Finalize**: Execute `manifest_write_summary` Activity to produce summary and run-index artifacts.
@@ -665,7 +665,7 @@ The manifest contract (`manifest_contract.py`) enforces this at validation time 
 
 **Delivered baseline:** `MoonMind.ManifestIngest` workflow and tests, `/api/manifests` registry, manifest contract validation and normalization, compiled plan model and node materialization, Temporal Updates for interactive control, and projection/snapshot plumbing for API queries.
 
-**Remaining work:** data-fetch and embedding pipeline activities, incremental checkpoint semantics, Qdrant integration, and Mission Control list/detail/launch and node-level controls. Phased sequencing and verification are tracked in MoonSpec feature artifacts or local planning notes when needed.
+**Remaining work:** data-fetch and embedding pipeline activities, incremental checkpoint semantics, Qdrant integration, and Mission Control list/detail/launch and node-level controls. Phased sequencing and verification are tracked under `docs/tmp/` or in local-only planning notes when needed.
 
 ---
 

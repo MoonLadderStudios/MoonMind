@@ -12,7 +12,7 @@ The legacy application allowed operators to open a Workflow Execution from the W
 
 The core idea is simple:
 
-- `/tasks/new` remains the single Workflow Execution submission surface.
+- `/workflows/new` remains the single Workflow Execution submission surface.
 - Existing Temporal executions become the editable object.
 - The Workflow details page regains an **Edit** action for executions that support in-place input updates.
 - Terminal executions, including failed and canceled executions, gain a **Rerun** action that reuses the same prefilled submit experience and allows the operator to edit the draft before submitting it again.
@@ -23,7 +23,7 @@ This keeps create, edit, and rerun on one form while making Temporal the source 
 
 This design applies to:
 
-- the shared Workflow Execution submit page at `/tasks/new`
+- the shared Workflow Execution submit page at `/workflows/new`
 - Temporal-backed Workflow detail surfaces in Mission Control
 - Temporal-backed list or card surfaces that may expose edit or rerun entry points
 - input reconstruction from Temporal execution details and referenced artifacts
@@ -46,7 +46,7 @@ Workflow editing must operate on Temporal execution state, capabilities, and inp
 
 ### 3.2 One submit experience
 
-Create, edit, and rerun should all reuse `/tasks/new` so operators do not learn separate flows.
+Create, edit, and rerun should all reuse `/workflows/new` so operators do not learn separate flows.
 
 ### 3.3 Preserve create-form ergonomics
 
@@ -80,13 +80,13 @@ The editable object is a Temporal execution identified by `workflowId`.
 
 The initial supported workflow type is:
 
-- `MoonMind.Run`
+- `MoonMind.UserWorkflow`
 
 Any other workflow type is out of scope until explicitly added.
 
 ### 4.3 Modes
 
-`/tasks/new` supports three modes:
+`/workflows/new` supports three modes:
 
 | Mode | When used | Behavior |
 |---|---|---|
@@ -109,19 +109,19 @@ Any other workflow type is out of scope until explicitly added.
 Create mode:
 
 ```text
-/tasks/new
+/workflows/new
 ```
 
 Edit mode:
 
 ```text
-/tasks/new?editExecutionId=<workflowId>
+/workflows/new?editExecutionId=<workflowId>
 ```
 
 Rerun mode:
 
 ```text
-/tasks/new?rerunExecutionId=<workflowId>
+/workflows/new?rerunExecutionId=<workflowId>
 ```
 
 ### 5.2 Deprecated routes and params
@@ -135,7 +135,7 @@ The following are deprecated and must not be used by new UI or documentation:
 
 ### 5.3 Mode resolution order
 
-When `/tasks/new` loads, mode is resolved in this order:
+When `/workflows/new` loads, mode is resolved in this order:
 
 1. `rerunExecutionId`
 2. `editExecutionId`
@@ -153,14 +153,14 @@ The detail page should:
 
 - show **Edit** when `actions.canUpdateInputs` is `true`
 - show **Rerun** when `actions.canRerun` is `true`
-- navigate to `/tasks/new` using the correct query parameter
+- navigate to `/workflows/new` using the correct query parameter
 - avoid rendering actions that are not supported by the current execution
 
 Canonical navigation targets:
 
 ```text
-Edit   -> /tasks/new?editExecutionId=<workflowId>
-Rerun  -> /tasks/new?rerunExecutionId=<workflowId>
+Edit   -> /workflows/new?editExecutionId=<workflowId>
+Rerun  -> /workflows/new?rerunExecutionId=<workflowId>
 ```
 
 ### 6.2 Workflow list or card surfaces
@@ -171,7 +171,7 @@ List and card surfaces may optionally expose the same actions, but the detail pa
 
 ### 7.1 Shared page, mode-specific behavior
 
-`/tasks/new` remains a shared page, but mode changes:
+`/workflows/new` remains a shared page, but mode changes:
 
 - the title
 - the primary CTA label
@@ -243,7 +243,7 @@ The reconstructed draft should prefill, where available:
 - primary skill
 - explicit steps or workflow options
 - applied template state
-- other standard create-form inputs already supported by `/tasks/new`
+- other standard create-form inputs already supported by `/workflows/new`
 
 ### 8.4 Instructions and artifacts
 
@@ -354,7 +354,7 @@ At minimum, the detail payload should make available:
 - capability flags such as `actions.canUpdateInputs` and `actions.canRerun`
 - any template, runtime, model, repository, and publish information required to reconstruct the form
 
-For failed and canceled `MoonMind.Run` executions, the read contract must expose enough input state for the submit page to build an editable rerun draft whenever `actions.canRerun` is `true`.
+For failed and canceled `MoonMind.UserWorkflow` executions, the read contract must expose enough input state for the submit page to build an editable rerun draft whenever `actions.canRerun` is `true`.
 
 ### 11.2 Update contract requirements
 
@@ -420,7 +420,7 @@ Operator-visible detail views should make it possible to understand whether a ch
 
 This design intentionally does not include:
 
-- a separate edit-only form distinct from `/tasks/new`
+- a separate edit-only form distinct from `/workflows/new`
 - queue-first Workflow editing UX
 - proposal editing
 - manifest-run editing
@@ -443,8 +443,8 @@ The following concepts should be removed from canonical docs and primary UI flow
 This design is considered implemented when all of the following are true:
 
 1. The Workflow detail page once again exposes an **Edit** action for supported Temporal executions.
-2. `/tasks/new?editExecutionId=<workflowId>` opens with a prefilled draft reconstructed from Temporal execution data and artifacts.
-3. `/tasks/new?rerunExecutionId=<workflowId>` opens the same shared form in rerun mode.
+2. `/workflows/new?editExecutionId=<workflowId>` opens with a prefilled draft reconstructed from Temporal execution data and artifacts.
+3. `/workflows/new?rerunExecutionId=<workflowId>` opens the same shared form in rerun mode.
 4. Edit submissions call `UpdateInputs`.
 5. Rerun submissions call `RequestRerun`.
 6. Failed and canceled executions with `actions.canRerun = true` open an editable prefilled rerun draft and can be submitted again with changed inputs.
@@ -458,7 +458,7 @@ This design is considered implemented when all of the following are true:
 Implementation sequencing and migration details should be tracked in:
 
 ```text
-docs/Tasks/WorkflowEditingSystem.md
+docs/Workflows/WorkflowEditingSystem.md
 ```
 
 That plan should remain an execution checklist. This document is the canonical target-state design.

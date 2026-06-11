@@ -2,7 +2,7 @@
 Unit tests for Phase 3 Live Logs — SSE publisher/subscriber.
 
 DOC-REQ coverage (publisher/subscriber layer only):
-  DOC-REQ-001  GET /api/task-runs/{id}/logs/stream endpoint contract
+  DOC-REQ-001  GET /api/agent-runs/{id}/logs/stream endpoint contract
   DOC-REQ-002  ObservabilityPublisher fan-out
   DOC-REQ-003  LogStreamEvent payload shape
   DOC-REQ-004  since= resumption semantics

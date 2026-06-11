@@ -101,7 +101,7 @@ async def test_agent_session_terminate_history_replays_deterministically(
     )
     session_input = CodexManagedSessionWorkflowInput.model_validate(
         {
-            "taskRunId": "task-run-session-replay",
+            "agentRunId": "agent-run-session-replay",
             "runtimeId": "codex_cli",
             "sessionId": "sess:unit:replay",
             "sessionEpoch": 1,
@@ -113,7 +113,7 @@ async def test_agent_session_terminate_history_replays_deterministically(
             AddSearchAttributesRequest(
                 namespace=env.client.namespace,
                 search_attributes={
-                    "TaskRunId": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+                    "AgentRunId": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
                     "RuntimeId": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
                     "SessionId": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
                     "SessionEpoch": IndexedValueType.INDEXED_VALUE_TYPE_INT,

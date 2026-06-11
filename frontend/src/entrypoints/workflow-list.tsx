@@ -48,7 +48,7 @@ const RUNTIME_FILTER_VALUE_ALIASES: Record<string, string> = {
   gemini_cli: 'gemini_cli',
   jules: 'jules',
 };
-const TASK_WORKFLOW_TYPE = 'MoonMind.Run';
+const TASK_WORKFLOW_TYPE = 'MoonMind.UserWorkflow';
 const TASK_ENTRY = 'user_workflow';
 
 const TIMESTAMP_SORT_FIELDS = new Set(['scheduledFor', 'createdAt', 'closedAt']);

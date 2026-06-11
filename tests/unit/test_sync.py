@@ -31,7 +31,7 @@ def test_map_temporal_state_to_projection_success():
     desc.id = "mm:123"
     desc.run_id = "run-123"
     desc.namespace = "moonmind"
-    desc.workflow_type = "MoonMind.Run"
+    desc.workflow_type = "MoonMind.UserWorkflow"
     desc.status = WorkflowExecutionStatus.COMPLETED
     desc.start_time = start_time
     desc.execution_time = start_time
@@ -67,7 +67,7 @@ def test_map_temporal_state_to_projection_success():
     assert result["workflow_id"] == "mm:123"
     assert result["run_id"] == "run-123"
     assert result["namespace"] == "moonmind"
-    assert result["workflow_type"] == TemporalWorkflowType.RUN
+    assert result["workflow_type"] == TemporalWorkflowType.USER_WORKFLOW
     assert result["owner_id"] == "owner-1"
     assert result["owner_type"] == TemporalExecutionOwnerType.USER
     assert result["state"] == MoonMindWorkflowState.COMPLETED
@@ -86,7 +86,7 @@ def test_map_temporal_state_to_projection_extracts_finish_summary():
     desc.id = "mm:finish-summary"
     desc.run_id = "run-finish-summary"
     desc.namespace = "moonmind"
-    desc.workflow_type = "MoonMind.Run"
+    desc.workflow_type = "MoonMind.UserWorkflow"
     desc.status = WorkflowExecutionStatus.COMPLETED
     desc.start_time = start_time
     desc.execution_time = start_time
@@ -118,7 +118,7 @@ def test_map_temporal_state_to_projection_extracts_snake_case_finish_outcome():
     desc.id = "mm:finish-summary-snake"
     desc.run_id = "run-finish-summary-snake"
     desc.namespace = "moonmind"
-    desc.workflow_type = "MoonMind.Run"
+    desc.workflow_type = "MoonMind.UserWorkflow"
     desc.status = WorkflowExecutionStatus.COMPLETED
     desc.start_time = start_time
     desc.execution_time = start_time
@@ -150,7 +150,7 @@ def test_map_temporal_state_to_projection_uses_search_attributes_for_owner_field
     desc.id = "mm:456"
     desc.run_id = "run-456"
     desc.namespace = "moonmind"
-    desc.workflow_type = "MoonMind.Run"
+    desc.workflow_type = "MoonMind.UserWorkflow"
     desc.status = WorkflowExecutionStatus.RUNNING
     desc.start_time = start_time
     desc.execution_time = start_time
@@ -191,7 +191,7 @@ def test_map_temporal_state_to_projection_memo_parameters_empty_by_default():
     desc.id = "mm:789"
     desc.run_id = "run-789"
     desc.namespace = "moonmind"
-    desc.workflow_type = "MoonMind.Run"
+    desc.workflow_type = "MoonMind.UserWorkflow"
     desc.status = WorkflowExecutionStatus.RUNNING
     desc.start_time = start_time
     desc.execution_time = start_time
@@ -241,7 +241,7 @@ async def test_sync_execution_projection_preserves_updated_at_when_mm_updated_at
                 workflow_id="mm:preserve-updated-at",
                 run_id="run-1",
                 namespace="moonmind",
-                workflow_type=TemporalWorkflowType.RUN,
+                workflow_type=TemporalWorkflowType.USER_WORKFLOW,
                 owner_id="owner-1",
                 owner_type=TemporalExecutionOwnerType.USER,
                 state=MoonMindWorkflowState.EXECUTING,
@@ -266,7 +266,7 @@ async def test_sync_execution_projection_preserves_updated_at_when_mm_updated_at
             desc.id = projection.workflow_id
             desc.run_id = "run-1"
             desc.namespace = "moonmind"
-            desc.workflow_type = "MoonMind.Run"
+            desc.workflow_type = "MoonMind.UserWorkflow"
             desc.status = WorkflowExecutionStatus.RUNNING
             desc.start_time = existing_updated_at
             desc.execution_time = existing_updated_at
@@ -312,7 +312,7 @@ async def test_sync_execution_projection_uses_mm_updated_at_from_temporal(
                     workflow_id="mm:canonical-updated-at",
                     run_id="run-1",
                     namespace="moonmind",
-                    workflow_type=TemporalWorkflowType.RUN,
+                    workflow_type=TemporalWorkflowType.USER_WORKFLOW,
                     owner_id="owner-1",
                     owner_type=TemporalExecutionOwnerType.USER,
                     state=MoonMindWorkflowState.EXECUTING,
@@ -333,7 +333,7 @@ async def test_sync_execution_projection_uses_mm_updated_at_from_temporal(
             desc.id = "mm:canonical-updated-at"
             desc.run_id = "run-1"
             desc.namespace = "moonmind"
-            desc.workflow_type = "MoonMind.Run"
+            desc.workflow_type = "MoonMind.UserWorkflow"
             desc.status = WorkflowExecutionStatus.RUNNING
             desc.start_time = created_at
             desc.execution_time = created_at
@@ -382,7 +382,7 @@ async def test_sync_execution_projection_refreshes_canonical_summary_and_started
                 workflow_id="mm:canonical-refresh",
                 run_id="run-old",
                 namespace="moonmind",
-                workflow_type=TemporalWorkflowType.RUN,
+                workflow_type=TemporalWorkflowType.USER_WORKFLOW,
                 owner_id="owner-1",
                 owner_type=TemporalExecutionOwnerType.USER,
                 state=MoonMindWorkflowState.INITIALIZING,
@@ -392,7 +392,7 @@ async def test_sync_execution_projection_refreshes_canonical_summary_and_started
                 memo={
                     "title": "Task",
                     "summary": "Execution initialized.",
-                    "taskRunId": "8b376541-53ba-4d76-a18f-8366943550ec",
+                    "agentRunId": "8b376541-53ba-4d76-a18f-8366943550ec",
                 },
                 artifact_refs=[],
                 parameters={"targetRuntime": "codex_cli"},
@@ -410,7 +410,7 @@ async def test_sync_execution_projection_refreshes_canonical_summary_and_started
             desc.id = canonical.workflow_id
             desc.run_id = "run-new"
             desc.namespace = "moonmind"
-            desc.workflow_type = "MoonMind.Run"
+            desc.workflow_type = "MoonMind.UserWorkflow"
             desc.status = WorkflowExecutionStatus.RUNNING
             desc.start_time = started_at
             desc.execution_time = started_at
@@ -445,7 +445,7 @@ async def test_sync_execution_projection_refreshes_canonical_summary_and_started
             assert canonical.run_id == "run-new"
             assert canonical.state == MoonMindWorkflowState.EXECUTING
             assert canonical.memo["summary"] == "Launching agent..."
-            assert canonical.memo["taskRunId"] == "8b376541-53ba-4d76-a18f-8366943550ec"
+            assert canonical.memo["agentRunId"] == "8b376541-53ba-4d76-a18f-8366943550ec"
             assert canonical.create_idempotency_key == "create-key-1"
             assert canonical.last_update_idempotency_key == "update-key-1"
             assert canonical.last_update_response == {"status": "accepted"}
@@ -478,7 +478,7 @@ async def test_sync_execution_projection_preserves_metadata_when_temporal_memo_d
                 workflow_id="mm:memo-decode-failure",
                 run_id="run-old",
                 namespace="moonmind",
-                workflow_type=TemporalWorkflowType.RUN,
+                workflow_type=TemporalWorkflowType.USER_WORKFLOW,
                 owner_id="owner-1",
                 owner_type=TemporalExecutionOwnerType.USER,
                 state=MoonMindWorkflowState.INITIALIZING,
@@ -500,7 +500,7 @@ async def test_sync_execution_projection_preserves_metadata_when_temporal_memo_d
                 workflow_id="mm:memo-decode-failure",
                 run_id="run-old",
                 namespace="moonmind",
-                workflow_type=TemporalWorkflowType.RUN,
+                workflow_type=TemporalWorkflowType.USER_WORKFLOW,
                 owner_id="owner-1",
                 owner_type=TemporalExecutionOwnerType.USER,
                 state=MoonMindWorkflowState.INITIALIZING,
@@ -535,7 +535,7 @@ async def test_sync_execution_projection_preserves_metadata_when_temporal_memo_d
             desc.id = canonical.workflow_id
             desc.run_id = "run-new"
             desc.namespace = "moonmind"
-            desc.workflow_type = "MoonMind.Run"
+            desc.workflow_type = "MoonMind.UserWorkflow"
             desc.status = WorkflowExecutionStatus.RUNNING
             desc.start_time = started_at
             desc.execution_time = started_at
@@ -603,7 +603,7 @@ def test_merged_parameters_for_projection_without_canonical_returns_memo_only():
 # --- merged_memo_for_projection tests ---
 
 def test_merged_memo_preserves_db_only_keys_absent_from_temporal_memo():
-    """DB-written keys like taskRunId survive projection sync even though
+    """DB-written keys like agentRunId survive projection sync even though
     Temporal's memo is immutable and will never contain them."""
     from types import SimpleNamespace
 
@@ -611,15 +611,15 @@ def test_merged_memo_preserves_db_only_keys_absent_from_temporal_memo():
     canonical.memo = {
         "title": "My Task",
         "summary": "Running",
-        "taskRunId": "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d",
+        "agentRunId": "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d",
     }
-    # Temporal's memo is a subset — taskRunId is absent (it's immutable after start)
+    # Temporal's memo is a subset — agentRunId is absent (it's immutable after start)
     temporal_payload = {"memo": {"title": "My Task", "summary": "Executing step 3"}}
 
     merged = merged_memo_for_projection(temporal_payload, canonical)
 
     # DB-only key survives
-    assert merged["taskRunId"] == "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"
+    assert merged["agentRunId"] == "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"
     # Temporal's value wins for keys present in both
     assert merged["summary"] == "Executing step 3"
     assert merged["title"] == "My Task"
@@ -629,13 +629,13 @@ def test_merged_memo_temporal_wins_for_overlapping_keys():
     from types import SimpleNamespace
 
     canonical = SimpleNamespace()
-    canonical.memo = {"summary": "Old summary", "taskRunId": "abc-123"}
+    canonical.memo = {"summary": "Old summary", "agentRunId": "abc-123"}
     temporal_payload = {"memo": {"summary": "New summary from Temporal"}}
 
     merged = merged_memo_for_projection(temporal_payload, canonical)
 
     assert merged["summary"] == "New summary from Temporal"
-    assert merged["taskRunId"] == "abc-123"
+    assert merged["agentRunId"] == "abc-123"
 
 def test_merged_memo_without_canonical_returns_temporal_memo_only():
     payload = {"memo": {"title": "task", "summary": "done"}}
@@ -647,11 +647,11 @@ def test_merged_memo_with_empty_temporal_memo_returns_canonical_memo():
     from types import SimpleNamespace
 
     canonical = SimpleNamespace()
-    canonical.memo = {"taskRunId": "abc", "title": "task"}
+    canonical.memo = {"agentRunId": "abc", "title": "task"}
     payload: dict = {"memo": {}}
 
     merged = merged_memo_for_projection(payload, canonical)
-    assert merged["taskRunId"] == "abc"
+    assert merged["agentRunId"] == "abc"
     assert merged["title"] == "task"
 
 # --- mm_started_at semantic timestamp tests ---
@@ -667,7 +667,7 @@ def _make_running_desc(
     desc.id = workflow_id
     desc.run_id = f"run-{workflow_id}"
     desc.namespace = "moonmind"
-    desc.workflow_type = "MoonMind.Run"
+    desc.workflow_type = "MoonMind.UserWorkflow"
     desc.status = WorkflowExecutionStatus.RUNNING
     desc.start_time = start_time
     desc.execution_time = start_time

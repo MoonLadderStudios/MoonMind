@@ -34,7 +34,7 @@ def _integration_profile_payload() -> dict[str, object]:
         "image": "ghcr.io/moonladderstudios/moonmind-integration-ci:1.0",
         "entrypoint": ["/bin/bash"],
         "commandWrapper": ["-lc"],
-        "workdirTemplate": "/work/agent_jobs/${task_run_id}/repo",
+        "workdirTemplate": "/work/agent_jobs/${agent_run_id}/repo",
         "requiredMounts": [
             {
                 "type": "volume",

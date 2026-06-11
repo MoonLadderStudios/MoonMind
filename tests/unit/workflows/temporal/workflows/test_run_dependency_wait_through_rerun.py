@@ -37,7 +37,7 @@ from moonmind.workflows.temporal.workflows.run import (
     DEPENDENCY_RESOLUTION_SATISFIED_AFTER_RERUN,
     DEPENDENCY_RESOLUTION_WAITING_FOR_RERUN,
     DEPENDENCY_WAIT_THROUGH_RERUN_PATCH,
-    MoonMindRunWorkflow,
+    MoonMindUserWorkflow,
     STATE_WAITING_ON_DEPENDENCIES,
 )
 
@@ -52,7 +52,7 @@ def _make_workflow_under_rerun_patch(
     *,
     declared: list[str],
     now: datetime | None = None,
-) -> MoonMindRunWorkflow:
+) -> MoonMindUserWorkflow:
     """Build a workflow instance with rerun patch enabled and gate primed."""
     monkeypatch.setattr(
         workflow,
@@ -63,7 +63,7 @@ def _make_workflow_under_rerun_patch(
     fixed_now = now or datetime(2026, 5, 8, 12, 0, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(workflow, "now", lambda: fixed_now)
 
-    instance = MoonMindRunWorkflow()
+    instance = MoonMindUserWorkflow()
     instance._declared_dependencies = list(declared)
     instance._unresolved_dependency_ids = set(declared)
     instance._dependency_resolution = DEPENDENCY_RESOLUTION_NOT_APPLICABLE
@@ -389,7 +389,7 @@ def test_bypass_records_per_outcome_resolution_bypassed(monkeypatch) -> None:
     )
     monkeypatch.setattr(workflow, "now", lambda: fixed_now)
 
-    wf = MoonMindRunWorkflow()
+    wf = MoonMindUserWorkflow()
     wf._declared_dependencies = ["dep-1", "dep-2"]
     wf._unresolved_dependency_ids = {"dep-1", "dep-2"}
     wf._state = STATE_WAITING_ON_DEPENDENCIES
@@ -436,7 +436,7 @@ def test_late_completed_signal_after_bypass_preserves_bypassed_resolution(
     )
     monkeypatch.setattr(workflow, "now", lambda: fixed_now)
 
-    wf = MoonMindRunWorkflow()
+    wf = MoonMindUserWorkflow()
     wf._declared_dependencies = ["dep-1"]
     wf._unresolved_dependency_ids = {"dep-1"}
     wf._state = STATE_WAITING_ON_DEPENDENCIES
@@ -566,7 +566,7 @@ def test_legacy_workflows_without_rerun_patch_still_fail_fast(monkeypatch) -> No
         lambda: datetime(2026, 5, 8, 12, 0, 0, tzinfo=timezone.utc),
     )
 
-    wf = MoonMindRunWorkflow()
+    wf = MoonMindUserWorkflow()
     wf._declared_dependencies = ["dep-1"]
     wf._unresolved_dependency_ids = {"dep-1"}
 
@@ -609,7 +609,7 @@ async def _fake_execute_activity(activity_name, *args, **kwargs):
 @pytest.fixture
 def mock_run_environment(monkeypatch):
     monkeypatch.setattr(
-        MoonMindRunWorkflow,
+        MoonMindUserWorkflow,
         "_trusted_owner_metadata",
         lambda self: ("user", "user-1"),
     )
@@ -624,10 +624,10 @@ def mock_run_environment(monkeypatch):
         pass
 
     monkeypatch.setattr(
-        MoonMindRunWorkflow, "_run_planning_stage", fake_planning_stage
+        MoonMindUserWorkflow, "_run_planning_stage", fake_planning_stage
     )
     monkeypatch.setattr(
-        MoonMindRunWorkflow, "_run_execution_stage", fake_execution_stage
+        MoonMindUserWorkflow, "_run_execution_stage", fake_execution_stage
     )
 
 
@@ -662,20 +662,20 @@ async def test_failed_prereq_then_completed_signal_unblocks_dependent(
         in {DEPENDENCY_GATE_PATCH, DEPENDENCY_WAIT_THROUGH_RERUN_PATCH},
     )
     monkeypatch.setattr(
-        MoonMindRunWorkflow, "_reconcile_dependencies", fake_reconcile
+        MoonMindUserWorkflow, "_reconcile_dependencies", fake_reconcile
     )
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
             env.client,
             task_queue="test-task-queue-rerun",
-            workflows=[MoonMindRunWorkflow],
+            workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await env.client.start_workflow(
-                MoonMindRunWorkflow.run,
+                MoonMindUserWorkflow.run,
                 {
-                    "workflow_type": "MoonMind.Run",
+                    "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {"task": {"dependsOn": ["dep-rerun-1"]}},
                     "plan_artifact_ref": "ref-123",
                 },

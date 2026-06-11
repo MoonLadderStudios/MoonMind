@@ -41,7 +41,7 @@ async def test_exact_rerun_creates_fresh_execution_without_recovery_progress(
         async with maker() as session:
             service = TemporalExecutionService(session, client_adapter=AsyncMock())
             created = await service.create_execution(
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 owner_id=uuid4(),
                 title="Failed task",
                 input_artifact_ref="artifact://input/original",
@@ -50,7 +50,7 @@ async def test_exact_rerun_creates_fresh_execution_without_recovery_progress(
                 failure_policy=None,
                 initial_parameters={
                     "repository": "MoonLadderStudios/MoonMind",
-                    "taskRunId": "old-task-run",
+                    "agentRunId": "old-agent-run",
                     "recoverySource": {"workflowId": "mm:failed", "runId": "run-old"},
                     "recoveryCheckpointRef": "artifact://checkpoint/old",
                     "preservedSteps": [{"id": "step-1"}],
@@ -90,7 +90,7 @@ async def test_exact_rerun_creates_fresh_execution_without_recovery_progress(
         "workflowId": source.workflow_id,
         "runId": source.run_id,
     }
-    assert "taskRunId" not in rerun.parameters
+    assert "agentRunId" not in rerun.parameters
     assert "recoverySource" not in rerun.parameters
     assert "recoveryCheckpointRef" not in rerun.parameters
     assert "preservedSteps" not in rerun.parameters

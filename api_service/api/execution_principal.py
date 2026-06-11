@@ -1,8 +1,8 @@
 """Resolve ``ExecutionPrincipal`` for ``POST /api/executions`` callers.
 
 Task-spawning callers identify themselves with trusted transport headers
-(``X-MoonMind-Task-Workflow-Id`` / ``X-MoonMind-Task-Run-Id`` /
-``X-MoonMind-Task-Run-Identifier``).  We refuse to honour those headers
+(``X-MoonMind-Task-Workflow-Id`` / ``X-MoonMind-Agent-Run-Id`` /
+``X-MoonMind-Agent-Run-Identifier``).  We refuse to honour those headers
 unless the executions service can confirm that the OIDC user owns the
 referenced workflow.  When that check passes the principal is granted the
 ``executions:create-child`` and ``executions:inherit-runtime`` scopes that
@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 from fastapi import Header, Request
 
-from moonmind.workflows.tasks.runtime_inheritance import (
+from moonmind.workflows.executions.runtime_inheritance import (
     SCOPE_CREATE_CHILD,
     SCOPE_INHERIT_RUNTIME,
     ExecutionPrincipal,
@@ -25,8 +25,8 @@ from moonmind.workflows.tasks.runtime_inheritance import (
 logger = logging.getLogger(__name__)
 
 TASK_WORKFLOW_HEADER = "X-MoonMind-Task-Workflow-Id"
-TASK_RUN_HEADER = "X-MoonMind-Task-Run-Id"
-TASK_RUN_IDENTIFIER_HEADER = "X-MoonMind-Task-Run-Identifier"
+AGENT_RUN_HEADER = "X-MoonMind-Agent-Run-Id"
+AGENT_RUN_IDENTIFIER_HEADER = "X-MoonMind-Agent-Run-Identifier"
 
 
 def _coerce_str(value: Any) -> Optional[str]:
@@ -79,7 +79,7 @@ async def resolve_execution_principal(
     request: Optional[Request] = None,
     workflow_id_header: Optional[str] = None,
     run_id_header: Optional[str] = None,
-    task_run_id_header: Optional[str] = None,
+    agent_run_id_header: Optional[str] = None,
 ) -> ExecutionPrincipal:
     """Build an ``ExecutionPrincipal`` for a request.
 
@@ -90,21 +90,21 @@ async def resolve_execution_principal(
 
     workflow_id = _coerce_str(workflow_id_header)
     run_id = _coerce_str(run_id_header)
-    task_run_id = _coerce_str(task_run_id_header)
+    agent_run_id = _coerce_str(agent_run_id_header)
 
     if request is not None:
         headers = request.headers
         if workflow_id is None:
             workflow_id = _coerce_str(headers.get(TASK_WORKFLOW_HEADER))
         if run_id is None:
-            run_id = _coerce_str(headers.get(TASK_RUN_HEADER))
-        if task_run_id is None:
-            task_run_id = _coerce_str(headers.get(TASK_RUN_IDENTIFIER_HEADER))
+            run_id = _coerce_str(headers.get(AGENT_RUN_HEADER))
+        if agent_run_id is None:
+            agent_run_id = _coerce_str(headers.get(AGENT_RUN_IDENTIFIER_HEADER))
 
     scopes: set[str] = set()
     verified_workflow_id: Optional[str] = None
     verified_run_id: Optional[str] = None
-    verified_task_run_id: Optional[str] = None
+    verified_agent_run_id: Optional[str] = None
 
     if workflow_id:
         ownership_ok = await _verify_task_workflow_ownership(
@@ -115,7 +115,7 @@ async def resolve_execution_principal(
         if ownership_ok:
             verified_workflow_id = workflow_id
             verified_run_id = run_id
-            verified_task_run_id = task_run_id
+            verified_agent_run_id = agent_run_id
             scopes.update({SCOPE_CREATE_CHILD, SCOPE_INHERIT_RUNTIME})
 
     return ExecutionPrincipal(
@@ -123,7 +123,7 @@ async def resolve_execution_principal(
         is_superuser=_is_superuser(user),
         workflow_id=verified_workflow_id,
         run_id=verified_run_id,
-        task_run_id=verified_task_run_id,
+        agent_run_id=verified_agent_run_id,
         scopes=frozenset(scopes),
     )
 
@@ -133,11 +133,11 @@ async def execution_principal_dependency(
     x_moonmind_task_workflow_id: Optional[str] = Header(
         default=None, alias=TASK_WORKFLOW_HEADER
     ),
-    x_moonmind_task_run_id: Optional[str] = Header(
-        default=None, alias=TASK_RUN_HEADER
+    x_moonmind_agent_run_id: Optional[str] = Header(
+        default=None, alias=AGENT_RUN_HEADER
     ),
-    x_moonmind_task_run_identifier: Optional[str] = Header(
-        default=None, alias=TASK_RUN_IDENTIFIER_HEADER
+    x_moonmind_agent_run_identifier: Optional[str] = Header(
+        default=None, alias=AGENT_RUN_IDENTIFIER_HEADER
     ),
 ) -> dict[str, Any]:
     """Return a *deferred* principal context for router endpoints.
@@ -151,14 +151,14 @@ async def execution_principal_dependency(
     return {
         "request": request,
         "workflow_id_header": x_moonmind_task_workflow_id,
-        "run_id_header": x_moonmind_task_run_id,
-        "task_run_id_header": x_moonmind_task_run_identifier,
+        "run_id_header": x_moonmind_agent_run_id,
+        "agent_run_id_header": x_moonmind_agent_run_identifier,
     }
 
 
 __all__ = [
-    "TASK_RUN_HEADER",
-    "TASK_RUN_IDENTIFIER_HEADER",
+    "AGENT_RUN_HEADER",
+    "AGENT_RUN_IDENTIFIER_HEADER",
     "TASK_WORKFLOW_HEADER",
     "execution_principal_dependency",
     "resolve_execution_principal",

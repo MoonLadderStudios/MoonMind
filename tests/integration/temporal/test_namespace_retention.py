@@ -8,6 +8,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 BOOTSTRAP_SCRIPT = REPO_ROOT / "services/temporal/scripts/bootstrap-namespace.sh"
+LEGACY_AGENT_RUN_SEARCH_ATTRIBUTE = "Task" + "RunId"
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 REQUIRED_SEARCH_ATTRIBUTES = {
@@ -22,7 +23,7 @@ REQUIRED_SEARCH_ATTRIBUTES = {
     "mm_scheduled_for": "Datetime",
     "mm_has_dependencies": "Bool",
     "mm_dependency_count": "Int",
-    "TaskRunId": "Keyword",
+    "AgentRunId": "Keyword",
     "RuntimeId": "Keyword",
     "SessionId": "Keyword",
     "SessionEpoch": "Int",
@@ -38,7 +39,7 @@ LEGACY_SEARCH_ATTRIBUTES = {
         and key != "mm_started_at"
         and key
         not in {
-            "TaskRunId",
+            "AgentRunId",
             "RuntimeId",
             "SessionId",
             "SessionEpoch",
@@ -57,6 +58,7 @@ RETIRED_SEARCH_ATTRIBUTES = {
     "CustomBoolField",
     "mm_continue_as_new_cause",
     "mm_dependency_state",
+    LEGACY_AGENT_RUN_SEARCH_ATTRIBUTE,
 }
 
 def _write_executable(path: Path, contents: str) -> None:
@@ -325,7 +327,7 @@ def test_namespace_bootstrap_registers_missing_search_attributes_on_upgrade(
     assert "Registered missing search attributes:" in result.stdout
     assert "mm_has_dependencies" in result.stdout
     assert "mm_dependency_count" in result.stdout
-    assert "TaskRunId" in result.stdout
+    assert "AgentRunId" in result.stdout
     assert "RuntimeId" in result.stdout
     assert "SessionId" in result.stdout
     assert "SessionEpoch" in result.stdout
@@ -360,7 +362,8 @@ def test_namespace_bootstrap_retire_old_keyword_attributes_before_sql_limit_upgr
             "mm_integration": "Keyword",
             "mm_continue_as_new_cause": "Keyword",
             "mm_dependency_state": "Keyword",
-            "TaskRunId": "Keyword",
+            LEGACY_AGENT_RUN_SEARCH_ATTRIBUTE: "Keyword",
+            "AgentRunId": "Keyword",
             "mm_updated_at": "Datetime",
             "mm_scheduled_for": "Datetime",
             "mm_has_dependencies": "Bool",

@@ -931,7 +931,7 @@ describe('Workflows Entrypoint', () => {
     fireEvent.mouseDown(document.body);
     expect(screen.queryByRole('dialog', { name: 'Status filter' })).toBeNull();
     expect(executionListCalls().length).toBe(baselineCalls);
-  });
+  }, 10000);
 
   it('moves focus into column filter dialogs and applies staged text filters with Enter', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);

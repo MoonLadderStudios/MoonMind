@@ -6,15 +6,15 @@ Last updated: 2026-05-06
 
 ## 1. Purpose
 
-This document defines the API and UI consumption contract for displaying and interacting with artifact-backed outputs in MoonMind across execution, task, session, report, and observability surfaces.
+This document defines the API and UI consumption contract for displaying and interacting with artifact-backed outputs in MoonMind across execution, workflow, session, report, and observability surfaces.
 
 It focuses on:
 
-- how UI clients present artifacts in execution, task detail, report, and observability flows
+- how UI clients present artifacts in execution, workflow detail, report, and observability flows
 - how API clients interpret artifact metadata fields
 - stable conventions for `link_type`, default reads, downloads, previews, and rendering hints
 - how artifact presentation connects to canonical runtime result and report bundle contracts
-- how artifact presentation works for **task-scoped session containers** and managed-runtime continuity
+- how artifact presentation works for **workflow-scoped session containers** and managed-runtime continuity
 
 This document is intentionally downstream of the artifact storage, execution identity, managed-runtime, report, and observability contracts. It does not redefine storage internals, artifact lifecycle implementation, managed-runtime supervision internals, report bundle semantics, or execution query semantics.
 
@@ -23,16 +23,16 @@ This document is intentionally downstream of the artifact storage, execution ide
 - `docs/Temporal/WorkflowArtifactSystemDesign.md`
   - Owns storage backend, artifact identity, lifecycle, linkage, authorization, and activity-boundary design.
 - `docs/Temporal/VisibilityAndUiQueryModel.md`
-  - Owns execution identity, list/detail query semantics, and task compatibility rules.
+  - Owns execution identity, list/detail query semantics, and workflow-surface mapping rules.
 - `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
   - Owns canonical runtime contracts (`AgentRunHandle`, `AgentRunStatus`, `AgentRunResult`) and execution-model boundaries.
 - `docs/ManagedAgents/CodexCliManagedSessions.md`
-  - Owns the desired-state contract for Codex task-scoped session identity, control actions, and clear/reset semantics.
+  - Owns the desired-state contract for Codex workflow-scoped session identity, control actions, and clear/reset semantics.
 - `docs/Observability/LiveLogs.md`
   - Owns live-log and observability APIs, artifact-backed tails, live streaming, and diagnostics presentation for managed runs.
 - `docs/Artifacts/ReportArtifacts.md`
   - Owns report-specific artifact classes, report bundle conventions, report metadata, evidence separation, and report-first UI behavior.
-- `docs/UI/MissionControlArchitecture.md`
+- `docs/UI/WorkflowConsoleArchitecture.md`
   - Owns dashboard route wiring, source resolution, and mixed-source UI integration.
 
 This document owns the **generic consumer-facing artifact presentation contract** layered on top of those decisions.
@@ -49,8 +49,8 @@ This document owns the **generic consumer-facing artifact presentation contract*
 - standard viewer rules by `content_type` and metadata hints
 - stable error codes and client behavior for common failure states
 - runtime result integration and artifact-backed large outputs
-- presentation rules for provider snapshots, managed-runtime diagnostics, reports, and task-scoped session continuity artifacts
-- session-aware aggregation views for task-scoped session containers
+- presentation rules for provider snapshots, managed-runtime diagnostics, reports, and workflow-scoped session continuity artifacts
+- session-aware aggregation views for workflow-scoped session containers
 - generic presentation rules that report-specific artifact contracts build on
 
 ### 2.2 Out of scope
@@ -71,10 +71,10 @@ This document owns the **generic consumer-facing artifact presentation contract*
 
 1. **Artifacts remain execution-centric.**
    - Artifacts attach durably to a Temporal execution identified by `(namespace, workflow_id, run_id)`.
-   - Task-oriented, session-oriented, and report-oriented views are compatibility projections over execution-linked artifacts; they do not create a second durable artifact identity.
+   - Workflow-oriented, session-oriented, and report-oriented views are projections over execution-linked artifacts; they do not create a second durable artifact identity.
 
-2. **Task-scoped session containers are continuity caches, not durable truth.**
-   - A persistent managed-runtime container may survive across multiple plan steps within one task.
+2. **Workflow-scoped session containers are continuity caches, not durable truth.**
+   - A persistent managed-runtime container may survive across multiple plan steps within one workflow execution.
    - Any state needed for recovery, audit, presentation, or rerun must be materialized as artifacts or bounded workflow metadata.
    - Clients must never assume that container memory, container-local session databases, or runtime home directories are the canonical source of truth.
 
@@ -124,10 +124,10 @@ This document owns the **generic consumer-facing artifact presentation contract*
 - **Link**: Join row connecting an artifact to an execution with semantic `link_type`.
 - **Preview artifact**: Redacted or reduced representation generated for safer presentation.
 - **Raw artifact**: The original bytes, which may be restricted.
-- **Task-scoped session container**: A managed-runtime container or long-lived process reused across multiple steps within one task.
-- **Session ID**: Durable MoonMind identifier for one task-scoped runtime session.
+- **Workflow-scoped session container**: A managed-runtime container or long-lived process reused across multiple steps within one workflow.
+- **Session ID**: Durable MoonMind identifier for one workflow-scoped runtime session.
 - **Session epoch**: One logical continuity interval within a session. A reset or `/clear` starts a new epoch.
-- **Step checkpoint artifact**: Compact MoonMind-owned artifact written at a step boundary so the task can be recovered or reviewed without depending on in-container state.
+- **Step checkpoint artifact**: Compact MoonMind-owned artifact written at a step boundary so the workflow execution can be recovered or reviewed without depending on in-container state.
 - **Session summary artifact**: Latest durable summary of the active session state used for presentation, handoff, and recovery.
 - **Session control artifact**: Artifact describing an explicit session control action such as `/clear`, approve/reject, operator message, pause, resume, or cancel.
 - **Session projection**: A server-produced read model that groups execution-linked artifacts by `session_id` and optional `session_epoch` for UI consumption.
@@ -217,7 +217,7 @@ Returned by session-aware list endpoints.
 
 ```json
 {
-  "task_run_id": "tr_...",
+  "agent_run_id": "tr_...",
   "session_id": "sess_...",
   "session_epoch": 3,
   "grouped_artifacts": [
@@ -248,7 +248,7 @@ Rules:
 
 - `SessionProjection` is a read convenience, not a second artifact identity model.
 - Every artifact returned in a session projection must still include normal execution `links[]`.
-- The session projection may span multiple executions within the same task when a session container is reused across steps.
+- The session projection may span multiple executions within the same workflow execution when a session container is reused across steps.
 - `grouped_artifacts` is server-defined. Clients may render known groups such as `runtime`, `continuity`, and `control`, but must tolerate unknown group keys.
 - Missing refs may be omitted from both latest-ref fields and grouped-artifact lists.
 - The projection must not require a live session container, live session-controller query, or container-local history.
@@ -310,19 +310,19 @@ This means:
 - report bodies, report evidence, and structured findings belong in artifacts
 - workflow history should only see small summaries, refs, and bounded metadata
 
-### 6.2 Task-scoped session container rule
+### 6.2 Workflow-scoped session container rule
 
-For task-scoped session containers, the artifact contract must behave as follows:
+For workflow-scoped session containers, the artifact contract must behave as follows:
 
 - the container may persist across multiple plan steps
 - the container may keep native runtime state for efficiency and continuity
 - MoonMind must still materialize step inputs, step outputs, logs, diagnostics, summaries, and checkpoints as artifacts
-- task and detail UIs must prefer artifact evidence over in-container session assumptions
+- workflow and detail UIs must prefer artifact evidence over in-container session assumptions
 - the existence of one long-lived session must not remove the requirement for per-step artifact evidence
 
 ### 6.3 Step and session durability rule
 
-For each managed step that uses a task-scoped session container, the durable presentation surface should include:
+For each managed step that uses a workflow-scoped session container, the durable presentation surface should include:
 
 - step-scoped input artifacts such as instructions, plan fragments, skill snapshots, and operator feedback
 - step-scoped output artifacts such as primary output, patch, summary, and agent result
@@ -330,11 +330,11 @@ For each managed step that uses a task-scoped session container, the durable pre
 - at least one session continuity artifact: a step checkpoint, session summary, or both
 - explicit control or reset artifacts when the operator intervenes or the session epoch changes
 
-A task-scoped session container may be reused, but no user-important state should exist only inside that container.
+A workflow-scoped session container may be reused, but no user-important state should exist only inside that container.
 
-### 6.4 Rule for task/detail UIs
+### 6.4 Rule for workflow/detail UIs
 
-Task and detail UIs should prefer execution-linked artifact evidence over provider-native inline payloads and over ephemeral container state.
+Workflow and detail UIs should prefer execution-linked artifact evidence over provider-native inline payloads and over ephemeral container state.
 
 When an `AgentRunResult` references artifacts, the UI should:
 
@@ -490,9 +490,9 @@ Rules:
 - `latest_only=true` is guaranteed only when paired with `link_type`; in that case the response contains at most one artifact, the latest for that execution/link pair.
 - Without `link_type`, clients must not assume the server collapses results to one artifact per `link_type`.
 
-### 7.10 Get artifact projection for a task-scoped session
+### 7.10 Get artifact projection for a workflow-scoped session
 
-`GET /api/task-runs/{task_run_id}/artifact-sessions/{session_id}`
+`GET /api/agent-runs/{agent_run_id}/artifact-sessions/{session_id}`
 
 Response:
 
@@ -550,7 +550,7 @@ Client rules:
 - Treat `authentication_required` as an auth/session problem, not a retry loop.
 - Treat `artifact_state_error` as recoverable. Refresh UI and show uploading/processing state.
 - Treat `artifact_forbidden` as “do not retry raw access.” Hide or disable raw-download affordances.
-- Treat `session_projection_not_found` as “session projection unavailable for this task run,” not as proof that the task has no artifacts.
+- Treat `session_projection_not_found` as “session projection unavailable for this workflow run,” not as proof that the workflow execution has no artifacts.
 - Treat `session_projection_unavailable` as a projection/read-model issue. Fall back to execution-scoped artifact listing instead of leaving the UI blank.
 
 ---
@@ -559,11 +559,11 @@ Client rules:
 
 ### 9.1 Primary UI surfaces
 
-Execution detail or task detail should expose:
+Execution detail or workflow detail should expose:
 
 - an **Execution Artifacts** panel for the current execution
-- a **Session Continuity** panel when the task used a task-scoped session container
-- a **Report** panel or report card when the execution or task has a canonical report artifact
+- a **Session Continuity** panel when the workflow used a workflow-scoped session container
+- a **Report** panel or report card when the execution or workflow has a canonical report artifact
 - observability/log panels that can read live streams or artifact-backed histories
 
 Common execution-artifact modes:
@@ -588,7 +588,7 @@ Common session-continuity modes:
 
 Default session view call:
 
-- `GET /api/task-runs/{task_run_id}/artifact-sessions/{session_id}`
+- `GET /api/agent-runs/{agent_run_id}/artifact-sessions/{session_id}`
 
 Artifact detail drawer/page should:
 
@@ -681,14 +681,14 @@ The canonical latest-output contract is server-defined scope plus `link_type`, n
 Rules:
 
 - if the UI wants “latest output” for a known artifact kind within one execution, it should specify `link_type`
-- if the UI wants “latest output” within one task-scoped session, it should use the session endpoint
-- if the UI wants “latest report” within one execution or task, it should use report-specific server projection or `link_type=report.primary`
+- if the UI wants “latest output” within one workflow-scoped session, it should use the session endpoint
+- if the UI wants “latest report” within one execution or workflow, it should use report-specific server projection or `link_type=report.primary`
 - if the UI wants cross-link aggregation later, add an explicit server mode instead of collapsing client-side
 - this applies equally to `output.primary`, `output.provider_snapshot`, `runtime.diagnostics`, `session.summary`, `session.step_checkpoint`, `report.primary`, `report.summary`, and all other link types
 
 ### 9.6 Session continuity presentation
 
-When task-scoped session containers are in use, the UI must present continuity without making the container itself the source of truth.
+When workflow-scoped session containers are in use, the UI must present continuity without making the container itself the source of truth.
 
 Rules:
 
@@ -699,7 +699,7 @@ Rules:
 - the panel should render server-defined groups such as `runtime`, `continuity`, and `control` without hiding unknown future groups
 - the panel must preserve links back to the source execution that produced each artifact
 - the panel must not imply that all artifacts came from one execution simply because they share one `session_id`
-- if the session projection is unavailable, the UI should fall back to execution-scoped artifacts plus standard task step context
+- if the session projection is unavailable, the UI should fall back to execution-scoped artifacts plus standard workflow step context
 
 ### 9.7 Logs and observability
 
@@ -707,7 +707,7 @@ Managed-run log viewing remains governed by the observability APIs.
 
 Rules:
 
-- task detail log panels should use the observability APIs for live tails and artifact-backed log retrieval
+- workflow detail log panels should use the observability APIs for live tails and artifact-backed log retrieval
 - artifact panels may still show `runtime.stdout`, `runtime.stderr`, `runtime.merged_logs`, `runtime.diagnostics`, and event-journal artifacts when those artifacts exist
 - the artifact panel must not attempt to simulate a terminal session
 - ended runs should always remain viewable from artifacts even if no live connection exists
@@ -872,7 +872,7 @@ Rules:
 
 ### 11.3 Session continuity artifact classes
 
-These artifact classes exist specifically to keep task-scoped session containers artifact-first:
+These artifact classes exist specifically to keep workflow-scoped session containers artifact-first:
 
 | `link_type` | Typical `content_type` | Recommended renderer | Notes |
 | --- | --- | --- | --- |
@@ -948,7 +948,7 @@ Debug artifacts should be hidden by default in normal user views and shown in op
 
 ### 12.3 Managed runtime artifact discipline
 
-The upload UX rules also apply to task-scoped session container outputs.
+The upload UX rules also apply to workflow-scoped session container outputs.
 
 Rules:
 
@@ -1021,9 +1021,9 @@ Rules:
 
 ### 13.4 Session context rules
 
-When artifacts participate in a task-scoped session view:
+When artifacts participate in a workflow-scoped session view:
 
-- `session_context.session_id` should be stable for the lifetime of the task-scoped session
+- `session_context.session_id` should be stable for the lifetime of the workflow-scoped session
 - `session_context.session_epoch` must increase when the session is cleared, reset, or rebuilt
 - `session_context.step_id` and `session_context.step_index` should identify the step that produced or consumed the artifact when applicable
 - `session_context.turn_index` may identify an interaction turn inside the session
@@ -1086,7 +1086,7 @@ Managed runtime producers should:
 
 - write stdout/stderr/diagnostics as runtime artifacts
 - write final user-facing output as `output.primary` or report artifacts as appropriate
-- write session continuity evidence when a task-scoped session is used
+- write session continuity evidence when a workflow-scoped session is used
 - avoid relying on container-local state for recovery or presentation
 - sanitize metadata and logs before exposing them in the control plane
 
@@ -1227,7 +1227,7 @@ During report rollout:
 During managed-session rollout:
 
 - session projections may initially include only latest refs and grouped artifacts from the durable managed-session record
-- older task runs may not have a session projection
+- older workflow runs may not have a session projection
 - clients should fall back to execution-scoped artifacts and observability views
 - unknown future group keys should be rendered as generic groups, not hidden
 
@@ -1254,7 +1254,7 @@ Consumer-facing artifact changes should include tests that cover:
 ## 19. Open questions
 
 1. Should `ArtifactMetadata` grow a first-class `session_context` column-backed field, or should session presentation remain metadata/projection-driven for now?
-2. Should report-aware execution projections live under execution endpoints, task endpoints, or both?
+2. Should report-aware execution projections live under execution endpoints, workflow endpoints, or both?
 3. Should `application/pdf` get a first-party viewer, or should PDFs remain download/open-only for safety and simplicity?
 4. Should latest-artifact queries support a generic multi-link server aggregation mode, or should each projection define its own latest refs?
 5. Should `report.evidence` receive additional grouping metadata such as `finding_id`, `section_id`, or `evidence_kind` in the report-specific contract?
@@ -1274,7 +1274,7 @@ The artifact system is still execution-linked and Temporal-compatible, but the p
 - observability logs and diagnostics
 - report deliverables
 - report evidence
-- task detail projections
+- workflow detail projections
 - future UI convenience surfaces
 
 This document should therefore move to `docs/Artifacts/ArtifactPresentationContract.md` and remain the generic presentation layer that more specific documents, especially `docs/Artifacts/ReportArtifacts.md`, build on.

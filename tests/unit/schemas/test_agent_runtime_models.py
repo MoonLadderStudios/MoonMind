@@ -124,7 +124,7 @@ def test_agent_execution_request_accepts_codex_managed_session_binding() -> None
         idempotencyKey="idem-1",
         managedSession={
             "workflowId": "wf-run-1:session:codex_cli",
-            "taskRunId": "wf-run-1",
+            "agentRunId": "wf-run-1",
             "sessionId": "sess:wf-run-1:codex_cli",
             "sessionEpoch": 1,
             "runtimeId": "codex_cli",
@@ -222,7 +222,7 @@ def test_agent_execution_request_rejects_managed_session_for_claude_code_runtime
             idempotencyKey="idem-1",
             managedSession={
                 "workflowId": "wf-run-1:session:claude_code",
-                "taskRunId": "wf-run-1",
+                "agentRunId": "wf-run-1",
                 "sessionId": "sess:wf-run-1:claude_code",
                 "sessionEpoch": 1,
                 "runtimeId": "claude_code",
@@ -241,7 +241,7 @@ def test_agent_execution_request_rejects_managed_session_for_non_session_runtime
             idempotencyKey="idem-1",
             managedSession={
                 "workflowId": "wf-run-1:session:codex_cli",
-                "taskRunId": "wf-run-1",
+                "agentRunId": "wf-run-1",
                 "sessionId": "sess:wf-run-1:codex_cli",
                 "sessionEpoch": 1,
                 "runtimeId": "codex_cli",
@@ -1138,10 +1138,10 @@ def test_no_docker_profile_cannot_be_raised_by_task_requested_mode() -> None:
         }
     )
 
-    with pytest.raises(ValueError, match="task instructions cannot raise Docker capability"):
+    with pytest.raises(ValueError, match="workflow instructions cannot raise Docker capability"):
         resolve_managed_runtime_workload_mode(
             profile,
-            task_requested_workload_mode="docker-sidecar",
+            workflow_requested_workload_mode="docker-sidecar",
         )
 
 

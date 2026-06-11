@@ -57,7 +57,7 @@ class RemediationEvidenceToolError(RuntimeError):
 class RemediationLogReadResult:
     """Bounded historical log read result."""
 
-    task_run_id: str
+    agent_run_id: str
     stream: RemediationLogStream
     lines: tuple[str, ...]
     next_cursor: str | None = None
@@ -75,7 +75,7 @@ class RemediationLiveFollowEvent:
 class RemediationLiveFollowResult:
     """Live-follow batch plus the cursor the caller should persist."""
 
-    task_run_id: str
+    agent_run_id: str
     events: tuple[RemediationLiveFollowEvent, ...]
     resume_cursor: dict[str, Any] | None
 
@@ -102,12 +102,12 @@ class RemediationActionRequestPreparation:
     context_target: dict[str, Any]
 
 class RemediationLogReader(Protocol):
-    """Read bounded historical logs for a target task run."""
+    """Read bounded historical logs for a target agent run."""
 
     async def read_logs(
         self,
         *,
-        task_run_id: str,
+        agent_run_id: str,
         stream: RemediationLogStream,
         cursor: str | None = None,
         tail_lines: int | None = None,
@@ -115,12 +115,12 @@ class RemediationLogReader(Protocol):
         raise NotImplementedError
 
 class RemediationLiveFollower(Protocol):
-    """Follow live target output for a target task run."""
+    """Follow live target output for a target agent run."""
 
     async def follow_logs(
         self,
         *,
-        task_run_id: str,
+        agent_run_id: str,
         from_sequence: int | None = None,
     ) -> RemediationLiveFollowResult:
         raise NotImplementedError
@@ -141,7 +141,7 @@ class _UnavailableLogReader:
     async def read_logs(
         self,
         *,
-        task_run_id: str,
+        agent_run_id: str,
         stream: RemediationLogStream,
         cursor: str | None = None,
         tail_lines: int | None = None,
@@ -154,7 +154,7 @@ class _UnavailableLiveFollower:
     async def follow_logs(
         self,
         *,
-        task_run_id: str,
+        agent_run_id: str,
         from_sequence: int | None = None,
     ) -> RemediationLiveFollowResult:
         raise RemediationEvidenceToolError(
@@ -239,25 +239,25 @@ class RemediationEvidenceToolService:
         self,
         *,
         remediation_workflow_id: str,
-        task_run_id: str,
+        agent_run_id: str,
         stream: RemediationLogStream,
         cursor: str | None = None,
         tail_lines: int | None = None,
         principal: str = "service:remediation-tools",
     ) -> RemediationLogReadResult:
-        """Read bounded logs for a taskRunId declared by the context bundle."""
+        """Read bounded logs for a agentRunId declared by the context bundle."""
 
         link = await self._load_link(remediation_workflow_id)
         context = await self._read_context_payload(link=link, principal=principal)
-        normalized_task_run_id = _required_string(task_run_id, "taskRunId")
-        if normalized_task_run_id not in _collect_context_task_run_ids(context):
+        normalized_agent_run_id = _required_string(agent_run_id, "agentRunId")
+        if normalized_agent_run_id not in _collect_context_agent_run_ids(context):
             raise RemediationEvidenceToolError(
-                f"Task run {normalized_task_run_id} is not listed in remediation context."
+                f"Agent run {normalized_agent_run_id} is not listed in remediation context."
             )
         normalized_stream = _normalize_log_stream(stream)
         bounded_tail_lines = _bounded_tail_lines(context, tail_lines)
         return await self._log_reader.read_logs(
-            task_run_id=normalized_task_run_id,
+            agent_run_id=normalized_agent_run_id,
             stream=normalized_stream,
             cursor=cursor,
             tail_lines=bounded_tail_lines,
@@ -267,7 +267,7 @@ class RemediationEvidenceToolService:
         self,
         *,
         remediation_workflow_id: str,
-        task_run_id: str | None = None,
+        agent_run_id: str | None = None,
         from_sequence: int | None = None,
         principal: str = "service:remediation-tools",
     ) -> RemediationLiveFollowResult:
@@ -287,16 +287,16 @@ class RemediationEvidenceToolService:
                 "Live follow is not allowed by remediation mode."
             )
 
-        selected_task_run_id = _required_string(
-            task_run_id or live_mapping.get("taskRunId"), "taskRunId"
+        selected_agent_run_id = _required_string(
+            agent_run_id or live_mapping.get("agentRunId"), "agentRunId"
         )
-        if selected_task_run_id not in _collect_context_task_run_ids(context):
+        if selected_agent_run_id not in _collect_context_agent_run_ids(context):
             raise RemediationEvidenceToolError(
-                f"Task run {selected_task_run_id} is not listed in remediation context."
+                f"Agent run {selected_agent_run_id} is not listed in remediation context."
             )
-        if live_mapping.get("taskRunId") not in {None, selected_task_run_id}:
+        if live_mapping.get("agentRunId") not in {None, selected_agent_run_id}:
             raise RemediationEvidenceToolError(
-                "Requested taskRunId does not match the live-follow target."
+                "Requested agentRunId does not match the live-follow target."
             )
 
         sequence = _normalize_sequence(
@@ -304,7 +304,7 @@ class RemediationEvidenceToolService:
             default_cursor=live_mapping.get("resumeCursor"),
         )
         result = await self._live_follower.follow_logs(
-            task_run_id=selected_task_run_id,
+            agent_run_id=selected_agent_run_id,
             from_sequence=sequence,
         )
         if self._cursor_recorder is not None:
@@ -786,28 +786,28 @@ def _collect_context_artifact_ids(context: Mapping[str, Any]) -> set[str]:
     collect(evidence_mapping)
     return artifact_ids
 
-def _collect_context_task_run_ids(context: Mapping[str, Any]) -> set[str]:
+def _collect_context_agent_run_ids(context: Mapping[str, Any]) -> set[str]:
     evidence = context.get("evidence")
     evidence_mapping = evidence if isinstance(evidence, Mapping) else {}
-    task_runs = evidence_mapping.get("taskRuns")
+    agent_runs = evidence_mapping.get("agentRuns")
     output: set[str] = set()
-    if isinstance(task_runs, Sequence) and not isinstance(
-        task_runs, (str, bytes, bytearray)
+    if isinstance(agent_runs, Sequence) and not isinstance(
+        agent_runs, (str, bytes, bytearray)
     ):
-        for item in task_runs:
+        for item in agent_runs:
             if isinstance(item, Mapping):
-                task_run_id = _string_or_none(item.get("taskRunId"))
-                if task_run_id:
-                    output.add(task_run_id)
+                agent_run_id = _string_or_none(item.get("agentRunId"))
+                if agent_run_id:
+                    output.add(agent_run_id)
     selected = context.get("selectedSteps")
     if isinstance(selected, Sequence) and not isinstance(
         selected, (str, bytes, bytearray)
     ):
         for item in selected:
             if isinstance(item, Mapping):
-                task_run_id = _string_or_none(item.get("taskRunId"))
-                if task_run_id:
-                    output.add(task_run_id)
+                agent_run_id = _string_or_none(item.get("agentRunId"))
+                if agent_run_id:
+                    output.add(agent_run_id)
     return output
 
 def _artifact_id_from_ref(value: str | Mapping[str, Any] | Any) -> str | None:

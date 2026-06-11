@@ -36,7 +36,7 @@ async def test_sync_execution_projection_upsert_no_duplicates(db_session: AsyncS
     desc.id = "mm:upsert-test"
     desc.run_id = "run-upsert"
     desc.namespace = "moonmind"
-    desc.workflow_type = "MoonMind.Run"
+    desc.workflow_type = "MoonMind.UserWorkflow"
     desc.status = WorkflowExecutionStatus.RUNNING
     desc.start_time = start_time
     desc.execution_time = None

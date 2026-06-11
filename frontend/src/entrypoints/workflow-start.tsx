@@ -208,19 +208,25 @@ interface DashboardConfig {
   };
   features?: {
     temporalDashboard?: {
+      temporalWorkflowEditing?: boolean;
       temporalTaskEditing?: boolean;
     };
   };
   system?: {
     defaultRepository?: string;
-    defaultTaskRuntime?: string;
+    defaultRuntime?: string;
+    defaultAgentRuntime?: string;
+    defaultModel?: string;
     defaultTaskModel?: string;
+    defaultEffort?: string;
     defaultTaskEffort?: string;
     defaultPublishMode?: string;
     defaultProposeTasks?: boolean;
+    defaultModelByRuntime?: Record<string, string>;
     defaultTaskModelByRuntime?: Record<string, string>;
+    defaultEffortByRuntime?: Record<string, string>;
     defaultTaskEffortByRuntime?: Record<string, string>;
-    supportedTaskRuntimes?: string[];
+    supportedAgentRuntimes?: string[];
     repositoryOptions?: {
       items?: Array<{
         value?: string | null;
@@ -233,13 +239,13 @@ interface DashboardConfig {
       list?: string;
       defaultProfileRef?: string | null;
     };
-    taskTemplateCatalog?: {
+    presetCatalog?: {
       enabled?: boolean;
       templateSaveEnabled?: boolean;
       list?: string;
       detail?: string;
       expand?: string;
-      saveFromTask?: string;
+      saveFromWorkflow?: string;
     };
     attachmentPolicy?: {
       enabled?: boolean;
@@ -501,7 +507,7 @@ interface ResponseErrorDetail {
   message: string;
 }
 
-interface TaskTemplateInputDefinition {
+interface PresetInputDefinition {
   name: string;
   label: string;
   type:
@@ -520,7 +526,7 @@ interface TaskTemplateInputDefinition {
   placeholder?: string | null;
 }
 
-interface TaskTemplateSummary {
+interface PresetSummary {
   slug: string;
   scope: TemplateScope;
   scopeRef?: string | null;
@@ -530,8 +536,8 @@ interface TaskTemplateSummary {
   version: string;
 }
 
-interface TaskTemplateDetail extends TaskTemplateSummary {
-  inputs?: TaskTemplateInputDefinition[];
+interface PresetDetail extends PresetSummary {
+  inputs?: PresetInputDefinition[];
   inputSchema?: Record<string, unknown>;
   uiSchema?: Record<string, unknown>;
   defaults?: Record<string, unknown>;
@@ -549,11 +555,11 @@ interface SkillCatalogResult {
   detailsById: Record<string, SkillCapabilityDetail>;
 }
 
-interface TaskTemplateListResponse {
-  items?: TaskTemplateSummary[];
+interface PresetListResponse {
+  items?: PresetSummary[];
 }
 
-interface TaskTemplateStepSkill {
+interface PresetStepSkill {
   id?: string;
   name?: string;
   type?: string;
@@ -566,8 +572,8 @@ interface ExpandedStepPayload {
   id?: string;
   title?: string;
   instructions?: string;
-  skill?: TaskTemplateStepSkill;
-  tool?: TaskTemplateStepSkill;
+  skill?: PresetStepSkill;
+  tool?: PresetStepSkill;
   type?: string;
   source?: Record<string, unknown>;
   presetProvenance?: Record<string, unknown>;
@@ -579,7 +585,7 @@ interface ExpandedStepPayload {
   jira_orchestration?: Record<string, unknown>;
 }
 
-interface TaskTemplateExpandResponse {
+interface PresetExpandResponse {
   steps?: ExpandedStepPayload[];
   appliedTemplate?: {
     slug?: string;
@@ -595,7 +601,7 @@ interface TaskTemplateExpandResponse {
   warnings?: string[];
 }
 
-interface TemplateOption extends TaskTemplateSummary {
+interface TemplateOption extends PresetSummary {
   key: string;
 }
 
@@ -688,15 +694,15 @@ interface StepState {
   presetKey: string;
   presetInputValues: Record<string, unknown>;
   presetInputErrors: Record<string, string>;
-  presetDetail: TaskTemplateDetail | null;
+  presetDetail: PresetDetail | null;
   submitExpansion?: PresetSubmitExpansionState | null;
   presetMessage: string | null;
   templateStepId: string;
   templateInstructions: string;
   inputAttachments: StepAttachmentRef[];
   templateAttachments: StepAttachmentRef[];
-  generatedTool?: TaskTemplateStepSkill;
-  generatedSkill?: TaskTemplateStepSkill;
+  generatedTool?: PresetStepSkill;
+  generatedSkill?: PresetStepSkill;
   source?: Record<string, unknown>;
   storyOutput?: Record<string, unknown>;
   jiraOrchestration?: Record<string, unknown>;
@@ -719,7 +725,7 @@ interface PresetExpansionState {
   assumptions: string[];
   capabilities: string[];
   warnings: string[];
-  appliedTemplate?: TaskTemplateExpandResponse["appliedTemplate"];
+  appliedTemplate?: PresetExpandResponse["appliedTemplate"];
 }
 
 interface AppliedTemplateState {
@@ -1849,7 +1855,7 @@ function isTemplateBoundStepForAttachments(
 
 function executableGeneratedToolPayload(
   step: StepState | null | undefined,
-): TaskTemplateStepSkill | null {
+): PresetStepSkill | null {
   if (step?.stepType !== "tool" || !step.generatedTool) {
     return null;
   }
@@ -1864,7 +1870,7 @@ function executableGeneratedToolPayload(
 
 function executableGeneratedSkillPayload(
   step: StepState | null | undefined,
-): TaskTemplateStepSkill | null {
+): PresetStepSkill | null {
   if (step?.stepType !== "skill" || !step.generatedSkill) {
     return null;
   }
@@ -1880,7 +1886,7 @@ function executableGeneratedSkillPayload(
 function manualToolPayload(
   step: StepState | null | undefined,
   inputs: Record<string, unknown>,
-): TaskTemplateStepSkill | null {
+): PresetStepSkill | null {
   if (step?.stepType !== "tool") {
     return null;
   }
@@ -2266,50 +2272,6 @@ function validateAttachmentTargets(
   return { ok: messages.length === 0, errors, messages };
 }
 
-function AttachmentPreview({
-  file,
-  alt,
-  onError,
-}: {
-  file: File;
-  alt: string;
-  onError: () => void;
-}) {
-  const [previewUrl, setPreviewUrl] = useState("");
-
-  useEffect(() => {
-    if (
-      !file.type.startsWith("image/") ||
-      typeof URL === "undefined" ||
-      typeof URL.createObjectURL !== "function"
-    ) {
-      setPreviewUrl("");
-      return;
-    }
-
-    const nextPreviewUrl = URL.createObjectURL(file);
-    setPreviewUrl(nextPreviewUrl);
-    return () => {
-      if (typeof URL.revokeObjectURL === "function") {
-        URL.revokeObjectURL(nextPreviewUrl);
-      }
-    };
-  }, [file]);
-
-  if (!previewUrl) {
-    return null;
-  }
-
-  return (
-    <img
-      alt={alt}
-      className="queue-attachment-preview"
-      src={previewUrl}
-      onError={onError}
-    />
-  );
-}
-
 function validateJiraImageAttachment(
   attachment: JiraIssueAttachment,
   policy: AttachmentPolicy,
@@ -2368,7 +2330,7 @@ function isMergeAutomationPublishMode(value: string): boolean {
 }
 
 function templateEnumOptionLabel(
-  definition: TaskTemplateInputDefinition,
+  definition: PresetInputDefinition,
   option: string,
 ): string {
   const normalizedName = definition.name.trim().toLowerCase();
@@ -2477,7 +2439,7 @@ function isRepositoryInputKey(rawKey: string): boolean {
 
 function isVisiblePresetInput(
   presetSlug: string | undefined,
-  definition: TaskTemplateInputDefinition,
+  definition: PresetInputDefinition,
 ): boolean {
   return isVisiblePresetInputName(presetSlug, definition.name);
 }
@@ -2670,12 +2632,12 @@ function capabilityInputTextValue(
   return value === undefined || value === null ? "" : String(value);
 }
 
-function schemaContractHasFields(detail: Pick<TaskTemplateDetail, "inputSchema"> | null | undefined): boolean {
+function schemaContractHasFields(detail: Pick<PresetDetail, "inputSchema"> | null | undefined): boolean {
   return Object.keys(schemaProperties(detail?.inputSchema)).length > 0;
 }
 
 function resolveSchemaCapabilityValues(
-  detail: Pick<TaskTemplateDetail, "inputSchema" | "defaults">,
+  detail: Pick<PresetDetail, "inputSchema" | "defaults">,
   explicitValues: Record<string, unknown>,
   featureRequestOverride?: string,
 ): Record<string, unknown> {
@@ -2707,7 +2669,7 @@ function resolveSchemaCapabilityValues(
 }
 
 function resolvedPresetInputValues(
-  detail: Pick<TaskTemplateDetail, "inputSchema" | "defaults">,
+  detail: Pick<PresetDetail, "inputSchema" | "defaults">,
   explicitValues: Record<string, unknown>,
   featureRequestOverride?: string,
 ): Record<string, unknown> {
@@ -2717,7 +2679,7 @@ function resolvedPresetInputValues(
 }
 
 function validateSchemaCapabilityValues(
-  detail: Pick<TaskTemplateDetail, "inputSchema" | "uiSchema">,
+  detail: Pick<PresetDetail, "inputSchema" | "uiSchema">,
   values: Record<string, unknown>,
 ): Record<string, string> {
   const errors: Record<string, string> = {};
@@ -2743,7 +2705,7 @@ function validateSchemaCapabilityValues(
 }
 
 function schemaSkillInputs(
-  detail: Pick<TaskTemplateDetail, "inputSchema" | "uiSchema" | "defaults"> | null | undefined,
+  detail: Pick<PresetDetail, "inputSchema" | "uiSchema" | "defaults"> | null | undefined,
   explicitValues: Record<string, unknown>,
 ): {
   values: Record<string, unknown>;
@@ -2775,7 +2737,7 @@ function SchemaCapabilityFields({
   onChange,
 }: {
   fields: Array<[string, unknown]>;
-  detail: Pick<TaskTemplateDetail, "uiSchema" | "defaults">;
+  detail: Pick<PresetDetail, "uiSchema" | "defaults">;
   values: Record<string, unknown>;
   errors: Record<string, string>;
   disabled: boolean;
@@ -3687,7 +3649,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     [],
   );
   const temporalTaskEditingEnabled = Boolean(
-    dashboardConfig.features?.temporalDashboard?.temporalTaskEditing,
+    dashboardConfig.features?.temporalDashboard?.temporalWorkflowEditing ??
+      dashboardConfig.features?.temporalDashboard?.temporalTaskEditing,
   );
   const temporalCreateEndpoint = String(
     dashboardConfig.sources?.temporal?.create || "/api/executions",
@@ -3715,23 +3678,23 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   );
   const configuredDefaultProviderProfileRef =
     dashboardConfig.system?.providerProfiles?.defaultProfileRef ?? null;
-  const taskTemplateCatalog = dashboardConfig.system?.taskTemplateCatalog;
-  const taskTemplateCatalogEnabled = Boolean(taskTemplateCatalog?.enabled);
-  const taskTemplateSaveEnabled = Boolean(
-    taskTemplateCatalog?.templateSaveEnabled,
+  const presetCatalog = dashboardConfig.system?.presetCatalog;
+  const presetCatalogEnabled = Boolean(presetCatalog?.enabled);
+  const presetSaveEnabled = Boolean(
+    presetCatalog?.templateSaveEnabled,
   );
   const taskTemplateListEndpoint = String(
-    taskTemplateCatalog?.list || "/api/task-step-templates",
+    presetCatalog?.list || "/api/presets",
   );
   const taskTemplateDetailEndpoint = String(
-    taskTemplateCatalog?.detail || "/api/task-step-templates/{slug}",
+    presetCatalog?.detail || "/api/presets/{slug}",
   );
   const taskTemplateExpandEndpoint = String(
-    taskTemplateCatalog?.expand || "/api/task-step-templates/{slug}:expand",
+    presetCatalog?.expand || "/api/presets/{slug}:expand",
   );
   const taskTemplateSaveEndpoint = String(
-    taskTemplateCatalog?.saveFromTask ||
-      "/api/task-step-templates/save-from-task",
+    presetCatalog?.saveFromWorkflow ||
+      "/api/presets/save-from-workflow",
   );
   const jiraIntegration = useMemo<JiraIntegrationConfig | null>(() => {
     const systemConfig = dashboardConfig.system?.jiraIntegration;
@@ -3780,7 +3743,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   }, [dashboardConfig.system?.attachmentPolicy]);
 
   const defaultRuntime = String(
-    dashboardConfig.system?.defaultTaskRuntime || "codex_cli",
+    dashboardConfig.system?.defaultRuntime ||
+      dashboardConfig.system?.defaultAgentRuntime ||
+      "codex_cli",
   );
   const defaultRepository = String(
     dashboardConfig.system?.defaultRepository || "",
@@ -3806,11 +3771,15 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     dashboardConfig.system?.defaultProposeTasks,
   );
   const defaultTaskModelByRuntime =
-    dashboardConfig.system?.defaultTaskModelByRuntime || {};
+    dashboardConfig.system?.defaultModelByRuntime ||
+    dashboardConfig.system?.defaultTaskModelByRuntime ||
+    {};
   const defaultTaskEffortByRuntime =
-    dashboardConfig.system?.defaultTaskEffortByRuntime || {};
-  const supportedTaskRuntimes = dashboardConfig.system
-    ?.supportedTaskRuntimes || ["codex_cli", "gemini_cli", "claude_code"];
+    dashboardConfig.system?.defaultEffortByRuntime ||
+    dashboardConfig.system?.defaultTaskEffortByRuntime ||
+    {};
+  const supportedAgentRuntimes = dashboardConfig.system
+    ?.supportedAgentRuntimes || ["codex_cli", "gemini_cli", "claude_code"];
 
   const [steps, setSteps] = useState<StepState[]>([createStepStateEntry(1)]);
   const stepsRef = useRef<StepState[]>(steps);
@@ -3820,6 +3789,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   const [model, setModel] = useState(
     String(
       defaultTaskModelByRuntime[defaultRuntime] ||
+        dashboardConfig.system?.defaultModel ||
         dashboardConfig.system?.defaultTaskModel ||
         "",
     ),
@@ -3828,6 +3798,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   const [effort, setEffort] = useState(
     String(
       defaultTaskEffortByRuntime[defaultRuntime] ||
+        dashboardConfig.system?.defaultEffort ||
         dashboardConfig.system?.defaultTaskEffort ||
         "",
     ),
@@ -3912,9 +3883,6 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   const [attachmentTargetErrors, setAttachmentTargetErrors] = useState<
     Record<string, string>
   >({});
-  const [previewFailureMessages, setPreviewFailureMessages] = useState<
-    Record<string, string>
-  >({});
   const [submitMessageState, setSubmitMessageState] = useState<
     { text: string; tone: "error" | "pending" } | null
   >(null);
@@ -3994,9 +3962,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         }
         const execution =
           (await response.json()) as TemporalTaskEditingExecutionContract;
-        if (String(execution.workflowType || "") !== "MoonMind.Run") {
+        if (String(execution.workflowType || "") !== "MoonMind.UserWorkflow") {
           throw new Error(
-            "This execution cannot be edited here because only MoonMind.Run is supported.",
+            "This execution cannot be edited here because only MoonMind.UserWorkflow is supported.",
           );
         }
         if (pageMode.intent === "edit" && execution.actions?.canUpdateInputs !== true) {
@@ -4177,6 +4145,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     setEffort(
       String(
         defaultTaskEffortByRuntime[runtime] ||
+          dashboardConfig.system?.defaultEffort ||
           dashboardConfig.system?.defaultTaskEffort ||
           "",
       ),
@@ -4197,6 +4166,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       setModel(
         String(
           defaultTaskModelByRuntime[runtime] ||
+            dashboardConfig.system?.defaultModel ||
             dashboardConfig.system?.defaultTaskModel ||
             "",
         ),
@@ -4204,7 +4174,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     }
   }, [
     dashboardConfig.system?.defaultTaskEffort,
+    dashboardConfig.system?.defaultEffort,
     dashboardConfig.system?.defaultTaskModel,
+    dashboardConfig.system?.defaultModel,
     defaultTaskEffortByRuntime,
     defaultTaskModelByRuntime,
     modelManualOverride,
@@ -4307,7 +4279,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         withQueryParams(temporalListEndpoint, {
           source: "temporal",
           pageSize: "50",
-          workflowType: "MoonMind.Run",
+          workflowType: "MoonMind.UserWorkflow",
           entry: "user_workflow",
         }),
         {
@@ -4325,7 +4297,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       const data = (await response.json()) as DependencyPickerListResponse;
       return (data.items || []).filter(
         (item) =>
-          String(item.workflowType || "MoonMind.Run") === "MoonMind.Run" &&
+          String(item.workflowType || "MoonMind.UserWorkflow") === "MoonMind.UserWorkflow" &&
           String(item.entry || "user_workflow") === "user_workflow",
       );
     },
@@ -4405,7 +4377,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       "task-template-catalog",
       taskTemplateListEndpoint,
     ],
-    enabled: taskTemplateCatalogEnabled,
+    enabled: presetCatalogEnabled,
     queryFn: async (): Promise<TemplateCatalogResult> => {
       const scopes: TemplateScope[] = ["global", "personal"];
       const results = await Promise.all(
@@ -4422,7 +4394,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                 await responseErrorMessage(response, "Failed to load presets."),
               );
             }
-            const data = (await response.json()) as TaskTemplateListResponse;
+            const data = (await response.json()) as PresetListResponse;
             const items = (data.items || []).map((item) => ({
               ...item,
               key: templateKey(item.scope, item.slug, item.scopeRef),
@@ -4720,7 +4692,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   }, [activeJiraColumnId, jiraBrowserOpen, jiraBrowserColumns]);
 
   useEffect(() => {
-    if (!taskTemplateCatalogEnabled || !selectedPresetKey) {
+    if (!presetCatalogEnabled || !selectedPresetKey) {
       return;
     }
     const selectedStillExists = templateItems.some(
@@ -4730,7 +4702,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       return;
     }
     setSelectedPresetKey("");
-  }, [selectedPresetKey, taskTemplateCatalogEnabled, templateItems]);
+  }, [selectedPresetKey, presetCatalogEnabled, templateItems]);
 
   const selectedPreset =
     templateItems.find((item) => item.key === selectedPresetKey) || null;
@@ -5345,15 +5317,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
 
   function removeStepAttachment(localId: string, fileToRemove: File) {
     const targetKey = attachmentTargetKey(localId);
-    const previewKey = `${targetKey}:${attachmentFileKey(fileToRemove)}`;
     setAttachmentTargetErrors((current) => {
       const next = { ...current };
       delete next[targetKey];
-      return next;
-    });
-    setPreviewFailureMessages((current) => {
-      const next = { ...current };
-      delete next[previewKey];
       return next;
     });
     setSelectedStepAttachmentFiles((current) => {
@@ -5375,20 +5341,6 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       delete next[targetKey];
       return next;
     });
-  }
-
-  function markAttachmentPreviewFailed(
-    targetKey: string,
-    targetLabel: string,
-    file: File,
-  ) {
-    const message = `${targetLabel}: Preview unavailable for ${
-      file.name || "attachment"
-    }. Attachment metadata remains available.`;
-    setPreviewFailureMessages((current) => ({
-      ...current,
-      [`${targetKey}:${attachmentFileKey(file)}`]: message,
-    }));
   }
 
   const selectedAttachmentFiles = useMemo(
@@ -5458,11 +5410,13 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         new Set(
           [
             String(defaultTaskModelByRuntime[runtime] || ""),
+            String(dashboardConfig.system?.defaultModel || ""),
             String(dashboardConfig.system?.defaultTaskModel || ""),
           ].filter(Boolean),
         ),
       ),
     [
+      dashboardConfig.system?.defaultModel,
       dashboardConfig.system?.defaultTaskModel,
       defaultTaskModelByRuntime,
       runtime,
@@ -5484,11 +5438,13 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
             "high",
             "xhigh",
             String(defaultTaskEffortByRuntime[runtime] || ""),
+            String(dashboardConfig.system?.defaultEffort || ""),
             String(dashboardConfig.system?.defaultTaskEffort || ""),
           ].filter(Boolean),
         ),
       ),
     [
+      dashboardConfig.system?.defaultEffort,
       dashboardConfig.system?.defaultTaskEffort,
       defaultTaskEffortByRuntime,
       runtime,
@@ -5594,7 +5550,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   function updateStepPreset(
     localId: string,
     presetKey: string,
-    presetDetail: TaskTemplateDetail | null = null,
+    presetDetail: PresetDetail | null = null,
   ) {
     updateStep(localId, {
       presetKey,
@@ -5907,7 +5863,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
 
   function updateStepPresetInputValue(
     localId: string,
-    definition: Pick<TaskTemplateInputDefinition, "name">,
+    definition: Pick<PresetInputDefinition, "name">,
     value: unknown,
   ) {
     setSteps((current) =>
@@ -5981,7 +5937,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   }
 
   function resolveTemplateInputs(
-    inputs: TaskTemplateInputDefinition[],
+    inputs: PresetInputDefinition[],
     explicitInputValues: Record<string, unknown> = {},
     featureRequestOverride?: string,
   ): {
@@ -6124,7 +6080,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
 
   function stepTemplateInputDisplayValue(
     step: StepState,
-    definition: TaskTemplateInputDefinition,
+    definition: PresetInputDefinition,
   ): string {
     const explicit = step.presetInputValues[definition.name];
     if (explicit !== undefined) {
@@ -6146,7 +6102,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
 
   async function loadPresetDetail(
     preset: TemplateOption,
-  ): Promise<TaskTemplateDetail> {
+  ): Promise<PresetDetail> {
     const response = await fetch(
       withQueryParams(
         interpolatePath(taskTemplateDetailEndpoint, {
@@ -6164,7 +6120,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         await responseErrorMessage(response, "Failed to load preset details."),
       );
     }
-    return (await response.json()) as TaskTemplateDetail;
+    return (await response.json()) as PresetDetail;
   }
 
   async function expandPresetForDraft({
@@ -6175,7 +6131,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     submitIntent,
   }: {
     preset: TemplateOption;
-    detail: TaskTemplateDetail;
+    detail: PresetDetail;
     inputValues: Record<string, unknown>;
     featureRequestOverride?: string;
     submitIntent?: string;
@@ -6238,7 +6194,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         await responseErrorMessage(expandResponse, "Failed to expand preset."),
       );
     }
-    const expanded = (await expandResponse.json()) as TaskTemplateExpandResponse;
+    const expanded = (await expandResponse.json()) as PresetExpandResponse;
     const expandedSteps = expanded.steps || [];
     return {
       presetKey: preset.key,
@@ -6261,7 +6217,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
 
   function appliedPresetStateFromExpansion(
     preset: TemplateOption,
-    detail: TaskTemplateDetail,
+    detail: PresetDetail,
     expansion: PresetExpansionState,
     expandedSteps: StepState[],
   ): AppliedTemplateState | null {
@@ -6300,7 +6256,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
 
   function recordAppliedPreset(
     preset: TemplateOption,
-    detail: TaskTemplateDetail,
+    detail: PresetDetail,
     expansion: PresetExpansionState,
     expandedSteps: StepState[],
   ) {
@@ -6324,7 +6280,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     replaceLocalId,
   }: {
     preset: TemplateOption;
-    detail: TaskTemplateDetail;
+    detail: PresetDetail;
     expansion: PresetExpansionState;
     setMessage: (message: string) => void;
     replaceLocalId?: string;
@@ -6464,7 +6420,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   }
 
   async function handleSaveCurrentStepsAsPreset(nameOverride: string): Promise<boolean> {
-    if (!taskTemplateSaveEnabled || isSavingPreset) {
+    if (!presetSaveEnabled || isSavingPreset) {
       return false;
     }
     const title = nameOverride.trim();
@@ -6571,7 +6527,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   }
 
   async function handleDeleteSelectedPreset(nameOverride: string): Promise<boolean> {
-    if (!taskTemplateSaveEnabled || isDeletingPreset) {
+    if (!presetSaveEnabled || isDeletingPreset) {
       return false;
     }
     const normalized = nameOverride.trim().toLowerCase();
@@ -7002,24 +6958,24 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     setAttachmentTargetErrors({});
 
     const normalizedRuntime = runtime.trim().toLowerCase();
-    const supportedTaskRuntimeIds = supportedTaskRuntimes.map((item) =>
+    const supportedAgentRuntimeIds = supportedAgentRuntimes.map((item) =>
       item.trim().toLowerCase(),
     );
-    if (!supportedTaskRuntimeIds.includes(normalizedRuntime)) {
+    if (!supportedAgentRuntimeIds.includes(normalizedRuntime)) {
       setSubmitMessage(
-        `Runtime must be one of: ${supportedTaskRuntimes.join(", ")}.`,
+        `Runtime must be one of: ${supportedAgentRuntimes.join(", ")}.`,
       );
       clearSubmitBusy();
       return;
     }
     const invalidStepRuntime = submissionSteps.find((step) => {
       const stepRuntime = step.runtimeMode.trim().toLowerCase();
-      return stepRuntime && !supportedTaskRuntimeIds.includes(stepRuntime);
+      return stepRuntime && !supportedAgentRuntimeIds.includes(stepRuntime);
     });
     if (invalidStepRuntime) {
       const stepIndex = submissionSteps.indexOf(invalidStepRuntime) + 1;
       setSubmitMessage(
-        `Step ${stepIndex} runtime must be one of: ${supportedTaskRuntimes.join(", ")}.`,
+        `Step ${stepIndex} runtime must be one of: ${supportedAgentRuntimes.join(", ")}.`,
       );
       clearSubmitBusy();
       return;
@@ -8977,8 +8933,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                             })
                           }
                         >
-                          <option value="">Inherit task runtime</option>
-                          {supportedTaskRuntimes.map((runtimeOption) => (
+                          <option value="">Inherit agent runtime</option>
+                          {supportedAgentRuntimes.map((runtimeOption) => (
                             <option key={runtimeOption} value={runtimeOption}>
                               {runtimeOption}
                             </option>
@@ -9217,28 +9173,6 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                                     {`${file.type || "application/octet-stream"}, ${formatAttachmentBytes(file.size)}`}
                                   </span>
                                 </span>
-                                <AttachmentPreview
-                                  file={file}
-                                  alt={`Preview of Step ${index + 1} attachment ${file.name}`}
-                                  onError={() =>
-                                    markAttachmentPreviewFailed(
-                                      attachmentTargetKey(step.localId),
-                                      `Step ${index + 1}`,
-                                      file,
-                                    )
-                                  }
-                                />
-                                {previewFailureMessages[
-                                  `${attachmentTargetKey(step.localId)}:${attachmentFileKey(file)}`
-                                ] ? (
-                                  <p className="small notice error">
-                                    {
-                                      previewFailureMessages[
-                                        `${attachmentTargetKey(step.localId)}:${attachmentFileKey(file)}`
-                                      ]
-                                    }
-                                  </p>
-                                ) : null}
                                 {attachmentTargetErrors[
                                   attachmentTargetKey(step.localId)
                                 ] ? (
@@ -9436,7 +9370,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
               </button>
             </div>
 
-            {taskTemplateCatalogEnabled && taskTemplateSaveEnabled ? (
+            {presetCatalogEnabled && presetSaveEnabled ? (
               <div className="stack queue-preset-management-block">
                 <div
                   className="actions queue-template-actions queue-preset-management-inline"
@@ -9495,7 +9429,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
             value={runtime}
             onChange={(event) => setRuntime(event.target.value)}
           >
-            {supportedTaskRuntimes.map((runtimeOption) => (
+            {supportedAgentRuntimes.map((runtimeOption) => (
               <option key={runtimeOption} value={runtimeOption}>
                 {runtimeOption}
               </option>
@@ -9974,7 +9908,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
               role="note"
             >
               <p className="small">
-                Add up to {DEPENDENCY_LIMIT} existing <code>MoonMind.Run</code>{" "}
+                Add up to {DEPENDENCY_LIMIT} existing <code>MoonMind.UserWorkflow</code>{" "}
                 prerequisites. The new run stays blocked until each
                 prerequisite finishes in <code>completed</code> state.
               </p>

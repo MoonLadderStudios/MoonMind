@@ -150,7 +150,7 @@ class MoonMindAgentSessionWorkflow:
     def _search_attributes(self) -> dict[str, list[str] | list[int] | list[bool]]:
         binding = self._require_binding()
         return {
-            "TaskRunId": [binding.task_run_id],
+            "AgentRunId": [binding.agent_run_id],
             "RuntimeId": [binding.runtime_id],
             "SessionId": [binding.session_id],
             "SessionEpoch": [binding.session_epoch],
@@ -162,7 +162,7 @@ class MoonMindAgentSessionWorkflow:
         binding = self._require_binding()
         context: dict[str, str | int | bool] = {
             "transition": transition,
-            "taskRunId": binding.task_run_id,
+            "agentRunId": binding.agent_run_id,
             "runtimeId": binding.runtime_id,
             "sessionId": binding.session_id,
             "sessionEpoch": binding.session_epoch,
@@ -375,7 +375,7 @@ class MoonMindAgentSessionWorkflow:
                     sessionEpoch=locator.session_epoch,
                     containerId=locator.container_id,
                     threadId=locator.thread_id,
-                    taskRunId=binding.task_run_id,
+                    agentRunId=binding.agent_run_id,
                     metadata=metadata or {},
                 ).model_dump(by_alias=True),
             )
@@ -414,7 +414,7 @@ class MoonMindAgentSessionWorkflow:
     def _build_continue_as_new_input(self) -> CodexManagedSessionWorkflowInput:
         binding = self._require_binding()
         payload: dict[str, Any] = {
-            "taskRunId": binding.task_run_id,
+            "agentRunId": binding.agent_run_id,
             "runtimeId": binding.runtime_id,
             "sessionId": binding.session_id,
             "sessionEpoch": binding.session_epoch,

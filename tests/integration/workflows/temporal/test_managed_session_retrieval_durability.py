@@ -60,7 +60,7 @@ async def test_reset_boundary_preserves_latest_context_pack_ref_for_publication(
         CodexManagedSessionRecord(
             sessionId="sess-1",
             sessionEpoch=1,
-            taskRunId="task-1",
+            agentRunId="task-1",
             containerId="ctr-1",
             threadId="logical-thread-1",
             runtimeId="codex_cli",
@@ -129,7 +129,7 @@ async def test_reset_boundary_preserves_latest_context_pack_ref_for_publication(
             sessionEpoch=2,
             containerId="ctr-1",
             threadId="logical-thread-2",
-            taskRunId="task-1",
+            agentRunId="task-1",
         )
     )
 

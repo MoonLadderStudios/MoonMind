@@ -494,7 +494,7 @@ async def test_default_skill_registry_payload_excludes_auto_when_explicit_skill_
     """When an explicit skill is selected, 'auto' (the placeholder) must not appear in the registry."""
     payload = _default_skill_registry_payload(
         parameters={
-            "task": {
+            "workflow": {
                 "tool": {
                     "type": "skill",
                     "name": "pr-resolver",
@@ -518,7 +518,7 @@ async def test_default_skill_registry_payload_auto_placeholder_filtered():
     """When 'auto' is the only (placeholder) skill, it must not appear in the registry."""
     payload = _default_skill_registry_payload(
         parameters={
-            "task": {
+            "workflow": {
                 "skill": {
                     "name": "auto",
                     "version": "1.0",
@@ -545,7 +545,7 @@ async def test_default_skill_registry_payload_excludes_agent_only_jira_skill(
 ):
     payload = _default_skill_registry_payload(
         parameters={
-            "task": {
+            "workflow": {
                 "tool": {
                     "type": "skill",
                     "name": skill_name,
@@ -560,7 +560,7 @@ async def test_default_skill_registry_payload_excludes_agent_only_jira_skill(
 async def test_default_skill_registry_payload_uses_dood_tool_definitions():
     payload = _default_skill_registry_payload(
         parameters={
-            "task": {
+            "workflow": {
                 "steps": [
                     {
                         "tool": {
@@ -597,9 +597,9 @@ async def test_default_skill_registry_payload_uses_dood_tool_definitions():
 
 async def test_default_skill_registry_payload_includes_input_sourced_tool_steps():
     payload = _default_skill_registry_payload(
-        parameters={"task": {"tool": {"name": "auto", "version": "1.0"}}},
+        parameters={"workflow": {"tool": {"name": "auto", "version": "1.0"}}},
         inputs={
-            "task": {
+            "workflow": {
                 "steps": [
                     {
                         "type": "tool",
@@ -623,7 +623,7 @@ async def test_default_skill_registry_payload_includes_input_sourced_tool_steps(
 async def test_default_skill_registry_payload_uses_curated_pentest_tool_definition():
     payload = _default_skill_registry_payload(
         parameters={
-            "task": {
+            "workflow": {
                 "steps": [
                     {
                         "tool": {
@@ -759,7 +759,7 @@ async def test_default_skill_registry_payload_uses_curated_pentest_tool_definiti
 async def test_default_skill_registry_payload_uses_curated_deployment_tool_definition():
     payload = _default_skill_registry_payload(
         parameters={
-            "task": {
+            "workflow": {
                 "steps": [
                     {
                         "tool": {
@@ -813,7 +813,7 @@ async def test_default_skill_registry_payload_uses_curated_deployment_tool_defin
 async def test_default_skill_registry_payload_routes_jira_preset_brief_to_integrations():
     payload = _default_skill_registry_payload(
         parameters={
-            "task": {
+            "workflow": {
                 "steps": [
                     {
                         "tool": {
@@ -889,7 +889,7 @@ def _approved_pentest_scope() -> dict[str, object]:
 def _pentest_activity_payload(**overrides: object) -> dict[str, object]:
     request: dict[str, object] = {
         "pentest_enabled": True,
-        "task_run_id": "run-123",
+        "agent_run_id": "run-123",
         "step_id": "step-pentest",
         "attempt": 1,
         "target": "https://lab.example.test",
@@ -911,7 +911,7 @@ def _pentest_activity_payload(**overrides: object) -> dict[str, object]:
 def _pentest_artifact_activity_payload(**overrides: object) -> dict[str, object]:
     request: dict[str, object] = {
         "pentest_enabled": True,
-        "task_run_id": "run-123",
+        "agent_run_id": "run-123",
         "step_id": "step-pentest",
         "attempt": 1,
         "target": "https://lab.example.test",
@@ -1676,7 +1676,7 @@ async def test_plan_generate_fallback_registry_includes_input_artifact_tool_step
                 payload=(
                     json.dumps(
                         {
-                            "task": {
+                            "workflow": {
                                 "instructions": "Fetch the Jira issue.",
                                 "runtime": {"mode": "codex_cli"},
                                 "steps": [
@@ -1709,7 +1709,7 @@ async def test_plan_generate_fallback_registry_includes_input_artifact_tool_step
                 parameters={
                     "repository": "MoonLadderStudios/MoonMind",
                     "targetRuntime": "codex_cli",
-                    "task": {
+                    "workflow": {
                         "tool": {"type": "skill", "name": "auto", "version": "1.0"}
                     },
                 },

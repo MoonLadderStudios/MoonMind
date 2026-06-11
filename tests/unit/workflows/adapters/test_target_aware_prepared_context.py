@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from moonmind.workflows.tasks.prepared_context import (
+from moonmind.workflows.executions.prepared_context import (
     build_prepared_input_manifest,
     select_step_prepared_context,
 )

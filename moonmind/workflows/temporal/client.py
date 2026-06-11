@@ -859,7 +859,7 @@ def build_manifest_child_parameters(
         "requestedBy": requested_by_model.model_dump(by_alias=True),
         "runtimeHints": {
             "manifestNodeState": node.state,
-            "workflowType": "MoonMind.Run",
+            "workflowType": "MoonMind.UserWorkflow",
         },
         "parentClosePolicy": MANIFEST_CHILD_PARENT_CLOSE_POLICY,
     }
@@ -877,7 +877,7 @@ async def start_manifest_child_runs(
     starts: list[ManifestChildWorkflowStart] = []
     for node in list(nodes)[: max(0, limit)]:
         child = await execution_service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
             owner_id=parent_execution.owner_id,
             title=node.title or f"Manifest node {node.node_id}",
             input_artifact_ref=parent_execution.manifest_ref,

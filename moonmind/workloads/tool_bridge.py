@@ -96,7 +96,7 @@ def build_dood_tool_definition_payload(*, name: str, version: str) -> dict[str, 
             "required": ["profileId", "repoDir", "artifactsDir", "command"],
             "properties": {
                 "profileId": {"type": "string", "minLength": 1},
-                "taskRunId": {"type": "string", "minLength": 1},
+                "agentRunId": {"type": "string", "minLength": 1},
                 "stepId": {"type": "string", "minLength": 1},
                 "attempt": {"type": "integer", "minimum": 1},
                 "repoDir": {"type": "string", "minLength": 1},
@@ -132,7 +132,7 @@ def build_dood_tool_definition_payload(*, name: str, version: str) -> dict[str, 
             ],
             "properties": {
                 "profileId": {"type": "string", "minLength": 1},
-                "taskRunId": {"type": "string", "minLength": 1},
+                "agentRunId": {"type": "string", "minLength": 1},
                 "stepId": {"type": "string", "minLength": 1},
                 "attempt": {"type": "integer", "minimum": 1},
                 "repoDir": {"type": "string", "minLength": 1},
@@ -163,7 +163,7 @@ def build_dood_tool_definition_payload(*, name: str, version: str) -> dict[str, 
             "required": ["profileId", "repoDir", "artifactsDir", "ttlSeconds"],
             "properties": {
                 "profileId": {"type": "string", "minLength": 1},
-                "taskRunId": {"type": "string", "minLength": 1},
+                "agentRunId": {"type": "string", "minLength": 1},
                 "stepId": {"type": "string", "minLength": 1},
                 "attempt": {"type": "integer", "minimum": 1},
                 "repoDir": {"type": "string", "minLength": 1},
@@ -188,7 +188,7 @@ def build_dood_tool_definition_payload(*, name: str, version: str) -> dict[str, 
             "type": "object",
             "required": ["image", "repoDir", "artifactsDir", "scratchDir", "command"],
             "properties": {
-                "taskRunId": {"type": "string", "minLength": 1},
+                "agentRunId": {"type": "string", "minLength": 1},
                 "stepId": {"type": "string", "minLength": 1},
                 "attempt": {"type": "integer", "minimum": 1},
                 "repoDir": {"type": "string", "minLength": 1},
@@ -228,7 +228,7 @@ def build_dood_tool_definition_payload(*, name: str, version: str) -> dict[str, 
             "type": "object",
             "required": ["repoDir", "artifactsDir", "command"],
             "properties": {
-                "taskRunId": {"type": "string", "minLength": 1},
+                "agentRunId": {"type": "string", "minLength": 1},
                 "stepId": {"type": "string", "minLength": 1},
                 "attempt": {"type": "integer", "minimum": 1},
                 "repoDir": {"type": "string", "minLength": 1},
@@ -251,7 +251,7 @@ def build_dood_tool_definition_payload(*, name: str, version: str) -> dict[str, 
             "required": ["repoDir", "artifactsDir", "projectPath"],
             "properties": {
                 "profileId": {"type": "string", "minLength": 1},
-                "taskRunId": {"type": "string", "minLength": 1},
+                "agentRunId": {"type": "string", "minLength": 1},
                 "stepId": {"type": "string", "minLength": 1},
                 "attempt": {"type": "integer", "minimum": 1},
                 "repoDir": {"type": "string", "minLength": 1},
@@ -279,7 +279,7 @@ def build_dood_tool_definition_payload(*, name: str, version: str) -> dict[str, 
             "type": "object",
             "required": ["repoDir", "artifactsDir"],
             "properties": {
-                "taskRunId": {"type": "string", "minLength": 1},
+                "agentRunId": {"type": "string", "minLength": 1},
                 "stepId": {"type": "string", "minLength": 1},
                 "attempt": {"type": "integer", "minimum": 1},
                 "repoDir": {"type": "string", "minLength": 1},
@@ -468,8 +468,8 @@ def _build_workload_request(
     if not isinstance(inputs, Mapping):
         raise ValueError("workload tool inputs must be an object")
     request_payload = dict(inputs)
-    if "taskRunId" not in request_payload:
-        request_payload["taskRunId"] = _context_text(context, "workflow_id")
+    if "agentRunId" not in request_payload:
+        request_payload["agentRunId"] = _context_text(context, "workflow_id")
     if "stepId" not in request_payload:
         request_payload["stepId"] = _context_text(context, "node_id")
     if "attempt" not in request_payload:

@@ -23,7 +23,7 @@ from api_service.db.models import (
 logger = logging.getLogger(__name__)
 
 WORKFLOW_ENTRY_BY_TYPE = {
-    TemporalWorkflowType.RUN: "user_workflow",
+    TemporalWorkflowType.USER_WORKFLOW: "user_workflow",
     TemporalWorkflowType.MANIFEST_INGEST: "manifest",
     TemporalWorkflowType.PROVIDER_PROFILE_MANAGER: "provider_profile",
 }
@@ -152,7 +152,7 @@ def merged_memo_for_projection(
     """Merge the canonical DB memo with the Temporal-derived memo.
 
     Temporal workflow memos are immutable after workflow start, so any key written
-    to the canonical DB memo after launch (e.g. ``taskRunId`` set by
+    to the canonical DB memo after launch (e.g. ``agentRunId`` set by
     ``_report_task_run_binding``) will never appear in Temporal's memo.  Letting
     Temporal's memo overwrite the projection memo on every sync would silently
     discard these DB-side additions.
@@ -230,7 +230,7 @@ async def map_temporal_state_to_projection(
     try:
         workflow_type = TemporalWorkflowType(desc.workflow_type)
     except ValueError:
-        workflow_type = TemporalWorkflowType.RUN
+        workflow_type = TemporalWorkflowType.USER_WORKFLOW
 
     entry = str(
         memo.get("entry") or WORKFLOW_ENTRY_BY_TYPE.get(workflow_type, "user_workflow")
@@ -420,7 +420,7 @@ async def sync_execution_projection(
     if canonical is not None or not temporal_metadata_missing:
         projection.parameters = merged_parameters_for_projection(payload, canonical)
 
-    # Preserve DB-only memo keys (e.g. taskRunId written by _report_task_run_binding)
+    # Preserve DB-only memo keys (e.g. agentRunId written by _report_task_run_binding)
     # that are absent from Temporal's immutable workflow memo.  Temporal keys win for
     # any key present in both sources.
     if canonical is not None or not temporal_metadata_missing:

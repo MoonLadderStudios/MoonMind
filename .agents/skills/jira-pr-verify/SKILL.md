@@ -38,7 +38,7 @@ such as `test -n "$GITHUB_TOKEN"` or `gh auth status`; do not run `printenv`,
 `env`, `set`, or equivalent commands that can dump secret values into workflow
 logs.
 
-For MoonMind task plans, the correct shape is:
+For MoonMind workflow plans, the correct shape is:
 
 1. Trusted Jira fetch/import step materializes normalized Jira issue artifacts.
 2. Managed agent step uses this skill with those artifacts plus the PR URL.

@@ -3,10 +3,10 @@
 > [!WARNING]
 > **DEPRECATED (Phase 6)**: This document describes the legacy terminal-session observability pattern (e.g., `web_ro`, `tmate` embedding). 
 > **Managed run observability is now strictly artifact-backed.**
-> Route examples below are historical references only; `/api/task-runs/{id}/live-session*` is not a supported managed-run log API surface after the Phase 6 cutoff.
+> Route examples below are historical references only; `/api/agent-runs/{id}/live-session*` is not a supported managed-run log API surface after the Phase 6 cutoff.
 > Please see [`docs/ManagedAgents/LiveLogs.md`](../ManagedAgents/LiveLogs.md) for the active architecture.
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
+**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 Status: Deprecated (Replaced by Phase 6 Live Logs) 
 Owners: MoonMind Engineering 
@@ -48,7 +48,7 @@ Implementation detail: the managed launcher runs agents as a plain subprocess wi
 Real-time visibility is delivered without an external terminal relay in the default managed path:
 
 1. **Managed runtime** — `ManagedRuntimeLauncher` spawns a direct subprocess; `ManagedRunSupervisor` streams stdout/stderr into run-scoped artifacts. Contracts and UI integration are described in [LiveLogs.md](../ManagedAgents/LiveLogs.md).
-2. **Workflow-run live sessions** — Historical metadata for operator tooling lived in **`task_run_live_sessions`**. Those `/api/task-runs/{id}/live-session*` routes are migration-era references, not the active managed-run log path. Provider **`none`** applies when no external relay is in use.
+2. **Workflow-run live sessions** — Historical metadata for operator tooling lived in **`task_run_live_sessions`**. Those `/api/agent-runs/{id}/live-session*` routes are migration-era references, not the active managed-run log path. Provider **`none`** applies when no external relay is in use.
 3. **Queue worker** — The standalone worker may report live-session state over HTTP when enabled; it does not provision a relay when the configured provider is `none`.
 
 ### 4.1 Session lifecycle (conceptual)
@@ -189,7 +189,7 @@ Tracks operator-driven actions for audit.
 
 ## 8. Historical API Surface & Temporal Signals
 
-The route names in this section are preserved to explain the retired terminal-session flow. They are not the active `/api/task-runs` contract for managed-run observability.
+The route names in this section are preserved to explain the retired terminal-session flow. They are not the active `/api/agent-runs` contract for managed-run observability.
 
 ### 8.1 Session Lifecycle (REST APIs)
 
@@ -224,7 +224,7 @@ Pauses and takeovers use standard **Temporal Signals**:
 
 ### 10.1 Workflow Execution Detail Page
 
-The Workflow Execution detail page (`/tasks/:taskId`) should include two live-session UI elements:
+The Workflow Execution detail page (`/workflows/{workflowId}`) should include two live-session UI elements:
 
 1. **Live Output Panel** (section 5): Collapsible panel with live log tailing. Toggle on/off. Available when log data exists for the run.
 2. **Live Session Card** (section 6): Shows session status, RO attach instructions, optional web view link, pause/resume signal buttons, RW grant UI, and operator message composer. Available for full handoff workflows.
@@ -243,7 +243,7 @@ The Workflow Execution detail page (`/tasks/:taskId`) should include two live-se
 }
 ```
 
-**Desired experience:** operators get artifact-backed log tailing in the Workflow Execution detail UI, optional live handoff controls (RO/RW, pause/resume, operator messages) when session metadata exists, and post-session artifacts such as **`transcript.log`**. Sequencing of UI/backend pieces is tracked in MoonSpec feature artifacts or local planning notes when needed.
+**Desired experience:** operators get artifact-backed log tailing in the Workflow Execution detail UI, optional live handoff controls (RO/RW, pause/resume, operator messages) when session metadata exists, and post-session artifacts such as **`transcript.log`**. Sequencing of UI/backend pieces is tracked under `docs/tmp/` or in local-only planning notes when needed.
 
 ---
 

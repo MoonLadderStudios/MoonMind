@@ -150,7 +150,7 @@ def _route_handlers(
             return
         route.continue_()
 
-    def _mock_task_step_templates(route):
+    def _mock_presets(route):
         route.fulfill(
             status=200,
             content_type="application/json",
@@ -201,7 +201,7 @@ def _route_handlers(
     )
     page.route(f"{base_url}/api/workflows/skills", _mock_skills)
     page.route(f"{base_url}/api/system/worker-pause", _mock_worker_pause)
-    page.route(f"{base_url}/api/task-step-templates*", _mock_task_step_templates)
+    page.route(f"{base_url}/api/presets*", _mock_presets)
     page.route(f"{base_url}/api/v1/provider-profiles*", _mock_provider_profiles)
     page.route(f"{base_url}/api/executions", _mock_create)
     page.route(f"{base_url}/api/executions/*", _mock_detail)
@@ -347,7 +347,7 @@ def test_temporal_detail_resolves_source_and_fetches_latest_run_artifacts(server
                             "runId": "run-123",
                             "temporalRunId": "run-123",
                             "namespace": "moonmind",
-                            "workflowType": "MoonMind.Run",
+                            "workflowType": "MoonMind.UserWorkflow",
                             "state": "awaiting_external",
                             "dashboardStatus": "awaiting_action",
                             "temporalStatus": "running",
@@ -390,8 +390,8 @@ def test_temporal_detail_resolves_source_and_fetches_latest_run_artifacts(server
 
 def test_temporal_detail_shows_edit_button_when_local_editing_enabled(server):
     base_url = server
-    previous_enabled = settings.temporal_dashboard.temporal_task_editing_enabled
-    settings.temporal_dashboard.temporal_task_editing_enabled = True
+    previous_enabled = settings.temporal_dashboard.temporal_workflow_editing_enabled
+    settings.temporal_dashboard.temporal_workflow_editing_enabled = True
     try:
         with sync_playwright() as p:
             with p.chromium.launch() as browser:
@@ -416,7 +416,7 @@ def test_temporal_detail_shows_edit_button_when_local_editing_enabled(server):
                                 "runId": "run-editable",
                                 "temporalRunId": "run-editable",
                                 "namespace": "moonmind",
-                                "workflowType": "MoonMind.Run",
+                                "workflowType": "MoonMind.UserWorkflow",
                                 "title": "Editable Temporal task",
                                 "summary": "Ready for edit.",
                                 "status": "running",
@@ -453,7 +453,7 @@ def test_temporal_detail_shows_edit_button_when_local_editing_enabled(server):
                     == "/tasks/new?editExecutionId=mm%3Aeditable"
                 )
     finally:
-        settings.temporal_dashboard.temporal_task_editing_enabled = previous_enabled
+        settings.temporal_dashboard.temporal_workflow_editing_enabled = previous_enabled
 
 def test_create_page_shows_provider_profiles_for_selected_runtime(server):
     base_url = server
@@ -658,7 +658,7 @@ def test_temporal_submit_redirects_without_exposing_runtime_picker(server):
                                 "runId": "run-123",
                                 "temporalRunId": "run-123",
                                 "namespace": "moonmind",
-                                "workflowType": "MoonMind.Run",
+                                "workflowType": "MoonMind.UserWorkflow",
                                 "state": "initializing",
                                 "dashboardStatus": "queued",
                                 "temporalStatus": "running",
@@ -697,7 +697,7 @@ def test_temporal_submit_redirects_without_exposing_runtime_picker(server):
                             "runId": "run-123",
                             "temporalRunId": "run-123",
                             "namespace": "moonmind",
-                            "workflowType": "MoonMind.Run",
+                            "workflowType": "MoonMind.UserWorkflow",
                             "state": "initializing",
                             "dashboardStatus": "queued",
                             "temporalStatus": "running",

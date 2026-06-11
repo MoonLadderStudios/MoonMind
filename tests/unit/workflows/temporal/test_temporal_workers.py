@@ -95,7 +95,7 @@ def test_build_all_worker_topologies_covers_canonical_fleets():
 
 def test_registered_workflow_types_include_manifest_ingest():
     assert list_registered_workflow_types() == (
-        "MoonMind.Run",
+        "MoonMind.UserWorkflow",
         "MoonMind.ManifestIngest",
         "MoonMind.ProviderProfileManager",
         "MoonMind.AgentSession",

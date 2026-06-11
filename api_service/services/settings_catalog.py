@@ -30,7 +30,7 @@ SettingSection = Literal["providers-secrets", "user-workspace", "operations"]
 SettingApplyMode = Literal[
     "immediate",
     "next_request",
-    "next_task",
+    "next_workflow",
     "next_launch",
     "worker_reload",
     "process_restart",
@@ -472,7 +472,10 @@ _SETTING_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$")
 
 _CATALOG_KEY_LEDGER: frozenset[str] = frozenset(
     {
+        # Renamed in the Task -> Workflow hard switch; covered by
+        # _CATALOG_MIGRATION_RULES below so persisted overrides migrate.
         "workflow.default_task_runtime",
+        "workflow.default_runtime",
         "workflow.default_publish_mode",
         "workflow.default_provider_profile_ref",
         "workflow.operation_mode",
@@ -518,18 +521,18 @@ class SettingRegistryEntry:
 
 _REGISTRY: tuple[SettingRegistryEntry, ...] = (
     SettingRegistryEntry(
-        key="workflow.default_task_runtime",
-        title="Default Task Runtime",
-        description="Runtime used when a task does not explicitly request one.",
+        key="workflow.default_runtime",
+        title="Default Runtime",
+        description="Runtime used when a workflow does not explicitly request one.",
         category="Workflow",
         section="user-workspace",
         value_type="enum",
         ui="select",
         scopes=("workspace",),
         default_value="codex",
-        settings_path=("workflow", "default_task_runtime"),
-        env_aliases=("WORKFLOW_DEFAULT_TASK_RUNTIME", "MOONMIND_DEFAULT_TASK_RUNTIME"),
-        apply_mode="next_task",
+        settings_path=("workflow", "default_runtime"),
+        env_aliases=("WORKFLOW_DEFAULT_RUNTIME", "MOONMIND_DEFAULT_RUNTIME"),
+        apply_mode="next_workflow",
         options=(
             ("codex", "Codex"),
             ("codex_cli", "Codex CLI"),
@@ -537,13 +540,13 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
             ("gemini_cli", "Gemini CLI"),
             ("jules", "Jules"),
         ),
-        applies_to=("task_creation", "workflow_runtime"),
+        applies_to=("workflow_creation", "workflow_runtime"),
         order=10,
     ),
     SettingRegistryEntry(
         key="workflow.default_publish_mode",
         title="Default Publish Mode",
-        description="Fallback publish mode used when tasks omit publish mode.",
+        description="Fallback publish mode used when workflows omit publish mode.",
         category="Workflow",
         section="user-workspace",
         value_type="enum",
@@ -552,9 +555,9 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         default_value="pr",
         settings_path=("workflow", "default_publish_mode"),
         env_aliases=("WORKFLOW_DEFAULT_PUBLISH_MODE", "MOONMIND_DEFAULT_PUBLISH_MODE"),
-        apply_mode="next_task",
+        apply_mode="next_workflow",
         options=(("none", "None"), ("branch", "Branch"), ("pr", "Pull Request")),
-        applies_to=("task_creation", "publishing"),
+        applies_to=("workflow_creation", "publishing"),
         order=20,
     ),
     SettingRegistryEntry(
@@ -591,7 +594,7 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         default_value=100,
         settings_path=("workflow", "skills_canary_percent"),
         env_aliases=("WORKFLOW_SKILLS_CANARY_PERCENT",),
-        apply_mode="next_task",
+        apply_mode="next_workflow",
         constraints=SettingConstraints(minimum=0, maximum=100),
         applies_to=("workflow_runtime", "skills"),
         order=40,
@@ -600,7 +603,7 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         key="live_sessions.default_enabled",
         title="Live Sessions Enabled By Default",
         description=(
-            "Whether live task sessions are enabled by default for queue task runs."
+            "Whether live task sessions are enabled by default for queue agent runs."
         ),
         category="Live Sessions",
         section="user-workspace",
@@ -610,8 +613,8 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         default_value=True,
         settings_path=("workflow", "live_session_enabled_default"),
         env_aliases=("MOONMIND_LIVE_SESSION_ENABLED_DEFAULT",),
-        apply_mode="next_task",
-        applies_to=("task_creation", "live_sessions"),
+        apply_mode="next_workflow",
+        applies_to=("workflow_creation", "live_sessions"),
         order=50,
     ),
     SettingRegistryEntry(
@@ -651,7 +654,7 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         default_value=None,
         env_aliases=("MOONMIND_DEFAULT_PROVIDER_PROFILE_REF",),
         apply_mode="next_launch",
-        applies_to=("task_creation", "workflow_runtime", "provider_profiles"),
+        applies_to=("workflow_creation", "workflow_runtime", "provider_profiles"),
         order=70,
     ),
     SettingRegistryEntry(
@@ -677,6 +680,22 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
 )
 
 
+# Data-layer migration rules for renamed settings keys (SettingsSystem.md section 24).
+# The orchestrator copies persisted overrides from old_key to new_key; the read
+# path resolves un-migrated overrides through the rename rule until then.
+_CATALOG_MIGRATION_RULES: tuple[SettingMigrationRule, ...] = (
+    SettingMigrationRule(
+        old_key="workflow.default_task_runtime",
+        new_key="workflow.default_runtime",
+        state="renamed",
+        message=(
+            "workflow.default_task_runtime was renamed to workflow.default_runtime "
+            "in the Task -> Workflow hard switch."
+        ),
+    ),
+)
+
+
 class SettingsRegistry:
     """Backend-owned registry of exposed settings descriptors with migration gate.
 
@@ -689,9 +708,13 @@ class SettingsRegistry:
     def __init__(
         self,
         entries: tuple[SettingRegistryEntry, ...],
-        migration_rules: tuple[SettingMigrationRule, ...] = (),
+        migration_rules: tuple[SettingMigrationRule, ...] | None = None,
         stable_key_ledger: frozenset[str] | None = _CATALOG_KEY_LEDGER,
     ) -> None:
+        if migration_rules is None:
+            migration_rules = (
+                _CATALOG_MIGRATION_RULES if entries is _REGISTRY else ()
+            )
         self._entries = tuple(sorted(entries, key=lambda e: e.order))
         self._migration_rules = migration_rules
         self._stable_key_ledger = stable_key_ledger
@@ -760,7 +783,7 @@ class SettingsRegistry:
             ui: str = mm.get("ui", "input")
             requires_reload: bool = bool(mm.get("requires_reload", False))
             apply_mode: SettingApplyMode = (
-                "worker_reload" if requires_reload else mm.get("apply_mode", "next_task")
+                "worker_reload" if requires_reload else mm.get("apply_mode", "next_workflow")
             )
             title: str = mm.get("title") or _field_name.replace("_", " ").title()
             description: str | None = mm.get("description") or getattr(
@@ -833,7 +856,7 @@ class SettingsCatalogService:
         settings: AppSettings | None = None,
         env: dict[str, str] | None = None,
         registry: tuple[SettingRegistryEntry, ...] = _REGISTRY,
-        migration_rules: tuple[SettingMigrationRule, ...] = (),
+        migration_rules: tuple[SettingMigrationRule, ...] | None = None,
         session: AsyncSession | None = None,
         workspace_id: UUID | None = None,
         user_id: UUID | None = None,
@@ -842,6 +865,10 @@ class SettingsCatalogService:
     ) -> None:
         self._settings = settings or app_settings
         self._env = env if env is not None else os.environ
+        if migration_rules is None:
+            migration_rules = (
+                _CATALOG_MIGRATION_RULES if registry is _REGISTRY else ()
+            )
         self._migration_rules = migration_rules
         self._change_publisher = change_publisher
         ledger = _CATALOG_KEY_LEDGER if registry is _REGISTRY else None
@@ -2009,7 +2036,7 @@ class SettingsCatalogService:
     ) -> dict[str, Any]:
         pending_state_by_mode: dict[str, SettingActivationState] = {
             "next_request": "pending_next_boundary",
-            "next_task": "pending_next_boundary",
+            "next_workflow": "pending_next_boundary",
             "next_launch": "pending_next_boundary",
             "worker_reload": "pending_reload",
             "process_restart": "pending_restart",
@@ -2018,7 +2045,7 @@ class SettingsCatalogService:
         guidance_by_mode = {
             "immediate": None,
             "next_request": "New requests will use this value.",
-            "next_task": "New tasks will use this value when they are created.",
+            "next_workflow": "New workflows will use this value when they are created.",
             "next_launch": "New launches will use this value the next time they start.",
             "worker_reload": "Reload affected workers to activate this value.",
             "process_restart": "Restart the affected process to activate this value.",
@@ -2143,8 +2170,8 @@ class SettingsCatalogService:
     def _refresh_targets_for_entry(self, entry: SettingRegistryEntry) -> list[str]:
         targets = {"settings_catalog"}
         applies_to = set(entry.applies_to)
-        if "task_creation" in applies_to:
-            targets.add("task_creation_defaults")
+        if "workflow_creation" in applies_to:
+            targets.add("workflow_creation_defaults")
         if "provider_profiles" in applies_to:
             targets.add("provider_profile_manager")
         if entry.apply_mode == "worker_reload" or entry.requires_reload:
@@ -2709,7 +2736,7 @@ class SettingsCatalogService:
         supported_apply_modes = {
             "immediate",
             "next_request",
-            "next_task",
+            "next_workflow",
             "next_launch",
             "worker_reload",
             "process_restart",
@@ -3581,7 +3608,7 @@ class SettingsCatalogService:
     ) -> list[SettingValidationIssue]:
         issues: list[SettingValidationIssue] = []
         policy = self._workspace_policy
-        runtime = changes.get("workflow.default_task_runtime")
+        runtime = changes.get("workflow.default_runtime")
         if (
             isinstance(runtime, str)
             and policy.allowed_runtimes is not None
@@ -3589,10 +3616,10 @@ class SettingsCatalogService:
         ):
             issues.append(
                 self._validation_issue(
-                    self._entries_by_key["workflow.default_task_runtime"],
+                    self._entries_by_key["workflow.default_runtime"],
                     scope,
                     code="runtime_policy_denied",
-                    message="workflow.default_task_runtime is not allowed by workspace policy.",
+                    message="workflow.default_runtime is not allowed by workspace policy.",
                     boundary=boundary,
                     rule="allowed_runtimes",
                     details={"allowed": sorted(policy.allowed_runtimes)},

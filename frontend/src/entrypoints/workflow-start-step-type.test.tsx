@@ -33,7 +33,7 @@ const mockPayload: BootPayload = {
       },
       system: {
         defaultRepository: "MoonLadderStudios/MoonMind",
-        defaultTaskRuntime: "codex_cli",
+        defaultAgentRuntime: "codex_cli",
         defaultTaskModel: "gpt-5.4",
         defaultTaskEffort: "medium",
         defaultPublishMode: "pr",
@@ -44,17 +44,17 @@ const mockPayload: BootPayload = {
         defaultTaskEffortByRuntime: {
           codex_cli: "medium",
         },
-        supportedTaskRuntimes: ["codex_cli"],
+        supportedAgentRuntimes: ["codex_cli"],
         providerProfiles: {
           list: "/api/v1/provider-profiles",
         },
-        taskTemplateCatalog: {
+        presetCatalog: {
           enabled: true,
           templateSaveEnabled: true,
-          list: "/api/task-step-templates",
-          detail: "/api/task-step-templates/{slug}",
-          expand: "/api/task-step-templates/{slug}:expand",
-          saveFromTask: "/api/task-step-templates/save-from-task",
+          list: "/api/presets",
+          detail: "/api/presets/{slug}",
+          expand: "/api/presets/{slug}:expand",
+          saveFromWorkflow: "/api/presets/save-from-workflow",
         },
       },
       features: {
@@ -106,7 +106,7 @@ describe("Task Create Step Type authoring", () => {
         if (url.startsWith("/api/v1/provider-profiles")) {
           return Promise.resolve({ ok: true, json: async () => [] } as Response);
         }
-        if (url.startsWith("/api/task-step-templates?scope=global")) {
+        if (url.startsWith("/api/presets?scope=global")) {
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -123,10 +123,10 @@ describe("Task Create Step Type authoring", () => {
             }),
           } as Response);
         }
-        if (url.startsWith("/api/task-step-templates?scope=personal")) {
+        if (url.startsWith("/api/presets?scope=personal")) {
           return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
         }
-        if (url.startsWith("/api/task-step-templates/jira-orchestrate?scope=global")) {
+        if (url.startsWith("/api/presets/jira-orchestrate?scope=global")) {
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -157,7 +157,7 @@ describe("Task Create Step Type authoring", () => {
             }),
           } as Response);
         }
-        if (url.startsWith("/api/task-step-templates/jira-orchestrate:expand?scope=global")) {
+        if (url.startsWith("/api/presets/jira-orchestrate:expand?scope=global")) {
           const body = JSON.parse(String(init?.body || "{}")) as {
             inputs?: { feature_request?: string };
           };
@@ -397,7 +397,7 @@ describe("Task Create Step Type authoring", () => {
 
     const expandCalls = fetchSpy.mock.calls.filter(([url]) =>
       String(url).startsWith(
-        "/api/task-step-templates/jira-orchestrate:expand?scope=global",
+        "/api/presets/jira-orchestrate:expand?scope=global",
       ),
     );
     expect(expandCalls).toHaveLength(1);
@@ -412,7 +412,7 @@ describe("Task Create Step Type authoring", () => {
       const url = String(input);
       if (
         url.startsWith(
-          "/api/task-step-templates/jira-orchestrate:expand?scope=global",
+          "/api/presets/jira-orchestrate:expand?scope=global",
         )
       ) {
         return new Promise<Response>((resolve) => {
