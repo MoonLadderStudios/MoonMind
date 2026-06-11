@@ -5317,15 +5317,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
 
   function removeStepAttachment(localId: string, fileToRemove: File) {
     const targetKey = attachmentTargetKey(localId);
-    const previewKey = `${targetKey}:${attachmentFileKey(fileToRemove)}`;
     setAttachmentTargetErrors((current) => {
       const next = { ...current };
       delete next[targetKey];
-      return next;
-    });
-    setPreviewFailureMessages((current) => {
-      const next = { ...current };
-      delete next[previewKey];
       return next;
     });
     setSelectedStepAttachmentFiles((current) => {
