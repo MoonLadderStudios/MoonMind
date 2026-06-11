@@ -2850,9 +2850,9 @@ class TemporalArtifactActivities:
         from temporalio.exceptions import WorkflowAlreadyStartedError
 
         from moonmind.workflows.temporal.client import TemporalClientAdapter
+        from moonmind.workflows.temporal.activity_catalog import get_workflow_task_queue
         from moonmind.workflows.temporal.workflows.provider_profile_manager import (
             WORKFLOW_NAME as PROVIDER_PROFILE_MANAGER_WF,
-            WORKFLOW_TASK_QUEUE as PROVIDER_PROFILE_MANAGER_QUEUE,
             workflow_id_for_runtime,
         )
 
@@ -2865,7 +2865,7 @@ class TemporalArtifactActivities:
                 PROVIDER_PROFILE_MANAGER_WF,
                 {"runtime_id": runtime_id},
                 id=workflow_id,
-                task_queue=PROVIDER_PROFILE_MANAGER_QUEUE,
+                task_queue=get_workflow_task_queue(),
             )
             logger.info(
                 "provider_profile.ensure_manager started manager for runtime=%s",
@@ -2894,9 +2894,9 @@ class TemporalArtifactActivities:
         from temporalio.service import RPCError
 
         from moonmind.workflows.temporal.client import TemporalClientAdapter
+        from moonmind.workflows.temporal.activity_catalog import get_workflow_task_queue
         from moonmind.workflows.temporal.workflows.provider_profile_manager import (
             WORKFLOW_NAME as PROVIDER_PROFILE_MANAGER_WF,
-            WORKFLOW_TASK_QUEUE as PROVIDER_PROFILE_MANAGER_QUEUE,
             workflow_id_for_runtime,
         )
 
@@ -2923,7 +2923,7 @@ class TemporalArtifactActivities:
             PROVIDER_PROFILE_MANAGER_WF,
             {"runtime_id": runtime_id},
             id=workflow_id,
-            task_queue=PROVIDER_PROFILE_MANAGER_QUEUE,
+            task_queue=get_workflow_task_queue(),
         )
         logger.info(
             "provider_profile.reset_manager started fresh manager for runtime=%s",

@@ -272,6 +272,7 @@ RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_UPDATE_EXECUTE_PATCH = (
 # Replay-stable patch id for skipping registry reads on agent-runtime-only plans.
 RUN_CONDITIONAL_REGISTRY_READ_PATCH = "run-conditional-registry-read-v1"
 RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
+RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH = "run-workflow-child-task-queue-v2"
 DEPENDENCY_GATE_PATCH = "dependency-gate-v1"
 # Replay-stable patch id for unified wait-through-rerun dependency behavior.
 # Under this patch, a non-success prerequisite terminal outcome (failed,
@@ -344,6 +345,11 @@ class MoonMindRunWorkflow:
         if workflow.patched(RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH):
             return workflow_id_for_runtime(runtime_id)
         return _legacy_manager_workflow_id(runtime_id)
+
+    def _workflow_child_task_queue(self) -> str:
+        if workflow.patched(RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH):
+            return settings.temporal.user_workflow_v2_task_queue
+        return WORKFLOW_TASK_QUEUE
 
     def _get_logger(self) -> logging.LoggerAdapter | logging.Logger:
         try:
@@ -3203,7 +3209,7 @@ class MoonMindRunWorkflow:
                 "MoonMind.AgentRun",
                 repair_request,
                 id=child_workflow_id,
-                task_queue=WORKFLOW_TASK_QUEUE,
+                task_queue=self._workflow_child_task_queue(),
             )
         finally:
             self._active_agent_child_workflow_id = None
@@ -4674,7 +4680,7 @@ class MoonMindRunWorkflow:
                                     "MoonMind.AgentRun",
                                     request,
                                     id=child_workflow_id,
-                                    task_queue=WORKFLOW_TASK_QUEUE,
+                                    task_queue=self._workflow_child_task_queue(),
                                 )
                             finally:
                                 self._active_agent_child_workflow_id = None
@@ -5942,7 +5948,7 @@ class MoonMindRunWorkflow:
                     "MoonMind.AgentRun",
                     request,
                     id=child_workflow_id,
-                    task_queue=WORKFLOW_TASK_QUEUE,
+                    task_queue=self._workflow_child_task_queue(),
                 )
             finally:
                 self._active_agent_child_workflow_id = None
@@ -6066,7 +6072,7 @@ class MoonMindRunWorkflow:
                             "MoonMind.AgentRun",
                             agent_request,
                             id=child_workflow_id,
-                            task_queue=WORKFLOW_TASK_QUEUE,
+                            task_queue=self._workflow_child_task_queue(),
                         )
                         current_result = self._map_agent_run_result(child_result)
                     except Exception as exc:
@@ -6272,7 +6278,7 @@ class MoonMindRunWorkflow:
             "MoonMind.AgentSession",
             session_input,
             id=session_workflow_id,
-            task_queue=WORKFLOW_TASK_QUEUE,
+            task_queue=self._workflow_child_task_queue(),
             search_attributes=self._workflow_scoped_session_visibility(
                 binding=initial_binding
             ),
@@ -8471,7 +8477,7 @@ class MoonMindRunWorkflow:
                 "MoonMind.MergeAutomation",
                 payload,
                 id=workflow_id,
-                task_queue=WORKFLOW_TASK_QUEUE,
+                task_queue=self._workflow_child_task_queue(),
                 cancellation_type=ChildWorkflowCancellationType.TRY_CANCEL,
                 static_summary="Waiting for pull request merge readiness",
                 static_details=f"Merge automation for {pull_request_url}",

@@ -51,6 +51,7 @@ with workflow.unsafe.imports_passed_through():
         WORKFLOW_TASK_QUEUE,
         build_default_activity_catalog,
     )
+    from moonmind.config.settings import settings
     from moonmind.workflows.temporal.runtime.store import ManagedRunStore
     from moonmind.workflows.temporal.workflows.provider_profile_manager import (
         workflow_id_for_runtime,
@@ -154,6 +155,9 @@ AGENT_RUN_MANAGED_NO_PROGRESS_RECONCILIATION_PATCH_ID = (
 )
 MANAGED_SESSION_START_AFTER_SLOT_PATCH_ID = (
     "agent-run-managed-session-start-after-slot-v1"
+)
+AGENT_RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH = (
+    "agent-run-workflow-child-task-queue-v2"
 )
 
 # Module-level activity catalog — deterministic, safe for Temporal replay.
@@ -332,6 +336,12 @@ async def external_adapter_execution_style(agent_id: str) -> str:
 
 @workflow.defn(name="MoonMind.AgentRun")
 class MoonMindAgentRun:
+    @staticmethod
+    def _workflow_child_task_queue() -> str:
+        if workflow.patched(AGENT_RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH):
+            return settings.temporal.user_workflow_v2_task_queue
+        return WORKFLOW_TASK_QUEUE
+
     def _get_logger(self) -> logging.LoggerAdapter | logging.Logger:
         try:
             info = workflow.info()
@@ -1178,7 +1188,7 @@ class MoonMindAgentRun:
             "MoonMind.AgentSession",
             session_input,
             id=session_workflow_id,
-            task_queue=WORKFLOW_TASK_QUEUE,
+            task_queue=self._workflow_child_task_queue(),
             parent_close_policy=workflow.ParentClosePolicy.ABANDON,
             search_attributes=self._workflow_scoped_session_visibility(binding=binding),
             static_summary="Workflow-scoped managed runtime session",

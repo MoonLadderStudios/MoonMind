@@ -13,6 +13,7 @@ from temporalio.exceptions import CancelledError
 from temporalio.workflow import ActivityCancellationType, ChildWorkflowCancellationType
 
 with workflow.unsafe.imports_passed_through():
+    from moonmind.config.settings import settings
     from moonmind.schemas.temporal_models import (
         MergeAutomationStartInput,
         ReadinessBlockerModel,
@@ -54,10 +55,19 @@ ALLOWED_DISPOSITIONS = SUCCESS_DISPOSITIONS | NON_SUCCESS_DISPOSITIONS | {
     DISPOSITION_REENTER_GATE
 }
 MAX_PUBLISHED_ARTIFACT_REFS = 20
+MERGE_AUTOMATION_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH = (
+    "merge-automation-workflow-child-task-queue-v2"
+)
 
 @workflow.defn(name=WORKFLOW_NAME)
 class MoonMindMergeAutomationWorkflow:
     """Wait for PR readiness, run pr-resolver as a child, and return a parent outcome."""
+
+    @staticmethod
+    def _workflow_child_task_queue() -> str:
+        if workflow.patched(MERGE_AUTOMATION_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH):
+            return settings.temporal.user_workflow_v2_task_queue
+        return WORKFLOW_TASK_QUEUE
 
     def __init__(self) -> None:
         self._status = STATE_WAITING
@@ -630,7 +640,7 @@ class MoonMindMergeAutomationWorkflow:
                 self._resolver_child_workflow_ids.append(resolver_workflow_id)
                 child_kwargs: dict[str, Any] = {
                     "id": resolver_workflow_id,
-                    "task_queue": WORKFLOW_TASK_QUEUE,
+                    "task_queue": self._workflow_child_task_queue(),
                     "search_attributes": self._resolver_search_attributes(),
                     "cancellation_type": ChildWorkflowCancellationType.TRY_CANCEL,
                     "static_summary": "Resolving pull request for merge automation",

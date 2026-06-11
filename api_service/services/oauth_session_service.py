@@ -14,10 +14,10 @@ async def start_oauth_session_workflow(session_model: Any) -> None:
     ``oauth-session:<session_id>``.  The workflow manages volume
     provisioning, status transitions, and session expiry.
     """
+    from moonmind.workflows.temporal.activity_catalog import get_workflow_task_queue
     from moonmind.workflows.temporal.client import TemporalClientAdapter
     from moonmind.workflows.temporal.workflows.oauth_session import (
         WORKFLOW_NAME,
-        WORKFLOW_TASK_QUEUE,
     )
 
     session_id: str = session_model.session_id
@@ -40,7 +40,7 @@ async def start_oauth_session_workflow(session_model: Any) -> None:
                 "profile_settings": session_model.metadata_json or {},
             },
             id=workflow_id,
-            task_queue=WORKFLOW_TASK_QUEUE,
+            task_queue=get_workflow_task_queue(),
         )
         logger.info("Started OAuth session workflow %s", workflow_id)
     except Exception as exc:
