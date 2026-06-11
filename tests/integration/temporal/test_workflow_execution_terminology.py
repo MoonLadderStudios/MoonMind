@@ -47,7 +47,7 @@ def test_temporal_user_workflow_query_excludes_legacy_run_entry() -> None:
     with TestClient(app) as test_client:
         response = test_client.get(
             "/api/executions",
-            params={"source": "temporal", "scope": "tasks"},
+            params={"source": "temporal", "scope": "workflows"},
         )
 
     assert response.status_code == 200

@@ -84,13 +84,13 @@ def test_executions_recurring_schedule_success_contract() -> None:
         response = client.post(
             "/api/executions",
             json={
-                "type": "task",
+                "type": "workflow",
                 "payload": {
                     "schedule": {
                         "mode": "recurring",
                         "cron": "0 * * * *",
                     },
-                    "task": {"instructions": "Run this on a schedule"},
+                    "workflow": {"instructions": "Run this on a schedule"},
                 },
             },
         )
@@ -114,13 +114,13 @@ def test_executions_recurring_schedule_validation_contract() -> None:
         response = client.post(
             "/api/executions",
             json={
-                "type": "task",
+                "type": "workflow",
                 "payload": {
                     "schedule": {
                         "mode": "recurring",
                         "cron": "0 * * * *",
                     },
-                    "task": {"instructions": "Run this on a schedule"},
+                    "workflow": {"instructions": "Run this on a schedule"},
                 },
             },
         )

@@ -62,11 +62,11 @@ def test_mm641_task_shaped_submission_boundary_exposes_canonical_task_parameters
         response = test_client.post(
             "/api/executions",
             json={
-                "type": "task",
+                "type": "workflow",
                 "payload": {
                     "repository": "Moon/Mind",
                     "targetRuntime": "codex",
-                    "task": {
+                    "workflow": {
                         "instructions": "Preserve MM-641 task shape.",
                         "dependsOn": ["mm:parent"],
                         "runtime": {"mode": "codex", "model": "gpt-5-codex"},
@@ -105,7 +105,7 @@ def test_mm641_task_shaped_submission_boundary_exposes_canonical_task_parameters
         )
 
     assert response.status_code == 201
-    task = service.create_execution.await_args.kwargs["initial_parameters"]["task"]
+    task = service.create_execution.await_args.kwargs["initial_parameters"]["workflow"]
     assert task["instructions"] == "Preserve MM-641 task shape."
     assert task["dependsOn"] == ["mm:parent"]
     assert task["runtime"] == {"mode": "codex_cli", "model": "gpt-5-codex"}
@@ -156,11 +156,11 @@ def test_task_shaped_submission_boundary_assigns_step_id_for_step_attachment(
         response = test_client.post(
             "/api/executions",
             json={
-                "type": "task",
+                "type": "workflow",
                 "payload": {
                     "repository": "Moon/Mind",
                     "targetRuntime": "claude_code",
-                    "task": {
+                    "workflow": {
                         "instructions": "Inspect the uploaded screenshot.",
                         "steps": [
                             {
@@ -181,7 +181,7 @@ def test_task_shaped_submission_boundary_assigns_step_id_for_step_attachment(
         )
 
     assert response.status_code == 201
-    task = service.create_execution.await_args.kwargs["initial_parameters"]["task"]
+    task = service.create_execution.await_args.kwargs["initial_parameters"]["workflow"]
     assert task["steps"][0]["id"] == "step-1"
     assert task["steps"][0]["inputAttachments"] == [
         {
@@ -247,11 +247,11 @@ def test_task_shaped_submission_boundary_preserves_recursive_preset_metadata(
         response = test_client.post(
             "/api/executions",
             json={
-                "type": "task",
+                "type": "workflow",
                 "payload": {
                     "repository": "Moon/Mind",
                     "targetRuntime": "codex",
-                    "task": {
+                    "workflow": {
                         "instructions": "Compile recursive presets.",
                         "runtime": {"mode": "codex"},
                         "publish": {"mode": "none"},
@@ -289,7 +289,7 @@ def test_task_shaped_submission_boundary_preserves_recursive_preset_metadata(
         )
 
     assert response.status_code == 201
-    task = service.create_execution.await_args.kwargs["initial_parameters"]["task"]
+    task = service.create_execution.await_args.kwargs["initial_parameters"]["workflow"]
     assert task["authoredPresets"] == authored_presets
     assert task["appliedStepTemplates"][0]["composition"] == composition
     assert task["appliedStepTemplates"][0]["authoredPresets"] == authored_presets
@@ -315,11 +315,11 @@ def test_mm569_task_shaped_submission_rejects_unresolved_preset_step(
         response = test_client.post(
             "/api/executions",
             json={
-                "type": "task",
+                "type": "workflow",
                 "payload": {
                     "repository": "Moon/Mind",
                     "targetRuntime": "codex",
-                    "task": {
+                    "workflow": {
                         "instructions": "Reject unresolved MM-569 preset.",
                         "steps": [preset_step()],
                     },
@@ -328,7 +328,7 @@ def test_mm569_task_shaped_submission_rejects_unresolved_preset_step(
         )
 
     assert response.status_code == 422
-    assert "task.steps[].type" in response.text
+    assert "workflow.steps[].type" in response.text
     service.create_execution.assert_not_awaited()
 
 
@@ -354,11 +354,11 @@ def test_mm569_task_shaped_submission_preserves_flat_tool_skill_provenance(
         response = test_client.post(
             "/api/executions",
             json={
-                "type": "task",
+                "type": "workflow",
                 "payload": {
                     "repository": "Moon/Mind",
                     "targetRuntime": "codex",
-                    "task": {
+                    "workflow": {
                         "instructions": "Submit flat MM-569 executable steps.",
                         "steps": [tool, skill],
                     },
@@ -367,7 +367,7 @@ def test_mm569_task_shaped_submission_preserves_flat_tool_skill_provenance(
         )
 
     assert response.status_code == 201
-    task = service.create_execution.await_args.kwargs["initial_parameters"]["task"]
+    task = service.create_execution.await_args.kwargs["initial_parameters"]["workflow"]
     assert [step["type"] for step in task["steps"]] == ["tool", "skill"]
     assert task["steps"][0]["source"]["presetSlug"] == "mm569-parent"
     assert task["steps"][1]["source"]["presetSlug"] == "mm569-parent"
@@ -385,11 +385,11 @@ def test_task_shaped_submission_boundary_does_not_fabricate_preset_metadata(
         response = test_client.post(
             "/api/executions",
             json={
-                "type": "task",
+                "type": "workflow",
                 "payload": {
                     "repository": "Moon/Mind",
                     "targetRuntime": "codex",
-                    "task": {
+                    "workflow": {
                         "instructions": "Manual only.",
                         "steps": [
                             {
@@ -405,7 +405,7 @@ def test_task_shaped_submission_boundary_does_not_fabricate_preset_metadata(
         )
 
     assert response.status_code == 201
-    task = service.create_execution.await_args.kwargs["initial_parameters"]["task"]
+    task = service.create_execution.await_args.kwargs["initial_parameters"]["workflow"]
     assert "authoredPresets" not in task
     assert "appliedStepTemplates" not in task
     assert "source" not in task["steps"][0]
@@ -437,11 +437,11 @@ def test_task_shaped_submission_boundary_rejects_invalid_alias_and_target_bindin
         target_branch_response = test_client.post(
             "/api/executions",
             json={
-                "type": "task",
+                "type": "workflow",
                 "payload": {
                     "repository": "Moon/Mind",
                     "targetRuntime": "codex",
-                    "task": {
+                    "workflow": {
                         "instructions": "Run task.",
                         "git": {"targetBranch": "feature/legacy"},
                     },
@@ -451,11 +451,11 @@ def test_task_shaped_submission_boundary_rejects_invalid_alias_and_target_bindin
         duplicate_target_response = test_client.post(
             "/api/executions",
             json={
-                "type": "task",
+                "type": "workflow",
                 "payload": {
                     "repository": "Moon/Mind",
                     "targetRuntime": "codex",
-                    "task": {
+                    "workflow": {
                         "instructions": "Run task.",
                         "inputAttachments": [attachment],
                         "steps": [
@@ -472,11 +472,11 @@ def test_task_shaped_submission_boundary_rejects_invalid_alias_and_target_bindin
         duplicate_same_target_response = test_client.post(
             "/api/executions",
             json={
-                "type": "task",
+                "type": "workflow",
                 "payload": {
                     "repository": "Moon/Mind",
                     "targetRuntime": "codex",
-                    "task": {
+                    "workflow": {
                         "instructions": "Run task.",
                         "inputAttachments": [attachment, attachment],
                     },
@@ -522,11 +522,11 @@ def test_task_shaped_submission_boundary_rejects_unfinalized_binary_ref(
         response = test_client.post(
             "/api/executions",
             json={
-                "type": "task",
+                "type": "workflow",
                 "payload": {
                     "repository": "Moon/Mind",
                     "targetRuntime": "codex",
-                    "task": {
+                    "workflow": {
                         "instructions": "Reject unfinalized binary input.",
                         "inputAttachments": [
                             {
@@ -571,11 +571,11 @@ def test_task_shaped_submission_boundary_rejects_wrong_owner_binary_ref(
         response = test_client.post(
             "/api/executions",
             json={
-                "type": "task",
+                "type": "workflow",
                 "payload": {
                     "repository": "Moon/Mind",
                     "targetRuntime": "codex",
-                    "task": {
+                    "workflow": {
                         "instructions": "Reject unauthorized binary input.",
                         "inputAttachments": [
                             {

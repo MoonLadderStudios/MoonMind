@@ -55,7 +55,7 @@ async def test_failed_execution_direct_rerun_creates_exact_full_rerun_from_origi
                     "recoveryCheckpointRef": "artifact://checkpoint/old",
                     "preservedSteps": [{"logicalStepId": "plan"}],
                     "completedSteps": [{"logicalStepId": "plan"}],
-                    "task": {
+                    "workflow": {
                         "title": "Original task",
                         "instructions": "Run the original task input unchanged.",
                         "recovery": {
@@ -122,7 +122,7 @@ async def test_failed_execution_direct_rerun_creates_exact_full_rerun_from_origi
         "workflowId": source_after_rerun.workflow_id,
         "runId": source_after_rerun.run_id,
     }
-    assert rerun.parameters["task"] == {
+    assert rerun.parameters["workflow"] == {
         "title": "Original task",
         "instructions": "Run the original task input unchanged.",
         "recovery": {
@@ -136,4 +136,4 @@ async def test_failed_execution_direct_rerun_creates_exact_full_rerun_from_origi
     assert "recoveryCheckpointRef" not in rerun.parameters
     assert "preservedSteps" not in rerun.parameters
     assert "completedSteps" not in rerun.parameters
-    assert "resume" not in rerun.parameters["task"]
+    assert "resume" not in rerun.parameters["workflow"]

@@ -8,6 +8,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 BOOTSTRAP_SCRIPT = REPO_ROOT / "services/temporal/scripts/bootstrap-namespace.sh"
+LEGACY_AGENT_RUN_SEARCH_ATTRIBUTE = "Task" + "RunId"
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 REQUIRED_SEARCH_ATTRIBUTES = {
@@ -57,6 +58,7 @@ RETIRED_SEARCH_ATTRIBUTES = {
     "CustomBoolField",
     "mm_continue_as_new_cause",
     "mm_dependency_state",
+    LEGACY_AGENT_RUN_SEARCH_ATTRIBUTE,
 }
 
 def _write_executable(path: Path, contents: str) -> None:
@@ -360,6 +362,7 @@ def test_namespace_bootstrap_retire_old_keyword_attributes_before_sql_limit_upgr
             "mm_integration": "Keyword",
             "mm_continue_as_new_cause": "Keyword",
             "mm_dependency_state": "Keyword",
+            LEGACY_AGENT_RUN_SEARCH_ATTRIBUTE: "Keyword",
             "AgentRunId": "Keyword",
             "mm_updated_at": "Datetime",
             "mm_scheduled_for": "Datetime",

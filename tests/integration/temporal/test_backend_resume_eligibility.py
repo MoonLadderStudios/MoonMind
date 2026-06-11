@@ -87,7 +87,7 @@ async def test_accepted_recovery_carries_canonical_recovery_and_recovery_refs(
                 failure_policy=None,
                 initial_parameters={
                     "agentRunId": "old-agent-run",
-                    "task": {"title": "Recovery source", "instructions": "Original"},
+                    "workflow": {"title": "Recovery source", "instructions": "Original"},
                 },
                 idempotency_key=None,
             )
@@ -111,13 +111,13 @@ async def test_accepted_recovery_carries_canonical_recovery_and_recovery_refs(
             )
             resumed = await service.describe_execution(result["execution"]["workflowId"])
 
-    task_payload = resumed.parameters["task"]
-    assert task_payload["recovery"] == {
+    workflow_payload = resumed.parameters["workflow"]
+    assert workflow_payload["recovery"] == {
         "kind": "recover_from_failed_step",
         "sourceWorkflowId": created.workflow_id,
         "sourceRunId": created.run_id,
     }
-    assert task_payload["resume"] == {
+    assert workflow_payload["resume"] == {
         "kind": "recover_from_failed_step",
         "sourceWorkflowId": created.workflow_id,
         "sourceRunId": created.run_id,
@@ -153,7 +153,7 @@ async def test_generic_rerun_does_not_carry_recovery_reference_fields(
                     "recoveryCheckpointRef": "artifact://checkpoint/old",
                     "preservedSteps": [{"logicalStepId": "plan"}],
                     "completedSteps": [{"logicalStepId": "plan"}],
-                    "task": {
+                    "workflow": {
                         "title": "Recovery source",
                         "instructions": "Original",
                         "recovery": {
@@ -199,7 +199,7 @@ async def test_generic_rerun_does_not_carry_recovery_reference_fields(
     assert "recoveryCheckpointRef" not in rerun.parameters
     assert "preservedSteps" not in rerun.parameters
     assert "completedSteps" not in rerun.parameters
-    assert rerun.parameters["task"] == {
+    assert rerun.parameters["workflow"] == {
         "title": "Recovery source",
         "instructions": "Original",
         "recovery": {
@@ -232,7 +232,7 @@ async def test_edited_full_retry_does_not_carry_recovery_reference_fields(
                     "recoveryCheckpointRef": "artifact://checkpoint/old",
                     "preservedSteps": [{"logicalStepId": "plan"}],
                     "completedSteps": [{"logicalStepId": "plan"}],
-                    "task": {
+                    "workflow": {
                         "title": "Recovery source",
                         "instructions": "Original",
                         "recovery": {
@@ -273,7 +273,7 @@ async def test_edited_full_retry_does_not_carry_recovery_reference_fields(
     assert "recoveryCheckpointRef" not in edited_retry.parameters
     assert "preservedSteps" not in edited_retry.parameters
     assert "completedSteps" not in edited_retry.parameters
-    assert edited_retry.parameters["task"] == {
+    assert edited_retry.parameters["workflow"] == {
         "title": "Recovery source",
         "instructions": "Original",
     }
