@@ -12,6 +12,8 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunResult,
     AgentRunStatus,
 )
+from moonmind.config.settings import settings
+from moonmind.security import OutboundScanResult
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -171,6 +173,60 @@ async def test_jules_send_message_activity_calls_adapter(_patch_build_adapter):
         prompt="Continue with step 2.",
     )
 
+async def test_jules_send_message_activity_scans_before_adapter_send(
+    _patch_build_adapter,
+    monkeypatch,
+):
+    from moonmind.workflows.temporal.activities import jules_activities
+
+    events: list[str] = []
+
+    async def recording_send_message(*, run_id: str, prompt: str) -> AgentRunStatus:
+        events.append("send")
+        return _mock_status()
+
+    def recording_scan(*args, **kwargs) -> OutboundScanResult:
+        events.append("scan")
+        return OutboundScanResult(
+            allowed=True,
+            decision="allow",
+            highSecurityMode=True,
+            findings=[],
+            sanitizedDiagnostics=[],
+        )
+
+    _patch_build_adapter.send_message.side_effect = recording_send_message
+    monkeypatch.setattr(jules_activities, "scan_outbound_text", recording_scan)
+
+    result = await jules_activities.jules_send_message_activity({
+        "session_id": "session-42",
+        "prompt": "Continue with step 2.",
+    })
+
+    assert result.run_id == "task-001"
+    assert events == ["scan", "send"]
+
+async def test_jules_send_message_activity_blocks_secret_before_adapter_send(
+    _patch_build_adapter,
+    monkeypatch,
+):
+    from moonmind.workflows.temporal.activities.jules_activities import (
+        jules_send_message_activity,
+    )
+
+    raw_secret = "unit-test-send-message-secret"
+    monkeypatch.setattr(settings.security, "high_security_mode", True)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await jules_send_message_activity({
+            "session_id": "session-42",
+            "prompt": f"Please continue with password={raw_secret}",
+        })
+
+    assert "jules.send_message.prompt" in str(exc_info.value)
+    assert raw_secret not in str(exc_info.value)
+    _patch_build_adapter.send_message.assert_not_awaited()
+
 async def test_repo_merge_pr_activity_updates_base_before_merge():
     from moonmind.workflows.temporal.activities.jules_activities import (
         repo_merge_pr_activity,
@@ -315,6 +371,36 @@ async def test_jules_answer_question_sends_answer(_patch_build_client):
     assert result["error"] is None
     assert result["answer"] == "Use the main branch."
     _patch_build_client.send_message.assert_awaited_once()
+
+async def test_jules_answer_question_blocks_secret_answer_before_client_send(
+    _patch_build_client,
+    monkeypatch,
+):
+    from moonmind.workflows.temporal.activities.jules_activities import (
+        jules_answer_question_activity,
+    )
+
+    raw_secret = "unit-test-auto-answer-secret"
+    _patch_build_client.send_message = AsyncMock()
+    monkeypatch.setattr(settings.security, "high_security_mode", True)
+
+    with patch(
+        "moonmind.workflows.temporal.activities.jules_activities._generate_llm_answer",
+        new_callable=AsyncMock,
+        return_value=f"Use password={raw_secret}",
+    ):
+        result = await jules_answer_question_activity({
+            "session_id": "ses-1",
+            "question": "Which credential?",
+            "task_context": "Fix bug in login",
+        })
+
+    assert result["answered"] is False
+    assert result["answer"] == "Use password=[REDACTED]"
+    assert "jules.answer_question.answer" in result["error"]
+    assert raw_secret not in result["error"]
+    assert raw_secret not in result["answer"]
+    _patch_build_client.send_message.assert_not_awaited()
 
 async def test_jules_answer_question_missing_session_id(_patch_build_client):
     """T020: answer_question returns error for missing session_id."""

@@ -17,6 +17,7 @@ import httpx
 from pydantic import ValidationError
 
 from moonmind.config import settings
+from moonmind.security import scan_outbound_text
 from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.task_proposals.models import (
     TaskProposal,
@@ -587,6 +588,26 @@ class TaskProposalService:
             headers["Authorization"] = self._notification_authorization
         return headers
 
+    def _scan_notification_payload_before_send(
+        self,
+        payload: Mapping[str, Any],
+    ) -> str | None:
+        result = scan_outbound_text(
+            json.dumps(payload, sort_keys=True, default=str),
+            location="task_proposal.notification.payload",
+        )
+        if result.allowed:
+            return None
+        diagnostics = "; ".join(result.sanitized_diagnostics) or (
+            "Blocked outbound content at task_proposal.notification.payload"
+        )
+        logger.warning(
+            "Blocked task proposal notification send at %s: %s",
+            "task_proposal.notification.payload",
+            diagnostics,
+        )
+        return diagnostics
+
     async def _emit_notification(self, proposal: TaskProposal) -> None:
         if not self._notifications_enabled or not self._notification_webhook:
             return
@@ -599,7 +620,23 @@ class TaskProposalService:
             return
         payload = self._build_notification_payload(proposal)
         status = "sent"
-        error_message: str | None = None
+        error_message: str | None = self._scan_notification_payload_before_send(payload)
+        if error_message is not None:
+            status = "blocked"
+            try:
+                await self._repository.log_notification(
+                    proposal_id=proposal.id,
+                    category=proposal.category or "",
+                    target=self._notification_webhook,
+                    status=status,
+                    error=error_message,
+                )
+                await self._repository.commit()
+            except Exception:  # pragma: no cover - logging only
+                logger.debug(
+                    "Notification audit insert failed for proposal %s", proposal.id
+                )
+            return
         try:
             async with httpx.AsyncClient(timeout=self._notification_timeout) as client:
                 response = await client.post(
