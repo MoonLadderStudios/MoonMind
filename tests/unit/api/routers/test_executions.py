@@ -1572,6 +1572,42 @@ def test_create_task_shaped_execution_rejects_invalid_required_capabilities() ->
     )
     mock_service.create_execution.assert_not_awaited()
 
+def test_create_task_shaped_execution_rejects_missing_task_payload(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        json={"type": "task", "payload": {"repository": "Moon/Mind"}},
+    )
+
+    assert response.status_code == 422
+    assert (
+        response.json()["detail"]["message"]
+        == "Task-shaped Temporal submit requests require payload.task."
+    )
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_task_shaped_execution_rejects_missing_workflow_payload(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        json={"type": "workflow", "payload": {"repository": "Moon/Mind"}},
+    )
+
+    assert response.status_code == 422
+    assert (
+        response.json()["detail"]["message"]
+        == "Workflow-shaped Temporal submit requests require payload.workflow."
+    )
+    service.create_execution.assert_not_awaited()
+
+
 def test_create_task_shaped_execution_rejects_more_than_10_dependencies(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:

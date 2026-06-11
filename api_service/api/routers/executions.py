@@ -6219,8 +6219,12 @@ async def _create_execution_from_workflow_request(
     elif isinstance(workflow_node, dict):
         task_payload = workflow_node
     if not task_payload:
+        required_field = (
+            "payload.workflow" if request_type == "workflow" else "payload.task"
+        )
+        shape_name = "Workflow-shaped" if request_type == "workflow" else "Task-shaped"
         raise _invalid_workflow_request(
-            "Task-shaped Temporal submit requests require payload.task."
+            f"{shape_name} Temporal submit requests require {required_field}."
         )
 
     # Resolve child-agent runtime inheritance before downstream normalization
