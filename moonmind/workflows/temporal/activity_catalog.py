@@ -26,7 +26,7 @@ INTEGRATIONS_FLEET = "integrations"
 AGENT_RUNTIME_FLEET = "agent_runtime"
 DEPLOYMENT_FLEET = "deployment"
 
-WORKFLOW_TASK_QUEUE = "mm.workflow"
+WORKFLOW_TASK_QUEUE = resolve_user_workflow_start_contract(settings.temporal).task_queue
 ARTIFACTS_TASK_QUEUE = "mm.activity.artifacts"
 LLM_TASK_QUEUE = "mm.activity.llm"
 SANDBOX_TASK_QUEUE = "mm.activity.sandbox"

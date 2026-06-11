@@ -125,6 +125,7 @@ async def sync_provider_profile_manager(
         from moonmind.workflows.temporal.workflows.provider_profile_manager import (
             ProviderProfileManagerInput,
             WORKFLOW_NAME,
+            WORKFLOW_TASK_QUEUE,
             workflow_id_for_runtime,
         )
         from temporalio.exceptions import WorkflowAlreadyStartedError
@@ -140,7 +141,7 @@ async def sync_provider_profile_manager(
                     runtime_id=runtime_id
                 ),
                 id=workflow_id,
-                task_queue="mm.workflow",
+                task_queue=WORKFLOW_TASK_QUEUE,
             )
             logger.info("Started ProviderProfileManager for runtime=%s", runtime_id)
         except WorkflowAlreadyStartedError:

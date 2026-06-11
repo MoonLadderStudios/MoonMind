@@ -25,9 +25,9 @@ from temporalio import exceptions, workflow
 with workflow.unsafe.imports_passed_through():
     from temporalio.common import RetryPolicy
     from moonmind.billing.costs import pricing_from_profile_metadata
+    from moonmind.workflows.temporal.activity_catalog import WORKFLOW_TASK_QUEUE
 
 WORKFLOW_NAME = "MoonMind.ProviderProfileManager"
-WORKFLOW_TASK_QUEUE = "mm.workflow"
 ACTIVITY_TASK_QUEUE = "mm.activity.artifacts"
 WORKFLOW_ID_PREFIX = "provider-profile-manager"
 
