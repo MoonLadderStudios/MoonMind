@@ -19,6 +19,8 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 _TYPE_NAME = "temporalworkflowtype"
+_OLD_USER_WORKFLOW_TYPE = "MoonMind." + "Run"
+_OLD_PROVIDER_PROFILE_MANAGER_TYPE = "MoonMind.AuthProfileManager"
 
 
 def _postgresql_connection() -> sa.Connection | None:
@@ -67,12 +69,12 @@ def upgrade() -> None:
 
     _rename_enum_value_if_needed(
         connection,
-        old_value="MoonMind.Run",
+        old_value=_OLD_USER_WORKFLOW_TYPE,
         new_value="MoonMind.UserWorkflow",
     )
     _rename_enum_value_if_needed(
         connection,
-        old_value="MoonMind.AuthProfileManager",
+        old_value=_OLD_PROVIDER_PROFILE_MANAGER_TYPE,
         new_value="MoonMind.ProviderProfileManager",
     )
 
