@@ -13,7 +13,6 @@ from temporalio import activity
 
 from moonmind.config.settings import settings
 from moonmind.jules.runtime import build_runtime_gate_state, JULES_RUNTIME_DISABLED_MESSAGE
-from moonmind.security.outbound_scan import scan_outbound_text
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunHandle,
@@ -23,6 +22,8 @@ from moonmind.schemas.agent_runtime_models import (
 from moonmind.schemas.jules_models import (
     JulesSendMessageRequest,
 )
+from moonmind.security import scan_outbound_text
+from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
 from moonmind.workflows.adapters.jules_client import JulesClient
 
@@ -34,16 +35,6 @@ _JULES_FALLBACK_ANSWER = "Proceed with your recommendation."
 def _blocked_message_error(surface: str, diagnostics: list[str]) -> str:
     joined = "; ".join(diagnostics) if diagnostics else surface
     return f"Blocked outbound message send: {joined}"
-
-
-def _scan_message_or_raise(content: str, *, location: str) -> None:
-    scan = scan_outbound_text(
-        content,
-        location=location,
-        settings=settings,
-    )
-    if not scan.allowed:
-        raise ValueError(_blocked_message_error(location, scan.sanitized_diagnostics))
 
 def _build_client() -> JulesClient:
     """Build a ``JulesClient`` from environment config.
@@ -77,6 +68,28 @@ def _build_adapter() -> JulesAgentAdapter:
     jules_key = os.environ.get("JULES_API_KEY", "").strip()
     client = JulesClient(base_url=jules_url, api_key=jules_key)
     return JulesAgentAdapter(client_factory=lambda: client)
+
+
+def _scan_jules_message_before_send(prompt: str, *, surface: str) -> None:
+    result = scan_outbound_text(
+        prompt,
+        location=surface,
+        settings=settings,
+    )
+    if result.allowed:
+        return
+    diagnostics = "; ".join(result.sanitized_diagnostics) or (
+        f"Blocked outbound content at {surface}"
+    )
+    logger.warning(
+        "Blocked Jules send-message attempt at %s: %s",
+        surface,
+        diagnostics,
+    )
+    raise RuntimeError(
+        f"Outbound message blocked by high security scan: {diagnostics}"
+    )
+
 
 async def _generate_llm_answer(prompt: str) -> str:
     """Dispatch a prompt to an LLM and return the generated answer.
@@ -172,9 +185,9 @@ async def jules_send_message_activity(payload: dict) -> AgentRunStatus:
             f"Invalid payload for jules_send_message_activity: {exc}"
         ) from exc
 
-    _scan_message_or_raise(
+    _scan_jules_message_before_send(
         validated.prompt,
-        location="jules.send_message.prompt",
+        surface="jules.send_message.prompt",
     )
     adapter = _build_adapter()
     return await adapter.send_message(
@@ -269,7 +282,11 @@ async def jules_answer_question_activity(payload: dict) -> dict:
             session_id, exc,
             exc_info=True,
         )
-        return {"answered": False, "answer": answer, "error": str(exc)}
+        return {
+            "answered": False,
+            "answer": redact_sensitive_text(answer),
+            "error": redact_sensitive_text(str(exc)),
+        }
     finally:
         await client.aclose()
 

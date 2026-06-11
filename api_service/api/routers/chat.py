@@ -26,7 +26,7 @@ from moonmind.factories.openai_factory import get_openai_model
 from moonmind.models_cache import model_cache
 from moonmind.billing.costs import emit_llm_cost_telemetry, estimate_model_cost
 from moonmind.rag.retriever import QdrantRAG
-from moonmind.security.outbound_scan import scan_outbound_text
+from moonmind.security import scan_outbound_text
 from moonmind.schemas.chat_models import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -45,17 +45,7 @@ router = APIRouter()
 responses_router = APIRouter()
 logger = logging.getLogger(__name__)
 
-
-def _blocked_message_detail(diagnostics: list[str]) -> str:
-    joined = "; ".join(diagnostics) if diagnostics else "blocked outbound message"
-    return f"Blocked outbound message send: {joined}"
-
-
-def _ensure_messages_pass_outbound_scan(
-    messages: List,
-    *,
-    surface: str,
-) -> None:
+def _scan_chat_messages_before_send(messages: List, *, surface: str) -> None:
     for index, msg in enumerate(messages):
         if isinstance(msg, dict):
             role = msg.get("role", "message")
@@ -68,18 +58,22 @@ def _ensure_messages_pass_outbound_scan(
             location=f"{surface}.messages[{index}].content",
             settings=settings,
         )
-        if not scan.allowed:
-            logger.warning(
-                "Blocked outbound chat message for surface %s role %s at index %s: %s",
-                surface,
-                role,
-                index,
-                "; ".join(scan.sanitized_diagnostics),
-            )
-            raise HTTPException(
-                status_code=400,
-                detail=_blocked_message_detail(scan.sanitized_diagnostics),
-            )
+        if scan.allowed:
+            continue
+        diagnostics = "; ".join(scan.sanitized_diagnostics) or (
+            f"Blocked outbound content at {surface}.messages[{index}].content"
+        )
+        logger.warning(
+            "Blocked chat send-message attempt at %s.messages[%s].content for role %s: %s",
+            surface,
+            index,
+            role,
+            diagnostics,
+        )
+        raise HTTPException(
+            status_code=422,
+            detail=f"Outbound message blocked by high security scan: {diagnostics}",
+        )
 
 def format_context_for_prompt(retrieved_nodes: List[NodeWithScore]) -> str:
     """Format retrieved RAG context for injection into prompts."""
@@ -605,9 +599,8 @@ async def create_response(
             (msg.content for msg in processed_messages if msg.role == "system"),
             None,
         )
-        _ensure_messages_pass_outbound_scan(
-            processed_messages,
-            surface="chat.openai_responses",
+        _scan_chat_messages_before_send(
+            processed_messages, surface="chat.openai.responses"
         )
         client = AsyncOpenAI(api_key=user_api_key)
         try:
@@ -676,8 +669,9 @@ async def handle_openai_request(
     )  # This function might need api_key if it uses it
     logger.info(f"Routing to OpenAI for model: {openai_model_name}")
 
+    _scan_chat_messages_before_send(messages, surface="chat.openai")
+
     # Prepare messages for OpenAI
-    _ensure_messages_pass_outbound_scan(messages, surface="chat.openai")
     openai_messages = [{"role": msg.role, "content": msg.content} for msg in messages]
 
     # The import 'from openai import AsyncOpenAI' is now at the top of the file.
@@ -763,7 +757,6 @@ async def handle_google_request(
         )
 
     logger.info(f"Routing to Google for model: {model_to_use}")
-    _ensure_messages_pass_outbound_scan(messages, surface="chat.google")
 
     # The get_google_model factory already uses settings.google.google_api_key.
     # We need to modify it or create a new client instance with the user's key.
@@ -782,6 +775,8 @@ async def handle_google_request(
 
     if not contents:
         raise HTTPException(status_code=400, detail="No messages provided.")
+
+    _scan_chat_messages_before_send(messages, surface="chat.google")
 
     logger.debug(
         f"Final `contents` for Gemini (with RAG context if any): {str(contents)[:1000]}..."
@@ -878,7 +873,6 @@ async def handle_anthropic_request(
         )
 
     logger.info(f"Routing to Anthropic for model: {model_to_use}")
-    _ensure_messages_pass_outbound_scan(messages, surface="chat.anthropic")
 
     # The AnthropicFactory.create_anthropic_model currently uses global settings.
     # We need to pass the api_key to it.
@@ -908,6 +902,8 @@ async def handle_anthropic_request(
             status_code=400,
             detail="No user or assistant messages provided for Anthropic.",
         )
+
+    _scan_chat_messages_before_send(messages, surface="chat.anthropic")
 
     try:
         # Note: Anthropic's SDK might use `messages` and `system` parameters differently

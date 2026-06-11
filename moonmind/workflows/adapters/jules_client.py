@@ -27,6 +27,7 @@ from moonmind.schemas.jules_models import (
     JulesTaskResponse,
     normalize_jules_status,
 )
+from moonmind.security import scan_outbound_text
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ class JulesClientError(RuntimeError):
         self.ambiguous = ambiguous
 
     def __str__(self) -> str:
-        parts = ["Jules API request failed"]
+        parts = [str(self.args[0]) if self.args else "Jules API request failed"]
         if self.request_path:
             parts.append(f"path={self.request_path}")
         if self.status_code is not None:
@@ -122,6 +123,22 @@ class JulesClient:
 
         See: https://developers.google.com/jules/api/reference/rest/v1alpha/sessions/sendMessage
         """
+        scan_result = scan_outbound_text(
+            request.prompt,
+            location="jules.client.send_message.prompt",
+        )
+        if not scan_result.allowed:
+            diagnostics = "; ".join(scan_result.sanitized_diagnostics) or (
+                "Blocked outbound content at jules.client.send_message.prompt"
+            )
+            logger.warning(
+                "Blocked Jules client send-message attempt at %s: %s",
+                "jules.client.send_message.prompt",
+                diagnostics,
+            )
+            raise JulesClientError(
+                f"Outbound message blocked by high security scan: {diagnostics}"
+            )
         path = f"/sessions/{request.session_id}:sendMessage"
         await self._post_json_empty(path, json={"prompt": request.prompt})
 

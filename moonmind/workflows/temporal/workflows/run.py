@@ -5525,13 +5525,9 @@ class MoonMindRunWorkflow:
             outputs.get("retry_recommendation"),
             provider_failure.get("retry_recommendation"),
         )
-        if not provider_error_code and not retry_recommendation:
-            return None
-
         reason = _first_text(
             provider_failure.get("reason"),
             outputs.get("summary"),
-            outputs.get("error"),
             self._get_from_result(result, "summary"),
         )
         profile_id = _first_text(
@@ -5540,6 +5536,58 @@ class MoonMindRunWorkflow:
             provider_failure.get("profileId"),
             provider_failure.get("profile_id"),
         )
+        failure_class = _first_text(
+            outputs.get("failureClass"),
+            outputs.get("failure_class"),
+            provider_failure.get("failureClass"),
+            provider_failure.get("failure_class"),
+            outputs.get("error"),
+        )
+        diagnostics_ref = _first_text(
+            outputs.get("diagnosticsRef"),
+            outputs.get("diagnostics_ref"),
+            provider_failure.get("diagnosticsRef"),
+            provider_failure.get("diagnostics_ref"),
+        )
+        turn_metadata = outputs.get("turnMetadata")
+        turn_failure_cause: str | None = None
+        retry_recommended_action: str | None = None
+        if isinstance(turn_metadata, Mapping):
+            turn_failure_cause = _first_text(
+                turn_metadata.get("failureCause"),
+                turn_metadata.get("failure_cause"),
+            )
+            retry_recommended_action = _first_text(
+                turn_metadata.get("retryRecommendedAction"),
+                turn_metadata.get("retry_recommended_action"),
+            )
+
+        if not provider_error_code and not retry_recommendation:
+            has_agent_failure_evidence = bool(
+                diagnostics_ref
+                or turn_failure_cause
+                or retry_recommended_action
+                or outputs.get("turnStatus") == "failed"
+            )
+            if not has_agent_failure_evidence or not reason:
+                return None
+
+            summary = "Agent runtime failed"
+            if failure_class:
+                summary = f"{summary} with {failure_class}"
+            if profile_id:
+                summary = f"{summary} for profile {profile_id}"
+            if turn_failure_cause:
+                summary = f"{summary} due to {turn_failure_cause}"
+            summary = f"{summary}: {reason}"
+            details = []
+            if retry_recommended_action:
+                details.append(f"retryRecommendedAction: {retry_recommended_action}")
+            if diagnostics_ref:
+                details.append(f"diagnosticsRef: {diagnostics_ref}")
+            if details:
+                summary = f"{summary} ({'; '.join(details)})"
+            return summary
 
         normalized_code = (provider_error_code or "").strip().lower()
         normalized_retry = (retry_recommendation or "").strip().lower()
