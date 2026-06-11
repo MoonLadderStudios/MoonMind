@@ -102,7 +102,6 @@ _CONTAINER_RESERVED_ENV_KEYS = frozenset({"ARTIFACT_DIR", "JOB_ID", "REPOSITORY"
 _CONTAINER_VOLUME_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _CONTAINER_STOP_TIMEOUT_SECONDS = 30.0
 _FULL_UUID_PATTERN = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
-_UNHELPFUL_STEP_TITLE_PATTERN = re.compile(r"^\s*[\W_]*\d+(?:[\W_]+\d+)*[\W_]*\s*$")
 _SECRET_LIKE_METADATA_PATTERN = re.compile(
     r"""(?ix)
     (?:
@@ -4971,7 +4970,17 @@ class CodexWorker:
 
         if not candidate:
             return False
-        if _UNHELPFUL_STEP_TITLE_PATTERN.fullmatch(candidate):
+        stripped = candidate.strip()
+        if not stripped:
+            return False
+        has_digit = False
+        for char in stripped:
+            if char.isalnum():
+                if char.isdigit():
+                    has_digit = True
+                    continue
+                return True
+        if has_digit:
             return False
         return True
 

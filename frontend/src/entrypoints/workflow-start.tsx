@@ -646,13 +646,6 @@ interface AttachmentPolicy {
   allowedContentTypes: string[];
 }
 
-const RASTER_ATTACHMENT_PREVIEW_TYPES = new Set([
-  "image/gif",
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-]);
-
 interface StepAttachmentRef {
   artifactId: string;
   filename: string;
@@ -2279,51 +2272,6 @@ function validateAttachmentTargets(
   return { ok: messages.length === 0, errors, messages };
 }
 
-function AttachmentPreview({
-  file,
-  alt,
-  onError,
-}: {
-  file: File;
-  alt: string;
-  onError: () => void;
-}) {
-  const [previewUrl, setPreviewUrl] = useState("");
-
-  useEffect(() => {
-    const normalizedType = file.type.trim().toLowerCase();
-    if (
-      !RASTER_ATTACHMENT_PREVIEW_TYPES.has(normalizedType) ||
-      typeof URL === "undefined" ||
-      typeof URL.createObjectURL !== "function"
-    ) {
-      setPreviewUrl("");
-      return;
-    }
-
-    const nextPreviewUrl = URL.createObjectURL(file);
-    setPreviewUrl(nextPreviewUrl);
-    return () => {
-      if (typeof URL.revokeObjectURL === "function") {
-        URL.revokeObjectURL(nextPreviewUrl);
-      }
-    };
-  }, [file]);
-
-  if (!previewUrl) {
-    return null;
-  }
-
-  return (
-    <img
-      alt={alt}
-      className="queue-attachment-preview"
-      src={previewUrl}
-      onError={onError}
-    />
-  );
-}
-
 function validateJiraImageAttachment(
   attachment: JiraIssueAttachment,
   policy: AttachmentPolicy,
@@ -3935,9 +3883,6 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   const [attachmentTargetErrors, setAttachmentTargetErrors] = useState<
     Record<string, string>
   >({});
-  const [previewFailureMessages, setPreviewFailureMessages] = useState<
-    Record<string, string>
-  >({});
   const [submitMessageState, setSubmitMessageState] = useState<
     { text: string; tone: "error" | "pending" } | null
   >(null);
@@ -5402,20 +5347,6 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       delete next[targetKey];
       return next;
     });
-  }
-
-  function markAttachmentPreviewFailed(
-    targetKey: string,
-    targetLabel: string,
-    file: File,
-  ) {
-    const message = `${targetLabel}: Preview unavailable for ${
-      file.name || "attachment"
-    }. Attachment metadata remains available.`;
-    setPreviewFailureMessages((current) => ({
-      ...current,
-      [`${targetKey}:${attachmentFileKey(file)}`]: message,
-    }));
   }
 
   const selectedAttachmentFiles = useMemo(
@@ -9248,28 +9179,6 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                                     {`${file.type || "application/octet-stream"}, ${formatAttachmentBytes(file.size)}`}
                                   </span>
                                 </span>
-                                <AttachmentPreview
-                                  file={file}
-                                  alt={`Preview of Step ${index + 1} attachment ${file.name}`}
-                                  onError={() =>
-                                    markAttachmentPreviewFailed(
-                                      attachmentTargetKey(step.localId),
-                                      `Step ${index + 1}`,
-                                      file,
-                                    )
-                                  }
-                                />
-                                {previewFailureMessages[
-                                  `${attachmentTargetKey(step.localId)}:${attachmentFileKey(file)}`
-                                ] ? (
-                                  <p className="small notice error">
-                                    {
-                                      previewFailureMessages[
-                                        `${attachmentTargetKey(step.localId)}:${attachmentFileKey(file)}`
-                                      ]
-                                    }
-                                  </p>
-                                ) : null}
                                 {attachmentTargetErrors[
                                   attachmentTargetKey(step.localId)
                                 ] ? (

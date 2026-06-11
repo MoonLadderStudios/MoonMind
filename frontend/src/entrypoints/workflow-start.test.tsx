@@ -5904,49 +5904,30 @@ describe.skip("Task Create Entrypoint", () => {
     expect(screen.getAllByText("same.png")).toHaveLength(1);
   });
 
-  it("preserves attachment metadata and remove action when preview fails", async () => {
-    const originalCreateObjectUrl = URL.createObjectURL;
-    Object.defineProperty(URL, "createObjectURL", {
-      configurable: true,
-      value: vi.fn(() => "blob:preview-wireframe"),
+  it("preserves attachment metadata and remove action without local preview", async () => {
+    renderWithClient(
+      <WorkflowStartPage payload={withImageOnlyAttachmentPolicy()} />,
+    );
+
+    const file = new File(["fake image"], "wireframe.png", {
+      type: "image/png",
     });
-    try {
-      renderWithClient(
-        <WorkflowStartPage payload={withImageOnlyAttachmentPolicy()} />,
-      );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Add images to Step 1" }),
+    );
+    fireEvent.change(await screen.findByLabelText("Step 1 image file picker"), {
+      target: { files: [file] },
+    });
 
-      const file = new File(["fake image"], "wireframe.png", {
-        type: "image/png",
-      });
-      fireEvent.click(
-        await screen.findByRole("button", { name: "Add images to Step 1" }),
-      );
-      fireEvent.change(await screen.findByLabelText("Step 1 image file picker"), {
-        target: { files: [file] },
-      });
-
-      const preview = await screen.findByAltText(
-        "Preview of Step 1 attachment wireframe.png",
-      );
-      fireEvent.error(preview);
-
-      expect(
-        await screen.findByText(
-          "Step 1: Preview unavailable for wireframe.png. Attachment metadata remains available.",
-        ),
-      ).toBeTruthy();
-      expect(screen.getByText("wireframe.png")).toBeTruthy();
-      expect(
-        screen.getByRole("button", {
-          name: "Remove Step 1 attachment wireframe.png",
-        }),
-      ).toBeTruthy();
-    } finally {
-      Object.defineProperty(URL, "createObjectURL", {
-        configurable: true,
-        value: originalCreateObjectUrl,
-      });
-    }
+    expect(await screen.findByText("wireframe.png")).toBeTruthy();
+    expect(
+      screen.queryByAltText("Preview of Step 1 attachment wireframe.png"),
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", {
+        name: "Remove Step 1 attachment wireframe.png",
+      }),
+    ).toBeTruthy();
   });
 
   it("uploads an objective-scoped attachment only as a task input attachment", async () => {
