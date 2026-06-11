@@ -11,6 +11,7 @@ import os
 
 from temporalio import activity
 
+from moonmind.config.settings import settings
 from moonmind.jules.runtime import build_runtime_gate_state, JULES_RUNTIME_DISABLED_MESSAGE
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
@@ -29,6 +30,11 @@ from moonmind.workflows.adapters.jules_client import JulesClient
 logger = logging.getLogger(__name__)
 
 _JULES_FALLBACK_ANSWER = "Proceed with your recommendation."
+
+
+def _blocked_message_error(surface: str, diagnostics: list[str]) -> str:
+    joined = "; ".join(diagnostics) if diagnostics else surface
+    return f"Blocked outbound message send: {joined}"
 
 def _build_client() -> JulesClient:
     """Build a ``JulesClient`` from environment config.
@@ -68,6 +74,7 @@ def _scan_jules_message_before_send(prompt: str, *, surface: str) -> None:
     result = scan_outbound_text(
         prompt,
         location=surface,
+        settings=settings,
     )
     if result.allowed:
         return
@@ -178,11 +185,11 @@ async def jules_send_message_activity(payload: dict) -> AgentRunStatus:
             f"Invalid payload for jules_send_message_activity: {exc}"
         ) from exc
 
-    adapter = _build_adapter()
     _scan_jules_message_before_send(
         validated.prompt,
         surface="jules.send_message.prompt",
     )
+    adapter = _build_adapter()
     return await adapter.send_message(
         run_id=validated.session_id,
         prompt=validated.prompt,
@@ -245,12 +252,23 @@ async def jules_answer_question_activity(payload: dict) -> dict:
     answer = await _generate_llm_answer(clarification_prompt)
 
     # Send the generated answer back to Jules
+    scan = scan_outbound_text(
+        answer,
+        location="jules.answer_question.answer",
+        settings=settings,
+    )
+    if not scan.allowed:
+        return {
+            "answered": False,
+            "answer": redact_sensitive_text(answer),
+            "error": _blocked_message_error(
+                "jules.answer_question.answer",
+                scan.sanitized_diagnostics,
+            ),
+        }
+
     client = _build_client()
     try:
-        _scan_jules_message_before_send(
-            answer,
-            surface="jules.answer_question.answer",
-        )
         await client.send_message(
             JulesSendMessageRequest(
                 session_id=session_id,

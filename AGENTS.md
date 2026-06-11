@@ -299,6 +299,8 @@ Key diagnostics:
 - N/A; deterministic runtime contracts and settings only (001-high-security-outbound-scan)
 - Python 3.12 with Pydantic v2 and Temporal Python SDK. + Temporal Python SDK activities, existing `TemporalActivityCatalog`, `TemporalAgentRuntimeActivities`, Docker workload launcher/registry substrate, artifact service helpers, existing PentestGPT Pydantic contracts in `moonmind/integrations/pentest/models.py`. (001-pentest-activity-handler)
 - Existing artifact store and workflow history only; no new persistent database tables planned. (001-pentest-activity-handler)
+- Python 3.12 + Pydantic v2, FastAPI, Temporal Python SDK, `httpx`, existing MoonMind outbound scan and redaction helpers (001-scan-message-send)
+- No new persistent storage; diagnostics are returned/logged through existing activity/API/workflow update failure result paths (001-scan-message-send)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers

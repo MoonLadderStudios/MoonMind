@@ -13,6 +13,9 @@ from api_service.api.routers.chat import (
     _extract_openai_response_text,
     _normalize_openai_response_payload,
     _response_content_to_text,
+    handle_anthropic_request,
+    handle_google_request,
+    handle_openai_request,
     responses_router,
     router as chat_router,
 )
@@ -391,6 +394,145 @@ def test_chat_completions_google_via_cache(
     )
     mock_google_chat_model_instance.generate_content.assert_called_once()
     # No mock_is_enabled_google to assert anymore
+
+
+@pytest.mark.asyncio
+@patch("api_service.api.routers.chat.AsyncOpenAI")
+async def test_handle_openai_request_blocks_secret_before_provider_call(
+    mock_async_openai_client,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings_in_chat_router.security, "high_security_mode", True)
+    settings_in_chat_router.openai.openai_enabled = True
+    request = ChatCompletionRequest(
+        model="gpt-3.5-turbo",
+        messages=[Message(role="user", content="Use token=blocked-secret-value")],
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        await handle_openai_request(
+            request,
+            request.messages,
+            "gpt-3.5-turbo",
+            "sk-test-openai-key",
+        )
+
+    assert "chat.openai.messages[0].content" in str(exc_info.value)
+    assert "blocked-secret-value" not in str(exc_info.value)
+    mock_async_openai_client.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("api_service.api.routers.chat.get_google_model")
+async def test_handle_google_request_blocks_secret_before_provider_call(
+    mock_get_google_model,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings_in_chat_router.security, "high_security_mode", True)
+    settings_in_chat_router.google.google_enabled = True
+    request = ChatCompletionRequest(
+        model="models/gemini-pro",
+        messages=[Message(role="user", content="Use token=blocked-secret-value")],
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        await handle_google_request(
+            request,
+            request.messages,
+            "models/gemini-pro",
+            "test-google-key",
+        )
+
+    assert "chat.google.messages[0].content" in str(exc_info.value)
+    assert "blocked-secret-value" not in str(exc_info.value)
+    mock_get_google_model.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("api_service.api.routers.chat.AnthropicFactory.create_anthropic_model")
+async def test_handle_anthropic_request_blocks_secret_before_provider_call(
+    mock_create_anthropic_model,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings_in_chat_router.security, "high_security_mode", True)
+    settings_in_chat_router.anthropic.anthropic_enabled = True
+    request = ChatCompletionRequest(
+        model="claude-test",
+        messages=[Message(role="user", content="Use token=blocked-secret-value")],
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        await handle_anthropic_request(
+            request,
+            request.messages,
+            "claude-test",
+            "test-anthropic-key",
+        )
+
+    assert "chat.anthropic.messages[0].content" in str(exc_info.value)
+    assert "blocked-secret-value" not in str(exc_info.value)
+    mock_create_anthropic_model.assert_not_called()
+
+
+def test_chat_outbound_scan_allows_clean_messages_with_high_security(monkeypatch):
+    from api_service.api.routers.chat import _scan_chat_messages_before_send
+
+    monkeypatch.setattr(settings_in_chat_router.security, "high_security_mode", True)
+
+    _scan_chat_messages_before_send(
+        [Message(role="user", content="Use the documented provider profile.")],
+        surface="chat.openai",
+    )
+
+
+def test_chat_outbound_scan_blocks_dict_messages_with_high_security(monkeypatch):
+    from api_service.api.routers.chat import _scan_chat_messages_before_send
+
+    monkeypatch.setattr(settings_in_chat_router.security, "high_security_mode", True)
+
+    with pytest.raises(Exception) as exc_info:
+        _scan_chat_messages_before_send(
+            [{"role": "user", "content": "Please use token=blocked-secret-value"}],
+            surface="chat.openai",
+        )
+
+    assert "chat.openai.messages[0].content" in str(exc_info.value)
+    assert "blocked-secret-value" not in str(exc_info.value)
+
+
+@patch("api_service.api.routers.chat.get_rag_context", new_callable=AsyncMock)
+@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
+@patch("api_service.api.routers.chat.get_openai_model")
+@patch("api_service.api.routers.chat.AsyncOpenAI")
+def test_responses_endpoint_blocks_secret_before_openai_provider_call(
+    mock_async_openai_client,
+    mock_get_openai_model,
+    mock_get_user_api_key_helper,
+    mock_get_provider,
+    mock_get_rag_context,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings_in_chat_router.security, "high_security_mode", True)
+    settings_in_chat_router.openai.openai_enabled = True
+    mock_get_provider.return_value = "OpenAI"
+    mock_get_user_api_key_helper.return_value = "sk-test-user-key"
+    mock_get_openai_model.return_value = "gpt-4.1"
+    mock_get_rag_context.return_value = ""
+
+    response = client.post(
+        "/responses",
+        json={
+            "model": "gpt-4.1",
+            "input": "Use token=blocked-secret-value",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "chat.openai.responses.messages[0].content" in response.json()["detail"]
+    assert "blocked-secret-value" not in response.json()["detail"]
+    mock_async_openai_client.assert_not_called()
+
 
 # Refined Google Error Handling Tests
 @patch("google.generativeai.configure")

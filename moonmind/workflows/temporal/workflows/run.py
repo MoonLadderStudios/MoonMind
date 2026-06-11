@@ -10675,7 +10675,8 @@ class MoonMindRunWorkflow:
     def validate_send_message(self, payload: dict[str, Any] | None = None) -> None:
         if self._state in (STATE_COMPLETED, STATE_CANCELED, STATE_FAILED):
             raise ValueError("Cannot send a message to a completed workflow.")
-        if self._extract_operator_message(payload) is None:
+        message = self._extract_operator_message(payload)
+        if message is None:
             raise ValueError("message is required when sending an operator message.")
 
     @workflow.update(name="Cancel")
