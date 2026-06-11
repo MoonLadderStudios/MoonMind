@@ -4461,7 +4461,11 @@ class TemporalAgentRuntimeActivities:
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         redacted_text = redact_sensitive_text(str(text))
-        target.write_bytes(redacted_text.encode("utf-8"))
+        # Redaction is applied immediately above; this sink intentionally persists
+        # only the scrubbed artifact body.
+        target.write_bytes(  # lgtm [py/clear-text-storage-sensitive-data]
+            redacted_text.encode("utf-8")
+        )
 
     @staticmethod
     def _write_pentest_json(
