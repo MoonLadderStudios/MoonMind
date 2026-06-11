@@ -4395,7 +4395,7 @@ class TemporalAgentRuntimeActivities:
             return {"status": "skipped", "reason": "no_channels"}
 
         scan_event = _build_execution_notification_payload(payload, redact=False)
-        event = redact_sensitive_payload(scan_event)
+        event = _build_execution_notification_payload(payload, redact=True)
         results: list[dict[str, str]] = []
         errors: list[dict[str, str]] = []
         timeout_seconds = max(1, int(notification_settings.timeout_seconds or 5))
@@ -4487,7 +4487,7 @@ class TemporalAgentRuntimeActivities:
                     )
         if errors and not results:
             if all(
-                error["reason"].startswith("Blocked outbound content:")
+                error["reason"].startswith("Blocked outbound content")
                 for error in errors
             ):
                 if len(errors) == 1:
