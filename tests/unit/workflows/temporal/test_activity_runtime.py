@@ -1556,6 +1556,7 @@ async def test_pentest_settings_parse_safe_policy_csv_values():
         MOONMIND_PENTEST_ALLOWED_OPERATION_MODES="recon_only,validate_hypothesis",
         MOONMIND_PENTEST_ALLOWED_EVIDENCE_LEVELS="minimal,standard",
         MOONMIND_PENTEST_MAX_TIME_BUDGET_MINUTES="120",
+        MOONMIND_PENTEST_PROVIDER_LEASE_SECONDS="",
     )
 
     assert parsed.enabled is True
@@ -1566,6 +1567,7 @@ async def test_pentest_settings_parse_safe_policy_csv_values():
     assert parsed.allowed_operation_modes == ("recon_only", "validate_hypothesis")
     assert parsed.allowed_evidence_levels == ("minimal", "standard")
     assert parsed.max_time_budget_minutes == 120
+    assert parsed.provider_lease_seconds is None
     assert (
         PentestSettings.model_fields["enabled"].json_schema_extra["moonmind"][
             "expose"

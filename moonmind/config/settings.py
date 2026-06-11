@@ -1603,6 +1603,7 @@ class PentestSettings(BaseSettings):
         "provider_profiles_file",
         "anthropic_secret_id",
         "openrouter_secret_id",
+        "provider_lease_seconds",
         mode="before",
     )
     @classmethod

@@ -51,7 +51,7 @@ def _normalize_secret_ref_input(
             return f"db://{secret_id}"
         if secret_id and not backend_type:
             return secret_id
-        raise ValueError(f"{field_name} mapping must include a secret reference")
+        raise ValueError(f"{field_name} must be a string secret reference")
     if not isinstance(ref, str):
         raise ValueError(
             f"{field_name} must be a string secret reference, got {type(ref).__name__}"
