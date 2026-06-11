@@ -846,7 +846,6 @@ services:
       - ./api_service:/app/api_service:ro
       - ./docs/ReleaseNotes:/app/docs/ReleaseNotes:ro
       - ./model_data:/app/model_data:ro
-      - ./api_service:/app/api_service:ro
       - moonmind_secrets:/app/var/secrets
       - ./init_db:/app/init_db
     command: sh /app/init_db/init_db_entrypoint.sh
