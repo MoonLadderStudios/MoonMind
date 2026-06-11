@@ -8,7 +8,6 @@ import { ExecutionStatusPill } from '../components/ExecutionStatusPill';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
 
 const POLL_MS_DEFAULT = 5000;
-const METRICS_SAMPLE_SIZE = 500;
 
 type ListDashboardConfig = {
   pollIntervalsMs?: { list?: number };
@@ -140,34 +139,6 @@ const ExecutionListResponseSchema = z.object({
 
 type ExecutionRow = z.infer<typeof ExecutionRowSchema>;
 
-const ExecutionMetricsResponseSchema = z.object({
-  totalRuns: z.number().optional(),
-  completedRuns: z.number().optional(),
-  failedRuns: z.number().optional(),
-  canceledRuns: z.number().optional(),
-  terminalRuns: z.number().optional(),
-  successRate: z.number().nullable().optional(),
-  duration: z
-    .object({
-      averageSeconds: z.number().nullable().optional(),
-      medianSeconds: z.number().nullable().optional(),
-      observedCount: z.number().optional(),
-    })
-    .optional(),
-  cost: z
-    .object({
-      totalEstimateUsd: z.number().optional(),
-      averageEstimateUsd: z.number().nullable().optional(),
-      observedCount: z.number().optional(),
-    })
-    .optional(),
-  sampleSize: z.number().optional(),
-  countMode: z.string().optional(),
-  refreshedAt: z.string().optional(),
-});
-
-type ExecutionMetricsResponse = z.infer<typeof ExecutionMetricsResponseSchema>;
-
 function rowWorkflowId(row: ExecutionRow): string {
   return row.workflowId || row.taskId || '';
 }
@@ -217,7 +188,7 @@ function hasUnsupportedWorkflowScopeState(params: URLSearchParams): boolean {
   const workflowType = (params.get('workflowType') || '').trim();
   const entry = (params.get('entry') || '').trim().toLowerCase();
   return Boolean(
-    (scope && scope !== 'tasks') ||
+    scope ||
       (workflowType && workflowType !== TASK_WORKFLOW_TYPE) ||
       (entry && entry !== TASK_ENTRY),
   );
@@ -247,35 +218,6 @@ function displayTemporalCount(count: number | null | undefined, countMode: strin
     return '';
   }
   return countMode && countMode !== 'exact' ? `${count} (${countMode})` : String(count);
-}
-
-function formatPercent(value: number | null | undefined): string {
-  if (typeof value !== 'number' || Number.isNaN(value)) return '—';
-  return new Intl.NumberFormat('en-US', {
-    style: 'percent',
-    maximumFractionDigits: 1,
-  }).format(value);
-}
-
-function formatDuration(seconds: number | null | undefined): string {
-  if (typeof seconds !== 'number' || Number.isNaN(seconds) || seconds < 0) return '—';
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-
-  const roundedSeconds = Math.round(seconds);
-  const hours = Math.floor(roundedSeconds / 3600);
-  const minutes = Math.floor((roundedSeconds % 3600) / 60);
-  const remainingSeconds = roundedSeconds % 60;
-  if (hours > 0) return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
-  return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
-}
-
-function formatUsd(value: number | null | undefined): string {
-  if (typeof value !== 'number' || Number.isNaN(value)) return '—';
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    maximumFractionDigits: value >= 10 ? 2 : 4,
-  }).format(value);
 }
 
 function sortRows(rows: ExecutionRow[], field: string, direction: 'asc' | 'desc'): ExecutionRow[] {
@@ -354,7 +296,7 @@ async function taskListErrorMessage(response: Response): Promise<string> {
     // Fall back to status text below when the body is empty or not JSON.
   }
   const statusText = sanitizeApiErrorMessage(response.statusText || '');
-  return statusText ? `Failed to fetch: ${statusText}` : 'Failed to fetch tasks.';
+  return statusText ? `Failed to fetch: ${statusText}` : 'Failed to fetch workflows.';
 }
 
 function emptyValueFilter(): ValueFilter {
@@ -720,27 +662,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     listCursor,
   ] as const;
 
-  const metricsQuery = useQuery({
-    queryKey: ['workflow-list', 'operational-metrics', filters] as const,
-    enabled: listEnabled && filterValidationErrors.length === 0,
-    queryFn: async (): Promise<ExecutionMetricsResponse> => {
-      const params = new URLSearchParams();
-      params.set('source', 'temporal');
-      params.set('scope', 'tasks');
-      params.set('sampleSize', String(METRICS_SAMPLE_SIZE));
-      appendFilterParams(params, filters);
-      const response = await fetch(`${payload.apiBase}/executions/metrics?${params}`, {
-        credentials: 'include',
-      });
-      if (!response.ok) {
-        throw new Error(`Failed to fetch operational metrics: ${response.statusText}`);
-      }
-      return ExecutionMetricsResponseSchema.parse(await response.json());
-    },
-    refetchInterval: liveUpdates && listEnabled && !openFilter ? listPollMs : false,
-    retry: false,
-  });
-
   const { data, isLoading, isError, error } = useQuery({
     queryKey,
     enabled: listEnabled && filterValidationErrors.length === 0,
@@ -748,7 +669,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       const params = new URLSearchParams();
       params.set('source', 'temporal');
       params.set('pageSize', String(pageSize));
-      params.set('scope', 'tasks');
       if (listCursor) params.set('nextPageToken', listCursor);
       appendFilterParams(params, filters);
       const response = await fetch(`${payload.apiBase}/executions?${params}`);
@@ -773,7 +693,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       params.set('source', 'temporal');
       params.set('facet', openFacet as string);
       params.set('pageSize', '50');
-      params.set('scope', 'tasks');
       appendFilterParams(params, filters);
       const response = await fetch(`${payload.apiBase}/executions/facets?${params}`);
       if (!response.ok) {
@@ -973,10 +892,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     [filters],
   );
   const hasActiveFilters = activeFilters.length > 0;
-  const metrics = metricsQuery.data;
-  const metricsRefreshedAt = metrics?.refreshedAt
-    ? formatWhen(metrics.refreshedAt)
-    : '—';
   const toggleFilter = useCallback((field: FilterField) => {
     setOpenFilter((current) => (current === field ? null : field));
   }, []);
@@ -1510,7 +1425,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
           <div
             id="workflow-list-mobile-filter-panel"
             className={`workflow-list-mobile-filter-controls${mobileFiltersOpen ? ' is-open' : ''}`}
-            aria-label="Mobile task filters"
+            aria-label="Mobile workflow filters"
           >
             {TABLE_COLUMNS.map(([field]) =>
               isFilterField(field) ? <div key={field}>{renderFilterControl(field, 'Mobile ')}</div> : null,
@@ -1526,43 +1441,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
         <header className="workflow-list-results-header">
           <h2 className="page-title" id="workflow-list-title">Workflows</h2>
         </header>
-        <section className="workflow-list-metrics" aria-label="Operational metrics">
-          {metricsQuery.isError ? (
-            <div className="notice warning workflow-list-metrics-notice">
-              Operational metrics are unavailable.
-            </div>
-          ) : null}
-          {!metricsQuery.isLoading && !metricsQuery.isError && metrics ? (
-            <>
-              <dl className="workflow-list-metrics-grid">
-                <div className="workflow-list-metric-tile">
-                  <dt>Runs</dt>
-                  <dd>{String(metrics.totalRuns ?? 0)}</dd>
-                  <p>{metrics.terminalRuns ?? 0} terminal from {metrics.sampleSize ?? 0} sampled</p>
-                </div>
-                <div className="workflow-list-metric-tile">
-                  <dt>Success Rate</dt>
-                  <dd>{formatPercent(metrics.successRate)}</dd>
-                  <p>{metrics.completedRuns ?? 0} completed, {metrics.failedRuns ?? 0} failed</p>
-                </div>
-                <div className="workflow-list-metric-tile">
-                  <dt>Run Duration</dt>
-                  <dd>{formatDuration(metrics.duration?.averageSeconds)}</dd>
-                  <p>Median {formatDuration(metrics.duration?.medianSeconds)} across {metrics.duration?.observedCount ?? 0} runs</p>
-                </div>
-                <div className="workflow-list-metric-tile">
-                  <dt>Cost</dt>
-                  <dd>{formatUsd(metrics.cost?.totalEstimateUsd)}</dd>
-                  <p>Average {formatUsd(metrics.cost?.averageEstimateUsd)} across {metrics.cost?.observedCount ?? 0} runs</p>
-                </div>
-              </dl>
-              <p className="small workflow-list-metrics-refreshed">
-                Refreshed {metricsRefreshedAt}
-                {metrics.countMode && metrics.countMode !== 'exact' ? ' · count estimate' : ''}
-              </p>
-            </>
-          ) : null}
-        </section>
         {isLoading ? (
           <p className="loading workflow-list-empty-message">Loading workflows...</p>
         ) : isError ? (
