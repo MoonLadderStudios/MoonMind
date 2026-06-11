@@ -4457,25 +4457,16 @@ class TemporalAgentRuntimeActivities:
             )
 
     @staticmethod
-    def _write_pentest_text(path: str, text: str) -> None:
-        target = Path(path)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        redacted_text = redact_sensitive_text(str(text))
-        # Redaction is applied immediately above; this sink intentionally persists
-        # only the scrubbed artifact body.
-        target.write_bytes(  # lgtm [py/clear-text-storage-sensitive-data]
-            redacted_text.encode("utf-8")
-        )
-
-    @staticmethod
     def _write_pentest_json(
         path: str,
         payload: Mapping[str, Any],
     ) -> None:
         redacted_payload = redact_sensitive_payload(dict(payload))
-        TemporalAgentRuntimeActivities._write_pentest_text(
-            path,
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
             json.dumps(redacted_payload, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
         )
 
     async def _resolve_pentest_secret_env(
@@ -4567,9 +4558,13 @@ class TemporalAgentRuntimeActivities:
             "runtime_paths": paths.model_dump(mode="json"),
             "provider_snapshot_ref": f"file:{paths.provider_snapshot_file}",
         }
-        self._write_pentest_text(
-            paths.instruction_file,
-            execution_materialization.instruction_bundle.content,
+        instruction_file = Path(paths.instruction_file)
+        instruction_file.parent.mkdir(parents=True, exist_ok=True)
+        instruction_file.write_text(
+            redact_sensitive_text(
+                execution_materialization.instruction_bundle.content
+            ),
+            encoding="utf-8",
         )
         self._write_pentest_json(paths.input_manifest_file, manifest)
         if request.approved_scope is not None:
@@ -4582,9 +4577,11 @@ class TemporalAgentRuntimeActivities:
             provider_snapshot_artifact["secret_env_keys"] = sorted(
                 provider_materialization.secret_env
             )
-        self._write_pentest_text(
-            paths.provider_snapshot_file,
+        provider_snapshot_file = Path(paths.provider_snapshot_file)
+        provider_snapshot_file.parent.mkdir(parents=True, exist_ok=True)
+        provider_snapshot_file.write_text(
             json.dumps(provider_snapshot_artifact, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
         )
         return {
             "input_manifest_ref": f"file:{paths.input_manifest_file}",
