@@ -21,6 +21,13 @@ depends_on: Union[str, Sequence[str], None] = None
 _TYPE_NAME = "temporalworkflowtype"
 
 
+def _postgresql_connection() -> sa.Connection | None:
+    connection = op.get_bind()
+    if connection is None or connection.dialect.name != "postgresql":
+        return None
+    return connection
+
+
 def _enum_labels(connection: sa.Connection) -> set[str]:
     rows = connection.execute(
         sa.text(
@@ -54,8 +61,8 @@ def _rename_enum_value_if_needed(
 
 
 def upgrade() -> None:
-    connection = op.get_bind()
-    if connection.dialect.name != "postgresql":
+    connection = _postgresql_connection()
+    if connection is None:
         return
 
     _rename_enum_value_if_needed(
@@ -71,17 +78,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    connection = op.get_bind()
-    if connection.dialect.name != "postgresql":
-        return
-
-    _rename_enum_value_if_needed(
-        connection,
-        old_value="MoonMind.UserWorkflow",
-        new_value="MoonMind.Run",
-    )
-    _rename_enum_value_if_needed(
-        connection,
-        old_value="MoonMind.ProviderProfileManager",
-        new_value="MoonMind.AuthProfileManager",
-    )
+    # Revision 314 already uses the workflow-native enum labels in the ORM and
+    # base migration, so reverting this label rename would leave downgraded
+    # databases incompatible with that revision's code.
+    return
