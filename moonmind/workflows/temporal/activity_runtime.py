@@ -1602,7 +1602,7 @@ def _build_execution_notification_email(
     message["Subject"] = f"MoonMind execution {status}: {workflow_id}"
     message.set_content(
         "MoonMind execution completed.\n\n"
-        + json.dumps(dict(event), indent=2, sort_keys=True)
+        + json.dumps(dict(event), default=str, indent=2, sort_keys=True)
         + "\n"
     )
     return message
@@ -1644,6 +1644,17 @@ def _send_execution_notification_email(
     smtp_use_ssl: bool,
     timeout_seconds: int,
 ) -> None:
+    scan_result = scan_outbound_text(
+        json.dumps(dict(event), default=str, sort_keys=True),
+        location="execution.notification.email.body",
+    )
+    if not scan_result.allowed:
+        diagnostics = "; ".join(scan_result.sanitized_diagnostics) or (
+            "Blocked outbound content at execution.notification.email.body"
+        )
+        raise TemporalActivityRuntimeError(
+            f"Outbound notification blocked by high security scan: {diagnostics}"
+        )
     message = _build_execution_notification_email(
         event,
         sender=sender,
@@ -4369,6 +4380,272 @@ class TemporalAgentRuntimeActivities:
                     "error_count": exc.error_count(),
                 },
             ) from exc
+
+    @staticmethod
+    def _validate_pentest_request_policy(
+        request: PentestWorkloadRequest,
+        scope: PentestApprovedScope,
+    ) -> None:
+        pentest_settings = settings.pentest
+        allowed_profiles = set(pentest_settings.allowed_runner_profiles)
+        if (
+            pentest_settings.allow_vpn_lab_profile
+            and pentest_settings.vpn_lab_profile_id
+        ):
+            allowed_profiles.add(pentest_settings.vpn_lab_profile_id)
+        if request.runner_profile_id not in allowed_profiles:
+            raise PentestLaunchPolicyError(
+                "Pentest runner profile is not enabled by deployment policy",
+                reason="runner_profile_disabled",
+                diagnostics={
+                    "runner_profile_id": request.runner_profile_id,
+                    "allowed_runner_profiles": sorted(allowed_profiles),
+                },
+            )
+        if request.operation_mode not in set(pentest_settings.allowed_operation_modes):
+            raise PentestLaunchPolicyError(
+                "Pentest operation mode is not enabled by deployment policy",
+                reason="operation_mode_disabled",
+                diagnostics={
+                    "operation_mode": request.operation_mode,
+                    "allowed_operation_modes": list(
+                        pentest_settings.allowed_operation_modes
+                    ),
+                },
+            )
+        if request.evidence_level not in set(pentest_settings.allowed_evidence_levels):
+            raise PentestLaunchPolicyError(
+                "Pentest evidence level is not enabled by deployment policy",
+                reason="evidence_level_disabled",
+                diagnostics={
+                    "evidence_level": request.evidence_level,
+                    "allowed_evidence_levels": list(
+                        pentest_settings.allowed_evidence_levels
+                    ),
+                },
+            )
+        if request.time_budget_minutes > pentest_settings.max_time_budget_minutes:
+            raise PentestLaunchPolicyError(
+                "Pentest time budget exceeds deployment policy",
+                reason="time_budget_exceeded",
+                diagnostics={
+                    "time_budget_minutes": request.time_budget_minutes,
+                    "max_time_budget_minutes": pentest_settings.max_time_budget_minutes,
+                },
+            )
+        if (
+            scope.target_class == "external_authorized"
+            and not pentest_settings.allow_external_targets
+        ):
+            raise PentestScopeValidationError(
+                error_code="UNAPPROVED_TARGET",
+                reasons=("external_targets_disabled",),
+                diagnostics={
+                    "scope_id": scope.scope_id,
+                    "target": request.target,
+                    "target_class": scope.target_class,
+                },
+            )
+        if (
+            scope.target_class == "external_authorized"
+            and pentest_settings.require_manual_approval_for_external
+            and not scope.approval_recorded
+        ):
+            raise PentestScopeValidationError(
+                error_code="UNAPPROVED_TARGET",
+                reasons=("external_target_manual_approval_required",),
+                diagnostics={"scope_id": scope.scope_id, "target": request.target},
+            )
+        if (
+            request.operation_mode == "full_authorized"
+            and pentest_settings.require_manual_approval_for_full_authorized
+            and not scope.approval_recorded
+        ):
+            raise PentestScopeValidationError(
+                error_code="UNAPPROVED_TARGET",
+                reasons=("full_authorized_manual_approval_required",),
+                diagnostics={"scope_id": scope.scope_id, "target": request.target},
+            )
+
+    @staticmethod
+    def _write_pentest_json(
+        path: str,
+        payload: Mapping[str, Any],
+    ) -> None:
+        redacted_payload = redact_sensitive_payload(dict(payload))
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps(redacted_payload, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    async def _resolve_pentest_secret_env(
+        self,
+        provider_materialization: Any,
+    ) -> tuple[dict[str, str], tuple[str, ...]]:
+        resolved: dict[str, str] = {}
+        missing: list[str] = []
+        for env_key, logical_ref in provider_materialization.secret_env.items():
+            ambient = str(os.environ.get(env_key, "") or "").strip()
+            if ambient:
+                resolved[env_key] = ambient
+                continue
+
+            secret_ref_config = provider_materialization.secret_refs.get(logical_ref)
+            candidate_refs: list[str | Mapping[str, Any]] = []
+            if isinstance(secret_ref_config, str):
+                candidate_refs.append(secret_ref_config)
+            elif isinstance(secret_ref_config, Mapping):
+                candidate_refs.append(secret_ref_config)
+                for key in ("secret_ref", "secretRef", "secret_id", "secretId"):
+                    value = str(secret_ref_config.get(key) or "").strip()
+                    if value:
+                        candidate_refs.append(value)
+            for candidate in candidate_refs:
+                if isinstance(candidate, str) and not re.match(
+                    r"^[a-z][a-z0-9+.-]*://", candidate
+                ):
+                    continue
+                try:
+                    resolved_value = await resolve_managed_api_key_reference(
+                        candidate,
+                        field_name=f"pentest.{env_key}",
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to resolve PentestGPT configured secret reference",
+                    )
+                    continue
+                if str(resolved_value or "").strip():
+                    resolved[env_key] = str(resolved_value)
+                    break
+            if env_key not in resolved:
+                missing.append(env_key)
+        return resolved, tuple(missing)
+
+    def _materialize_pentest_input_files(
+        self,
+        *,
+        request: PentestWorkloadRequest,
+        launch_plan: Any,
+        provider_materialization: Any,
+        execution_materialization: Any,
+        provider_lease: Mapping[str, Any],
+        missing_secret_env_keys: Sequence[str],
+    ) -> dict[str, Any]:
+        paths = execution_materialization.runtime_paths
+        provider_snapshot = {
+            "profile_id": provider_materialization.profile_id,
+            "provider_id": provider_materialization.provider_id,
+            "runtime_id": provider_materialization.runtime_id,
+            "force_non_interactive": provider_materialization.force_non_interactive,
+            "env_keys": sorted(provider_materialization.env),
+            "secret_env_keys": sorted(provider_materialization.secret_env),
+            "secret_env_key_count": len(provider_materialization.secret_env),
+            "missing_secret_env_keys": sorted(missing_secret_env_keys),
+            "missing_secret_env_key_count": len(missing_secret_env_keys),
+            "lease": dict(provider_lease),
+            "telemetry_enabled": settings.pentest.telemetry_enabled,
+        }
+        manifest = {
+            "tool_name": "security.pentest.run",
+            "tool_version": "1.0.0",
+            "agent_run_id": request.agent_run_id,
+            "step_id": request.step_id,
+            "attempt": request.attempt,
+            "target": request.target,
+            "scope_artifact_ref": request.scope_artifact_ref,
+            "operation_mode": request.operation_mode,
+            "runner_profile_id": request.runner_profile_id,
+            "execution_profile_ref": request.execution_profile_ref,
+            "time_budget_minutes": request.time_budget_minutes,
+            "evidence_level": request.evidence_level,
+            "launch_plan": {
+                "profile_id": launch_plan.profile_id,
+                "image": launch_plan.image,
+                "network_policy": launch_plan.network_policy,
+                "timeout_seconds": launch_plan.timeout_seconds,
+                "labels": dict(launch_plan.labels),
+            },
+            "runtime_paths": paths.model_dump(mode="json"),
+            "provider_snapshot_ref": f"file:{paths.provider_snapshot_file}",
+        }
+        instruction_file = Path(paths.instruction_file)
+        instruction_file.parent.mkdir(parents=True, exist_ok=True)
+        instruction_file.write_text(
+            redact_sensitive_text(
+                execution_materialization.instruction_bundle.content
+            ),
+            encoding="utf-8",
+        )
+        self._write_pentest_json(paths.input_manifest_file, manifest)
+        if request.approved_scope is not None:
+            self._write_pentest_json(
+                paths.approved_scope_file,
+                request.approved_scope.model_dump(mode="json"),
+            )
+        provider_snapshot_artifact = {
+            "profile_id": str(provider_materialization.profile_id),
+            "provider_id": str(provider_materialization.provider_id),
+            "runtime_id": str(provider_materialization.runtime_id),
+            "force_non_interactive": bool(
+                provider_materialization.force_non_interactive
+            ),
+            "env_keys": sorted(provider_materialization.env),
+            "credential_env_key_count": len(provider_materialization.secret_env),
+            "missing_credential_env_key_count": len(missing_secret_env_keys),
+            "lease": dict(provider_lease),
+            "telemetry_enabled": settings.pentest.telemetry_enabled,
+        }
+        provider_snapshot_file = Path(paths.provider_snapshot_file)
+        provider_snapshot_file.parent.mkdir(parents=True, exist_ok=True)
+        provider_snapshot_file.write_text(
+            json.dumps(provider_snapshot_artifact, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return {
+            "input_manifest_ref": f"file:{paths.input_manifest_file}",
+            "approved_scope_snapshot_ref": f"file:{paths.approved_scope_file}",
+            "provider_snapshot_ref": f"file:{paths.provider_snapshot_file}",
+            "provider_snapshot": provider_snapshot,
+        }
+
+    @staticmethod
+    def _load_pentest_runner_findings(path: str) -> dict[str, Any] | None:
+        try:
+            payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, Mapping):
+            return None
+        normalized = redact_sensitive_payload(dict(payload))
+        findings = normalized.get("findings")
+        if not isinstance(findings, list):
+            normalized["findings"] = []
+        else:
+            normalized["findings"] = [
+                item for item in findings if isinstance(item, Mapping)
+            ]
+        summary = normalized.get("summary")
+        if not isinstance(summary, Mapping):
+            confirmed = sum(
+                1
+                for item in normalized["findings"]
+                if str(item.get("confidence") or "") == "confirmed"
+            )
+            high_or_critical = sum(
+                1
+                for item in normalized["findings"]
+                if str(item.get("severity") or "") in {"high", "critical"}
+            )
+            normalized["summary"] = {
+                "findings_count": len(normalized["findings"]),
+                "confirmed_findings_count": confirmed,
+                "high_or_critical_count": high_or_critical,
+            }
+        return dict(normalized)
+
     async def execution_notify_completion(
         self,
         request: Any = None,
@@ -5045,7 +5322,7 @@ class TemporalAgentRuntimeActivities:
         enabled = _coerce_bool(
             policy_payload.get(
                 "pentest_enabled",
-                os.environ.get("MOONMIND_PENTEST_ENABLED"),
+                settings.pentest.enabled,
             ),
             default=False,
         )
@@ -5091,6 +5368,13 @@ class TemporalAgentRuntimeActivities:
                 )
                 request_payload["scope_artifact_loaded"] = True
             request = PentestWorkloadRequest.model_validate(request_payload)
+            if request.approved_scope is None:
+                raise PentestScopeValidationError(
+                    error_code="INVALID_SCOPE",
+                    reasons=("missing_approved_scope",),
+                    diagnostics={"scope_artifact_ref": request.scope_artifact_ref},
+                )
+            self._validate_pentest_request_policy(request, request.approved_scope)
             launch_plan = build_pentest_launch_plan(request)
             provider_profile = resolve_pentest_provider_profile(
                 execution_profile_ref=request.execution_profile_ref,
@@ -5103,12 +5387,18 @@ class TemporalAgentRuntimeActivities:
             execution_materialization = build_pentest_execution_materialization(
                 request
             )
+            resolved_secret_env, missing_secret_env_keys = (
+                await self._resolve_pentest_secret_env(provider_materialization)
+            )
         except (
             PentestScopeValidationError,
             PentestLaunchPolicyError,
             PentestProviderMaterializationError,
         ) as exc:
-            diagnostics = getattr(exc, "diagnostics", {})
+            diagnostics = dict(getattr(exc, "diagnostics", {}) or {})
+            reason_code = getattr(exc, "reason", None)
+            if reason_code:
+                diagnostics["policy_reason"] = str(reason_code)
             return structured_failure(
                 status="validation_failed",
                 target=str(request_payload.get("target") or "") or None,
@@ -5120,18 +5410,40 @@ class TemporalAgentRuntimeActivities:
             )
         output = launch_plan.to_activity_output(request)
         output["provider_profile"] = provider_materialization.model_dump(mode="json")
-        output["provider_lease"] = pentest_provider_lease_metadata(provider_profile)
+        provider_lease = pentest_provider_lease_metadata(provider_profile)
+        output["provider_lease"] = provider_lease
         execution_metadata = execution_materialization.model_dump(mode="json")
         execution_metadata["instruction_bundle"].pop("content", None)
         execution_metadata["instruction_bundle"].pop("objective", None)
         output.update(execution_metadata)
+        try:
+            output.update(
+                self._materialize_pentest_input_files(
+                    request=request,
+                    launch_plan=launch_plan,
+                    provider_materialization=provider_materialization,
+                    execution_materialization=execution_materialization,
+                    provider_lease=provider_lease,
+                    missing_secret_env_keys=missing_secret_env_keys,
+                )
+            )
+        except OSError as exc:
+            output.update(
+                structured_failure(
+                    status="failed",
+                    target=request.target,
+                    failure_kind="transient_infrastructure",
+                    interaction_state="pre_interaction",
+                    phase="materializing_inputs",
+                    reason=str(exc),
+                    diagnostics={"materialization": "input_file_write_failed"},
+                )
+            )
+            return output
         publication = build_pentest_publication_result(
             request,
             findings=list(publication_payload.get("findings") or ()),
-            provider_snapshot_available=_coerce_bool(
-                publication_payload.get("provider_snapshot_available"),
-                default=False,
-            ),
+            provider_snapshot_available=True,
             wrapper_log_available=_coerce_bool(
                 publication_payload.get("wrapper_log_available"),
                 default=False,
@@ -5188,6 +5500,7 @@ class TemporalAgentRuntimeActivities:
             "command": list(execution_materialization.wrapper_invocation.command),
             "envOverrides": {
                 **provider_materialization.env,
+                **resolved_secret_env,
                 **execution_materialization.wrapper_invocation.env,
             },
             "timeoutSeconds": launch_plan.timeout_seconds,
@@ -5263,6 +5576,12 @@ class TemporalAgentRuntimeActivities:
 
         workload_dump = workload_result.model_dump(mode="json", by_alias=True)
         output["workload_result"] = workload_dump
+        runner_findings = self._load_pentest_runner_findings(
+            execution_materialization.runtime_paths.normalizer_input_file
+        )
+        if runner_findings is not None:
+            publication["normalized_findings"] = runner_findings
+            output["normalized_findings"] = runner_findings
         output_refs = workload_result.output_refs or {}
         stdout_ref = workload_result.stdout_ref or _artifact_ref_for_pentest_name(
             publication, "runtime.stdout"
@@ -5287,6 +5606,12 @@ class TemporalAgentRuntimeActivities:
             publication, "report.evidence"
         )
         finding_summary = publication["normalized_findings"]["summary"]
+        severity_counts: dict[str, int] = {}
+        for finding in publication["normalized_findings"].get("findings", []):
+            if not isinstance(finding, Mapping):
+                continue
+            severity = str(finding.get("severity") or "informational").strip()
+            severity_counts[severity] = severity_counts.get(severity, 0) + 1
 
         if workload_result.status != "succeeded":
             terminal_reason = (
@@ -5342,6 +5667,35 @@ class TemporalAgentRuntimeActivities:
         output["summary_ref"] = summary_ref
         output["structured_ref"] = structured_ref
         output["evidence_refs"] = [evidence_ref]
+        output["report_type"] = "security_pentest_report"
+        output["report_scope"] = "final"
+        output["sensitivity"] = {
+            "classification": "security_restricted",
+            "redaction_level": "restricted",
+            "contains_pentest_evidence": True,
+            "raw_observability_artifacts": [
+                "runtime.stdout",
+                "runtime.stderr",
+                "runtime.diagnostics",
+            ],
+        }
+        output["severity_counts"] = severity_counts
+        output["report_bundle"] = {
+            "report_bundle_v": 1,
+            "primary_report_ref": primary_ref,
+            "summary_ref": summary_ref,
+            "structured_ref": structured_ref,
+            "evidence_refs": [evidence_ref],
+            "report_type": "security_pentest_report",
+            "report_scope": "final",
+            "sensitivity": output["sensitivity"],
+            "findings_count": finding_summary["findings_count"],
+            "confirmed_findings_count": finding_summary[
+                "confirmed_findings_count"
+            ],
+            "high_or_critical_count": finding_summary["high_or_critical_count"],
+            "severity_counts": severity_counts,
+        }
         output["execution_policy"] = execution_policy.model_dump(mode="json")
         output["terminal_cleanup"] = cleanup(
             terminal_reason="success",

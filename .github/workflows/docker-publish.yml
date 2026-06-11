@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image_name: ${{ steps.meta.outputs.image_name }}
+      pentest_image_name: ${{ steps.meta.outputs.pentest_image_name }}
       version_tag: ${{ steps.meta.outputs.version_tag }}
     steps:
       - name: Generate image metadata
@@ -23,6 +24,7 @@ jobs:
           IMAGE_NAME="${{ env.REGISTRY_IMAGE }}"
           IMAGE_NAME="$(printf '%s' "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')"
           echo "image_name=${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "pentest_image_name=${IMAGE_NAME}-pentestgpt" >> "$GITHUB_OUTPUT"
 
   build:
     needs: metadata
@@ -168,3 +170,131 @@ jobs:
         run: |
           IMAGE_NAME="${{ needs.metadata.outputs.image_name }}"
           docker buildx imagetools inspect "${IMAGE_NAME}:latest"
+
+  build-pentestgpt:
+    needs: metadata
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare runner build metadata
+        id: meta
+        run: |
+          platform=${{ matrix.platform }}
+          echo "pair=pentestgpt-${platform//\//-}" >> "$GITHUB_OUTPUT"
+          echo "image_name=${{ needs.metadata.outputs.pentest_image_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build runner smoke image
+        if: matrix.platform == 'linux/amd64'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./docker/pentestgpt-runner/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: moonmind-pentestgpt-smoke:${{ needs.metadata.outputs.version_tag }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.metadata.outputs.version_tag }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=MoonMind PentestGPT Runner
+          cache-from: type=gha,scope=${{ steps.meta.outputs.pair }}
+
+      - name: Smoke test runner image
+        if: matrix.platform == 'linux/amd64'
+        run: |
+          docker run --rm moonmind-pentestgpt-smoke:${{ needs.metadata.outputs.version_tag }} --version
+          docker run --rm moonmind-pentestgpt-smoke:${{ needs.metadata.outputs.version_tag }} --self-test
+
+      - name: Build and push runner by digest
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./docker/pentestgpt-runner/Dockerfile
+          platforms: ${{ matrix.platform }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.metadata.outputs.version_tag }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=MoonMind PentestGPT Runner
+          outputs: type=image,name=${{ steps.meta.outputs.image_name }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ steps.meta.outputs.pair }}
+          cache-to: type=gha,scope=${{ steps.meta.outputs.pair }},mode=max
+
+      - name: Export runner digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload runner digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ steps.meta.outputs.pair }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge-pentestgpt:
+    runs-on: ubuntu-latest
+    needs:
+      - metadata
+      - build-pentestgpt
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download runner digests
+        uses: actions/download-artifact@v8
+        with:
+          path: /tmp/digests
+          pattern: digests-pentestgpt-*
+          merge-multiple: true
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Create runner manifest list and push
+        working-directory: /tmp/digests
+        run: |
+          IMAGE_NAME="${{ needs.metadata.outputs.pentest_image_name }}"
+          docker buildx imagetools create \
+            -t "${IMAGE_NAME}:${{ needs.metadata.outputs.version_tag }}" \
+            -t "${IMAGE_NAME}:latest" \
+            -t "${IMAGE_NAME}:1.0" \
+            $(printf "${IMAGE_NAME}@sha256:%s " *)
+
+      - name: Inspect runner image
+        run: |
+          IMAGE_NAME="${{ needs.metadata.outputs.pentest_image_name }}"
+          docker buildx imagetools inspect "${IMAGE_NAME}:1.0"

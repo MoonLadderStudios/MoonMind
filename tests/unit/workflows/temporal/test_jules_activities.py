@@ -6,13 +6,13 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from moonmind.config.settings import settings
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunHandle,
     AgentRunResult,
     AgentRunStatus,
 )
-from moonmind.config.settings import settings
 from moonmind.security import OutboundScanResult
 
 pytestmark = [pytest.mark.asyncio]

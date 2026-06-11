@@ -1,11 +1,9 @@
 name: Run Pytest Integration CI
 
 "on":
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+  schedule:
+    - cron: "47 9 * * *"
 
 permissions:
   contents: read
