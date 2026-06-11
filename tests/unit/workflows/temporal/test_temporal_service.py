@@ -257,7 +257,7 @@ async def test_create_execution_routes_pr_merge_automation_workflows_to_dedicate
             failure_policy=None,
             initial_parameters={
                 "publishMode": "pr",
-                "task": {
+                "workflow": {
                     "publish": {
                         "mode": "pr",
                         "mergeAutomation": {"enabled": True},
@@ -292,7 +292,7 @@ async def test_create_execution_keeps_default_priority_without_merge_automation(
             failure_policy=None,
             initial_parameters={
                 "publishMode": "pr",
-                "task": {"publish": {"mode": "pr"}},
+                "workflow": {"publish": {"mode": "pr"}},
             },
             idempotency_key=None,
         )
@@ -490,7 +490,7 @@ async def test_create_execution_rejects_more_than_10_dependencies(tmp_path):
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={
-                    "task": {"dependsOn": [f"dep-{i}" for i in range(11)]}
+                "workflow": {"dependsOn": [f"dep-{i}" for i in range(11)]}
                 },
                 idempotency_key=None,
             )
@@ -512,7 +512,7 @@ async def test_create_execution_rejects_missing_dependency(tmp_path):
                 plan_artifact_ref=None,
                 manifest_artifact_ref=None,
                 failure_policy=None,
-                initial_parameters={"task": {"dependsOn": ["mm:non-existent"]}},
+                initial_parameters={"workflow": {"dependsOn": ["mm:non-existent"]}},
                 idempotency_key=None,
             )
 
@@ -548,7 +548,7 @@ async def test_create_execution_rejects_dependency_run_id_identifier(
                 plan_artifact_ref=None,
                 manifest_artifact_ref=None,
                 failure_policy=None,
-                initial_parameters={"task": {"dependsOn": [existing.run_id]}},
+                initial_parameters={"workflow": {"dependsOn": [existing.run_id]}},
                 idempotency_key=None,
             )
 
@@ -585,7 +585,7 @@ async def test_create_execution_rejects_non_run_dependency(tmp_path, mock_client
                 plan_artifact_ref=None,
                 manifest_artifact_ref=None,
                 failure_policy=None,
-                initial_parameters={"task": {"dependsOn": [manifest.workflow_id]}},
+                initial_parameters={"workflow": {"dependsOn": [manifest.workflow_id]}},
                 idempotency_key=None,
             )
 
@@ -620,7 +620,7 @@ async def test_create_execution_rejects_unauthorized_dependency(tmp_path, mock_c
                 plan_artifact_ref=None,
                 manifest_artifact_ref=None,
                 failure_policy=None,
-                initial_parameters={"task": {"dependsOn": [foreign.workflow_id]}},
+                initial_parameters={"workflow": {"dependsOn": [foreign.workflow_id]}},
                 idempotency_key=None,
             )
 
@@ -664,7 +664,7 @@ async def test_create_execution_persists_dependency_edges_and_supports_lookups(
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "task": {
+                "workflow": {
                     "dependsOn": [dep1.workflow_id, dep2.workflow_id, dep1.workflow_id]
                 }
             },
@@ -673,7 +673,7 @@ async def test_create_execution_persists_dependency_edges_and_supports_lookups(
 
         source = await session.get(TemporalExecutionCanonicalRecord, dependent.workflow_id)
         assert source is not None
-        assert source.parameters["task"]["dependsOn"] == [dep1.workflow_id, dep2.workflow_id]
+        assert source.parameters["workflow"]["dependsOn"] == [dep1.workflow_id, dep2.workflow_id]
 
         prerequisites = await service.list_prerequisites(dependent.workflow_id)
         assert [edge.prerequisite_workflow_id for edge in prerequisites] == [
@@ -724,7 +724,7 @@ async def test_create_execution_persists_remediation_link_and_supports_lookups(
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "task": {
+                "workflow": {
                     "instructions": "Investigate the target",
                     "remediation": {
                         "target": {"workflowId": target.workflow_id},
@@ -757,12 +757,12 @@ async def test_create_execution_persists_remediation_link_and_supports_lookups(
             TemporalExecutionCanonicalRecord, remediation.workflow_id
         )
         assert remediation_record is not None
-        assert remediation_record.parameters["task"]["remediation"]["target"] == {
+        assert remediation_record.parameters["workflow"]["remediation"]["target"] == {
             "workflowId": target.workflow_id,
             "runId": target.run_id,
         }
         start_kwargs = mock_client_adapter.start_workflow.await_args_list[1].kwargs
-        assert start_kwargs["input_args"]["initial_parameters"]["task"][
+        assert start_kwargs["input_args"]["initial_parameters"]["workflow"][
             "remediation"
         ]["target"] == {
             "workflowId": target.workflow_id,
@@ -811,7 +811,7 @@ async def test_record_remediation_approval_decision_appends_bounded_audit(
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "task": {
+                "workflow": {
                     "remediation": {
                         "target": {"workflowId": target.workflow_id},
                         "mode": "snapshot",
@@ -911,7 +911,7 @@ async def test_create_execution_persists_supplied_matching_remediation_run_id(
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "task": {
+                "workflow": {
                     "instructions": "Investigate the target",
                     "remediation": {
                         "target": {
@@ -941,7 +941,7 @@ async def test_create_execution_rejects_missing_remediation_target_workflow_id(
 
         with pytest.raises(
             TemporalExecutionValidationError,
-            match="task.remediation.target.workflowId is required",
+            match="workflow.remediation.target.workflowId is required",
         ):
             await service.create_execution(
                 workflow_type="MoonMind.UserWorkflow",
@@ -951,7 +951,7 @@ async def test_create_execution_rejects_missing_remediation_target_workflow_id(
                 plan_artifact_ref=None,
                 manifest_artifact_ref=None,
                 failure_policy=None,
-                initial_parameters={"task": {"remediation": {"target": {}}}},
+                initial_parameters={"workflow": {"remediation": {"target": {}}}},
                 idempotency_key=None,
             )
 
@@ -987,7 +987,7 @@ async def test_create_execution_rejects_remediation_run_id_identifier(
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={
-                    "task": {"remediation": {"target": {"workflowId": target.run_id}}}
+                "workflow": {"remediation": {"target": {"workflowId": target.run_id}}}
                 },
                 idempotency_key=None,
             )
@@ -1012,7 +1012,7 @@ async def test_create_execution_rejects_missing_remediation_target(
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={
-                    "task": {
+                "workflow": {
                         "remediation": {
                             "target": {"workflowId": "mm:missing-remediation-target"}
                         }
@@ -1053,7 +1053,7 @@ async def test_create_execution_rejects_non_run_remediation_target(
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={
-                    "task": {
+                "workflow": {
                         "remediation": {
                             "target": {"workflowId": target.workflow_id}
                         }
@@ -1094,7 +1094,7 @@ async def test_create_execution_rejects_mismatched_remediation_target_run_id(
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={
-                    "task": {
+                "workflow": {
                         "remediation": {
                             "target": {
                                 "workflowId": target.workflow_id,
@@ -1127,7 +1127,7 @@ async def test_create_execution_rejects_unsupported_remediation_authority_mode(
 
         with pytest.raises(
             TemporalExecutionValidationError,
-            match="Unsupported task.remediation.authorityMode",
+            match="Unsupported workflow.remediation.authorityMode",
         ):
             await service.create_execution(
                 workflow_type="MoonMind.UserWorkflow",
@@ -1138,7 +1138,7 @@ async def test_create_execution_rejects_unsupported_remediation_authority_mode(
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={
-                    "task": {
+                "workflow": {
                         "remediation": {
                             "target": {"workflowId": target.workflow_id},
                             "authorityMode": "root_shell",
@@ -1169,7 +1169,7 @@ async def test_create_execution_rejects_incompatible_remediation_action_policy(
 
         with pytest.raises(
             TemporalExecutionValidationError,
-            match="Unsupported task.remediation.actionPolicyRef",
+            match="Unsupported workflow.remediation.actionPolicyRef",
         ):
             await service.create_execution(
                 workflow_type="MoonMind.UserWorkflow",
@@ -1180,7 +1180,7 @@ async def test_create_execution_rejects_incompatible_remediation_action_policy(
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={
-                    "task": {
+                "workflow": {
                         "remediation": {
                             "target": {"workflowId": target.workflow_id},
                             "actionPolicyRef": "unknown_policy",
@@ -1207,7 +1207,7 @@ async def test_create_execution_keeps_future_remediation_policy_inert(
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "task": {
+                "workflow": {
                     "instructions": "Normal task with future policy metadata.",
                     "remediationPolicy": {
                         "enabled": True,
@@ -1231,11 +1231,11 @@ async def test_create_execution_keeps_future_remediation_policy_inert(
         )
 
         assert record is not None
-        assert record.parameters["task"]["remediationPolicy"]["enabled"] is True
+        assert record.parameters["workflow"]["remediationPolicy"]["enabled"] is True
         assert link is None
         mock_client_adapter.start_workflow.assert_awaited_once()
         start_args = mock_client_adapter.start_workflow.await_args.kwargs["input_args"]
-        assert "remediation" not in start_args["initial_parameters"]["task"]
+        assert "remediation" not in start_args["initial_parameters"]["workflow"]
 
 @pytest.mark.asyncio
 async def test_create_execution_rejects_nested_remediation_target(
@@ -1264,7 +1264,7 @@ async def test_create_execution_rejects_nested_remediation_target(
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "task": {"remediation": {"target": {"workflowId": target.workflow_id}}}
+                "workflow": {"remediation": {"target": {"workflowId": target.workflow_id}}}
             },
             idempotency_key=None,
         )
@@ -1282,7 +1282,7 @@ async def test_create_execution_rejects_nested_remediation_target(
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={
-                    "task": {
+                "workflow": {
                         "remediation": {
                             "target": {"workflowId": first_remediation.workflow_id}
                         }
@@ -1312,7 +1312,7 @@ async def test_create_execution_rejects_malformed_remediation_agent_run_ids(
 
         with pytest.raises(
             TemporalExecutionValidationError,
-            match="task.remediation.target.agentRunIds must be a list of strings",
+            match="workflow.remediation.target.agentRunIds must be a list of strings",
         ):
             await service.create_execution(
                 workflow_type="MoonMind.UserWorkflow",
@@ -1323,7 +1323,7 @@ async def test_create_execution_rejects_malformed_remediation_agent_run_ids(
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={
-                    "task": {
+                "workflow": {
                         "remediation": {
                             "target": {
                                 "workflowId": target.workflow_id,
@@ -1365,7 +1365,7 @@ async def test_create_execution_rejects_foreign_remediation_agent_run_ids(
 
         with pytest.raises(
             TemporalExecutionValidationError,
-            match="task.remediation.target.agentRunIds must belong to the target execution",
+            match="workflow.remediation.target.agentRunIds must belong to the target execution",
         ):
             await service.create_execution(
                 workflow_type="MoonMind.UserWorkflow",
@@ -1376,7 +1376,7 @@ async def test_create_execution_rejects_foreign_remediation_agent_run_ids(
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={
-                    "task": {
+                "workflow": {
                         "remediation": {
                             "target": {
                                 "workflowId": target.workflow_id,
@@ -1425,7 +1425,7 @@ async def test_create_execution_accepts_owned_remediation_agent_run_ids(
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "task": {
+                "workflow": {
                     "remediation": {
                         "target": {
                             "workflowId": target.workflow_id,
@@ -1476,7 +1476,7 @@ async def test_create_execution_normalizes_depends_on_before_limit_and_persisten
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "task": {
+                "workflow": {
                     "dependsOn": workflow_ids + [workflow_ids[0], "   ", None],  # type: ignore[list-item]
                 }
             },
@@ -1487,7 +1487,7 @@ async def test_create_execution_normalizes_depends_on_before_limit_and_persisten
             TemporalExecutionCanonicalRecord, created.workflow_id
         )
         assert source is not None
-        assert source.parameters["task"]["dependsOn"] == workflow_ids
+        assert source.parameters["workflow"]["dependsOn"] == workflow_ids
 
 @pytest.mark.asyncio
 async def test_create_execution_removes_empty_normalized_depends_on_from_parameters(
@@ -1505,7 +1505,7 @@ async def test_create_execution_removes_empty_normalized_depends_on_from_paramet
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={"task": {"dependsOn": [None, "   "]}},
+            initial_parameters={"workflow": {"dependsOn": [None, "   "]}},
             idempotency_key=None,
         )
 
@@ -1560,7 +1560,7 @@ async def test_mark_execution_succeeded_fans_out_dependency_resolution_signals(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={"task": {"dependsOn": [prerequisite.workflow_id]}},
+            initial_parameters={"workflow": {"dependsOn": [prerequisite.workflow_id]}},
             idempotency_key=None,
         )
         dependent_two = await service.create_execution(
@@ -1571,7 +1571,7 @@ async def test_mark_execution_succeeded_fans_out_dependency_resolution_signals(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={"task": {"dependsOn": [prerequisite.workflow_id]}},
+            initial_parameters={"workflow": {"dependsOn": [prerequisite.workflow_id]}},
             idempotency_key=None,
         )
 
@@ -1619,7 +1619,7 @@ async def test_record_terminal_state_fans_out_dependency_resolution_signals(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={"task": {"dependsOn": [prerequisite.workflow_id]}},
+            initial_parameters={"workflow": {"dependsOn": [prerequisite.workflow_id]}},
             idempotency_key=None,
         )
 
@@ -1823,7 +1823,7 @@ async def test_dependency_status_snapshot_repairs_stale_terminal_prerequisite(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={"task": {"dependsOn": [prerequisite.workflow_id]}},
+            initial_parameters={"workflow": {"dependsOn": [prerequisite.workflow_id]}},
             idempotency_key=None,
         )
 
@@ -1939,7 +1939,7 @@ async def test_mark_execution_failed_fanout_is_best_effort(tmp_path, mock_client
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={"task": {"dependsOn": [prerequisite.workflow_id]}},
+            initial_parameters={"workflow": {"dependsOn": [prerequisite.workflow_id]}},
             idempotency_key=None,
         )
         dependent_two = await service.create_execution(
@@ -1950,7 +1950,7 @@ async def test_mark_execution_failed_fanout_is_best_effort(tmp_path, mock_client
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={"task": {"dependsOn": [prerequisite.workflow_id]}},
+            initial_parameters={"workflow": {"dependsOn": [prerequisite.workflow_id]}},
             idempotency_key=None,
         )
 
@@ -2183,7 +2183,7 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(
                 "recoveryCheckpointRef": "artifact://checkpoint/old",
                 "preservedSteps": [{"id": "step-1"}],
                 "completedSteps": [{"id": "step-0"}],
-                "task": {
+                "workflow": {
                     "instructions": "Original task",
                     "recovery": {
                         "kind": "recover_from_failed_step",
@@ -2240,7 +2240,7 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(
         assert "recoveryCheckpointRef" not in refreshed.parameters
         assert "preservedSteps" not in refreshed.parameters
         assert "completedSteps" not in refreshed.parameters
-        assert refreshed.parameters["task"] == {
+        assert refreshed.parameters["workflow"] == {
             "instructions": "Original task",
             "recovery": {
                 "kind": "exact_full_rerun",
@@ -2273,7 +2273,7 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
                 "recoveryCheckpointRef": "artifact://checkpoint/old",
                 "preservedSteps": [{"id": "step-1"}],
                 "completedSteps": [{"id": "step-0"}],
-                "task": {
+                "workflow": {
                     "instructions": "Original task",
                     "recovery": {
                         "kind": "recover_from_failed_step",
@@ -2335,7 +2335,7 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
         assert "recoveryCheckpointRef" not in rerun.parameters
         assert "preservedSteps" not in rerun.parameters
         assert "completedSteps" not in rerun.parameters
-        assert rerun.parameters["task"] == {
+        assert rerun.parameters["workflow"] == {
             "instructions": "Original task",
             "recovery": {
                 "kind": "exact_full_rerun",
@@ -2362,7 +2362,7 @@ async def test_request_rerun_pins_patch_recovery_to_terminal_source_execution(
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={"task": {"instructions": "Original task"}},
+            initial_parameters={"workflow": {"instructions": "Original task"}},
             idempotency_key=None,
         )
         await service.cancel_execution(
@@ -2379,8 +2379,7 @@ async def test_request_rerun_pins_patch_recovery_to_terminal_source_execution(
             update_name="RequestRerun",
             input_artifact_ref=None,
             plan_artifact_ref=None,
-            parameters_patch={
-                "task": {
+            parameters_patch={"workflow": {
                     "instructions": "Edited task",
                     "recovery": {"kind": "edited_full_retry"},
                 }
@@ -2394,7 +2393,7 @@ async def test_request_rerun_pins_patch_recovery_to_terminal_source_execution(
         )
         rerun = await service.describe_execution(response["workflow_id"])
 
-        assert rerun.parameters["task"]["recovery"] == {
+        assert rerun.parameters["workflow"]["recovery"] == {
             "kind": "edited_full_retry",
             "sourceWorkflowId": source_workflow_id,
             "sourceRunId": source_run_id,
@@ -2404,11 +2403,11 @@ async def test_request_rerun_pins_patch_recovery_to_terminal_source_execution(
 def test_full_retry_recovery_from_patch_rejects_non_string_source_ids():
     with pytest.raises(
         TemporalExecutionValidationError,
-        match="task.recovery.sourceWorkflowId must be a string",
+        match="workflow.recovery.sourceWorkflowId must be a string",
     ):
         TemporalExecutionService._full_retry_recovery_from_patch(
             {
-                "task": {
+                "workflow": {
                     "recovery": {
                         "kind": "edited_full_retry",
                         "sourceWorkflowId": 123,
@@ -2428,7 +2427,7 @@ def test_full_retry_recovery_from_patch_rejects_forged_source_ids():
     ):
         TemporalExecutionService._full_retry_recovery_from_patch(
             {
-                "task": {
+                "workflow": {
                     "recovery": {
                         "kind": "edited_full_retry",
                         "sourceWorkflowId": "mm:other",
@@ -2625,7 +2624,7 @@ async def test_failed_step_recovery_creates_linked_execution_with_source_identit
             failure_policy=None,
             initial_parameters={
                 "agentRunId": "old-agent-run",
-                "task": {"title": "recovery source", "instructions": "Original"},
+                "workflow": {"title": "recovery source", "instructions": "Original"},
             },
             idempotency_key=None,
         )
@@ -2665,7 +2664,7 @@ async def test_failed_step_recovery_creates_linked_execution_with_source_identit
         assert resumed.parameters["recoverySource"]["preservedSteps"][0][
             "logicalStepId"
         ] == "plan"
-        task_payload = resumed.parameters["task"]
+        task_payload = resumed.parameters["workflow"]
         assert task_payload["recovery"] == {
             "kind": "recover_from_failed_step",
             "sourceWorkflowId": created.workflow_id,
@@ -2702,7 +2701,7 @@ async def test_failed_step_recovery_accepts_legacy_checkpoint_memo_key(
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "task": {"title": "recovery source", "instructions": "Original"},
+                "workflow": {"title": "recovery source", "instructions": "Original"},
             },
             idempotency_key=None,
         )
@@ -2729,9 +2728,187 @@ async def test_failed_step_recovery_accepts_legacy_checkpoint_memo_key(
         resumed = await service.describe_execution(result["execution"]["workflowId"])
         assert result["applied"] == "created_resumed_execution"
         assert (
-            resumed.parameters["task"]["resume"]["recoveryCheckpointRef"]
+            resumed.parameters["workflow"]["resume"]["recoveryCheckpointRef"]
             == "artifact://checkpoint/source"
         )
+
+
+@pytest.mark.asyncio
+async def test_selected_step_recovery_starts_from_preserved_step(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="recover source",
+            input_artifact_ref="artifact://input/source",
+            plan_artifact_ref="artifact://plan/source",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "agentRunId": "old-agent-run",
+                "workflow": {"title": "recovery source", "instructions": "Original"},
+            },
+            idempotency_key=None,
+        )
+        created.state = MoonMindWorkflowState.FAILED
+        created.close_status = TemporalExecutionCloseStatus.FAILED
+        created.memo = {
+            **created.memo,
+            "task_input_snapshot_ref": "artifact://snapshot/source",
+            "recovery_checkpoint_ref": "artifact://checkpoint/source",
+        }
+        await session.commit()
+
+        checkpoint_payload = _valid_recovery_checkpoint_payload(
+            workflow_id=created.workflow_id,
+            run_id=created.run_id,
+            snapshot_ref="artifact://snapshot/source",
+        )
+        checkpoint_payload["preservedSteps"] = [
+            checkpoint_payload["preservedSteps"][0],
+            {
+                "logicalStepId": "design",
+                "order": 2,
+                "status": "succeeded",
+                "sourceExecutionOrdinal": 1,
+                "artifacts": {"outputSummary": "artifact://summary/design"},
+                "stateCheckpointRef": "artifact://workspace/before-design",
+            },
+        ]
+        checkpoint_payload["failedStep"] = {
+            "logicalStepId": "implement",
+            "order": 3,
+            "executionOrdinal": 1,
+            "title": "Implement",
+        }
+
+        result = await service.create_failed_step_recovery_execution(
+            created,
+            recovery_checkpoint_ref=None,
+            idempotency_key="recover-selected",
+            checkpoint_payload=checkpoint_payload,
+            selected_start_step_id="design",
+        )
+
+        resumed = await service.describe_execution(result["execution"]["workflowId"])
+        assert result["relationship"] == "Recovered from selected step"
+        assert resumed.parameters["recoverySource"]["recoveryMode"] == "selected_step"
+        assert resumed.parameters["recoverySource"]["failedStepId"] == "design"
+        assert resumed.parameters["recoverySource"]["selectedStartStepId"] == "design"
+        assert [
+            step["logicalStepId"]
+            for step in resumed.parameters["recoverySource"]["preservedSteps"]
+        ] == ["plan"]
+        assert resumed.parameters["workflow"]["resume"]["failedStepId"] == "design"
+        assert resumed.parameters["workflow"]["resume"]["recoveryMode"] == "selected_step"
+        assert resumed.parameters["workflow"]["resume"]["selectedStartStepId"] == "design"
+
+
+@pytest.mark.asyncio
+async def test_selected_step_recovery_rejects_step_without_checkpoint_evidence(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="recover source",
+            input_artifact_ref="artifact://input/source",
+            plan_artifact_ref="artifact://plan/source",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        created.state = MoonMindWorkflowState.FAILED
+        created.close_status = TemporalExecutionCloseStatus.FAILED
+        created.memo = {
+            **created.memo,
+            "task_input_snapshot_ref": "artifact://snapshot/source",
+            "recovery_checkpoint_ref": "artifact://checkpoint/source",
+        }
+        await session.commit()
+
+        with pytest.raises(
+            TemporalExecutionRecoveryCheckpointError,
+            match="Selected start step",
+        ):
+            await service.create_failed_step_recovery_execution(
+                created,
+                recovery_checkpoint_ref=None,
+                idempotency_key="recover-selected",
+                checkpoint_payload=_valid_recovery_checkpoint_payload(
+                    workflow_id=created.workflow_id,
+                    run_id=created.run_id,
+                    snapshot_ref="artifact://snapshot/source",
+                ),
+                selected_start_step_id="missing-step",
+            )
+
+
+@pytest.mark.asyncio
+async def test_selected_step_recovery_rejects_step_after_failed_step(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="recover source",
+            input_artifact_ref="artifact://input/source",
+            plan_artifact_ref="artifact://plan/source",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        created.state = MoonMindWorkflowState.FAILED
+        created.close_status = TemporalExecutionCloseStatus.FAILED
+        created.memo = {
+            **created.memo,
+            "task_input_snapshot_ref": "artifact://snapshot/source",
+            "recovery_checkpoint_ref": "artifact://checkpoint/source",
+        }
+        await session.commit()
+
+        checkpoint_payload = _valid_recovery_checkpoint_payload(
+            workflow_id=created.workflow_id,
+            run_id=created.run_id,
+            snapshot_ref="artifact://snapshot/source",
+        )
+        checkpoint_payload["preservedSteps"].append(
+            {
+                "logicalStepId": "notify",
+                "order": 4,
+                "status": "succeeded",
+                "sourceExecutionOrdinal": 1,
+                "artifacts": {"outputSummary": "artifact://summary/notify"},
+                "stateCheckpointRef": "artifact://workspace/before-notify",
+            }
+        )
+
+        with pytest.raises(
+            TemporalExecutionRecoveryCheckpointError,
+            match="must precede the failed step",
+        ):
+            await service.create_failed_step_recovery_execution(
+                created,
+                recovery_checkpoint_ref=None,
+                idempotency_key="recover-selected",
+                checkpoint_payload=checkpoint_payload,
+                selected_start_step_id="notify",
+            )
 
 
 @pytest.mark.asyncio
@@ -3483,7 +3660,7 @@ async def test_signal_bypass_dependencies_records_operator_audit(
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={"task": {"dependsOn": []}},
+            initial_parameters={"workflow": {"dependsOn": []}},
             idempotency_key=None,
         )
         source = await service._require_source_execution(created.workflow_id)
@@ -3530,7 +3707,7 @@ async def test_signal_bypass_dependencies_outside_wait_does_not_mutate_projectio
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={"task": {"dependsOn": []}},
+            initial_parameters={"workflow": {"dependsOn": []}},
             idempotency_key=None,
         )
         source = await service._require_source_execution(created.workflow_id)
@@ -4027,7 +4204,7 @@ async def test_update_inputs_major_reconfiguration_records_distinct_continue_as_
                 "recoveryCheckpointRef": "artifact://checkpoint/old",
                 "preservedSteps": [{"id": "step-1"}],
                 "completedSteps": [{"id": "step-0"}],
-                "task": {
+                "workflow": {
                     "instructions": "Original task",
                     "recovery": {
                         "kind": "recover_from_failed_step",
@@ -4073,7 +4250,7 @@ async def test_update_inputs_major_reconfiguration_records_distinct_continue_as_
         assert "recoveryCheckpointRef" not in refreshed.parameters
         assert "preservedSteps" not in refreshed.parameters
         assert "completedSteps" not in refreshed.parameters
-        assert refreshed.parameters["task"] == {"instructions": "Original task"}
+        assert refreshed.parameters["workflow"] == {"instructions": "Original task"}
 
 
 @pytest.mark.asyncio
@@ -4097,7 +4274,7 @@ async def test_update_inputs_continue_as_new_preserves_recovery_provenance_for_r
                 "recoveryCheckpointRef": "artifact://checkpoint/old",
                 "preservedSteps": [{"id": "step-1"}],
                 "completedSteps": [{"id": "step-0"}],
-                "task": {
+                "workflow": {
                     "instructions": "Original task",
                     "recovery": {
                         "kind": "recover_from_failed_step",
@@ -4142,10 +4319,10 @@ async def test_update_inputs_continue_as_new_preserves_recovery_provenance_for_r
         assert refreshed.parameters["recoveryCheckpointRef"] == "artifact://checkpoint/old"
         assert refreshed.parameters["preservedSteps"] == [{"id": "step-1"}]
         assert refreshed.parameters["completedSteps"] == [{"id": "step-0"}]
-        assert refreshed.parameters["task"]["recovery"]["kind"] == (
+        assert refreshed.parameters["workflow"]["recovery"]["kind"] == (
             "recover_from_failed_step"
         )
-        assert refreshed.parameters["task"]["resume"]["recoveryCheckpointRef"] == (
+        assert refreshed.parameters["workflow"]["resume"]["recoveryCheckpointRef"] == (
             "artifact://checkpoint/old"
         )
 

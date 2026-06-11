@@ -7164,6 +7164,85 @@ def test_get_execution_step_executions_returns_bounded_manifest_history() -> Non
     )
 
 
+def test_get_execution_step_executions_sanitizes_failed_attempt_summary() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(
+        app,
+        ledger={
+            "workflowId": "mm:wf-1",
+            "runId": "run-99",
+            "runScope": "latest",
+            "steps": [
+                {
+                    "logicalStepId": "implement",
+                    "order": 1,
+                    "title": "Implement",
+                    "tool": {"type": "skill", "name": "jira-implement", "version": "1"},
+                    "dependsOn": [],
+                    "status": "failed",
+                    "waitingReason": None,
+                    "attentionRequired": True,
+                    "attempt": 1,
+                    "startedAt": "2026-05-19T10:00:00Z",
+                    "updatedAt": "2026-05-19T10:01:00Z",
+                    "summary": "Failed",
+                    "checks": [],
+                    "refs": {
+                        "childWorkflowId": None,
+                        "childRunId": None,
+                        "agentRunId": None,
+                        "latestStepExecutionManifestRef": "art-attempt-1",
+                        "stepExecutionManifestRefs": ["art-attempt-1"],
+                    },
+                    "artifacts": {},
+                    "lastError": None,
+                }
+            ],
+        },
+    )
+    _override_user_dependencies(app, is_superuser=True)
+    raw_token = "ghp_123456789012345678901234567890123456"
+    payload = _step_execution_manifest_payload(
+        artifact_ref="art-attempt-1",
+        attempt=1,
+        status="failed",
+    )
+    payload["outputs"] = {
+        "summary": f"failed with token={raw_token}",
+        "diagnosticsRef": "art-diagnostics-1",
+    }
+    artifact_service = SimpleNamespace(
+        read=AsyncMock(
+            return_value=(
+                SimpleNamespace(artifact_id="art-attempt-1"),
+                json.dumps(payload).encode(),
+            )
+        )
+    )
+    app.dependency_overrides[get_async_session] = _empty_session_override
+
+    with patch(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        return_value=artifact_service,
+    ):
+        with TestClient(app) as test_client:
+            response = test_client.get(
+                "/api/executions/mm:wf-1/steps/implement/step-executions"
+            )
+
+    assert response.status_code == 200
+    dumped = response.text
+    assert raw_token not in dumped
+    assert "token=[REDACTED]" in dumped
+    assert response.json()["stepExecutions"][0]["outputRefs"] == {
+        "diagnosticsRef": "art-diagnostics-1"
+    }
+
+
 def test_get_execution_step_execution_returns_bounded_detail_refs() -> None:
     app = FastAPI()
     app.include_router(router)
@@ -9254,7 +9333,7 @@ def test_failed_step_recovery_submission_rejects_stale_recovery_evidence(
                 "workflow": {"instructions": "change the task"},
                 "runtime": {"model": "gpt-5.4"},
             },
-            ["runtime", "task"],
+            ["runtime"],
         ),
         (
             {
@@ -9560,6 +9639,182 @@ def test_failed_step_recovery_hydrates_checkpoint_artifact(
     call_kwargs = mock_service.create_failed_step_recovery_execution.await_args.kwargs
     assert call_kwargs["checkpoint_payload"] == checkpoint_payload
     assert call_kwargs["recovery_checkpoint_ref"] is None
+
+
+def test_selected_step_recovery_pins_source_and_selected_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    canonical = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    canonical.memo = {
+        **canonical.memo,
+        "recovery_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
+        "task_input_snapshot_ref": "artifact://snapshot/source",
+    }
+    mock_service.describe_execution.return_value = canonical
+    mock_service.create_failed_step_recovery_execution.return_value = {
+        "accepted": True,
+        "applied": "created_resumed_execution",
+        "source": {"workflowId": canonical.workflow_id, "runId": canonical.run_id},
+        "execution": {
+            "workflowId": "mm:selected",
+            "runId": "run-selected",
+            "detailHref": "/workflows/mm:selected",
+        },
+        "relationship": "Recovered from selected step",
+        "recoveryCheckpointRef": "artifact://resume-checkpoints/source/checkpoint-v1",
+    }
+    checkpoint_payload = {
+        "schemaVersion": "v1",
+        "source": {"workflowId": canonical.workflow_id, "runId": canonical.run_id},
+        "taskInputSnapshotRef": "artifact://snapshot/source",
+        "planDigest": "sha256:resume-plan",
+        "failedStep": {
+            "logicalStepId": "implement",
+            "order": 2,
+            "attempt": 1,
+        },
+        "preservedSteps": [
+            {
+                "logicalStepId": "plan",
+                "order": 1,
+                "status": "succeeded",
+                "sourceExecutionOrdinal": 1,
+                "artifacts": {"outputSummary": "artifact://completed/plan"},
+                "stateCheckpointRef": "artifact://workspace/before-plan",
+            }
+        ],
+        "recoveryWorkspace": {"checkpointRef": "artifact://workspace/source"},
+    }
+    artifact_service = SimpleNamespace(
+        read=AsyncMock(
+            return_value=(SimpleNamespace(), json.dumps(checkpoint_payload).encode())
+        )
+    )
+
+    class Session:
+        async def get(self, model, key):
+            return canonical
+
+        async def commit(self):
+            return None
+
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = lambda: Session()
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        lambda _session: artifact_service,
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/recover-from-selected-step",
+            json={
+                "idempotencyKey": "recover-selected-1",
+                "sourceWorkflowId": canonical.workflow_id,
+                "sourceRunId": canonical.run_id,
+                "selectedStartStepId": "plan",
+            },
+        )
+
+    assert response.status_code == 201
+    call_kwargs = mock_service.create_failed_step_recovery_execution.await_args.kwargs
+    assert call_kwargs["checkpoint_payload"] == checkpoint_payload
+    assert (
+        call_kwargs["recovery_checkpoint_ref"]
+        == "artifact://resume-checkpoints/source/checkpoint-v1"
+    )
+    assert call_kwargs["selected_start_step_id"] == "plan"
+
+
+def test_selected_step_recovery_requires_checkpoint_ref_before_hydration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    canonical = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    canonical.memo = {
+        key: value
+        for key, value in dict(canonical.memo).items()
+        if key not in {"recovery_checkpoint_ref", "recoveryCheckpointRef"}
+    }
+    mock_service.describe_execution.return_value = canonical
+
+    artifact_service = SimpleNamespace(read=AsyncMock())
+
+    def session_override() -> SimpleNamespace:
+        return SimpleNamespace()
+
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = session_override
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        lambda _session: artifact_service,
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/recover-from-selected-step",
+            json={
+                "idempotencyKey": "recover-selected-1",
+                "sourceWorkflowId": canonical.workflow_id,
+                "sourceRunId": canonical.run_id,
+                "selectedStartStepId": "plan",
+            },
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason"] == "checkpoint_missing"
+    artifact_service.read.assert_not_awaited()
+    mock_service.create_failed_step_recovery_execution.assert_not_awaited()
+
+
+def test_selected_step_recovery_rejects_source_run_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    canonical = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    canonical.memo = {
+        **canonical.memo,
+        "recovery_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
+    }
+    mock_service.describe_execution.return_value = canonical
+
+    class Session:
+        async def get(self, model, key):
+            return canonical
+
+    artifact_service = SimpleNamespace(read=AsyncMock())
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = lambda: Session()
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        lambda _session: artifact_service,
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/recover-from-selected-step",
+            json={
+                "idempotencyKey": "recover-selected-1",
+                "sourceWorkflowId": canonical.workflow_id,
+                "sourceRunId": "stale-run",
+                "selectedStartStepId": "plan",
+            },
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason"] == "checkpoint_inconsistent"
+    artifact_service.read.assert_not_awaited()
+    mock_service.create_failed_step_recovery_execution.assert_not_awaited()
 
 
 def test_failed_step_recovery_reports_checkpoint_authorization_error(

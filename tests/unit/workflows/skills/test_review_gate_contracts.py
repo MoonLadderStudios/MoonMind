@@ -25,18 +25,32 @@ class TestApprovalPolicyPolicy:
         p = ApprovalPolicyPolicy()
         assert p.enabled is False
         assert p.max_review_attempts == 2
+        assert p.max_consecutive_no_progress_attempts is None
         assert p.reviewer_model == "default"
         assert p.review_timeout_seconds == 120
         assert p.skip_tool_types == DEFAULT_SKIP_TOOL_TYPES
 
     def test_enabled(self):
-        p = ApprovalPolicyPolicy(enabled=True, max_review_attempts=3)
+        p = ApprovalPolicyPolicy(
+            enabled=True,
+            max_review_attempts=3,
+            max_consecutive_no_progress_attempts=2,
+        )
         assert p.enabled is True
         assert p.max_review_attempts == 3
+        assert p.max_consecutive_no_progress_attempts == 2
 
     def test_negative_max_attempts_rejected(self):
         with pytest.raises(ContractValidationError, match="max_review_attempts"):
             ApprovalPolicyPolicy(max_review_attempts=-1)
+
+    @pytest.mark.parametrize("value", [-1, 0])
+    def test_invalid_no_progress_attempts_rejected(self, value):
+        with pytest.raises(
+            ContractValidationError,
+            match="max_consecutive_no_progress_attempts",
+        ):
+            ApprovalPolicyPolicy(max_consecutive_no_progress_attempts=value)
 
     def test_zero_max_attempts_allowed(self):
         p = ApprovalPolicyPolicy(max_review_attempts=0)
@@ -50,6 +64,7 @@ class TestApprovalPolicyPolicy:
         p = ApprovalPolicyPolicy(enabled=True, skip_tool_types=("agent_runtime",))
         payload = p.to_payload()
         assert payload["enabled"] is True
+        assert "max_consecutive_no_progress_attempts" not in payload
         assert payload["skip_tool_types"] == ["agent_runtime"]
 
 # ── ReviewRequest ─────────────────────────────────────────────────────

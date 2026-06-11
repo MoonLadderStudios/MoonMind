@@ -242,8 +242,15 @@ OAuth session state should be transport-neutral:
 Runtime provider registry entries may use `session_transport = "none"` while the
 interactive PTY bridge is unavailable or intentionally disabled. When the bridge
 is enabled, the transport identifier should be a MoonMind-owned value such as
-`moonmind_pty_ws`; provider profile and workflow semantics should not depend on
-the old `tmate` URL model.
+`moonmind_pty_ws`.
+
+MoonMind also supports an explicit `tmate` session transport for OAuth sessions
+that need an external terminal handoff. Tmate transport is requested per OAuth
+session, starts the same short-lived auth runner container, creates a tmate
+session inside that container, and stores the safe web/SSH connection refs on
+the OAuth session row through `terminal_session_id` and `terminal_bridge_id`.
+Provider profile and workflow semantics still depend on the OAuth session row,
+auth volume, and finalization endpoint rather than on the tmate URL itself.
 
 ### 5.4 Provider terminal finalization workflow
 

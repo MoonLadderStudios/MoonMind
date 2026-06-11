@@ -967,6 +967,14 @@ const StepLedgerArtifactsSchema = z
     stepExecutionManifestRefs: [],
   });
 
+const StepLedgerRecoveryPreservationSchema = z
+  .object({
+    eligible: z.boolean(),
+    reason: z.string(),
+    message: z.string().nullable().optional(),
+  })
+  .passthrough();
+
 const StepLedgerWorkloadSchema = z
   .object({
     agentRunId: z.string().nullable().optional(),
@@ -1021,6 +1029,7 @@ const StepLedgerRowSchema = z
       .optional(),
     workload: StepLedgerWorkloadSchema.nullable().optional(),
     stateCheckpointRef: z.string().nullable().optional(),
+    recoveryPreservation: StepLedgerRecoveryPreservationSchema.nullable().optional(),
     lastError: z.unknown().nullable().optional(),
   })
   .passthrough();
@@ -2764,6 +2773,9 @@ function StepLedgerRowCard({
           {!expanded && row.summary ? (
             <p className="step-tl-summary">{row.summary}</p>
           ) : null}
+          {!expanded && row.dependsOn.length > 0 ? (
+            <p className="step-tl-summary">Depends on: {row.dependsOn.join(', ')}</p>
+          ) : null}
           {!expanded && row.checks.length > 0 ? (
             <div className="step-check-badges">
               {row.checks.map((check, index) => (
@@ -4242,26 +4254,68 @@ function StepDagOverview({
 }: {
   snapshot: z.infer<typeof StepLedgerSnapshotSchema>;
 }) {
+  const stepIds = new Set(snapshot.steps.map((step) => step.logicalStepId));
+  const dependencyEdges = snapshot.steps.flatMap((step) =>
+    step.dependsOn.map((sourceId) => ({
+      sourceId,
+      targetId: step.logicalStepId,
+      isKnownSource: stepIds.has(sourceId),
+    })),
+  );
+  const rootEdges = snapshot.steps
+    .filter((step) => step.dependsOn.length === 0)
+    .map((step) => ({
+      sourceId: 'start',
+      targetId: step.logicalStepId,
+      isKnownSource: true,
+    }));
+  const displayEdges = [...rootEdges, ...dependencyEdges];
+
   return (
     <section className="step-dag-panel" aria-label="Step DAG visualization">
       <h4>Step DAG</h4>
-      <div className="step-dag-grid">
-        {snapshot.steps.map((step) => (
-          <article key={step.logicalStepId} className="step-dag-node">
-            <div className="step-dag-node-header">
-              <strong>{step.title}</strong>
-              <span {...executionStatusPillProps(step.status)}>
-                {formatStatusLabel(step.status)}
-              </span>
-            </div>
-            <div className="small">
-              <code>{step.logicalStepId}</code>
-            </div>
-            <div className="small">
-              Depends on: {step.dependsOn.length > 0 ? step.dependsOn.join(', ') : 'start'}
-            </div>
-          </article>
-        ))}
+      <div className="step-dag-canvas">
+        {snapshot.steps.length > 0 ? (
+          <div className="step-dag-grid" role="list" aria-label="Step dependency nodes">
+            {snapshot.steps.map((step) => (
+              <article key={step.logicalStepId} className="step-dag-node" role="listitem">
+                <div className="step-dag-node-header">
+                  <strong>{step.title}</strong>
+                  <span {...executionStatusPillProps(step.status)}>
+                    {formatStatusLabel(step.status)}
+                  </span>
+                </div>
+                <div className="small">
+                  <code>{step.logicalStepId}</code>
+                </div>
+                <div className="small">
+                  Depends on: {step.dependsOn.length > 0 ? step.dependsOn.join(', ') : 'start'}
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className="small step-dag-empty">No steps in the ledger yet.</p>
+        )}
+        {displayEdges.length > 0 ? (
+          <div className="step-dag-edges" aria-label="Step dependency edges">
+            {displayEdges.map((edge) => (
+              <div
+                key={`${edge.sourceId}->${edge.targetId}`}
+                className={
+                  edge.isKnownSource
+                    ? 'step-dag-edge-label'
+                    : 'step-dag-edge-label step-dag-edge-label-missing'
+                }
+                aria-label={`${edge.sourceId} to ${edge.targetId}`}
+              >
+                <code>{edge.sourceId}</code>
+                <span aria-hidden="true">-&gt;</span>
+                <code>{edge.targetId}</code>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </div>
     </section>
   );
@@ -4561,6 +4615,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const [remediationMode, setRemediationMode] = useState('snapshot_then_follow');
   const [remediationAuthority, setRemediationAuthority] = useState('approval_gated');
   const [remediationActionPolicy, setRemediationActionPolicy] = useState('admin_healer_default');
+  const [selectedRecoveryStepId, setSelectedRecoveryStepId] = useState('');
 
   const detailQuery = useQuery({
     queryKey: ['workflow-detail', encodedTaskId, sourceTemporal],
@@ -4628,6 +4683,44 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     refetchInterval: liveUpdates && execution?.stepsHref && !isTerminalExecution ? detailPoll : false,
   });
   const latestRunId = stepsQuery.data?.runId || runId;
+  const selectedRecoveryOptions = useMemo(() => {
+    const failedStepId = execution?.resume?.failedStepId || '';
+    const rows = stepsQuery.data?.steps || [];
+    if (!failedStepId || rows.length === 0) {
+      return [];
+    }
+    const failedRow = rows.find((row) => row.logicalStepId === failedStepId);
+    const failedOrder = failedRow?.order ?? Number.POSITIVE_INFINITY;
+    return rows.map((row) => {
+      const preservation = row.recoveryPreservation;
+      const isFailedStep = row.logicalStepId === failedStepId;
+      const eligible = isFailedStep || Boolean(preservation?.eligible);
+      let reason = '';
+      if (!eligible) {
+        if (row.order > failedOrder) {
+          reason = 'after failed step';
+        } else if (preservation?.message) {
+          reason = preservation.message;
+        } else if (preservation?.reason) {
+          reason = formatStatusLabel(preservation.reason);
+        } else {
+          reason = 'checkpoint evidence missing';
+        }
+      }
+      return {
+        logicalStepId: row.logicalStepId,
+        title: row.title,
+        eligible,
+        reason,
+        isFailedStep,
+      };
+    });
+  }, [execution?.resume?.failedStepId, stepsQuery.data?.steps]);
+  const selectedRecoveryStep =
+    selectedRecoveryOptions.find((option) => option.logicalStepId === selectedRecoveryStepId) ||
+    selectedRecoveryOptions.find((option) => option.isFailedStep) ||
+    selectedRecoveryOptions.find((option) => option.eligible) ||
+    null;
 
   const artifactsQuery = useQuery({
     queryKey: ['workflow-detail-artifacts', namespace, workflowId, latestRunId],
@@ -4825,7 +4918,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           body: JSON.stringify({
             idempotencyKey: `resume-${workflowId}-${latestRunId || runId || 'latest'}`,
             ...(execution?.resume?.checkpointRef
-              ? { resumeCheckpointRef: execution.resume.checkpointRef }
+              ? { recoveryCheckpointRef: execution.resume.checkpointRef }
               : {}),
             operatorMetadata: { requestedFrom: 'workflow-detail' },
           }),
@@ -4839,6 +4932,43 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     },
     onSuccess: () => {
       setActionNotice('Resumed from failed step.');
+      invalidate();
+    },
+    onError: (error: Error) => setActionError(error.message),
+  });
+
+  const selectedStepRecoveryMutation = useMutation({
+    mutationFn: async () => {
+      const selectedStepId = selectedRecoveryStep?.logicalStepId || '';
+      const sourceRunId = execution?.resume?.sourceRunId || latestRunId || runId || '';
+      if (!selectedStepId || !sourceRunId) {
+        throw new Error('Selected-step recovery requires a source run and start step.');
+      }
+      const response = await fetch(
+        `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/recover-from-selected-step`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({
+            idempotencyKey: `selected-step-recovery-${workflowId}-${sourceRunId}-${selectedStepId}`,
+            sourceWorkflowId: workflowId,
+            sourceRunId,
+            selectedStartStepId: selectedStepId,
+            ...(execution?.resume?.checkpointRef
+              ? { recoveryCheckpointRef: execution.resume.checkpointRef }
+              : {}),
+            operatorMetadata: { requestedFrom: 'workflow-detail', mode: 'selected-step' },
+          }),
+        },
+      );
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || response.statusText);
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      setActionNotice('Recovery started from selected step.');
       invalidate();
     },
     onError: (error: Error) => setActionError(error.message),
@@ -4936,6 +5066,13 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     failedStepResumeMutation.mutate();
   };
 
+  const onRecoverFromSelectedStep = () => {
+    setActionError(null);
+    const label = selectedRecoveryStep?.title || selectedRecoveryStep?.logicalStepId || 'the selected step';
+    if (!window.confirm(`Recover from ${label} using checkpoint evidence from the source run?`)) return;
+    selectedStepRecoveryMutation.mutate();
+  };
+
   const onApprove = () => {
     setActionError(null);
     signalMutation.mutate({ signalName: 'Approve', payload: {} });
@@ -4977,6 +5114,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     signalMutation.isPending ||
     cancelMutation.isPending ||
     failedStepResumeMutation.isPending ||
+    selectedStepRecoveryMutation.isPending ||
     createRemediationMutation.isPending ||
     remediationApprovalMutation.isPending;
   const editHref = workflowId
@@ -5791,6 +5929,39 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                   </button>
                 ) : null}
               </div>
+              {taskEditingOn && actions.canResumeFromFailedStep && selectedRecoveryOptions.length > 0 ? (
+                <div className="stack">
+                  <label className="field-label" htmlFor="selected-recovery-step">
+                    Recovery start step
+                  </label>
+                  <select
+                    id="selected-recovery-step"
+                    value={selectedRecoveryStep?.logicalStepId || ''}
+                    disabled={busy}
+                    onChange={(event) => setSelectedRecoveryStepId(event.target.value)}
+                  >
+                    {selectedRecoveryOptions.map((option) => (
+                      <option
+                        key={option.logicalStepId}
+                        value={option.logicalStepId}
+                        disabled={!option.eligible}
+                      >
+                        {option.title || option.logicalStepId}
+                        {option.isFailedStep ? ' (failed step)' : ''}
+                        {!option.eligible && option.reason ? ` - ${option.reason}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={busy || !selectedRecoveryStep?.eligible}
+                    onClick={onRecoverFromSelectedStep}
+                  >
+                    Recover from selected step
+                  </button>
+                </div>
+              ) : null}
               {editTaskUnavailableReason ? (
                 <p className="small">
                   Edit workflow unavailable: {formatStatusLabel(editTaskUnavailableReason)}

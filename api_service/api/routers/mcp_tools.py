@@ -8,8 +8,10 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.auth_providers import get_current_user
+from api_service.db.base import async_session_maker, get_async_session
 from api_service.db.models import User
 from moonmind.config.settings import settings
 from moonmind.integrations.jira.errors import JiraToolError
@@ -23,6 +25,10 @@ from moonmind.mcp.jules_tool_registry import (
     JulesToolExecutionContext,
     JulesToolRegistry,
 )
+from moonmind.mcp.skills_on_demand_registry import (
+    SkillsOnDemandToolExecutionContext,
+    SkillsOnDemandToolRegistry,
+)
 from moonmind.mcp.tool_registry import (
     QueueToolExecutionContext,
     QueueToolRegistry,
@@ -34,6 +40,7 @@ from moonmind.mcp.tool_registry import (
     ToolListResponse,
     ToolNotFoundError,
 )
+from moonmind.workflows import get_temporal_artifact_service
 from moonmind.workflows.adapters.jules_client import JulesClient, JulesClientError
 
 logger = logging.getLogger(__name__)
@@ -45,6 +52,9 @@ MCP_SERVER_INFO = {"name": "moonmind", "version": "0.1.0"}
 
 _queue_registry = QueueToolRegistry()
 _execution_tool_registry = ExecutableToolDiscoveryRegistry()
+_skills_on_demand_registry = SkillsOnDemandToolRegistry(
+    expose_commands=settings.workflow.skills_on_demand_enabled
+)
 _jira_registry: JiraToolRegistry | None = None
 _jira_service: JiraToolService | None = None
 _jules_registry: JulesToolRegistry | None = None
@@ -135,7 +145,11 @@ def _to_http_exception(exc: Exception) -> HTTPException:
 
 
 def _list_registered_tools() -> list[Any]:
-    tools = _queue_registry.list_tools() + _execution_tool_registry.list_tools()
+    tools = (
+        _queue_registry.list_tools()
+        + _execution_tool_registry.list_tools()
+        + _skills_on_demand_registry.list_tools()
+    )
     if _jira_registry is not None:
         tools = tools + _jira_registry.list_tools()
     if _jules_registry is not None:
@@ -144,7 +158,7 @@ def _list_registered_tools() -> list[Any]:
 
 
 def _list_streamable_callable_tools() -> list[Any]:
-    tools = _queue_registry.list_tools()
+    tools = _queue_registry.list_tools() + _skills_on_demand_registry.list_tools()
     if _jira_registry is not None:
         tools = tools + _jira_registry.list_tools()
     if _jules_registry is not None:
@@ -152,7 +166,11 @@ def _list_streamable_callable_tools() -> list[Any]:
     return tools
 
 
-async def _dispatch_tool_call(payload: ToolCallRequest, user: User) -> Any:
+async def _dispatch_tool_call(
+    payload: ToolCallRequest,
+    user: User,
+    session: AsyncSession | None = None,
+) -> Any:
     if _execution_tool_registry.has_tool(payload.tool):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -182,6 +200,31 @@ async def _dispatch_tool_call(payload: ToolCallRequest, user: User) -> Any:
             tool=payload.tool,
             arguments=payload.arguments,
             context=jules_context,
+        )
+    if payload.tool.startswith("moonmind.skills."):
+        artifact_service = (
+            get_temporal_artifact_service(session)
+            if session is not None and settings.workflow.skills_on_demand_enabled
+            else None
+        )
+        skills_context = SkillsOnDemandToolExecutionContext(
+            enabled=settings.workflow.skills_on_demand_enabled,
+            workspace_root=settings.workflow.repo_root,
+            artifact_service=artifact_service,
+            async_session_maker=async_session_maker,
+            skills_cache_root=settings.workflow.skills_cache_root,
+            skills_workspace_root=settings.workflow.skills_workspace_root,
+            allow_repo_skills=bool(
+                getattr(settings.workflow, "allow_repo_skills", False)
+            ),
+            allow_local_skills=bool(
+                getattr(settings.workflow, "allow_local_skills", False)
+            ),
+        )
+        return await _skills_on_demand_registry.call_tool(
+            tool=payload.tool,
+            arguments=payload.arguments,
+            context=skills_context,
         )
 
     queue_context = QueueToolExecutionContext(
@@ -294,7 +337,11 @@ def _tool_error_payload(detail: Any) -> dict[str, Any]:
     }
 
 
-async def _handle_json_rpc_request(message: Any, user: User) -> dict[str, Any] | None:
+async def _handle_json_rpc_request(
+    message: Any,
+    user: User,
+    session: AsyncSession | None = None,
+) -> dict[str, Any] | None:
     if _is_json_rpc_notification(message) or _is_json_rpc_response(message):
         return None
     if not isinstance(message, dict):
@@ -369,6 +416,7 @@ async def _handle_json_rpc_request(message: Any, user: User) -> dict[str, Any] |
             result = await _dispatch_tool_call(
                 ToolCallRequest(tool=tool_name, arguments=arguments),
                 user,
+                session,
             )
             return _json_rpc_result(request_id, _tool_result_payload(result))
     except HTTPException as exc:
@@ -411,6 +459,7 @@ async def _handle_json_rpc_request(message: Any, user: User) -> dict[str, Any] |
 async def handle_streamable_http_post(
     request: Request,
     user: User = Depends(get_current_user()),
+    session: AsyncSession = Depends(get_async_session),
 ) -> Response:
     """Handle MCP Streamable HTTP JSON-RPC messages at the single MCP endpoint."""
 
@@ -446,7 +495,8 @@ async def handle_streamable_http_post(
         responses = [
             response
             for response in [
-                await _handle_json_rpc_request(message, user) for message in payload
+                await _handle_json_rpc_request(message, user, session)
+                for message in payload
             ]
             if response is not None
         ]
@@ -454,7 +504,7 @@ async def handle_streamable_http_post(
             return Response(status_code=status.HTTP_202_ACCEPTED)
         return JSONResponse(responses)
 
-    response = await _handle_json_rpc_request(payload, user)
+    response = await _handle_json_rpc_request(payload, user, session)
     if response is None:
         return Response(status_code=status.HTTP_202_ACCEPTED)
     return JSONResponse(response)
@@ -495,11 +545,16 @@ async def list_tools(
 async def call_tool(
     payload: ToolCallRequest,
     user: User = Depends(get_current_user()),
+    session: AsyncSession = Depends(get_async_session),
 ) -> ToolCallResponse:
     """Dispatch one MCP tool invocation."""
 
     try:
-        result = await _dispatch_tool_call(payload, user)
+        result = await _dispatch_tool_call(
+            payload,
+            user,
+            session,
+        )
     except HTTPException:
         raise
     except JiraToolError as exc:

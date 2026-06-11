@@ -75,6 +75,7 @@ class TestParsePlanDefinitionApprovalPolicy:
                 "approval_policy": {
                     "enabled": True,
                     "max_review_attempts": 3,
+                    "max_consecutive_no_progress_attempts": 2,
                     "reviewer_model": "gpt-4",
                     "review_timeout_seconds": 60,
                     "skip_tool_types": ["agent_runtime"],
@@ -85,6 +86,7 @@ class TestParsePlanDefinitionApprovalPolicy:
         rg = plan.policy.approval_policy
         assert rg.enabled is True
         assert rg.max_review_attempts == 3
+        assert rg.max_consecutive_no_progress_attempts == 2
         assert rg.reviewer_model == "gpt-4"
         assert rg.review_timeout_seconds == 60
         assert rg.skip_tool_types == ("agent_runtime",)

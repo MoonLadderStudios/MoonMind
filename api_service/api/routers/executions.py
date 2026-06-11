@@ -50,6 +50,7 @@ from moonmind.schemas.manifest_ingest_models import (
     ManifestStatusSnapshotModel,
 )
 from moonmind.schemas.temporal_artifact_models import ArtifactRefModel
+from moonmind.utils.logging import redact_sensitive_text
 from moonmind.schemas.temporal_models import (
     CancelExecutionRequest,
     ConfigureIntegrationMonitoringRequest,
@@ -78,6 +79,7 @@ from moonmind.schemas.temporal_models import (
     ExecutionSkillVersionSummaryModel,
     RecoverFromFailedStepRequest,
     RecoverFromFailedStepResponse,
+    RecoverFromSelectedStepRequest,
     WorkflowInputSnapshotDescriptorModel,
     PollIntegrationRequest,
     RescheduleExecutionRequest,
@@ -4046,6 +4048,12 @@ def _first_text(*values: Any) -> str | None:
     return None
 
 
+def _safe_display_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return redact_sensitive_text(value)
+
+
 def _quality_gate_verdict(checks: list[dict[str, Any]]) -> str | None:
     for check in checks:
         if not isinstance(check, (Mapping, BaseModel)):
@@ -4104,9 +4112,11 @@ def _step_execution_projection_payload(
     source_execution_ordinal = (
         manifest.lineage.source_execution_ordinal if manifest.lineage is not None else None
     )
-    summary = _first_text(
-        _field_value(outputs, "summary"),
-        _field_value(execution, "summary"),
+    summary = _safe_display_text(
+        _first_text(
+            _field_value(outputs, "summary"),
+            _field_value(execution, "summary"),
+        )
     )
     return {
         "manifestArtifactRef": manifest_artifact_ref,
@@ -5804,6 +5814,8 @@ async def _hydrate_recovery_checkpoint_payload(
 
 def _recovery_not_available_reason(exc: Exception) -> str:
     message = str(exc).lower()
+    if "selected start step" in message:
+        return "selected_step_not_eligible"
     if "does not match" in message:
         return "checkpoint_inconsistent"
     if "plan" in message:
@@ -8984,6 +8996,107 @@ async def recover_execution_from_failed_step(
             detail={
                 "code": "resume_not_available",
                 "message": "Failed-step recovery is not available for this execution.",
+                "reason": "state_not_eligible",
+            },
+        ) from exc
+    await session.commit()
+    return RecoverFromFailedStepResponse.model_validate(result)
+
+@router.post(
+    "/{workflow_id}/recover-from-selected-step",
+    response_model=RecoverFromFailedStepResponse,
+    status_code=status.HTTP_201_CREATED,
+    response_model_exclude_none=True,
+)
+async def recover_execution_from_selected_step(
+    workflow_id: str,
+    payload: dict[str, Any] = Body(default_factory=dict),
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+    _submit_enabled: None = Depends(_ensure_submit_enabled),
+) -> RecoverFromFailedStepResponse:
+    try:
+        request = RecoverFromSelectedStepRequest.model_validate(payload)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "invalid_recovery_request",
+                "message": str(exc),
+            },
+        ) from exc
+
+    canonical = await _get_owned_execution(
+        service=service, workflow_id=workflow_id, user=user
+    )
+    if request.source_workflow_id != canonical.workflow_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "resume_not_available",
+                "message": "Selected-step recovery source workflow does not match.",
+                "reason": "checkpoint_inconsistent",
+            },
+        )
+    if request.source_run_id != str(canonical.run_id or ""):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "resume_not_available",
+                "message": "Selected-step recovery source run does not match.",
+                "reason": "checkpoint_inconsistent",
+            },
+        )
+    checkpoint_ref = request.recovery_checkpoint_ref or _recovery_checkpoint_ref_from_record(
+        canonical
+    )
+    if not checkpoint_ref:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "resume_not_available",
+                "message": "Selected-step recovery requires a valid checkpoint reference.",
+                "reason": "checkpoint_missing",
+            },
+        )
+    if _recovery_evidence_marked_stale(canonical):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "resume_not_available",
+                "message": "Selected-step recovery is not available for this execution.",
+                "reason": "stale_recovery_evidence",
+            },
+        )
+    checkpoint_payload = await _hydrate_recovery_checkpoint_payload(
+        session=session,
+        user=user,
+        checkpoint_ref=checkpoint_ref,
+    )
+    try:
+        result = await service.create_failed_step_recovery_execution(
+            canonical,
+            recovery_checkpoint_ref=checkpoint_ref,
+            idempotency_key=request.idempotency_key,
+            checkpoint_payload=checkpoint_payload,
+            selected_start_step_id=request.selected_start_step_id,
+        )
+    except TemporalExecutionRecoveryCheckpointError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "resume_not_available",
+                "message": "Selected-step recovery is not available for this execution.",
+                "reason": _recovery_not_available_reason(exc),
+            },
+        ) from exc
+    except TemporalExecutionValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "resume_not_available",
+                "message": "Selected-step recovery is not available for this execution.",
                 "reason": "state_not_eligible",
             },
         ) from exc

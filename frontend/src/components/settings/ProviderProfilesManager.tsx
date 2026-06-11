@@ -120,18 +120,51 @@ interface OAuthSessionResponse {
   runtime_id: string;
   profile_id: string;
   status: OAuthSessionStatus;
+  terminal_session_id?: string | null;
+  terminal_bridge_id?: string | null;
   session_transport?: string | null;
   failure_reason?: string | null;
 }
 
 interface OAuthSessionState {
   sessionId: string;
+  profileId: string;
   status: OAuthSessionStatus;
+  sessionTransport?: string | null | undefined;
+  terminalSessionId?: string | null | undefined;
+  terminalBridgeId?: string | null | undefined;
   failureReason?: string | null | undefined;
 }
 
 export const PROVIDER_PROFILE_QUERY_KEY = ['provider-profiles'] as const;
 const PROVIDER_PROFILE_REFRESH_STORAGE_KEY = 'moonmind:provider-profile-updated';
+
+function oauthSessionStateFromResponse(
+  session: OAuthSessionResponse,
+  fallbackProfileId?: string,
+): OAuthSessionState {
+  return {
+    sessionId: session.session_id,
+    profileId: session.profile_id || fallbackProfileId || '',
+    status: session.status,
+    sessionTransport: session.session_transport,
+    terminalSessionId: session.terminal_session_id,
+    terminalBridgeId: session.terminal_bridge_id,
+    failureReason: session.failure_reason,
+  };
+}
+
+function oauthSessionStatesEqual(left: OAuthSessionState, right: OAuthSessionState): boolean {
+  return (
+    left.sessionId === right.sessionId &&
+    left.profileId === right.profileId &&
+    left.status === right.status &&
+    left.sessionTransport === right.sessionTransport &&
+    left.terminalSessionId === right.terminalSessionId &&
+    left.terminalBridgeId === right.terminalBridgeId &&
+    left.failureReason === right.failureReason
+  );
+}
 
 export function defaultFormState(): ProviderProfileFormState {
   return {
@@ -556,6 +589,7 @@ export function ProviderProfilesManager({
   const [form, setForm] = useState<ProviderProfileFormState>(() => defaultFormState());
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
   const [oauthSessions, setOauthSessions] = useState<Record<string, OAuthSessionState>>({});
+  const [tmateOAuthSession, setTmateOAuthSession] = useState<OAuthSessionState | null>(null);
   const [claudeEnrollment, setClaudeEnrollment] = useState<ClaudeEnrollmentState | null>(null);
   const claudeEnrollmentDrawerRef = useRef<HTMLDivElement | null>(null);
   const claudeEnrollmentProfileIdRef = useRef<string | null>(null);
@@ -573,6 +607,23 @@ export function ProviderProfilesManager({
       }
       return updater(current);
     });
+  };
+
+  const applyOAuthSessionResponse = (session: OAuthSessionResponse, fallbackProfileId?: string) => {
+    const sessionState = oauthSessionStateFromResponse(session, fallbackProfileId);
+    setOauthSessions((current) => ({
+      ...current,
+      [sessionState.profileId]: sessionState,
+    }));
+    if (sessionState.sessionTransport === 'tmate') {
+      setTmateOAuthSession(sessionState);
+    } else {
+      window.open(
+        `/oauth-terminal?session_id=${encodeURIComponent(sessionState.sessionId)}`,
+        '_blank',
+        'noopener,noreferrer',
+      );
+    }
   };
 
   useEffect(() => {
@@ -902,19 +953,7 @@ export function ProviderProfilesManager({
       return response.json() as Promise<OAuthSessionResponse>;
     },
     onSuccess: (session) => {
-      setOauthSessions((current) => ({
-        ...current,
-        [session.profile_id]: {
-          sessionId: session.session_id,
-          status: session.status,
-          failureReason: session.failure_reason,
-        },
-      }));
-      window.open(
-        `/oauth-terminal?session_id=${encodeURIComponent(session.session_id)}`,
-        '_blank',
-        'noopener,noreferrer',
-      );
+      applyOAuthSessionResponse(session);
       onNotice({
         level: 'ok',
         text: `OAuth session "${session.session_id}" started for "${session.profile_id}".`,
@@ -944,7 +983,12 @@ export function ProviderProfilesManager({
     onSuccess: ({ profileId }) => {
       setOauthSessions((current) => ({
         ...current,
-        [profileId]: { ...current[profileId], sessionId: current[profileId]?.sessionId ?? '', status: 'cancelled' },
+        [profileId]: {
+          ...current[profileId],
+          sessionId: current[profileId]?.sessionId ?? '',
+          profileId,
+          status: 'cancelled',
+        },
       }));
       onNotice({ level: 'ok', text: `OAuth session for "${profileId}" cancelled.` });
     },
@@ -972,8 +1016,11 @@ export function ProviderProfilesManager({
     onSuccess: ({ profileId, sessionId }) => {
       setOauthSessions((current) => ({
         ...current,
-        [profileId]: { sessionId, status: 'succeeded' },
+        [profileId]: { ...current[profileId], sessionId, profileId, status: 'succeeded' },
       }));
+      setTmateOAuthSession((current) =>
+        current?.sessionId === sessionId ? { ...current, status: 'succeeded' } : current,
+      );
       queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
       onNotice({ level: 'ok', text: `OAuth session for "${profileId}" finalized.` });
     },
@@ -1000,19 +1047,7 @@ export function ProviderProfilesManager({
       return { profileId, session };
     },
     onSuccess: ({ profileId, session }) => {
-      setOauthSessions((current) => ({
-        ...current,
-        [profileId]: {
-          sessionId: session.session_id,
-          status: session.status,
-          failureReason: session.failure_reason,
-        },
-      }));
-      window.open(
-        `/oauth-terminal?session_id=${encodeURIComponent(session.session_id)}`,
-        '_blank',
-        'noopener,noreferrer',
-      );
+      applyOAuthSessionResponse(session, profileId);
       onNotice({ level: 'ok', text: `OAuth session for "${profileId}" retried.` });
     },
     onError: (error: Error) => {
@@ -1089,22 +1124,31 @@ export function ProviderProfilesManager({
         let hasChanges = false;
         for (const { profileId, session } of appliedUpdates) {
           const existing = current[profileId];
-          if (
-            existing &&
-            existing.sessionId === session.session_id &&
-            existing.status === session.status &&
-            existing.failureReason === session.failure_reason
-          ) {
+          const sessionState = oauthSessionStateFromResponse(session, profileId);
+          if (existing && oauthSessionStatesEqual(existing, sessionState)) {
             continue;
           }
-          next[profileId] = {
-            sessionId: session.session_id,
-            status: session.status,
-            failureReason: session.failure_reason,
-          };
+          next[profileId] = sessionState;
           hasChanges = true;
         }
         return hasChanges ? next : current;
+      });
+
+      setTmateOAuthSession((current) => {
+        if (!current) {
+          return current;
+        }
+        const matchingUpdate = appliedUpdates.find(
+          ({ session }) => session.session_id === current.sessionId,
+        );
+        if (!matchingUpdate) {
+          return current;
+        }
+        const sessionState = oauthSessionStateFromResponse(
+          matchingUpdate.session,
+          matchingUpdate.profileId,
+        );
+        return oauthSessionStatesEqual(current, sessionState) ? current : sessionState;
       });
 
       if (appliedUpdates.some(({ session }) => session.status === 'succeeded')) {
@@ -1541,6 +1585,96 @@ export function ProviderProfilesManager({
           </tbody>
         </table>
       </div>
+
+      {tmateOAuthSession ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setTmateOAuthSession(null);
+            }
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="tmate-oauth-session-title"
+            className="w-full max-w-xl rounded-lg border border-slate-200 bg-white p-5 shadow-2xl outline-none dark:border-slate-800 dark:bg-slate-900"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h4
+                  id="tmate-oauth-session-title"
+                  className="text-base font-semibold text-slate-900 dark:text-white"
+                >
+                  Tmate OAuth session
+                </h4>
+                <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                  Complete provider login in the Tmate terminal, then finalize this OAuth session.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="inline-flex items-center justify-center rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-slate-400 dark:border-slate-700 dark:text-slate-300 dark:hover:border-slate-500"
+                onClick={() => setTmateOAuthSession(null)}
+              >
+                Close
+              </button>
+            </div>
+            <dl className="mt-4 space-y-3 text-sm">
+              <div>
+                <dt className="font-medium text-slate-700 dark:text-slate-300">Session</dt>
+                <dd className="mt-1 font-mono text-xs text-slate-600 dark:text-slate-400">
+                  {tmateOAuthSession.sessionId}
+                </dd>
+              </div>
+              {tmateOAuthSession.terminalSessionId ? (
+                <div>
+                  <dt className="font-medium text-slate-700 dark:text-slate-300">Web terminal</dt>
+                  <dd className="mt-1 break-all font-mono text-xs text-slate-600 dark:text-slate-400">
+                    {tmateOAuthSession.terminalSessionId}
+                  </dd>
+                </div>
+              ) : null}
+              {tmateOAuthSession.terminalBridgeId ? (
+                <div>
+                  <dt className="font-medium text-slate-700 dark:text-slate-300">SSH terminal</dt>
+                  <dd className="mt-1 break-all font-mono text-xs text-slate-600 dark:text-slate-400">
+                    {tmateOAuthSession.terminalBridgeId}
+                  </dd>
+                </div>
+              ) : null}
+            </dl>
+            <div className="mt-5 flex flex-wrap gap-2">
+              {tmateOAuthSession.terminalSessionId ? (
+                <a
+                  className="inline-flex items-center justify-center rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-200"
+                  href={tmateOAuthSession.terminalSessionId}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Open Tmate
+                </a>
+              ) : null}
+              {canFinalizeOAuthStatus(tmateOAuthSession.status) ? (
+                <button
+                  type="button"
+                  className="inline-flex items-center justify-center rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-400 dark:border-slate-700 dark:text-slate-300 dark:hover:border-slate-500"
+                  onClick={() => {
+                    finalizeOAuthMutation.mutate({
+                      profileId: tmateOAuthSession.profileId,
+                      sessionId: tmateOAuthSession.sessionId,
+                    });
+                  }}
+                  disabled={finalizeOAuthMutation.isPending}
+                >
+                  Finalize Provider Profile
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {claudeEnrollment ? (
         <div

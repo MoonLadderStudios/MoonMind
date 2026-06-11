@@ -1463,3 +1463,11 @@ def test_recover_from_failed_step_route_contract_is_registered() -> None:
     assert route["responses"]["201"]["description"]
     request_schema = route["requestBody"]["content"]["application/json"]["schema"]
     assert request_schema["type"] == "object"
+
+
+def test_recover_from_selected_step_route_contract_is_registered() -> None:
+    schema = app.openapi()
+    route = schema["paths"]["/api/executions/{workflow_id}/recover-from-selected-step"]["post"]
+    assert route["responses"]["201"]["description"]
+    request_schema = route["requestBody"]["content"]["application/json"]["schema"]
+    assert request_schema["type"] == "object"

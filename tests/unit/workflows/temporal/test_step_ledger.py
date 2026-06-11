@@ -385,10 +385,14 @@ def test_mark_step_checkpoint_evidence_marks_completed_step_eligible() -> None:
         "implement",
         updated_at=updated_at,
         state_checkpoint_ref="artifact://checkpoint/implement/1",
+        workspace_checkpoint_ref="artifact://workspace/implement/1",
+        step_checkpoint_ref="artifact://step/implement/1",
     )
 
     row = StepLedgerRowModel.model_validate(rows[0])
     assert row.state_checkpoint_ref == "artifact://checkpoint/implement/1"
+    assert row.workspace_checkpoint_ref == "artifact://workspace/implement/1"
+    assert row.step_checkpoint_ref == "artifact://step/implement/1"
     assert row.resume_preservation is not None
     assert row.resume_preservation.eligible is True
     assert row.resume_preservation.reason == "complete"

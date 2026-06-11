@@ -36,6 +36,11 @@ from moonmind.agents.codex_worker.handlers import (
     OutputChunkCallback,
     WorkerExecutionResult,
 )
+from moonmind.security.outbound_scan import (
+    OutboundBundleItem,
+    resolve_high_security_mode,
+    scan_outbound_bundle,
+)
 from moonmind.workflows.executions.job_types import CANONICAL_WORKFLOW_JOB_TYPE, LEGACY_WORKFLOW_JOB_TYPES
 from moonmind.workflows.executions.execution_contract import (
     SUPPORTED_EXECUTION_RUNTIMES,
@@ -64,7 +69,7 @@ from moonmind.workflows.temporal.runtime.self_heal import (
 )
 from moonmind.workflows.adapters.github_service import GitHubService
 from moonmind.config.settings import settings
-from moonmind.services.skills_on_demand import skills_on_demand_disabled_instruction
+from moonmind.services.skills_on_demand import skills_on_demand_runtime_instruction
 from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
 from moonmind.jules.runtime import (
     build_runtime_gate_state as build_jules_runtime_gate_state,
@@ -88,6 +93,10 @@ from moonmind.workflows.skills.workspace_links import (
 from moonmind.workflows.automation.workspace import generate_branch_name
 
 logger = logging.getLogger(__name__)
+
+_PUBLISH_PUSH_SCAN_MAX_COMMIT_METADATA_CHARS = 100_000
+_PUBLISH_PUSH_SCAN_MAX_FILE_DIFF_CHARS = 200_000
+_PUBLISH_PUSH_SCAN_MAX_CHANGED_FILES = 200
 
 _CONTAINER_RESERVED_ENV_KEYS = frozenset({"ARTIFACT_DIR", "JOB_ID", "REPOSITORY"})
 _CONTAINER_VOLUME_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
@@ -216,6 +225,16 @@ def _canonical_execution_runtime(runtime_mode: str) -> str:
     """Map alias runtimes to their canonical executable form for dispatch."""
 
     return _RUNTIME_MODE_EXECUTION_ALIASES.get(runtime_mode, runtime_mode)
+
+def _canonical_workflow_node(canonical_payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    workflow_node = canonical_payload.get("workflow")
+    if isinstance(workflow_node, Mapping):
+        return workflow_node
+    task_node = canonical_payload.get("task")
+    if isinstance(task_node, Mapping):
+        return task_node
+    return {}
+
 _PROPOSAL_INSTRUCTIONS_PLACEHOLDER = "<OBJECTIVE>"
 _DEFAULT_PREPARE_GIT_USER_NAME = "MoonMind Worker"
 _DEFAULT_PREPARE_GIT_USER_EMAIL = "moonmind-worker@users.noreply.github.com"
@@ -2007,8 +2026,7 @@ class CodexWorker:
             submitted_count=0,
             errors=[],
         )
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         publish_node = task.get("publish")
         publish = publish_node if isinstance(publish_node, Mapping) else {}
         publish_mode = str(publish.get("mode") or "pr").strip().lower() or "pr"
@@ -2652,8 +2670,7 @@ class CodexWorker:
                 step=resolved_steps[0],
                 total_steps=1,
             )
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         objective = str(task.get("instructions") or "").strip() or "(missing objective)"
         step_lines: list[str] = []
         for step in resolved_steps:
@@ -2992,8 +3009,7 @@ class CodexWorker:
             payload={"jobType": job.type, "stages": stage_plan, **skill_meta},
         )
 
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         publish_node = task.get("publish")
         publish = publish_node if isinstance(publish_node, Mapping) else {}
         publish_mode = str(publish.get("mode") or "none").strip().lower() or "none"
@@ -3836,8 +3852,7 @@ class CodexWorker:
     ) -> list[ResolvedTaskStep]:
         """Resolve canonical payload into ordered runtime step metadata."""
 
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         task_skill_node = task.get("skill")
         task_skill = task_skill_node if isinstance(task_skill_node, Mapping) else {}
         task_skill_id = str(task_skill.get("id") or "auto").strip() or "auto"
@@ -3973,10 +3988,8 @@ class CodexWorker:
     ) -> dict[str, Any]:
         """Return normalized skill execution metadata for job events."""
 
-        task_node = canonical_payload.get("task")
-        runtime_node = (
-            task_node.get("runtime") if isinstance(task_node, Mapping) else None
-        )
+        task = _canonical_workflow_node(canonical_payload)
+        runtime_node = task.get("runtime")
         if isinstance(runtime_node, Mapping):
             selected_model = str(runtime_node.get("model") or "").strip() or None
             selected_effort = str(runtime_node.get("effort") or "").strip() or None
@@ -4069,8 +4082,7 @@ class CodexWorker:
     def _workflow_proposals_requested(self, canonical_payload: Mapping[str, Any]) -> bool:
         """Return whether post-run proposal generation is requested for this task."""
 
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         requested_value = task.get("proposeTasks")
         return self._coerce_bool(requested_value, default=False)
 
@@ -4093,8 +4105,7 @@ class CodexWorker:
         workdir_mode_override: str | None = None,
         include_ref: bool = True,
     ) -> dict[str, Any]:
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         runtime_node = task.get("runtime")
         runtime = runtime_node if isinstance(runtime_node, Mapping) else {}
         git_node = task.get("git")
@@ -4229,8 +4240,7 @@ class CodexWorker:
                     )
 
             workdir_mode = self._safe_workdir_mode(source_payload)
-            task_node = canonical_payload.get("task")
-            task = task_node if isinstance(task_node, Mapping) else {}
+            task = _canonical_workflow_node(canonical_payload)
             runtime_node = task.get("runtime")
             runtime = runtime_node if isinstance(runtime_node, Mapping) else {}
             git_node = task.get("git")
@@ -4627,8 +4637,7 @@ class CodexWorker:
     def _collect_input_attachment_targets(
         cls, canonical_payload: Mapping[str, Any]
     ) -> list[InputAttachmentMaterializationTarget]:
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         targets: list[InputAttachmentMaterializationTarget] = []
         objective_refs = task.get("inputAttachments")
         if objective_refs is not None:
@@ -4943,8 +4952,7 @@ class CodexWorker:
     ) -> str | None:
         """Extract first non-empty instruction sentence/line."""
 
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         task_instructions = str(task.get("instructions") or "")
         for line in task_instructions.splitlines():
             line = line.strip()
@@ -4984,8 +4992,7 @@ class CodexWorker:
     ) -> str | None:
         """Return the canonical Jira issue key attached to a task-shaped payload."""
 
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         candidates = (
             task.get("jiraIssueKey"),
             task.get("jira_issue_key"),
@@ -5010,8 +5017,7 @@ class CodexWorker:
     ) -> str | None:
         """Return the active MoonSpec path when task payload metadata provides it."""
 
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         for candidate in (
             task.get("moonSpecPath"),
             task.get("moonspecPath"),
@@ -5198,8 +5204,7 @@ class CodexWorker:
 
     @staticmethod
     def _resolve_publish_runtime_mode(canonical_payload: Mapping[str, Any]) -> str:
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         runtime_node = task.get("runtime")
         runtime = runtime_node if isinstance(runtime_node, Mapping) else {}
         runtime_mode = (
@@ -5868,8 +5873,7 @@ class CodexWorker:
     ) -> str | None:
         """Publish repository changes according to task publish policy."""
 
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         publish_node = task.get("publish")
         publish = publish_node if isinstance(publish_node, Mapping) else {}
         publish_mode = str(publish.get("mode") or "pr").strip().lower() or "pr"
@@ -6181,6 +6185,12 @@ class CodexWorker:
                 log_path=prepared.publish_log_path,
                 env=prepared.publish_command_env,
                 redaction_values=(commit_message,),
+            )
+            await self._scan_publish_git_push(
+                repo_dir=prepared.repo_dir,
+                branch_name=prepared.working_branch,
+                base_ref=f"origin/{publish_base_branch}",
+                env=prepared.publish_command_env,
             )
             await self._run_stage_command(
                 ["git", "push", "-u", "origin", prepared.working_branch],
@@ -7484,8 +7494,7 @@ class CodexWorker:
     ) -> StepGateResult:
         """Fail resolve-PR runs when final PR state remains unresolved."""
 
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         objective = str(task.get("instructions") or "").strip()
         is_pr_resolution_task = _is_resolve_pr_objective_text(objective) or any(
             step.effective_skill_id == _PR_RESOLVER_SKILL_ID for step in resolved_steps
@@ -8128,6 +8137,133 @@ class CodexWorker:
                 env=env,
             )
 
+    async def _scan_publish_git_push(
+        self,
+        *,
+        repo_dir: Path,
+        branch_name: str,
+        base_ref: str,
+        env: Mapping[str, str] | None,
+    ) -> None:
+        if not resolve_high_security_mode():
+            return
+
+        scan_env = dict(env) if env is not None else None
+        if base_ref.startswith("origin/"):
+            with suppress(Exception):
+                await self._read_git_text_for_push_scan(
+                    repo_dir=repo_dir,
+                    env=scan_env,
+                    timeout=30,
+                    args=["fetch", "origin", base_ref.removeprefix("origin/")],
+                )
+        commit_range = f"{base_ref}..{branch_name}"
+        try:
+            commit_metadata = await self._read_git_text_for_push_scan(
+                repo_dir=repo_dir,
+                env=scan_env,
+                timeout=15,
+                args=[
+                    "log",
+                    (
+                        "--format=commit %H%nparents %P%nauthor %an <%ae>%n"
+                        + "subject %s%nbody%n%B%n---END-COMMIT---"
+                    ),
+                    commit_range,
+                ],
+            )
+            changed_files_text = await self._read_git_text_for_push_scan(
+                repo_dir=repo_dir,
+                env=scan_env,
+                timeout=15,
+                args=["diff", "--name-only", commit_range],
+            )
+            bundle = [
+                OutboundBundleItem(
+                    location=f"git.push.commits:{commit_range}",
+                    content=commit_metadata[
+                        :_PUBLISH_PUSH_SCAN_MAX_COMMIT_METADATA_CHARS
+                    ],
+                )
+            ]
+            changed_files = [
+                line.strip()
+                for line in changed_files_text.splitlines()
+                if line.strip()
+            ][:_PUBLISH_PUSH_SCAN_MAX_CHANGED_FILES]
+            diff_semaphore = asyncio.Semaphore(10)
+
+            async def _diff_item(changed_file: str) -> OutboundBundleItem:
+                async with diff_semaphore:
+                    file_diff = await self._read_git_text_for_push_scan(
+                        repo_dir=repo_dir,
+                        env=scan_env,
+                        timeout=20,
+                        args=[
+                            "diff",
+                            "--no-ext-diff",
+                            commit_range,
+                            "--",
+                            changed_file,
+                        ],
+                    )
+                return OutboundBundleItem(
+                    location=f"git.push.diff:{changed_file}",
+                    content=file_diff[:_PUBLISH_PUSH_SCAN_MAX_FILE_DIFF_CHARS],
+                )
+
+            bundle.extend(
+                await asyncio.gather(*(_diff_item(path) for path in changed_files))
+            )
+        except Exception as exc:
+            safe_detail = moonmind_logging.redact_sensitive_text(str(exc))
+            raise RuntimeError(
+                "outbound git push blocked: could not build high security "
+                f"scan payload for {commit_range}: {safe_detail}"
+            ) from exc
+
+        scan_result = scan_outbound_bundle(bundle, high_security_mode=True)
+        if scan_result.allowed:
+            return
+        diagnostics = "; ".join(scan_result.sanitized_diagnostics)
+        raise RuntimeError(
+            "outbound git push blocked by high security scan: " + diagnostics
+        )
+
+    async def _read_git_text_for_push_scan(
+        self,
+        *,
+        repo_dir: Path,
+        env: Mapping[str, str] | None,
+        timeout: int,
+        args: list[str],
+    ) -> str:
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            "-C",
+            str(repo_dir),
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=dict(env) if env is not None else None,
+        )
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise
+        if proc.returncode != 0:
+            detail = (
+                stderr_bytes.decode("utf-8", errors="replace").strip()
+                or stdout_bytes.decode("utf-8", errors="replace").strip()
+                or f"git exited with {proc.returncode}"
+            )
+            raise RuntimeError(detail)
+        return stdout_bytes.decode("utf-8", errors="replace")
+
     async def _run_stage_command(
         self,
         command: list[str],
@@ -8330,8 +8466,7 @@ class CodexWorker:
         workdir_mode_override: str | None = None,
         include_ref: bool = True,
     ) -> dict[str, Any]:
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         runtime_node = task.get("runtime")
         runtime = runtime_node if isinstance(runtime_node, Mapping) else {}
         git_node = task.get("git")
@@ -8412,8 +8547,7 @@ class CodexWorker:
     ) -> dict[str, Any]:
         """Build a safe default workflowCreateRequest template for proposal skills."""
 
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         runtime_node = task.get("runtime")
         runtime = runtime_node if isinstance(runtime_node, Mapping) else {}
         git_node = task.get("git")
@@ -8460,8 +8594,7 @@ class CodexWorker:
     ) -> str:
         """Build runtime instruction for post-run proposal generation hooks."""
 
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         objective = str(task.get("instructions") or "").strip() or "(missing objective)"
         status_text = "completed" if task_result.succeeded else "failed"
         request_template = json.dumps(
@@ -8687,15 +8820,15 @@ class CodexWorker:
         request = self._build_proposal_task_request_template(canonical_payload)
         request_payload = request.get("payload")
         payload = request_payload if isinstance(request_payload, dict) else {}
-        task_node = payload.get("task")
-        task = task_node if isinstance(task_node, dict) else {}
-        task["instructions"] = instructions
-        publish_node = task.get("publish")
+        workflow_node = payload.get("workflow")
+        workflow_payload = workflow_node if isinstance(workflow_node, dict) else {}
+        workflow_payload["instructions"] = instructions
+        publish_node = workflow_payload.get("publish")
         publish = publish_node if isinstance(publish_node, dict) else {}
         publish["commitMessage"] = commit_message
         publish["prTitle"] = pr_title
-        task["publish"] = publish
-        payload["task"] = task
+        workflow_payload["publish"] = publish
+        payload["workflow"] = workflow_payload
         request["payload"] = payload
 
         return [
@@ -9933,8 +10066,7 @@ class CodexWorker:
     ) -> WorkerExecutionResult:
         """Execute resolved task steps via selected runtime adapter."""
 
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         explicit_steps = isinstance(task.get("steps"), list) and bool(task.get("steps"))
         container_spec = self._extract_container_task_spec(canonical_payload)
         if container_spec is not None:
@@ -10321,8 +10453,7 @@ class CodexWorker:
     def _extract_container_task_spec(
         self, canonical_payload: Mapping[str, Any]
     ) -> ContainerTaskSpec | None:
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         container_node = task.get("container")
         container = container_node if isinstance(container_node, Mapping) else {}
         if not bool(container.get("enabled")):
@@ -10968,8 +11099,7 @@ class CodexWorker:
         total_steps: int,
         prepared: PreparedTaskWorkspace | None = None,
     ) -> str:
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         publish_node = task.get("publish")
         publish = publish_node if isinstance(publish_node, Mapping) else {}
         publish_mode = str(publish.get("mode") or "pr").strip().lower() or "pr"
@@ -11053,11 +11183,11 @@ class CodexWorker:
                 "- .agents/skills is a compatibility alias only when MoonMind can "
                 "create it without masking repo-authored skill source."
             )
-            disabled_instruction = skills_on_demand_disabled_instruction(
+            on_demand_instruction = skills_on_demand_runtime_instruction(
                 enabled=settings.workflow.skills_on_demand_enabled
             )
-            if disabled_instruction:
-                instruction += f"\n{disabled_instruction}"
+            if on_demand_instruction:
+                instruction += f"\n{on_demand_instruction}"
             instruction += (
                 f"\n\nRUNTIME ADAPTER: {runtime_mode}"
                 "\n\nSKILL USAGE:\n"
@@ -11487,8 +11617,7 @@ class CodexWorker:
         canonical_payload: Mapping[str, Any],
         runtime_mode: str,
     ) -> tuple[str | None, str | None]:
-        task_node = canonical_payload.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
+        task = _canonical_workflow_node(canonical_payload)
         runtime_node = task.get("runtime")
         runtime = runtime_node if isinstance(runtime_node, Mapping) else {}
         model_override = str(runtime.get("model") or "").strip() or None
@@ -11916,10 +12045,8 @@ class CodexWorker:
                 errors=errors,
             )
 
-        task_node = canonical_payload.get("task")
-        policy_node = (
-            task_node.get("proposalPolicy") if isinstance(task_node, Mapping) else None
-        )
+        task = _canonical_workflow_node(canonical_payload)
+        policy_node = task.get("proposalPolicy")
         task_policy: WorkflowProposalPolicy | None = None
         if isinstance(policy_node, Mapping):
             try:

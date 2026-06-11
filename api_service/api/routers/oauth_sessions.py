@@ -64,6 +64,7 @@ _FINALIZE_SUPERSEDING_STATUSES = (
     OAuthSessionStatus.REGISTERING_PROFILE,
     OAuthSessionStatus.SUCCEEDED,
 )
+_SUPPORTED_SESSION_TRANSPORTS = {"none", "moonmind_pty_ws", "tmate"}
 _oauth_terminal_pty_adapter_factory = create_docker_exec_pty_adapter
 
 def _make_terminal_output_sender(websocket: WebSocket):
@@ -75,6 +76,20 @@ def _make_terminal_output_sender(websocket: WebSocket):
             await websocket.send_text(text)
 
     return _send_terminal_output
+
+def _resolve_session_transport(runtime_id: str, requested_transport: str | None) -> str:
+    default_transport = _oauth_default(runtime_id, "session_transport") or "none"
+    raw_transport = requested_transport if requested_transport is not None else default_transport
+    session_transport = str(raw_transport).strip() or "none"
+    if session_transport not in _SUPPORTED_SESSION_TRANSPORTS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Unsupported OAuth session transport. "
+                "Expected one of: moonmind_pty_ws, none, tmate."
+            ),
+        )
+    return session_transport
 
 async def _close_for_pty_io_error(
     websocket: WebSocket,
@@ -308,6 +323,10 @@ async def create_oauth_session(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="volume_mount_path is required for OAuth sessions.",
         )
+    session_transport = _resolve_session_transport(
+        request.runtime_id,
+        request.session_transport,
+    )
 
     await _expire_stale_active_sessions(db, profile_id=request.profile_id)
 
@@ -349,7 +368,7 @@ async def create_oauth_session(
         profile_id=request.profile_id,
         volume_ref=volume_ref,
         volume_mount_path=volume_mount_path,
-        session_transport=_oauth_default(request.runtime_id, "session_transport") or "none",
+        session_transport=session_transport,
         account_label=request.account_label,
         status=OAuthSessionStatus.PENDING,
         requested_by_user_id=str(current_user.id),

@@ -95,6 +95,13 @@ def _mapping_payload(value: object) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
 
+def _workflow_payload(parameters: Mapping[str, Any]) -> Mapping[str, Any]:
+    workflow_payload = _mapping_payload(parameters.get("workflow"))
+    if workflow_payload:
+        return workflow_payload
+    return _mapping_payload(parameters.get("task"))
+
+
 def _truthy_enabled(value: object) -> bool:
     if isinstance(value, bool):
         return value
@@ -106,7 +113,7 @@ def _truthy_enabled(value: object) -> bool:
 
 
 def _merge_automation_publish_selected(parameters: Mapping[str, Any]) -> bool:
-    task_payload = _mapping_payload(parameters.get("task"))
+    task_payload = _workflow_payload(parameters)
     task_publish = _mapping_payload(task_payload.get("publish"))
     publish_payload = _mapping_payload(parameters.get("publish"))
 
@@ -523,7 +530,7 @@ class TemporalExecutionService:
                 "workflow, not a MoonMind.UserWorkflow workflow."
             )
         target_task = (
-            target_record.parameters.get("task")
+            _workflow_payload(target_record.parameters)
             if isinstance(target_record.parameters, Mapping)
             else None
         )
@@ -948,9 +955,12 @@ class TemporalExecutionService:
         run_id = str(uuid4())
         normalized_depends_on: list[str] = []
         remediation_link: TemporalExecutionRemediationLink | None = None
+        task_mapping: Mapping[str, Any] = {}
 
         if workflow_type_enum is TemporalWorkflowType.USER_WORKFLOW:
-            raw_task = (initial_parameters or {}).get("task")
+            raw_task = (initial_parameters or {}).get("workflow")
+            if not isinstance(raw_task, Mapping):
+                raw_task = (initial_parameters or {}).get("task")
             task_mapping = raw_task if isinstance(raw_task, Mapping) else {}
             depends_on = task_mapping.get("dependsOn")
             if isinstance(depends_on, list) and depends_on:
@@ -996,18 +1006,19 @@ class TemporalExecutionService:
         params = dict(initial_parameters or {})
         if failure_policy is not None:
             params.setdefault("failurePolicy", failure_policy)
-        task_params = (
-            dict(params.get("task", {})) if isinstance(params.get("task"), dict) else {}
-        )
-        if isinstance((initial_parameters or {}).get("task", {}).get("dependsOn"), list):
+        task_params = dict(_workflow_payload(params))
+        legacy_task_params = params.get("task")
+        if isinstance(legacy_task_params, Mapping):
+            params.pop("task", None)
+        if isinstance(task_mapping.get("dependsOn"), list):
             if normalized_depends_on:
                 task_params["dependsOn"] = normalized_depends_on
             else:
                 task_params.pop("dependsOn", None)
             if task_params:
-                params["task"] = task_params
+                params["workflow"] = task_params
             else:
-                params.pop("task", None)
+                params.pop("workflow", None)
         if remediation_link is not None:
             remediation_params = task_params.get("remediation")
             if isinstance(remediation_params, Mapping):
@@ -1020,7 +1031,7 @@ class TemporalExecutionService:
                 pinned_target["runId"] = remediation_link.target_run_id
                 pinned_remediation["target"] = pinned_target
                 task_params["remediation"] = pinned_remediation
-                params["task"] = task_params
+                params["workflow"] = task_params
 
         resolved_title = title or self._default_title_for_type(workflow_type_enum)
         memo = {
@@ -2743,15 +2754,17 @@ class TemporalExecutionService:
         for key in FULL_RERUN_RECOVERY_CARRYOVER_PARAM_KEYS:
             params.pop(key, None)
 
-        task_payload = params.get("task")
-        if isinstance(task_payload, Mapping):
-            task_params = dict(task_payload)
-            task_params.pop("recovery", None)
-            task_params.pop("resume", None)
-            if task_params:
-                params["task"] = task_params
+        for key in ("workflow", "task"):
+            workflow_payload = params.get(key)
+            if not isinstance(workflow_payload, Mapping):
+                continue
+            workflow_params = dict(workflow_payload)
+            workflow_params.pop("recovery", None)
+            workflow_params.pop("resume", None)
+            if workflow_params:
+                params[key] = workflow_params
             else:
-                params.pop("task", None)
+                params.pop(key, None)
         return params
 
     @classmethod
@@ -2765,15 +2778,17 @@ class TemporalExecutionService:
         for key in AGENT_RUN_ID_PARAM_KEYS:
             params.pop(key, None)
 
-        if isinstance(params.get("task"), Mapping):
-            params["task"].pop("dependsOn", None)
-            if not params["task"]:
-                params.pop("task", None)
+        for key in ("workflow", "task"):
+            if isinstance(params.get(key), Mapping):
+                params[key].pop("dependsOn", None)
+                if not params[key]:
+                    params.pop(key, None)
         params.pop("dependsOn", None)
         if recovery_provenance:
-            task_params = dict(params.get("task") or {})
-            task_params["recovery"] = dict(recovery_provenance)
-            params["task"] = task_params
+            workflow_params = dict(params.get("workflow") or params.get("task") or {})
+            workflow_params["recovery"] = dict(recovery_provenance)
+            params.pop("task", None)
+            params["workflow"] = workflow_params
         return params
 
     @staticmethod
@@ -2801,11 +2816,9 @@ class TemporalExecutionService:
         source_workflow_id: str,
         source_run_id: str,
     ) -> dict[str, Any] | None:
-        task_patch = (
-            parameters_patch.get("task")
-            if isinstance(parameters_patch, Mapping)
-            else None
-        )
+        task_patch = None
+        if isinstance(parameters_patch, Mapping):
+            task_patch = parameters_patch.get("workflow") or parameters_patch.get("task")
         if not isinstance(task_patch, Mapping):
             return None
         recovery = task_patch.get("recovery")
@@ -2829,11 +2842,11 @@ class TemporalExecutionService:
                 continue
             if not isinstance(value, str):
                 raise TemporalExecutionValidationError(
-                    f"task.recovery.{field} must be a string."
+                    f"workflow.recovery.{field} must be a string."
                 )
             if value.strip() != canonical_value:
                 raise TemporalExecutionValidationError(
-                    "task.recovery source identifiers must match the source execution."
+                    "workflow.recovery source identifiers must match the source execution."
                 )
 
         recovery_provenance = dict(recovery)
@@ -2848,6 +2861,7 @@ class TemporalExecutionService:
         recovery_checkpoint_ref: str | None,
         idempotency_key: str,
         checkpoint_payload: Mapping[str, Any] | None = None,
+        selected_start_step_id: str | None = None,
     ) -> dict[str, Any]:
         """Create a linked follow-up execution for failed-step recovery."""
 
@@ -2927,17 +2941,49 @@ class TemporalExecutionService:
                 raise TemporalExecutionRecoveryCheckpointError(
                     "Recovery checkpoint plan identity does not match source execution."
                 )
-        failed_step_id = checkpoint.failed_step.logical_step_id
-        failed_step_execution = checkpoint.failed_step.execution_ordinal
-        if not failed_step_id:
+        checkpoint_failed_step_id = checkpoint.failed_step.logical_step_id
+        checkpoint_failed_step_execution = checkpoint.failed_step.execution_ordinal
+        if not checkpoint_failed_step_id:
             raise TemporalExecutionRecoveryCheckpointError(
                 "Recovery failed step id is required."
             )
+        selected_step_id = str(selected_start_step_id or "").strip()
+        recovery_mode = "selected_step" if selected_step_id else "last_failed_step"
+        failed_step_id = checkpoint_failed_step_id
+        failed_step_execution = checkpoint_failed_step_execution
+        preserved_steps = list(checkpoint.preserved_steps)
+        if selected_step_id:
+            if selected_step_id == checkpoint_failed_step_id:
+                recovery_mode = "last_failed_step"
+            else:
+                selected_preserved = next(
+                    (
+                        step
+                        for step in checkpoint.preserved_steps
+                        if step.logical_step_id == selected_step_id
+                    ),
+                    None,
+                )
+                if selected_preserved is None:
+                    raise TemporalExecutionRecoveryCheckpointError(
+                        "Selected start step is not compatible with recovery checkpoint evidence."
+                    )
+                if selected_preserved.order >= checkpoint.failed_step.order:
+                    raise TemporalExecutionRecoveryCheckpointError(
+                        "Selected start step must precede the failed step."
+                    )
+                failed_step_id = selected_preserved.logical_step_id
+                failed_step_execution = selected_preserved.source_execution_ordinal
+                preserved_steps = [
+                    step
+                    for step in checkpoint.preserved_steps
+                    if step.order < selected_preserved.order
+                ]
 
         params = dict(record.parameters or {})
         for key in AGENT_RUN_ID_PARAM_KEYS:
             params.pop(key, None)
-        params["recoverySource"] = RecoverySourceModel(
+        recovery_source_payload = RecoverySourceModel(
             sourceWorkflowId=record.workflow_id,
             sourceRunId=source_run_id,
             sourceTaskInputSnapshotRef=source_snapshot_ref,
@@ -2945,14 +2991,26 @@ class TemporalExecutionService:
             sourcePlanDigest=checkpoint.plan_digest,
             failedStepId=failed_step_id,
             failedStepExecution=failed_step_execution,
+            recoveryMode=recovery_mode,
+            selectedStartStepId=(
+                failed_step_id if recovery_mode == "selected_step" else None
+            ),
+            selectedStartStepExecution=(
+                failed_step_execution if recovery_mode == "selected_step" else None
+            ),
             recoveryCheckpointRef=checkpoint_ref,
             recoveryWorkspace=checkpoint.recovery_workspace,
-            preservedSteps=checkpoint.preserved_steps,
+            preservedSteps=preserved_steps,
         ).model_dump(by_alias=True, mode="json")
+        if recovery_mode == "last_failed_step":
+            recovery_source_payload.pop("recoveryMode", None)
+            recovery_source_payload.pop("selectedStartStepId", None)
+            recovery_source_payload.pop("selectedStartStepExecution", None)
+        params["recoverySource"] = recovery_source_payload
 
-        task_payload = params.get("task")
-        task_params = dict(task_payload) if isinstance(task_payload, Mapping) else {}
-        task_params["recovery"] = {
+        workflow_payload = _workflow_payload(params)
+        workflow_params = dict(workflow_payload)
+        workflow_params["recovery"] = {
             "kind": "recover_from_failed_step",
             "sourceWorkflowId": record.workflow_id,
             "sourceRunId": source_run_id,
@@ -2966,15 +3024,20 @@ class TemporalExecutionService:
             "recoveryCheckpointRef": checkpoint_ref,
             "taskInputSnapshotRef": source_snapshot_ref,
         }
+        if recovery_mode == "selected_step":
+            recover_ref["recoveryMode"] = recovery_mode
+            recover_ref["selectedStartStepId"] = failed_step_id
+            recover_ref["selectedStartStepExecution"] = failed_step_execution
         plan_ref = checkpoint.plan_ref or source_plan_ref
         if plan_ref:
             recover_ref["planRef"] = plan_ref
         if checkpoint.plan_digest:
             recover_ref["planDigest"] = checkpoint.plan_digest
-        task_params["resume"] = recover_ref
-        params["task"] = task_params
+        workflow_params["resume"] = recover_ref
+        params.pop("task", None)
+        params["workflow"] = workflow_params
         title = (
-            str(task_params.get("title") or "").strip()
+            str(workflow_params.get("title") or "").strip()
             or str((record.memo or {}).get("title") or "").strip()
             or None
         )
@@ -2995,7 +3058,11 @@ class TemporalExecutionService:
             ),
             repository=repository,
             integration=None,
-            summary=f"Recovered from failed step of {record.workflow_id}.",
+            summary=(
+                f"Recovered from selected step of {record.workflow_id}."
+                if recovery_mode == "selected_step"
+                else f"Recovered from failed step of {record.workflow_id}."
+            ),
         )
         return {
             "accepted": True,
@@ -3009,7 +3076,11 @@ class TemporalExecutionService:
                 "runId": created.run_id,
                 "detailHref": f"/workflows/{created.workflow_id}",
             },
-            "relationship": "Recovered from failed step",
+            "relationship": (
+                "Recovered from selected step"
+                if recovery_mode == "selected_step"
+                else "Recovered from failed step"
+            ),
             "recoveryCheckpointRef": checkpoint_ref,
         }
 

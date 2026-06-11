@@ -2104,7 +2104,7 @@ def build_canonical_workflow_view(
             "repository": repository,
             "targetRuntime": "codex",
             "auth": _build_auth_from_payload(source),
-            "task": _build_spec_from_codex_exec_payload(source),
+            "workflow": _build_spec_from_codex_exec_payload(source),
         }
     elif normalized_type == "codex_skill":
         repository = (
@@ -2127,14 +2127,14 @@ def build_canonical_workflow_view(
             "repository": repository,
             "targetRuntime": "codex",
             "auth": _build_auth_from_payload(source),
-            "task": _build_spec_from_codex_skill_payload(source),
+            "workflow": _build_spec_from_codex_skill_payload(source),
         }
     else:
         canonical = {
             "repository": _clean_optional_str(source.get("repository")) or "",
             "targetRuntime": resolved_default_runtime,
             "auth": _build_auth_from_payload(source),
-            "task": {
+            "workflow": {
                 "instructions": _clean_optional_str(source.get("instruction"))
                 or "Queue job",
                 "skill": {"id": "auto", "args": {}},
@@ -2201,7 +2201,14 @@ def build_canonical_workflow_view(
         else ((canonical.get("workflow") or {}).get("publish") or {}).get("mode")
     )
     workflow_node = canonical.get("workflow")
-    workflow_payload = workflow_node if isinstance(workflow_node, Mapping) else {}
+    if not isinstance(workflow_node, dict):
+        workflow_node = {}
+        canonical["workflow"] = workflow_node
+    workflow_payload = workflow_node
+    publish_node = workflow_payload.get("publish")
+    if not isinstance(publish_node, dict):
+        publish_node = {}
+        workflow_payload["publish"] = publish_node
     skill_node = workflow_payload.get("skill") or {}
     skill = skill_node if isinstance(skill_node, Mapping) else {}
     skill_id = skill.get("id")
@@ -2210,7 +2217,7 @@ def build_canonical_workflow_view(
         publish_mode_candidate,
         allow_repository_publish=allows_repository_publish_for_skill_context(workflow_payload),
     )
-    canonical["workflow"]["publish"]["mode"] = publish_mode
+    publish_node["mode"] = publish_mode
     if publish_mode == "pr":
         required.append("gh")
 

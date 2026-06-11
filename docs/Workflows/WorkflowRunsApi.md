@@ -48,6 +48,8 @@ These routes extend the main lifecycle surface for specific execution types:
 | `POST` | `/api/executions/{workflowId}/integration/poll` | Record integration poll results |
 | `POST` | `/api/executions/{workflowId}/reschedule` | Change the scheduled time of a scheduled execution |
 | `POST` | `/api/executions/{workflowId}/rerun` | Create a fresh execution with the original parameters and a new `workflowId` |
+| `POST` | `/api/executions/{workflowId}/recover-from-failed-step` | Create a linked recovery execution that resumes from the last failed step using durable checkpoint evidence |
+| `POST` | `/api/executions/{workflowId}/recover-from-selected-step` | Create a linked recovery execution that resumes from an operator-selected eligible step using pinned source `workflowId`/`runId` and checkpoint evidence |
 
 ### 2.3 Managed-Run Observability (`/api/agent-runs`)
 
@@ -88,6 +90,14 @@ These routes are artifact-first:
 - `diagnostics` exposes the persisted supervision payload for postmortem inspection.
 
 Full log bodies and diagnostics come from managed-run artifact storage and spool files, not from workflow history or raw Temporal event history.
+
+## 4.1 Recovery Behavior
+
+Failed `MoonMind.Run` executions may expose failed-step recovery when the source run has an original task input snapshot, recovery checkpoint ref, plan identity, workspace checkpoint evidence, and completed prior-step output refs.
+
+The default `recover-from-failed-step` route preserves the original task input and starts new execution at the recorded failed step. The `recover-from-selected-step` route is for intentional earlier recovery: the request must include the source `workflowId`, source `runId`, and `selectedStartStepId`. The service validates those values against the canonical source execution and checkpoint payload before creating the follow-up execution. Steps before the selected start step are preserved from checkpoint evidence; the selected step and downstream steps execute again.
+
+Recovery routes do not accept edited task instructions, attachments, runtime/model settings, dependency changes, or publish changes. Operators must use edit/rerun flows for those behaviors.
 
 ## 5. Request Model Posture
 
