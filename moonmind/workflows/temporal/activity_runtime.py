@@ -4531,7 +4531,9 @@ class TemporalAgentRuntimeActivities:
             "force_non_interactive": provider_materialization.force_non_interactive,
             "env_keys": sorted(provider_materialization.env),
             "secret_env_keys": sorted(provider_materialization.secret_env),
+            "secret_env_key_count": len(provider_materialization.secret_env),
             "missing_secret_env_keys": sorted(missing_secret_env_keys),
+            "missing_secret_env_key_count": len(missing_secret_env_keys),
             "lease": dict(provider_lease),
             "telemetry_enabled": settings.pentest.telemetry_enabled,
         }
@@ -4573,10 +4575,6 @@ class TemporalAgentRuntimeActivities:
                 request.approved_scope.model_dump(mode="json"),
             )
         provider_snapshot_artifact = redact_sensitive_payload(provider_snapshot)
-        if isinstance(provider_snapshot_artifact, dict):
-            provider_snapshot_artifact["secret_env_keys"] = sorted(
-                provider_materialization.secret_env
-            )
         provider_snapshot_file = Path(paths.provider_snapshot_file)
         provider_snapshot_file.parent.mkdir(parents=True, exist_ok=True)
         provider_snapshot_file.write_text(
