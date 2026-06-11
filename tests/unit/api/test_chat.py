@@ -319,6 +319,37 @@ def test_chat_completions_blocks_secret_before_provider_send(
     mock_async_openai_client.assert_not_called()
 
 
+@patch("api_service.api.routers.chat.get_rag_context", new_callable=AsyncMock)
+@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
+@patch("api_service.api.routers.chat.get_openai_model", return_value="gpt-4.1")
+@patch("api_service.api.routers.chat.AsyncOpenAI")
+def test_responses_endpoint_blocks_secret_before_provider_send(
+    mock_async_openai_client,
+    _mock_get_openai_model,
+    mock_get_user_api_key_helper,
+    mock_get_provider,
+    mock_get_rag_context,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings_in_chat_router.security, "high_security_mode", True)
+    mock_get_provider.return_value = "OpenAI"
+    mock_get_user_api_key_helper.return_value = "sk-test-user-key"
+    mock_get_rag_context.return_value = ""
+
+    response = client.post(
+        "/responses",
+        json={
+            "model": "gpt-4.1",
+            "input": "Use token=super-secret-value",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "responses.openai.messages[0].content" in response.json()["detail"]
+    mock_async_openai_client.assert_not_called()
+
+
 def test_openai_response_normalization_preserves_zero_token_usage() -> None:
     payload = _normalize_openai_response_payload(
         {

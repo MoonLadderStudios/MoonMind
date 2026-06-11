@@ -1595,7 +1595,7 @@ def _build_execution_notification_email(
     message["Subject"] = f"MoonMind execution {status}: {workflow_id}"
     message.set_content(
         "MoonMind execution completed.\n\n"
-        + json.dumps(dict(event), indent=2, sort_keys=True)
+        + json.dumps(dict(event), default=str, indent=2, sort_keys=True)
         + "\n"
     )
     return message
@@ -1615,7 +1615,7 @@ def _send_execution_notification_email(
     timeout_seconds: int,
 ) -> None:
     scan_result = scan_outbound_text(
-        json.dumps(dict(event), sort_keys=True),
+        json.dumps(dict(event), default=str, sort_keys=True),
         location="execution.notification.email.body",
     )
     if not scan_result.allowed:

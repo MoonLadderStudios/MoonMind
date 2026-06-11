@@ -602,7 +602,7 @@ class TaskProposalService:
         status = "sent"
         error_message: str | None = None
         scan_result = scan_outbound_text(
-            json.dumps(payload, sort_keys=True),
+            json.dumps(payload, default=str, sort_keys=True),
             location="task_proposal.notification.webhook.json",
         )
         if not scan_result.allowed:

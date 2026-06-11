@@ -577,6 +577,7 @@ async def create_response(
                 detail="OpenAI provider is disabled on the server.",
             )
         openai_model_name = get_openai_model(model_to_use)
+        _scan_chat_messages_before_send(processed_messages, surface="responses.openai")
         client = AsyncOpenAI(api_key=user_api_key)
         openai_input = [
             {"role": msg.role, "content": msg.content}
