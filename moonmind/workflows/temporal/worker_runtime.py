@@ -1159,9 +1159,13 @@ def _build_runtime_planner():
 
         parameter_payload = dict(parameters or {})
         input_payload = _coerce_mapping(inputs)
-        task_payload = _coerce_mapping(input_payload.get("task"))
+        task_payload = _coerce_mapping(
+            input_payload.get("workflow") or input_payload.get("task")
+        )
         if not task_payload:
-            task_payload = _coerce_mapping(parameter_payload.get("task"))
+            task_payload = _coerce_mapping(
+                parameter_payload.get("workflow") or parameter_payload.get("task")
+            )
         git_payload = _coerce_mapping(task_payload.get("git"))
         selected_skill_payload = _coerce_mapping(task_payload.get("tool")) or _coerce_mapping(
             task_payload.get("skill")
@@ -1202,7 +1206,7 @@ def _build_runtime_planner():
             else:
                 raise RuntimeError(
                     "agent_runtime plan requires non-empty instructions in "
-                    "task.instructions, inputs.instructions, or parameters.instructions"
+                    "workflow.instructions, inputs.instructions, or parameters.instructions"
                 )
 
         if (

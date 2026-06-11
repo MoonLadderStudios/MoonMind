@@ -21,6 +21,7 @@ from api_service.db.models import (
 )
 from api_service.main import app
 from api_service.services.settings_catalog import (
+    _CATALOG_MIGRATION_RULES,
     SettingMigrationRule,
     SettingRegistryEntry,
     SettingsCatalogService,
@@ -32,9 +33,10 @@ SETTINGS_USER_DEP = get_current_user()
 
 def _install_settings_migration_rules(monkeypatch, rules):
     service_cls = SettingsCatalogService
+    merged_rules = (*_CATALOG_MIGRATION_RULES, *rules)
 
     def _factory(*args, **kwargs):
-        kwargs.setdefault("migration_rules", rules)
+        kwargs.setdefault("migration_rules", merged_rules)
         return service_cls(*args, **kwargs)
 
     monkeypatch.setattr(settings_router, "SettingsCatalogService", _factory)

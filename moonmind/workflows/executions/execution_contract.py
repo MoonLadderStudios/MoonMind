@@ -2644,9 +2644,9 @@ def build_authoritative_workflow_input_snapshot(
 
 
 def build_workflow_stage_plan(canonical_payload: Mapping[str, Any]) -> list[str]:
-    """Return ordered stage identifiers for canonical task execution."""
+    """Return ordered stage identifiers for canonical workflow execution."""
 
-    task_node = canonical_payload.get("task")
+    task_node = canonical_payload.get("workflow")
     task = task_node if isinstance(task_node, Mapping) else {}
     publish_node = task.get("publish")
     publish = publish_node if isinstance(publish_node, Mapping) else {}

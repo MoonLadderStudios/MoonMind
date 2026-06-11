@@ -2,7 +2,7 @@ import pytest
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner, Replayer
 
-from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from moonmind.workflows.temporal.workflows.run import MoonMindUserWorkflow
 from tests.unit.workflows.temporal.workflows.test_run_signals_updates import mock_run_environment
 
 @pytest.mark.asyncio
@@ -11,11 +11,11 @@ async def test_workflow_determinism_replay(mock_run_environment):
         async with Worker(
             env.client,
             task_queue="test-task-queue-replay",
-            workflows=[MoonMindRunWorkflow],
+            workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await env.client.start_workflow(
-                MoonMindRunWorkflow.run,
+                MoonMindUserWorkflow.run,
                 {
                     "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {},
@@ -33,7 +33,7 @@ async def test_workflow_determinism_replay(mock_run_environment):
             
             # Replay history
             replayer = Replayer(
-                workflows=[MoonMindRunWorkflow],
+                workflows=[MoonMindUserWorkflow],
                 workflow_runner=UnsandboxedWorkflowRunner(),
             )
             await replayer.replay_workflow(history)

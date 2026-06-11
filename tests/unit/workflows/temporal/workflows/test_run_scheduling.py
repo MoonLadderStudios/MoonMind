@@ -9,7 +9,7 @@ from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 from temporalio import workflow
 from moonmind.workflows.temporal.workflows.run import (
     DEPENDENCY_GATE_PATCH,
-    MoonMindRunWorkflow,
+    MoonMindUserWorkflow,
 )
 
 async def fake_execute_activity(activity_name, *args, **kwargs):
@@ -27,15 +27,15 @@ async def fake_execute_activity(activity_name, *args, **kwargs):
 
 @pytest.fixture
 def mock_run_environment(monkeypatch):
-    monkeypatch.setattr(MoonMindRunWorkflow, "_trusted_owner_metadata", lambda self: ("user", "user-1"))
+    monkeypatch.setattr(MoonMindUserWorkflow, "_trusted_owner_metadata", lambda self: ("user", "user-1"))
     monkeypatch.setattr(workflow, "execute_activity", fake_execute_activity)
     monkeypatch.setattr(workflow, "upsert_search_attributes", lambda attr: None)
     monkeypatch.setattr(workflow, "upsert_memo", lambda memo: None)
     
     async def fake_planning_stage(*args, **kwargs): return "ref-123"
     async def fake_execution_stage(*args, **kwargs): pass
-    monkeypatch.setattr(MoonMindRunWorkflow, "_run_planning_stage", fake_planning_stage)
-    monkeypatch.setattr(MoonMindRunWorkflow, "_run_execution_stage", fake_execution_stage)
+    monkeypatch.setattr(MoonMindUserWorkflow, "_run_planning_stage", fake_planning_stage)
+    monkeypatch.setattr(MoonMindUserWorkflow, "_run_execution_stage", fake_execution_stage)
 
 @pytest.mark.asyncio
 async def test_run_workflow_scheduled(mock_run_environment):
@@ -43,12 +43,12 @@ async def test_run_workflow_scheduled(mock_run_environment):
         async with Worker(
             env.client,
             task_queue="test-task-queue-sched",
-            workflows=[MoonMindRunWorkflow],
+            workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             future_time = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
             handle = await env.client.start_workflow(
-                MoonMindRunWorkflow.run,
+                MoonMindUserWorkflow.run,
                 {
                     "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {},
@@ -69,12 +69,12 @@ async def test_run_workflow_rescheduled(mock_run_environment):
         async with Worker(
             env.client,
             task_queue="test-task-queue-sched",
-            workflows=[MoonMindRunWorkflow],
+            workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             future_time = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
             handle = await env.client.start_workflow(
-                MoonMindRunWorkflow.run,
+                MoonMindUserWorkflow.run,
                 {
                     "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {},
@@ -98,12 +98,12 @@ async def test_run_workflow_rescheduled_past(mock_run_environment):
         async with Worker(
             env.client,
             task_queue="test-task-queue-sched",
-            workflows=[MoonMindRunWorkflow],
+            workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             future_time = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
             handle = await env.client.start_workflow(
-                MoonMindRunWorkflow.run,
+                MoonMindUserWorkflow.run,
                 {
                     "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {},
@@ -134,12 +134,12 @@ async def test_run_workflow_scheduled_cancel(mock_run_environment):
         async with Worker(
             env.client,
             task_queue="test-task-queue-sched",
-            workflows=[MoonMindRunWorkflow],
+            workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             future_time = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
             handle = await env.client.start_workflow(
-                MoonMindRunWorkflow.run,
+                MoonMindUserWorkflow.run,
                 {
                     "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {},
@@ -161,12 +161,12 @@ async def test_run_workflow_invalid_scheduled_for(mock_run_environment):
         async with Worker(
             env.client,
             task_queue="test-task-queue-sched",
-            workflows=[MoonMindRunWorkflow],
+            workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             with pytest.raises(Exception) as excinfo:
                 handle = await env.client.start_workflow(
-                    MoonMindRunWorkflow.run,
+                    MoonMindUserWorkflow.run,
                     {
                         "workflow_type": "MoonMind.UserWorkflow",
                         "initial_parameters": {},
@@ -212,20 +212,20 @@ async def test_run_workflow_waits_on_dependencies_before_planning(
         lambda patch_id: patch_id == DEPENDENCY_GATE_PATCH,
     )
     monkeypatch.setattr(
-        MoonMindRunWorkflow, "_reconcile_dependencies", fake_reconcile
+        MoonMindUserWorkflow, "_reconcile_dependencies", fake_reconcile
     )
-    monkeypatch.setattr(MoonMindRunWorkflow, "_run_planning_stage", fake_planning_stage)
-    monkeypatch.setattr(MoonMindRunWorkflow, "_run_execution_stage", fake_execution_stage)
+    monkeypatch.setattr(MoonMindUserWorkflow, "_run_planning_stage", fake_planning_stage)
+    monkeypatch.setattr(MoonMindUserWorkflow, "_run_execution_stage", fake_execution_stage)
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
             env.client,
             task_queue="test-task-queue-dep-order",
-            workflows=[MoonMindRunWorkflow],
+            workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await env.client.start_workflow(
-                MoonMindRunWorkflow.run,
+                MoonMindUserWorkflow.run,
                 {
                     "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {"task": {"dependsOn": ["dep-1", "dep-2"]}},
@@ -285,19 +285,19 @@ async def test_run_workflow_dependency_pause_gate_blocks_planning_until_resume(
         lambda patch_id: patch_id == DEPENDENCY_GATE_PATCH,
     )
     monkeypatch.setattr(
-        MoonMindRunWorkflow, "_reconcile_dependencies", fake_reconcile
+        MoonMindUserWorkflow, "_reconcile_dependencies", fake_reconcile
     )
-    monkeypatch.setattr(MoonMindRunWorkflow, "_run_planning_stage", fake_planning_stage)
+    monkeypatch.setattr(MoonMindUserWorkflow, "_run_planning_stage", fake_planning_stage)
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
             env.client,
             task_queue="test-task-queue-dep-pause",
-            workflows=[MoonMindRunWorkflow],
+            workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await env.client.start_workflow(
-                MoonMindRunWorkflow.run,
+                MoonMindUserWorkflow.run,
                 {
                     "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {"task": {"dependsOn": ["dep-1"]}},
@@ -358,18 +358,18 @@ async def test_run_workflow_dependency_cancel_interrupts_wait(
         lambda patch_id: patch_id == DEPENDENCY_GATE_PATCH,
     )
     monkeypatch.setattr(
-        MoonMindRunWorkflow, "_reconcile_dependencies", fake_reconcile
+        MoonMindUserWorkflow, "_reconcile_dependencies", fake_reconcile
     )
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
             env.client,
             task_queue="test-task-queue-dep-cancel",
-            workflows=[MoonMindRunWorkflow],
+            workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await env.client.start_workflow(
-                MoonMindRunWorkflow.run,
+                MoonMindUserWorkflow.run,
                 {
                     "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {"task": {"dependsOn": ["dep-1"]}},
@@ -404,11 +404,11 @@ async def test_run_workflow_dependency_gate_unpatched_skips_wait(
         async with Worker(
             env.client,
             task_queue="test-task-queue-dep-unpatched",
-            workflows=[MoonMindRunWorkflow],
+            workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await env.client.start_workflow(
-                MoonMindRunWorkflow.run,
+                MoonMindUserWorkflow.run,
                 {
                     "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {"task": {"dependsOn": ["dep-1"]}},
@@ -456,20 +456,20 @@ async def test_run_workflow_handles_failed_dependency_with_degraded_outcome(
         lambda patch_id: patch_id == DEPENDENCY_GATE_PATCH,
     )
     monkeypatch.setattr(
-        MoonMindRunWorkflow, "_reconcile_dependencies", fake_reconcile
+        MoonMindUserWorkflow, "_reconcile_dependencies", fake_reconcile
     )
-    monkeypatch.setattr(MoonMindRunWorkflow, "_run_planning_stage", fake_planning_stage)
-    monkeypatch.setattr(MoonMindRunWorkflow, "_run_execution_stage", fake_execution_stage)
+    monkeypatch.setattr(MoonMindUserWorkflow, "_run_planning_stage", fake_planning_stage)
+    monkeypatch.setattr(MoonMindUserWorkflow, "_run_execution_stage", fake_execution_stage)
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
             env.client,
             task_queue="test-task-queue-dep-failure",
-            workflows=[MoonMindRunWorkflow],
+            workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await env.client.start_workflow(
-                MoonMindRunWorkflow.run,
+                MoonMindUserWorkflow.run,
                 {
                     "workflow_type": "MoonMind.UserWorkflow",
                     "initial_parameters": {"task": {"dependsOn": ["dep-1"]}},

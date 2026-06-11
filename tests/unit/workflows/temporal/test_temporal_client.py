@@ -10,6 +10,10 @@ import pytest
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal import client as temporal_client_module
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
+from moonmind.workflows.temporal.hard_switch_cutover import (
+    resolve_user_workflow_start_contract,
+)
+from moonmind.config.settings import settings
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -79,7 +83,9 @@ async def test_explicit_task_queue_override_wins_over_default_topology():
         )
         == "mm.workflow.merge_automation"
     )
-    assert adapter._get_task_queue(workflow_type="MoonMind.UserWorkflow") == "mm.workflow"
+    assert adapter._get_task_queue(
+        workflow_type="MoonMind.UserWorkflow"
+    ) == resolve_user_workflow_start_contract(settings.temporal).task_queue
 
 # ---- get_drain_metrics ----
 

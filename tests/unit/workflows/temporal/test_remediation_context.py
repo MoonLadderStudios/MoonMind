@@ -99,7 +99,7 @@ async def _create_target_and_remediation(
         manifest_artifact_ref=None,
         failure_policy=None,
         initial_parameters={
-            "task": {
+            "workflow": {
                 "remediation": {
                     "target": {"workflowId": target.workflow_id},
                     "authorityMode": authority_mode,
@@ -337,7 +337,7 @@ async def test_remediation_context_builder_creates_bounded_linked_artifact(
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "task": {
+                "workflow": {
                     "instructions": "Investigate the target",
                     "remediation": {
                         "target": {
@@ -564,7 +564,7 @@ async def test_remediation_context_builder_enriches_agent_run_evidence_and_live_
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "task": {
+                "workflow": {
                     "remediation": {
                         "target": {
                             "workflowId": target.workflow_id,
@@ -687,7 +687,7 @@ async def test_remediation_context_builder_matches_selected_step_by_full_identit
         assert remediation_source is not None
         remediation_source.parameters = {
             **remediation_source.parameters,
-            "task": {
+            "workflow": {
                 "remediation": {
                     "target": {
                         "workflowId": target.workflow_id,
@@ -758,7 +758,7 @@ async def test_remediation_context_builder_records_historical_degraded_evidence(
         assert remediation_source is not None
         remediation_source.parameters = {
             **remediation_source.parameters,
-            "task": {
+            "workflow": {
                 "remediation": {
                     "target": {
                         "workflowId": target.workflow_id,
@@ -881,7 +881,7 @@ async def test_remediation_context_builder_marks_unsupported_live_follow_degrade
         assert remediation_source is not None
         remediation_source.parameters = {
             **remediation_source.parameters,
-            "task": {
+            "workflow": {
                 "remediation": {
                     "target": {
                         "workflowId": target.workflow_id,
@@ -1828,7 +1828,7 @@ async def test_remediation_evidence_tools_read_only_context_declared_evidence(
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "task": {
+                "workflow": {
                     "remediation": {
                         "target": {
                             "workflowId": target.workflow_id,
@@ -1939,7 +1939,7 @@ async def test_remediation_evidence_tools_gate_live_follow_by_context_policy(
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "task": {
+                "workflow": {
                     "remediation": {
                         "target": {
                             "workflowId": target.workflow_id,
@@ -2063,7 +2063,7 @@ async def test_remediation_evidence_tools_prepare_action_request_rereads_target_
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "task": {
+                "workflow": {
                     "remediation": {
                         "target": {
                             "workflowId": target.workflow_id,
@@ -3296,7 +3296,7 @@ async def test_remediation_mutation_guard_persists_locks_and_ledger_across_servi
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "task": {
+                "workflow": {
                     "remediation": {
                         "target": {"workflowId": target.workflow_id},
                         "authorityMode": "admin_auto",

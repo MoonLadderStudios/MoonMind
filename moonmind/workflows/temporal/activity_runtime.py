@@ -3378,14 +3378,14 @@ class TemporalProposalActivities:
             if tool_type and tool_type.lower() != "skill":
                 raise ValueError(f"{path}.type must be 'skill'")
 
-        check_tool(task.get("tool"), "payload.task.tool")
+        check_tool(task.get("tool"), "payload.workflow.tool")
         steps = task.get("steps")
         if not isinstance(steps, Sequence) or isinstance(steps, (str, bytes)):
             return
         for index, step_node in enumerate(steps):
             if not isinstance(step_node, Mapping):
                 continue
-            check_tool(step_node.get("tool"), f"payload.task.steps[{index}].tool")
+            check_tool(step_node.get("tool"), f"payload.workflow.steps[{index}].tool")
 
     @classmethod
     def _stamp_default_runtime(
@@ -3406,7 +3406,7 @@ class TemporalProposalActivities:
             else:
                 task_node["runtime"] = {"mode": default_runtime}
         else:
-            payload_node["task"] = {"runtime": {"mode": default_runtime}}
+            payload_node["workflow"] = {"runtime": {"mode": default_runtime}}
         return stamped_request
 
     @staticmethod
@@ -3665,7 +3665,7 @@ class TemporalProposalActivities:
                     ).strip()
                     or "Queue job"
                 )
-        validation_payload["task"] = task
+        validation_payload["workflow"] = task
         cls._reject_unsupported_tool_selectors(validation_payload)
         try:
             CanonicalWorkflowExecutionPayload.model_validate(validation_payload)

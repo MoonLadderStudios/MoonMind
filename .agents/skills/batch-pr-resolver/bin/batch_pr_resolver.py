@@ -465,8 +465,8 @@ def _task_workflow_id_from_env() -> str | None:
     return None
 
 
-def _task_run_id_from_env() -> str | None:
-    for env_key in ("MOONMIND_TASK_RUN_ID", "MOONMIND_RUN_ID", "TASK_RUN_ID"):
+def _agent_run_id_from_env() -> str | None:
+    for env_key in ("MOONMIND_AGENT_RUN_ID", "MOONMIND_RUN_ID", "AGENT_RUN_ID"):
         value = _runtime_text(os.getenv(env_key))
         if value:
             return value
@@ -654,9 +654,9 @@ async def _submit_jobs_via_http(
     task_workflow_id = _task_workflow_id_from_env()
     if task_workflow_id:
         headers["X-MoonMind-Task-Workflow-Id"] = task_workflow_id
-    task_run_id = _task_run_id_from_env()
-    if task_run_id:
-        headers["X-MoonMind-Task-Run-Identifier"] = task_run_id
+    agent_run_id = _agent_run_id_from_env()
+    if agent_run_id:
+        headers["X-MoonMind-Agent-Run-Identifier"] = agent_run_id
     base = moonmind_url.rstrip("/")
     async with httpx.AsyncClient(
         base_url=base, timeout=30.0, headers=headers

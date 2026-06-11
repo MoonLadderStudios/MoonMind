@@ -321,9 +321,11 @@ class RemediationContextBuilder:
         record: db_models.TemporalExecutionCanonicalRecord,
     ) -> Mapping[str, Any]:
         parameters = record.parameters if isinstance(record.parameters, Mapping) else {}
-        task = parameters.get("task") if isinstance(parameters, Mapping) else {}
-        task_mapping = task if isinstance(task, Mapping) else {}
-        remediation = task_mapping.get("remediation")
+        workflow_payload = (
+            parameters.get("workflow") if isinstance(parameters, Mapping) else {}
+        )
+        workflow_mapping = workflow_payload if isinstance(workflow_payload, Mapping) else {}
+        remediation = workflow_mapping.get("remediation")
         return remediation if isinstance(remediation, Mapping) else {}
 
     @staticmethod

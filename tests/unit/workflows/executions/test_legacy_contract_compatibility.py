@@ -1,11 +1,9 @@
-"""In-flight compatibility regression coverage for the WP5a contract rename.
+"""Hard-switch contract regression coverage for user workflow execution payloads.
 
-The MoonMind Task -> Workflow Execution hard switch renames Python symbols in
-the core contract layer (``moonmind.workflows.executions``), but serialized
-payload shapes, persisted values, and replay-stable patch identifiers written
-by ``MoonMind.UserWorkflow`` histories MUST NOT change until the MoonMind.UserWorkflow
-v2 cutover (MM-730).  These tests pin the legacy_run contract so the rename
-cannot drift wire shapes for in-flight runs.
+The MoonMind Task -> Workflow Execution hard switch renames the canonical
+execution envelope to ``workflow`` for new starts. Replay-stable patch
+identifiers and persisted stage values remain pinned separately because they
+are written into Temporal histories.
 """
 
 from __future__ import annotations
@@ -25,40 +23,46 @@ def test_canonical_job_type_value_is_unchanged_for_legacy_run_histories() -> Non
     assert CANONICAL_WORKFLOW_JOB_TYPE == "task"
     assert LEGACY_WORKFLOW_JOB_TYPES == frozenset({"codex_exec", "codex_skill"})
 
-def test_payload_still_accepts_and_serializes_the_legacy_task_envelope() -> None:
-    """Previous payload shape: top-level "task" node with task-shaped keys."""
+def test_payload_serializes_the_canonical_workflow_envelope() -> None:
+    """Current payload shape: top-level "workflow" node with workflow keys."""
 
-    legacy_shaped = {
+    workflow_shaped = {
         "repository": "MoonLadderStudios/MoonMind",
         "targetRuntime": "codex",
-        "task": {
+        "workflow": {
             "instructions": "Implement MM-123",
             "proposeTasks": False,
             "publish": {"mode": "pr"},
         },
     }
-    model = CanonicalWorkflowExecutionPayload.model_validate(legacy_shaped)
+    model = CanonicalWorkflowExecutionPayload.model_validate(workflow_shaped)
     dumped = model.model_dump(by_alias=True, exclude_none=False)
 
-    # The serialized envelope key remains "task" until the v2 cutover.
-    assert "task" in dumped
-    assert dumped["task"]["instructions"] == "Implement MM-123"
-    assert dumped["task"]["proposeTasks"] is False
+    assert "workflow" in dumped
+    assert "task" not in dumped
+    assert dumped["workflow"]["instructions"] == "Implement MM-123"
+    assert dumped["workflow"]["proposeTasks"] is False
 
-def test_canonical_view_preserves_legacy_wire_keys() -> None:
+def test_canonical_view_emits_workflow_wire_keys() -> None:
     canonical = build_canonical_workflow_view(
         job_type=CANONICAL_WORKFLOW_JOB_TYPE,
         payload={
             "repository": "MoonLadderStudios/MoonMind",
-            "task": {"instructions": "Implement MM-123"},
+            "workflow": {"instructions": "Implement MM-123"},
         },
     )
-    assert set(canonical) >= {"repository", "targetRuntime", "task", "requiredCapabilities"}
-    assert canonical["task"]["publish"]["mode"]
+    assert set(canonical) >= {
+        "repository",
+        "targetRuntime",
+        "workflow",
+        "requiredCapabilities",
+    }
+    assert "task" not in canonical
+    assert canonical["workflow"]["publish"]["mode"]
 
 def test_stage_plan_values_are_replay_stable() -> None:
     stages = build_workflow_stage_plan(
-        {"task": {"publish": {"mode": "pr"}}}
+        {"workflow": {"publish": {"mode": "pr"}}}
     )
     assert stages == [
         "moonmind.task.prepare",
