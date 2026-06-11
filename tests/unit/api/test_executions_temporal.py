@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Iterator
@@ -428,6 +429,26 @@ def test_list_executions_source_temporal_ignores_unknown_scope(client) -> None:
     query = mock_client.count_workflows.await_args.kwargs["query"]
     assert 'WorkflowType="MoonMind.UserWorkflow"' in query
     assert 'mm_entry="user_workflow"' in query
+
+
+def test_normalize_temporal_list_scope_logs_retired_scope_safely(caplog) -> None:
+    retired_scope = " System\nInjected" + ("x" * 100)
+
+    with caplog.at_level(logging.INFO, logger=executions_module.logger.name):
+        scope = executions_module._normalize_temporal_list_scope(
+            retired_scope,
+            workflow_type=None,
+            entry=None,
+        )
+
+    assert scope == "default"
+    assert len(caplog.records) == 1
+    message = caplog.records[0].getMessage()
+    logged_scope = caplog.records[0].args[0]
+    assert logged_scope == retired_scope.strip().lower()[:64]
+    assert len(logged_scope) == 64
+    assert "system\\ninjected" in message
+    assert "system\ninjected" not in message
 
 
 def test_execution_router_exposes_recover_route_without_recovery_alias() -> None:

@@ -455,8 +455,8 @@ def _normalize_temporal_list_scope(
     normalized = str(scope or "").strip().lower()
     if normalized:
         logger.info(
-            "Ignoring retired execution list scope=%s on workflow-list boundary",
-            normalized,
+            "Ignoring retired execution list scope=%r on workflow-list boundary",
+            normalized[:64],
         )
     return "default"
 
