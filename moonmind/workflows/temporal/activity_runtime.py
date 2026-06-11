@@ -1602,7 +1602,7 @@ def _build_execution_notification_email(
     message["Subject"] = f"MoonMind execution {status}: {workflow_id}"
     message.set_content(
         "MoonMind execution completed.\n\n"
-        + json.dumps(dict(event), indent=2, sort_keys=True)
+        + json.dumps(dict(event), default=str, indent=2, sort_keys=True)
         + "\n"
     )
     return message
@@ -1644,6 +1644,17 @@ def _send_execution_notification_email(
     smtp_use_ssl: bool,
     timeout_seconds: int,
 ) -> None:
+    scan_result = scan_outbound_text(
+        json.dumps(dict(event), default=str, sort_keys=True),
+        location="execution.notification.email.body",
+    )
+    if not scan_result.allowed:
+        diagnostics = "; ".join(scan_result.sanitized_diagnostics) or (
+            "Blocked outbound content at execution.notification.email.body"
+        )
+        raise TemporalActivityRuntimeError(
+            f"Outbound notification blocked by high security scan: {diagnostics}"
+        )
     message = _build_execution_notification_email(
         event,
         sender=sender,

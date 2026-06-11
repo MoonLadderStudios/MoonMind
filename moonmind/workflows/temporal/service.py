@@ -38,6 +38,7 @@ from api_service.db.models import (
     TemporalWorkflowType,
 )
 from moonmind.config.settings import settings
+from moonmind.security import scan_outbound_text
 from moonmind.schemas.manifest_ingest_models import (
     ManifestNodePageModel,
     ManifestStatusSnapshotModel,
