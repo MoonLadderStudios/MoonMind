@@ -2,7 +2,7 @@
 
 Status: Desired State
 Owners: MoonMind Engineering
-Last Updated: 2026-05-16
+Last Updated: 2026-06-10
 Canonical for: semantic step reattempts, checkpointed side-effect policy, gated iteration, failed-step recovery primitive, autonomous story loops
 Related: `docs/Steps/StepTypes.md`, `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/WorkflowRemediation.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`, `docs/Temporal/ActivityCatalogAndWorkerTopology.md`, `docs/Artifacts/ArtifactPresentationContract.md`
 
@@ -72,17 +72,30 @@ Rules:
 4. Attempt history is available through expanded API/UI surfaces using step execution manifest refs.
 5. App DB projections must be downstream of workflow state, artifact linkage, and git state. They must not invent step or attempt truth.
 
-Recommended step execution manifest content type:
+Canonical step execution manifest content type (`STEP_EXECUTION_MANIFEST_CONTENT_TYPE`):
 
 ```text
 application/vnd.moonmind.step-execution+json;version=1
 ```
 
-Recommended checkpoint content type:
+Canonical checkpoint content type (`STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE`):
 
 ```text
-application/vnd.moonmind.step-checkpoint+json;version=1
+application/vnd.moonmind.step-execution-checkpoint+json;version=1
 ```
+
+These are the only two step-execution evidence content types. Older spellings such as `step-checkpoint` or `step-resume-checkpoint` are superseded and must not appear in new writers, docs, or fixtures.
+
+### 2.1 Manifest vs checkpoint
+
+The manifest and the checkpoint are **separate artifacts with separate roles**:
+
+| Artifact | Role | Written when | Consumed by |
+| --- | --- | --- | --- |
+| Step execution manifest | Complete immutable evidence of one semantic execution: identity, lineage, context refs, outputs, checks, side effects, disposition | At execution start and at terminal classification | Operator/API attempt history, audits, gap diagnosis |
+| Step execution checkpoint | Minimal durable evidence needed to restore or validate state at one boundary | At checkpoint boundaries (section 9.1) | Workspace policy application, Step Re-execution, RecoverFromFailedStep |
+
+The manifest references checkpoints by ref (`workspace.checkpointBeforeRef`, `workspace.checkpointAfterRef`); checkpoints never embed manifests. Recovery requires a valid checkpoint, not a manifest. A manifest without checkpoints is evidence-only and cannot satisfy a workspace policy that demands restorable state.
 
 ---
 
@@ -147,6 +160,8 @@ step re-execution     = new Step Execution, same logical step
 recover failed step   = linked Workflow Execution that begins by creating a new Step Execution at the failed step
 ```
 
+Where payloads must label the operation explicitly, the canonical tokens are `retry`, `reexecute`, and `recover` (`StepExecutionSemanticOperation`).
+
 Broad Temporal workflow retries are not a substitute for Step Executions when work may mutate a repository or external system.
 
 ---
@@ -190,9 +205,11 @@ Representative deterministic identifiers:
 ```text
 stepExecutionId   = {workflowId}:{runId}:{logicalStepId}:execution:{executionOrdinal}
 childWorkflowId   = {workflowId}:agent:{logicalStepId}:execution:{executionOrdinal}
-checkpointId      = {workflowId}:{runId}:{logicalStepId}:execution:{executionOrdinal}:{boundary}
+checkpointId      = {workflowId}:{runId}:{logicalStepId}:execution:{executionOrdinal}:checkpoint:{boundary}
 artifactLinkScope = step:{logicalStepId}:execution:{executionOrdinal}
 ```
+
+`stepExecutionId` and `checkpointId` are validated identities: a manifest or checkpoint whose ID does not match its identity fields must be rejected at the model boundary, not repaired downstream.
 
 If these identifiers are exposed to external systems, sanitize or hash fields as needed to avoid leaking sensitive workflow details.
 
@@ -229,28 +246,31 @@ Rules:
 1. Local attempt identity remains the durable storage key.
 2. Lineage identity is provenance and display metadata.
 3. Resume must pin both source `workflowId` and source `runId` so lineage cannot drift when the source logical execution changes later.
+4. The `lineage.source*` prefix and the `preservedFrom.*` prefix are intentionally distinct and must not be mixed: `lineage.source*` lives on a **newly executed** Step Execution and points at the attempt that caused it; `preservedFrom.*` lives on a **preserved step row** imported into a recovery execution and points at the execution whose accepted output is being reused (see section 14 and `docs/Temporal/StepLedgerAndProgressModel.md`).
 
 ### 6.3 Idempotency keys
 
 All side-effecting Activities participating in an attempt must accept or derive stable idempotency keys.
 
-Default key shape:
+Canonical key shape — the step execution ID plus an operation suffix:
 
 ```text
-{namespace}:{workflowId}:{runId}:{logicalStepId}:{attempt}:{operation}
+{workflowId}:{runId}:{logicalStepId}:execution:{executionOrdinal}:{operation}
 ```
 
 Examples:
 
-| Operation | Suggested key |
+| Operation | Key |
 | --- | --- |
-| Create step execution manifest | `{workflowId}:{runId}:{logicalStepId}:{attempt}:manifest` |
-| Capture workspace checkpoint | `{workflowId}:{runId}:{logicalStepId}:{attempt}:checkpoint:{boundary}` |
-| Launch managed AgentRun | `{workflowId}:{runId}:{logicalStepId}:{attempt}:agent-run` |
-| Run quality gate | `{workflowId}:{runId}:{logicalStepId}:{executionOrdinal}:gate:{gateName}` |
-| Commit accepted changes | `{workflowId}:{runId}:{logicalStepId}:{executionOrdinal}:commit` |
-| Create PR | `{workflowId}:{runId}:{logicalStepId}:{executionOrdinal}:publish-pr` |
-| Jira transition | `{workflowId}:{runId}:{logicalStepId}:{executionOrdinal}:jira-transition:{targetStatus}` |
+| Create step execution manifest | `{stepExecutionId}:manifest` |
+| Capture workspace checkpoint | `{stepExecutionId}:checkpoint:{boundary}` |
+| Launch managed AgentRun | `{stepExecutionId}:agent-run` |
+| Run quality gate | `{stepExecutionId}:gate:{gateName}` |
+| Commit accepted changes | `{stepExecutionId}:commit` |
+| Create PR | `{stepExecutionId}:publish-pr` |
+| Jira transition | `{stepExecutionId}:jira-transition:{targetStatus}` |
+
+The operation suffix must be non-empty; key builders must reject blank operations rather than emitting a bare identity key.
 
 Retries may log Temporal activity attempt numbers, but activity attempt numbers must not be the primary business idempotency key.
 
@@ -259,6 +279,8 @@ Retries may log Temporal activity attempt numbers, but activity attempt numbers 
 ## 7. Step Execution Manifest Contract
 
 A Step Execution manifest is an immutable artifact-backed record of one semantic execution. The workflow keeps only a compact projection of this record.
+
+Manifest evidence is written at least twice per Step Execution: once at start (status `running`, or `blocked` with `terminalDisposition = "blocked"` when workspace-policy launch validation rejects the attempt) and once at terminal classification (terminal status plus terminal disposition, git effect, output refs, checks, and dependency effects). Each write is a new immutable manifest artifact under the same step execution identity and `manifest` idempotency key scope; the step ledger tracks the latest ref and the ref history. There must be exactly one manifest write path in the workflow; parallel manifest builders for the same identity are a contract violation.
 
 Representative shape:
 
@@ -385,6 +407,8 @@ Step Execution reasons must be bounded metadata, not free-form transcripts. Rich
 
 ### 7.3 Terminal dispositions
 
+This is the canonical disposition set (`StepExecutionTerminalDisposition`). Section 18 consumes it; it is defined only here.
+
 | Disposition | Meaning |
 | --- | --- |
 | `accepted` | Attempt passed gates and may advance the logical step. |
@@ -394,6 +418,7 @@ Step Execution reasons must be bounded metadata, not free-form transcripts. Rich
 | `discarded` | Attempt evidence is retained but workspace effects are not reused. |
 | `superseded` | A later attempt replaced this attempt. |
 | `failed_unrecoverable` | The attempt or gate found a permanent blocker or unsafe condition. |
+| `failed_with_remaining_work` | Automation stopped under budget/stop rules with known remaining work and published evidence. |
 
 ---
 
@@ -508,7 +533,7 @@ Representative checkpoint:
 ```json
 {
   "schemaVersion": "v1",
-  "checkpointId": "mm:wf:run-1:implement-story-S004:execution:2:after_gate",
+  "checkpointId": "mm:wf:run-1:implement-story-S004:execution:2:checkpoint:after_gate",
   "checkpointKind": "step_boundary",
   "boundary": "after_gate",
   "source": {
@@ -539,16 +564,23 @@ Representative checkpoint:
 
 Checkpoint refs must remain outside large inline workflow histories when they are large or binary.
 
+Checkpoint contract rules:
+
+1. A checkpoint must carry `planRef` or `planDigest`; a checkpoint with neither is invalid and must be rejected at the model boundary.
+2. Checkpoints and step outputs must carry refs and bounded summaries only. Inline evidence payloads (raw `stdout`, `stderr`, `diff`, `logs`, `content`, provider output, and similar) are rejected at the model boundary; only `*Ref`/`*Refs` and summary/message fields may carry that information.
+
 ### 9.1 Checkpoint boundaries
 
-MoonMind should create or update checkpoint evidence at these boundaries:
+MoonMind creates or updates checkpoint evidence at these canonical boundaries (`StepExecutionCheckpointBoundary`):
 
-1. after prepare succeeds;
-2. before a mutating step execution starts, when a restorable baseline exists;
-3. after a step execution completes;
-4. after quality gates complete;
-5. before publication or external state transitions;
-6. before Resume restoration executes any new work.
+| Boundary | When |
+| --- | --- |
+| `after_prepare` | After prepare succeeds. |
+| `before_execution` | Before a mutating step execution starts, when a restorable baseline exists. |
+| `after_execution` | After a step execution completes. |
+| `after_gate` | After quality gates complete. |
+| `before_publication` | Before publication or external state transitions. |
+| `before_recovery_restoration` | Before recovery restoration executes any new work. |
 
 Checkpoint writes must be idempotent because Activities and workflow tasks may retry.
 
@@ -603,7 +635,16 @@ Before a checkpoint can be used to start a new attempt or Resume execution, Moon
 8. checkpoint kind compatibility with the selected workspace policy;
 9. policy eligibility for replaying or preserving side effects.
 
-If validation fails, MoonMind must fail explicitly before launching an agent or mutating the workspace.
+Validation failures must be typed, not prose. Canonical failure codes (`StepCheckpointValidationFailureCode`):
+
+```text
+source_mismatch, task_input_mismatch, plan_mismatch, step_mismatch,
+execution_mismatch, artifact_missing, artifact_unauthorized,
+artifact_corrupted, workspace_mismatch, checkpoint_kind_incompatible,
+policy_incompatible, invalid_checkpoint
+```
+
+If validation fails, MoonMind must fail explicitly — with the failure code in structured diagnostics — before launching an agent or mutating the workspace.
 
 ---
 
@@ -708,7 +749,7 @@ Representative side effect:
 {
   "class": "external_idempotent",
   "operation": "jira.add_comment",
-  "idempotencyKey": "mm:wf:run-1:verify:attempt:1:jira-comment",
+  "idempotencyKey": "mm:wf:run-1:verify:execution:1:jira-comment",
   "target": "MM-123",
   "disposition": "accepted"
 }
@@ -901,9 +942,9 @@ This rule is required for both failed-step recovery and autonomous story loops. 
 
 ---
 
-## 15. Resume Relationship
+## 15. RecoverFromFailedStep Relationship
 
-Failed-step recovery is one consumer of Step Executions with Checkpointing.
+Failed-step recovery is one consumer of Step Executions with Checkpointing. This section uses "Resume" as shorthand for the RecoverFromFailedStep action defined in `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`; RecoverFromSelectedStep follows the same rules with an operator-chosen starting step.
 
 Resume does not continue the old failed step in place. Resume creates a linked follow-up execution and starts new work by creating a new local Step Execution for the failed logical step.
 
@@ -1010,13 +1051,15 @@ Expanded surfaces should allow operators to inspect attempt history:
 
 APIs should expose bounded attempt projections and artifact refs. They must not inline large transcripts, diffs, provider payloads, or verification reports.
 
-Suggested API shape:
+Canonical API shape:
 
 ```http
-GET /api/executions/{workflowId}/steps
-GET /api/executions/{workflowId}/steps/{logicalStepId}/attempts
-GET /api/executions/{workflowId}/steps/{logicalStepId}/attempts/{attempt}
+GET /api/executions/{workflow_id}/steps
+GET /api/executions/{workflow_id}/steps/{logical_step_id}/step-executions
+GET /api/executions/{workflow_id}/steps/{logical_step_id}/step-executions/{execution_ordinal}
 ```
+
+The path segment is `step-executions` keyed by `execution_ordinal`; `attempts` is not an API term.
 
 Representative attempt list response:
 
@@ -1059,19 +1102,7 @@ Representative attempt list response:
 
 ## 18. Failure and Stop Semantics
 
-When an attempt fails or a gate requests more work, MoonMind must classify the next state.
-
-Suggested terminal dispositions:
-
-| Disposition | Meaning |
-| --- | --- |
-| `accepted` | Attempt passed gates and may advance the logical step. |
-| `retryable` | Another attempt is allowed under budget and policy. |
-| `blocked` | Missing prerequisite, credential, infrastructure, or approval prevents progress. |
-| `needs_human` | Automated attempts are exhausted or unsafe. |
-| `discarded` | Attempt evidence is retained but workspace effects are not reused. |
-| `superseded` | A later attempt replaced this attempt. |
-| `failed_with_remaining_work` | Automation stopped with known remaining work and evidence. |
+When an attempt fails or a gate requests more work, MoonMind must classify the next state using a terminal disposition from the canonical set in section 7.3.
 
 When a downstream step depends on a passing gate, the parent workflow must skip, block, invalidate, or revalidate that downstream step if the gate fails. Publication and external state transitions must not rely only on the downstream agent noticing the failed gate.
 
@@ -1190,9 +1221,7 @@ This design does not require:
 
 ---
 
-## 22. Rollout Guidance
-
-Implementation should be phased.
+## 22. Versioning and Compatibility
 
 Payload-affecting Step Execution and checkpoint changes follow a versioned
 cutover rule: canonical writers fail fast for unsupported values, while
@@ -1202,41 +1231,14 @@ instead of crashing workflow tasks. Additive `v1` fields remain optional or
 default-initialized; incompatible payload changes require a new content-type
 version and an explicit cutover before new writers emit that version.
 
-### Phase 1: Step execution manifests and evidence
+Rules:
 
-1. Add step execution manifest artifact type.
-2. Add latest-attempt refs to the step ledger.
-3. Capture child workflow refs, summaries, diagnostics, and diffs per attempt.
-4. Add bounded API support for attempt lists.
+1. Manifest and checkpoint schemas are versioned through their content types (section 2); a writer must never emit a payload it cannot name with a canonical content type.
+2. Enum growth (reasons, statuses, dispositions, boundaries, policies, verdicts, failure codes) is additive within `v1`; readers must map unknown values to typed invalid/degraded decisions, never crash or silently coerce.
+3. Renaming or removing a field, changing identity/key shapes, or changing disposition semantics requires a new content-type version and a cutover in which the old version is deleted, not aliased (Constitution principle XIII).
+4. Replay safety: any change to manifest/checkpoint payloads carried through workflow state must include a compatibility or replay-style regression test at the workflow boundary, or documented proof that no in-flight run can carry the old shape.
 
-### Phase 2: Checkpoints
-
-1. Capture before/after workspace checkpoints.
-2. Validate checkpoint source identity, plan digest, prepared input refs, and workspace policy compatibility.
-3. Materialize preserved prior steps in Resume.
-4. Fail Resume explicitly when checkpoint validation fails.
-
-### Phase 3: Gated reattempt loops
-
-1. Add structured gate verdicts.
-2. Add budgets and stop rules.
-3. Add workspace policy selection for reattempts.
-4. Add downstream invalidation/revalidation behavior.
-
-### Phase 4: Retrieval and memory manifests
-
-1. Add retrieval manifest refs to context bundles.
-2. Add memory proposal manifests and promotion states.
-3. Permit run-local memory promotion under policy.
-4. Gate repo-level memory writes.
-
-### Phase 5: Autonomous story / PRD loop
-
-1. Compile PRD/story items into logical steps.
-2. Use Step Executions for each story implementation attempt.
-3. Use independent quality gates.
-4. Commit only accepted attempts.
-5. Stop on completion, budget exhaustion, blocked state, or human-needed disposition.
+Migration sequencing and the implementation gap backlog are tracked outside this document under `docs/tmp/` per Constitution principle XII; this document describes only the target contracts.
 
 ---
 

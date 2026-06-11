@@ -350,10 +350,10 @@ Clients must not guess “latest” step evidence by sorting artifacts locally. 
 
 The recovery checkpoint is the durable evidence that makes failed-step recovery possible.
 
-Recommended content type:
+Canonical content type — recovery checkpoints share the step execution checkpoint content type; `docs/Steps/StepExecutionsAndCheckpointing.md` is canonical for the checkpoint contract:
 
 ```text
-application/vnd.moonmind.step-resume-checkpoint+json;version=1
+application/vnd.moonmind.step-execution-checkpoint+json;version=1
 ```
 
 Representative shape:
