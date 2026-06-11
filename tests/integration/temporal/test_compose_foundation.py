@@ -67,6 +67,20 @@ def test_temporal_compose_topology_and_private_exposure():
     elif isinstance(temporal_networks, list):
         assert "local-network" in temporal_networks
 
+def test_merge_automation_workflow_worker_polls_dedicated_user_workflow_queue():
+    compose = _load_compose()
+    services = compose["services"]
+
+    merge_worker_env = _env_map(
+        services["temporal-worker-workflow-merge-automation"]["environment"]
+    )
+    assert merge_worker_env["TEMPORAL_WORKFLOW_TASK_QUEUE"] == (
+        "${TEMPORAL_WORKFLOW_TASK_QUEUE:-mm.workflow}"
+    )
+    assert merge_worker_env["TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE"] == (
+        "${TEMPORAL_MERGE_AUTOMATION_WORKFLOW_TASK_QUEUE:-mm.workflow.merge_automation}"
+    )
+
 def test_sandbox_worker_compose_egress_is_restricted_for_mm_785():
     compose = _load_compose()
     services = compose["services"]
