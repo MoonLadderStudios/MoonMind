@@ -66,6 +66,8 @@ The selector fails open. Empty changed-file input, unknown paths, CI workflow ch
 
 The workflow still runs a dedicated frontend validation job, and the generated-contract check still runs only when `tools/check_openapi_affecting_changes.sh` reports an OpenAPI-affecting path.
 
+See [Backend Test Selection Strategy](BackendTestSelection.md) for the detailed selector contract, category definitions, full-backend fail-open rules, and maintenance guidance.
+
 CI does **not** currently run a dedicated `pre-commit` step, so local `pre-commit` runs are still the main way to catch formatting and auto-fixable lint issues before pushing.
 
 ## Setup
@@ -139,6 +141,7 @@ That is expected by default. `./tools/test_unit.sh` switches to the Docker-backe
 ## Related Files
 
 - `.pre-commit-config.yaml`
+- `docs/Development/BackendTestSelection.md`
 - `package.json`
 - `tools/test_unit.sh`
 - `tools/test_unit_docker.sh`
