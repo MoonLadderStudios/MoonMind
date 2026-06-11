@@ -454,12 +454,9 @@ def _normalize_temporal_list_scope(
 
     normalized = str(scope or "").strip().lower()
     if normalized:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={
-                "code": "invalid_temporal_list_scope",
-                "message": "scope is no longer supported for workflow execution lists.",
-            },
+        logger.info(
+            "Ignoring retired execution list scope=%r on workflow-list boundary",
+            normalized[:64],
         )
     return "default"
 

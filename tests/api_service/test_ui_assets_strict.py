@@ -254,7 +254,64 @@ def test_ui_assets_prefers_newer_usable_bundled_dist_over_older_local_dist(
     assert 'href="/static/workflow_console/dist/assets/mission-control.css"' in html
     assert resolve_mission_control_dist_root() == bundled_dist_root
 
-def test_resolve_mission_control_dist_root_returns_after_newest_usable_candidate(
+def test_ui_assets_prefers_bundled_dist_over_newer_local_dist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    local_dist_root = tmp_path / "local-dist"
+    local_manifest_dir = local_dist_root / ".vite"
+    local_assets_dir = local_dist_root / "assets"
+    local_manifest_dir.mkdir(parents=True)
+    local_assets_dir.mkdir()
+    (local_manifest_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "entrypoints/mission-control.tsx": {
+                    "file": "assets/local-mission-control.js",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (local_assets_dir / "local-mission-control.js").write_text(
+        "console.log('newer local dist');", encoding="utf-8"
+    )
+
+    bundled_dist_root = tmp_path / "bundled-dist"
+    bundled_manifest_dir = bundled_dist_root / ".vite"
+    bundled_assets_dir = bundled_dist_root / "assets"
+    bundled_manifest_dir.mkdir(parents=True)
+    bundled_assets_dir.mkdir()
+    (bundled_manifest_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "entrypoints/mission-control.tsx": {
+                    "file": "assets/bundled-mission-control.js",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (bundled_assets_dir / "bundled-mission-control.js").write_text(
+        "console.log('bundled dist');", encoding="utf-8"
+    )
+
+    older = 1_700_000_000
+    newer = older + 300
+    os.utime(bundled_manifest_dir / "manifest.json", (older, older))
+    os.utime(local_manifest_dir / "manifest.json", (newer, newer))
+
+    monkeypatch.delenv("VITE_MANIFEST_PATH", raising=False)
+    monkeypatch.delenv("MOONMIND_LENIENT_UI_ASSETS", raising=False)
+    monkeypatch.setenv("MOONMIND_BUNDLED_UI_DIST_ROOT", str(bundled_dist_root))
+    monkeypatch.setattr(ui_assets_module, "local_ui_dist_root", lambda: local_dist_root)
+
+    html = ui_assets("mission-control")
+
+    assert 'src="/static/workflow_console/dist/assets/bundled-mission-control.js"' in html
+    assert "local-mission-control.js" not in html
+    assert resolve_mission_control_dist_root() == bundled_dist_root
+
+def test_resolve_mission_control_dist_root_returns_after_bundled_usable_candidate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     local_dist_root = tmp_path / "local-dist"
