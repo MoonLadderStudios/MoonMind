@@ -71,7 +71,7 @@ def _scan_chat_messages_before_send(messages: List, *, surface: str) -> None:
             diagnostics,
         )
         raise HTTPException(
-            status_code=400,
+            status_code=422,
             detail=f"Outbound message blocked by high security scan: {diagnostics}",
         )
 

@@ -528,8 +528,8 @@ def test_responses_endpoint_blocks_secret_before_openai_provider_call(
         },
     )
 
-    assert response.status_code == 400
-    assert "chat.openai_responses.messages[0].content" in response.json()["detail"]
+    assert response.status_code == 422
+    assert "chat.openai.responses.messages[0].content" in response.json()["detail"]
     assert "blocked-secret-value" not in response.json()["detail"]
     mock_async_openai_client.assert_not_called()
 

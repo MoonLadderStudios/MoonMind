@@ -3578,7 +3578,7 @@ async def test_signal_send_message_blocks_secret_before_temporal_update(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type=RENAMED_USER_WORKFLOW_TYPE,
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,
@@ -3613,7 +3613,7 @@ async def test_signal_send_message_forwards_clean_message_unchanged_with_scan(
         service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
-            workflow_type="MoonMind.Run",
+            workflow_type=RENAMED_USER_WORKFLOW_TYPE,
             owner_id=uuid4(),
             title=None,
             input_artifact_ref=None,

@@ -392,7 +392,7 @@ async def test_send_message_forwards_operator_message_without_resuming(monkeypat
 
 @pytest.mark.asyncio
 async def test_send_message_does_not_scan_inside_workflow_replay_path(monkeypatch):
-    workflow_instance = MoonMindRunWorkflow()
+    workflow_instance = MoonMindUserWorkflow()
     workflow_instance._active_agent_child_workflow_id = "wf:child"
     workflow_instance._active_agent_id = "jules"
     workflow_instance._awaiting_external = True
@@ -421,7 +421,7 @@ async def test_send_message_does_not_scan_inside_workflow_replay_path(monkeypatc
 
 @pytest.mark.asyncio
 async def test_send_message_forwards_clean_operator_message_with_scan(monkeypatch):
-    workflow_instance = MoonMindRunWorkflow()
+    workflow_instance = MoonMindUserWorkflow()
     workflow_instance._active_agent_child_workflow_id = "wf:child"
     workflow_instance._active_agent_id = "jules"
     workflow_instance._awaiting_external = True

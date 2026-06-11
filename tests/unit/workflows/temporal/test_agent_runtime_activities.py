@@ -212,7 +212,7 @@ async def test_execution_notify_completion_scans_emitted_event_not_internal_payl
             "result": {
                 "summary": "safe completion",
                 "metadata": {
-                    "taskRunId": "task-1",
+                    "agentRunId": "agent-run-1",
                     "internalDiagnostics": "token=blocked-secret-value",
                 },
             },
@@ -222,7 +222,7 @@ async def test_execution_notify_completion_scans_emitted_event_not_internal_payl
     assert result["status"] == "sent"
     assert "blocked-secret-value" not in json.dumps(result)
     assert post_calls[0]["json"]["summary"] == "safe completion"
-    assert post_calls[0]["json"]["taskRunId"] == "task-1"
+    assert post_calls[0]["json"]["agentRunId"] == "agent-run-1"
     assert "internalDiagnostics" not in post_calls[0]["json"]
     assert email_calls
 
