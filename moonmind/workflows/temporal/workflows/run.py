@@ -5315,7 +5315,7 @@ class MoonMindRunWorkflow:
                         gate_verdict == "ADDITIONAL_WORK_NEEDED"
                         and self._has_remaining_moonspec_remediation_step(
                             ordered_nodes=ordered_nodes,
-                            current_index=index,
+                            current_index=index - 1,
                         )
                     ):
                         self._plan_blocked_message = blocking_gate_reason
