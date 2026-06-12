@@ -7,6 +7,7 @@ import base64
 import json
 import time
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Iterator
 from unittest.mock import AsyncMock, Mock, call, patch
@@ -404,12 +405,18 @@ def _override_query_client(
     app.dependency_overrides[get_temporal_client] = lambda: client
     return client
 
-def _override_user_dependencies(app: FastAPI, *, is_superuser: bool) -> SimpleNamespace:
+def _override_user_dependencies(
+    app: FastAPI,
+    *,
+    is_superuser: bool,
+    roles: list[str] | None = None,
+) -> SimpleNamespace:
     mock_user = SimpleNamespace(
         id=uuid4(),
         email="executions@example.com",
         is_active=True,
         is_superuser=is_superuser,
+        roles=list(roles or []),
     )
     user_dependencies = {
         dep.call
@@ -4141,6 +4148,210 @@ def test_create_task_shaped_execution_allows_pr_resolver_with_starting_branch(
     assert initial_parameters["workflow"]["git"] == {
         "startingBranch": "feature/resolve-pr"
     }
+
+def _pentest_workflow_payload(
+    *,
+    tool_inputs: dict[str, object] | None = None,
+    step_inputs: dict[str, object] | None = None,
+    authorized_principals: list[str] | None = None,
+) -> dict[str, object]:
+    safe_inputs: dict[str, object] = {
+        "target": "https://lab.example.test",
+        "scope_artifact_ref": "art_scope_valid",
+        "objective": "Recon only",
+        "operation_mode": "recon_only",
+        "runner_profile_id": "pentestgpt-safe",
+        "execution_profile_ref": "pentestgpt_anthropic_api_team",
+        "time_budget_minutes": 60,
+        "evidence_level": "standard",
+    }
+    if authorized_principals is not None:
+        safe_inputs["approved_scope"] = {
+            "authorized_principals": authorized_principals,
+        }
+    if tool_inputs:
+        safe_inputs.update(tool_inputs)
+    step_safe_inputs = dict(safe_inputs)
+    if step_inputs:
+        step_safe_inputs.update(step_inputs)
+    return {
+        "type": "workflow",
+        "payload": {
+            "workflow": {
+                "title": "Pentest recon",
+                "instructions": "Run the approved pentest.",
+                "tool": {
+                    "type": "skill",
+                    "name": "security.pentest.run",
+                    "version": "1.0.0",
+                    "inputs": safe_inputs,
+                },
+                "steps": [
+                    {
+                        "id": "step-pentest",
+                        "type": "tool",
+                        "instructions": "Run the curated pentest tool.",
+                        "tool": {
+                            "type": "skill",
+                            "name": "security.pentest.run",
+                            "version": "1.0.0",
+                            "inputs": step_safe_inputs,
+                        },
+                    }
+                ],
+            }
+        },
+    }
+
+def test_create_task_shaped_execution_rejects_disabled_pentest_submission(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, user = client
+    user.roles = ["admin"]
+    monkeypatch.setattr(settings.pentest, "enabled", False)
+
+    response = test_client.post("/api/executions", json=_pentest_workflow_payload())
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_execution_request"
+    assert "disabled" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+@pytest.mark.parametrize("role", ["admin", "security_operator"])
+def test_create_task_shaped_execution_accepts_authorized_pentest_roles(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+    role: str,
+) -> None:
+    test_client, service, user = client
+    user.roles = [role]
+    monkeypatch.setattr(settings.pentest, "enabled", True)
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post("/api/executions", json=_pentest_workflow_payload())
+
+    assert response.status_code == 201
+    workflow = service.create_execution.await_args.kwargs["initial_parameters"][
+        "workflow"
+    ]
+    assert workflow["tool"] == {
+        "type": "skill",
+        "name": "security.pentest.run",
+        "version": "1.0.0",
+        "inputs": {
+            "target": "https://lab.example.test",
+            "scope_artifact_ref": "art_scope_valid",
+            "objective": "Recon only",
+            "operation_mode": "recon_only",
+            "runner_profile_id": "pentestgpt-safe",
+            "execution_profile_ref": "pentestgpt_anthropic_api_team",
+            "time_budget_minutes": 60,
+            "evidence_level": "standard",
+        },
+    }
+
+@pytest.mark.parametrize("roles", [[], [""], ["developer"], ["viewer", "auditor"]])
+def test_create_task_shaped_execution_rejects_non_security_pentest_roles(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+    roles: list[str],
+) -> None:
+    test_client, service, user = client
+    user.roles = roles
+    monkeypatch.setattr(settings.pentest, "enabled", True)
+
+    response = test_client.post("/api/executions", json=_pentest_workflow_payload())
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_execution_request"
+    assert "admin or security_operator" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+def test_create_task_shaped_execution_rejects_scope_member_without_pentest_role(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, user = client
+    user.roles = ["developer"]
+    monkeypatch.setattr(settings.pentest, "enabled", True)
+
+    response = test_client.post(
+        "/api/executions",
+        json=_pentest_workflow_payload(authorized_principals=[str(user.id)]),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_execution_request"
+    service.create_execution.assert_not_awaited()
+
+def test_create_task_shaped_execution_rejects_pentest_privileged_overrides(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, user = client
+    user.roles = ["security_operator"]
+    monkeypatch.setattr(settings.pentest, "enabled", True)
+
+    response = test_client.post(
+        "/api/executions",
+        json=_pentest_workflow_payload(
+            tool_inputs={
+                "image": "unsafe:latest",
+                "provider_secret": "secret-value",
+                "env": {"TOKEN": "secret-value"},
+                "network": "host",
+                "mounts": ["/:/host"],
+                "capabilities": ["SYS_ADMIN"],
+                "raw_command": "sh -lc id",
+            }
+        ),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_execution_request"
+    message = response.json()["detail"]["message"]
+    assert "privileged" in message
+    assert "secret-value" not in message
+    service.create_execution.assert_not_awaited()
+
+def test_pentest_safe_preset_exposes_only_ordinary_inputs() -> None:
+    import yaml
+
+    preset_path = Path("api_service/data/presets/pentest-recon.yaml")
+    preset = yaml.safe_load(preset_path.read_text())
+    schema_props = set(preset["annotations"]["inputSchema"]["properties"])
+    exposed_inputs = {item["name"] for item in preset["inputs"]}
+    step_inputs = preset["steps"][0]["tool"]["inputs"]
+    privileged = {
+        "image",
+        "provider_secret",
+        "provider_secret_ref",
+        "env",
+        "environment",
+        "network",
+        "mount",
+        "mounts",
+        "capability",
+        "capabilities",
+        "command",
+        "raw_command",
+    }
+
+    assert schema_props == {
+        "target",
+        "scope_artifact_ref",
+        "objective",
+        "operation_mode",
+        "evidence_level",
+        "time_budget_minutes",
+        "execution_profile_ref",
+    }
+    assert exposed_inputs == schema_props
+    assert privileged.isdisjoint(schema_props)
+    assert privileged.isdisjoint(exposed_inputs)
+    assert step_inputs["runner_profile_id"] == "pentestgpt-safe"
+    assert privileged.isdisjoint(step_inputs)
 
 def test_create_task_shaped_submit_accepts_task_payload_pr_resolver(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],

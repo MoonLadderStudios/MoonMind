@@ -5444,6 +5444,156 @@ def _normalize_task_tool(task_payload: dict[str, Any]) -> dict[str, Any] | None:
         normalized["inputs"] = dict(inline_inputs)
     return normalized
 
+_PENTEST_TOOL_NAME = "security.pentest.run"
+_PENTEST_ALLOWED_ROLES = frozenset({"admin", "security_operator"})
+_PENTEST_PRIVILEGED_INPUT_FIELDS = frozenset(
+    {
+        "image",
+        "runner_image",
+        "provider_secret",
+        "provider_secret_ref",
+        "provider_secret_id",
+        "secret",
+        "secrets",
+        "env",
+        "environment",
+        "environment_variables",
+        "network",
+        "network_mode",
+        "mount",
+        "mounts",
+        "host_mount",
+        "host_mounts",
+        "capability",
+        "capabilities",
+        "docker_args",
+        "docker",
+        "command",
+        "raw_command",
+        "args",
+    }
+)
+
+def _tool_payload_name(payload: Mapping[str, Any] | None) -> str:
+    if not isinstance(payload, Mapping):
+        return ""
+    return str(payload.get("name") or payload.get("id") or "").strip()
+
+def _is_pentest_tool_payload(payload: Mapping[str, Any] | None) -> bool:
+    return _tool_payload_name(payload).lower() == _PENTEST_TOOL_NAME
+
+def _pentest_input_payloads_for_submission(
+    *,
+    task_payload: Mapping[str, Any],
+    normalized_tool: Mapping[str, Any] | None,
+    normalized_steps: list[dict[str, Any]],
+) -> list[Mapping[str, Any]]:
+    payloads: list[Mapping[str, Any]] = []
+    if _is_pentest_tool_payload(normalized_tool):
+        if isinstance(normalized_tool.get("inputs"), Mapping):
+            payloads.append(normalized_tool["inputs"])
+        if isinstance(task_payload.get("inputs"), Mapping):
+            payloads.append(task_payload["inputs"])
+
+    for step in normalized_steps:
+        step_tool = step.get("tool") if isinstance(step.get("tool"), Mapping) else None
+        step_skill = (
+            step.get("skill") if isinstance(step.get("skill"), Mapping) else None
+        )
+        selected = step_tool if _is_pentest_tool_payload(step_tool) else step_skill
+        if not _is_pentest_tool_payload(selected):
+            continue
+        for key in ("inputs", "args"):
+            value = selected.get(key) if isinstance(selected, Mapping) else None
+            if isinstance(value, Mapping):
+                payloads.append(value)
+    return payloads
+
+def _submission_contains_pentest_tool(
+    *,
+    task_payload: Mapping[str, Any],
+    normalized_tool: Mapping[str, Any] | None,
+    normalized_steps: list[dict[str, Any]],
+) -> bool:
+    if _is_pentest_tool_payload(normalized_tool):
+        return True
+    for step in normalized_steps:
+        step_tool = step.get("tool") if isinstance(step.get("tool"), Mapping) else None
+        step_skill = (
+            step.get("skill") if isinstance(step.get("skill"), Mapping) else None
+        )
+        if _is_pentest_tool_payload(step_tool) or _is_pentest_tool_payload(step_skill):
+            return True
+    return False
+
+def _normalize_user_role_name(value: Any) -> str:
+    if isinstance(value, Mapping):
+        value = value.get("name") or value.get("role") or value.get("id")
+    return str(value or "").strip().lower()
+
+def _effective_user_roles(user: Any) -> set[str]:
+    roles: set[str] = set()
+    for attr_name in ("roles", "role_names", "groups"):
+        raw = getattr(user, attr_name, None)
+        if isinstance(raw, str):
+            roles.update(
+                role for role in (_normalize_user_role_name(raw),) if role
+            )
+        elif isinstance(raw, (list, tuple, set, frozenset)):
+            roles.update(
+                role
+                for item in raw
+                for role in (_normalize_user_role_name(item),)
+                if role
+            )
+    role = _normalize_user_role_name(getattr(user, "role", None))
+    if role:
+        roles.add(role)
+    if bool(getattr(user, "is_superuser", False)):
+        roles.add("admin")
+    return roles
+
+def _validate_pentest_submission_boundary(
+    *,
+    task_payload: Mapping[str, Any],
+    normalized_tool: Mapping[str, Any] | None,
+    normalized_steps: list[dict[str, Any]],
+    user: Any,
+) -> None:
+    if not _submission_contains_pentest_tool(
+        task_payload=task_payload,
+        normalized_tool=normalized_tool,
+        normalized_steps=normalized_steps,
+    ):
+        return
+
+    if not settings.pentest.enabled:
+        raise _invalid_workflow_request(
+            "security.pentest.run submission is disabled by MOONMIND_PENTEST_ENABLED."
+        )
+
+    user_roles = _effective_user_roles(user)
+    if user_roles.isdisjoint(_PENTEST_ALLOWED_ROLES):
+        raise _invalid_workflow_request(
+            "security.pentest.run submission requires an admin or security_operator role."
+        )
+
+    for inputs in _pentest_input_payloads_for_submission(
+        task_payload=task_payload,
+        normalized_tool=normalized_tool,
+        normalized_steps=normalized_steps,
+    ):
+        blocked = sorted(
+            str(key)
+            for key in inputs.keys()
+            if str(key).strip().lower() in _PENTEST_PRIVILEGED_INPUT_FIELDS
+        )
+        if blocked:
+            raise _invalid_workflow_request(
+                "security.pentest.run submission contains privileged input fields "
+                f"that are not user-editable: {', '.join(blocked)}."
+            )
+
 def _validate_workflow_runtime_requirements(
     *,
     task_payload: dict[str, Any],
@@ -6368,6 +6518,12 @@ async def _create_execution_from_workflow_request(
         payload.get("report_output"),
     )
     normalized_tool = _normalize_task_tool(task_payload)
+    _validate_pentest_submission_boundary(
+        task_payload=task_payload,
+        normalized_tool=normalized_tool,
+        normalized_steps=normalized_steps,
+        user=user,
+    )
     publish_payload = _resolve_workflow_publish_payload(
         payload=payload,
         task_payload=task_payload,
