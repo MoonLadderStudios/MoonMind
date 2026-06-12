@@ -302,6 +302,8 @@ Key diagnostics:
 - Existing artifact store and workflow history only; no new persistent database tables planned. (001-pentest-activity-handler)
 - Python 3.12 + Pydantic v2, FastAPI, Temporal Python SDK, `httpx`, existing MoonMind outbound scan and redaction helpers (001-scan-message-send)
 - No new persistent storage; diagnostics are returned/logged through existing activity/API/workflow update failure result paths (001-scan-message-send)
+- Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind workflow/activity helpers and schemas (001-consolidate-step-manifests)
+- Existing Temporal workflow history and artifact-backed JSON manifests; no new persistent storage (001-consolidate-step-manifests)
 - Python 3.12; TypeScript/React present for Mission Control but not expected for this story. + FastAPI, Pydantic v2, SQLAlchemy async ORM, Temporal Python SDK, existing executable tool registry and Temporal execution router. (001-enforce-pentest-role)
 - Existing execution records and task input snapshot artifacts only; no new persistent storage. (001-enforce-pentest-role)
 - Python 3.12 + Pydantic v2, pytest, Temporal Python SDK boundary helpers, existing MoonMind schema/workflow modules, existing terminology verification tooling (001-step-execution-conformance)

@@ -81,6 +81,58 @@ def test_manifest_payload_is_compact_boundary_contract() -> None:
     assert payload["outputs"] == {"summary": "Executing plan step"}
 
 
+def test_manifest_payload_accepts_terminal_disposition_and_effect_matrices() -> None:
+    now = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
+    payload = build_step_execution_manifest_payload(
+        workflow_id="wf-1",
+        run_id="run-1",
+        logical_step_id="implement",
+        execution_ordinal=1,
+        reason="initial_execution",
+        status="succeeded",
+        terminal_disposition="accepted",
+        updated_at=now,
+        input_refs=["artifact://input"],
+        context={"bundleRef": "artifact://context"},
+        workspace={"policy": "fresh_branch_from_source"},
+        git_effect={"disposition": "accepted", "acceptedOutputPresent": True},
+        execution={"kind": "agent_runtime"},
+        outputs={"summaryRef": "artifact://summary"},
+        checks=[{"kind": "approval_policy", "status": "passed"}],
+        side_effects={
+            "summary": {
+                "categories": {
+                    "git": 1,
+                    "external": 1,
+                    "artifact": 1,
+                    "publication": 1,
+                    "compensation": 1,
+                    "memory": 1,
+                    "retrieval": 1,
+                    "record": 7,
+                }
+            }
+        },
+        side_effect_records=[
+            {"class": "external_idempotent", "kind": "normal", "operation": "jira"},
+            {"class": "artifact_write", "kind": "normal", "operation": "artifact"},
+            {"class": "publication", "kind": "normal", "operation": "publish"},
+            {"class": "external_non_idempotent", "kind": "compensation", "operation": "compensate"},
+            {"class": "memory_update", "kind": "normal", "operation": "memory"},
+            {"class": "retrieval_index_update", "kind": "normal", "operation": "retrieval"},
+            {"class": "workspace_mutation", "kind": "normal", "operation": "record"},
+        ],
+        dependency_effects={"invalidatedLogicalStepIds": ["verify"]},
+        budget={"maxReviewAttempts": 2},
+    )
+
+    assert payload["terminalDisposition"] == "accepted"
+    assert payload["workspace"]["gitEffect"]["disposition"] == "accepted"
+    assert payload["sideEffects"]["summary"]["categories"]["retrieval"] == 1
+    assert len(payload["sideEffects"]["records"]) == 7
+    assert payload["dependencyEffects"]["invalidatedLogicalStepIds"] == ["verify"]
+
+
 def test_workspace_policy_metadata_rejects_missing_required_checkpoint() -> None:
     decision = validate_workspace_policy_launch(
         policy="apply_previous_execution_diff_to_clean_baseline",

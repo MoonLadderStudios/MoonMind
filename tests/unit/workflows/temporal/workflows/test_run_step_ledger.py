@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -97,6 +98,33 @@ def _approval_policy_plan_payload() -> dict[str, Any]:
         ],
         "edges": [],
     }
+
+
+def test_run_exposes_one_canonical_step_execution_manifest_record_surface() -> None:
+    workflow_attrs = {
+        name
+        for name in dir(MoonMindRunWorkflow)
+        if name.startswith("_record_step_execution_manifest")
+    }
+
+    assert workflow_attrs == {"_record_step_execution_manifest"}
+    assert run_module.RUN_STEP_EXECUTION_MANIFEST_PATCH == (
+        "run-step-attempt-manifest-v1"
+    )
+
+
+def test_step_execution_manifest_start_write_keeps_replay_patch_guard() -> None:
+    source = Path(run_module.__file__).read_text()
+
+    guard = "if workflow.patched(RUN_STEP_EXECUTION_MANIFEST_PATCH):"
+    start_manifest_call = (
+        "await self._record_step_execution_manifest(\n"
+        "                            node_id,\n"
+        '                            phase="start",'
+    )
+
+    assert source.index(guard) < source.index(start_manifest_call)
+
 
 def _registry_payload() -> dict[str, Any]:
     return {
@@ -630,8 +658,9 @@ async def test_run_records_step_execution_manifest_ref_when_work_begins(
         updated_at=now,
         summary="Launching child runtime",
     )
-    await workflow._record_step_execution_manifest_start(
+    await workflow._record_step_execution_manifest(
         "delegate-agent",
+        phase="start",
         updated_at=now,
         reason="initial_execution",
     )
@@ -658,8 +687,9 @@ async def test_run_records_step_execution_manifest_ref_when_work_begins(
         updated_at=now,
         summary="Retrying child runtime",
     )
-    await workflow._record_step_execution_manifest_start(
+    await workflow._record_step_execution_manifest(
         "delegate-agent",
+        phase="start",
         updated_at=now,
         reason="runtime_recovered",
     )
@@ -678,9 +708,18 @@ async def test_run_records_step_execution_manifest_ref_when_work_begins(
         "wf-run-1:run-1:delegate-agent:execution:1"
     )
     assert writes[0]["metadata_json"]["idempotencyKey"] == (
-        "wf-run-1:run-1:delegate-agent:1:manifest"
+        "wf-run-1:run-1:delegate-agent:execution:1:manifest"
     )
     assert writes[0]["payload"]["reason"] == "initial_execution"
+    assert writes[0]["payload"]["context"]["contextBundleRef"].startswith(
+        "execution-context-bundle://sha256:"
+    )
+    assert writes[0]["payload"]["context"]["contextBundleDigest"].startswith(
+        "sha256:"
+    )
+    assert writes[0]["payload"]["context"]["builderVersion"] == (
+        "execution-context-builder-v1"
+    )
     assert writes[0]["payload"]["execution"] == {
         "runtimeContextPolicy": "fresh_agent_run"
     }
@@ -779,8 +818,9 @@ async def test_step_execution_manifest_merges_explicit_execution_with_refs(
         updated_at=now,
     )
 
-    await workflow._record_step_execution_manifest_started(
+    await workflow._record_step_execution_manifest(
         "delegate-external",
+        phase="start",
         updated_at=now,
         reason="initial_execution",
         execution={
@@ -789,6 +829,15 @@ async def test_step_execution_manifest_merges_explicit_execution_with_refs(
         },
     )
 
+    assert writes[0]["content_type"] == (
+        "application/vnd.moonmind.step-execution+json;version=1"
+    )
+    assert writes[0]["metadata_json"]["artifact_kind"] == "step_execution_manifest"
+    assert writes[0]["metadata_json"]["logicalStepId"] == "delegate-external"
+    assert writes[0]["metadata_json"]["attempt"] == 1
+    assert writes[0]["payload"]["context"]["contextBundleRef"].startswith(
+        "execution-context-bundle://sha256:"
+    )
     assert writes[0]["payload"]["execution"] == {
         "runtimeContextPolicy": "external_provider_continuation",
         "externalProviderContinuation": {
@@ -830,7 +879,14 @@ async def test_external_continuation_manifest_records_side_effects_and_checkpoin
         content_type: str = "application/json",
         metadata_json: dict[str, Any] | None = None,
     ) -> str:
-        writes.append({"name": name, "payload": payload})
+        writes.append(
+            {
+                "name": name,
+                "payload": payload,
+                "content_type": content_type,
+                "metadata_json": metadata_json,
+            }
+        )
         return f"artifact-attempt-{len(writes)}"
 
     monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
@@ -879,12 +935,16 @@ async def test_external_continuation_manifest_records_side_effects_and_checkpoin
         workflow_state_accepted=True,
     )
 
-    await workflow._record_step_execution_manifest_started(
+    await workflow._record_step_execution_manifest(
         "delegate-external",
+        phase="start",
         updated_at=now,
         reason="initial_execution",
     )
 
+    assert writes[0]["content_type"] == (
+        "application/vnd.moonmind.step-execution+json;version=1"
+    )
     execution = writes[0]["payload"]["execution"]
     assert execution["runtimeContextPolicy"] == "external_provider_continuation"
     # Attempt identity / context refs are still recorded.
@@ -960,8 +1020,9 @@ async def test_run_records_terminal_step_execution_manifest_with_result_refs(
     )
 
     workflow._mark_step_running("run-tests", updated_at=now, summary="Run tests")
-    await workflow._record_step_execution_manifest_start(
+    await workflow._record_step_execution_manifest(
         "run-tests",
+        phase="start",
         updated_at=now,
         reason="initial_execution",
     )
@@ -992,8 +1053,9 @@ async def test_run_records_terminal_step_execution_manifest_with_result_refs(
         idempotency_key="wf-run-1:run-1:run-tests:execution:1:publish-pr",
         workflow_state_accepted=True,
     )
-    await workflow._record_step_execution_manifest_terminal(
+    await workflow._record_step_execution_manifest(
         "run-tests",
+        phase="terminal",
         updated_at=now,
         reason="initial_execution",
         status="succeeded",
@@ -1026,7 +1088,23 @@ async def test_run_records_terminal_step_execution_manifest_with_result_refs(
                 "workflowStateAccepted": True,
                 "disposition": "accepted",
             }
-        ]
+        ],
+        "summary": {
+            "totalRecords": 1,
+            "categories": {
+                "git": 1,
+                "external": 0,
+                "artifact": 0,
+                "publication": 1,
+                "compensation": 0,
+                "memory": 0,
+                "retrieval": 0,
+                "record": 1,
+            },
+            "byClass": {"publication": 1},
+            "byDisposition": {"accepted": 2},
+            "byKind": {"normal": 1},
+        },
     }
 
 
@@ -1061,7 +1139,7 @@ async def test_write_step_execution_manifest_requires_real_artifact_id(
         match="artifact.create returned no artifact_id",
     ):
         await workflow._write_json_artifact(
-            name="reports/step_executions/run-tests_attempt_1.json",
+            name="step-execution-manifest.json",
             payload={"schemaVersion": "v1"},
             content_type=STEP_EXECUTION_MANIFEST_CONTENT_TYPE,
         )
@@ -1496,6 +1574,9 @@ async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check
             if getattr(payload, "content_type", "") == (
                 "application/vnd.moonmind.step-execution+json;version=1"
             ):
+                written_review_payloads.append(
+                    json.loads(payload.payload.decode("utf-8"))
+                )
                 return {"ok": True}
             written_review_payloads.append(json.loads(payload.payload.decode("utf-8")))
             return {"ok": True}
@@ -1564,12 +1645,12 @@ async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check
     ]
     assert review_payloads[0]["verdict"]["verdict"] == "FULLY_IMPLEMENTED"
     attempt_payloads = [
-        payload for payload in written_review_payloads if payload.get("contentType")
+        payload for payload in written_review_payloads if payload.get("stepExecutionId")
     ]
     assert attempt_payloads[0]["stepExecutionId"] == (
         "wf-run-review-1:run-review-1:apply-patch:execution:1"
     )
-    assert step["artifacts"]["stepExecutionManifestRef"] == "art_attempt_1"
+    assert step["artifacts"]["stepExecutionManifestRef"] == "art_attempt_1_terminal"
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retry_count(
@@ -1726,10 +1807,11 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
     ]
     assert review_payloads[0]["verdict"]["verdict"] == "ADDITIONAL_WORK_NEEDED"
     assert review_payloads[1]["verdict"]["verdict"] == "FULLY_IMPLEMENTED"
-    assert step["artifacts"]["stepExecutionManifestRef"] == "art_attempt_2"
+    assert step["artifacts"]["stepExecutionManifestRef"] == "art_attempt_2_terminal"
     assert step["artifacts"]["stepExecutionManifestRefs"] == [
         "art_attempt_1",
         "art_attempt_2",
+        "art_attempt_2_terminal",
     ]
 
 
@@ -2157,14 +2239,19 @@ async def test_run_execution_stage_continues_independent_nodes_after_gate_stop(
     assert workflow._publish_reason == (
         "Structured gate stopped before downstream handoff."
     )
-    assert [payload["logicalStepId"] for payload in step_execution_payloads] == [
+    terminal_payloads = [
+        payload
+        for payload in step_execution_payloads
+        if payload.get("terminalDisposition")
+    ]
+    assert [payload["logicalStepId"] for payload in terminal_payloads] == [
         "implement",
         "publish",
     ]
-    assert step_execution_payloads[0]["terminalDisposition"] == (
+    assert terminal_payloads[0]["terminalDisposition"] == (
         "failed_with_remaining_work"
     )
-    assert step_execution_payloads[-1]["terminalDisposition"] == "accepted"
+    assert terminal_payloads[-1]["terminalDisposition"] == "accepted"
 
 
 @pytest.mark.asyncio
@@ -2324,4 +2411,4 @@ async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_i
     ]
     assert review_payloads[0]["attempt"] == 1
     assert review_payloads[1]["attempt"] == 2
-    assert step["artifacts"]["stepExecutionManifestRef"] == "art_attempt_2"
+    assert step["artifacts"]["stepExecutionManifestRef"] == "art_attempt_2_terminal"
