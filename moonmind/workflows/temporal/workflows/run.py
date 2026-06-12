@@ -318,6 +318,9 @@ RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH = (
 RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH = (
     "run-moonspec-verify-publication-gate-v1"
 )
+RUN_MOONSPEC_VERIFY_REMEDIATION_INDEX_PATCH = (
+    "run-moonspec-verify-remediation-index-v1"
+)
 MM_STARTED_AT_SEARCH_ATTRIBUTE = "mm_started_at"
 _PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code", "gemini_cli")
 _MANAGED_AGENT_IDS = frozenset(
@@ -5311,11 +5314,18 @@ class MoonMindRunWorkflow:
                         self._moonspec_gate_verdict
                     )
                     blocking_gate_reason = self._blocking_moonspec_gate_reason()
+                    remaining_remediation_index = (
+                        index - 1
+                        if workflow.patched(
+                            RUN_MOONSPEC_VERIFY_REMEDIATION_INDEX_PATCH
+                        )
+                        else index
+                    )
                     if blocking_gate_reason and not (
                         gate_verdict == "ADDITIONAL_WORK_NEEDED"
                         and self._has_remaining_moonspec_remediation_step(
                             ordered_nodes=ordered_nodes,
-                            current_index=index,
+                            current_index=remaining_remediation_index,
                         )
                     ):
                         self._plan_blocked_message = blocking_gate_reason
