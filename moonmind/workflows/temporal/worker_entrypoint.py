@@ -72,19 +72,26 @@ async def main():
     bindings = build_worker_activity_bindings(fleet=topology.fleet)
     activities = [b.handler for b in bindings]
 
-    worker = Worker(
-        client,
-        task_queue=topology.task_queues[0],
-        workflows=workflows,
-        activities=activities,
-        max_concurrent_activities=topology.concurrency_limit or 100,
-        workflow_runner=UnsandboxedWorkflowRunner(),
-    )
+    workers = [
+        Worker(
+            client,
+            task_queue=task_queue,
+            workflows=workflows,
+            activities=activities,
+            max_concurrent_activities=topology.concurrency_limit or 100,
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        )
+        for task_queue in topology.task_queues
+    ]
 
     logger.info(
-        f"Starting Temporal worker for fleet '{topology.fleet}' on queue '{topology.task_queues[0]}'"
+        "Starting Temporal worker for fleet '%s' on queues '%s'",
+        topology.fleet,
+        ", ".join(topology.task_queues),
     )
-    await worker.run()
+    async with asyncio.TaskGroup() as tg:
+        for worker in workers:
+            tg.create_task(worker.run())
 
 if __name__ == "__main__":
     asyncio.run(main())
