@@ -1810,6 +1810,74 @@ async def test_child_jira_orchestrate_run_expands_seeded_template_steps(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_child_jira_orchestrate_workflow_payload_expands_seeded_template_steps(
+    tmp_path,
+):
+    async with _template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            expanded_parameters = await _expand_preset_for_child_run(
+                session=session,
+                initial_parameters={
+                    "requestType": "workflow",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "codex_cli",
+                    "publishMode": "pr",
+                    "workflow": {
+                        "title": "Run Jira Orchestrate for MM-820: Conformance",
+                        "instructions": "Use the existing Jira Orchestrate workflow.",
+                        "tool": {
+                            "type": "skill",
+                            "name": "jira-orchestrate",
+                            "version": "1.0",
+                        },
+                        "skill": {"name": "jira-orchestrate", "version": "1.0"},
+                        "inputs": {
+                            "jira_issue_key": "MM-820",
+                            "source_design_path": (
+                                "docs/Steps/StepExecutionsAndCheckpointing.md"
+                            ),
+                            "constraints": "Do not run implementation inline.",
+                        },
+                        "runtime": {"mode": "codex_cli"},
+                        "publish": {"mode": "pr"},
+                        "taskTemplate": {
+                            "slug": "jira-orchestrate",
+                            "version": "1.0.0",
+                        },
+                    },
+                },
+            )
+
+    task = expanded_parameters["workflow"]
+    assert "task" not in expanded_parameters
+    assert expanded_parameters["stepCount"] == 26
+    assert len(task["steps"]) == 26
+    assert task["steps"][0]["skill"]["id"] == "jira-issue-updater"
+    assert task["steps"][0]["type"] == "skill"
+    assert task["appliedStepTemplates"][0]["slug"] == "jira-orchestrate"
+    assert task["authoredPresets"][0]["presetSlug"] == "jira-orchestrate"
+
+    planner = _build_runtime_planner()
+    plan = planner(
+        inputs={"workflow": task},
+        parameters={"targetRuntime": "codex_cli"},
+        snapshot=SimpleNamespace(
+            digest="reg:sha256:test",
+            artifact_ref="art_registry_123",
+        ),
+    )
+
+    first_node = plan["nodes"][0]
+    assert first_node["id"].startswith("tpl:jira-orchestrate:1.0.0:01")
+    assert first_node["tool"] == {
+        "type": "agent_runtime",
+        "name": "codex_cli",
+        "version": "1.0",
+    }
+    assert first_node["inputs"]["selectedSkill"] == "jira-issue-updater"
+
+
+@pytest.mark.asyncio
 async def test_child_jira_orchestrate_run_persists_original_task_input_snapshot(
     tmp_path,
 ):
