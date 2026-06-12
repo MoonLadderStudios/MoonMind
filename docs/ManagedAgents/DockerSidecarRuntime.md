@@ -328,6 +328,7 @@ Start with classic DinD on trusted deployments. Roll rootless out as a hardening
 | `workspace` | session | same path in both (e.g. `/work/agent_jobs`) | agent + sidecar | the agent's repo and run artifacts |
 | `docker-socket` | session | `/var/run/moonmind-docker` | agent + sidecar | Unix socket exposed by `dockerd` |
 | `docker-graph` | session | `/var/lib/docker` (or rootless equivalent) | sidecar only | nested image/container storage |
+| `docker-config` | session | `<sessionWorkspace>/.docker` | agent only | optional Docker client auth config for deployment-approved pull credentials |
 | optional caches | session or user | deployment-defined | agent + sidecar (as declared) | package manager / build caches |
 
 Invariants:
@@ -731,6 +732,8 @@ Every per-session sidecar deployment must be discoverable and traceable. The two
 
 The session-status surface (§13) reports daemon readiness, version, and probe results. Durable evidence for agent work continues to flow through the existing artifact pipeline; the sidecar itself is not the system of record. Per-container stdout/stderr capture for the daemon belongs in worker logs, not in the workflow artifact area, unless explicitly attached for debugging.
 
+When a deployment provides GHCR pull credentials through managed secret references such as `GHCR_PULL_USER` and `GHCR_PULL_TOKEN`, the launcher may materialize a session-scoped Docker client config under the session workspace and set `DOCKER_CONFIG` only for that managed session. The config is ephemeral, contains only pull-scoped registry auth, and is never written into workflow history or durable metadata. Diagnostics record only metadata such as `pullAuth: authenticated|anonymous`, the registry, and manifest probe outcome.
+
 ---
 
 ## 23. Validation rules
@@ -747,6 +750,7 @@ The session launcher must validate at least the following before starting a sess
 8. Admin/ops Docker access must be isolated to the MoonMind ops runtime (§21).
 9. The sidecar image tag must be pinned (`docker:27-dind`, not `docker:latest`).
 10. The Docker daemon scope must be per session — no shared daemon across sessions or users.
+11. If a managed-session Docker manifest preflight image is configured, it must be digest-pinned and `docker manifest inspect` must pass before the session proceeds to agent orchestration.
 
 Example failure message:
 

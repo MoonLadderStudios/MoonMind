@@ -82,6 +82,13 @@ profiles:
       - type: volume
         source: unreal_ubt_volume
         target: /work/ubt-cache
+    credentialMounts:
+      - type: volume
+        source: ghcr_pull_auth_volume
+        target: /home/runner/.docker
+        readOnly: true
+        justification: Read-only Docker client config for GHCR read:packages pulls of curated Unreal runner images.
+        approvalRef: THOR-555
     envAllowlist:
       - CI
       - CCACHE_DIR

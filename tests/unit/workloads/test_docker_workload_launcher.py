@@ -480,8 +480,13 @@ def test_unreal_profile_launch_args_include_cache_volumes_and_safe_posture() -> 
     assert "type=volume,source=agent_workspaces,target=/work/agent_jobs" in run_args
     assert "type=volume,source=unreal_ccache_volume,target=/work/.ccache" in run_args
     assert "type=volume,source=unreal_ubt_volume,target=/work/ubt-cache" in run_args
+    assert (
+        "type=volume,source=ghcr_pull_auth_volume,target=/home/runner/.docker,readonly"
+        in run_args
+    )
     assert "ghcr.io/moonladderstudios/moonmind-unreal-runner:5.3" in run_args
     assert "/var/run/docker.sock" not in " ".join(run_args)
+    assert "read:packages" not in " ".join(run_args)
 
 def test_launcher_mounts_only_explicit_credential_declarations(
     tmp_path: Path,

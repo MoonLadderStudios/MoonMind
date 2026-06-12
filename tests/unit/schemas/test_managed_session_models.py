@@ -215,6 +215,7 @@ def test_mm693_launch_request_serializes_docker_capability_contract() -> None:
         "mode": "sidecar-dind-rootless",
         "dockerHost": "unix:///var/run/moonmind-docker/docker.sock",
         "composeSupport": True,
+        "manifestImageRef": None,
         "timeoutSeconds": 30.0,
         "intervalSeconds": 1.0,
     }
