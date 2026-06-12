@@ -177,6 +177,7 @@ _MOONSPEC_GATE_BLOCKING_VERDICTS = frozenset(
         "NO_DETERMINATION",
         "BLOCKED",
         "FAILED_UNRECOVERABLE",
+        "ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION",
     }
 )
 _MOONSPEC_GATE_VERDICT_TEXT_PATTERN = re.compile(
@@ -184,6 +185,7 @@ _MOONSPEC_GATE_VERDICT_TEXT_PATTERN = re.compile(
     r"FULLY_IMPLEMENTED|"
     r"ADDITIONAL_WORK_NEEDED|"
     r"NO_DETERMINATION|"
+    r"ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION|"
     r"FAILED_UNRECOVERABLE|"
     r"BLOCKED"
     r")\b",
@@ -317,6 +319,9 @@ RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH = (
 )
 RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH = (
     "run-moonspec-verify-publication-gate-v1"
+)
+RUN_MOONSPEC_VERIFY_REMEDIATION_INDEX_PATCH = (
+    "run-moonspec-verify-remediation-index-v1"
 )
 MM_STARTED_AT_SEARCH_ATTRIBUTE = "mm_started_at"
 _PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code", "gemini_cli")
@@ -2598,6 +2603,7 @@ class MoonMindRunWorkflow:
             "ADDITIONAL_WORK_NEEDED",
             "BLOCKED",
             "FAILED_UNRECOVERABLE",
+            "ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION",
         }:
             return "failed"
         return "inconclusive"
@@ -2692,9 +2698,12 @@ class MoonMindRunWorkflow:
                 "verificationVerdict",
                 "verification_verdict",
             ):
-                verdict = self._normalize_moonspec_verify_verdict(source.get(key))
+                raw_verdict = source.get(key)
+                verdict = self._normalize_moonspec_verify_verdict(raw_verdict)
                 if verdict:
                     return verdict
+                if isinstance(raw_verdict, str) and raw_verdict.strip():
+                    return "NO_DETERMINATION"
         for key in (
             "operator_summary",
             "operatorSummary",
@@ -2926,6 +2935,8 @@ class MoonMindRunWorkflow:
             return "blocked"
         if normalized == "FAILED_UNRECOVERABLE":
             return "failed_unrecoverable"
+        if normalized == "ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION":
+            return "environment_contaminated_by_skill_projection"
         if normalized == "ADDITIONAL_WORK_NEEDED":
             return "failed_with_remaining_work"
         return "needs_human"
@@ -5297,11 +5308,18 @@ class MoonMindRunWorkflow:
                         self._moonspec_gate_verdict
                     )
                     blocking_gate_reason = self._blocking_moonspec_gate_reason()
+                    remaining_remediation_index = (
+                        index - 1
+                        if workflow.patched(
+                            RUN_MOONSPEC_VERIFY_REMEDIATION_INDEX_PATCH
+                        )
+                        else index
+                    )
                     if blocking_gate_reason and not (
                         gate_verdict == "ADDITIONAL_WORK_NEEDED"
                         and self._has_remaining_moonspec_remediation_step(
                             ordered_nodes=ordered_nodes,
-                            current_index=index,
+                            current_index=remaining_remediation_index,
                         )
                     ):
                         self._plan_blocked_message = blocking_gate_reason

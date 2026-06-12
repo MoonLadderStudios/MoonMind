@@ -988,6 +988,7 @@ class ManagedSessionDockerCapabilityRequest(BaseModel):
     mode: ManagedSessionDockerCapabilityMode = Field("sidecar-dind", alias="mode")
     docker_host: str | None = Field(None, alias="dockerHost")
     compose_support: bool = Field(False, alias="composeSupport")
+    manifest_image_ref: str | None = Field(None, alias="manifestImageRef")
     timeout_seconds: float = Field(60.0, alias="timeoutSeconds", ge=0)
     interval_seconds: float = Field(2.0, alias="intervalSeconds", ge=0)
 
@@ -997,6 +998,11 @@ class ManagedSessionDockerCapabilityRequest(BaseModel):
             self.docker_host = require_non_blank(
                 self.docker_host,
                 field_name="dockerCapability.dockerHost",
+            )
+        if self.manifest_image_ref is not None:
+            self.manifest_image_ref = require_non_blank(
+                self.manifest_image_ref,
+                field_name="dockerCapability.manifestImageRef",
             )
         return self
 

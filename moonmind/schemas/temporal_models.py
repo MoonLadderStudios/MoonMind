@@ -137,6 +137,8 @@ StepCheckpointValidationFailureCode = Literal[
 ]
 _STEP_EXECUTION_INLINE_EVIDENCE_KEYS = {
     "content",
+    "credential",
+    "credentials",
     "diff",
     "diagnostics",
     "log",
@@ -145,8 +147,10 @@ _STEP_EXECUTION_INLINE_EVIDENCE_KEYS = {
     "payload",
     "provideroutput",
     "raw",
+    "report",
     "stderr",
     "stdout",
+    "verificationreport",
 }
 
 

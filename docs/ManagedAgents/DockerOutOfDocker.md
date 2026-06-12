@@ -553,6 +553,8 @@ Any auth or credential mount must be:
 * explicitly declared by a runner profile, or
 * explicitly provisioned by MoonMind policy for the unrestricted execution plane
 
+Runner-profile credential mounts are also the parity mechanism for curated control-plane workloads that require registry pull configuration. A profile may declare a read-only Docker config volume, with justification and approval reference, for deployment-approved GHCR `read:packages` pull credentials. The mount declaration is policy metadata and must not expose raw credentials in tool inputs, logs, or diagnostics.
+
 ### 10.5 Output discipline
 
 Workload containers must write only to approved workspace paths and mounted caches.

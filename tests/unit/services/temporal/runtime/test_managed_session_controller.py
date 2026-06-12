@@ -72,6 +72,44 @@ def _workspace_git_command(workspace_path: str | Path, *args: str) -> tuple[str,
         *args,
     )
 
+
+def test_controller_session_end_cleanup_removes_moonmind_skill_projections(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "agent_jobs" / "job-1" / "repo"
+    active = tmp_path / "agent_jobs" / "job-1" / "runtime" / "skills_active" / "snap"
+    active.mkdir(parents=True)
+    (active / "_manifest.json").write_text('{"snapshot_id": "snap"}\n', encoding="utf-8")
+    agents_projection = workspace / ".agents" / "skills"
+    gemini_projection = workspace / ".gemini" / "skills"
+    agents_projection.parent.mkdir(parents=True)
+    gemini_projection.parent.mkdir(parents=True)
+    agents_projection.symlink_to(active)
+    gemini_projection.symlink_to(active)
+    record = CodexManagedSessionRecord(
+        sessionId="sess-cleanup",
+        sessionEpoch=1,
+        agentRunId="task-1",
+        containerId="ctr-1",
+        threadId="thread-1",
+        runtimeId="codex_cli",
+        imageRef="img",
+        controlUrl="docker-exec://ctr-1",
+        status="ready",
+        workspacePath=str(workspace),
+        sessionWorkspacePath=str(tmp_path / "session"),
+        artifactSpoolPath=str(tmp_path / "artifacts"),
+        startedAt="2026-04-06T12:00:00Z",
+    )
+
+    DockerCodexManagedSessionController._cleanup_skill_projections_for_session(record)
+
+    assert not agents_projection.exists()
+    assert not agents_projection.is_symlink()
+    assert not gemini_projection.exists()
+    assert not gemini_projection.is_symlink()
+    assert (workspace / ".agents").is_dir()
+
 @pytest.mark.asyncio
 async def test_default_command_runner_clears_supplemental_groups_when_uid_changes(
     monkeypatch: pytest.MonkeyPatch,
@@ -3226,6 +3264,14 @@ async def test_controller_terminate_removes_session_docker_sidecar_resources(
     tmp_path: Path,
 ) -> None:
     store = ManagedSessionStore(tmp_path / "session-store")
+    workspace_root = tmp_path / "agent_jobs"
+    session_workspace = workspace_root / "task-1" / "session"
+    docker_config = session_workspace / ".docker" / "config.json"
+    docker_config.parent.mkdir(parents=True)
+    docker_config.write_text(
+        '{"auths":{"ghcr.io":{"auth":"secret"}}}\n',
+        encoding="utf-8",
+    )
     store.save(
         CodexManagedSessionRecord(
             sessionId="sess-1",
@@ -3237,9 +3283,9 @@ async def test_controller_terminate_removes_session_docker_sidecar_resources(
             imageRef="img",
             controlUrl="docker-exec://moonmind-session-sess-1-agent",
             status="ready",
-            workspacePath="/work/agent_jobs/task-1/repo",
-            sessionWorkspacePath="/work/agent_jobs/task-1/session",
-            artifactSpoolPath="/work/agent_jobs/task-1/artifacts",
+            workspacePath=str(workspace_root / "task-1" / "repo"),
+            sessionWorkspacePath=str(session_workspace),
+            artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
             metadata={"dockerSidecarEnabled": True},
             startedAt="2026-04-06T12:00:00Z",
         )
@@ -3263,7 +3309,7 @@ async def test_controller_terminate_removes_session_docker_sidecar_resources(
     controller = DockerCodexManagedSessionController(
         workspace_volume_name="agent_workspaces",
         codex_volume_name="codex_auth_volume",
-        workspace_root="/work/agent_jobs",
+        workspace_root=str(workspace_root),
         session_store=store,
         command_runner=_fake_runner,
     )
@@ -3294,6 +3340,7 @@ async def test_controller_terminate_removes_session_docker_sidecar_resources(
         "-f",
         "moonmind-session-sess-1-docker-socket",
     ) in commands
+    assert not docker_config.exists()
 
 @pytest.mark.asyncio
 async def test_controller_terminate_without_store_removes_deterministic_sidecar(

@@ -6,9 +6,11 @@ This module validates prerequisites before starting a workflow run.
 from __future__ import annotations
 
 import logging
+import os
 import re
+import subprocess
 from dataclasses import dataclass
-from typing import Optional
+from typing import Mapping, Optional
 
 from moonmind.config.settings import settings
 from moonmind.workflows.automation import models
@@ -30,6 +32,8 @@ class CodexPreflightResult:
     exit_code: Optional[int] = None
     stdout: Optional[str] = None
     stderr: Optional[str] = None
+    failure_class: Optional[str] = None
+    diagnostics_ref: Optional[str] = None
 
 def _summarize_preflight_output(stdout: str, stderr: str) -> Optional[str]:
     """Return a one-line summary extracted from preflight output."""
@@ -39,6 +43,204 @@ def _summarize_preflight_output(stdout: str, stderr: str) -> Optional[str]:
         if stripped:
             return stripped[:200]
     return None
+
+def _is_pinned_container_image(image: str) -> bool:
+    """Return whether an image reference is pinned to a non-latest tag or digest."""
+
+    normalized = image.strip()
+    if not normalized:
+        return False
+    if "@" in normalized:
+        return True
+    last_segment = normalized.rsplit("/", 1)[-1]
+    if ":" not in last_segment:
+        return False
+    tag = last_segment.rsplit(":", 1)[-1].strip().lower()
+    return bool(tag) and tag != "latest"
+
+def _configured_pinned_ue_image(
+    env: Mapping[str, str],
+    *,
+    pinned_image: str | None = None,
+) -> str | None:
+    """Resolve the optional pinned Unreal Engine validation image."""
+
+    candidates = (
+        pinned_image,
+        env.get("MOONMIND_UNREAL_ENGINE_IMAGE"),
+        env.get("MOONMIND_UNREAL_DOCKER_IMAGE"),
+        env.get("MOONMIND_PINNED_UE_IMAGE"),
+        env.get("MOONMIND_PINNED_UNREAL_ENGINE_IMAGE"),
+    )
+    for candidate in candidates:
+        image = str(candidate or "").strip()
+        if image:
+            return image
+    return None
+
+def _docker_sidecar_preflight_enabled(env: Mapping[str, str]) -> bool:
+    mode = str(env.get("MOONMIND_MANAGED_SESSION_DOCKER_MODE") or "").strip().lower()
+    if mode in {"no-docker", "disabled", "none", "off"}:
+        return False
+    return mode == "docker-sidecar" or bool(str(env.get("DOCKER_HOST") or "").strip())
+
+def _run_docker_command(
+    args: list[str],
+    *,
+    env: Mapping[str, str],
+    timeout: int,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        args,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env={**os.environ, **{k: str(v) for k, v in env.items() if v is not None}},
+    )
+
+
+def _docker_preflight_os_error_result(
+    exc: OSError,
+    *,
+    diagnostics_ref: str,
+) -> CodexPreflightResult:
+    message = "Docker sidecar preflight failed: docker CLI is not installed."
+    if not isinstance(exc, FileNotFoundError):
+        message = f"Docker sidecar preflight failed: {exc}"
+    return CodexPreflightResult(
+        status=models.CodexPreflightStatus.FAILED,
+        message=message,
+        failure_class="system_error",
+        diagnostics_ref=diagnostics_ref,
+    )
+
+
+def run_docker_sidecar_preflight_check(
+    *,
+    env: Mapping[str, str] | None = None,
+    timeout: int = 30,
+    pinned_ue_image: str | None = None,
+) -> CodexPreflightResult:
+    """Validate Docker sidecar readiness and optional pinned UE image access."""
+
+    source = env if env is not None else os.environ
+    diagnostics_ref = "preflight://docker-sidecar"
+    if not _docker_sidecar_preflight_enabled(source):
+        return CodexPreflightResult(
+            status=models.CodexPreflightStatus.SKIPPED,
+            message="Docker sidecar preflight skipped because sidecar Docker is not enabled.",
+            diagnostics_ref=diagnostics_ref,
+        )
+
+    try:
+        info = _run_docker_command(
+            ["docker", "info"],
+            env=source,
+            timeout=timeout,
+        )
+    except OSError as exc:
+        return _docker_preflight_os_error_result(
+            exc,
+            diagnostics_ref=diagnostics_ref,
+        )
+    except subprocess.TimeoutExpired:
+        return CodexPreflightResult(
+            status=models.CodexPreflightStatus.FAILED,
+            message=(
+                "Docker sidecar preflight failed: docker info timed out after "
+                f"{timeout} seconds."
+            ),
+            failure_class="system_error",
+            diagnostics_ref=diagnostics_ref,
+        )
+
+    if info.returncode != 0:
+        summary = _summarize_preflight_output(info.stdout, info.stderr)
+        message = "Docker sidecar preflight failed: docker info did not succeed."
+        if summary:
+            message = f"{message} Details: {summary}"
+        return CodexPreflightResult(
+            status=models.CodexPreflightStatus.FAILED,
+            message=message,
+            exit_code=info.returncode,
+            stdout=info.stdout,
+            stderr=info.stderr,
+            failure_class="system_error",
+            diagnostics_ref=diagnostics_ref,
+        )
+
+    image = _configured_pinned_ue_image(source, pinned_image=pinned_ue_image)
+    if not image:
+        return CodexPreflightResult(
+            status=models.CodexPreflightStatus.PASSED,
+            message="Docker sidecar preflight passed; no pinned UE image probe configured.",
+            exit_code=info.returncode,
+            stdout=info.stdout,
+            stderr=info.stderr,
+            diagnostics_ref=diagnostics_ref,
+        )
+    if not _is_pinned_container_image(image):
+        return CodexPreflightResult(
+            status=models.CodexPreflightStatus.FAILED,
+            message=(
+                "Docker sidecar preflight failed: configured UE image must be pinned "
+                f"to a non-latest tag or digest: {image}"
+            ),
+            failure_class="system_error",
+            diagnostics_ref=diagnostics_ref,
+        )
+
+    try:
+        manifest = _run_docker_command(
+            ["docker", "manifest", "inspect", image],
+            env=source,
+            timeout=timeout,
+        )
+    except OSError as exc:
+        return _docker_preflight_os_error_result(
+            exc,
+            diagnostics_ref=diagnostics_ref,
+        )
+    except subprocess.TimeoutExpired:
+        return CodexPreflightResult(
+            status=models.CodexPreflightStatus.FAILED,
+            message=(
+                "Docker sidecar preflight failed: docker manifest inspect timed "
+                f"out after {timeout} seconds for {image}."
+            ),
+            failure_class="system_error",
+            diagnostics_ref=diagnostics_ref,
+        )
+
+    stdout = f"{info.stdout}\n{manifest.stdout}".strip()
+    stderr = f"{info.stderr}\n{manifest.stderr}".strip()
+    if manifest.returncode != 0:
+        summary = _summarize_preflight_output(manifest.stdout, manifest.stderr)
+        message = (
+            "Docker sidecar preflight failed: pinned UE image manifest could not "
+            f"be inspected: {image}."
+        )
+        if summary:
+            message = f"{message} Details: {summary}"
+        return CodexPreflightResult(
+            status=models.CodexPreflightStatus.FAILED,
+            message=message,
+            exit_code=manifest.returncode,
+            stdout=stdout,
+            stderr=stderr,
+            failure_class="system_error",
+            diagnostics_ref=diagnostics_ref,
+        )
+
+    return CodexPreflightResult(
+        status=models.CodexPreflightStatus.PASSED,
+        message=f"Docker sidecar preflight passed for pinned UE image {image}.",
+        exit_code=0,
+        stdout=stdout,
+        stderr=stderr,
+        diagnostics_ref=diagnostics_ref,
+    )
 
 def _run_codex_preflight_check(
     *, timeout: int = 60, volume_name: str | None = None
@@ -189,4 +391,8 @@ def run_codex_preflight_check(
 
     return _run_codex_preflight_check(timeout=timeout, volume_name=volume_name)
 
-__all__ = ["CodexPreflightResult", "run_codex_preflight_check"]
+__all__ = [
+    "CodexPreflightResult",
+    "run_codex_preflight_check",
+    "run_docker_sidecar_preflight_check",
+]

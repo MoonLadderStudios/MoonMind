@@ -89,8 +89,10 @@ from .run_projection import (
     verify_skill_projection,
 )
 from .workspace_links import (
+    SkillProjectionCleanupResult,
     SkillWorkspaceError,
     SkillWorkspaceLinks,
+    cleanup_moonmind_skill_projections,
     ensure_shared_skill_links,
     validate_shared_skill_links,
 )
@@ -157,6 +159,8 @@ __all__ = [
     "materialize_run_skill_workspace",
     "SkillWorkspaceLinks",
     "SkillWorkspaceError",
+    "SkillProjectionCleanupResult",
+    "cleanup_moonmind_skill_projections",
     "ensure_shared_skill_links",
     "validate_shared_skill_links",
     "SkillProjectionError",

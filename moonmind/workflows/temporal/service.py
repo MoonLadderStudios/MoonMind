@@ -72,6 +72,10 @@ from moonmind.workflows.temporal.runtime.managed_session_store import (
     TERMINAL_MANAGED_SESSION_STATUSES,
 )
 from moonmind.schemas.managed_session_models import canonical_managed_session_runtime_id
+from moonmind.workflows.executions.preset_expansion import (
+    expand_preset_for_child_run,
+    has_unexpanded_task_template,
+)
 
 TERMINAL_STATES: set[MoonMindWorkflowState] = {
     MoonMindWorkflowState.COMPLETED,
@@ -2726,6 +2730,12 @@ class TemporalExecutionService:
             "runId": record.run_id,
         }
         params["rerunSource"] = rerun_source
+        if has_unexpanded_task_template(params):
+            params = await expand_preset_for_child_run(
+                session=self._session,
+                initial_parameters=params,
+                allow_goal_schedule=False,
+            )
 
         next_input_ref = input_artifact_ref or record.input_ref
         next_plan_ref = plan_artifact_ref or record.plan_ref

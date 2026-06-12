@@ -400,7 +400,7 @@ async def test_run_execution_stage_rejects_legacy_skill_registry_dispatch(
                 payload.get("artifact_ref")
                 if isinstance(payload, dict)
                 else getattr(payload, "artifact_ref", None)
-            )
+            ) if payload is not None else None
             if artifact_ref == "artifact://registry/1":
                 return json.dumps(
                     {
@@ -3017,7 +3017,7 @@ async def test_run_execution_stage_moonspec_verify_blocks_native_pr_creation(
                 payload.get("artifact_ref")
                 if isinstance(payload, dict)
                 else getattr(payload, "artifact_ref", None)
-            )
+            ) if payload is not None else None
             if artifact_ref == "artifact://registry/1":
                 return json.dumps(
                     {
@@ -3148,6 +3148,7 @@ async def test_run_execution_stage_moonspec_verify_blocks_native_pr_creation(
             run_workflow_module.RUN_CONDITIONAL_REGISTRY_READ_PATCH,
             run_workflow_module.NATIVE_PR_BRANCH_DEFAULTS_PATCH,
             run_workflow_module.RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH,
+            run_workflow_module.RUN_MOONSPEC_VERIFY_REMEDIATION_INDEX_PATCH,
         },
     )
 
@@ -3167,6 +3168,237 @@ async def test_run_execution_stage_moonspec_verify_blocks_native_pr_creation(
     assert status == "failed"
     assert publish_failure is True
     assert "MoonSpec verification did not approve publication" in message
+
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_moonspec_verify_uses_remaining_remediation_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "MoonLadderStudios/MoonMind"
+    create_pr_called = False
+    executed_steps: list[str] = []
+
+    def _request_step_id(request: object) -> str:
+        parameters = getattr(request, "parameters", {})
+        metadata = parameters.get("metadata") if isinstance(parameters, dict) else {}
+        moonmind = metadata.get("moonmind") if isinstance(metadata, dict) else {}
+        step_ledger = moonmind.get("stepLedger") if isinstance(moonmind, dict) else {}
+        return str(step_ledger.get("logicalStepId") or "")
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, object] | None = None,
+        **_kwargs: object,
+    ) -> object:
+        nonlocal create_pr_called
+        if activity_type == "repo.create_pr":
+            create_pr_called = True
+            return {"url": "https://github.com/MoonLadderStudios/MoonMind/pull/999"}
+        if activity_type == "agent_skill.resolve":
+            return {
+                "manifestRef": "art_skill_snapshot_1",
+                "skills": [
+                    {"name": "moonspec-implement"},
+                    {"name": "moonspec-verify"},
+                ],
+            }
+
+        if activity_type == "artifact.read":
+            artifact_ref = (
+                payload.get("artifact_ref")
+                if isinstance(payload, dict)
+                else getattr(payload, "artifact_ref", None)
+            ) if payload is not None else None
+            if artifact_ref == "artifact://registry/1":
+                return json.dumps({"skills": []}).encode("utf-8")
+            return json.dumps(
+                {
+                    "plan_version": "1.0",
+                    "metadata": {
+                        "title": "MoonSpec Remediation Budget",
+                        "created_at": "2026-03-12T00:00:00Z",
+                        "registry_snapshot": {
+                            "digest": "reg:sha256:" + ("a" * 64),
+                            "artifact_ref": "artifact://registry/1",
+                        },
+                    },
+                    "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+                    "nodes": [
+                        {
+                            "id": "tpl:jira-orchestrate:1.0.0:21:verify",
+                            "tool": {
+                                "type": "agent_runtime",
+                                "name": "auto",
+                                "version": "1.0.0",
+                            },
+                            "inputs": {
+                                "runtime": {"mode": "codex"},
+                                "selectedSkill": "moonspec-verify",
+                                "instructions": "Verify remediation 5.",
+                            },
+                            "options": {},
+                        },
+                        {
+                            "id": "tpl:jira-orchestrate:1.0.0:22:remediate",
+                            "tool": {
+                                "type": "agent_runtime",
+                                "name": "auto",
+                                "version": "1.0.0",
+                            },
+                            "inputs": {
+                                "runtime": {"mode": "codex"},
+                                "selectedSkill": "moonspec-implement",
+                                "title": "Remediate verification gaps 6 of 6",
+                                "annotations": {
+                                    "jiraOrchestrateRole": "moonspec-remediation",
+                                },
+                                "instructions": "Remediate verification gaps 6.",
+                            },
+                            "options": {},
+                        },
+                        {
+                            "id": "tpl:jira-orchestrate:1.0.0:23:verify",
+                            "tool": {
+                                "type": "agent_runtime",
+                                "name": "auto",
+                                "version": "1.0.0",
+                            },
+                            "inputs": {
+                                "runtime": {"mode": "codex"},
+                                "selectedSkill": "moonspec-verify",
+                                "instructions": "Verify remediation 6.",
+                            },
+                            "options": {},
+                        },
+                    ],
+                    "edges": [
+                        {
+                            "from": "tpl:jira-orchestrate:1.0.0:21:verify",
+                            "to": "tpl:jira-orchestrate:1.0.0:22:remediate",
+                        },
+                        {
+                            "from": "tpl:jira-orchestrate:1.0.0:22:remediate",
+                            "to": "tpl:jira-orchestrate:1.0.0:23:verify",
+                        },
+                    ],
+                }
+            ).encode("utf-8")
+        return {"status": "COMPLETED", "outputs": {}}
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        request: object,
+        **_kwargs: object,
+    ) -> object:
+        step_id = _request_step_id(request)
+        executed_steps.append(step_id)
+        if step_id.endswith(":21:verify"):
+            return {
+                "summary": "Verdict: ADDITIONAL_WORK_NEEDED",
+                "metadata": {
+                    "verdict": "ADDITIONAL_WORK_NEEDED",
+                    "operator_summary": "One remediation attempt remains.",
+                    "diagnostics_ref": "art_verify_5",
+                    "push_status": "pushed",
+                    "push_branch": "209-botplanner-trace-contracts",
+                    "push_base_ref": "origin/main",
+                },
+                "output_refs": [],
+            }
+        if step_id.endswith(":23:verify"):
+            return {
+                "summary": "Verdict: FULLY_IMPLEMENTED",
+                "metadata": {
+                    "verdict": "FULLY_IMPLEMENTED",
+                    "operator_summary": "Verification passed.",
+                    "diagnostics_ref": "art_verify_6",
+                    "push_status": "pushed",
+                    "push_branch": "209-botplanner-trace-contracts",
+                    "push_base_ref": "origin/main",
+                },
+                "output_refs": [],
+            }
+        return {
+            "summary": "Remediation completed.",
+            "metadata": {
+                "operator_summary": "Remediation completed.",
+                "push_status": "pushed",
+                "push_branch": "209-botplanner-trace-contracts",
+                "push_base_ref": "origin/main",
+            },
+            "output_refs": [],
+        }
+
+    async def fake_bind_workflow_scoped_session(
+        self: MoonMindRunWorkflow,
+        request: object,
+    ) -> object:
+        return request
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "execute_activity", fake_execute_activity
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        _immediate_wait_condition,
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            run_workflow_module.RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+            run_workflow_module.NATIVE_PR_BRANCH_DEFAULTS_PATCH,
+            run_workflow_module.RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH,
+            run_workflow_module.RUN_MOONSPEC_VERIFY_REMEDIATION_INDEX_PATCH,
+        },
+    )
+
+    await workflow._run_execution_stage(
+        parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
+        plan_ref="art_plan_1",
+    )
+
+    assert executed_steps == [
+        "tpl:jira-orchestrate:1.0.0:21:verify",
+        "tpl:jira-orchestrate:1.0.0:22:remediate",
+        "tpl:jira-orchestrate:1.0.0:23:verify",
+    ]
+    assert create_pr_called
+    assert workflow._publish_context["moonSpecGate"]["verdict"] == (
+        "FULLY_IMPLEMENTED"
+    )
+    assert "publicationBlockedBy" not in workflow._publish_context
 
 
 @pytest.mark.asyncio
