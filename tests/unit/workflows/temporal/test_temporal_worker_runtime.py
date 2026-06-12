@@ -2534,7 +2534,7 @@ profiles:
   - id: pentestgpt-safe
     kind: one_shot
     image: ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0
-    workdirTemplate: /work/agent_jobs/${task_run_id}/repo
+    workdirTemplate: /work/agent_jobs/${agent_run_id}/repo
     requiredMounts:
       - type: volume
         source: agent_workspaces
