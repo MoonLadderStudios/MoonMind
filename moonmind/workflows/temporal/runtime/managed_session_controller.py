@@ -548,10 +548,27 @@ class DockerCodexManagedSessionController:
             }
         }
         host_config_path.parent.mkdir(parents=True, exist_ok=True)
+        # Docker requires plaintext registry auth in config.json; this file is
+        # session-scoped, mode 0600, owned by the agent user, and cleaned up.
+        # codeql[py/clear-text-storage-sensitive-data]
         host_config_path.write_text(
             json.dumps(config_payload, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+        geteuid = getattr(os, "geteuid", None)
+        if os.name == "posix" and callable(geteuid) and geteuid() == 0:
+            try:
+                os.chown(
+                    host_config_path,
+                    _MANAGED_SESSION_CONTAINER_UID,
+                    _MANAGED_SESSION_CONTAINER_GID,
+                )
+            except OSError:
+                logger.debug(
+                    "Could not chown session Docker config at %s",
+                    host_config_path,
+                    exc_info=True,
+                )
         try:
             host_config_path.chmod(0o600)
         except OSError:
@@ -560,6 +577,8 @@ class DockerCodexManagedSessionController:
                 host_config_path,
                 exc_info=True,
             )
+        session_environment.pop("GHCR_PULL_USER", None)
+        session_environment.pop("GHCR_PULL_TOKEN", None)
         session_environment["DOCKER_CONFIG"] = str(container_config_path.parent)
         return {
             **diagnostics,
@@ -2221,10 +2240,14 @@ class DockerCodexManagedSessionController:
                 request,
                 session_environment,
             )
-            manifest_probe = await self._preflight_docker_manifest_probe(
-                request=request,
-                pull_auth_diagnostics=docker_pull_diagnostics,
-            )
+            try:
+                manifest_probe = await self._preflight_docker_manifest_probe(
+                    request=request,
+                    pull_auth_diagnostics=docker_pull_diagnostics,
+                )
+            except Exception:
+                self._cleanup_session_docker_config(request.session_workspace_path)
+                raise
             docker_pull_diagnostics = {
                 **docker_pull_diagnostics,
                 "manifestProbe": manifest_probe,

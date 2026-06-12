@@ -164,7 +164,11 @@ async def resolve_ghcr_pull_credentials_for_launch(
         or os.environ.get("GHCR_PULL_TOKEN")
         or ""
     ).strip()
-    if user and token:
+    if user or token:
+        if not user or not token:
+            raise ValueError(
+                "GHCR pull authentication requires both user and token environment variables"
+            )
         return user, token
 
     try:

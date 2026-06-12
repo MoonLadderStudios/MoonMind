@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -142,6 +143,8 @@ async def test_sidecar_bootstrap_writes_session_docker_config_when_ghcr_secret_p
     assert config["auths"]["ghcr.io"]["auth"] == base64.b64encode(
         b"pull-user:pull-token"
     ).decode("ascii")
+    if os.name == "posix" and os.geteuid() == 0:
+        assert (config_path.stat().st_uid, config_path.stat().st_gid) == (1000, 1000)
 
     manifest_call = next(
         item for item in commands if item[0][:3] == ("docker", "manifest", "inspect")
@@ -210,3 +213,102 @@ async def test_sidecar_bootstrap_uses_anonymous_pull_auth_when_ghcr_secret_absen
     assert docker_pull["pullAuth"] == "anonymous"
     assert docker_pull["manifestProbe"]["status"] == "passed"
     assert docker_pull["manifestProbe"]["pullAuth"] == "anonymous"
+
+
+@pytest.mark.asyncio
+async def test_sidecar_bootstrap_scrubs_ghcr_env_credentials_from_agent_container(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "agent_jobs"
+    request = _request(workspace_root).model_copy(
+        update={
+            "environment": {
+                **_request(workspace_root).environment,
+                "GHCR_PULL_USER": "pull-user",
+                "GHCR_PULL_TOKEN": "pull-token",
+            }
+        }
+    )
+
+    _controller, store, commands = await _launch_with_fake_docker(
+        request,
+        tmp_path=tmp_path,
+    )
+
+    config_path = Path(request.session_workspace_path) / ".docker" / "config.json"
+    assert config_path.exists()
+
+    manifest_call = next(
+        item for item in commands if item[0][:3] == ("docker", "manifest", "inspect")
+    )
+    assert manifest_call[1] == {"DOCKER_CONFIG": str(config_path.parent)}
+
+    agent_run = next(
+        command
+        for command, _env in commands
+        if command[:2] == ("docker", "run")
+        and "moonmind-session-sess-1-agent" in command
+    )
+    rendered_agent_run = " ".join(agent_run)
+    assert f"DOCKER_CONFIG={request.session_workspace_path}/.docker" in agent_run
+    assert "GHCR_PULL_USER=" not in rendered_agent_run
+    assert "GHCR_PULL_TOKEN=" not in rendered_agent_run
+    assert "pull-token" not in rendered_agent_run
+
+    record = store.load(request.session_id)
+    assert record is not None
+    assert "pull-token" not in json.dumps(record.metadata)
+
+
+@pytest.mark.asyncio
+async def test_sidecar_bootstrap_cleans_docker_config_when_preflight_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "agent_jobs"
+    request = _request(workspace_root)
+    commands: list[tuple[tuple[str, ...], dict[str, str] | None]] = []
+
+    async def _fake_resolver(_environment: dict[str, str]) -> tuple[str, str]:
+        return "pull-user", "pull-token"
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+        **_kwargs: Any,
+    ) -> tuple[int, str, str]:
+        del input_text
+        commands.append((command, env))
+        if command[:3] == ("docker", "rm", "-f"):
+            return 1, "", "No such container"
+        if command[:4] == ("docker", "volume", "rm", "-f"):
+            return 0, "", ""
+        if command[:3] == ("docker", "manifest", "inspect"):
+            return 1, "", "denied"
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller."
+        "resolve_ghcr_pull_credentials_for_launch",
+        _fake_resolver,
+    )
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(Path(request.workspace_path).parents[1]),
+        session_store=ManagedSessionStore(tmp_path / "session-store"),
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    with pytest.raises(RuntimeError, match="preflight manifest probe failed"):
+        await controller.launch_session(request)
+
+    config_path = Path(request.session_workspace_path) / ".docker" / "config.json"
+    assert not config_path.exists()
+    assert any(
+        command[:3] == ("docker", "manifest", "inspect") for command, _env in commands
+    )

@@ -12,6 +12,7 @@ from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
     SecretRefLaunchBlockedError,
     assert_managed_secret_refs_active_for_launch,
     inspect_managed_secret_refs_for_launch,
+    resolve_ghcr_pull_credentials_for_launch,
     resolve_github_token_for_launch,
     resolve_managed_api_key_reference,
     resolve_managed_github_token_from_store,
@@ -154,6 +155,35 @@ async def test_resolve_github_token_for_launch_uses_canonical_workflow_env(
     out = await resolve_github_token_for_launch({})
 
     assert out == "workflow-token"
+
+async def test_resolve_ghcr_pull_credentials_requires_complete_env_pair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GHCR_PULL_USER", raising=False)
+    monkeypatch.delenv("GHCR_PULL_TOKEN", raising=False)
+
+    with pytest.raises(ValueError, match="requires both user and token"):
+        await resolve_ghcr_pull_credentials_for_launch(
+            {"GHCR_PULL_USER": "pull-user"}
+        )
+
+    with pytest.raises(ValueError, match="requires both user and token"):
+        await resolve_ghcr_pull_credentials_for_launch(
+            {"GHCR_PULL_TOKEN": "pull-token"}
+        )
+
+async def test_resolve_ghcr_pull_credentials_uses_complete_env_pair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GHCR_PULL_USER", raising=False)
+    monkeypatch.delenv("GHCR_PULL_TOKEN", raising=False)
+
+    assert await resolve_ghcr_pull_credentials_for_launch(
+        {
+            "GHCR_PULL_USER": " pull-user ",
+            "GHCR_PULL_TOKEN": " pull-token ",
+        }
+    ) == ("pull-user", "pull-token")
 
 async def test_shape_launch_github_auth_environment_uses_ambient_token_before_store(
     monkeypatch: pytest.MonkeyPatch,
