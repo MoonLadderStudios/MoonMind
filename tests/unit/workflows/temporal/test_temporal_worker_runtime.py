@@ -2625,6 +2625,83 @@ profiles:
     with pytest.raises(RuntimeError, match="runner image drift"):
         _validate_pentest_workload_registry(registry)
 
+def test_pentest_workload_registry_validation_rejects_hidden_lab_image_drift(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    registry_path = tmp_path / "profiles.yaml"
+    registry_path.write_text(
+        """
+profiles:
+  - id: pentestgpt-safe
+    kind: one_shot
+    image: ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0
+    workdirTemplate: /work/agent_jobs/${agent_run_id}/repo
+    requiredMounts:
+      - type: volume
+        source: agent_workspaces
+        target: /work/agent_jobs
+    envAllowlist:
+      - PENTESTGPT_AUTH_MODE
+    networkPolicy: bridge
+    resources:
+      cpu: "4"
+      memory: 8g
+      shmSize: 1g
+      maxCpu: "4"
+      maxMemory: 8g
+      maxShmSize: 1g
+    timeoutSeconds: 28800
+    maxTimeoutSeconds: 28800
+    cleanup:
+      removeContainerOnExit: true
+      killGraceSeconds: 30
+    devicePolicy:
+      mode: none
+  - id: pentestgpt-vpn-lab
+    kind: one_shot
+    image: ghcr.io/moonladderstudios/moonmind-pentestgpt:1.1
+    workdirTemplate: /work/agent_jobs/${agent_run_id}/repo
+    requiredMounts:
+      - type: volume
+        source: agent_workspaces
+        target: /work/agent_jobs
+    optionalMounts:
+      - type: volume
+        source: pentest_vpn_state
+        target: /var/lib/pentest-vpn
+    envAllowlist:
+      - PENTESTGPT_AUTH_MODE
+      - MM_NETWORK_ATTACHMENT_REF
+    networkPolicy: bridge
+    resources:
+      cpu: "4"
+      memory: 8g
+      shmSize: 1g
+      maxCpu: "4"
+      maxMemory: 8g
+      maxShmSize: 1g
+    timeoutSeconds: 28800
+    maxTimeoutSeconds: 28800
+    cleanup:
+      removeContainerOnExit: true
+      killGraceSeconds: 30
+    devicePolicy:
+      mode: none
+    linuxCapabilities:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+""",
+        encoding="utf-8",
+    )
+    registry = RunnerProfileRegistry.load_file(registry_path, workspace_root=tmp_path)
+    pentest_settings = PentestSettings()
+    monkeypatch.setattr(settings, "pentest", pentest_settings)
+
+    with pytest.raises(RuntimeError, match="pentestgpt-vpn-lab"):
+        _validate_pentest_workload_registry(registry)
+
 def test_build_agent_runtime_deps_reuses_global_session_network(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,

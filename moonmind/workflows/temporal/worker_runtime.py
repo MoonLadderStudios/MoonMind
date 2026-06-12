@@ -2086,9 +2086,16 @@ def _validate_pentest_workload_registry(workload_registry: Any) -> None:
     pentest_settings = settings.pentest
     required_profile_ids = set(pentest_settings.enabled_runner_profile_ids)
     required_profile_ids.add(pentest_settings.default_runner_profile)
-    for profile_id in sorted(required_profile_ids):
+    image_checked_profile_ids = {
+        *required_profile_ids,
+        pentest_settings.safe_profile_id,
+        pentest_settings.vpn_lab_profile_id,
+    }
+    for profile_id in sorted(image_checked_profile_ids):
         profile = workload_registry.get(profile_id)
         if profile is None:
+            if profile_id not in required_profile_ids:
+                continue
             raise RuntimeError(
                 "Pentest runner profile is enabled by deployment policy but "
                 f"missing from workload registry: {profile_id}"
