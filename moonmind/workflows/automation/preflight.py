@@ -96,8 +96,25 @@ def _run_docker_command(
         capture_output=True,
         text=True,
         timeout=timeout,
-        env={**os.environ, **dict(env)},
+        env={**os.environ, **{k: str(v) for k, v in env.items() if v is not None}},
     )
+
+
+def _docker_preflight_os_error_result(
+    exc: OSError,
+    *,
+    diagnostics_ref: str,
+) -> CodexPreflightResult:
+    message = "Docker sidecar preflight failed: docker CLI is not installed."
+    if not isinstance(exc, FileNotFoundError):
+        message = f"Docker sidecar preflight failed: {exc}"
+    return CodexPreflightResult(
+        status=models.CodexPreflightStatus.FAILED,
+        message=message,
+        failure_class="system_error",
+        diagnostics_ref=diagnostics_ref,
+    )
+
 
 def run_docker_sidecar_preflight_check(
     *,
@@ -122,11 +139,9 @@ def run_docker_sidecar_preflight_check(
             env=source,
             timeout=timeout,
         )
-    except FileNotFoundError:
-        return CodexPreflightResult(
-            status=models.CodexPreflightStatus.FAILED,
-            message="Docker sidecar preflight failed: docker CLI is not installed.",
-            failure_class="system_error",
+    except OSError as exc:
+        return _docker_preflight_os_error_result(
+            exc,
             diagnostics_ref=diagnostics_ref,
         )
     except subprocess.TimeoutExpired:
@@ -181,6 +196,11 @@ def run_docker_sidecar_preflight_check(
             ["docker", "manifest", "inspect", image],
             env=source,
             timeout=timeout,
+        )
+    except OSError as exc:
+        return _docker_preflight_os_error_result(
+            exc,
+            diagnostics_ref=diagnostics_ref,
         )
     except subprocess.TimeoutExpired:
         return CodexPreflightResult(
