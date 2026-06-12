@@ -11,6 +11,7 @@ from moonmind.workflows.temporal.activity_catalog import (
     WORKFLOW_FLEET,
     WORKFLOW_TASK_QUEUE,
     build_default_activity_catalog,
+    get_workflow_poll_task_queues,
     get_workflow_task_queue,
 )
 from moonmind.workflows.temporal.client import TemporalClientAdapter
@@ -146,6 +147,33 @@ def test_workflow_task_queue_constant_stays_replay_stable_while_start_queue_is_l
 
     assert WORKFLOW_TASK_QUEUE == "mm.workflow"
     assert get_workflow_task_queue(temporal_settings) == "mm.workflow.user.v2"
+    assert get_workflow_poll_task_queues(temporal_settings) == (
+        "mm.workflow.user.v2",
+        "mm.workflow",
+    )
+
+
+def test_workflow_poll_task_queues_ignore_missing_replay_queue(tmp_path: Path) -> None:
+    temporal_settings = _renamed_contract_settings(tmp_path).model_copy(
+        update={"workflow_task_queue": None}
+    )
+
+    assert get_workflow_poll_task_queues(temporal_settings) == ("mm.workflow.user.v2",)
+
+
+def test_merge_automation_workflow_fleet_does_not_poll_user_replay_queue(
+    tmp_path: Path,
+) -> None:
+    temporal_settings = _renamed_contract_settings(tmp_path).model_copy(
+        update={
+            "user_workflow_v2_task_queue": "mm.workflow.merge_automation",
+            "merge_automation_workflow_task_queue": "mm.workflow.merge_automation",
+        }
+    )
+
+    assert get_workflow_poll_task_queues(temporal_settings) == (
+        "mm.workflow.merge_automation",
+    )
 
 
 def test_renamed_contract_resolution_caches_cutover_file_validation(
@@ -183,7 +211,9 @@ def test_worker_registration_serves_only_one_user_workflow_type(tmp_path: Path) 
     assert LEGACY_USER_WORKFLOW_TYPE not in renamed_types
 
 
-def test_renamed_contract_workflow_fleet_polls_start_queue(tmp_path: Path) -> None:
+def test_renamed_contract_workflow_fleet_polls_start_and_replay_queues(
+    tmp_path: Path,
+) -> None:
     temporal_settings = _renamed_contract_settings(tmp_path)
     catalog = build_default_activity_catalog(temporal_settings)
     topology = describe_configured_worker(
@@ -193,7 +223,7 @@ def test_renamed_contract_workflow_fleet_polls_start_queue(tmp_path: Path) -> No
         catalog=catalog,
     )
 
-    assert topology.task_queues == ("mm.workflow.user.v2",)
+    assert topology.task_queues == ("mm.workflow.user.v2", "mm.workflow")
     assert (
         catalog.resolve_activity("integration.resolve_adapter_metadata").task_queue
         == "mm.workflow.user.v2"

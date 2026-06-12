@@ -33,13 +33,16 @@ def test_temporal_activity_topology_contract_uses_canonical_v1_queue_set() -> No
         "mm.activity.integrations",
     }
     assert {fleet.task_queues[0] for fleet in catalog.fleets} == {
-        "mm.workflow",
+        "mm.workflow.user.v2",
         "mm.activity.artifacts",
         "mm.activity.llm",
         "mm.activity.sandbox",
         "mm.activity.integrations",
         "mm.activity.agent_runtime",
+        "mm.activity.deployment",
     }
+    workflow_fleet = next(fleet for fleet in catalog.fleets if fleet.fleet == "workflow")
+    assert workflow_fleet.task_queues == ("mm.workflow.user.v2", "mm.workflow")
 
 def test_shared_envelope_contract_requires_idempotency_for_side_effecting_inputs() -> (
     None
