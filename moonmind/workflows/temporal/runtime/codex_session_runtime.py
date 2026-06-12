@@ -38,6 +38,9 @@ from moonmind.schemas.managed_session_models import (
     SteerCodexManagedSessionTurnRequest,
     TerminateCodexManagedSessionRequest,
 )
+from moonmind.workflows.automation.preflight import (
+    run_docker_sidecar_preflight_check,
+)
 from moonmind.workflows.codex_session_timeouts import (
     DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS,
 )
@@ -2720,6 +2723,16 @@ def _validated_runtime_environment() -> dict[str, str]:
         "image_ref": image_ref,
     }
 
+def _run_docker_sidecar_runtime_preflight() -> None:
+    result = run_docker_sidecar_preflight_check(env=os.environ)
+    if result.status.value != "failed":
+        return
+    message = result.message or "Docker sidecar preflight failed."
+    if result.diagnostics_ref:
+        message = f"{message} diagnosticsRef={result.diagnostics_ref}"
+    raise RuntimeError(message)
+
+
 def _runtime_from_environment() -> CodexManagedSessionRuntime:
     env = _validated_runtime_environment()
     workspace_path = env["workspace_path"]
@@ -2771,10 +2784,12 @@ def _emit_json(payload: BaseModel | Mapping[str, Any], *, exit_code: int = 0) ->
 
 def _run_ready() -> int:
     _validated_runtime_environment()
+    _run_docker_sidecar_runtime_preflight()
     return _emit_json({"ready": True})
 
 def _run_serve() -> int:
     _validated_runtime_environment()
+    _run_docker_sidecar_runtime_preflight()
     stopping = False
 
     def _handle_signal(signum: int, _frame: object) -> None:

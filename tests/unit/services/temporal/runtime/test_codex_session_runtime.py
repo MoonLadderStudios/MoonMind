@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import time
 from datetime import UTC, datetime, timedelta
-import sqlite3
 from pathlib import Path
 
 import pytest
@@ -16,6 +16,8 @@ from moonmind.schemas.managed_session_models import (
     SendCodexManagedSessionTurnRequest,
     SteerCodexManagedSessionTurnRequest,
 )
+from moonmind.workflows.automation import models as automation_models
+from moonmind.workflows.automation.preflight import CodexPreflightResult
 from moonmind.workflows.temporal.runtime.codex_session_runtime import (
     CodexAppServerRpcClient,
     CodexManagedSessionRuntime,
@@ -3357,6 +3359,50 @@ def test_run_ready_requires_runtime_environment(monkeypatch: pytest.MonkeyPatch,
     )
 
     with pytest.raises(RuntimeError, match="MOONMIND_SESSION_IMAGE_REF is required"):
+        _run_ready()
+
+
+def test_run_ready_fails_when_docker_sidecar_preflight_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace_path = tmp_path / "repo"
+    workspace_path.mkdir()
+    monkeypatch.setenv("MOONMIND_SESSION_WORKSPACE_PATH", str(workspace_path))
+    monkeypatch.setenv(
+        "MOONMIND_SESSION_WORKSPACE_STATE_PATH",
+        str(tmp_path / "session"),
+    )
+    monkeypatch.setenv(
+        "MOONMIND_SESSION_ARTIFACT_SPOOL_PATH",
+        str(tmp_path / "artifacts"),
+    )
+    monkeypatch.setenv(
+        "MOONMIND_SESSION_CODEX_HOME_PATH",
+        str(tmp_path / "codex-home"),
+    )
+    monkeypatch.setenv("MOONMIND_SESSION_IMAGE_REF", "ghcr.io/acme/moonmind:runtime")
+    monkeypatch.setenv("MOONMIND_MANAGED_SESSION_DOCKER_MODE", "docker-sidecar")
+    monkeypatch.setenv("DOCKER_HOST", "unix:///var/run/moonmind-docker/docker.sock")
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.codex_session_runtime.shutil.which",
+        lambda _name: "/usr/bin/codex",
+    )
+
+    def fake_preflight(**_kwargs: object) -> CodexPreflightResult:
+        return CodexPreflightResult(
+            status=automation_models.CodexPreflightStatus.FAILED,
+            message="Docker sidecar preflight failed: docker info did not succeed.",
+            failure_class="system_error",
+            diagnostics_ref="preflight://docker-sidecar",
+        )
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.codex_session_runtime.run_docker_sidecar_preflight_check",
+        fake_preflight,
+    )
+
+    with pytest.raises(RuntimeError, match="Docker sidecar preflight failed"):
         _run_ready()
 
 
