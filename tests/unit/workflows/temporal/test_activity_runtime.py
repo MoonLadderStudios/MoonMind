@@ -1019,9 +1019,30 @@ class _RecordingPentestRegistry:
             containerName=request.container_name,
         )
 
+class _FakePentestProviderLeaseManager:
+    async def acquire(self, payload: dict[str, object]) -> dict[str, object]:
+        owner_id = str(payload["owner_id"])
+        return {
+            "lease_id": owner_id,
+            "runtime_id": payload["runtime_id"],
+            "profile_id": payload["profile_id"],
+            "owner_id": owner_id,
+            "release_required": True,
+            "metadata": dict(payload.get("metadata") or {}),
+        }
+
+    async def release(self, payload: dict[str, object]) -> None:
+        return None
+
+    async def report_cooldown(self, payload: dict[str, object]) -> None:
+        return None
+
 async def test_security_pentest_execute_fails_closed_before_runner_when_disabled_by_default():
     launcher = _FakePentestLauncher()
-    activities = TemporalAgentRuntimeActivities(workload_launcher=launcher)
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=launcher,
+        pentest_provider_lease_manager=_FakePentestProviderLeaseManager(),
+    )
 
     payload = _pentest_activity_payload()["request"]
     payload.pop("pentest_enabled")
@@ -1037,7 +1058,10 @@ async def test_security_pentest_execute_fails_closed_before_runner_when_disabled
 
 async def test_security_pentest_execute_fails_closed_before_runner_without_scope():
     launcher = _FakePentestLauncher()
-    activities = TemporalAgentRuntimeActivities(workload_launcher=launcher)
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=launcher,
+        pentest_provider_lease_manager=_FakePentestProviderLeaseManager(),
+    )
 
     result = await activities._security_pentest_execute_trusted_internal(
         _pentest_activity_payload(approved_scope=None)
@@ -1056,6 +1080,7 @@ async def test_security_pentest_execute_loads_scope_artifact_before_launch_plan(
         artifact_service=artifact_service,
         workload_launcher=_FakePentestLauncher(),
         workload_registry=_RecordingPentestRegistry(),
+        pentest_provider_lease_manager=_FakePentestProviderLeaseManager(),
     )
 
     result = await activities.security_pentest_execute(
@@ -1089,6 +1114,7 @@ async def test_security_pentest_execute_maps_unreadable_scope_artifacts(
         artifact_service=_FakePentestArtifactService(artifacts),
         workload_launcher=launcher,
         workload_registry=_RecordingPentestRegistry(),
+        pentest_provider_lease_manager=_FakePentestProviderLeaseManager(),
     )
 
     result = await activities.security_pentest_execute(
@@ -1102,7 +1128,10 @@ async def test_security_pentest_execute_maps_unreadable_scope_artifacts(
 
 async def test_security_pentest_execute_rejects_ordinary_inline_scope_without_artifact():
     launcher = _FakePentestLauncher()
-    activities = TemporalAgentRuntimeActivities(workload_launcher=launcher)
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=launcher,
+        pentest_provider_lease_manager=_FakePentestProviderLeaseManager(),
+    )
 
     result = await activities.security_pentest_execute(
         _pentest_activity_payload(
@@ -1125,6 +1154,7 @@ async def test_security_pentest_execute_allows_trusted_internal_inline_scope():
     activities = TemporalAgentRuntimeActivities(
         workload_launcher=_FakePentestLauncher(),
         workload_registry=_RecordingPentestRegistry(),
+        pentest_provider_lease_manager=_FakePentestProviderLeaseManager(),
     )
 
     result = await activities._security_pentest_execute_trusted_internal(
@@ -1142,7 +1172,10 @@ async def test_security_pentest_execute_ignores_caller_supplied_trust_flag():
     """A registry-dispatched submission cannot self-authorize an inline scope."""
 
     launcher = _FakePentestLauncher()
-    activities = TemporalAgentRuntimeActivities(workload_launcher=launcher)
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=launcher,
+        pentest_provider_lease_manager=_FakePentestProviderLeaseManager(),
+    )
 
     result = await activities.security_pentest_execute(
         _pentest_activity_payload(
@@ -1210,6 +1243,7 @@ async def test_security_pentest_execute_returns_validation_failure_before_side_e
         ),
         workload_launcher=launcher,
         workload_registry=_RecordingPentestRegistry(),
+        pentest_provider_lease_manager=_FakePentestProviderLeaseManager(),
     )
 
     result = await activities.security_pentest_execute(
@@ -1240,6 +1274,7 @@ async def test_security_pentest_execute_reaches_launch_plan_after_scope_validati
     activities = TemporalAgentRuntimeActivities(
         workload_launcher=launcher,
         workload_registry=registry,
+        pentest_provider_lease_manager=_FakePentestProviderLeaseManager(),
     )
 
     result = await activities._security_pentest_execute_trusted_internal(
@@ -1258,6 +1293,7 @@ async def test_security_pentest_execute_returns_safe_launch_plan_after_scope_val
     activities = TemporalAgentRuntimeActivities(
         workload_launcher=_FakePentestLauncher(),
         workload_registry=_RecordingPentestRegistry(),
+        pentest_provider_lease_manager=_FakePentestProviderLeaseManager(),
     )
 
     result = await activities._security_pentest_execute_trusted_internal(
@@ -1280,6 +1316,7 @@ async def test_security_pentest_execute_includes_secret_safe_provider_preparatio
     activities = TemporalAgentRuntimeActivities(
         workload_launcher=_FakePentestLauncher(),
         workload_registry=_RecordingPentestRegistry(),
+        pentest_provider_lease_manager=_FakePentestProviderLeaseManager(),
     )
 
     result = await activities._security_pentest_execute_trusted_internal(
@@ -1330,6 +1367,7 @@ async def test_security_pentest_execute_resolves_mapping_secret_refs(
     activities = TemporalAgentRuntimeActivities(
         workload_launcher=launcher,
         workload_registry=_RecordingPentestRegistry(),
+        pentest_provider_lease_manager=_FakePentestProviderLeaseManager(),
     )
 
     result = await activities._security_pentest_execute_trusted_internal(
@@ -1353,6 +1391,7 @@ async def test_security_pentest_execute_filters_provider_runtime_state():
     activities = TemporalAgentRuntimeActivities(
         workload_launcher=_FakePentestLauncher(),
         workload_registry=_RecordingPentestRegistry(),
+        pentest_provider_lease_manager=_FakePentestProviderLeaseManager(),
     )
 
     result = await activities._security_pentest_execute_trusted_internal(
@@ -1375,6 +1414,7 @@ async def test_security_pentest_execute_reports_secret_safe_provider_cooldown():
     activities = TemporalAgentRuntimeActivities(
         workload_launcher=_FakePentestLauncher(),
         workload_registry=_RecordingPentestRegistry(),
+        pentest_provider_lease_manager=_FakePentestProviderLeaseManager(),
     )
 
     result = await activities._security_pentest_execute_trusted_internal(
@@ -1391,7 +1431,7 @@ async def test_security_pentest_execute_reports_secret_safe_provider_cooldown():
         "failure_category": "provider_429",
         "retry_allowed": False,
     }
-    assert result["provider_lease"]["release_required"] is True
+    assert result["provider_lease"]["release_required"] is False
     assert "OPENROUTER_API_KEY" not in str(result["provider_cooldown"])
     assert "token" not in str(result).lower()
 
@@ -1399,6 +1439,7 @@ async def test_security_pentest_execute_includes_instruction_materialization_met
     activities = TemporalAgentRuntimeActivities(
         workload_launcher=_FakePentestLauncher(),
         workload_registry=_RecordingPentestRegistry(),
+        pentest_provider_lease_manager=_FakePentestProviderLeaseManager(),
     )
 
     result = await activities._security_pentest_execute_trusted_internal(
@@ -1451,6 +1492,7 @@ async def test_security_pentest_execute_includes_publication_metadata_without_se
     activities = TemporalAgentRuntimeActivities(
         workload_launcher=_FakePentestLauncher(),
         workload_registry=_RecordingPentestRegistry(),
+        pentest_provider_lease_manager=_FakePentestProviderLeaseManager(),
     )
 
     result = await activities._security_pentest_execute_trusted_internal(
@@ -1534,6 +1576,7 @@ async def test_security_pentest_execute_coerces_string_publication_flags():
     activities = TemporalAgentRuntimeActivities(
         workload_launcher=_FakePentestLauncher(),
         workload_registry=_RecordingPentestRegistry(),
+        pentest_provider_lease_manager=_FakePentestProviderLeaseManager(),
     )
 
     result = await activities._security_pentest_execute_trusted_internal(
@@ -1611,6 +1654,7 @@ async def test_security_pentest_execute_materializes_input_files_without_secrets
     activities = TemporalAgentRuntimeActivities(
         workload_launcher=_FakePentestLauncher(),
         workload_registry=_RecordingPentestRegistry(),
+        pentest_provider_lease_manager=_FakePentestProviderLeaseManager(),
     )
 
     result = await activities._security_pentest_execute_trusted_internal(
@@ -1640,7 +1684,10 @@ async def test_security_pentest_execute_materializes_input_files_without_secrets
 
 async def test_security_pentest_execute_fails_before_launch_when_policy_disallows_mode():
     launcher = _FakePentestLauncher()
-    activities = TemporalAgentRuntimeActivities(workload_launcher=launcher)
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=launcher,
+        pentest_provider_lease_manager=_FakePentestProviderLeaseManager(),
+    )
 
     result = await activities._security_pentest_execute_trusted_internal(
         _pentest_activity_payload(operation_mode="full_authorized")
@@ -1654,6 +1701,7 @@ async def test_security_pentest_execute_sources_publication_payload_from_nested_
     activities = TemporalAgentRuntimeActivities(
         workload_launcher=_FakePentestLauncher(),
         workload_registry=_RecordingPentestRegistry(),
+        pentest_provider_lease_manager=_FakePentestProviderLeaseManager(),
     )
     nested_request = _pentest_activity_payload(
         findings=[
@@ -1723,6 +1771,7 @@ async def test_security_pentest_execute_uses_runner_normalized_findings_after_la
     activities = TemporalAgentRuntimeActivities(
         workload_launcher=launcher,
         workload_registry=_RecordingPentestRegistry(),
+        pentest_provider_lease_manager=_FakePentestProviderLeaseManager(),
     )
 
     result = await activities._security_pentest_execute_trusted_internal(
@@ -1742,7 +1791,10 @@ async def test_security_pentest_execute_fails_closed_before_vpn_lab_launch_witho
     monkeypatch: pytest.MonkeyPatch,
 ):
     launcher = _FakePentestLauncher()
-    activities = TemporalAgentRuntimeActivities(workload_launcher=launcher)
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=launcher,
+        pentest_provider_lease_manager=_FakePentestProviderLeaseManager(),
+    )
     monkeypatch.setattr(
         settings.pentest, "allowed_runner_profiles", ("pentestgpt-vpn-lab",)
     )
@@ -1768,6 +1820,7 @@ async def test_security_pentest_execute_returns_structured_runtime_failure_with_
     activities = TemporalAgentRuntimeActivities(
         workload_launcher=launcher,
         workload_registry=_RecordingPentestRegistry(),
+        pentest_provider_lease_manager=_FakePentestProviderLeaseManager(),
     )
 
     result = await activities._security_pentest_execute_trusted_internal(
@@ -1786,7 +1839,10 @@ async def test_security_pentest_execute_requires_registry_to_launch():
     # a ValidatedWorkloadRequest, so the activity must fail closed rather than
     # hand the raw request to the launcher.
     launcher = _FakePentestLauncher()
-    activities = TemporalAgentRuntimeActivities(workload_launcher=launcher)
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=launcher,
+        pentest_provider_lease_manager=_FakePentestProviderLeaseManager(),
+    )
 
     result = await activities._security_pentest_execute_trusted_internal(
         _pentest_activity_payload()
@@ -1821,6 +1877,7 @@ async def test_security_pentest_execute_handles_missing_output_refs():
     activities = TemporalAgentRuntimeActivities(
         workload_launcher=launcher,
         workload_registry=_RecordingPentestRegistry(),
+        pentest_provider_lease_manager=_FakePentestProviderLeaseManager(),
     )
 
     result = await activities._security_pentest_execute_trusted_internal(
