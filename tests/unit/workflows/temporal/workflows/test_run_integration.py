@@ -2151,6 +2151,70 @@ def test_moonspec_verify_gate_records_nested_summary_and_report(
     assert gate_context["diagnosticsRef"] == "art_nested_verify_report"
 
 
+def test_moonspec_verify_blocked_attempt_one_stops_with_remaining_budget(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    ordered_nodes = [
+        {
+            "id": "verify-1",
+            "inputs": {
+                "title": "Verify remediation 1 of 6",
+                "selectedSkill": "moonspec-verify",
+            },
+        },
+        {
+            "id": "remediate-2",
+            "annotations": {"jiraOrchestrateRole": "moonspec-remediation"},
+            "skill": {"id": "moonspec-implement"},
+            "inputs": {"title": "Remediate verification gaps 2 of 6"},
+        },
+    ]
+
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-1",
+        outputs={
+            "verdict": "BLOCKED",
+            "operator_summary": "UE Docker sidecar is not reachable.",
+            "diagnostics_ref": "art_verify_blocked",
+        },
+    )
+
+    assert mock_run_workflow._has_remaining_moonspec_remediation_step(
+        ordered_nodes=ordered_nodes,
+        current_index=0,
+    )
+    assert mock_run_workflow._normalize_moonspec_verify_verdict(
+        mock_run_workflow._moonspec_gate_verdict
+    ) == "BLOCKED"
+    assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is True
+    assert mock_run_workflow._publish_status == "not_required"
+    assert mock_run_workflow._publish_context["publicationBlockedBy"] == (
+        "moonspec_verify"
+    )
+    assert "UE Docker sidecar is not reachable" in (
+        mock_run_workflow._plan_blocked_message or ""
+    )
+
+
+def test_moonspec_verify_gate_degrades_unknown_verdict_to_no_determination(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-1",
+        outputs={
+            "verdict": "UNREAL_VALIDATION_ENVIRONMENT_MISSING",
+            "operator_summary": "Verifier returned an unsupported environment verdict.",
+            "diagnostics_ref": "art_unknown_verdict",
+        },
+    )
+
+    gate_context = mock_run_workflow._publish_context["moonSpecGate"]
+    assert gate_context["verdict"] == "NO_DETERMINATION"
+    assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is True
+    assert "NO_DETERMINATION" in (mock_run_workflow._plan_blocked_message or "")
+    assert "art_unknown_verdict" in (mock_run_workflow._plan_blocked_message or "")
+
+
 def test_moonspec_verify_gate_accepts_fully_implemented_publish(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
