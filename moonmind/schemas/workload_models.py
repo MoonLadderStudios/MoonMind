@@ -140,6 +140,17 @@ def _is_safe_absolute_profile_path(value: str) -> bool:
         return False
     return normalized != "/var/run/docker.sock" and "docker.sock" not in normalized
 
+
+def _validate_profile_device(value: str) -> None:
+    parts = str(value).split(":")
+    if len(parts) not in {1, 2, 3}:
+        raise ValueError("devices[] must be a Docker device path mapping")
+    for part in parts[:2]:
+        if not _is_safe_absolute_profile_path(part):
+            raise ValueError("devices[] must use absolute safe device paths")
+    if len(parts) == 3 and parts[2] not in {"r", "w", "m", "rw", "rwm"}:
+        raise ValueError("devices[] permissions must be one of r, w, m, rw, rwm")
+
 def _validate_relative_artifact_path(value: str, *, field_name: str) -> str:
     normalized = require_non_blank(value, field_name=field_name).replace("\\", "/")
     normalized = posixpath.normpath(normalized)
@@ -377,6 +388,11 @@ class RunnerProfile(BaseModel):
         default_factory=WorkloadDevicePolicy,
         alias="devicePolicy",
     )
+    linux_capabilities: tuple[NonBlankStr, ...] = Field(
+        default_factory=tuple,
+        alias="linuxCapabilities",
+    )
+    devices: tuple[NonBlankStr, ...] = Field(default_factory=tuple, alias="devices")
 
     @model_validator(mode="after")
     def _validate_profile(self) -> "RunnerProfile":
@@ -394,6 +410,14 @@ class RunnerProfile(BaseModel):
                 for key in self.env_allowlist
             )
         )
+        self.linux_capabilities = tuple(
+            dict.fromkeys(
+                require_non_blank(item, field_name="linuxCapabilities[]").upper()
+                for item in self.linux_capabilities
+            )
+        )
+        for device in self.devices:
+            _validate_profile_device(device)
         if self.max_timeout_seconds is not None:
             if self.timeout_seconds > self.max_timeout_seconds:
                 raise ValueError("timeoutSeconds must not exceed maxTimeoutSeconds")

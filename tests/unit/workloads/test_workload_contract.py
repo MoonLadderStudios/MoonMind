@@ -356,6 +356,25 @@ def test_registry_allows_profiles_from_approved_registry(tmp_path: Path) -> None
 
     assert registry.profile_ids == ("local-python",)
 
+
+def test_registry_accepts_profile_owned_capabilities_and_devices(
+    tmp_path: Path,
+) -> None:
+    registry = _registry(
+        tmp_path,
+        _profile_payload(
+            linux_capabilities=["NET_ADMIN", "net_admin"],
+            devices=["/dev/net/tun:/dev/net/tun"],
+        ),
+    )
+
+    profile = registry.get("local-python")
+
+    assert profile is not None
+    assert profile.linux_capabilities == ("NET_ADMIN",)
+    assert profile.devices == ("/dev/net/tun:/dev/net/tun",)
+
+
 def test_default_registry_contains_unreal_pilot_profile() -> None:
     registry = RunnerProfileRegistry.load_file(
         Path("config/workloads/default-runner-profiles.yaml"),

@@ -2511,6 +2511,52 @@ def test_pentest_workload_registry_validation_rejects_missing_enabled_profile(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ):
+    registry_path = tmp_path / "profiles.yaml"
+    registry_path.write_text(
+        """
+profiles:
+  - id: pentestgpt-safe
+    kind: one_shot
+    image: ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0
+    workdirTemplate: /work/agent_jobs/${agent_run_id}/repo
+    requiredMounts:
+      - type: volume
+        source: agent_workspaces
+        target: /work/agent_jobs
+    envAllowlist:
+      - PENTESTGPT_AUTH_MODE
+    networkPolicy: bridge
+    resources:
+      cpu: "4"
+      memory: 8g
+      shmSize: 1g
+      maxCpu: "4"
+      maxMemory: 8g
+      maxShmSize: 1g
+    timeoutSeconds: 28800
+    maxTimeoutSeconds: 28800
+    cleanup:
+      removeContainerOnExit: true
+      killGraceSeconds: 30
+    devicePolicy:
+      mode: none
+""",
+        encoding="utf-8",
+    )
+    registry = RunnerProfileRegistry.load_file(registry_path, workspace_root=tmp_path)
+    pentest_settings = PentestSettings(
+        MOONMIND_PENTEST_ALLOW_VPN_LAB_PROFILE="true",
+    )
+    monkeypatch.setattr(settings, "pentest", pentest_settings)
+
+    with pytest.raises(RuntimeError, match="missing from workload registry"):
+        _validate_pentest_workload_registry(registry)
+
+
+def test_pentest_workload_registry_validation_accepts_gated_lab_profile(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
     registry = RunnerProfileRegistry.load_file(
         "config/workloads/default-runner-profiles.yaml",
         workspace_root=tmp_path,
@@ -2520,8 +2566,17 @@ def test_pentest_workload_registry_validation_rejects_missing_enabled_profile(
     )
     monkeypatch.setattr(settings, "pentest", pentest_settings)
 
-    with pytest.raises(RuntimeError, match="missing from workload registry"):
-        _validate_pentest_workload_registry(registry)
+    _validate_pentest_workload_registry(registry)
+
+    profile = registry.get("pentestgpt-vpn-lab")
+    assert profile is not None
+    assert profile.image == pentest_settings.runner_image
+    assert "MM_NETWORK_ATTACHMENT_REF" in profile.env_allowlist
+    assert {mount.source for mount in profile.optional_mounts} == {
+        "pentest_vpn_state"
+    }
+    assert profile.linux_capabilities == ("NET_ADMIN",)
+    assert profile.devices == ("/dev/net/tun:/dev/net/tun",)
 
 def test_pentest_workload_registry_validation_rejects_image_drift(
     tmp_path,

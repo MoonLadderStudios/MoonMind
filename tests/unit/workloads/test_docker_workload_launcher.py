@@ -301,6 +301,28 @@ def test_launcher_wraps_multi_part_shell_command_as_single_arg(
 
     assert run_args[-3:] == ["python:3.12-slim", "-lc", "python -V"]
 
+
+def test_launcher_adds_profile_owned_capabilities_and_devices(tmp_path: Path) -> None:
+    validated = _validated_request(
+        tmp_path,
+        profiles=[
+            _profile_payload(
+                linux_capabilities=["NET_ADMIN"],
+                devices=["/dev/net/tun:/dev/net/tun"],
+            )
+        ],
+    )
+
+    run_args = DockerWorkloadLauncher().build_run_args(validated)
+
+    assert "--cap-drop" in run_args
+    assert run_args[run_args.index("--cap-drop") + 1] == "ALL"
+    assert "--cap-add" in run_args
+    assert run_args[run_args.index("--cap-add") + 1] == "NET_ADMIN"
+    assert "--device" in run_args
+    assert run_args[run_args.index("--device") + 1] == "/dev/net/tun:/dev/net/tun"
+
+
 def test_unrestricted_docker_request_replaces_leading_docker_binary(
     tmp_path: Path,
 ) -> None:

@@ -688,6 +688,10 @@ class DockerWorkloadLauncher:
             args.extend(["--mount", _mount_arg(mount)])
         for mount in profile.credential_mounts:
             args.extend(["--mount", _mount_arg(mount)])
+        for capability in profile.linux_capabilities:
+            args.extend(["--cap-add", capability])
+        for device in profile.devices:
+            args.extend(["--device", device])
         for key, value in workload.env_overrides.items():
             args.extend(["--env", f"{key}={value}"])
         for flag, value in _effective_resources(
@@ -745,6 +749,10 @@ class DockerWorkloadLauncher:
             args.extend(["--mount", _mount_arg(mount)])
         for mount in profile.credential_mounts:
             args.extend(["--mount", _mount_arg(mount)])
+        for capability in profile.linux_capabilities:
+            args.extend(["--cap-add", capability])
+        for device in profile.devices:
+            args.extend(["--device", device])
         for key, value in workload.env_overrides.items():
             args.extend(["--env", f"{key}={value}"])
         for flag, value in _effective_resources(

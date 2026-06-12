@@ -1644,17 +1644,27 @@ async def test_pentest_settings_validates_runner_image_policy():
 
     assert unsafe.runner_image == "local/pentestgpt-dev:latest"
 
-async def test_pentest_workload_profile_registry_includes_safe_runner():
+async def test_pentest_workload_profile_registry_includes_canonical_runners():
     registry = RunnerProfileRegistry.load_file(
         Path("config/workloads/default-runner-profiles.yaml"),
         workspace_root="/work/agent_jobs",
     )
 
-    profile = registry.get("pentestgpt-safe")
-    assert profile is not None
-    assert profile.image == "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0"
-    assert profile.network_policy == "bridge"
-    assert "ANTHROPIC_API_KEY" in profile.env_allowlist
+    safe_profile = registry.get("pentestgpt-safe")
+    lab_profile = registry.get("pentestgpt-vpn-lab")
+    assert safe_profile is not None
+    assert lab_profile is not None
+    assert safe_profile.image == "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0"
+    assert lab_profile.image == "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0"
+    assert safe_profile.network_policy == "bridge"
+    assert lab_profile.network_policy == "bridge"
+    assert "ANTHROPIC_API_KEY" in safe_profile.env_allowlist
+    assert "MM_NETWORK_ATTACHMENT_REF" in lab_profile.env_allowlist
+    assert {mount.source for mount in lab_profile.optional_mounts} == {
+        "pentest_vpn_state"
+    }
+    assert lab_profile.linux_capabilities == ("NET_ADMIN",)
+    assert lab_profile.devices == ("/dev/net/tun:/dev/net/tun",)
 
 async def test_pentest_runner_image_defaults_match_published_tag():
     default_image = PentestSettings().runner_image
