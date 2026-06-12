@@ -556,7 +556,7 @@ class DockerCodexManagedSessionController:
         # session-scoped, mode 0600, owned by the agent user, and cleaned up.
         # codeql[py/clear-text-storage-sensitive-data]
         host_config_path.write_text(
-            config_json,
+            config_json,  # codeql[py/clear-text-storage-sensitive-data] # lgtm[py/clear-text-storage-sensitive-data]
             encoding="utf-8",
         )
         geteuid = getattr(os, "geteuid", None)
