@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import inspect
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -114,7 +114,7 @@ def test_run_exposes_one_canonical_step_execution_manifest_record_surface() -> N
 
 
 def test_step_execution_manifest_start_write_keeps_replay_patch_guard() -> None:
-    source = inspect.getsource(MoonMindRunWorkflow.run)
+    source = Path(run_module.__file__).read_text()
 
     guard = "if workflow.patched(RUN_STEP_EXECUTION_MANIFEST_PATCH):"
     start_manifest_call = (
