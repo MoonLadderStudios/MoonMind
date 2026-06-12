@@ -3969,6 +3969,7 @@ async def test_agent_runtime_prepare_turn_instructions_materializes_selected_ski
                 "idempotencyKey": "idem-1",
                 "resolvedSkillsetRef": "art-pr-resolver-snapshot",
                 "parameters": {
+                    "title": "Verify PR resolver outcome",
                     "instructions": "Resolve the PR.",
                     "publishMode": "none",
                     "metadata": {
@@ -4014,7 +4015,7 @@ async def test_agent_runtime_prepare_turn_instructions_cleans_projection_for_ver
     active_root = job_root / "runtime" / "skills_active" / "skillset-verify"
     active_root.mkdir(parents=True)
     (active_root / "_manifest.json").write_text(
-        '{"snapshot_id": "skillset-verify"}\n",
+        '{"snapshot_id": "skillset-verify"}\n',
         encoding="utf-8",
     )
     agents_projection = workspace / ".agents" / "skills"

@@ -63,7 +63,7 @@ def test_ensure_shared_skill_links_can_treat_gemini_link_as_optional(tmp_path):
     validate_shared_skill_links(links, require_gemini_link=False)
 
 
-def test_ensure_shared_skill_links_chowns_created_links_without_following(
+def test_ensure_shared_skill_links_chowns_created_links(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ):
@@ -82,7 +82,7 @@ def test_ensure_shared_skill_links_chowns_created_links_without_following(
     ) -> None:
         assert uid == 1000
         assert gid == 1000
-        assert follow_symlinks is False
+        assert follow_symlinks is True
         chowned_dirs.append(Path(path))
 
     def _fake_lchown(path: str | Path, uid: int, gid: int) -> None:
@@ -93,6 +93,11 @@ def test_ensure_shared_skill_links_chowns_created_links_without_following(
     monkeypatch.setattr(
         "moonmind.workflows.skills.workspace_links.os.chown",
         _fake_chown,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.workspace_links.os.geteuid",
+        lambda: 0,
+        raising=False,
     )
     monkeypatch.setattr(
         "moonmind.workflows.skills.workspace_links.os.lchown",
@@ -109,6 +114,61 @@ def test_ensure_shared_skill_links_chowns_created_links_without_following(
 
     assert links.agents_skills_path in lchowned_links
     assert links.gemini_skills_path in lchowned_links
+    assert links.agents_skills_path.parent in chowned_dirs
+    assert links.gemini_skills_path.parent in chowned_dirs
+
+
+def test_ensure_shared_skill_links_chowns_reused_link_parents(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    run_root = tmp_path / "runs" / "run-reused-owned"
+    skills_active = run_root / "skills_active"
+    skills_active.mkdir(parents=True)
+    agents = run_root / ".agents" / "skills"
+    gemini = run_root / ".gemini" / "skills"
+    agents.parent.mkdir(parents=True)
+    gemini.parent.mkdir(parents=True)
+    agents.symlink_to(skills_active)
+    gemini.symlink_to(skills_active)
+    chowned_dirs: list[Path] = []
+
+    def _fake_chown(
+        path: str | Path,
+        uid: int,
+        gid: int,
+        *,
+        follow_symlinks: bool = True,
+    ) -> None:
+        assert uid == 1000
+        assert gid == 1000
+        assert follow_symlinks is True
+        chowned_dirs.append(Path(path))
+
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.workspace_links.os.chown",
+        _fake_chown,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.workspace_links.os.geteuid",
+        lambda: 0,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.workspace_links.os.lchown",
+        lambda _path, _uid, _gid: None,
+        raising=False,
+    )
+
+    links = ensure_shared_skill_links(
+        run_root=run_root,
+        skills_active_path=skills_active,
+        owner_uid=1000,
+        owner_gid=1000,
+    )
+
+    assert links.agents_skills_status == "reused"
+    assert links.gemini_skills_status == "reused"
     assert links.agents_skills_path.parent in chowned_dirs
     assert links.gemini_skills_path.parent in chowned_dirs
 

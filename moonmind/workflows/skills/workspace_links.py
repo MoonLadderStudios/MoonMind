@@ -101,14 +101,12 @@ def _replace_link(
     owner_uid: int | None = None,
     owner_gid: int | None = None,
 ) -> SkillAliasResult:
-    parent_exists = path.parent.exists()
     if path.exists() or path.is_symlink():
         if path.is_symlink():
             current = path.resolve(strict=False)
             if current == target.resolve(strict=False):
                 _align_projection_ownership(
                     path,
-                    parent_created=False,
                     owner_uid=owner_uid,
                     owner_gid=owner_gid,
                 )
@@ -153,7 +151,6 @@ def _replace_link(
     path.symlink_to(relative_target)
     _align_projection_ownership(
         path,
-        parent_created=not parent_exists,
         owner_uid=owner_uid,
         owner_gid=owner_gid,
     )
@@ -166,7 +163,6 @@ def _replace_link(
 def _align_projection_ownership(
     path: Path,
     *,
-    parent_created: bool,
     owner_uid: int | None,
     owner_gid: int | None,
 ) -> None:
@@ -174,9 +170,10 @@ def _align_projection_ownership(
         return
     if os.name != "posix":
         return
+    if hasattr(os, "geteuid") and os.geteuid() != 0:
+        return
     try:
-        if parent_created:
-            os.chown(path.parent, owner_uid, owner_gid, follow_symlinks=False)
+        os.chown(path.parent, owner_uid, owner_gid)
         if path.is_symlink() and hasattr(os, "lchown"):
             os.lchown(path, owner_uid, owner_gid)
         else:
@@ -292,6 +289,7 @@ def cleanup_moonmind_skill_projections(
             try:
                 candidate.parent.rmdir()
             except OSError:
+                # Removing the empty adapter parent is optional.
                 pass
     return SkillProjectionCleanupResult(
         removed_paths=tuple(removed),

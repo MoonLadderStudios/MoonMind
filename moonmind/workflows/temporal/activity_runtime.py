@@ -97,6 +97,7 @@ from moonmind.schemas.agent_skill_models import (
     ResolvedSkillSet,
     RuntimeMaterializationMode,
 )
+from moonmind.services.skill_materialization import AgentSkillMaterializer
 from moonmind.workflows.temporal.jira_agent_skills import JIRA_AGENT_SKILLS
 from moonmind.workflows.skills.deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
@@ -6990,8 +6991,6 @@ class TemporalAgentRuntimeActivities:
             skill_source_preservation_root = (
                 run_root / "runtime" / "skill_sources" / "repo_agents_skills"
             )
-            from moonmind.services.skill_materialization import AgentSkillMaterializer
-
             materializer = AgentSkillMaterializer(
                 workspace_root=str(workspace),
                 artifact_service=self._artifact_service,
@@ -7035,12 +7034,16 @@ class TemporalAgentRuntimeActivities:
     def _is_verification_class_request(request: AgentExecutionRequest) -> bool:
         params = request.parameters if isinstance(request.parameters, Mapping) else {}
         selected_skill = str(selected_agent_skill(params) or "").strip().lower()
-        if selected_skill in {"moonspec-verify", "jira-verify", "jira-pr-verify"}:
-            return True
+        if selected_skill:
+            return selected_skill in {
+                "moonspec-verify",
+                "jira-verify",
+                "jira-pr-verify",
+            } or selected_skill.endswith("-verify")
         title = str(params.get("title") or params.get("name") or "").strip().lower()
         if "verification" in title or "verify" in title:
             return True
-        return selected_skill.endswith("-verify")
+        return False
 
     @staticmethod
     def _cleanup_skill_projections_for_workspace(workspace_path: str) -> None:
