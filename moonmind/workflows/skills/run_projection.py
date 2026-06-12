@@ -28,7 +28,6 @@ from moonmind.schemas.agent_skill_models import (
     ResolvedSkillSet,
     RuntimeMaterializationMode,
 )
-from moonmind.services.skill_materialization import AgentSkillMaterializer
 from moonmind.services.skills_on_demand import skills_on_demand_runtime_instruction
 from moonmind.workflows.agent_skills.selection import selected_agent_skill
 from moonmind.workflows.temporal.artifacts import TemporalArtifactError
@@ -86,6 +85,8 @@ async def materialize_run_skill_snapshot(
     resolved_skillset: ResolvedSkillSet,
     artifact_service: Any,
     mode: RuntimeMaterializationMode = RuntimeMaterializationMode.HYBRID,
+    projection_owner_uid: int | None = None,
+    projection_owner_gid: int | None = None,
 ) -> dict[str, Any]:
     """Materialize a resolved snapshot for one run and return its metadata.
 
@@ -100,11 +101,15 @@ async def materialize_run_skill_snapshot(
     backing_root = root / "runtime" / "skills_active" / resolved_skillset.snapshot_id
     source_preservation_root = root / "runtime" / "skill_sources" / "repo_agents_skills"
 
+    from moonmind.services.skill_materialization import AgentSkillMaterializer
+
     materializer = AgentSkillMaterializer(
         workspace_root=str(workspace),
         artifact_service=artifact_service,
         backing_root=str(backing_root),
         source_preservation_root=str(source_preservation_root),
+        projection_owner_uid=projection_owner_uid,
+        projection_owner_gid=projection_owner_gid,
     )
     try:
         materialization = await materializer.materialize(

@@ -4003,6 +4003,57 @@ async def test_agent_runtime_prepare_turn_instructions_materializes_selected_ski
 
 
 @pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_cleans_projection_for_verifier_step(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    managed_root = tmp_path / "agent_jobs"
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(managed_root))
+    job_root = managed_root / "job-verify"
+    workspace = job_root / "repo"
+    active_root = job_root / "runtime" / "skills_active" / "skillset-verify"
+    active_root.mkdir(parents=True)
+    (active_root / "_manifest.json").write_text(
+        '{"snapshot_id": "skillset-verify"}\n",
+        encoding="utf-8",
+    )
+    agents_projection = workspace / ".agents" / "skills"
+    gemini_projection = workspace / ".gemini" / "skills"
+    agents_projection.parent.mkdir(parents=True)
+    gemini_projection.parent.mkdir(parents=True)
+    agents_projection.symlink_to(active_root)
+    gemini_projection.symlink_to(active_root)
+    activities = TemporalAgentRuntimeActivities(artifact_service=_StaticArtifactService({}))
+
+    result = await activities.agent_runtime_prepare_turn_instructions(
+        {
+            "request": {
+                "agentKind": "managed",
+                "agentId": "codex",
+                "correlationId": "corr-verify",
+                "idempotencyKey": "idem-verify",
+                "parameters": {
+                    "instructions": "Run final verification.",
+                    "metadata": {
+                        "moonmind": {
+                            "selectedSkill": "moonspec-verify",
+                        },
+                    },
+                },
+            },
+            "workspacePath": str(workspace),
+        }
+    )
+
+    assert "Run final verification." in result
+    assert "Active MoonMind skill snapshot:" not in result
+    assert not agents_projection.exists()
+    assert not agents_projection.is_symlink()
+    assert not gemini_projection.exists()
+    assert not gemini_projection.is_symlink()
+
+
+@pytest.mark.asyncio
 async def test_agent_runtime_prepare_turn_instructions_can_skip_skill_materialization(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

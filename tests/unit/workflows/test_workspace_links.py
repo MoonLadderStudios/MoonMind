@@ -8,6 +8,7 @@ import pytest
 
 from moonmind.workflows.skills.workspace_links import (
     SkillWorkspaceError,
+    cleanup_moonmind_skill_projections,
     ensure_shared_skill_links,
     validate_shared_skill_links,
 )
@@ -45,7 +46,6 @@ def test_ensure_shared_skill_links_can_treat_gemini_link_as_optional(tmp_path):
     run_root = tmp_path / "runs" / "run-optional-gemini"
     skills_active = run_root / "skills_active"
     skills_active.mkdir(parents=True)
-    (run_root / ".gemini" / "skills").mkdir(parents=True)
 
     links = ensure_shared_skill_links(
         run_root=run_root,
@@ -57,9 +57,60 @@ def test_ensure_shared_skill_links_can_treat_gemini_link_as_optional(tmp_path):
     assert links.agents_skills_path.resolve() == skills_active.resolve()
     assert not links.gemini_skills_path.is_symlink()
     assert links.gemini_skills_available is False
-    assert links.gemini_skills_error is not None
-    assert "existing non-symlink path present" in links.gemini_skills_error
+    assert links.gemini_skills_status == "skipped"
+    assert links.gemini_skills_error is None
+    assert not (run_root / ".gemini").exists()
     validate_shared_skill_links(links, require_gemini_link=False)
+
+
+def test_ensure_shared_skill_links_chowns_created_links_without_following(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    run_root = tmp_path / "runs" / "run-owned"
+    skills_active = run_root / "skills_active"
+    skills_active.mkdir(parents=True)
+    chowned_dirs: list[Path] = []
+    lchowned_links: list[Path] = []
+
+    def _fake_chown(
+        path: str | Path,
+        uid: int,
+        gid: int,
+        *,
+        follow_symlinks: bool = True,
+    ) -> None:
+        assert uid == 1000
+        assert gid == 1000
+        assert follow_symlinks is False
+        chowned_dirs.append(Path(path))
+
+    def _fake_lchown(path: str | Path, uid: int, gid: int) -> None:
+        assert uid == 1000
+        assert gid == 1000
+        lchowned_links.append(Path(path))
+
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.workspace_links.os.chown",
+        _fake_chown,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.workspace_links.os.lchown",
+        _fake_lchown,
+        raising=False,
+    )
+
+    links = ensure_shared_skill_links(
+        run_root=run_root,
+        skills_active_path=skills_active,
+        owner_uid=1000,
+        owner_gid=1000,
+    )
+
+    assert links.agents_skills_path in lchowned_links
+    assert links.gemini_skills_path in lchowned_links
+    assert links.agents_skills_path.parent in chowned_dirs
+    assert links.gemini_skills_path.parent in chowned_dirs
 
 
 def test_ensure_shared_skill_links_replaces_stale_owned_agents_symlink(tmp_path):
@@ -123,3 +174,53 @@ def test_ensure_shared_skill_links_rejects_unknown_symlink(tmp_path):
 
     with pytest.raises(SkillWorkspaceError, match="existing symlink"):
         ensure_shared_skill_links(run_root=run_root, skills_active_path=skills_active)
+
+
+def test_cleanup_moonmind_skill_projections_removes_only_owned_symlinks(tmp_path):
+    run_root = tmp_path / "runs" / "run-clean"
+    active = run_root / "runtime" / "skills_active" / "active"
+    active.mkdir(parents=True)
+    (active / "_manifest.json").write_text('{"snapshot_id": "active"}\n')
+    agents = run_root / ".agents" / "skills"
+    gemini = run_root / ".gemini" / "skills"
+    agents.parent.mkdir(parents=True)
+    gemini.parent.mkdir(parents=True)
+    agents.symlink_to(active)
+    gemini.symlink_to(active)
+    repo_authored = run_root / ".agents" / "local"
+    repo_authored.mkdir(parents=True)
+
+    result = cleanup_moonmind_skill_projections(
+        run_root=run_root,
+        skills_active_path=active.parent,
+        owned_roots=(active.parent,),
+    )
+
+    assert result.removed_paths == (agents, gemini)
+    assert not agents.exists()
+    assert not agents.is_symlink()
+    assert not gemini.exists()
+    assert not gemini.is_symlink()
+    assert repo_authored.is_dir()
+    assert (run_root / ".agents").is_dir()
+    assert not (run_root / ".gemini").exists()
+
+
+def test_cleanup_moonmind_skill_projections_preserves_repo_authored_agents_skills(
+    tmp_path,
+):
+    run_root = tmp_path / "runs" / "run-preserve"
+    active = run_root / "runtime" / "skills_active" / "active"
+    active.mkdir(parents=True)
+    repo_skill = run_root / ".agents" / "skills" / "repo-skill"
+    repo_skill.mkdir(parents=True)
+
+    result = cleanup_moonmind_skill_projections(
+        run_root=run_root,
+        skills_active_path=active.parent,
+        owned_roots=(active.parent,),
+    )
+
+    assert result.removed_paths == ()
+    assert result.skipped_paths == (run_root / ".agents" / "skills",)
+    assert repo_skill.is_dir()

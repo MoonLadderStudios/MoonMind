@@ -30,6 +30,13 @@ class SkillAliasResult:
     reason: str | None = None
 
 @dataclass(frozen=True, slots=True)
+class SkillProjectionCleanupResult:
+    """Outcome from removing MoonMind-owned adapter projections."""
+
+    removed_paths: tuple[Path, ...] = ()
+    skipped_paths: tuple[Path, ...] = ()
+
+@dataclass(frozen=True, slots=True)
 class SkillWorkspaceLinks:
     """Resolved adapter link paths for one run workspace."""
 
@@ -91,11 +98,20 @@ def _replace_link(
     target: Path,
     owned_roots: Sequence[Path] = (),
     optional: bool = False,
+    owner_uid: int | None = None,
+    owner_gid: int | None = None,
 ) -> SkillAliasResult:
+    parent_exists = path.parent.exists()
     if path.exists() or path.is_symlink():
         if path.is_symlink():
             current = path.resolve(strict=False)
             if current == target.resolve(strict=False):
+                _align_projection_ownership(
+                    path,
+                    parent_created=False,
+                    owner_uid=owner_uid,
+                    owner_gid=owner_gid,
+                )
                 return SkillAliasResult(
                     path=path,
                     status=SkillAliasStatus.REUSED,
@@ -135,11 +151,40 @@ def _replace_link(
     path.parent.mkdir(parents=True, exist_ok=True)
     relative_target = Path(os.path.relpath(target, path.parent))
     path.symlink_to(relative_target)
+    _align_projection_ownership(
+        path,
+        parent_created=not parent_exists,
+        owner_uid=owner_uid,
+        owner_gid=owner_gid,
+    )
     return SkillAliasResult(
         path=path,
         status=SkillAliasStatus.CREATED,
         available=True,
     )
+
+def _align_projection_ownership(
+    path: Path,
+    *,
+    parent_created: bool,
+    owner_uid: int | None,
+    owner_gid: int | None,
+) -> None:
+    if owner_uid is None or owner_gid is None:
+        return
+    if os.name != "posix":
+        return
+    try:
+        if parent_created:
+            os.chown(path.parent, owner_uid, owner_gid, follow_symlinks=False)
+        if path.is_symlink() and hasattr(os, "lchown"):
+            os.lchown(path, owner_uid, owner_gid)
+        else:
+            os.chown(path, owner_uid, owner_gid, follow_symlinks=False)
+    except OSError as exc:
+        raise SkillWorkspaceError(
+            f"Failed to align adapter projection ownership for {path}: {exc}"
+        ) from exc
 
 def ensure_shared_skill_links(
     *,
@@ -148,6 +193,8 @@ def ensure_shared_skill_links(
     require_gemini_link: bool = True,
     require_agents_link: bool = True,
     owned_roots: Sequence[Path] = (),
+    owner_uid: int | None = None,
+    owner_gid: int | None = None,
 ) -> SkillWorkspaceLinks:
     """Create safe optional adapter links to `skills_active`."""
 
@@ -164,25 +211,27 @@ def ensure_shared_skill_links(
         target=skills_active_path,
         owned_roots=owned_roots,
         optional=not require_agents_link,
+        owner_uid=owner_uid,
+        owner_gid=owner_gid,
     )
-    gemini_skills_available = True
+    gemini_skills_available = False
+    gemini_skills_status = SkillAliasStatus.SKIPPED.value
     gemini_skills_error = None
-    try:
-        gemini_result = _replace_link(
-            gemini_skills,
-            target=skills_active_path,
-            owned_roots=owned_roots,
-            optional=not require_gemini_link,
-        )
-        gemini_skills_available = gemini_result.available
-        gemini_skills_status = gemini_result.status.value
-        gemini_skills_error = gemini_result.reason
-    except SkillWorkspaceError as ex:
-        if require_gemini_link:
+    if require_gemini_link:
+        try:
+            gemini_result = _replace_link(
+                gemini_skills,
+                target=skills_active_path,
+                owned_roots=owned_roots,
+                optional=False,
+                owner_uid=owner_uid,
+                owner_gid=owner_gid,
+            )
+            gemini_skills_available = gemini_result.available
+            gemini_skills_status = gemini_result.status.value
+            gemini_skills_error = gemini_result.reason
+        except SkillWorkspaceError:
             raise
-        gemini_skills_available = False
-        gemini_skills_status = SkillAliasStatus.FAILED.value
-        gemini_skills_error = str(ex)
 
     links = SkillWorkspaceLinks(
         skills_active_path=skills_active_path,
@@ -201,6 +250,53 @@ def ensure_shared_skill_links(
         require_agents_link=require_agents_link,
     )
     return links
+
+def cleanup_moonmind_skill_projections(
+    *,
+    run_root: Path,
+    skills_active_path: Path | None = None,
+    owned_roots: Sequence[Path] = (),
+) -> SkillProjectionCleanupResult:
+    """Remove only MoonMind-owned runtime adapter projections from a workspace."""
+
+    resolved_run_root = run_root.resolve(strict=False)
+    active_path = (
+        skills_active_path
+        if skills_active_path is not None
+        else resolved_run_root / "runtime" / "skills_active"
+    )
+    owned = tuple(owned_roots) or (active_path, resolved_run_root / "skills_active")
+    candidates = (
+        resolved_run_root / ".agents" / "skills",
+        resolved_run_root / ".gemini" / "skills",
+        resolved_run_root / "skills_active",
+    )
+    removed: list[Path] = []
+    skipped: list[Path] = []
+    for candidate in candidates:
+        if not candidate.exists() and not candidate.is_symlink():
+            continue
+        if not candidate.is_symlink():
+            skipped.append(candidate)
+            continue
+        if not is_moonmind_owned_projection(
+            candidate,
+            target=active_path,
+            owned_roots=owned,
+        ):
+            skipped.append(candidate)
+            continue
+        candidate.unlink()
+        removed.append(candidate)
+        if candidate.parent.name == ".gemini":
+            try:
+                candidate.parent.rmdir()
+            except OSError:
+                pass
+    return SkillProjectionCleanupResult(
+        removed_paths=tuple(removed),
+        skipped_paths=tuple(skipped),
+    )
 
 def validate_shared_skill_links(
     links: SkillWorkspaceLinks,

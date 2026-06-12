@@ -72,6 +72,44 @@ def _workspace_git_command(workspace_path: str | Path, *args: str) -> tuple[str,
         *args,
     )
 
+
+def test_controller_session_end_cleanup_removes_moonmind_skill_projections(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "agent_jobs" / "job-1" / "repo"
+    active = tmp_path / "agent_jobs" / "job-1" / "runtime" / "skills_active" / "snap"
+    active.mkdir(parents=True)
+    (active / "_manifest.json").write_text('{"snapshot_id": "snap"}\n', encoding="utf-8")
+    agents_projection = workspace / ".agents" / "skills"
+    gemini_projection = workspace / ".gemini" / "skills"
+    agents_projection.parent.mkdir(parents=True)
+    gemini_projection.parent.mkdir(parents=True)
+    agents_projection.symlink_to(active)
+    gemini_projection.symlink_to(active)
+    record = CodexManagedSessionRecord(
+        sessionId="sess-cleanup",
+        sessionEpoch=1,
+        agentRunId="task-1",
+        containerId="ctr-1",
+        threadId="thread-1",
+        runtimeId="codex_cli",
+        imageRef="img",
+        controlUrl="docker-exec://ctr-1",
+        status="ready",
+        workspacePath=str(workspace),
+        sessionWorkspacePath=str(tmp_path / "session"),
+        artifactSpoolPath=str(tmp_path / "artifacts"),
+        startedAt="2026-04-06T12:00:00Z",
+    )
+
+    DockerCodexManagedSessionController._cleanup_skill_projections_for_session(record)
+
+    assert not agents_projection.exists()
+    assert not agents_projection.is_symlink()
+    assert not gemini_projection.exists()
+    assert not gemini_projection.is_symlink()
+    assert (workspace / ".agents").is_dir()
+
 @pytest.mark.asyncio
 async def test_default_command_runner_clears_supplemental_groups_when_uid_changes(
     monkeypatch: pytest.MonkeyPatch,
