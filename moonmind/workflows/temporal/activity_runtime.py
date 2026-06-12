@@ -5395,6 +5395,7 @@ class TemporalAgentRuntimeActivities:
             evidence_refs: Sequence[str] = (),
         ) -> dict[str, Any]:
             redacted_reason = redact_pentest_human_text(reason)
+            redacted_diagnostics = redact_sensitive_payload(dict(diagnostics or {}))
             return {
                 "status": status,
                 "target": target,
@@ -5405,7 +5406,7 @@ class TemporalAgentRuntimeActivities:
                     phase=phase,
                     diagnostics={
                         "reason": redacted_reason,
-                        **dict(diagnostics or {}),
+                        **redacted_diagnostics,
                     },
                 ).model_dump(mode="json"),
                 "progress_annotation": progress(phase, redacted_reason),
@@ -5422,7 +5423,7 @@ class TemporalAgentRuntimeActivities:
                 ),
                 "diagnostics": {
                     "reason": redacted_reason,
-                    **dict(diagnostics or {}),
+                    **redacted_diagnostics,
                 },
             }
 
@@ -5570,7 +5571,7 @@ class TemporalAgentRuntimeActivities:
                     target=str(request_payload.get("target") or "") or None,
                     failure_kind="policy_denied",
                     interaction_state="pre_interaction",
-                    phase="materializing_provider_profile",
+                    phase="materializing_inputs",
                     reason=str(exc),
                     diagnostics=diagnostics
                     if isinstance(diagnostics, Mapping)

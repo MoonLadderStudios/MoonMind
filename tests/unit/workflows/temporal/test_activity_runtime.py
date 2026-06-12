@@ -20,6 +20,7 @@ from temporalio import exceptions as temporal_exceptions
 
 from api_service.db.models import Base
 from moonmind.config.settings import PentestSettings, settings
+from moonmind.integrations.pentest.models import PentestProviderMaterializationError
 from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
 from moonmind.schemas.agent_runtime_models import AgentRunResult
 from moonmind.schemas.jules_models import JulesTaskResponse
@@ -1599,6 +1600,71 @@ async def test_security_pentest_execute_releases_lease_once_on_publication_failu
     assert len(lease_manager.releases) == 1
     assert lease_manager.releases[0]["terminal_reason"] == "artifact_publication_failure"
     assert result["terminal_cleanup"]["provider_lease_released"] is True
+
+async def test_security_pentest_execute_releases_lease_once_on_provider_materialization_failure(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    lease_manager = _FakePentestProviderLeaseManager()
+
+    def _raise_materialization_failure(profile: object) -> object:
+        raise PentestProviderMaterializationError(
+            "provider materialization failed token=secret",
+            reason="provider_materialization_failed",
+            diagnostics={"message": "password=raw-secret"},
+        )
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.activity_runtime.materialize_pentest_provider_profile",
+        _raise_materialization_failure,
+    )
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=_FakePentestLauncher(),
+        workload_registry=_RecordingPentestRegistry(),
+        pentest_provider_lease_manager=lease_manager,
+    )
+
+    result = await activities._security_pentest_execute_trusted_internal(
+        _pentest_activity_payload()
+    )
+
+    assert result["status"] == "validation_failed"
+    assert len(lease_manager.acquires) == 1
+    assert len(lease_manager.releases) == 1
+    assert lease_manager.releases[0]["terminal_reason"] == (
+        "provider_materialization_failed"
+    )
+    assert result["diagnostics"]["provider_lease"]["released"] is True
+    assert "raw-secret" not in str(result)
+
+async def test_security_pentest_execute_releases_lease_once_on_input_materialization_failure(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    lease_manager = _FakePentestProviderLeaseManager()
+
+    def _raise_input_write_failure(path: str, payload: object) -> None:
+        raise OSError("input write failed token=secret")
+
+    monkeypatch.setattr(
+        TemporalAgentRuntimeActivities,
+        "_write_pentest_json",
+        staticmethod(_raise_input_write_failure),
+    )
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=_FakePentestLauncher(),
+        workload_registry=_RecordingPentestRegistry(),
+        pentest_provider_lease_manager=lease_manager,
+    )
+
+    result = await activities._security_pentest_execute_trusted_internal(
+        _pentest_activity_payload()
+    )
+
+    assert result["status"] == "failed"
+    assert len(lease_manager.acquires) == 1
+    assert len(lease_manager.releases) == 1
+    assert lease_manager.releases[0]["terminal_reason"] == "materialization_failure"
+    assert result["terminal_cleanup"]["provider_lease_released"] is True
+    assert "secret" not in str(result["diagnostics"]).lower()
 
 async def test_security_pentest_execute_classifies_acquire_failure_as_provider_capacity():
     lease_manager = _FakePentestProviderLeaseManager(
