@@ -207,6 +207,141 @@ async def _run_command(cmd, **kwargs):
 
 logger = getLogger(__name__)
 
+_PENTEST_PROVIDER_MANAGER_WORKFLOW_ID = "provider-profile-manager:pentestgpt"
+
+
+class PentestProviderLeaseManager(Protocol):
+    async def acquire(
+        self,
+        *,
+        runtime_id: str,
+        profile_id: str,
+        owner: str,
+        metadata: Mapping[str, Any],
+    ) -> str:
+        """Acquire provider capacity for one PentestGPT attempt."""
+
+    async def release(
+        self,
+        *,
+        runtime_id: str,
+        profile_id: str,
+        owner: str,
+        lease_id: str,
+    ) -> None:
+        """Release provider capacity for one PentestGPT attempt."""
+
+    async def record_cooldown(
+        self,
+        *,
+        runtime_id: str,
+        profile_id: str,
+        owner: str,
+        cooldown_seconds: int,
+        reason: str,
+    ) -> None:
+        """Record provider cooldown for a quota or rate-limit failure."""
+
+
+class TemporalPentestProviderLeaseManager:
+    def __init__(self, client_adapter: Any) -> None:
+        self._client_adapter = client_adapter
+
+    async def acquire(
+        self,
+        *,
+        runtime_id: str,
+        profile_id: str,
+        owner: str,
+        metadata: Mapping[str, Any],
+    ) -> str:
+        update_workflow = getattr(self._client_adapter, "update_workflow", None)
+        if update_workflow is None:
+            raise RuntimeError("Temporal client adapter does not support workflow updates")
+        await update_workflow(
+            _PENTEST_PROVIDER_MANAGER_WORKFLOW_ID,
+            "AcquireSlot",
+            {
+                "requester_workflow_id": owner,
+                "runtime_id": runtime_id,
+                "execution_profile_ref": profile_id,
+                "metadata": dict(metadata),
+            },
+        )
+        return owner
+
+    async def release(
+        self,
+        *,
+        runtime_id: str,
+        profile_id: str,
+        owner: str,
+        lease_id: str,
+    ) -> None:
+        await self._client_adapter.signal_workflow(
+            _PENTEST_PROVIDER_MANAGER_WORKFLOW_ID,
+            "release_slot",
+            {
+                "requester_workflow_id": owner,
+                "runtime_id": runtime_id,
+                "profile_id": profile_id,
+                "lease_id": lease_id,
+            },
+        )
+
+    async def record_cooldown(
+        self,
+        *,
+        runtime_id: str,
+        profile_id: str,
+        owner: str,
+        cooldown_seconds: int,
+        reason: str,
+    ) -> None:
+        await self._client_adapter.signal_workflow(
+            _PENTEST_PROVIDER_MANAGER_WORKFLOW_ID,
+            "report_cooldown",
+            {
+                "runtime_id": runtime_id,
+                "profile_id": profile_id,
+                "requester_workflow_id": owner,
+                "cooldown_seconds": cooldown_seconds,
+                "reason": reason,
+            },
+        )
+
+
+def _pentest_provider_lease_owner(
+    *,
+    agent_run_id: str,
+    step_id: str,
+    attempt: int,
+) -> str:
+    return f"pentest:{agent_run_id}:{step_id}:{attempt}"
+
+
+def _pentest_target_hash(target: str) -> str:
+    return hashlib.sha256(target.encode("utf-8")).hexdigest()
+
+
+def _pentest_provider_lease_safe_metadata(
+    request: PentestWorkloadRequest,
+    *,
+    runtime_id: str,
+    profile_id: str,
+) -> dict[str, Any]:
+    return {
+        "tool": "security.pentest.run",
+        "runtime_id": runtime_id,
+        "profile_id": profile_id,
+        "agent_run_id": request.agent_run_id,
+        "step_id": request.step_id,
+        "attempt": request.attempt,
+        "target_hash": _pentest_target_hash(request.target),
+        "mode": request.operation_mode,
+        "runner_profile": request.runner_profile_id,
+    }
+
 _GIT_PUSH_SCAN_MAX_COMMIT_METADATA_CHARS = 100_000
 _GIT_PUSH_SCAN_MAX_FILE_DIFF_CHARS = 200_000
 _GIT_PUSH_SCAN_MAX_CHANGED_FILES = 200
@@ -4300,6 +4435,7 @@ class TemporalAgentRuntimeActivities:
         workload_registry: Any | None = None,
         workflow_docker_mode: str = "profiles",
         client_adapter: Any = None,
+        pentest_provider_lease_manager: PentestProviderLeaseManager | None = None,
     ) -> None:
         self._artifact_service = artifact_service
         self._run_store = run_store
@@ -4314,6 +4450,10 @@ class TemporalAgentRuntimeActivities:
 
             client_adapter = temporal_client_module.TemporalClientAdapter()
         self._client_adapter = client_adapter
+        self._pentest_provider_lease_manager = (
+            pentest_provider_lease_manager
+            or TemporalPentestProviderLeaseManager(client_adapter)
+        )
         self._supervision_tasks: set[asyncio.Task] = set()
 
     @staticmethod
@@ -5319,6 +5459,29 @@ class TemporalAgentRuntimeActivities:
                 },
             }
 
+        lease_runtime_id: str | None = None
+        lease_profile_id: str | None = None
+        lease_owner: str | None = None
+        lease_id: str | None = None
+        lease_release_attempted = False
+
+        async def release_provider_lease() -> bool:
+            nonlocal lease_release_attempted
+            if not all(
+                (lease_id, lease_runtime_id, lease_profile_id, lease_owner)
+            ):
+                return False
+            if lease_release_attempted:
+                return True
+            lease_release_attempted = True
+            await self._pentest_provider_lease_manager.release(
+                runtime_id=lease_runtime_id,
+                profile_id=lease_profile_id,
+                owner=lease_owner,
+                lease_id=lease_id,
+            )
+            return True
+
         enabled = _coerce_bool(
             policy_payload.get(
                 "pentest_enabled",
@@ -5381,6 +5544,34 @@ class TemporalAgentRuntimeActivities:
                 provider_selector=request.provider_selector,
                 runtime_state=request.provider_runtime_state,
             )
+            lease_runtime_id = provider_profile.runtime_id
+            lease_profile_id = provider_profile.profile_id
+            lease_owner = _pentest_provider_lease_owner(
+                agent_run_id=request.agent_run_id,
+                step_id=request.step_id,
+                attempt=request.attempt,
+            )
+            try:
+                lease_id = await self._pentest_provider_lease_manager.acquire(
+                    runtime_id=lease_runtime_id,
+                    profile_id=lease_profile_id,
+                    owner=lease_owner,
+                    metadata=_pentest_provider_lease_safe_metadata(
+                        request,
+                        runtime_id=lease_runtime_id,
+                        profile_id=lease_profile_id,
+                    ),
+                )
+            except Exception as exc:
+                return structured_failure(
+                    status="provider_capacity_failed",
+                    target=request.target,
+                    failure_kind="provider_capacity",
+                    interaction_state="pre_interaction",
+                    phase="waiting_for_profile_slot",
+                    reason=str(exc),
+                    diagnostics={"provider_capacity": "lease_manager_failure"},
+                )
             provider_materialization = materialize_pentest_provider_profile(
                 provider_profile
             )
@@ -5395,6 +5586,15 @@ class TemporalAgentRuntimeActivities:
             PentestLaunchPolicyError,
             PentestProviderMaterializationError,
         ) as exc:
+            provider_lease_released = False
+            if lease_id:
+                try:
+                    provider_lease_released = await release_provider_lease()
+                except Exception as release_exc:
+                    logger.warning(
+                        "failed to release Pentest provider lease after validation failure: %s",
+                        release_exc,
+                    )
             diagnostics = dict(getattr(exc, "diagnostics", {}) or {})
             reason_code = getattr(exc, "reason", None)
             if reason_code:
@@ -5407,10 +5607,18 @@ class TemporalAgentRuntimeActivities:
                 phase="validating_scope",
                 reason=str(exc),
                 diagnostics=diagnostics if isinstance(diagnostics, Mapping) else {},
+                provider_lease_released=provider_lease_released,
             )
         output = launch_plan.to_activity_output(request)
         output["provider_profile"] = provider_materialization.model_dump(mode="json")
         provider_lease = pentest_provider_lease_metadata(provider_profile)
+        provider_lease["lease_id"] = lease_id
+        provider_lease["lease_owner"] = lease_owner
+        provider_lease["metadata"] = _pentest_provider_lease_safe_metadata(
+            request,
+            runtime_id=provider_profile.runtime_id,
+            profile_id=provider_profile.profile_id,
+        )
         output["provider_lease"] = provider_lease
         execution_metadata = execution_materialization.model_dump(mode="json")
         execution_metadata["instruction_bundle"].pop("content", None)
@@ -5428,6 +5636,14 @@ class TemporalAgentRuntimeActivities:
                 )
             )
         except OSError as exc:
+            provider_lease_released = False
+            try:
+                provider_lease_released = await release_provider_lease()
+            except Exception as release_exc:
+                logger.warning(
+                    "failed to release Pentest provider lease after materialization failure: %s",
+                    release_exc,
+                )
             output.update(
                 structured_failure(
                     status="failed",
@@ -5437,6 +5653,7 @@ class TemporalAgentRuntimeActivities:
                     phase="materializing_inputs",
                     reason=str(exc),
                     diagnostics={"materialization": "input_file_write_failed"},
+                    provider_lease_released=provider_lease_released,
                 )
             )
             return output
@@ -5471,6 +5688,27 @@ class TemporalAgentRuntimeActivities:
                 cooldown_seconds=provider_profile.cooldown_after_429_seconds,
                 reason=failure_category,
             ).model_dump(mode="json")
+            try:
+                await self._pentest_provider_lease_manager.record_cooldown(
+                    runtime_id=provider_profile.runtime_id,
+                    profile_id=provider_profile.profile_id,
+                    owner=lease_owner or "",
+                    cooldown_seconds=provider_profile.cooldown_after_429_seconds,
+                    reason=failure_category,
+                )
+            except Exception as cooldown_exc:
+                logger.warning(
+                    "failed to record Pentest provider cooldown: %s",
+                    cooldown_exc,
+                )
+            provider_lease_released = False
+            try:
+                provider_lease_released = await release_provider_lease()
+            except Exception as release_exc:
+                logger.warning(
+                    "failed to release Pentest provider lease after cooldown: %s",
+                    release_exc,
+                )
             output.update(
                 structured_failure(
                     status="provider_cooldown",
@@ -5480,12 +5718,19 @@ class TemporalAgentRuntimeActivities:
                     phase="waiting_for_profile_slot",
                     reason=failure_category,
                     diagnostics={"provider_cooldown": cooldown},
-                    provider_lease_released=False,
+                    provider_lease_released=provider_lease_released,
                 )
             )
             output["provider_cooldown"] = cooldown
             output["provider_lease"] = pentest_provider_lease_metadata(
                 provider_profile, release_required=True
+            )
+            output["provider_lease"]["lease_id"] = lease_id
+            output["provider_lease"]["lease_owner"] = lease_owner
+            output["provider_lease"]["metadata"] = _pentest_provider_lease_safe_metadata(
+                request,
+                runtime_id=provider_profile.runtime_id,
+                profile_id=provider_profile.profile_id,
             )
             return output
 
@@ -5560,6 +5805,14 @@ class TemporalAgentRuntimeActivities:
                 else:
                     workload_result = WorkloadResult.model_validate(raw_workload_result)
         except Exception as exc:
+            provider_lease_released = False
+            try:
+                provider_lease_released = await release_provider_lease()
+            except Exception as release_exc:
+                logger.warning(
+                    "failed to release Pentest provider lease after workload failure: %s",
+                    release_exc,
+                )
             output.update(
                 structured_failure(
                     status="failed",
@@ -5569,7 +5822,7 @@ class TemporalAgentRuntimeActivities:
                     phase="running",
                     reason=str(exc),
                     launched=True,
-                    provider_lease_released=True,
+                    provider_lease_released=provider_lease_released,
                 )
             )
             return output
@@ -5614,6 +5867,14 @@ class TemporalAgentRuntimeActivities:
             severity_counts[severity] = severity_counts.get(severity, 0) + 1
 
         if workload_result.status != "succeeded":
+            provider_lease_released = False
+            try:
+                provider_lease_released = await release_provider_lease()
+            except Exception as release_exc:
+                logger.warning(
+                    "failed to release Pentest provider lease after terminal workload status: %s",
+                    release_exc,
+                )
             terminal_reason = (
                 "timeout"
                 if workload_result.status == "timed_out"
@@ -5633,7 +5894,7 @@ class TemporalAgentRuntimeActivities:
                     reason=workload_result.timeout_reason
                     or f"Pentest workload ended with status {workload_result.status}.",
                     launched=True,
-                    provider_lease_released=True,
+                    provider_lease_released=provider_lease_released,
                     stdout_ref=stdout_ref,
                     stderr_ref=stderr_ref,
                     diagnostics_ref=diagnostics_ref,
@@ -5643,6 +5904,14 @@ class TemporalAgentRuntimeActivities:
             output["terminal_cleanup"]["terminal_reason"] = terminal_reason
             return output
 
+        provider_lease_released = False
+        try:
+            provider_lease_released = await release_provider_lease()
+        except Exception as release_exc:
+            logger.warning(
+                "failed to release Pentest provider lease after success: %s",
+                release_exc,
+            )
         result = PentestWorkloadResult(
             status="completed",
             target=request.target,
@@ -5701,7 +5970,7 @@ class TemporalAgentRuntimeActivities:
             terminal_reason="success",
             last_phase="cleanup",
             launched=True,
-            provider_lease_released=True,
+            provider_lease_released=provider_lease_released,
             stdout_ref=stdout_ref,
             stderr_ref=stderr_ref,
             diagnostics_ref=diagnostics_ref,
