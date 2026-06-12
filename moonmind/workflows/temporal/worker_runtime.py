@@ -211,7 +211,13 @@ async def _expand_preset_for_child_run(
     """
 
     parameters = dict(initial_parameters or {})
-    task_payload = _coerce_mapping(parameters.get("task"))
+    workflow_payload = _coerce_mapping(parameters.get("workflow"))
+    if workflow_payload:
+        payload_key = "workflow"
+        task_payload = workflow_payload
+    else:
+        payload_key = "task"
+        task_payload = _coerce_mapping(parameters.get("task"))
     if not task_payload:
         return parameters
     raw_steps = task_payload.get("steps")
@@ -330,7 +336,7 @@ async def _expand_preset_for_child_run(
         "version": str(applied_template.get("version") or template_version),
         "scope": template_scope,
     }
-    parameters["task"] = task_payload
+    parameters[payload_key] = task_payload
     parameters["stepCount"] = len(expanded_steps)
     return parameters
 
