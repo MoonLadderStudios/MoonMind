@@ -48,6 +48,7 @@ def test_manifest_and_checkpoint_forbidden_inline_evidence_matrix(
     assert isinstance(decision, dict)
     assert decision["valid"] is False
     assert decision["decision"] == "invalid"
+    assert decision["expected"] == "invalid"
     assert decision["failureCode"] == fixture["failureCode"]
     assert fixture["payloadClass"] in decision["message"]
     assert fixture["contractSurface"] in {"manifest", "checkpoint"}
@@ -78,6 +79,7 @@ def test_golden_fixture_catalog_is_complete_and_deterministic() -> None:
         fixture["fixtureId"]: fixture["decision"]["decision"]
         for fixture in catalog
     }["legacy-checkpoint-only-ledger-row"] == "degraded"
+    assert all("expected" in fixture["decision"] for fixture in catalog)
 
 
 def test_manifest_and_checkpoint_writer_fixtures_use_canonical_refs() -> None:
@@ -108,11 +110,15 @@ def test_degraded_inputs_return_typed_decisions_without_exceptions() -> None:
     }
 
     assert decisions["old-manifest-row"]["decision"] == "invalid"
+    assert decisions["old-manifest-row"]["expected"] == "invalid"
     assert decisions["old-checkpoint-row"]["decision"] == "invalid"
+    assert decisions["old-checkpoint-row"]["expected"] == "invalid"
     assert decisions["blank-gate-verdict"]["decision"] == "degraded"
+    assert decisions["blank-gate-verdict"]["expected"] == "degraded"
     assert decisions["unknown-gate-verdict"]["decision"] == "degraded"
     assert decisions["future-gate-verdict"]["decision"] == "degraded"
     assert decisions["legacy-checkpoint-only-ledger-row"]["decision"] == "degraded"
+    assert decisions["legacy-checkpoint-only-ledger-row"]["expected"] == "degraded"
 
 
 @pytest.mark.parametrize(
@@ -158,6 +164,33 @@ def test_canonical_terminology_fixture_decisions_are_enforced() -> None:
     assert terminology["term-executionOrdinal"]["decision"] == "valid"
     assert terminology["term-recover_from_failed_step"]["decision"] == "valid"
     assert terminology["term-step-attempt"]["decision"] == "invalid"
+    assert terminology["term-step-attempt"]["expected"] == "invalid"
+
+
+def test_expected_decision_mismatch_fails_relevant_family(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.workflows.temporal import step_execution_conformance as conformance
+
+    mutated = [
+        dict(fixture) for fixture in conformance.FORBIDDEN_INLINE_EVIDENCE_FIXTURES
+    ]
+    first_fixture = dict(mutated[0])
+    first_decision = dict(first_fixture["decision"])
+    first_decision["decision"] = "valid"
+    first_fixture["decision"] = first_decision
+    mutated[0] = first_fixture
+    monkeypatch.setattr(
+        conformance, "FORBIDDEN_INLINE_EVIDENCE_FIXTURES", tuple(mutated)
+    )
+
+    summary = conformance.build_conformance_summary()
+    family_by_name = {family["family"]: family for family in summary["families"]}
+    failed_family = family_by_name[first_fixture["contractSurface"]]
+
+    assert summary["overallResult"] == "failed"
+    assert failed_family["result"] == "failed"
+    assert first_decision["fixtureId"] in failed_family["failedFixtureIds"]
 
 
 def test_traceability_matrix_covers_all_mm_820_categories() -> None:

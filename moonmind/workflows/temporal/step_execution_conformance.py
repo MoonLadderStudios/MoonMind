@@ -97,6 +97,7 @@ def _decision(
     category: str,
     contract_surface: str,
     decision: str,
+    expected: str = "valid",
     failure_code: str | None,
     message: str,
     traceability: Iterable[str],
@@ -107,6 +108,7 @@ def _decision(
         "contractSurface": contract_surface,
         "valid": decision == "valid",
         "decision": decision,
+        "expected": expected,
         "failureCode": failure_code,
         "message": _bounded_message(message),
         "traceability": list(traceability),
@@ -164,28 +166,22 @@ def _classify_manifest_payload(
     fixture_id: str,
     payload: Mapping[str, Any],
     *,
+    category: str = "golden",
+    expected: str = "valid",
     traceability: Iterable[str],
 ) -> dict[str, Any]:
     result = validate_step_execution_manifest_payload(
         dict(payload), manifest_artifact_ref=f"artifact://{fixture_id}"
     )
-    if result["valid"]:
-        return _decision(
-            fixture_id=fixture_id,
-            category="golden",
-            contract_surface="manifest",
-            decision="valid",
-            failure_code=None,
-            message="manifest fixture passed",
-            traceability=traceability,
-        )
+    decision = "valid" if result["valid"] else "invalid"
     return _decision(
         fixture_id=fixture_id,
-        category="degraded_input",
+        category=category,
         contract_surface="manifest",
-        decision="invalid",
-        failure_code=str(result["failureCode"]),
-        message=str(result["message"]),
+        decision=decision,
+        expected=expected,
+        failure_code=None if result["valid"] else str(result["failureCode"]),
+        message="manifest fixture passed" if result["valid"] else str(result["message"]),
         traceability=traceability,
     )
 
@@ -194,6 +190,8 @@ def _classify_checkpoint_payload(
     fixture_id: str,
     payload: Mapping[str, Any],
     *,
+    category: str = "golden",
+    expected: str = "valid",
     traceability: Iterable[str],
 ) -> dict[str, Any]:
     result = validate_step_checkpoint_payload(
@@ -204,35 +202,33 @@ def _classify_checkpoint_payload(
         workspace_policy="apply_previous_execution_diff_to_clean_baseline",
         checkpoint_ref=f"artifact://{fixture_id}",
     )
-    if result.valid:
-        return _decision(
-            fixture_id=fixture_id,
-            category="golden",
-            contract_surface="checkpoint",
-            decision="valid",
-            failure_code=None,
-            message="checkpoint fixture passed",
-            traceability=traceability,
-        )
+    decision = "valid" if result.valid else "invalid"
     return _decision(
         fixture_id=fixture_id,
-        category="degraded_input",
+        category=category,
         contract_surface="checkpoint",
-        decision="invalid",
-        failure_code=str(result.failure_code),
-        message=result.message,
+        decision=decision,
+        expected=expected,
+        failure_code=None if result.valid else str(result.failure_code),
+        message="checkpoint fixture passed" if result.valid else result.message,
         traceability=traceability,
     )
 
 
-def classify_gate_verdict(fixture_id: str, raw_verdict: Any) -> dict[str, Any]:
+def classify_gate_verdict(
+    fixture_id: str,
+    raw_verdict: Any,
+    category: str = "gate",
+    expected: str = "valid",
+) -> dict[str, Any]:
     verdict = str(raw_verdict or "").strip().upper()
     if verdict in _VALID_GATE_VERDICTS:
         return _decision(
             fixture_id=fixture_id,
-            category="golden",
+            category=category,
             contract_surface="gate",
             decision="valid",
+            expected=expected,
             failure_code=None,
             message=f"gate verdict {verdict} is structured",
             traceability=("FR-003", "FR-005", "DESIGN-REQ-012"),
@@ -245,9 +241,10 @@ def classify_gate_verdict(fixture_id: str, raw_verdict: Any) -> dict[str, Any]:
         failure_code = "unknown_gate_verdict"
     return _decision(
         fixture_id=fixture_id,
-        category="degraded_input",
+        category=category,
         contract_surface="gate",
         decision="degraded",
+        expected=expected,
         failure_code=failure_code,
         message=f"gate verdict classified as {failure_code}",
         traceability=("FR-005", "SC-004", "DESIGN-REQ-012", "DESIGN-REQ-024"),
@@ -256,6 +253,8 @@ def classify_gate_verdict(fixture_id: str, raw_verdict: Any) -> dict[str, Any]:
 
 def classify_legacy_checkpoint_only_ledger_row(
     row: Mapping[str, Any],
+    category: str = "replay",
+    expected: str = "degraded",
 ) -> dict[str, Any]:
     checkpoint_ref = str(
         row.get("stepCheckpointRef")
@@ -269,18 +268,20 @@ def classify_legacy_checkpoint_only_ledger_row(
     if checkpoint_ref and not has_current_manifest_ref:
         return _decision(
             fixture_id="legacy-checkpoint-only-ledger-row",
-            category="replay",
+            category=category,
             contract_surface="ledger",
             decision="degraded",
+            expected=expected,
             failure_code="legacy_checkpoint_only_ledger_row",
             message="legacy ledger row has checkpoint refs but no current manifest ref",
             traceability=("FR-003", "FR-005", "SC-004", "DESIGN-REQ-024"),
         )
     return _decision(
         fixture_id="legacy-checkpoint-only-ledger-row",
-        category="replay",
+        category=category,
         contract_surface="ledger",
         decision="valid",
+        expected=expected,
         failure_code=None,
         message="ledger row contains current step execution evidence",
         traceability=("FR-003", "FR-005", "DESIGN-REQ-024"),
@@ -361,6 +362,7 @@ def _classify_forbidden_fixture(
             category="forbidden_inline_evidence",
             contract_surface=contract_surface,
             decision="invalid",
+            expected="invalid",
             failure_code=f"forbidden_{payload_class}",
             message=f"forbidden inline evidence class rejected: {payload_class}",
             traceability=(
@@ -377,6 +379,7 @@ def _classify_forbidden_fixture(
             category="forbidden_inline_evidence",
             contract_surface=contract_surface,
             decision="valid",
+            expected="invalid",
             failure_code=None,
             message=f"forbidden inline evidence class accepted: {payload_class}",
             traceability=("FR-002", "SC-002"),
@@ -429,6 +432,8 @@ def golden_fixture_catalog() -> list[dict[str, Any]]:
             "decision": _classify_manifest_payload(
                 "successful-execution",
                 _valid_manifest_payload(),
+                category="golden",
+                expected="valid",
                 traceability=(
                     "FR-003",
                     "FR-004",
@@ -444,13 +449,18 @@ def golden_fixture_catalog() -> list[dict[str, Any]]:
             "decision": _classify_manifest_payload(
                 "failed-reattempt",
                 failed_manifest,
+                category="golden",
+                expected="valid",
                 traceability=("FR-003", "SC-003", "DESIGN-REQ-006"),
             ),
         },
         {
             "fixtureId": "gate-failure",
             "decision": classify_gate_verdict(
-                "gate-failure", "ADDITIONAL_WORK_NEEDED"
+                "gate-failure",
+                "ADDITIONAL_WORK_NEEDED",
+                category="gate",
+                expected="valid",
             ),
         },
         {
@@ -458,6 +468,8 @@ def golden_fixture_catalog() -> list[dict[str, Any]]:
             "decision": _classify_manifest_payload(
                 "recovery-with-preserved-steps",
                 recovery_manifest,
+                category="golden",
+                expected="valid",
                 traceability=("FR-003", "SC-003", "DESIGN-REQ-003"),
             ),
         },
@@ -466,12 +478,19 @@ def golden_fixture_catalog() -> list[dict[str, Any]]:
             "decision": _classify_checkpoint_payload(
                 "degraded-checkpoint-payload",
                 degraded_checkpoint,
+                category="degraded_input",
+                expected="invalid",
                 traceability=("FR-003", "FR-005", "DESIGN-REQ-010"),
             ),
         },
         {
             "fixtureId": "degraded-gate-verdict",
-            "decision": classify_gate_verdict("degraded-gate-verdict", "FUTURE_OK"),
+            "decision": classify_gate_verdict(
+                "degraded-gate-verdict",
+                "FUTURE_OK",
+                category="degraded_input",
+                expected="degraded",
+            ),
         },
         {
             "fixtureId": "legacy-checkpoint-only-ledger-row",
@@ -479,7 +498,9 @@ def golden_fixture_catalog() -> list[dict[str, Any]]:
                 {
                     "logicalStepId": "implement-story",
                     "stateCheckpointRef": "artifact://legacy-checkpoint",
-                }
+                },
+                category="replay",
+                expected="degraded",
             ),
         },
     ]
@@ -494,22 +515,42 @@ def replay_degraded_fixture_decisions() -> list[dict[str, Any]]:
         _classify_manifest_payload(
             "old-manifest-row",
             old_manifest,
+            category="degraded_input",
+            expected="invalid",
             traceability=("FR-005", "SC-004", "DESIGN-REQ-024"),
         ),
         _classify_checkpoint_payload(
             "old-checkpoint-row",
             old_checkpoint,
+            category="degraded_input",
+            expected="invalid",
             traceability=("FR-005", "SC-004", "DESIGN-REQ-024"),
         ),
-        classify_gate_verdict("blank-gate-verdict", ""),
-        classify_gate_verdict("unknown-gate-verdict", "APPROVED_WITH_WARNINGS"),
-        classify_gate_verdict("future-gate-verdict", "FUTURE_OK"),
-        classify_gate_verdict("old-gate-verdict", "PASS"),
+        classify_gate_verdict(
+            "blank-gate-verdict", "", category="degraded_input", expected="degraded"
+        ),
+        classify_gate_verdict(
+            "unknown-gate-verdict",
+            "APPROVED_WITH_WARNINGS",
+            category="degraded_input",
+            expected="degraded",
+        ),
+        classify_gate_verdict(
+            "future-gate-verdict",
+            "FUTURE_OK",
+            category="degraded_input",
+            expected="degraded",
+        ),
+        classify_gate_verdict(
+            "old-gate-verdict", "PASS", category="degraded_input", expected="degraded"
+        ),
         classify_legacy_checkpoint_only_ledger_row(
             {
                 "logicalStepId": "implement-story",
                 "stepCheckpointRef": "artifact://legacy-step-checkpoint",
-            }
+            },
+            category="replay",
+            expected="degraded",
         ),
     ]
 
@@ -521,6 +562,7 @@ def _terminology_decisions() -> list[dict[str, Any]]:
             category="terminology",
             contract_surface="terminology",
             decision="valid",
+            expected="valid",
             failure_code=None,
             message="canonical route term accepted",
             traceability=("FR-006", "SC-005", "DESIGN-REQ-003", "DESIGN-REQ-021"),
@@ -530,6 +572,7 @@ def _terminology_decisions() -> list[dict[str, Any]]:
             category="terminology",
             contract_surface="terminology",
             decision="valid",
+            expected="valid",
             failure_code=None,
             message="canonical ordinal field accepted",
             traceability=("FR-006", "SC-005", "DESIGN-REQ-003"),
@@ -539,6 +582,7 @@ def _terminology_decisions() -> list[dict[str, Any]]:
             category="terminology",
             contract_surface="terminology",
             decision="valid",
+            expected="valid",
             failure_code=None,
             message="canonical recovery action token accepted",
             traceability=("FR-006", "SC-005", "DESIGN-REQ-003"),
@@ -548,6 +592,7 @@ def _terminology_decisions() -> list[dict[str, Any]]:
             category="terminology",
             contract_surface="terminology",
             decision="invalid",
+            expected="invalid",
             failure_code="superseded_step_attempt_term",
             message="superseded terminology rejected",
             traceability=("FR-006", "SC-005", "DESIGN-REQ-003"),
@@ -601,6 +646,7 @@ def _api_decision() -> dict[str, Any]:
         category="api_contract",
         contract_surface="api",
         decision="valid",
+        expected="valid",
         failure_code=None,
         message="api projection exposes canonical terms and artifact refs",
         traceability=("FR-001", "FR-002", "FR-006", "SC-001", "DESIGN-REQ-021"),
@@ -613,11 +659,8 @@ def _family_results(decisions: list[dict[str, Any]]) -> list[dict[str, Any]]:
         failed = [
             decision["fixtureId"]
             for decision in decisions
-            if _decision_family(decision) == family and decision["decision"] not in {
-                "valid",
-                "degraded",
-                "invalid",
-            }
+            if _decision_family(decision) == family
+            and decision["decision"] != decision.get("expected", "valid")
         ]
         families.append(
             {
