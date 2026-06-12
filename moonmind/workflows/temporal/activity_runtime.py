@@ -97,8 +97,8 @@ from moonmind.schemas.agent_skill_models import (
     ResolvedSkillSet,
     RuntimeMaterializationMode,
 )
-from moonmind.workflows.temporal.jira_agent_skills import JIRA_AGENT_SKILLS
 from moonmind.services.skill_materialization import AgentSkillMaterializer
+from moonmind.workflows.temporal.jira_agent_skills import JIRA_AGENT_SKILLS
 from moonmind.workflows.skills.deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
     build_deployment_update_tool_definition_payload,
@@ -140,6 +140,9 @@ from moonmind.schemas.managed_session_models import (
     TerminateCodexManagedSessionRequest,
 )
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
+from moonmind.workflows.skills.workspace_links import (
+    cleanup_moonmind_skill_projections,
+)
 from moonmind.workflows.skills.plan_validation import validate_plan_payload
 
 from moonmind.workflows.skills.skill_dispatcher import execute_skill_activity
@@ -208,6 +211,8 @@ async def _run_command(cmd, **kwargs):
 logger = getLogger(__name__)
 
 _PENTEST_PROVIDER_MANAGER_WORKFLOW_ID = "provider-profile-manager:pentestgpt"
+_MANAGED_AGENT_UID = 1000
+_MANAGED_AGENT_GID = 1000
 
 
 class PentestProviderLeaseManager(Protocol):
@@ -6882,6 +6887,9 @@ class TemporalAgentRuntimeActivities:
             payload.get("skipSkillMaterialization")
             or payload.get("skip_skill_materialization")
         )
+        if self._is_verification_class_request(request):
+            self._cleanup_skill_projections_for_workspace(workspace_path_raw)
+            skip_skill_materialization = True
         skill_materialization_metadata: Mapping[str, Any] | None = None
         if not skip_skill_materialization:
             skill_materialization_metadata = await self._materialize_selected_agent_skill_for_turn(
@@ -6988,6 +6996,8 @@ class TemporalAgentRuntimeActivities:
                 artifact_service=self._artifact_service,
                 backing_root=str(skills_backing_root),
                 source_preservation_root=str(skill_source_preservation_root),
+                projection_owner_uid=_MANAGED_AGENT_UID,
+                projection_owner_gid=_MANAGED_AGENT_GID,
             )
             materialization = await materializer.materialize(
                 resolved_skillset=resolved_skillset,
@@ -7019,6 +7029,34 @@ class TemporalAgentRuntimeActivities:
             ) from exc
 
         return metadata
+
+    @staticmethod
+    def _is_verification_class_request(request: AgentExecutionRequest) -> bool:
+        params = request.parameters if isinstance(request.parameters, Mapping) else {}
+        selected_skill = str(selected_agent_skill(params) or "").strip().lower()
+        if selected_skill:
+            return selected_skill in {
+                "moonspec-verify",
+                "jira-verify",
+                "jira-pr-verify",
+            } or selected_skill.endswith("-verify")
+        title = str(params.get("title") or params.get("name") or "").strip().lower()
+        if "verification" in title or "verify" in title:
+            return True
+        return False
+
+    @staticmethod
+    def _cleanup_skill_projections_for_workspace(workspace_path: str) -> None:
+        normalized = str(workspace_path or "").strip()
+        if not normalized:
+            return
+        workspace = Path(normalized).expanduser().resolve()
+        active_root = workspace.parent / "runtime" / "skills_active"
+        cleanup_moonmind_skill_projections(
+            run_root=workspace,
+            skills_active_path=active_root,
+            owned_roots=(active_root,),
+        )
 
     @staticmethod
     def _validate_selected_skill_projection(

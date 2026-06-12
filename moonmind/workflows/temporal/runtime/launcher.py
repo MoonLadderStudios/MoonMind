@@ -907,6 +907,8 @@ class ManagedRuntimeLauncher:
             runtime_id=str(profile.runtime_id or "managed-runtime"),
             resolved_skillset=resolved_skillset,
             artifact_service=self._artifact_service,
+            projection_owner_uid=1000,
+            projection_owner_gid=1000,
         )
 
         params = request.parameters if isinstance(request.parameters, Mapping) else {}

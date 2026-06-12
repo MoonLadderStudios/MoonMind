@@ -30,6 +30,8 @@ class AgentSkillMaterializer:
         artifact_service: Any | None = None,
         backing_root: str | None = None,
         source_preservation_root: str | None = None,
+        projection_owner_uid: int | None = None,
+        projection_owner_gid: int | None = None,
     ) -> None:
         if not workspace_root:
             raise ValueError("workspace_root must be provided")
@@ -41,6 +43,8 @@ class AgentSkillMaterializer:
             if source_preservation_root
             else None
         )
+        self.projection_owner_uid = projection_owner_uid
+        self.projection_owner_gid = projection_owner_gid
 
     async def materialize(
         self,
@@ -143,12 +147,15 @@ class AgentSkillMaterializer:
 
             try:
                 require_agents_link = not self._is_repo_authored_skills_dir(alias_dir)
+                require_gemini_link = self._runtime_needs_gemini_projection(runtime_id)
                 links = ensure_shared_skill_links(
                     run_root=self.workspace_root,
                     skills_active_path=active_dir,
                     require_agents_link=require_agents_link,
-                    require_gemini_link=False,
+                    require_gemini_link=require_gemini_link,
                     owned_roots=(active_dir.parent, active_dir),
+                    owner_uid=self.projection_owner_uid,
+                    owner_gid=self.projection_owner_gid,
                 )
                 alias_available = links.agents_skills_available
                 if alias_available:
@@ -265,6 +272,11 @@ class AgentSkillMaterializer:
         if visible_dir.is_symlink():
             return False
         return not visible_dir.exists() or visible_dir.is_dir()
+
+    @staticmethod
+    def _runtime_needs_gemini_projection(runtime_id: str) -> bool:
+        normalized = str(runtime_id or "").strip().lower()
+        return normalized in {"gemini", "gemini_cli"}
 
     @staticmethod
     def _verify_payload_digest(entry: Any, payload: bytes) -> None:

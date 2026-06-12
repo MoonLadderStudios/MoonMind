@@ -42,6 +42,7 @@ from moonmind.workflows.codex_session_timeouts import (
 from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
     resolve_github_token_for_launch,
 )
+from moonmind.workflows.skills.workspace_links import cleanup_moonmind_skill_projections
 from moonmind.utils.logging import SecretRedactor, scrub_github_tokens
 from moonmind.workflow_docker_mode import normalize_workflow_docker_mode
 
@@ -2541,6 +2542,7 @@ class DockerCodexManagedSessionController:
                         ignore_failure=True,
                     )
                 await self._github_auth_brokers.stop(request.session_id)
+                self._cleanup_skill_projections_for_session(record)
                 return CodexManagedSessionHandle(
                     runtimeFamily=request.runtime_family,
                     sessionState=record.session_state(),
@@ -2561,6 +2563,7 @@ class DockerCodexManagedSessionController:
                 remove_volumes_if_container_missing=False,
             )
         await self._github_auth_brokers.stop(request.session_id)
+        self._cleanup_skill_projections_for_session(record)
         handle = CodexManagedSessionHandle(
             runtimeFamily=request.runtime_family,
             sessionState={
@@ -2602,6 +2605,27 @@ class DockerCodexManagedSessionController:
                     updated_at=datetime.now(tz=UTC),
                 )
         return handle
+
+    @staticmethod
+    def _cleanup_skill_projections_for_session(
+        record: CodexManagedSessionRecord | None,
+    ) -> None:
+        if record is None or not record.workspace_path:
+            return
+        workspace = Path(record.workspace_path)
+        active_root = workspace.parent / "runtime" / "skills_active"
+        try:
+            cleanup_moonmind_skill_projections(
+                run_root=workspace,
+                skills_active_path=active_root,
+                owned_roots=(active_root,),
+            )
+        except OSError:
+            logger.debug(
+                "Best-effort skill projection cleanup failed for session %s",
+                record.session_id,
+                exc_info=True,
+            )
 
     async def fetch_session_summary(
         self,

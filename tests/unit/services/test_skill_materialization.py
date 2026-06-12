@@ -264,10 +264,10 @@ async def test_materializer_reports_structured_alias_projection_diagnostics(
                 tmp_path / "runtime" / "skills_active" / "active_snap"
             ),
             "aliasPath": str(tmp_path / ".gemini" / "skills"),
-            "event": "skill_projection_alias_created",
+            "event": "skill_projection_alias_skipped",
             "reason": None,
             "snapshotId": "active_snap",
-            "status": "created",
+            "status": "skipped",
             "workspace": str(tmp_path),
         },
     ]
@@ -477,10 +477,45 @@ async def test_materializer_does_not_block_on_incompatible_gemini_skills_path(
     compatibility = result.metadata["compatibilityPaths"]
     assert compatibility["geminiSkillsPath"] == str(gemini_skill)
     assert compatibility["geminiSkillsAvailable"] is False
-    assert "existing non-symlink path present" in compatibility["geminiSkillsError"]
+    assert compatibility["geminiSkillsStatus"] == "skipped"
+    assert "geminiSkillsError" not in compatibility
     assert (
         gemini_skill / "SKILL.md"
     ).read_text(encoding="utf-8") == "local gemini skill"
+
+
+@pytest.mark.asyncio
+async def test_materializer_creates_gemini_projection_only_for_gemini_runtime(
+    tmp_path: Path,
+):
+    materializer = AgentSkillMaterializer(str(tmp_path))
+    skillset = ResolvedSkillSet(
+        snapshot_id="gemini_snap",
+        resolved_at=datetime.now(tz=UTC),
+        skills=[],
+    )
+
+    codex_result = await materializer.materialize(
+        resolved_skillset=skillset,
+        runtime_id="codex_cli",
+        mode=RuntimeMaterializationMode.WORKSPACE_MOUNTED,
+    )
+
+    assert not (tmp_path / ".gemini").exists()
+    assert codex_result.metadata["compatibilityPaths"]["geminiSkillsStatus"] == "skipped"
+
+    gemini_result = await materializer.materialize(
+        resolved_skillset=skillset,
+        runtime_id="gemini_cli",
+        mode=RuntimeMaterializationMode.WORKSPACE_MOUNTED,
+    )
+
+    gemini_skills = tmp_path / ".gemini" / "skills"
+    assert gemini_skills.is_symlink()
+    assert gemini_skills.resolve() == (
+        tmp_path / "runtime" / "skills_active" / "gemini_snap"
+    ).resolve()
+    assert gemini_result.metadata["compatibilityPaths"]["geminiSkillsAvailable"] is True
 
 @pytest.mark.asyncio
 async def test_materializer_hybrid_returns_compact_metadata_without_skill_body(
