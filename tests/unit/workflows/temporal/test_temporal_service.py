@@ -3277,6 +3277,90 @@ async def test_request_rerun_creates_fresh_execution_when_temporal_reports_compl
         assert rerun.parameters["rerunSource"]["workflowId"] == source_workflow_id
         assert service._client_adapter.update_workflow.await_count == 1
 
+
+@pytest.mark.asyncio
+async def test_fresh_rerun_expands_unexpanded_jira_orchestrate_template(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        source = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="Run Jira Orchestrate for MM-820",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "requestType": "workflow",
+                "repository": "MoonLadderStudios/MoonMind",
+                "targetRuntime": "codex_cli",
+                "publishMode": "pr",
+                "workflow": {
+                    "title": "Run Jira Orchestrate for MM-820",
+                    "instructions": "Use the existing Jira Orchestrate workflow.",
+                    "tool": {
+                        "type": "skill",
+                        "name": "jira-orchestrate",
+                        "version": "1.0",
+                    },
+                    "skill": {"name": "jira-orchestrate", "version": "1.0"},
+                    "inputs": {
+                        "jira_issue_key": "MM-820",
+                        "source_design_path": (
+                            "docs/Steps/StepExecutionsAndCheckpointing.md"
+                        ),
+                        "constraints": "Do not run implementation inline.",
+                    },
+                    "runtime": {"mode": "codex_cli"},
+                    "publish": {"mode": "pr"},
+                    "taskTemplate": {
+                        "slug": "jira-orchestrate",
+                        "version": "1.0.0",
+                    },
+                },
+            },
+            idempotency_key=None,
+        )
+        await service.record_terminal_state(
+            workflow_id=source.workflow_id,
+            state="failed",
+            close_status="failed",
+            summary="failed before template expansion",
+        )
+
+        response = await service.update_execution(
+            workflow_id=source.workflow_id,
+            update_name="RequestRerun",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            parameters_patch=None,
+            title=None,
+            new_manifest_artifact_ref=None,
+            mode=None,
+            max_concurrency=None,
+            node_ids=None,
+            idempotency_key="rerun-jira-orchestrate-template",
+        )
+        rerun = await service.describe_execution(response["workflow_id"])
+
+    workflow_payload = rerun.parameters["workflow"]
+    assert rerun.parameters["stepCount"] == 26
+    assert len(workflow_payload["steps"]) == 26
+    assert workflow_payload["steps"][0]["skill"]["id"] == "jira-issue-updater"
+    assert workflow_payload["steps"][7]["skill"]["id"] == "moonspec-tasks"
+    assert workflow_payload["steps"][9]["skill"]["id"] == "moonspec-implement"
+    assert workflow_payload["appliedStepTemplates"][0]["slug"] == "jira-orchestrate"
+    assert workflow_payload["recovery"] == {
+        "kind": "exact_full_rerun",
+        "sourceWorkflowId": source.workflow_id,
+        "sourceRunId": source.run_id,
+    }
+
+
 @pytest.mark.asyncio
 async def test_manifest_only_updates_rejected_for_non_manifest_workflow(
     tmp_path, mock_client_adapter
