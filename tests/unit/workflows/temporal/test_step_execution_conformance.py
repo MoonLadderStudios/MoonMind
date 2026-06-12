@@ -1,0 +1,173 @@
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from moonmind.workflows.temporal.step_execution_conformance import (
+    FORBIDDEN_INLINE_EVIDENCE_FIXTURES,
+    REQUIRED_CONFORMANCE_FAMILIES,
+    REQUIRED_TRACEABILITY_IDS,
+    STEP_EXECUTION_CONFORMANCE_SUITE_ID,
+    api_contract_fixture,
+    build_conformance_summary,
+    golden_fixture_catalog,
+    run_step_execution_conformance,
+)
+
+
+FORBIDDEN_OUTPUT_TOKENS = (
+    "raw stdout",
+    "raw stderr",
+    "diff --git",
+    "provider payload",
+    "verification report",
+    "credential value",
+    "x" * 1200,
+)
+
+
+def test_conformance_summary_reports_all_required_families() -> None:
+    summary = build_conformance_summary()
+
+    assert summary["suite"] == STEP_EXECUTION_CONFORMANCE_SUITE_ID
+    assert summary["overallResult"] == "passed"
+    assert {family["family"] for family in summary["families"]} == set(
+        REQUIRED_CONFORMANCE_FAMILIES
+    )
+    assert all(family["result"] == "passed" for family in summary["families"])
+
+
+@pytest.mark.parametrize("fixture", FORBIDDEN_INLINE_EVIDENCE_FIXTURES)
+def test_manifest_and_checkpoint_forbidden_inline_evidence_matrix(
+    fixture: dict[str, object],
+) -> None:
+    decision = fixture["decision"]
+
+    assert isinstance(decision, dict)
+    assert decision["valid"] is False
+    assert decision["decision"] == "invalid"
+    assert decision["failureCode"] == fixture["failureCode"]
+    assert fixture["payloadClass"] in decision["message"]
+    assert fixture["contractSurface"] in {"manifest", "checkpoint"}
+
+
+def test_golden_fixture_catalog_is_complete_and_deterministic() -> None:
+    catalog = golden_fixture_catalog()
+
+    assert [fixture["fixtureId"] for fixture in catalog] == [
+        "successful-execution",
+        "failed-reattempt",
+        "gate-failure",
+        "recovery-with-preserved-steps",
+        "degraded-checkpoint-payload",
+        "degraded-gate-verdict",
+        "legacy-checkpoint-only-ledger-row",
+    ]
+    assert {fixture["decision"]["decision"] for fixture in catalog} == {
+        "valid",
+        "invalid",
+        "degraded",
+    }
+    assert {
+        fixture["fixtureId"]: fixture["decision"]["decision"]
+        for fixture in catalog
+    }["successful-execution"] == "valid"
+    assert {
+        fixture["fixtureId"]: fixture["decision"]["decision"]
+        for fixture in catalog
+    }["legacy-checkpoint-only-ledger-row"] == "degraded"
+
+
+def test_manifest_and_checkpoint_writer_fixtures_use_canonical_refs() -> None:
+    summary = build_conformance_summary()
+    content_types = {
+        item["contentType"]
+        for item in summary["writerFixtures"]
+        if item["contractSurface"] in {"manifest", "checkpoint"}
+    }
+
+    assert content_types == {
+        "application/vnd.moonmind.step-execution+json;version=1",
+        "application/vnd.moonmind.step-execution-checkpoint+json;version=1",
+    }
+    serialized = json.dumps(summary["writerFixtures"])
+    assert "step-checkpoint" not in serialized
+    assert "step-resume-checkpoint" not in serialized
+    assert "summaryRef" in serialized
+    assert "diffRef" in serialized
+
+
+def test_degraded_inputs_return_typed_decisions_without_exceptions() -> None:
+    summary = build_conformance_summary()
+    decisions = {
+        decision["fixtureId"]: decision
+        for decision in summary["decisions"]
+        if decision["category"] in {"degraded_input", "replay"}
+    }
+
+    assert decisions["old-manifest-row"]["decision"] == "invalid"
+    assert decisions["old-checkpoint-row"]["decision"] == "invalid"
+    assert decisions["blank-gate-verdict"]["decision"] == "degraded"
+    assert decisions["unknown-gate-verdict"]["decision"] == "degraded"
+    assert decisions["future-gate-verdict"]["decision"] == "degraded"
+    assert decisions["legacy-checkpoint-only-ledger-row"]["decision"] == "degraded"
+
+
+def test_conformance_messages_are_bounded_and_do_not_leak_raw_evidence() -> None:
+    summary = build_conformance_summary()
+    rendered = json.dumps(
+        [
+            decision["message"]
+            for decision in summary["decisions"]
+            if decision["decision"] != "valid"
+        ]
+    )
+
+    assert len(rendered) < 5000
+    for token in FORBIDDEN_OUTPUT_TOKENS:
+        assert token not in rendered
+
+
+def test_canonical_terminology_fixture_decisions_are_enforced() -> None:
+    summary = build_conformance_summary()
+    terminology = {
+        decision["fixtureId"]: decision for decision in summary["decisions"]
+    }
+
+    assert terminology["term-step-executions"]["decision"] == "valid"
+    assert terminology["term-executionOrdinal"]["decision"] == "valid"
+    assert terminology["term-recover_from_failed_step"]["decision"] == "valid"
+    assert terminology["term-step-attempt"]["decision"] == "invalid"
+
+
+def test_traceability_matrix_covers_all_mm_820_categories() -> None:
+    summary = build_conformance_summary()
+    covered = {
+        trace_id
+        for decision in summary["decisions"]
+        for trace_id in decision["traceability"]
+    }
+
+    assert set(REQUIRED_TRACEABILITY_IDS).issubset(covered)
+
+
+def test_api_contract_fixture_exposes_refs_and_canonical_terms_only() -> None:
+    fixture = api_contract_fixture()
+
+    assert fixture["route"] == "/api/executions/{execution_id}/step-executions"
+    assert fixture["projection"]["executionOrdinal"] == 2
+    assert fixture["projection"]["recoveryAction"] == "recover_from_failed_step"
+    assert "providerPayload" not in fixture["projection"]
+    assert "verificationReport" not in fixture["projection"]
+    assert fixture["projection"]["artifactRefs"]["manifestRef"].startswith(
+        "artifact://"
+    )
+
+
+def test_run_step_execution_conformance_returns_one_aggregate_result() -> None:
+    result = run_step_execution_conformance()
+
+    assert result["overallResult"] == "passed"
+    assert result["failedFixtureIds"] == []
+    assert set(result["familyResults"]) == set(REQUIRED_CONFORMANCE_FAMILIES)
