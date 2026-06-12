@@ -98,6 +98,17 @@ def _approval_policy_plan_payload() -> dict[str, Any]:
         "edges": [],
     }
 
+
+def test_run_exposes_one_canonical_step_execution_manifest_record_surface() -> None:
+    workflow_attrs = {
+        name
+        for name in dir(MoonMindRunWorkflow)
+        if name.startswith("_record_step_execution_manifest")
+    }
+
+    assert workflow_attrs == {"_record_step_execution_manifest"}
+    assert not hasattr(run_module, "RUN_STEP_EXECUTION_MANIFEST_PATCH")
+
 def _registry_payload() -> dict[str, Any]:
     return {
         "skills": [
@@ -630,8 +641,9 @@ async def test_run_records_step_execution_manifest_ref_when_work_begins(
         updated_at=now,
         summary="Launching child runtime",
     )
-    await workflow._record_step_execution_manifest_start(
+    await workflow._record_step_execution_manifest(
         "delegate-agent",
+        phase="start",
         updated_at=now,
         reason="initial_execution",
     )
@@ -658,8 +670,9 @@ async def test_run_records_step_execution_manifest_ref_when_work_begins(
         updated_at=now,
         summary="Retrying child runtime",
     )
-    await workflow._record_step_execution_manifest_start(
+    await workflow._record_step_execution_manifest(
         "delegate-agent",
+        phase="start",
         updated_at=now,
         reason="runtime_recovered",
     )
@@ -788,8 +801,9 @@ async def test_step_execution_manifest_merges_explicit_execution_with_refs(
         updated_at=now,
     )
 
-    await workflow._record_step_execution_manifest_started(
+    await workflow._record_step_execution_manifest(
         "delegate-external",
+        phase="start",
         updated_at=now,
         reason="initial_execution",
         execution={
@@ -801,9 +815,9 @@ async def test_step_execution_manifest_merges_explicit_execution_with_refs(
     assert writes[0]["content_type"] == (
         "application/vnd.moonmind.step-execution+json;version=1"
     )
-    assert writes[0]["name"] == (
-        "reports/step_executions/delegate-external_attempt_1.json"
-    )
+    assert writes[0]["metadata_json"]["artifact_kind"] == "step_execution_manifest"
+    assert writes[0]["metadata_json"]["logicalStepId"] == "delegate-external"
+    assert writes[0]["metadata_json"]["attempt"] == 1
     assert writes[0]["payload"]["context"]["contextBundleRef"].startswith(
         "execution-context-bundle://sha256:"
     )
@@ -904,8 +918,9 @@ async def test_external_continuation_manifest_records_side_effects_and_checkpoin
         workflow_state_accepted=True,
     )
 
-    await workflow._record_step_execution_manifest_started(
+    await workflow._record_step_execution_manifest(
         "delegate-external",
+        phase="start",
         updated_at=now,
         reason="initial_execution",
     )
@@ -988,8 +1003,9 @@ async def test_run_records_terminal_step_execution_manifest_with_result_refs(
     )
 
     workflow._mark_step_running("run-tests", updated_at=now, summary="Run tests")
-    await workflow._record_step_execution_manifest_start(
+    await workflow._record_step_execution_manifest(
         "run-tests",
+        phase="start",
         updated_at=now,
         reason="initial_execution",
     )
@@ -1020,8 +1036,9 @@ async def test_run_records_terminal_step_execution_manifest_with_result_refs(
         idempotency_key="wf-run-1:run-1:run-tests:execution:1:publish-pr",
         workflow_state_accepted=True,
     )
-    await workflow._record_step_execution_manifest_terminal(
+    await workflow._record_step_execution_manifest(
         "run-tests",
+        phase="terminal",
         updated_at=now,
         reason="initial_execution",
         status="succeeded",
@@ -1105,7 +1122,7 @@ async def test_write_step_execution_manifest_requires_real_artifact_id(
         match="artifact.create returned no artifact_id",
     ):
         await workflow._write_json_artifact(
-            name="reports/step_executions/run-tests_attempt_1.json",
+            name="step-execution-manifest.json",
             payload={"schemaVersion": "v1"},
             content_type=STEP_EXECUTION_MANIFEST_CONTENT_TYPE,
         )

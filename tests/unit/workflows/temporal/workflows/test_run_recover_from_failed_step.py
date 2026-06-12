@@ -352,8 +352,9 @@ async def test_recover_step_execution_manifest_preserves_source_lineage(
     )
 
     workflow._mark_step_running("implement", updated_at=now, summary="Resuming")
-    await workflow._record_step_execution_manifest_start(
+    await workflow._record_step_execution_manifest(
         "implement",
+        phase="start",
         updated_at=now,
         reason="recover_from_failed_step",
     )
