@@ -11,6 +11,7 @@ from moonmind.workflows.temporal.step_execution_conformance import (
     STEP_EXECUTION_CONFORMANCE_SUITE_ID,
     api_contract_fixture,
     build_conformance_summary,
+    classify_gate_verdict,
     golden_fixture_catalog,
     run_step_execution_conformance,
 )
@@ -112,6 +113,24 @@ def test_degraded_inputs_return_typed_decisions_without_exceptions() -> None:
     assert decisions["unknown-gate-verdict"]["decision"] == "degraded"
     assert decisions["future-gate-verdict"]["decision"] == "degraded"
     assert decisions["legacy-checkpoint-only-ledger-row"]["decision"] == "degraded"
+
+
+@pytest.mark.parametrize(
+    "verdict",
+    [
+        "FULLY_IMPLEMENTED",
+        "ADDITIONAL_WORK_NEEDED",
+        "NO_DETERMINATION",
+        "BLOCKED",
+        "FAILED_UNRECOVERABLE",
+    ],
+)
+def test_canonical_gate_verdicts_are_structured_valid_values(verdict: str) -> None:
+    decision = classify_gate_verdict(f"canonical-{verdict.lower()}", verdict)
+
+    assert decision["decision"] == "valid"
+    assert decision["valid"] is True
+    assert decision["failureCode"] is None
 
 
 def test_conformance_messages_are_bounded_and_do_not_leak_raw_evidence() -> None:

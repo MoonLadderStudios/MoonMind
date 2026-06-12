@@ -10,6 +10,7 @@ from moonmind.workflows.temporal.step_execution_conformance import (
     REQUIRED_CONFORMANCE_FAMILIES,
     api_contract_fixture,
     build_conformance_summary,
+    classify_gate_verdict,
     golden_fixture_catalog,
     replay_degraded_fixture_decisions,
 )
@@ -62,6 +63,22 @@ def test_gate_and_legacy_ledger_replay_inputs_are_typed_degraded() -> None:
     assert decisions["future-gate-verdict"]["decision"] == "degraded"
     assert decisions["legacy-checkpoint-only-ledger-row"]["decision"] == "degraded"
     assert all(decision["failureCode"] for decision in decisions.values())
+
+
+def test_full_canonical_gate_verdict_set_is_accepted() -> None:
+    decisions = {
+        verdict: classify_gate_verdict(f"canonical-{verdict.lower()}", verdict)
+        for verdict in (
+            "FULLY_IMPLEMENTED",
+            "ADDITIONAL_WORK_NEEDED",
+            "NO_DETERMINATION",
+            "BLOCKED",
+            "FAILED_UNRECOVERABLE",
+        )
+    }
+
+    assert {decision["decision"] for decision in decisions.values()} == {"valid"}
+    assert all(decision["failureCode"] is None for decision in decisions.values())
 
 
 def test_replay_style_old_rows_return_typed_decisions() -> None:
