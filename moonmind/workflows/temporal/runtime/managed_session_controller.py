@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import logging
@@ -40,6 +41,7 @@ from moonmind.workflows.codex_session_timeouts import (
     DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS,
 )
 from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
+    resolve_ghcr_pull_credentials_for_launch,
     resolve_github_token_for_launch,
 )
 from moonmind.utils.logging import SecretRedactor, scrub_github_tokens
@@ -69,6 +71,8 @@ _LAST_ASSISTANT_TEXT_METADATA_MAX_BYTES = 4 * 1024
 _SESSION_DOCKER_SOCKET_DIR = "/var/run/moonmind-docker"
 _SESSION_DOCKER_SOCKET_PATH = f"{_SESSION_DOCKER_SOCKET_DIR}/docker.sock"
 _SESSION_DOCKER_GRAPH_PATH = "/var/lib/docker"
+_SESSION_DOCKER_CONFIG_DIRNAME = ".docker"
+_SESSION_DOCKER_CONFIG_FILENAME = "config.json"
 _DEFAULT_SESSION_DOCKER_SIDECAR_IMAGE = "docker:27-dind"
 _SESSION_DOCKER_MODE_ENABLED_VALUES = {"docker-sidecar"}
 _SESSION_DOCKER_MODE_DISABLED_VALUES = {"no-docker", "disabled", "none", "off"}
@@ -469,6 +473,166 @@ class DockerCodexManagedSessionController:
             raise RuntimeError("docker sidecar run returned a blank container id")
         await self._wait_docker_sidecar_ready(sidecar_id)
         return sidecar_id
+
+    def _session_docker_config_path(
+        self,
+        request: LaunchCodexManagedSessionRequest,
+    ) -> tuple[Path, PurePosixPath]:
+        host_path = (
+            Path(request.session_workspace_path)
+            / _SESSION_DOCKER_CONFIG_DIRNAME
+            / _SESSION_DOCKER_CONFIG_FILENAME
+        )
+        container_path = (
+            PurePosixPath(request.session_workspace_path)
+            / _SESSION_DOCKER_CONFIG_DIRNAME
+            / _SESSION_DOCKER_CONFIG_FILENAME
+        )
+        return host_path, container_path
+
+    def _cleanup_session_docker_config(
+        self,
+        session_workspace_path: str,
+    ) -> None:
+        docker_config_dir = (
+            Path(session_workspace_path) / _SESSION_DOCKER_CONFIG_DIRNAME
+        )
+        if not self._is_within_workspace_root(docker_config_dir):
+            return
+        config_path = docker_config_dir / _SESSION_DOCKER_CONFIG_FILENAME
+        try:
+            if config_path.exists():
+                config_path.unlink()
+            docker_config_dir.rmdir()
+        except FileNotFoundError:
+            return
+        except OSError:
+            logger.debug(
+                "Could not remove session Docker config at %s",
+                docker_config_dir,
+                exc_info=True,
+            )
+
+    async def _configure_session_ghcr_pull_auth(
+        self,
+        request: LaunchCodexManagedSessionRequest,
+        session_environment: dict[str, str],
+    ) -> dict[str, Any]:
+        credentials = await resolve_ghcr_pull_credentials_for_launch(
+            session_environment
+        )
+        diagnostics: dict[str, Any] = {
+            "pullAuth": "anonymous",
+            "registry": "ghcr.io",
+            "dockerConfig": "not_materialized",
+        }
+        if credentials is None:
+            return diagnostics
+
+        username, token = credentials
+        host_config_path, container_config_path = self._session_docker_config_path(
+            request
+        )
+        self._validate_workspace_path(
+            str(host_config_path),
+            field_name="dockerConfigPath",
+        )
+        auth_payload = base64.b64encode(
+            f"{username}:{token}".encode("utf-8")
+        ).decode("ascii")
+        config_payload = {
+            "auths": {
+                "ghcr.io": {
+                    "auth": auth_payload,
+                }
+            }
+        }
+        host_config_path.parent.mkdir(parents=True, exist_ok=True)
+        host_config_path.write_text(
+            json.dumps(config_payload, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        try:
+            host_config_path.chmod(0o600)
+        except OSError:
+            logger.debug(
+                "Could not chmod session Docker config at %s",
+                host_config_path,
+                exc_info=True,
+            )
+        session_environment["DOCKER_CONFIG"] = str(container_config_path.parent)
+        return {
+            **diagnostics,
+            "pullAuth": "authenticated",
+            "dockerConfig": "session_workspace",
+            "dockerConfigPath": str(container_config_path),
+        }
+
+    @staticmethod
+    def _docker_manifest_probe_image_ref(
+        request: LaunchCodexManagedSessionRequest,
+    ) -> str | None:
+        capability = request.docker_capability
+        raw = (
+            getattr(capability, "manifest_image_ref", None)
+            if capability is not None
+            else None
+        )
+        if not raw:
+            raw = request.environment.get("MOONMIND_DOCKER_PREFLIGHT_IMAGE_REF")
+        text = str(raw or "").strip()
+        return text or None
+
+    @staticmethod
+    def _image_ref_is_pinned_digest(image_ref: str) -> bool:
+        return "@sha256:" in str(image_ref or "").strip()
+
+    async def _preflight_docker_manifest_probe(
+        self,
+        *,
+        request: LaunchCodexManagedSessionRequest,
+        pull_auth_diagnostics: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        image_ref = self._docker_manifest_probe_image_ref(request)
+        if not image_ref:
+            return {"status": "skipped", "reason": "no_manifest_image_ref"}
+        if not self._image_ref_is_pinned_digest(image_ref):
+            raise RuntimeError(
+                "Docker preflight image ref must be pinned to a digest"
+            )
+        docker_config_path, _container_config_path = self._session_docker_config_path(
+            request
+        )
+        docker_config_dir = docker_config_path.parent
+        command = [
+            self._docker_binary,
+            "manifest",
+            "inspect",
+            image_ref,
+        ]
+        extra_env: dict[str, str] | None = None
+        if pull_auth_diagnostics.get("pullAuth") == "authenticated":
+            extra_env = {"DOCKER_CONFIG": str(docker_config_dir)}
+        returncode, stdout, stderr = await self._command_runner(
+            tuple(command),
+            env={**self._docker_env(), **(extra_env or {})},
+        )
+        detail = (stderr.strip() or stdout.strip())[:500]
+        if returncode != 0:
+            rendered_command, rendered_detail = self._scrub_command_failure(
+                command,
+                detail,
+                extra_env=extra_env,
+            )
+            raise RuntimeError(
+                "Docker preflight manifest probe failed: "
+                f"{rendered_command}: {rendered_detail}"
+            )
+        return {
+            "status": "passed",
+            "imageRef": image_ref,
+            "pullAuth": str(pull_auth_diagnostics.get("pullAuth") or "anonymous"),
+        }
 
     async def _wait_docker_sidecar_ready(self, sidecar_id: str) -> None:
         command = (
@@ -2046,6 +2210,25 @@ class DockerCodexManagedSessionController:
             session_environment.pop("SYSTEM_DOCKER_HOST", None)
         else:
             self._apply_unrestricted_docker_session_environment(session_environment)
+        docker_pull_diagnostics: dict[str, Any] = {
+            "pullAuth": "anonymous",
+            "registry": "ghcr.io",
+            "dockerConfig": "not_materialized",
+            "manifestProbe": {"status": "skipped", "reason": "docker_sidecar_disabled"},
+        }
+        if docker_sidecar_enabled:
+            docker_pull_diagnostics = await self._configure_session_ghcr_pull_auth(
+                request,
+                session_environment,
+            )
+            manifest_probe = await self._preflight_docker_manifest_probe(
+                request=request,
+                pull_auth_diagnostics=docker_pull_diagnostics,
+            )
+            docker_pull_diagnostics = {
+                **docker_pull_diagnostics,
+                "manifestProbe": manifest_probe,
+            }
         container_name = (
             self._sidecar_agent_container_name(request.session_id)
             if docker_sidecar_enabled
@@ -2186,6 +2369,7 @@ class DockerCodexManagedSessionController:
                     request.session_id,
                     ignore_failure=True,
                 )
+                self._cleanup_session_docker_config(request.session_workspace_path)
             if github_broker_started:
                 await self._github_auth_brokers.stop(request.session_id)
             raise
@@ -2194,6 +2378,14 @@ class DockerCodexManagedSessionController:
             docker_capability_metadata = await self._evaluate_docker_capability(
                 container_id=container_id,
                 request=request.model_copy(update={"environment": session_environment}),
+            )
+            docker_capability_metadata = self._merge_capability_metadata(
+                {
+                    "capabilities": {
+                        "dockerPull": docker_pull_diagnostics,
+                    },
+                },
+                docker_capability_metadata,
             )
             launch_metadata = self._merge_capability_metadata(
                 request.metadata,
@@ -2222,6 +2414,7 @@ class DockerCodexManagedSessionController:
                     request.session_id,
                     ignore_failure=True,
                 )
+                self._cleanup_session_docker_config(request.session_workspace_path)
             if github_broker_started:
                 await self._github_auth_brokers.stop(request.session_id)
             raise
@@ -2540,6 +2733,7 @@ class DockerCodexManagedSessionController:
                         request.session_id,
                         ignore_failure=True,
                     )
+                    self._cleanup_session_docker_config(record.session_workspace_path)
                 await self._github_auth_brokers.stop(request.session_id)
                 return CodexManagedSessionHandle(
                     runtimeFamily=request.runtime_family,
@@ -2554,6 +2748,7 @@ class DockerCodexManagedSessionController:
                 request.session_id,
                 ignore_failure=True,
             )
+            self._cleanup_session_docker_config(record.session_workspace_path)
         elif record is None:
             await self._cleanup_docker_sidecar_resources(
                 request.session_id,

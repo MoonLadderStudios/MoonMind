@@ -3226,6 +3226,14 @@ async def test_controller_terminate_removes_session_docker_sidecar_resources(
     tmp_path: Path,
 ) -> None:
     store = ManagedSessionStore(tmp_path / "session-store")
+    workspace_root = tmp_path / "agent_jobs"
+    session_workspace = workspace_root / "task-1" / "session"
+    docker_config = session_workspace / ".docker" / "config.json"
+    docker_config.parent.mkdir(parents=True)
+    docker_config.write_text(
+        '{"auths":{"ghcr.io":{"auth":"secret"}}}\n',
+        encoding="utf-8",
+    )
     store.save(
         CodexManagedSessionRecord(
             sessionId="sess-1",
@@ -3237,9 +3245,9 @@ async def test_controller_terminate_removes_session_docker_sidecar_resources(
             imageRef="img",
             controlUrl="docker-exec://moonmind-session-sess-1-agent",
             status="ready",
-            workspacePath="/work/agent_jobs/task-1/repo",
-            sessionWorkspacePath="/work/agent_jobs/task-1/session",
-            artifactSpoolPath="/work/agent_jobs/task-1/artifacts",
+            workspacePath=str(workspace_root / "task-1" / "repo"),
+            sessionWorkspacePath=str(session_workspace),
+            artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
             metadata={"dockerSidecarEnabled": True},
             startedAt="2026-04-06T12:00:00Z",
         )
@@ -3263,7 +3271,7 @@ async def test_controller_terminate_removes_session_docker_sidecar_resources(
     controller = DockerCodexManagedSessionController(
         workspace_volume_name="agent_workspaces",
         codex_volume_name="codex_auth_volume",
-        workspace_root="/work/agent_jobs",
+        workspace_root=str(workspace_root),
         session_store=store,
         command_runner=_fake_runner,
     )
@@ -3294,6 +3302,7 @@ async def test_controller_terminate_removes_session_docker_sidecar_resources(
         "-f",
         "moonmind-session-sess-1-docker-socket",
     ) in commands
+    assert not docker_config.exists()
 
 @pytest.mark.asyncio
 async def test_controller_terminate_without_store_removes_deterministic_sidecar(

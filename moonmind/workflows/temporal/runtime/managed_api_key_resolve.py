@@ -26,6 +26,8 @@ _MANAGED_GITHUB_TOKEN_SLUGS: tuple[str, ...] = (
     "GITHUB_TOKEN",
     "GITHUB_PAT",
 )
+_MANAGED_GHCR_PULL_USER_SLUGS: tuple[str, ...] = ("GHCR_PULL_USER",)
+_MANAGED_GHCR_PULL_TOKEN_SLUGS: tuple[str, ...] = ("GHCR_PULL_TOKEN",)
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +87,102 @@ async def resolve_managed_github_token_from_store() -> str | None:
             candidate = str(secret.ciphertext if secret else "").strip()
             if candidate:
                 return candidate
+    return None
+
+async def _resolve_first_active_managed_secret_slug(
+    slugs: Iterable[str],
+) -> str | None:
+    """Return the first active managed secret value for the provided slugs."""
+
+    from api_service.db.base import async_session_maker
+    from api_service.db.models import ManagedSecret, SecretStatus
+
+    async with async_session_maker() as session:
+        for slug in slugs:
+            normalized = str(slug or "").strip()
+            if not normalized:
+                continue
+            result = await session.execute(
+                select(ManagedSecret).where(
+                    ManagedSecret.slug == normalized,
+                    ManagedSecret.status == SecretStatus.ACTIVE,
+                )
+            )
+            secret = result.scalar_one_or_none()
+            candidate = str(secret.ciphertext if secret else "").strip()
+            if candidate:
+                return candidate
+    return None
+
+async def resolve_ghcr_pull_credentials_for_launch(
+    environment: Mapping[str, str] | None = None,
+) -> tuple[str, str] | None:
+    """Resolve deployment-scoped GHCR pull credentials for launch boundaries.
+
+    The returned plaintext is for immediate Docker config materialization only.
+    Callers must not store it in workflow history, logs, or durable metadata.
+    """
+
+    launch_environment = environment or {}
+
+    user_ref = str(
+        launch_environment.get("GHCR_PULL_USER_SECRET_REF")
+        or os.environ.get("MOONMIND_GHCR_PULL_USER_SECRET_REF")
+        or os.environ.get("WORKFLOW_GHCR_PULL_USER_SECRET_REF")
+        or ""
+    ).strip()
+    token_ref = str(
+        launch_environment.get("GHCR_PULL_TOKEN_SECRET_REF")
+        or os.environ.get("MOONMIND_GHCR_PULL_TOKEN_SECRET_REF")
+        or os.environ.get("WORKFLOW_GHCR_PULL_TOKEN_SECRET_REF")
+        or ""
+    ).strip()
+    if user_ref or token_ref:
+        if not user_ref or not token_ref:
+            raise ValueError(
+                "GHCR pull authentication requires both user and token secret refs"
+            )
+        user = await resolve_managed_api_key_reference(
+            user_ref,
+            field_name="GHCR_PULL_USER_SECRET_REF",
+        )
+        token = await resolve_managed_api_key_reference(
+            token_ref,
+            field_name="GHCR_PULL_TOKEN_SECRET_REF",
+        )
+        if user.strip() and token.strip():
+            return user.strip(), token.strip()
+        return None
+
+    user = str(
+        launch_environment.get("GHCR_PULL_USER")
+        or os.environ.get("GHCR_PULL_USER")
+        or ""
+    ).strip()
+    token = str(
+        launch_environment.get("GHCR_PULL_TOKEN")
+        or os.environ.get("GHCR_PULL_TOKEN")
+        or ""
+    ).strip()
+    if user and token:
+        return user, token
+
+    try:
+        stored_user, stored_token = await asyncio.gather(
+            _resolve_first_active_managed_secret_slug(_MANAGED_GHCR_PULL_USER_SLUGS),
+            _resolve_first_active_managed_secret_slug(_MANAGED_GHCR_PULL_TOKEN_SLUGS),
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.warning(
+            "Failed to resolve GHCR pull credentials from managed secrets store",
+            exc_info=True,
+        )
+        return None
+
+    if stored_user and stored_token:
+        return stored_user.strip(), stored_token.strip()
     return None
 
 async def resolve_github_token_for_launch(
