@@ -1552,7 +1552,7 @@ async def test_security_pentest_execute_coerces_string_publication_flags():
 async def test_pentest_settings_parse_safe_policy_csv_values():
     parsed = PentestSettings(
         MOONMIND_PENTEST_ENABLED="true",
-        MOONMIND_PENTEST_ALLOWED_RUNNER_PROFILES="pentestgpt-safe,pentestgpt-vpn-lab",
+        MOONMIND_PENTEST_ALLOWED_RUNNER_PROFILES="pentestgpt-safe",
         MOONMIND_PENTEST_ALLOWED_OPERATION_MODES="recon_only,validate_hypothesis",
         MOONMIND_PENTEST_ALLOWED_EVIDENCE_LEVELS="minimal,standard",
         MOONMIND_PENTEST_MAX_TIME_BUDGET_MINUTES="120",
@@ -1560,10 +1560,8 @@ async def test_pentest_settings_parse_safe_policy_csv_values():
     )
 
     assert parsed.enabled is True
-    assert parsed.allowed_runner_profiles == (
-        "pentestgpt-safe",
-        "pentestgpt-vpn-lab",
-    )
+    assert parsed.allowed_runner_profiles == ("pentestgpt-safe",)
+    assert parsed.enabled_runner_profile_ids == ("pentestgpt-safe",)
     assert parsed.allowed_operation_modes == ("recon_only", "validate_hypothesis")
     assert parsed.allowed_evidence_levels == ("minimal", "standard")
     assert parsed.max_time_budget_minutes == 120
@@ -1591,6 +1589,60 @@ async def test_pentest_settings_rejects_defaults_outside_allowlists():
             MOONMIND_PENTEST_DEFAULT_RUNNER_PROFILE="pentestgpt-vpn-lab",
             MOONMIND_PENTEST_ALLOWED_RUNNER_PROFILES="pentestgpt-safe",
         )
+    with pytest.raises(ValueError, match="known Pentest profiles"):
+        PentestSettings(
+            MOONMIND_PENTEST_ALLOWED_RUNNER_PROFILES="pentestgpt-safe,custom-profile",
+        )
+
+async def test_pentest_settings_requires_explicit_vpn_lab_gate():
+    with pytest.raises(ValueError, match="VPN/lab runner profile"):
+        PentestSettings(
+            MOONMIND_PENTEST_ALLOWED_RUNNER_PROFILES=(
+                "pentestgpt-safe",
+                "pentestgpt-vpn-lab",
+            ),
+        )
+
+    parsed = PentestSettings(
+        MOONMIND_PENTEST_ALLOW_VPN_LAB_PROFILE="true",
+        MOONMIND_PENTEST_ALLOWED_RUNNER_PROFILES=(
+            "pentestgpt-safe",
+            "pentestgpt-vpn-lab",
+        ),
+    )
+
+    assert parsed.enabled_runner_profile_ids == (
+        "pentestgpt-safe",
+        "pentestgpt-vpn-lab",
+    )
+
+async def test_pentest_settings_validates_runner_image_policy():
+    PentestSettings(
+        MOONMIND_PENTEST_RUNNER_IMAGE=(
+            "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.1"
+        )
+    )
+    PentestSettings(
+        MOONMIND_PENTEST_RUNNER_IMAGE=(
+            "example.com/lab/pentestgpt@sha256:" + "a" * 64
+        )
+    )
+
+    with pytest.raises(ValueError, match="Pentest runner image must be"):
+        PentestSettings(MOONMIND_PENTEST_RUNNER_IMAGE="docker.io/library/busybox:1.36")
+    with pytest.raises(ValueError, match="Pentest runner image must be"):
+        PentestSettings(
+            MOONMIND_PENTEST_RUNNER_IMAGE=(
+                "ghcr.io/moonladderstudios/moonmind-pentestgpt:latest"
+            )
+        )
+
+    unsafe = PentestSettings(
+        MOONMIND_PENTEST_RUNNER_IMAGE="local/pentestgpt-dev:latest",
+        MOONMIND_PENTEST_ALLOW_UNSAFE_RUNNER_IMAGE_OVERRIDE="true",
+    )
+
+    assert unsafe.runner_image == "local/pentestgpt-dev:latest"
 
 async def test_pentest_workload_profile_registry_includes_safe_runner():
     registry = RunnerProfileRegistry.load_file(
@@ -1603,6 +1655,15 @@ async def test_pentest_workload_profile_registry_includes_safe_runner():
     assert profile.image == "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0"
     assert profile.network_policy == "bridge"
     assert "ANTHROPIC_API_KEY" in profile.env_allowlist
+
+async def test_pentest_runner_image_defaults_match_published_tag():
+    default_image = PentestSettings().runner_image
+    publish_workflow = Path(".github/workflows/docker-publish.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert default_image == "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0"
+    assert '-t "${IMAGE_NAME}:1.0"' in publish_workflow
 
 async def test_security_pentest_execute_materializes_input_files_without_secrets(
     tmp_path: Path,

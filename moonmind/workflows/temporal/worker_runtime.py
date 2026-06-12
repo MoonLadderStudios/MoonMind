@@ -2061,6 +2061,7 @@ def _build_agent_runtime_deps(
             workspace_root=workspace_root,
             allowed_image_registries=allowed_image_registries or None,
         )
+    _validate_pentest_workload_registry(workload_registry)
     workload_fleet_limit = _positive_int_env("MOONMIND_DOCKER_WORKLOAD_FLEET_CONCURRENCY")
     workload_launcher = DockerWorkloadLauncher(
         docker_binary=os.environ.get("MOONMIND_DOCKER_BINARY", "docker"),
@@ -2077,6 +2078,27 @@ def _build_agent_runtime_deps(
         workload_registry,
         workload_launcher,
     )
+
+
+def _validate_pentest_workload_registry(workload_registry: Any) -> None:
+    """Fail fast when Pentest deployment settings drift from workload profiles."""
+
+    pentest_settings = settings.pentest
+    required_profile_ids = set(pentest_settings.enabled_runner_profile_ids)
+    required_profile_ids.add(pentest_settings.default_runner_profile)
+    for profile_id in sorted(required_profile_ids):
+        profile = workload_registry.get(profile_id)
+        if profile is None:
+            raise RuntimeError(
+                "Pentest runner profile is enabled by deployment policy but "
+                f"missing from workload registry: {profile_id}"
+            )
+        if profile.image != pentest_settings.runner_image:
+            raise RuntimeError(
+                "Pentest runner image drift detected for workload profile "
+                f"{profile_id}: registry image {profile.image!r} does not match "
+                f"MOONMIND_PENTEST_RUNNER_IMAGE {pentest_settings.runner_image!r}"
+            )
 
 async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[object]]:
     """Build activity handlers for the configured non-workflow fleet.

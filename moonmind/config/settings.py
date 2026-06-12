@@ -26,6 +26,13 @@ _PENTEST_ALLOWED_OPERATION_MODES = (
     "full_authorized",
 )
 _PENTEST_ALLOWED_EVIDENCE_LEVELS = ("minimal", "standard", "full")
+_PENTEST_RUNNER_IMAGE_REPOSITORY = (
+    "ghcr.io/moonladderstudios/moonmind-pentestgpt"
+)
+_SHA256_IMAGE_DIGEST_PATTERN = re.compile(
+    r"^[^\s@]+@sha256:[0-9a-fA-F]{64}$"
+)
+_IMAGE_TAG_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 _OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _JIRA_PROJECT_KEY_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9]+$")
 _JIRA_ALLOWED_ACTIONS = frozenset(
@@ -1452,6 +1459,16 @@ class PentestSettings(BaseSettings):
         validation_alias=AliasChoices("MOONMIND_PENTEST_RUNNER_IMAGE"),
         description="Curated PentestGPT runner image tag or digest.",
     )
+    allow_unsafe_runner_image_override: bool = Field(
+        False,
+        validation_alias=AliasChoices(
+            "MOONMIND_PENTEST_ALLOW_UNSAFE_RUNNER_IMAGE_OVERRIDE"
+        ),
+        description=(
+            "Allow arbitrary local/dev PentestGPT runner images. Must remain false "
+            "for production deployments."
+        ),
+    )
     safe_profile_id: str = Field(
         "pentestgpt-safe",
         validation_alias=AliasChoices("MOONMIND_PENTEST_SAFE_PROFILE_ID"),
@@ -1613,6 +1630,14 @@ class PentestSettings(BaseSettings):
         normalized = str(value).strip()
         return normalized or None
 
+    @field_validator("runner_image", mode="before")
+    @classmethod
+    def _normalize_runner_image(cls, value: object) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("Pentest runner image must not be blank")
+        return normalized
+
     @field_validator("default_operation_mode", mode="before")
     @classmethod
     def _normalize_default_operation_mode(cls, value: object) -> str:
@@ -1651,6 +1676,30 @@ class PentestSettings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_default_values_are_allowlisted(self) -> Self:
+        known_profiles = {self.safe_profile_id, self.vpn_lab_profile_id}
+        invalid_profiles = set(self.allowed_runner_profiles) - known_profiles
+        if invalid_profiles:
+            allowed = ", ".join(sorted(known_profiles))
+            raise ValueError(
+                "allowed pentest runner profiles must be known Pentest profiles: "
+                f"{allowed}"
+            )
+        if self.default_runner_profile not in known_profiles:
+            allowed = ", ".join(sorted(known_profiles))
+            raise ValueError(
+                "default pentest runner profile must be a known Pentest profile: "
+                f"{allowed}"
+            )
+        if (
+            self.vpn_lab_profile_id in set(self.allowed_runner_profiles)
+            and not self.allow_vpn_lab_profile
+        ):
+            raise ValueError(
+                "pentest VPN/lab runner profile requires "
+                "MOONMIND_PENTEST_ALLOW_VPN_LAB_PROFILE=true"
+            )
+        if not self.allow_unsafe_runner_image_override:
+            _validate_pentest_runner_image(self.runner_image)
         if self.default_operation_mode not in self.allowed_operation_modes:
             raise ValueError(
                 "default pentest operation mode must be included in "
@@ -1670,6 +1719,39 @@ class PentestSettings(BaseSettings):
                 "pentest runner profiles"
             )
         return self
+
+    @property
+    def enabled_runner_profile_ids(self) -> tuple[str, ...]:
+        """Return deployment-enabled Pentest runner profile ids."""
+
+        profiles = list(self.allowed_runner_profiles)
+        if self.allow_vpn_lab_profile and self.vpn_lab_profile_id not in profiles:
+            profiles.append(self.vpn_lab_profile_id)
+        return tuple(profiles)
+
+
+def _validate_pentest_runner_image(image: str | None) -> None:
+    normalized = str(image or "").strip()
+    if _is_digest_pinned_image(normalized) or _is_approved_pentest_tag(normalized):
+        return
+    raise ValueError(
+        "Pentest runner image must be a ghcr.io/moonladderstudios/"
+        "moonmind-pentestgpt non-latest tag or a sha256 digest-pinned reference; "
+        "set MOONMIND_PENTEST_ALLOW_UNSAFE_RUNNER_IMAGE_OVERRIDE=true only for "
+        "local unsafe development overrides"
+    )
+
+
+def _is_digest_pinned_image(image: str) -> bool:
+    return bool(_SHA256_IMAGE_DIGEST_PATTERN.fullmatch(image))
+
+
+def _is_approved_pentest_tag(image: str) -> bool:
+    prefix = f"{_PENTEST_RUNNER_IMAGE_REPOSITORY}:"
+    if not image.startswith(prefix) or "@" in image:
+        return False
+    tag = image.removeprefix(prefix)
+    return bool(tag) and tag != "latest" and bool(_IMAGE_TAG_PATTERN.fullmatch(tag))
 
 DEFAULT_GOOGLE_EMBEDDING_DIMENSIONS: int = 3072
 

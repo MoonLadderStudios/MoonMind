@@ -34,12 +34,15 @@ from moonmind.workflows.temporal.worker_runtime import (
     _build_runtime_planner,
     _build_runtime_activities,
     _configure_worker_logging,
+    _validate_pentest_workload_registry,
     main_async,
     resolve_adapter_metadata,
     get_activity_route,
     resolve_external_adapter,
     external_adapter_execution_style,
 )
+from moonmind.config.settings import PentestSettings, settings
+from moonmind.workloads.registry import RunnerProfileRegistry
 from moonmind.workflows.temporal.workers import (
     AGENT_RUNTIME_FLEET,
     DEPLOYMENT_FLEET,
@@ -2503,6 +2506,69 @@ def test_build_agent_runtime_deps_uses_artifacts_env_without_double_nesting(
     assert workload_launcher is not None
     assert artifacts_root.is_dir()
     assert not (artifacts_root / "artifacts").exists()
+
+def test_pentest_workload_registry_validation_rejects_missing_enabled_profile(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    registry = RunnerProfileRegistry.load_file(
+        "config/workloads/default-runner-profiles.yaml",
+        workspace_root=tmp_path,
+    )
+    pentest_settings = PentestSettings(
+        MOONMIND_PENTEST_ALLOW_VPN_LAB_PROFILE="true",
+    )
+    monkeypatch.setattr(settings, "pentest", pentest_settings)
+
+    with pytest.raises(RuntimeError, match="missing from workload registry"):
+        _validate_pentest_workload_registry(registry)
+
+def test_pentest_workload_registry_validation_rejects_image_drift(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    registry_path = tmp_path / "profiles.yaml"
+    registry_path.write_text(
+        """
+profiles:
+  - id: pentestgpt-safe
+    kind: one_shot
+    image: ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0
+    workdirTemplate: /work/agent_jobs/${task_run_id}/repo
+    requiredMounts:
+      - type: volume
+        source: agent_workspaces
+        target: /work/agent_jobs
+    envAllowlist:
+      - PENTESTGPT_AUTH_MODE
+    networkPolicy: bridge
+    resources:
+      cpu: "4"
+      memory: 8g
+      shmSize: 1g
+      maxCpu: "4"
+      maxMemory: 8g
+      maxShmSize: 1g
+    timeoutSeconds: 28800
+    maxTimeoutSeconds: 28800
+    cleanup:
+      removeContainerOnExit: true
+      killGraceSeconds: 30
+    devicePolicy:
+      mode: none
+""",
+        encoding="utf-8",
+    )
+    registry = RunnerProfileRegistry.load_file(registry_path, workspace_root=tmp_path)
+    pentest_settings = PentestSettings(
+        MOONMIND_PENTEST_RUNNER_IMAGE=(
+            "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.1"
+        ),
+    )
+    monkeypatch.setattr(settings, "pentest", pentest_settings)
+
+    with pytest.raises(RuntimeError, match="runner image drift"):
+        _validate_pentest_workload_registry(registry)
 
 def test_build_agent_runtime_deps_reuses_global_session_network(
     tmp_path,
