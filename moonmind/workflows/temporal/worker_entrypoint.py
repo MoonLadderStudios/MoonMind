@@ -89,7 +89,9 @@ async def main():
         topology.fleet,
         ", ".join(topology.task_queues),
     )
-    await asyncio.gather(*(worker.run() for worker in workers))
+    async with asyncio.TaskGroup() as tg:
+        for worker in workers:
+            tg.create_task(worker.run())
 
 if __name__ == "__main__":
     asyncio.run(main())

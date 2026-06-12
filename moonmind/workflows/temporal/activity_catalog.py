@@ -56,8 +56,13 @@ def get_workflow_poll_task_queues(
 
     cfg = temporal_settings or settings.temporal
     start_queue = get_workflow_task_queue(cfg)
-    replay_queue = str(cfg.workflow_task_queue).strip()
-    if replay_queue and replay_queue != start_queue:
+    replay_queue = (
+        str(cfg.workflow_task_queue).strip()
+        if cfg.workflow_task_queue is not None
+        else ""
+    )
+    merge_queue = str(cfg.merge_automation_workflow_task_queue).strip()
+    if replay_queue and replay_queue != start_queue and start_queue != merge_queue:
         return (start_queue, replay_queue)
     return (start_queue,)
 

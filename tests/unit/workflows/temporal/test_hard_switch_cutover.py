@@ -153,6 +153,29 @@ def test_workflow_task_queue_constant_stays_replay_stable_while_start_queue_is_l
     )
 
 
+def test_workflow_poll_task_queues_ignore_missing_replay_queue(tmp_path: Path) -> None:
+    temporal_settings = _renamed_contract_settings(tmp_path).model_copy(
+        update={"workflow_task_queue": None}
+    )
+
+    assert get_workflow_poll_task_queues(temporal_settings) == ("mm.workflow.user.v2",)
+
+
+def test_merge_automation_workflow_fleet_does_not_poll_user_replay_queue(
+    tmp_path: Path,
+) -> None:
+    temporal_settings = _renamed_contract_settings(tmp_path).model_copy(
+        update={
+            "user_workflow_v2_task_queue": "mm.workflow.merge_automation",
+            "merge_automation_workflow_task_queue": "mm.workflow.merge_automation",
+        }
+    )
+
+    assert get_workflow_poll_task_queues(temporal_settings) == (
+        "mm.workflow.merge_automation",
+    )
+
+
 def test_renamed_contract_resolution_caches_cutover_file_validation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

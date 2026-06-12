@@ -2354,7 +2354,9 @@ async def main_async() -> None:
             "Worker started, polling task queues: %s",
             ", ".join(topology.task_queues),
         )
-        await asyncio.gather(*(worker.run() for worker in workers))
+        async with asyncio.TaskGroup() as tg:
+            for worker in workers:
+                tg.create_task(worker.run())
     finally:
         if runtime_resources is not None:
             await runtime_resources.aclose()
