@@ -389,7 +389,7 @@ async def test_run_execution_stage_rejects_legacy_skill_registry_dispatch(
                 payload.get("artifact_ref")
                 if isinstance(payload, dict)
                 else getattr(payload, "artifact_ref", None)
-            )
+            ) if payload is not None else None
             if artifact_ref == "artifact://registry/1":
                 return json.dumps(
                     {
@@ -3005,7 +3005,7 @@ async def test_run_execution_stage_moonspec_verify_blocks_native_pr_creation(
                 payload.get("artifact_ref")
                 if isinstance(payload, dict)
                 else getattr(payload, "artifact_ref", None)
-            )
+            ) if payload is not None else None
             if artifact_ref == "artifact://registry/1":
                 return json.dumps(
                     {
@@ -3136,6 +3136,7 @@ async def test_run_execution_stage_moonspec_verify_blocks_native_pr_creation(
             run_workflow_module.RUN_CONDITIONAL_REGISTRY_READ_PATCH,
             run_workflow_module.NATIVE_PR_BRANCH_DEFAULTS_PATCH,
             run_workflow_module.RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH,
+            run_workflow_module.RUN_MOONSPEC_VERIFY_REMEDIATION_INDEX_PATCH,
         },
     )
 
@@ -3197,7 +3198,7 @@ async def test_run_execution_stage_moonspec_verify_uses_remaining_remediation_bu
                 payload.get("artifact_ref")
                 if isinstance(payload, dict)
                 else getattr(payload, "artifact_ref", None)
-            )
+            ) if payload is not None else None
             if artifact_ref == "artifact://registry/1":
                 return json.dumps({"skills": []}).encode("utf-8")
             return json.dumps(
@@ -3367,6 +3368,7 @@ async def test_run_execution_stage_moonspec_verify_uses_remaining_remediation_bu
             run_workflow_module.RUN_CONDITIONAL_REGISTRY_READ_PATCH,
             run_workflow_module.NATIVE_PR_BRANCH_DEFAULTS_PATCH,
             run_workflow_module.RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH,
+            run_workflow_module.RUN_MOONSPEC_VERIFY_REMEDIATION_INDEX_PATCH,
         },
     )
 
