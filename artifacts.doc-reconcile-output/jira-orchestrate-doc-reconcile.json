@@ -1,0 +1,14 @@
+{
+  "action": "no_update_required",
+  "docPaths": [
+    "docs/Steps/StepExecutionsAndCheckpointing.md"
+  ],
+  "gateRationale": "Doc reconciliation skipped: no latest post-remediation moonspec-verify report with verdict FULLY_IMPLEMENTED was found in the workspace, so publication remains blocked and the moonspec-doc-reconcile update gate does not allow canonical doc edits.",
+  "evidence": [
+    "specs/001-step-execution-conformance/spec.md records Source Document: docs/Steps/StepExecutionsAndCheckpointing.md",
+    "artifacts/ contains only context retrieval files; no moonspec-verify report or Source Document Drift section was present",
+    "/work/agent_jobs/mm:9c6ae3d9-cbc5-45f1-a024-a8e9861ae3b7/artifacts/stdout.log and stderr.log contain prior runtime/tooling diagnostics but no controlling FULLY_IMPLEMENTED post-remediation verdict",
+    "docs/tmp/jira-orchestrate-mm-820-handoff.json is a submission handoff, not a post-remediation verification report",
+    "Could not write artifacts/jira-orchestrate-doc-reconcile.json because ./artifacts is root-owned and not writable by uid 1000(app); chmod was denied by the filesystem"
+  ]
+}
