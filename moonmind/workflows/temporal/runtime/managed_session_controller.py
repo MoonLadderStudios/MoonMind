@@ -548,11 +548,15 @@ class DockerCodexManagedSessionController:
             }
         }
         host_config_path.parent.mkdir(parents=True, exist_ok=True)
+        # Docker requires plaintext registry auth in config.json; this file is
+        # session-scoped, mode 0600, owned by the agent user, and cleaned up.
+        # codeql[py/clear-text-storage-sensitive-data]
+        config_json = json.dumps(config_payload, sort_keys=True) + "\n"
+        # Docker requires plaintext registry auth in config.json; this file is
+        # session-scoped, mode 0600, owned by the agent user, and cleaned up.
+        # codeql[py/clear-text-storage-sensitive-data]
         host_config_path.write_text(
-            # Docker requires plaintext registry auth in config.json; this file is
-            # session-scoped, mode 0600, owned by the agent user, and cleaned up.
-            # codeql[py/clear-text-storage-sensitive-data]
-            json.dumps(config_payload, sort_keys=True) + "\n",
+            config_json,
             encoding="utf-8",
         )
         geteuid = getattr(os, "geteuid", None)
