@@ -966,6 +966,58 @@ class TestProviderProfileManagerHelpers:
         assert wf._pending_requests[0].lease_group_id == "run-1"
 
     @pytest.mark.asyncio
+    async def test_acquire_slot_update_reserves_without_callback_signal(self):
+        wf = self._make_workflow()
+        wf._runtime_id = "pentestgpt"
+        wf._profiles["pentestgpt_anthropic_api_team"] = ProfileSlotState(
+            profile_id="pentestgpt_anthropic_api_team",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=True,
+        )
+        now = datetime(2026, 6, 12, tzinfo=timezone.utc)
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.now.return_value = now
+            mock_wf.patched.return_value = False
+            first = await wf.acquire_slot(
+                {
+                    "requester_workflow_id": "pentest:run-1:step-1:1",
+                    "runtime_id": "pentestgpt",
+                    "execution_profile_ref": "pentestgpt_anthropic_api_team",
+                    "metadata": {"target_hash": "hash-1"},
+                }
+            )
+            second = await wf.acquire_slot(
+                {
+                    "requester_workflow_id": "pentest:run-1:step-1:1",
+                    "runtime_id": "pentestgpt",
+                    "execution_profile_ref": "pentestgpt_anthropic_api_team",
+                }
+            )
+
+        assert first == {
+            "profile_id": "pentestgpt_anthropic_api_team",
+            "lease_id": "pentest:run-1:step-1:1",
+            "already_held": False,
+        }
+        assert second == {
+            "profile_id": "pentestgpt_anthropic_api_team",
+            "lease_id": "pentest:run-1:step-1:1",
+            "already_held": True,
+        }
+        profile = wf._profiles["pentestgpt_anthropic_api_team"]
+        assert profile.current_leases == ["pentest:run-1:step-1:1"]
+        assert profile.lease_granted_at == {
+            "pentest:run-1:step-1:1": "2026-06-12T00:00:00+00:00"
+        }
+        assert wf._pending_requests == []
+
+    @pytest.mark.asyncio
     async def test_release_slot_creates_short_handoff_reservation(self):
         wf = self._make_workflow()
         wf._profiles["p1"] = ProfileSlotState(
